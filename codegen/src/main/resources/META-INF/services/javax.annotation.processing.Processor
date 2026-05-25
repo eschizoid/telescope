@@ -1,0 +1,3 @@
+org.telescope.codegen.FocusProcessor
+org.telescope.codegen.BeanBridgeProcessor
+org.telescope.codegen.BeanFocusProcessor
