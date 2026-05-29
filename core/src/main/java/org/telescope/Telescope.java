@@ -65,17 +65,18 @@ public final class Telescope<S, A> {
   public interface Accessor<A, B> extends Function<A, B>, Serializable {}
 
   private final Traversal<S, A> optic;
-  // When true, field()/each() navigate a POJO via getters + rebuild-via-strategy (see ofBean),
-  // instead of the record canonical-constructor path. Propagated to derived telescopes.
-  private final boolean beanMode;
+  // How accessor-based navigation (field/each/eachValue/whenPresent) turns a method reference into
+  // a field Lens: records read/rebuild via the canonical constructor, beans via getters +
+  // rebuild-via-strategy (see ofBean). Propagated to derived telescopes.
+  private final FieldOptics fieldOptics;
 
   private Telescope(final Traversal<S, A> optic) {
-    this(optic, false);
+    this(optic, RecordFieldOptics.INSTANCE);
   }
 
-  private Telescope(final Traversal<S, A> optic, final boolean beanMode) {
+  private Telescope(final Traversal<S, A> optic, final FieldOptics fieldOptics) {
     this.optic = optic;
-    this.beanMode = beanMode;
+    this.fieldOptics = fieldOptics;
   }
 
   /**
@@ -130,7 +131,7 @@ public final class Telescope<S, A> {
    * #mapBean(Class)}.
    */
   public static <P> Telescope<P, P> ofBean(final Class<P> pojoClass) {
-    return new Telescope<>(Iso.identity(), true);
+    return new Telescope<>(Iso.identity(), BeanFieldOptics.INSTANCE);
   }
 
   /**
@@ -416,14 +417,10 @@ public final class Telescope<S, A> {
 
     private Telescope<P, R> bridge(final Beans.BeanWriter<P> writer) {
       final var names = Records.componentNames(recordClass);
-      // The POJO property each record component reads from / writes to (identity unless renamed).
-      final var beanKeys = new String[names.length];
-      for (var i = 0; i < names.length; i++) {
-        final var prop = componentToProperty.getOrDefault(names[i], names[i]);
-        beanKeys[i] = prop;
-        if (!Beans.hasProperty(pojoClass, prop)) throw new IllegalArgumentException(
+      matchedNames(names, componentToProperty, pojoClass, false, (comp, prop) ->
+        new IllegalArgumentException(
           "fromBean: record component '" +
-            names[i] +
+            comp +
             "' on " +
             recordClass.getSimpleName() +
             " has no matching getter '" +
@@ -431,8 +428,11 @@ public final class Telescope<S, A> {
             "' on " +
             pojoClass.getSimpleName() +
             " (matched by exact name; rename it with .rename(...) or add a getter)."
-        );
-      }
+        )
+      );
+      // The POJO property each record component reads from / writes to (identity unless renamed).
+      final var beanKeys = new String[names.length];
+      for (var i = 0; i < names.length; i++) beanKeys[i] = componentToProperty.getOrDefault(names[i], names[i]);
       final var propertyToComponent = new java.util.LinkedHashMap<String, String>();
       componentToProperty.forEach((comp, prop) -> propertyToComponent.put(prop, comp));
       final Function<P, R> forward = pojo ->
@@ -547,8 +547,12 @@ public final class Telescope<S, A> {
     public Telescope<A, B> build() {
       final var targetToSource = new java.util.LinkedHashMap<String, String>();
       sourceToTarget.forEach((s, t) -> targetToSource.put(t, s));
-      final var bKeys = matched(Beans.propertyNames(target), target, source, targetToSource);
-      final var aKeys = matched(Beans.propertyNames(source), source, target, sourceToTarget);
+      final var bKeys = matchedNames(Beans.propertyNames(target), targetToSource, source, ignoreUnmatched, (name, cp) ->
+        mismatch(name, target, cp, source)
+      ).toArray(String[]::new);
+      final var aKeys = matchedNames(Beans.propertyNames(source), sourceToTarget, target, ignoreUnmatched, (name, cp) ->
+        mismatch(name, source, cp, target)
+      ).toArray(String[]::new);
       final var writerA = Beans.autoWriter(source);
       final var writerB = Beans.autoWriter(target);
       final Function<A, B> forward = a ->
@@ -558,35 +562,23 @@ public final class Telescope<S, A> {
       return new Telescope<>(Iso.of(forward, backward));
     }
 
-    // The properties of `owner` to (re)build: each must have a counterpart getter on `other`,
-    // directly or via a rename. With ignoreUnmatched, those without one are dropped; otherwise a
-    // missing counterpart is an error.
-    private String[] matched(
-      final String[] ownerNames,
+    private static RuntimeException mismatch(
+      final String name,
       final Class<?> owner,
-      final Class<?> other,
-      final Map<String, String> ownerToOther
+      final String counterpart,
+      final Class<?> other
     ) {
-      final var keep = new java.util.ArrayList<String>();
-      for (final var name : ownerNames) {
-        final var counterpart = ownerToOther.getOrDefault(name, name);
-        if (Beans.hasProperty(other, counterpart)) {
-          keep.add(name);
-        } else if (!ignoreUnmatched) {
-          throw new IllegalArgumentException(
-            "mapBean: property '" +
-              name +
-              "' on " +
-              owner.getSimpleName() +
-              " has no matching getter '" +
-              counterpart +
-              "' on " +
-              other.getSimpleName() +
-              " (rename it with .rename(...), or call .ignoreUnmatched() to drop it)."
-          );
-        }
-      }
-      return keep.toArray(String[]::new);
+      return new IllegalArgumentException(
+        "mapBean: property '" +
+          name +
+          "' on " +
+          owner.getSimpleName() +
+          " has no matching getter '" +
+          counterpart +
+          "' on " +
+          other.getSimpleName() +
+          " (rename it with .rename(...), or call .ignoreUnmatched() to drop it)."
+      );
     }
   }
 
@@ -931,32 +923,8 @@ public final class Telescope<S, A> {
    * Class)}. Records only — see {@link #fromBean(Class)} for the POJO escape hatch.
    */
   public <B> Telescope<S, B> field(final Accessor<A, B> getter) {
-    if (beanMode) return beanField(getter);
-    return field(methodNameOf(getter));
-  }
-
-  // POJO field navigation (see ofBean): get via the getter method ref, set by rebuilding the POJO
-  // (whose class is recovered from the method ref) with that one property changed via its strategy.
-  private <B> Telescope<S, B> beanField(final Accessor<A, B> getter) {
-    final var implClass = beanImplClass(getter);
-    final var property = Beans.propertyOf(methodNameOf(getter));
-    final Lens<A, B> lens = Beans.lens(implClass, property, Beans.autoWriter(implClass));
-    return new Telescope<>(optic.then(lens), true);
-  }
-
-  @SuppressWarnings("unchecked")
-  private Class<A> beanImplClass(final Accessor<A, ?> getter) {
-    try {
-      final var writeReplace = getter.getClass().getDeclaredMethod("writeReplace");
-      writeReplace.setAccessible(true);
-      final var serialized = (SerializedLambda) writeReplace.invoke(getter);
-      return (Class<A>) Class.forName(serialized.getImplClass().replace('/', '.'));
-    } catch (final ReflectiveOperationException e) {
-      throw new IllegalArgumentException(
-        "ofBean navigation requires a method reference to a getter (e.g. Pojo::getX)",
-        e
-      );
-    }
+    final Lens<A, B> lens = fieldOptics.lensFor(getter);
+    return new Telescope<>(optic.then(lens), fieldOptics);
   }
 
   /**
@@ -1014,15 +982,8 @@ public final class Telescope<S, A> {
    */
   public <E> Telescope<S, E> each(final Accessor<A, ? extends Iterable<E>> getter) {
     final Traversal<Iterable<E>, E> elements = Traversals.eachContainer();
-    if (beanMode) {
-      final var implClass = beanImplClass(getter);
-      final var property = Beans.propertyOf(methodNameOf(getter));
-      final Lens<A, Iterable<E>> listLens = Beans.lens(implClass, property, Beans.autoWriter(implClass));
-      return new Telescope<>(optic.then(listLens).then(elements), true);
-    }
-    final var fieldName = methodNameOf(getter);
-    final Lens<A, Iterable<E>> fieldLens = Records.fieldLens(fieldName);
-    return new Telescope<>(optic.then(fieldLens).then(elements));
+    final Lens<A, Iterable<E>> lens = fieldOptics.lensFor(getter);
+    return new Telescope<>(optic.then(lens).then(elements), fieldOptics);
   }
 
   /**
@@ -1040,17 +1001,8 @@ public final class Telescope<S, A> {
    */
   public <K, V> Telescope<S, V> eachValue(final Accessor<A, ? extends Map<K, V>> getter) {
     final Traversal<Map<K, V>, V> values = Traversals.eachMapValue();
-    if (beanMode) {
-      final var implClass = beanImplClass(getter);
-      final Lens<A, Map<K, V>> mapLens = Beans.lens(
-        implClass,
-        Beans.propertyOf(methodNameOf(getter)),
-        Beans.autoWriter(implClass)
-      );
-      return new Telescope<>(optic.then(mapLens).then(values), true);
-    }
-    final Lens<A, Map<K, V>> fieldLens = Records.fieldLens(methodNameOf(getter));
-    return new Telescope<>(optic.then(fieldLens).then(values));
+    final Lens<A, Map<K, V>> lens = fieldOptics.lensFor(getter);
+    return new Telescope<>(optic.then(lens).then(values), fieldOptics);
   }
 
   /**
@@ -1067,17 +1019,8 @@ public final class Telescope<S, A> {
    */
   public <E> Telescope<S, E> whenPresent(final Accessor<A, ? extends Optional<E>> getter) {
     final Traversal<Optional<E>, E> present = Traversals.eachOptional();
-    if (beanMode) {
-      final var implClass = beanImplClass(getter);
-      final Lens<A, Optional<E>> optLens = Beans.lens(
-        implClass,
-        Beans.propertyOf(methodNameOf(getter)),
-        Beans.autoWriter(implClass)
-      );
-      return new Telescope<>(optic.then(optLens).then(present), true);
-    }
-    final Lens<A, Optional<E>> fieldLens = Records.fieldLens(methodNameOf(getter));
-    return new Telescope<>(optic.then(fieldLens).then(present));
+    final Lens<A, Optional<E>> lens = fieldOptics.lensFor(getter);
+    return new Telescope<>(optic.then(lens).then(present), fieldOptics);
   }
 
   /**
@@ -1381,6 +1324,27 @@ public final class Telescope<S, A> {
     );
   }
 
+  // Shared name-correspondence check for the bean conversions (fromBean / mapBean). Each name in
+  // `ownerNames` is mapped to its counterpart via `remap` (identity when absent); names whose
+  // counterpart exists on `other` are returned in order. A missing counterpart throws the
+  // `onMissing`-built exception unless `dropUnmatched` is set. One place for the matching policy;
+  // each caller keeps its own error wording via the factory.
+  private static List<String> matchedNames(
+    final String[] ownerNames,
+    final Map<String, String> remap,
+    final Class<?> other,
+    final boolean dropUnmatched,
+    final BiFunction<String, String, RuntimeException> onMissing
+  ) {
+    final var keep = new java.util.ArrayList<String>();
+    for (final var name : ownerNames) {
+      final var counterpart = remap.getOrDefault(name, name);
+      if (Beans.hasProperty(other, counterpart)) keep.add(name);
+      else if (!dropUnmatched) throw onMissing.apply(name, counterpart);
+    }
+    return keep;
+  }
+
   private static final Map<Class<?>, String> METHOD_NAME_CACHE = new ConcurrentHashMap<>();
 
   private static String methodNameOf(final Serializable lambda) {
@@ -1399,6 +1363,56 @@ public final class Telescope<S, A> {
       return name;
     } catch (final ReflectiveOperationException e) {
       throw new IllegalArgumentException("field(...) requires a method reference to a record component accessor", e);
+    }
+  }
+
+  /**
+   * The seam between record-backed and bean-backed telescopes: how accessor-based navigation
+   * ({@link #field(Accessor)}, {@link #each(Accessor)}, {@link #eachValue}, {@link #whenPresent})
+   * turns a method reference into a field {@link Lens}. {@link #of} installs {@link
+   * RecordFieldOptics}; {@link #ofBean} installs {@link BeanFieldOptics}. Both are stateless
+   * singletons, so a telescope carries its adapter, not a flag.
+   */
+  private interface FieldOptics {
+    <A, B> Lens<A, B> lensFor(Accessor<A, ?> getter);
+  }
+
+  /** Records: read + rebuild via the canonical constructor, keyed by component name. */
+  private enum RecordFieldOptics implements FieldOptics {
+    INSTANCE;
+
+    @Override
+    public <A, B> Lens<A, B> lensFor(final Accessor<A, ?> getter) {
+      return Records.fieldLens(methodNameOf(getter));
+    }
+  }
+
+  /** POJOs: read via the getter, rebuild via the auto-detected write strategy. */
+  private enum BeanFieldOptics implements FieldOptics {
+    INSTANCE;
+
+    @Override
+    public <A, B> Lens<A, B> lensFor(final Accessor<A, ?> getter) {
+      final Class<A> implClass = implClassOf(getter);
+      final var property = Beans.propertyOf(methodNameOf(getter));
+      return Beans.<A, B>lens(implClass, property, Beans.autoWriter(implClass));
+    }
+
+    // The bean's class is recovered from the method reference's SerializedLambda — the navigation
+    // hop's owner type (Pojo for Pojo::getX), needed to discover the getter and write strategy.
+    @SuppressWarnings("unchecked")
+    private static <A> Class<A> implClassOf(final Accessor<A, ?> getter) {
+      try {
+        final var writeReplace = getter.getClass().getDeclaredMethod("writeReplace");
+        writeReplace.setAccessible(true);
+        final var serialized = (SerializedLambda) writeReplace.invoke(getter);
+        return (Class<A>) Class.forName(serialized.getImplClass().replace('/', '.'));
+      } catch (final ReflectiveOperationException e) {
+        throw new IllegalArgumentException(
+          "ofBean navigation requires a method reference to a getter (e.g. Pojo::getX)",
+          e
+        );
+      }
     }
   }
 }

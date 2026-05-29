@@ -3,71 +3,23 @@ package org.telescope.codegen;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.telescope.codegen.ProcessorHarness.source;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.OutputStream;
-import java.net.URI;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import javax.tools.Diagnostic;
-import javax.tools.DiagnosticCollector;
-import javax.tools.ForwardingJavaFileManager;
-import javax.tools.JavaCompiler;
-import javax.tools.JavaFileManager;
 import javax.tools.JavaFileObject;
-import javax.tools.SimpleJavaFileObject;
-import javax.tools.StandardLocation;
-import javax.tools.ToolProvider;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.telescope.codegen.ProcessorHarness.Compilation;
 
 /**
- * Unit tests that drive {@link FocusProcessor} in isolation through the JDK's in-memory compilation
- * API ({@link ToolProvider#getSystemJavaCompiler()}). Each test compiles a single record source
- * string with the processor wired in, then asserts on either the captured generated source or the
- * compiler diagnostics. No third-party compile-testing dependency is used.
+ * Unit tests that drive {@link FocusProcessor} in isolation through the shared {@link
+ * ProcessorHarness}. Each test compiles a single record source string with the processor wired in,
+ * then asserts on either the captured generated source or the compiler diagnostics.
  */
 class FocusProcessorTest {
 
-  /**
-   * Compiles {@code sources} with {@link FocusProcessor} attached, capturing generated {@code
-   * SOURCE} outputs and all diagnostics.
-   */
   private static Compilation compile(final JavaFileObject... sources) {
-    final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-    assertNotNull(compiler, "no system Java compiler available (need a JDK, not a JRE)");
-
-    final var diagnostics = new DiagnosticCollector<JavaFileObject>();
-    final var capturing = new CapturingFileManager(
-      compiler.getStandardFileManager(diagnostics, Locale.ROOT, StandardCharsets.UTF_8)
-    );
-
-    final JavaCompiler.CompilationTask task = compiler.getTask(
-      null,
-      capturing,
-      diagnostics,
-      // -proc:only runs annotation processing without emitting .class files (so nothing leaks
-      // into
-      // the working tree and there is no read-back compile round). The -Xlint flags mirror
-      // the build.
-      List.of("-proc:only", "-Xlint:all,-processing"),
-      null,
-      List.of(sources)
-    );
-    task.setProcessors(List.of(new FocusProcessor()));
-
-    final boolean success = task.call();
-    return new Compilation(success, diagnostics.getDiagnostics(), capturing.generatedSources());
-  }
-
-  private static JavaFileObject source(final String fqcn, final String code) {
-    return new StringSource(fqcn, code);
+    return ProcessorHarness.compile(new FocusProcessor(), sources);
   }
 
   @Nested
@@ -253,117 +205,6 @@ class FocusProcessorTest {
       assertTrue(generated.contains("Telescope<Primitives, Character> c ="), generated);
       assertTrue(generated.contains("Telescope<Primitives, Float> f ="), generated);
       assertTrue(generated.contains("Telescope<Primitives, Double> d ="), generated);
-    }
-  }
-
-  /**
-   * Outcome of one in-memory compilation: success flag, diagnostics, and captured generated source.
-   */
-  private record Compilation(
-    boolean success,
-    List<Diagnostic<? extends JavaFileObject>> diagnostics,
-    Map<String, String> generated
-  ) {
-    List<Diagnostic<? extends JavaFileObject>> errors() {
-      final var out = new ArrayList<Diagnostic<? extends JavaFileObject>>();
-      for (final var d : diagnostics) {
-        if (d.getKind() == Diagnostic.Kind.ERROR) {
-          out.add(d);
-        }
-      }
-      return out;
-    }
-
-    boolean hasError(final String fragment) {
-      for (final var d : errors()) {
-        if (d.getMessage(Locale.ROOT).contains(fragment)) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    String errorMessages() {
-      final var sb = new StringBuilder();
-      for (final var d : diagnostics) {
-        sb.append(d.getKind()).append(": ").append(d.getMessage(Locale.ROOT)).append('\n');
-      }
-      return sb.toString();
-    }
-  }
-
-  /** A source {@link JavaFileObject} backed by an in-memory string. */
-  private static final class StringSource extends SimpleJavaFileObject {
-
-    private final String code;
-
-    StringSource(final String fqcn, final String code) {
-      super(URI.create("string:///" + fqcn.replace('.', '/') + Kind.SOURCE.extension), Kind.SOURCE);
-      this.code = code;
-    }
-
-    @Override
-    public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
-      return code;
-    }
-  }
-
-  /**
-   * Wraps the standard file manager and captures any {@code SOURCE}-kind outputs the processor
-   * emits via the {@code Filer}, keyed by the binary name the compiler requested.
-   */
-  private static final class CapturingFileManager extends ForwardingJavaFileManager<JavaFileManager> {
-
-    private final Map<String, CapturedSource> captured = new LinkedHashMap<>();
-
-    CapturingFileManager(final JavaFileManager delegate) {
-      super(delegate);
-    }
-
-    @Override
-    public JavaFileObject getJavaFileForOutput(
-      final Location location,
-      final String className,
-      final JavaFileObject.Kind kind,
-      final javax.tools.FileObject sibling
-    ) throws IOException {
-      if (location == StandardLocation.SOURCE_OUTPUT && kind == JavaFileObject.Kind.SOURCE) {
-        final var sourceFile = new CapturedSource(className);
-        captured.put(className, sourceFile);
-        return sourceFile;
-      }
-      return super.getJavaFileForOutput(location, className, kind, sibling);
-    }
-
-    Map<String, String> generatedSources() {
-      final var out = new LinkedHashMap<String, String>();
-      captured.forEach((name, file) -> out.put(name, file.text()));
-      return out;
-    }
-  }
-
-  /** In-memory sink for a single generated source file. */
-  private static final class CapturedSource extends SimpleJavaFileObject {
-
-    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-
-    CapturedSource(final String className) {
-      super(URI.create("mem:///" + className.replace('.', '/') + Kind.SOURCE.extension), Kind.SOURCE);
-    }
-
-    @Override
-    public OutputStream openOutputStream() {
-      return bytes;
-    }
-
-    // The compiler reads generated sources back in the next round; serve the captured bytes.
-    @Override
-    public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
-      return text();
-    }
-
-    String text() {
-      return bytes.toString(StandardCharsets.UTF_8);
     }
   }
 }
