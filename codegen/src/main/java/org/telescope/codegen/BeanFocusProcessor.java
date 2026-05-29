@@ -147,6 +147,7 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
         for (var i = 0; i < props.size(); i++) {
           emitPropertyMethod(out, pojoName, props, setters, useBuilder, props.get(i));
         }
+        emitTelescopeForwarders(out, "path", pojoName);
       }
     );
   }
@@ -238,6 +239,8 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
         out.println("  public " + elementResultType + " " + stepMethod + "() {");
         out.println("    return " + elementBody + ";");
         out.println("  }");
+        out.println();
+        emitTelescopeForwarders(out, "path", containerType);
       }
     );
   }

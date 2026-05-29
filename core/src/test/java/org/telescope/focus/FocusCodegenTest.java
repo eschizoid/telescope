@@ -124,5 +124,59 @@ class FocusCodegenTest {
       final var membersList = FocusTeamPath.start().members().get();
       assertEquals(1, membersList.read(team).size());
     }
+
+    @Test
+    @DisplayName("Every Path and Step forwards the full Telescope op surface (incl. effects) at any hop")
+    void forwardersAtIntermediateHops() throws Exception {
+      final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
+
+      // Sync ops directly on the root Path — no .get() unwrap.
+      final var renamed = FocusPersonPath.start().update(alice, p -> new FocusPerson("ALICE", p.age(), p.address()));
+      assertEquals("ALICE", renamed.name());
+      assertEquals("alice", FocusPersonPath.start().read(alice).name());
+
+      // Effect at an intermediate sub-record Path hop: updateAsync on
+      // FocusAddressPath<FocusPerson>.
+      final var movedFuture = FocusPersonPath.start()
+        .address()
+        .updateAsync(alice, addr ->
+          java.util.concurrent.CompletableFuture.completedFuture(
+            new FocusAddress(addr.city().toUpperCase(), addr.zip())
+          )
+        );
+      assertEquals("NYC", movedFuture.get().address().city());
+
+      // updateEither at an intermediate Step → Path chain.
+      final var team = new FocusTeam(
+        "eng",
+        java.util.List.of(
+          new FocusPerson("alice", 30, new FocusAddress("nyc", "10001")),
+          new FocusPerson("bob", 25, new FocusAddress("sf", "94016"))
+        )
+      );
+      final org.telescope.Either<String, FocusTeam> ok = FocusTeamPath.start()
+        .members()
+        .each()
+        .updateEither(team, p ->
+          org.telescope.Either.right(new FocusPerson(p.name().toUpperCase(), p.age(), p.address()))
+        );
+      assertEquals(
+        "ALICE",
+        ok.fold(
+          err -> {
+            throw new AssertionError(err);
+          },
+          t -> t.members().get(0).name()
+        )
+      );
+
+      // updateIndexed forwarded from a Step → Path chain.
+      final var bumped = FocusTeamPath.start()
+        .members()
+        .each()
+        .updateIndexed(team, (i, p) -> new FocusPerson(p.name() + ":" + i, p.age(), p.address()));
+      assertEquals("alice:0", bumped.members().get(0).name());
+      assertEquals("bob:1", bumped.members().get(1).name());
+    }
   }
 }

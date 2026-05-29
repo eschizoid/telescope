@@ -191,6 +191,125 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
+   * Emit forwarding methods for every public {@link org.telescope.Telescope} operation on the
+   * wrapped path field {@code pathField} whose focus type is {@code focusType}. Lets a generated
+   * {@code <X>Path<R>} or {@code <X><Cap>Step<R>} stand in for the wrapped {@code Telescope<R,
+   * focusType>}: callers can do {@code update} / {@code updateAsync} / {@code read} / {@code
+   * toList} / etc. (including the four effect methods and {@code then}) at any hop without first
+   * unwrapping with {@code get()}.
+   */
+  protected void emitTelescopeForwarders(final PrintWriter out, final String pathField, final String focusType) {
+    // Sync reads.
+    out.println("  public " + focusType + " read(final R source) { return " + pathField + ".read(source); }");
+    out.println();
+    out.println(
+      "  public java.util.Optional<" + focusType + "> find(final R source) { return " + pathField + ".find(source); }"
+    );
+    out.println();
+    out.println(
+      "  public java.util.List<" + focusType + "> toList(final R source) { return " + pathField + ".toList(source); }"
+    );
+    out.println();
+    out.println(
+      "  public java.util.List<org.telescope.Indexed<" +
+        focusType +
+        ">> toListIndexed(final R source) { return " +
+        pathField +
+        ".toListIndexed(source); }"
+    );
+    out.println();
+    out.println("  public long count(final R source) { return " + pathField + ".count(source); }");
+    out.println();
+    out.println("  public boolean exists(final R source) { return " + pathField + ".exists(source); }");
+    out.println();
+    // Sync writes.
+    out.println(
+      "  public R set(final R source, final " + focusType + " value) { return " + pathField + ".set(source, value); }"
+    );
+    out.println();
+    out.println(
+      "  public R update(final R source, final java.util.function.Function<" +
+        focusType +
+        ", " +
+        focusType +
+        "> fn) { return " +
+        pathField +
+        ".update(source, fn); }"
+    );
+    out.println();
+    out.println(
+      "  public R updateIndexed(final R source, final java.util.function.BiFunction<Integer, ? super " +
+        focusType +
+        ", ? extends " +
+        focusType +
+        "> fn) { return " +
+        pathField +
+        ".updateIndexed(source, fn); }"
+    );
+    out.println();
+    // Effectful writes.
+    out.println(
+      "  public java.util.concurrent.CompletableFuture<R> updateAsync(final R source, final java.util.function.Function<? super " +
+        focusType +
+        ", ? extends java.util.concurrent.CompletableFuture<" +
+        focusType +
+        ">> fn) { return " +
+        pathField +
+        ".updateAsync(source, fn); }"
+    );
+    out.println();
+    out.println(
+      "  public java.util.concurrent.CompletableFuture<R> updateAsync(final R source, final java.util.function.Function<? super " +
+        focusType +
+        ", ? extends java.util.concurrent.CompletableFuture<" +
+        focusType +
+        ">> fn, final java.util.concurrent.Executor executor) { return " +
+        pathField +
+        ".updateAsync(source, fn, executor); }"
+    );
+    out.println();
+    out.println(
+      "  public java.util.Optional<R> updateOptional(final R source, final java.util.function.Function<? super " +
+        focusType +
+        ", ? extends java.util.Optional<" +
+        focusType +
+        ">> fn) { return " +
+        pathField +
+        ".updateOptional(source, fn); }"
+    );
+    out.println();
+    out.println(
+      "  public <E> org.telescope.Either<E, R> updateEither(final R source, final java.util.function.Function<? super " +
+        focusType +
+        ", ? extends org.telescope.Either<E, " +
+        focusType +
+        ">> fn) { return " +
+        pathField +
+        ".updateEither(source, fn); }"
+    );
+    out.println();
+    out.println(
+      "  public <E> org.telescope.Validated<E, R> updateValidated(final R source, final java.util.function.Function<? super " +
+        focusType +
+        ", ? extends org.telescope.Validated<E, " +
+        focusType +
+        ">> fn) { return " +
+        pathField +
+        ".updateValidated(source, fn); }"
+    );
+    out.println();
+    // Composition with an external Telescope.
+    out.println(
+      "  public <B> Telescope<R, B> then(final Telescope<" +
+        focusType +
+        ", B> next) { return " +
+        pathField +
+        ".then(next); }"
+    );
+    out.println();
+  }
+
+  /**
    * Emit a non-utility generated class — i.e., one with instance state and a non-{@code private}
    * constructor. Header (package, single {@code org.telescope.Telescope} import, javadoc, class
    * declaration with {@code typeParams}) is written before {@code body}, then the closing brace.

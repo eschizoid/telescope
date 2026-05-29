@@ -757,6 +757,13 @@ the element is itself annotated, or a terminal `Telescope` otherwise. At any hop
 `Telescope` — so a step or path _is_ a navigator, but every leaf is the same `Telescope<R, X>` value the reflective DSL
 gives you.
 
+**Ops at every hop, effects included.** Every generated `Path` and `Step` also forwards the full `Telescope` operation
+surface — `read` / `find` / `toList` / `count` / `exists` / `set` / `update` / `updateIndexed` / `toListIndexed` /
+`then` plus the four effect methods `updateAsync` (with or without `Executor`) / `updateOptional` / `updateEither` /
+`updateValidated`. You don't need to terminate with `.get()` first; the navigator stands in for the wrapped Telescope at
+any intermediate hop. So `CompanyPath.start().teams().each().users().each().updateAsync(company, svc::lookup, pool)`
+returns a `CompletableFuture<Company>` directly, with the effect threaded through the generated chain.
+
 Gradle wiring:
 
 ```kotlin
