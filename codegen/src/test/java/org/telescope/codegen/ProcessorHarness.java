@@ -28,7 +28,7 @@ import javax.tools.ToolProvider;
  * processor through the JDK's {@link ToolProvider#getSystemJavaCompiler()} over in-memory source
  * strings, capturing generated {@code SOURCE} outputs and all diagnostics — no third-party
  * compile-testing dependency. Used by {@link FocusProcessorTest}, {@link BeanFocusProcessorTest},
- * and {@link BeanBridgeProcessorTest}.
+ * and {@link BridgeProcessorTest}.
  */
 final class ProcessorHarness {
 

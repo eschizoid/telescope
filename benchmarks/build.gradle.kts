@@ -16,12 +16,11 @@ java {
 }
 
 dependencies {
-    // Reflection path (Telescope.of(...).field(...)) and the reflection-free Telescope.lens(...) constant
-    // both live in :core. :codegen is the @Focus processor that emits those lens constants — we depend on it
-    // so the benchmark module mirrors the real consumer setup, even though the hand-rolled Telescope.lens
-    // constant stands in for generated output here.
+    // The DSL and the @Focus/@Bridge annotations live in :core. :codegen is the processor that turns those
+    // annotations into generated *Focus/*Bridge constants — on the jmh annotation-processor path so it runs
+    // over src/jmh and the benchmark measures real generated output, not a hand-rolled stand-in.
     implementation(project(":core"))
-    implementation(project(":codegen"))
+    jmhAnnotationProcessor(project(":codegen"))
 }
 
 tasks.withType<JavaCompile>().configureEach {

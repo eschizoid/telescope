@@ -38,7 +38,7 @@
  * <p>Field navigation rebuilds via a record's canonical constructor. Non-record types throw at
  * runtime with a clear message. For mutable POJOs / Hibernate entities / Lombok classes, bridge
  * once at the seam: {@link org.telescope.Telescope#fromBean} reflectively maps a POJO to a record
- * and back, and the annotation {@link org.telescope.annotations.BeanBridge} is its reflection-free,
+ * and back, and the annotation {@link org.telescope.annotations.Bridge} is its reflection-free,
  * compile-checked counterpart (annotate the record to have the bridge generated and validated at
  * compile time). The {@link org.telescope.Telescope#from} / {@code .to} / {@code .using} factory
  * covers the simpler record-to-record case via an {@code Iso}.

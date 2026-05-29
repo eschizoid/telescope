@@ -19,9 +19,8 @@ import java.lang.annotation.Target;
  * <p>The lens setter rebuilds the POJO with one property changed via a strategy auto-detected at
  * compile time: a static {@code builder()}, or a no-arg constructor plus {@code setX} setters.
  * (Field injection isn't available to generated code, so a POJO that exposes neither a builder nor
- * setters can't be {@code @BeanFocus}'d — bridge it to a record with {@link BeanBridge}, or
- * navigate it reflectively with {@code ofBean}.) A missing setter/builder method is a compile
- * error.
+ * setters can't be {@code @BeanFocus}'d — bridge it to a record with {@link Bridge}, or navigate it
+ * reflectively with {@code ofBean}.) A missing setter/builder method is a compile error.
  *
  * <pre>{@code
  * @BeanFocus

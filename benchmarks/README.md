@@ -28,8 +28,9 @@ POJO benchmarks walk an identical mutable-bean mirror. The conversion benchmarks
 | `mapperForwardRead`        | `Telescope.map(...).build().read(...)` record→record conversion.                                     |
 | `ofBeanFieldUpdate`        | Native POJO deep update via `Telescope.ofBean(...).field(getX)...` — rebuild-via-strategy per level. |
 | `handRolledBeanCopyUpdate` | Same POJO update written by hand (no-arg ctor + setters) — bean baseline.                            |
-| `mapBeanForwardRead`       | `Telescope.mapBean(...).build().read(...)` POJO→POJO conversion.                                     |
+| `mapBeanForwardRead`       | `Telescope.mapBean(...).build().read(...)` POJO→POJO conversion (runtime reflective).                |
 | `fromBeanForwardRead`      | `Telescope.fromBean(...).viaFields().read(...)` POJO→record bridge.                                  |
+| `bridgeForwardRead`        | Same POJO→POJO conversion via the generated `@Bridge` constant — reflection-free codegen.            |
 
 ## Results
 
@@ -37,29 +38,32 @@ Numbers are machine-specific; reproduce with `./gradlew :benchmarks:jmh`. The ra
 absolute values. A local run (JDK 25, Apple Silicon, 1 fork, 3 warmup + 5 measurement iterations — directional, not
 publication-grade) gave:
 
-| Benchmark                  | ns/op | ±error |         vs hand-copy |
-| -------------------------- | ----: | -----: | -------------------: |
-| `handRolledBeanCopyUpdate` |  24.5 |   ±5.9 | 1.0x (bean baseline) |
-| `handRolledCopyUpdate`     |  30.4 |   ±4.5 |      record baseline |
-| `lensConstantUpdate`       |  51.5 |   ±4.5 |                 2.1x |
-| `mapperForwardRead`        | 112.2 |  ±10.8 |        record→record |
-| `fromBeanForwardRead`      | 123.0 |  ±35.3 |                 5.0x |
-| `mapBeanForwardRead`       | 170.0 | ±256.7 |    6.9x (very noisy) |
-| `reflectionFieldUpdate`    | 242.6 |   ±3.1 |                 9.9x |
-| `ofBeanFieldUpdate`        | 441.8 |  ±34.0 |                18.0x |
+| Benchmark                  | ns/op | ±error |           vs hand-copy |
+| -------------------------- | ----: | -----: | ---------------------: |
+| `bridgeForwardRead`        |  14.9 |   ±0.2 | **codegen conversion** |
+| `handRolledBeanCopyUpdate` |  22.2 |   ±0.6 |   1.0x (bean baseline) |
+| `handRolledCopyUpdate`     |  26.4 |   ±1.9 |        record baseline |
+| `lensConstantUpdate`       |  45.2 |   ±3.4 |                   1.7x |
+| `fromBeanForwardRead`      | 114.0 |   ±1.7 |                   5.1x |
+| `mapperForwardRead`        | 135.4 |  ±90.1 |  record→record (noisy) |
+| `mapBeanForwardRead`       | 142.5 |   ±3.7 |                   6.4x |
+| `reflectionFieldUpdate`    | 261.6 |  ±15.9 |                  11.8x |
+| `ofBeanFieldUpdate`        | 488.1 | ±139.7 |                  22.0x |
 
-Both deep-field benchmarks walk three levels — divide by three for per-level cost: record reflection ≈81 ns/level, the
-`lens` path ≈17 ns/level, native `ofBean` ≈147 ns/level.
+Both deep-field benchmarks walk three levels — divide by three for per-level cost: record reflection ≈87 ns/level, the
+`lens` path ≈15 ns/level, native `ofBean` ≈163 ns/level.
 
 Takeaways:
 
-- **Conversion is reasonable.** The POJO→record bridge (`fromBean`, ~123 ns) lands right next to the record→record
-  mapper (~112 ns); `mapBean` (~170 ns, noisy) costs a little more because it builds a POJO via setters rather than a
-  single record constructor. These are ordinary-feature territory.
-- **Native POJO navigation (`ofBean`) is the expensive path — ~442 ns, ~18x a hand-written bean copy and ~1.8x record
+- **`@Bridge` is the codegen win for conversions** — at ~15 ns it's ~9.5x faster than the runtime `mapBean` it replaces,
+  and actually beats a hand-rolled bean copy for the same shape (direct constructor/setter calls, no field scan, no name
+  lookup). Use the annotation whenever the source/target pair is known at compile time; fall back to runtime `mapBean` /
+  `fromBean` / `from-to-using` only for cases needing renames or transforms.
+- **Conversion is reasonable even reflectively.** Runtime `fromBean` (~114 ns), `mapper` (~135 ns), and `mapBean` (~142
+  ns) cluster in the same band — ordinary-feature territory for sub-microsecond conversions.
+- **Native POJO navigation (`ofBean`) is the expensive path — ~488 ns, ~22x a hand-written bean copy and ~1.9x record
   reflection.** It rebuilds the whole POJO at _every_ level and re-reads all getters per level to carry untouched
   properties over. Still sub-microsecond (~2M ops/sec single-threaded), so fine for ordinary use — but for a hot loop,
-  bridge once to a record with `fromBean` and navigate the record (or use `@Focus` codegen) rather than rebuilding the
-  bean at each level.
-- The reflection-free `lens` path (~52 ns) — what `@Focus` codegen emits — is ~5x faster than record reflection and ~2x
-  a hand-copy. That's the codegen payoff.
+  bridge once to a record with `fromBean` (or use `@BeanFocus` codegen) rather than rebuilding the bean at each level.
+- The reflection-free `lens` path (~45 ns) — what `@Focus` codegen emits — is ~5.8x faster than record reflection and
+  ~1.7x a hand-copy. That's the codegen payoff for deep field navigation.

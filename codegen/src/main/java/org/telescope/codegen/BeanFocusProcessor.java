@@ -27,7 +27,7 @@ import javax.lang.model.util.ElementFilter;
  * compile time, in priority order: a static {@code builder()} (with a per-property method {@code x}
  * / {@code setX} / {@code withX} and {@code build()}), then a public no-arg constructor plus {@code
  * setX} setters. Field injection is unavailable to generated code, so a POJO exposing neither is a
- * compile error (use {@code @BeanBridge} with a record, or runtime {@code Telescope.ofBean}).
+ * compile error (use {@code @Bridge} with a record, or runtime {@code Telescope.ofBean}).
  *
  * <p>Guards (each a compile error on the offending element): the annotated element must be a
  * top-level {@code class} (records use {@code @Focus}); it must have at least one readable
@@ -83,7 +83,7 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
         "@BeanFocus: " +
           pojo.getQualifiedName() +
           " needs a static builder() or a public no-arg constructor with setters (field injection " +
-          "isn't available to generated code — use @BeanBridge with a record, or Telescope.ofBean)"
+          "isn't available to generated code — use @Bridge with a record, or Telescope.ofBean)"
       );
       return;
     }

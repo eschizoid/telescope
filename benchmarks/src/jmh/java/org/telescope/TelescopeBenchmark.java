@@ -215,6 +215,7 @@ public class TelescopeBenchmark {
   private CompanyBean companyBean;
   private UserBeanA userBeanA;
   private UserBeanA userBeanForBridge;
+  private BenchUserA benchUserA;
 
   // (e) native POJO deep navigation (rebuild-via-strategy at each level).
   private Telescope<CompanyBean, String> ofBeanCity;
@@ -277,6 +278,11 @@ public class TelescopeBenchmark {
     userBeanA.setEmail("alice@example.com");
     userBeanA.setName("Alice");
     userBeanForBridge = userBeanA;
+
+    benchUserA = new BenchUserA();
+    benchUserA.setId("u1");
+    benchUserA.setEmail("alice@example.com");
+    benchUserA.setName("Alice");
 
     // (e) native POJO deep navigation, built once and reused.
     ofBeanCity = Telescope.ofBean(CompanyBean.class)
@@ -362,5 +368,13 @@ public class TelescopeBenchmark {
   @Benchmark
   public void fromBeanForwardRead(final Blackhole bh) {
     bh.consume(fromBeanConv.read(userBeanForBridge));
+  }
+
+  // ---- (h) POJO -> POJO conversion via the generated @Bridge constant (reflection-free) ---------
+  // The compile-time counterpart to (f) mapBeanForwardRead: same conversion, no runtime reflection.
+
+  @Benchmark
+  public void bridgeForwardRead(final Blackhole bh) {
+    bh.consume(BenchUserABridge.BRIDGE.read(benchUserA));
   }
 }

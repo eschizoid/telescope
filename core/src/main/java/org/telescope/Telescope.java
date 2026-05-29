@@ -228,7 +228,7 @@ public final class Telescope<S, A> {
    * POJO via the strategy you pick at the terminal {@code .via*()} call. Fields are matched by name
    * (record component name &harr; bean property name). Reflection is used at runtime — for a
    * reflection-free, compile-checked equivalent, annotate the record with {@link
-   * org.telescope.annotations.BeanBridge}.
+   * org.telescope.annotations.Bridge}.
    *
    * <pre>{@code
    * // POJO has a no-arg constructor; write each field reflectively (no setters needed):
@@ -265,14 +265,14 @@ public final class Telescope<S, A> {
    * POJOs holding records/values as leaves), not nested-POJO graphs. For a nested case, bridge each
    * level and compose.
    *
-   * <p>The reflection-free, compile-checked counterpart is {@link
-   * org.telescope.annotations.BeanBridge} — annotate the record with it to have the bridge
-   * generated and validated at compile time instead of resolved reflectively here.
+   * <p>The reflection-free, compile-checked counterpart is {@link org.telescope.annotations.Bridge}
+   * — annotate the record with it to have the bridge generated and validated at compile time
+   * instead of resolved reflectively here.
    *
    * <p>The target type parameter is bounded to {@link Record}; the POJO is unconstrained because
    * the three {@code via*()} strategies cover the shapes a non-record can take.
    *
-   * @see org.telescope.annotations.BeanBridge
+   * @see org.telescope.annotations.Bridge
    */
   public static <P> BeanFrom<P> fromBean(final Class<P> pojoClass) {
     return new BeanFrom<>(pojoClass);

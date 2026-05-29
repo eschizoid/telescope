@@ -17,7 +17,7 @@ import javax.tools.Diagnostic;
 
 /**
  * Shared machinery for the telescope annotation processors ({@link FocusProcessor}, {@link
- * BeanFocusProcessor}, {@link BeanBridgeProcessor}): generated-source emission and the {@code
+ * BeanFocusProcessor}, {@link BridgeProcessor}): generated-source emission and the {@code
  * javax.lang.model} probes (setter/builder discovery, no-arg-constructor and static-factory checks,
  * name casing, primitive boxing) they all rely on. Each concrete processor keeps only its own
  * element discovery and the member body it writes.

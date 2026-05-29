@@ -1,7 +1,7 @@
 package org.telescope.beans;
 
-import org.telescope.annotations.BeanBridge;
+import org.telescope.annotations.Bridge;
 
 /** Codegen test fixture: bridges to {@link SetterBean} via a no-arg constructor + setters. */
-@BeanBridge(SetterBean.class)
+@Bridge(SetterBean.class)
 public record SetterRecord(String id, String email) {}

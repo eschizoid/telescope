@@ -1,7 +1,7 @@
 package org.telescope.beans;
 
-import org.telescope.annotations.BeanBridge;
+import org.telescope.annotations.Bridge;
 
 /** Codegen test fixture: bridges to {@link CtorPojo} via its all-args constructor. */
-@BeanBridge(CtorPojo.class)
+@Bridge(CtorPojo.class)
 public record CtorRecord(String id, String email) {}

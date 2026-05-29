@@ -212,7 +212,7 @@ place or **convert** between two types?
 | ------------------------------------- | ---------------------------------------------------- | ---------------------------- | ---------------------------------------------- |
 | **Navigate & update** in place        | `Telescope.of(R.class)`                              | `Telescope.ofBean(P.class)`  | bridge first (below), then navigate the record |
 | **Convert / map** between two types   | `Telescope.map(A).to(B)` or `from(A).to(B).using(…)` | `Telescope.mapBean(A).to(B)` | `Telescope.fromBean(P).to(R)`                  |
-| **Reflection-free** (compile-checked) | `@Focus` (navigate)                                  | `@BeanFocus` (navigate)      | `@BeanBridge` (convert)                        |
+| **Reflection-free** (compile-checked) | `@Focus` (navigate)                                  | `@BeanFocus` (navigate)      | `@Bridge` (convert, any pair)                  |
 
 Conversions are bidirectional `Iso`s, so any cell in the middle row composes into a longer navigation path with
 `.then(...)`. Mismatched names and dropped fields are handled by `.rename(...)` / `.ignoreUnmatched()`, covered under
@@ -623,27 +623,32 @@ Telescope.mapBean(PersonA.class).to(PersonView.class)
   .build();
 ```
 
-**`@BeanBridge` — reflection-free, compile-checked.** The codegen counterpart. Annotate the record (which you own — the
-POJO is often a generated class) with the POJO type; the processor generates a `<Record>Bridge` whose `Telescope`
-constant is built from direct getter / constructor / builder calls. No runtime reflection, and a missing getter or
-component is a compile error rather than a runtime one:
+**`@Bridge` — reflection-free, compile-checked (any pair).** The codegen counterpart to `fromBean` / `mapBean` / `map`.
+Annotate the source you own with the target type; the processor generates `<Source>Bridge.BRIDGE`, a
+`Telescope<Source, Target>` built from direct component/getter reads and constructor / builder / setter calls. Both
+sides may be records or POJOs — record⇄record, record⇄POJO, POJO⇄POJO. Fields match by name (a bijection); a name
+mismatch or a missing construction strategy is a compile error, not a runtime one:
 
 ```java
-import org.telescope.annotations.BeanBridge;
+import org.telescope.annotations.Bridge;
 
-@BeanBridge(LegacyUser.class)
-record UserRecord(String id, String email, String name) {}
+@Bridge(UserDto.class)
+record UserEntity(String id, String email) {}
 
-// Generated alongside:  UserRecordBridge.BRIDGE  (a Telescope<LegacyUser, UserRecord>)
+// Generated alongside:  UserEntityBridge.BRIDGE  (a Telescope<UserEntity, UserDto>)
+UserDto dto = UserEntityBridge.BRIDGE.read(entity);
+
+// BRIDGE is a Telescope value, so it threads through a longer path:
 final Page lowered = Telescope.of(Page.class)
-  .each(Page::items)
-  .then(UserRecordBridge.BRIDGE)
-  .field(UserRecord::email)
+  .each(Page::entities) // each UserEntity on the page
+  .then(UserEntityBridge.BRIDGE) // view it as a UserDto
+  .field(UserDto::email)
   .update(page, String::toLowerCase);
 ```
 
-It auto-detects the strategy at compile time (all-args constructor → builder → no-arg + setters). Wire up
-`telescope-codegen` as shown under [Installation](#installation).
+It auto-detects each side's strategy at compile time (record canonical constructor; POJO name-matched constructor →
+builder → no-arg + setters). Renames and per-field transforms can't be expressed in an annotation — use the runtime
+`map` / `from/to/using` for those. Wire up `telescope-codegen` as shown under [Installation](#installation).
 
 **`from/to/using` — hand-written.** When the mapping is lossy, one-directional, or just custom, write both functions
 yourself:
@@ -689,10 +694,10 @@ shared parts as effectively immutable.
 
 ### Scope
 
-`fromBean` / `mapBean` / `@BeanBridge` match by exact name and need a same-named getter on each side; nested collections
-need `.viaEach`. `viaFields` (and `ofBean`'s field-injection fallback) use `setAccessible`, so under JPMS the POJO's
-package must be `opens`'d to `org.telescope` — `viaConstructor` / `viaBuilder` / setters (and all of `@BeanBridge`) use
-public members only.
+`fromBean` / `mapBean` / `@Bridge` match by exact name and need a same-named field on each side; nested collections need
+`.viaEach`. `viaFields` (and `ofBean`'s field-injection fallback) use `setAccessible`, so under JPMS the POJO's package
+must be `opens`'d to `org.telescope` — `viaConstructor` / `viaBuilder` / setters (and all of `@Bridge`) use public
+members only.
 
 ---
 
