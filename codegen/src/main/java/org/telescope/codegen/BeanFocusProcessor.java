@@ -129,6 +129,16 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
               ");"
           );
           out.println();
+          // Compile-time traversal for a collection property: descend into its elements with the
+          // element type baked in (reflection-free, generator-proven).
+          final var element = iterableElement(p.type());
+          if (element != null) {
+            out.println(
+              "  public static final Telescope<" + pojoName + ", " + element + "> each" + capitalize(p.name()) + " ="
+            );
+            out.println("    " + p.name() + ".<" + element + ">each();");
+            out.println();
+          }
         }
       }
     );

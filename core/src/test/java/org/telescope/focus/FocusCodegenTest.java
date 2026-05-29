@@ -65,5 +65,31 @@ class FocusCodegenTest {
     void singleton() {
       assertSame(FocusPersonFocus.name, FocusPersonFocus.name);
     }
+
+    @Test
+    @DisplayName("Generated each<Component> traversal descends into a List, reflection-free, and composes")
+    void traversalConstant() {
+      final var team = new FocusTeam(
+        "eng",
+        java.util.List.of(
+          new FocusPerson("alice", 30, new FocusAddress("nyc", "10001")),
+          new FocusPerson("bob", 25, new FocusAddress("sf", "94016"))
+        )
+      );
+
+      // eachMembers : Telescope<FocusTeam, FocusPerson> — composed with a member field lens. The
+      // element type is generator-proven, so this whole path is compile-checked and
+      // reflection-free.
+      final var memberNames = FocusTeamFocus.eachMembers.then(FocusPersonFocus.name);
+
+      assertEquals(java.util.List.of("alice", "bob"), memberNames.toList(team));
+
+      final var shouted = memberNames.update(team, String::toUpperCase);
+      assertEquals("ALICE", shouted.members().get(0).name());
+      assertEquals("BOB", shouted.members().get(1).name());
+      assertEquals("eng", shouted.name());
+      // original untouched (immutable rebuild)
+      assertEquals("alice", team.members().get(0).name());
+    }
   }
 }

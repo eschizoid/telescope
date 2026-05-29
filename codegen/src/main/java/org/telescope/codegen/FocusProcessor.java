@@ -86,6 +86,16 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
           }
           out.println("));");
           out.println();
+          // Compile-time traversal: for a collection component, a constant that descends into its
+          // elements with the element type baked in (reflection-free, generator-proven).
+          final var element = iterableElement(comp.asType());
+          if (element != null) {
+            out.println(
+              "  public static final Telescope<" + recordName + ", " + element + "> each" + capitalize(fieldName) + " ="
+            );
+            out.println("    " + fieldName + ".<" + element + ">each();");
+            out.println();
+          }
         }
       }
     );

@@ -8,6 +8,8 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
 import javax.tools.Diagnostic;
@@ -120,6 +122,27 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     if (s.isEmpty()) return s;
     if (s.length() > 1 && Character.isUpperCase(s.charAt(0)) && Character.isUpperCase(s.charAt(1))) return s;
     return Character.toLowerCase(s.charAt(0)) + s.substring(1);
+  }
+
+  /**
+   * If {@code type} is a single-arg {@code Iterable} (List / Set / Collection / Iterable) with a
+   * concrete element type, return that element type's fully-qualified name; otherwise {@code null}.
+   * Drives the compile-time traversal constant ({@code each<Component>}): the element type is known
+   * to the generator, so {@code lens.<Element>each()} is type-safe by construction. Raw types,
+   * wildcards, and non-collections return {@code null} (the runtime {@code .each(...)} still
+   * works).
+   */
+  protected String iterableElement(final TypeMirror type) {
+    if (type.getKind() != TypeKind.DECLARED) return null;
+    final var declared = (DeclaredType) type;
+    final var types = processingEnv.getTypeUtils();
+    final var iterable = processingEnv.getElementUtils().getTypeElement("java.lang.Iterable");
+    if (iterable == null || !types.isAssignable(types.erasure(declared), types.erasure(iterable.asType()))) {
+      return null;
+    }
+    final var args = declared.getTypeArguments();
+    if (args.size() != 1 || args.get(0).getKind() != TypeKind.DECLARED) return null;
+    return args.get(0).toString();
   }
 
   // The Telescope type parameter must be a reference type; box primitive types to their wrappers.

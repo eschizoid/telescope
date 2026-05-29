@@ -129,6 +129,34 @@ class BeanFocusProcessorTest {
       assertTrue(generated.contains("Telescope<Counter, Integer> count ="), generated);
       assertFalse(generated.contains("Telescope<Counter, int>"), generated);
     }
+
+    @Test
+    @DisplayName("a List property gets an each<Property> traversal constant")
+    void listPropertyGeneratesEach() {
+      final var compilation = compile(
+        source(
+          "demo.Roster",
+          """
+          package demo;
+          import org.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Roster {
+            private java.util.List<String> names;
+            public Roster() {}
+            public java.util.List<String> getNames() { return names; }
+            public void setNames(java.util.List<String> names) { this.names = names; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.RosterFocus");
+      assertNotNull(generated, () -> "RosterFocus not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(generated.contains("public static final Telescope<Roster, java.lang.String> eachNames ="), generated);
+      assertTrue(generated.contains("names.<java.lang.String>each();"), generated);
+    }
   }
 
   @Nested

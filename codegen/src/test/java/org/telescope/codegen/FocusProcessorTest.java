@@ -207,4 +207,45 @@ class FocusProcessorTest {
       assertTrue(generated.contains("Telescope<Primitives, Double> d ="), generated);
     }
   }
+
+  @Nested
+  @DisplayName("Compile-time traversal constants — each<Component>")
+  class TraversalConstants {
+
+    @Test
+    @DisplayName("a List component gets an each<Component> traversal with the element type baked in")
+    void listComponentGeneratesEach() {
+      final var compilation = compile(
+        source(
+          "demo.Team",
+          """
+          package demo;
+          import java.util.List;
+          import org.telescope.annotations.Focus;
+          @Focus
+          public record Team(String name, List<demo.Member> members) {}
+          """
+        ),
+        source(
+          "demo.Member",
+          """
+          package demo;
+          public record Member(String id) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.TeamFocus");
+      assertNotNull(generated, () -> "TeamFocus not generated; saw " + compilation.generated().keySet());
+
+      // The list lens stays...
+      assertTrue(generated.contains("Telescope<Team, java.util.List<demo.Member>> members ="), generated);
+      // ...plus a traversal constant that descends into elements, element type baked in.
+      assertTrue(generated.contains("public static final Telescope<Team, demo.Member> eachMembers ="), generated);
+      assertTrue(generated.contains("members.<demo.Member>each();"), generated);
+      // A non-collection component gets no each constant.
+      assertFalse(generated.contains("eachName"), generated);
+    }
+  }
 }
