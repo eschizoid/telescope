@@ -247,5 +247,41 @@ class FocusProcessorTest {
       // A non-collection component gets no each constant.
       assertFalse(generated.contains("eachName"), generated);
     }
+
+    @Test
+    @DisplayName("Map yields its value type (keys preserved) and Optional yields its element")
+    void mapAndOptionalGenerateEach() {
+      final var compilation = compile(
+        source(
+          "demo.Bag",
+          """
+          package demo;
+          import java.util.Map;
+          import java.util.Optional;
+          import org.telescope.annotations.Focus;
+          @Focus
+          public record Bag(Map<String, demo.Member> byId, Optional<demo.Member> primary) {}
+          """
+        ),
+        source(
+          "demo.Member",
+          """
+          package demo;
+          public record Member(String id) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.BagFocus");
+      assertNotNull(generated, () -> "BagFocus not generated; saw " + compilation.generated().keySet());
+
+      // Map<String, Member> -> traversal over Member (the value type).
+      assertTrue(generated.contains("public static final Telescope<Bag, demo.Member> eachById ="), generated);
+      assertTrue(generated.contains("byId.<demo.Member>each();"), generated);
+      // Optional<Member> -> traversal over Member.
+      assertTrue(generated.contains("public static final Telescope<Bag, demo.Member> eachPrimary ="), generated);
+      assertTrue(generated.contains("primary.<demo.Member>each();"), generated);
+    }
   }
 }

@@ -91,5 +91,25 @@ class FocusCodegenTest {
       // original untouched (immutable rebuild)
       assertEquals("alice", team.members().get(0).name());
     }
+
+    @Test
+    @DisplayName("each<Component> covers Map values (keys preserved) and Optional, reflection-free")
+    void mapAndOptionalTraversal() {
+      final var bag = new FocusBag(
+        java.util.Map.of("a", "x", "b", "y"),
+        java.util.Optional.of("hi"),
+        java.util.List.of("p", "q")
+      );
+
+      // Map<String,String> -> traversal over values; keys preserved.
+      final var upperValues = FocusBagFocus.eachLabels.update(bag, String::toUpperCase);
+      assertEquals(java.util.Map.of("a", "X", "b", "Y"), upperValues.labels());
+
+      // Optional<String> -> traversal over the present element.
+      final var upperNote = FocusBagFocus.eachNote.update(bag, String::toUpperCase);
+      assertEquals(java.util.Optional.of("HI"), upperNote.note());
+
+      assertEquals(java.util.List.of("p", "q"), FocusBagFocus.eachTags.toList(bag));
+    }
   }
 }

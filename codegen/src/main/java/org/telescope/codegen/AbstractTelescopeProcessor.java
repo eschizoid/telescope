@@ -2,6 +2,7 @@ package org.telescope.codegen;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.List;
 import java.util.function.Consumer;
 import javax.annotation.processing.AbstractProcessor;
 import javax.lang.model.element.Element;
@@ -125,24 +126,43 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * If {@code type} is a single-arg {@code Iterable} (List / Set / Collection / Iterable) with a
-   * concrete element type, return that element type's fully-qualified name; otherwise {@code null}.
-   * Drives the compile-time traversal constant ({@code each<Component>}): the element type is known
-   * to the generator, so {@code lens.<Element>each()} is type-safe by construction. Raw types,
-   * wildcards, and non-collections return {@code null} (the runtime {@code .each(...)} still
-   * works).
+   * The element type to traverse for a collection-shaped {@code type}, or {@code null} if it isn't
+   * traversable (raw, wildcard, or not a container). Mirrors what the runtime {@code .each()} does:
+   * a {@code Map} yields its <em>value</em> type (keys preserved), an {@code Optional} its element,
+   * and {@code List}/{@code Set}/{@code Iterable} their element. Drives the {@code each<Component>}
+   * traversal constant — the element type is known to the generator, so {@code
+   * lens.<Element>each()} is type-safe by construction; the runtime {@code .each(...)} still covers
+   * the {@code null} cases.
    */
-  protected String iterableElement(final TypeMirror type) {
+  protected String traversalElement(final TypeMirror type) {
     if (type.getKind() != TypeKind.DECLARED) return null;
     final var declared = (DeclaredType) type;
     final var types = processingEnv.getTypeUtils();
-    final var iterable = processingEnv.getElementUtils().getTypeElement("java.lang.Iterable");
-    if (iterable == null || !types.isAssignable(types.erasure(declared), types.erasure(iterable.asType()))) {
-      return null;
-    }
+    final var elements = processingEnv.getElementUtils();
     final var args = declared.getTypeArguments();
-    if (args.size() != 1 || args.get(0).getKind() != TypeKind.DECLARED) return null;
-    return args.get(0).toString();
+    final var erasure = types.erasure(declared);
+
+    final var map = elements.getTypeElement("java.util.Map");
+    if (map != null && types.isAssignable(erasure, types.erasure(map.asType()))) {
+      return concreteArg(args, 1); // Map<K,V> -> V (values; keys preserved)
+    }
+    final var optional = elements.getTypeElement("java.util.Optional");
+    if (optional != null && types.isSameType(erasure, types.erasure(optional.asType()))) {
+      return concreteArg(args, 0); // Optional<E> -> E
+    }
+    final var iterable = elements.getTypeElement("java.lang.Iterable");
+    if (iterable != null && types.isAssignable(erasure, types.erasure(iterable.asType()))) {
+      return concreteArg(args, 0); // List / Set / Iterable<E> -> E
+    }
+    return null;
+  }
+
+  // The type argument at {@code index} as a fully-qualified name, or null if absent or not a
+  // concrete (declared) type — so raw types and wildcards fall back to the runtime path.
+  private static String concreteArg(final List<? extends TypeMirror> args, final int index) {
+    if (args.size() <= index) return null;
+    final var arg = args.get(index);
+    return arg.getKind() == TypeKind.DECLARED ? arg.toString() : null;
   }
 
   // The Telescope type parameter must be a reference type; box primitive types to their wrappers.

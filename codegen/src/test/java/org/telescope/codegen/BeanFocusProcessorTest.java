@@ -157,6 +157,39 @@ class BeanFocusProcessorTest {
       assertTrue(generated.contains("public static final Telescope<Roster, java.lang.String> eachNames ="), generated);
       assertTrue(generated.contains("names.<java.lang.String>each();"), generated);
     }
+
+    @Test
+    @DisplayName("a Map property traverses values and an Optional property traverses its element")
+    void mapAndOptionalPropertiesGenerateEach() {
+      final var compilation = compile(
+        source(
+          "demo.Store",
+          """
+          package demo;
+          import org.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Store {
+            private java.util.Map<String, String> labels;
+            private java.util.Optional<String> note;
+            public Store() {}
+            public java.util.Map<String, String> getLabels() { return labels; }
+            public java.util.Optional<String> getNote() { return note; }
+            public void setLabels(java.util.Map<String, String> labels) { this.labels = labels; }
+            public void setNote(java.util.Optional<String> note) { this.note = note; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.StoreFocus");
+      assertNotNull(generated, () -> "StoreFocus not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(generated.contains("public static final Telescope<Store, java.lang.String> eachLabels ="), generated);
+      assertTrue(generated.contains("labels.<java.lang.String>each();"), generated);
+      assertTrue(generated.contains("public static final Telescope<Store, java.lang.String> eachNote ="), generated);
+      assertTrue(generated.contains("note.<java.lang.String>each();"), generated);
+    }
   }
 
   @Nested
