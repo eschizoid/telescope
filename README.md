@@ -707,7 +707,26 @@ The reflection-based `Telescope.of(User.class).field(User::name)` path resolves 
 for ordinary use (~100ns), but a typo or a rename surfaces as a runtime error, not a compile error. Annotate the types
 you navigate with `@Focus` (records) or `@BeanFocus` (POJOs) and add the processor to your build; for each annotated
 type the processor emits a sibling **fluent typed path navigator** that reads like the runtime DSL but is fully
-compile-checked and reflection-free:
+compile-checked and reflection-free.
+
+**Same path, two ways.** The two surfaces produce the same terminal `Telescope<Company, String>` and the same `update`
+result — they only differ in _when_ the path is resolved (runtime vs `javac`) and _how_ it's dispatched (reflection vs
+direct method-ref + constructor calls). On the [benchmarks](benchmarks/README.md), the reflective deep-field path
+measures ~262 ns/op; the codegen lens path it desugars to measures ~45 ns/op (~5.8x).
+
+```java
+// Reflective — runtime resolution, ~100 ns per field hop
+Telescope.of(Company.class)
+  .each(Company::departments).each(Department::teams)
+  .each(Team::users).field(User::email)
+  .update(company, String::toLowerCase);
+
+// Compile-time, reflection-free — same Telescope, generator-built
+CompanyPath.start()
+  .departments().each().teams().each()
+  .users().each().email()
+  .update(company, String::toLowerCase);
+```
 
 ```java
 import org.telescope.annotations.Focus;
