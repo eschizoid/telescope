@@ -55,10 +55,12 @@ Both deep-field benchmarks walk three levels — divide by three for per-level c
 
 Takeaways:
 
-- **`@Bridge` is the codegen win for conversions** — at ~15 ns it's ~9.5x faster than the runtime `mapBean` it replaces,
-  and actually beats a hand-rolled bean copy for the same shape (direct constructor/setter calls, no field scan, no name
-  lookup). Use the annotation whenever the source/target pair is known at compile time; fall back to runtime `mapBean` /
-  `fromBean` / `from-to-using` only for cases needing renames or transforms.
+- **`@Bridge` is the codegen win for conversions** — at ~15 ns it's ~9.5x faster than runtime `mapBean` for the same
+  POJO→POJO conversion. Direct constructor/setter calls compile away the field scan, getter resolution, and writer
+  dispatch that the reflective path has to do per call. (`handRolledBeanCopyUpdate` at ~22 ns is a different, deeper
+  workload — a 3-level tree rebuild — so it isn't an apples-to-apples lower bound; the codegen vs reflective conversion
+  comparison is the trustworthy one.) Use the annotation whenever the source/target pair is known at compile time; fall
+  back to runtime `mapBean` / `fromBean` / `from-to-using` only for cases needing renames or transforms.
 - **Conversion is reasonable even reflectively.** Runtime `fromBean` (~114 ns), `mapper` (~135 ns), and `mapBean` (~142
   ns) cluster in the same band — ordinary-feature territory for sub-microsecond conversions.
 - **Native POJO navigation (`ofBean`) is the expensive path — ~488 ns, ~22x a hand-written bean copy and ~1.9x record
