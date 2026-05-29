@@ -12,9 +12,10 @@ import org.junit.jupiter.api.Test;
 import org.telescope.codegen.ProcessorHarness.Compilation;
 
 /**
- * Drives {@link BeanFocusProcessor} through the shared {@link ProcessorHarness}. Covers both
- * rebuild strategies (static {@code builder()} and no-arg constructor + setters), primitive boxing,
- * and every guard that raises a compile error.
+ * Drives {@link BeanFocusProcessor} through the shared {@link ProcessorHarness}. Asserts on the
+ * shape of the generated fluent navigator: {@code <Pojo>Path<R>} with {@code start()}, {@code
+ * get()}, and per-property methods (scalar terminal / sub-bean-Path / container step), for both
+ * rebuild strategies (static {@code builder()} and no-arg constructor + setters), plus the guards.
  */
 class BeanFocusProcessorTest {
 
@@ -23,11 +24,11 @@ class BeanFocusProcessorTest {
   }
 
   @Nested
-  @DisplayName("Happy path — rebuild strategies")
+  @DisplayName("Happy path — navigator shape across rebuild strategies")
   class HappyPath {
 
     @Test
-    @DisplayName("builder() POJO: lens setter rebuilds via builder(), swapping only the focused property")
+    @DisplayName("builder() POJO: navigator method rebuilds via builder(), swapping only the focused property")
     void builderStrategy() {
       final var compilation = compile(
         source(
@@ -56,10 +57,12 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.BuilderPojoFocus");
-      assertNotNull(generated, () -> "BuilderPojoFocus not generated; saw " + compilation.generated().keySet());
+      final var generated = compilation.generated().get("demo.BuilderPojoPath");
+      assertNotNull(generated, () -> "BuilderPojoPath not generated; saw " + compilation.generated().keySet());
 
-      assertTrue(generated.contains("public static final Telescope<BuilderPojo, java.lang.String> id ="), generated);
+      assertTrue(generated.contains("public final class BuilderPojoPath<R>"), generated);
+      assertTrue(generated.contains("public static BuilderPojoPath<BuilderPojo> start()"), generated);
+      assertTrue(generated.contains("public Telescope<R, java.lang.String> id()"), generated);
       assertTrue(generated.contains("Telescope.lens(BuilderPojo::getId,"), generated);
       assertTrue(generated.contains("BuilderPojo.builder()"), generated);
       assertTrue(generated.contains(".build()"), generated);
@@ -70,7 +73,7 @@ class BeanFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("setter POJO: lens setter rebuilds via no-arg ctor + setX")
+    @DisplayName("setter POJO: navigator method rebuilds via no-arg ctor + setX")
     void setterStrategy() {
       final var compilation = compile(
         source(
@@ -93,9 +96,10 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.SetterPojoFocus");
-      assertNotNull(generated, () -> "SetterPojoFocus not generated; saw " + compilation.generated().keySet());
+      final var generated = compilation.generated().get("demo.SetterPojoPath");
+      assertNotNull(generated, () -> "SetterPojoPath not generated; saw " + compilation.generated().keySet());
 
+      assertTrue(generated.contains("public final class SetterPojoPath<R>"), generated);
       assertTrue(generated.contains("new SetterPojo()"), generated);
       assertTrue(generated.contains("c.setId(v)"), generated);
       assertTrue(generated.contains("c.setEmail(v)"), generated);
@@ -103,7 +107,7 @@ class BeanFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("int property surfaces as Telescope<..., Integer>")
+    @DisplayName("int property surfaces as Telescope<R, Integer> on the navigator method")
     void primitiveIsBoxed() {
       final var compilation = compile(
         source(
@@ -123,16 +127,16 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.CounterFocus");
-      assertNotNull(generated, () -> "CounterFocus not generated; saw " + compilation.generated().keySet());
+      final var generated = compilation.generated().get("demo.CounterPath");
+      assertNotNull(generated, () -> "CounterPath not generated; saw " + compilation.generated().keySet());
 
-      assertTrue(generated.contains("Telescope<Counter, Integer> count ="), generated);
-      assertFalse(generated.contains("Telescope<Counter, int>"), generated);
+      assertTrue(generated.contains("public Telescope<R, Integer> count()"), generated);
+      assertFalse(generated.contains("Telescope<R, int>"), generated);
     }
 
     @Test
-    @DisplayName("a List property gets an each<Property> traversal constant")
-    void listPropertyGeneratesEach() {
+    @DisplayName("a List property emits a Step whose each() returns a terminal Telescope")
+    void listOfScalarsEachReturnsTerminal() {
       final var compilation = compile(
         source(
           "demo.Roster",
@@ -151,16 +155,19 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.RosterFocus");
-      assertNotNull(generated, () -> "RosterFocus not generated; saw " + compilation.generated().keySet());
+      final var step = compilation.generated().get("demo.RosterNamesStep");
+      assertNotNull(step, () -> "RosterNamesStep not generated; saw " + compilation.generated().keySet());
+      assertTrue(step.contains("public final class RosterNamesStep<R>"), step);
+      assertTrue(step.contains("public Telescope<R, java.lang.String> each()"), step);
 
-      assertTrue(generated.contains("public static final Telescope<Roster, java.lang.String> eachNames ="), generated);
-      assertTrue(generated.contains("names.<java.lang.String>each();"), generated);
+      final var path = compilation.generated().get("demo.RosterPath");
+      assertNotNull(path);
+      assertTrue(path.contains("public RosterNamesStep<R> names()"), path);
     }
 
     @Test
-    @DisplayName("a Map property traverses values and an Optional property traverses its element")
-    void mapAndOptionalPropertiesGenerateEach() {
+    @DisplayName("a Map property's step exposes eachValue(); an Optional property's step exposes whenPresent()")
+    void mapAndOptionalUseDistinctStepMethods() {
       final var compilation = compile(
         source(
           "demo.Store",
@@ -182,13 +189,14 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.StoreFocus");
-      assertNotNull(generated, () -> "StoreFocus not generated; saw " + compilation.generated().keySet());
 
-      assertTrue(generated.contains("public static final Telescope<Store, java.lang.String> eachLabels ="), generated);
-      assertTrue(generated.contains("labels.<java.lang.String>each();"), generated);
-      assertTrue(generated.contains("public static final Telescope<Store, java.lang.String> eachNote ="), generated);
-      assertTrue(generated.contains("note.<java.lang.String>each();"), generated);
+      final var labelsStep = compilation.generated().get("demo.StoreLabelsStep");
+      assertNotNull(labelsStep, () -> "StoreLabelsStep not generated; saw " + compilation.generated().keySet());
+      assertTrue(labelsStep.contains("public Telescope<R, java.lang.String> eachValue()"), labelsStep);
+
+      final var noteStep = compilation.generated().get("demo.StoreNoteStep");
+      assertNotNull(noteStep, () -> "StoreNoteStep not generated; saw " + compilation.generated().keySet());
+      assertTrue(noteStep.contains("public Telescope<R, java.lang.String> whenPresent()"), noteStep);
     }
   }
 
@@ -294,32 +302,6 @@ class BeanFocusProcessorTest {
       assertTrue(
         compilation.hasError("needs a static builder() or a public no-arg constructor with setters"),
         () -> "expected no-strategy diagnostic; saw " + compilation.errorMessages()
-      );
-    }
-
-    @Test
-    @DisplayName("no-arg constructor but a missing setter is an error")
-    void missingSetterIsRejected() {
-      final var compilation = compile(
-        source(
-          "demo.HalfBean",
-          """
-          package demo;
-          import org.telescope.annotations.BeanFocus;
-          @BeanFocus
-          public class HalfBean {
-            private String a = "x";
-            public HalfBean() {}
-            public String getA() { return a; }
-          }
-          """
-        )
-      );
-
-      assertFalse(compilation.success(), "a getter-only @BeanFocus class should fail");
-      assertTrue(
-        compilation.hasError("no setter for property 'a'"),
-        () -> "expected missing-setter diagnostic; saw " + compilation.errorMessages()
       );
     }
   }

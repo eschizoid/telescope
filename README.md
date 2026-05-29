@@ -701,29 +701,42 @@ members only.
 
 ---
 
-## Compile-time field navigation (`@Focus` codegen)
+## Compile-time, reflection-free navigation (`@Focus` / `@BeanFocus`)
 
-The reflection-based `.field(User::name)` path resolves the field name at runtime — fast enough for almost everything
-(~100ns), but a typo or a rename surfaces as a runtime error, not a compile error. Annotate a record with `@Focus` and
-add the processor to your build; it generates a `<Record>Focus` companion with one `Telescope` constant per component:
+The reflection-based `Telescope.of(User.class).field(User::name)` path resolves the field name at runtime — fast enough
+for ordinary use (~100ns), but a typo or a rename surfaces as a runtime error, not a compile error. Annotate the types
+you navigate with `@Focus` (records) or `@BeanFocus` (POJOs) and add the processor to your build; for each annotated
+type the processor emits a sibling **fluent typed path navigator** that reads like the runtime DSL but is fully
+compile-checked and reflection-free:
 
 ```java
 import org.telescope.annotations.Focus;
 
-@Focus
-record User(String name, int age, Address address) {}
+@Focus record Address(String city, String zip) {}
+@Focus record User(String name, int age, Address address) {}
+@Focus record Team(String name, List<User> users) {}
+@Focus record Company(String name, List<Team> teams) {}
 
-// Generated alongside, at compile time:
-// public final class UserFocus {
-//   public static final Telescope<User, String>  name    = Telescope.lens(...);
-//   public static final Telescope<User, Integer> age     = Telescope.lens(...);
-//   public static final Telescope<User, Address> address = Telescope.lens(...);
-// }
+// Generated: <X>Path<R> per annotated type plus a step class per collection-shaped component.
+// Usage reads like the reflective DSL — but every hop is type-checked by javac and every read /
+// rebuild is a direct method-ref + constructor call (no reflection):
+final Telescope<Company, String> userNames = CompanyPath.start()
+  .teams().each()        // step over List<Team> → TeamPath<Company>
+  .users().each()        // step over List<User> → UserPath<Company>
+  .name();               // terminal Telescope<Company, String>
 
-// Usage — no reflection, the field reference is checked by javac:
-UserFocus.name.update(alice, String::toUpperCase);
-UserFocus.address.then(AddressFocus.city).set(alice, "Boston");   // composes like any telescope
+final Company shouted = userNames.update(company, String::toUpperCase);
+
+// Single fields are just as direct:
+UserPath.start().address().city().update(alice, String::toUpperCase);
 ```
+
+Each scalar component yields a terminal `Telescope<R, T>`; each sub-record component (also `@Focus`-annotated) yields a
+`<Sub>Path<R>` to keep navigating; each container component yields a small step class whose `.each()` (List/Set/
+Iterable), `.eachValue()` (Map values, keys preserved), or `.whenPresent()` (Optional) returns the element's `Path` when
+the element is itself annotated, or a terminal `Telescope` otherwise. At any hop, `.get()` returns the current
+`Telescope` — so a step or path _is_ a navigator, but every leaf is the same `Telescope<R, X>` value the reflective DSL
+gives you.
 
 Gradle wiring:
 
@@ -732,28 +745,23 @@ implementation("io.github.eschizoid:telescope:0.1.0")
 annotationProcessor("io.github.eschizoid:telescope-codegen:0.1.0")
 ```
 
-The generated constants are plain `Telescope<S, A>` values — they read, write, and compose exactly like reflection-built
-ones, just without the per-access reflection cost. `@Focus` is source-retention and inert without the processor, so
-annotating costs nothing if you don't wire up codegen. Only top-level records are supported (a generated top-level class
-can't reference a nested record's constructor).
+`@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
+wire up codegen. Only top-level records / classes are supported (the generated top-level navigator can't reference a
+nested type's constructor).
 
-**`@BeanFocus` — the POJO analog.** `ofBean` navigation rebuilds the whole bean and re-reads every getter reflectively
-at each hop (~442 ns for a 3-level path). Annotate a POJO with `@BeanFocus` and the same processor generates a
-`<Pojo>Focus` companion of `Telescope` constants built from direct getter + rebuild calls (a static `builder()` when
-present, else a no-arg constructor with setters) — no reflection, ~52 ns:
+**`@BeanFocus` — the POJO analog.** Same surface as `@Focus`, applied to a POJO with either a static `builder()` or a
+no-arg constructor + `setX` setters. Field injection isn't available to generated code, so a POJO that exposes neither
+is a compile error; reach for runtime `Telescope.ofBean` in that case. Compare ~488 ns for the runtime `ofBean` 3-level
+path vs ~15 ns for a generated `@Bridge` conversion in the benchmark — the navigator gets you the same reflection-free
+win for navigation.
 
 ```java
 import org.telescope.annotations.BeanFocus;
 
-@BeanFocus
-public class UserBean { /* getId()/getEmail() + setters, or a static builder() */ }
+@BeanFocus public class UserBean { /* getId/getEmail + setters, or a static builder() */ }
 
-// Generated alongside:
-// public final class UserBeanFocus {
-//   public static final Telescope<UserBean, String> email = Telescope.lens(UserBean::getEmail, (p, v) -> /* rebuilt bean */);
-// }
-
-UserBeanFocus.email.update(user, String::toLowerCase);   // immutable rebuild, no reflection
+// Generated alongside: UserBeanPath<R> with the same fluent surface as a record navigator.
+UserBeanPath.start().email().update(user, String::toLowerCase);   // no reflection
 ```
 
 ---

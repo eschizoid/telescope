@@ -5,16 +5,23 @@ skill, not here.)
 
 ## Terms
 
-### Focus constant
+### Path navigator (`<X>Path<R>`)
 
-A generated `public static final Telescope<Owner, Field>` produced by `@Focus` (records) or `@BeanFocus` (POJOs) — one
-per component/property. Reflection-free single-field navigation, with the field name checked at compile time. Deep field
-paths compose compile-checked via `.then(...)`.
+A generated fluent typed navigator emitted by `@Focus` (records) or `@BeanFocus` (POJOs), one per annotated type. The
+class is parameterised by the navigation **root** `R` and wraps a current `Telescope<R, X>`. Static `start()` roots a
+navigator at `Telescope.of(X.class)`; instance methods descend per component/property (sub-record/-bean → next
+`<Sub>Path<R>`, scalar → terminal `Telescope<R, T>`); `get()` returns the current `Telescope` at any hop.
 
-### Traversal constant (`each<Component>`)
+A path itself is _not_ a `Telescope` — it's a fluent builder. Every leaf method returns a `Telescope<R, X>`, the same
+value the reflective DSL would produce, so the navigator and the reflective DSL produce interchangeable terminals.
+End-to-end compile-time type-checked; method bodies use only `Telescope.lens(getter, setter)` plus the no-arg `.each()`
+— fully reflection-free for the same surface `@Focus`/`@BeanFocus` covered before the navigator.
 
-A generated `public static final Telescope<Owner, Element>` emitted next to the Focus constant for a collection-shaped
-component, defined as `<lens>.<Element>each()`. Covers `List` / `Set` / `Iterable` (element type), `Map` (value type —
-keys preserved), and `Optional` (element type), mirroring the runtime `.each()` dispatch. The element type is baked in
-by the generator, so descending into a collection is **compile-time checked and reflection-free**, and composes via
-`.then(...)` like any Focus constant. This is the substrate a future fluent path navigator would build on.
+### Container step (`<X><Cap>Step<R>`)
+
+A generated step class emitted alongside `<X>Path<R>` for each collection-shaped component of `X` (List/Set/Iterable,
+Map, Optional). The step is shaped as `Telescope<R, ContainerType>` and exposes `.get()` plus the matching
+container-traversal method — `.each()` (List/Set/Iterable), `.eachValue()` (Map values; keys preserved), or
+`.whenPresent()` (Optional) — which returns the element's `<Elem>Path<R>` when the element is itself annotated, or a
+terminal `Telescope<R, Element>` otherwise. The runtime dispatch is `Traversals.eachContainer` — `instanceof`-based, not
+reflective.

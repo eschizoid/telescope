@@ -1,57 +1,59 @@
 package org.telescope.focus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * End-to-end probe of the {@code @Focus} annotation processor. The processor runs against this test
- * source set (see {@code testAnnotationProcessor(project(":telescope-codegen"))} in the build) and
- * generates a sibling {@code *Focus} class for each annotated top-level record ({@link FocusPerson}
- * → {@code FocusPersonFocus}, {@link FocusAddress} → {@code FocusAddressFocus}). The tests here use
- * those generated constants, proving both that the processor ran and that the emitted code is
- * correct.
+ * End-to-end probe of the {@code @Focus} fluent path navigator. The processor runs against this
+ * test source set (see {@code testAnnotationProcessor(project(":telescope-codegen"))} in the build)
+ * and generates a sibling {@code <X>Path<R>} class for each annotated top-level record ({@link
+ * FocusPerson} &rarr; {@code FocusPersonPath}, {@link FocusAddress} &rarr; {@code
+ * FocusAddressPath}, …). The tests here use those navigators, proving both that the processor ran
+ * and that the emitted code is correct.
  */
 class FocusCodegenTest {
 
   @Nested
-  @DisplayName("Generated *Focus classes")
+  @DisplayName("Generated *Path navigators")
   class Generated {
 
     @Test
-    @DisplayName("FocusPersonFocus.name reads and writes the name field")
-    void nameLens() {
+    @DisplayName("FocusPersonPath.start().name() reads and updates the name field")
+    void nameNavigation() {
       final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
+      final var name = FocusPersonPath.start().name();
 
-      assertEquals("alice", FocusPersonFocus.name.read(alice));
+      assertEquals("alice", name.read(alice));
 
-      final var renamed = FocusPersonFocus.name.update(alice, String::toUpperCase);
+      final var renamed = name.update(alice, String::toUpperCase);
       assertEquals("ALICE", renamed.name());
       assertEquals(30, renamed.age());
       assertEquals(alice.address(), renamed.address());
     }
 
     @Test
-    @DisplayName("FocusPersonFocus.age boxes int → Integer; round-trips correctly")
+    @DisplayName("FocusPersonPath.start().age() boxes int → Integer; round-trips correctly")
     void primitiveBoxing() {
       final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
+      final var age = FocusPersonPath.start().age();
 
-      assertEquals(30, FocusPersonFocus.age.read(alice));
+      assertEquals(30, age.read(alice));
 
-      final var aged = FocusPersonFocus.age.update(alice, n -> n + 1);
+      final var aged = age.update(alice, n -> n + 1);
       assertEquals(31, aged.age());
     }
 
     @Test
-    @DisplayName("Generated lenses compose with the rest of the DSL")
-    void composesWithDsl() {
+    @DisplayName("Deep paths compose through sub-record Path returns, compile-checked end to end")
+    void deepFieldPath() {
       final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
 
-      // Nest: FocusPersonFocus.address composed with FocusAddressFocus.city
-      final var city = FocusPersonFocus.address.then(FocusAddressFocus.city);
+      // address() returns FocusAddressPath<FocusPerson>; city() returns Telescope<FocusPerson,
+      // String>
+      final var city = FocusPersonPath.start().address().city();
 
       assertEquals("nyc", city.read(alice));
 
@@ -61,14 +63,8 @@ class FocusCodegenTest {
     }
 
     @Test
-    @DisplayName("Generated constants are singletons (same instance returned)")
-    void singleton() {
-      assertSame(FocusPersonFocus.name, FocusPersonFocus.name);
-    }
-
-    @Test
-    @DisplayName("Generated each<Component> traversal descends into a List, reflection-free, and composes")
-    void traversalConstant() {
+    @DisplayName("Container hop: List<Record> traverses elements via .each() into the element's Path")
+    void listTraversal() {
       final var team = new FocusTeam(
         "eng",
         java.util.List.of(
@@ -77,10 +73,11 @@ class FocusCodegenTest {
         )
       );
 
-      // eachMembers : Telescope<FocusTeam, FocusPerson> — composed with a member field lens. The
-      // element type is generator-proven, so this whole path is compile-checked and
+      // members() returns FocusTeamMembersStep<FocusTeam>; .each() returns
+      // FocusPersonPath<FocusTeam>;
+      // .name() returns Telescope<FocusTeam, String>. Whole path is compile-checked,
       // reflection-free.
-      final var memberNames = FocusTeamFocus.eachMembers.then(FocusPersonFocus.name);
+      final var memberNames = FocusTeamPath.start().members().each().name();
 
       assertEquals(java.util.List.of("alice", "bob"), memberNames.toList(team));
 
@@ -93,7 +90,7 @@ class FocusCodegenTest {
     }
 
     @Test
-    @DisplayName("each<Component> covers Map values (keys preserved) and Optional, reflection-free")
+    @DisplayName("Container hops: Map values via .eachValue() (keys preserved) and Optional via .whenPresent()")
     void mapAndOptionalTraversal() {
       final var bag = new FocusBag(
         java.util.Map.of("a", "x", "b", "y"),
@@ -101,15 +98,31 @@ class FocusCodegenTest {
         java.util.List.of("p", "q")
       );
 
-      // Map<String,String> -> traversal over values; keys preserved.
-      final var upperValues = FocusBagFocus.eachLabels.update(bag, String::toUpperCase);
+      // Map<String, String> values: eachValue() returns terminal Telescope<FocusBag, String>.
+      final var labelValues = FocusBagPath.start().labels().eachValue();
+      final var upperValues = labelValues.update(bag, String::toUpperCase);
       assertEquals(java.util.Map.of("a", "X", "b", "Y"), upperValues.labels());
 
-      // Optional<String> -> traversal over the present element.
-      final var upperNote = FocusBagFocus.eachNote.update(bag, String::toUpperCase);
+      // Optional<String>: whenPresent() returns terminal Telescope<FocusBag, String>.
+      final var noteValue = FocusBagPath.start().note().whenPresent();
+      final var upperNote = noteValue.update(bag, String::toUpperCase);
       assertEquals(java.util.Optional.of("HI"), upperNote.note());
 
-      assertEquals(java.util.List.of("p", "q"), FocusBagFocus.eachTags.toList(bag));
+      // List<String>: each() returns terminal Telescope<FocusBag, String>.
+      assertEquals(java.util.List.of("p", "q"), FocusBagPath.start().tags().each().toList(bag));
+    }
+
+    @Test
+    @DisplayName(".get() returns the current Telescope at any hop (terminal use of a step)")
+    void stepGetReturnsCurrentTelescope() {
+      final var team = new FocusTeam(
+        "eng",
+        java.util.List.of(new FocusPerson("alice", 30, new FocusAddress("nyc", "10001")))
+      );
+
+      // The members() step exposes the whole List as a Telescope<FocusTeam, List<FocusPerson>>.
+      final var membersList = FocusTeamPath.start().members().get();
+      assertEquals(1, membersList.read(team).size());
     }
   }
 }

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.function.Consumer;
 import javax.annotation.processing.AbstractProcessor;
 import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
@@ -126,14 +127,111 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * The element type to traverse for a collection-shaped {@code type}, or {@code null} if it isn't
-   * traversable (raw, wildcard, or not a container). Mirrors what the runtime {@code .each()} does:
-   * a {@code Map} yields its <em>value</em> type (keys preserved), an {@code Optional} its element,
-   * and {@code List}/{@code Set}/{@code Iterable} their element. Drives the {@code each<Component>}
-   * traversal constant — the element type is known to the generator, so {@code
-   * lens.<Element>each()} is type-safe by construction; the runtime {@code .each(...)} still covers
-   * the {@code null} cases.
+   * Describes a container-shaped component: its concrete element type plus the runtime-DSL method
+   * name the generated container step exposes ({@code each} / {@code eachValue} / {@code
+   * whenPresent}). Returned by {@link #traversalKind}; {@code null} when the type isn't a
+   * traversable container.
    */
+  protected record TraversalShape(String elementType, String stepMethod) {}
+
+  /**
+   * The traversal shape of a collection-shaped {@code type}, or {@code null} if it isn't
+   * traversable. {@code Map<K,V>} yields its <em>value</em> type with step method {@code eachValue}
+   * (keys preserved); {@code Optional<E>} yields {@code E} with {@code whenPresent}; {@code
+   * List}/{@code Set}/{@code Iterable<E>} yield {@code E} with {@code each}. Mirrors the runtime
+   * {@code Telescope.each} / {@code eachValue} / {@code whenPresent} naming so the generated
+   * navigator reads the same way as the reflective DSL.
+   */
+  protected TraversalShape traversalKind(final TypeMirror type) {
+    if (type.getKind() != TypeKind.DECLARED) return null;
+    final var declared = (DeclaredType) type;
+    final var types = processingEnv.getTypeUtils();
+    final var elements = processingEnv.getElementUtils();
+    final var args = declared.getTypeArguments();
+    final var erasure = types.erasure(declared);
+
+    final var map = elements.getTypeElement("java.util.Map");
+    if (map != null && types.isAssignable(erasure, types.erasure(map.asType()))) {
+      final var elem = concreteArg(args, 1);
+      return elem == null ? null : new TraversalShape(elem, "eachValue");
+    }
+    final var optional = elements.getTypeElement("java.util.Optional");
+    if (optional != null && types.isSameType(erasure, types.erasure(optional.asType()))) {
+      final var elem = concreteArg(args, 0);
+      return elem == null ? null : new TraversalShape(elem, "whenPresent");
+    }
+    final var iterable = elements.getTypeElement("java.lang.Iterable");
+    if (iterable != null && types.isAssignable(erasure, types.erasure(iterable.asType()))) {
+      final var elem = concreteArg(args, 0);
+      return elem == null ? null : new TraversalShape(elem, "each");
+    }
+    return null;
+  }
+
+  /**
+   * The fully-qualified name of {@code type}'s element if it's a top-level type carrying the
+   * annotation named by {@code annotationFqn} and of the given {@code requiredKind} (typically
+   * {@link ElementKind#RECORD} for {@code @Focus} or {@link ElementKind#CLASS} for
+   * {@code @BeanFocus}); otherwise {@code null}. Drives the navigator's "descend into a sub-Path"
+   * emission: only types that have their own generated {@code <Sub>Path<R>} are routed there;
+   * everything else becomes a terminal {@code Telescope<R, T>}.
+   */
+  protected String navigableType(final TypeMirror type, final ElementKind requiredKind, final String annotationFqn) {
+    if (type.getKind() != TypeKind.DECLARED) return null;
+    final var element = ((DeclaredType) type).asElement();
+    if (element.getKind() != requiredKind) return null;
+    final var anno = processingEnv.getElementUtils().getTypeElement(annotationFqn);
+    if (anno == null) return null;
+    for (final var am : element.getAnnotationMirrors()) {
+      if (am.getAnnotationType().asElement().equals(anno)) {
+        return ((TypeElement) element).getQualifiedName().toString();
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Emit a non-utility generated class — i.e., one with instance state and a non-{@code private}
+   * constructor. Header (package, single {@code org.telescope.Telescope} import, javadoc, class
+   * declaration with {@code typeParams}) is written before {@code body}, then the closing brace.
+   * The body is responsible for the class's constructor and members. IO failures are reported on
+   * {@code origin}.
+   */
+  protected void writeInstanceClass(
+    final String qualifiedName,
+    final String simpleName,
+    final String typeParams,
+    final String javadoc,
+    final Element origin,
+    final Consumer<PrintWriter> body
+  ) {
+    final var dot = qualifiedName.lastIndexOf('.');
+    final var pkg = dot < 0 ? "" : qualifiedName.substring(0, dot);
+    try {
+      final var file = processingEnv.getFiler().createSourceFile(qualifiedName, origin);
+      try (final var out = new PrintWriter(file.openWriter())) {
+        if (!pkg.isEmpty()) {
+          out.println("package " + pkg + ";");
+          out.println();
+        }
+        out.println("import org.telescope.Telescope;");
+        out.println();
+        out.println("/** " + javadoc + " */");
+        out.println("public final class " + simpleName + typeParams + " {");
+        out.println();
+        body.accept(out);
+        out.println("}");
+      }
+    } catch (final IOException e) {
+      error(origin, "Failed to write " + qualifiedName + ": " + e.getMessage());
+    }
+  }
+
+  /**
+   * @deprecated Superseded by {@link #traversalKind}, which also reports the step method name.
+   *     Retained briefly during the navigator migration; remove when no caller remains.
+   */
+  @Deprecated
   protected String traversalElement(final TypeMirror type) {
     if (type.getKind() != TypeKind.DECLARED) return null;
     final var declared = (DeclaredType) type;

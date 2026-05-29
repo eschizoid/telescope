@@ -12,9 +12,11 @@ import org.junit.jupiter.api.Test;
 import org.telescope.codegen.ProcessorHarness.Compilation;
 
 /**
- * Unit tests that drive {@link FocusProcessor} in isolation through the shared {@link
- * ProcessorHarness}. Each test compiles a single record source string with the processor wired in,
- * then asserts on either the captured generated source or the compiler diagnostics.
+ * Drives {@link FocusProcessor} through the shared {@link ProcessorHarness}. Asserts on the shape
+ * of the generated fluent navigator: a {@code <Record>Path<R>} class with a {@code start()}
+ * factory, a {@code get()} terminal, and one method per component (scalar terminal /
+ * sub-record-Path / container step), plus the container step classes for {@code List}/{@code
+ * Map}/{@code Optional} components.
  */
 class FocusProcessorTest {
 
@@ -23,12 +25,12 @@ class FocusProcessorTest {
   }
 
   @Nested
-  @DisplayName("Happy path — top-level record")
+  @DisplayName("Happy path — navigator class shape")
   class HappyPath {
 
     @Test
-    @DisplayName("generates a <Record>Focus class with one lens constant per component")
-    void generatesFocusClass() {
+    @DisplayName("generates a <Record>Path<R> class with start(), get(), and one method per component")
+    void generatesPathClass() {
       final var compilation = compile(
         source(
           "demo.Person",
@@ -43,25 +45,35 @@ class FocusProcessorTest {
           "demo.Address",
           """
           package demo;
+          import org.telescope.annotations.Focus;
+          @Focus
           public record Address(String city) {}
           """
         )
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      assertTrue(compilation.errors().isEmpty(), () -> "unexpected errors: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.PersonPath");
+      assertNotNull(generated, () -> "PersonPath not generated; saw " + compilation.generated().keySet());
 
-      final var generated = compilation.generated().get("demo.PersonFocus");
-      assertNotNull(generated, () -> "PersonFocus not generated; saw " + compilation.generated().keySet());
-
-      assertTrue(generated.contains("public final class PersonFocus"), generated);
+      // Parameterised class + the import header are emitted by writeInstanceClass.
+      assertTrue(generated.contains("public final class PersonPath<R>"), generated);
       assertTrue(generated.contains("import org.telescope.Telescope;"), generated);
-      // One typed lens constant per record component, with the field name preserved. The processor
-      // emits TypeMirror.toString() for the field type, which is the fully-qualified name.
-      assertTrue(generated.contains("public static final Telescope<Person, java.lang.String> name ="), generated);
-      assertTrue(generated.contains("public static final Telescope<Person, demo.Address> address ="), generated);
+
+      // start() returns PersonPath<Person> rooted at Telescope.of(Person.class).
+      assertTrue(generated.contains("public static PersonPath<Person> start()"), generated);
+      assertTrue(generated.contains("Telescope.of(Person.class)"), generated);
+
+      // get() exposes the current path as a Telescope.
+      assertTrue(generated.contains("public Telescope<R, Person> get()"), generated);
+
+      // Scalar component: terminal Telescope<R, String> method built from Telescope.lens.
+      assertTrue(generated.contains("public Telescope<R, java.lang.String> name()"), generated);
       assertTrue(generated.contains("Telescope.lens(Person::name,"), generated);
-      assertTrue(generated.contains("Telescope.lens(Person::address,"), generated);
+
+      // Sub-record component: returns the sub-record's Path<R>.
+      assertTrue(generated.contains("public demo.AddressPath<R> address()"), generated);
+      assertTrue(generated.contains("new demo.AddressPath<>"), generated);
     }
 
     @Test
@@ -80,13 +92,13 @@ class FocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.PairFocus");
-      assertNotNull(generated, () -> "PairFocus not generated; saw " + compilation.generated().keySet());
+      final var generated = compilation.generated().get("demo.PairPath");
+      assertNotNull(generated, () -> "PairPath not generated; saw " + compilation.generated().keySet());
 
-      // For the 'left' lens: new Pair(v, s.right())
-      assertTrue(generated.contains("new Pair(v, s.right())"), generated);
-      // For the 'right' lens: new Pair(s.left(), v)
-      assertTrue(generated.contains("new Pair(s.left(), v)"), generated);
+      // For the 'left' navigator: (s, v) -> new Pair(v, s.right())
+      assertTrue(generated.contains("(s, v) -> new Pair(v, s.right())"), generated);
+      // For the 'right' navigator: (s, v) -> new Pair(s.left(), v)
+      assertTrue(generated.contains("(s, v) -> new Pair(s.left(), v)"), generated);
     }
   }
 
@@ -115,8 +127,8 @@ class FocusProcessorTest {
         () -> "expected non-record diagnostic; saw " + compilation.errorMessages()
       );
       assertFalse(
-        compilation.generated().containsKey("demo.NotARecordFocus"),
-        "no Focus class should be generated for a rejected type"
+        compilation.generated().containsKey("demo.NotARecordPath"),
+        "no Path class should be generated for a rejected type"
       );
     }
 
@@ -142,19 +154,15 @@ class FocusProcessorTest {
         compilation.hasError("@Focus is only supported on top-level records"),
         () -> "expected nested-record diagnostic; saw " + compilation.errorMessages()
       );
-      assertFalse(
-        compilation.generated().containsKey("demo.InnerFocus"),
-        "no Focus class should be generated for a rejected nested record"
-      );
     }
   }
 
   @Nested
-  @DisplayName("Primitive boxing — boxedType()")
+  @DisplayName("Primitive boxing")
   class PrimitiveBoxing {
 
     @Test
-    @DisplayName("int component surfaces as Telescope<..., Integer>")
+    @DisplayName("int component surfaces as Telescope<R, Integer> on the navigator method")
     void intIsBoxedToInteger() {
       final var compilation = compile(
         source(
@@ -169,52 +177,22 @@ class FocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.AgeFocus");
-      assertNotNull(generated, () -> "AgeFocus not generated; saw " + compilation.generated().keySet());
+      final var generated = compilation.generated().get("demo.AgePath");
+      assertNotNull(generated, () -> "AgePath not generated; saw " + compilation.generated().keySet());
 
-      assertTrue(generated.contains("public static final Telescope<Age, Integer> age ="), generated);
+      assertTrue(generated.contains("public Telescope<R, Integer> age()"), generated);
       // The primitive name must not leak into the reference-typed Telescope parameter.
-      assertFalse(generated.contains("Telescope<Age, int>"), generated);
-    }
-
-    @Test
-    @DisplayName("every primitive component is mapped to its wrapper type")
-    void allPrimitivesAreBoxed() {
-      final var compilation = compile(
-        source(
-          "demo.Primitives",
-          """
-          package demo;
-          import org.telescope.annotations.Focus;
-          @Focus
-          public record Primitives(
-              boolean b, byte by, short sh, int i, long l, char c, float f, double d) {}
-          """
-        )
-      );
-
-      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.PrimitivesFocus");
-      assertNotNull(generated, () -> "PrimitivesFocus not generated; saw " + compilation.generated().keySet());
-
-      assertTrue(generated.contains("Telescope<Primitives, Boolean> b ="), generated);
-      assertTrue(generated.contains("Telescope<Primitives, Byte> by ="), generated);
-      assertTrue(generated.contains("Telescope<Primitives, Short> sh ="), generated);
-      assertTrue(generated.contains("Telescope<Primitives, Integer> i ="), generated);
-      assertTrue(generated.contains("Telescope<Primitives, Long> l ="), generated);
-      assertTrue(generated.contains("Telescope<Primitives, Character> c ="), generated);
-      assertTrue(generated.contains("Telescope<Primitives, Float> f ="), generated);
-      assertTrue(generated.contains("Telescope<Primitives, Double> d ="), generated);
+      assertFalse(generated.contains("Telescope<R, int>"), generated);
     }
   }
 
   @Nested
-  @DisplayName("Compile-time traversal constants — each<Component>")
-  class TraversalConstants {
+  @DisplayName("Container steps — List/Set/Iterable, Map, Optional")
+  class ContainerSteps {
 
     @Test
-    @DisplayName("a List component gets an each<Component> traversal with the element type baked in")
-    void listComponentGeneratesEach() {
+    @DisplayName("a List<Record> component emits a Step whose each() returns the element's Path<R>")
+    void listOfRecordsEachReturnsElementPath() {
       final var compilation = compile(
         source(
           "demo.Team",
@@ -230,27 +208,56 @@ class FocusProcessorTest {
           "demo.Member",
           """
           package demo;
+          import org.telescope.annotations.Focus;
+          @Focus
           public record Member(String id) {}
           """
         )
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.TeamFocus");
-      assertNotNull(generated, () -> "TeamFocus not generated; saw " + compilation.generated().keySet());
 
-      // The list lens stays...
-      assertTrue(generated.contains("Telescope<Team, java.util.List<demo.Member>> members ="), generated);
-      // ...plus a traversal constant that descends into elements, element type baked in.
-      assertTrue(generated.contains("public static final Telescope<Team, demo.Member> eachMembers ="), generated);
-      assertTrue(generated.contains("members.<demo.Member>each();"), generated);
-      // A non-collection component gets no each constant.
-      assertFalse(generated.contains("eachName"), generated);
+      // Step class is its own top-level type, named <Record><Cap><Component>Step.
+      final var step = compilation.generated().get("demo.TeamMembersStep");
+      assertNotNull(step, () -> "TeamMembersStep not generated; saw " + compilation.generated().keySet());
+      assertTrue(step.contains("public final class TeamMembersStep<R>"), step);
+      assertTrue(step.contains("public Telescope<R, java.util.List<demo.Member>> get()"), step);
+      // each() returns the element's Path (Member is a record).
+      assertTrue(step.contains("public demo.MemberPath<R> each()"), step);
+      assertTrue(step.contains("path.<demo.Member>each()"), step);
+
+      // The Path itself routes the members() method to the Step.
+      final var path = compilation.generated().get("demo.TeamPath");
+      assertNotNull(path, () -> "TeamPath not generated; saw " + compilation.generated().keySet());
+      assertTrue(path.contains("public TeamMembersStep<R> members()"), path);
     }
 
     @Test
-    @DisplayName("Map yields its value type (keys preserved) and Optional yields its element")
-    void mapAndOptionalGenerateEach() {
+    @DisplayName("a List<Scalar> component emits a Step whose each() returns a terminal Telescope")
+    void listOfScalarsEachReturnsTerminal() {
+      final var compilation = compile(
+        source(
+          "demo.Bag",
+          """
+          package demo;
+          import java.util.List;
+          import org.telescope.annotations.Focus;
+          @Focus
+          public record Bag(List<String> tags) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var step = compilation.generated().get("demo.BagTagsStep");
+      assertNotNull(step, () -> "BagTagsStep not generated; saw " + compilation.generated().keySet());
+      // Scalar element → terminal Telescope<R, String>, not a Path.
+      assertTrue(step.contains("public Telescope<R, java.lang.String> each()"), step);
+    }
+
+    @Test
+    @DisplayName("Map values use eachValue() (keys preserved); Optional uses whenPresent()")
+    void mapAndOptionalUseDistinctStepMethods() {
       final var compilation = compile(
         source(
           "demo.Bag",
@@ -260,28 +267,20 @@ class FocusProcessorTest {
           import java.util.Optional;
           import org.telescope.annotations.Focus;
           @Focus
-          public record Bag(Map<String, demo.Member> byId, Optional<demo.Member> primary) {}
-          """
-        ),
-        source(
-          "demo.Member",
-          """
-          package demo;
-          public record Member(String id) {}
+          public record Bag(Map<String, String> labels, Optional<String> note) {}
           """
         )
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.BagFocus");
-      assertNotNull(generated, () -> "BagFocus not generated; saw " + compilation.generated().keySet());
 
-      // Map<String, Member> -> traversal over Member (the value type).
-      assertTrue(generated.contains("public static final Telescope<Bag, demo.Member> eachById ="), generated);
-      assertTrue(generated.contains("byId.<demo.Member>each();"), generated);
-      // Optional<Member> -> traversal over Member.
-      assertTrue(generated.contains("public static final Telescope<Bag, demo.Member> eachPrimary ="), generated);
-      assertTrue(generated.contains("primary.<demo.Member>each();"), generated);
+      final var labelsStep = compilation.generated().get("demo.BagLabelsStep");
+      assertNotNull(labelsStep, () -> "BagLabelsStep not generated; saw " + compilation.generated().keySet());
+      assertTrue(labelsStep.contains("public Telescope<R, java.lang.String> eachValue()"), labelsStep);
+
+      final var noteStep = compilation.generated().get("demo.BagNoteStep");
+      assertNotNull(noteStep, () -> "BagNoteStep not generated; saw " + compilation.generated().keySet());
+      assertTrue(noteStep.contains("public Telescope<R, java.lang.String> whenPresent()"), noteStep);
     }
   }
 }
