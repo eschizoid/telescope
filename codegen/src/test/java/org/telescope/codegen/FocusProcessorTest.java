@@ -68,7 +68,7 @@ class FocusProcessorTest {
       assertTrue(generated.contains("public Telescope<R, Person> get()"), generated);
 
       // Scalar component: terminal Telescope<R, String> method built from Telescope.lens.
-      assertTrue(generated.contains("public Telescope<R, java.lang.String> name()"), generated);
+      assertTrue(generated.contains("public Telescope<R, String> name()"), generated);
       assertTrue(generated.contains("Telescope.lens(Person::name,"), generated);
 
       // Sub-record component: returns the sub-record's Path<R>.
@@ -221,7 +221,7 @@ class FocusProcessorTest {
       final var step = compilation.generated().get("demo.TeamMembersStep");
       assertNotNull(step, () -> "TeamMembersStep not generated; saw " + compilation.generated().keySet());
       assertTrue(step.contains("public final class TeamMembersStep<R>"), step);
-      assertTrue(step.contains("public Telescope<R, java.util.List<demo.Member>> get()"), step);
+      assertTrue(step.contains("public Telescope<R, List<demo.Member>> get()"), step);
       // each() returns the element's Path (Member is a record).
       assertTrue(step.contains("public demo.MemberPath<R> each()"), step);
       assertTrue(step.contains("path.<demo.Member>each()"), step);
@@ -252,7 +252,7 @@ class FocusProcessorTest {
       final var step = compilation.generated().get("demo.BagTagsStep");
       assertNotNull(step, () -> "BagTagsStep not generated; saw " + compilation.generated().keySet());
       // Scalar element → terminal Telescope<R, String>, not a Path.
-      assertTrue(step.contains("public Telescope<R, java.lang.String> each()"), step);
+      assertTrue(step.contains("public Telescope<R, String> each()"), step);
     }
 
     @Test
@@ -276,11 +276,11 @@ class FocusProcessorTest {
 
       final var labelsStep = compilation.generated().get("demo.BagLabelsStep");
       assertNotNull(labelsStep, () -> "BagLabelsStep not generated; saw " + compilation.generated().keySet());
-      assertTrue(labelsStep.contains("public Telescope<R, java.lang.String> eachValue()"), labelsStep);
+      assertTrue(labelsStep.contains("public Telescope<R, String> eachValue()"), labelsStep);
 
       final var noteStep = compilation.generated().get("demo.BagNoteStep");
       assertNotNull(noteStep, () -> "BagNoteStep not generated; saw " + compilation.generated().keySet());
-      assertTrue(noteStep.contains("public Telescope<R, java.lang.String> whenPresent()"), noteStep);
+      assertTrue(noteStep.contains("public Telescope<R, String> whenPresent()"), noteStep);
     }
   }
 }

@@ -202,16 +202,12 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // Sync reads.
     out.println("  public " + focusType + " read(final R source) { return " + pathField + ".read(source); }");
     out.println();
-    out.println(
-      "  public java.util.Optional<" + focusType + "> find(final R source) { return " + pathField + ".find(source); }"
-    );
+    out.println("  public Optional<" + focusType + "> find(final R source) { return " + pathField + ".find(source); }");
+    out.println();
+    out.println("  public List<" + focusType + "> toList(final R source) { return " + pathField + ".toList(source); }");
     out.println();
     out.println(
-      "  public java.util.List<" + focusType + "> toList(final R source) { return " + pathField + ".toList(source); }"
-    );
-    out.println();
-    out.println(
-      "  public java.util.List<org.telescope.Indexed<" +
+      "  public List<Indexed<" +
         focusType +
         ">> toListIndexed(final R source) { return " +
         pathField +
@@ -228,7 +224,7 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     );
     out.println();
     out.println(
-      "  public R update(final R source, final java.util.function.Function<" +
+      "  public R update(final R source, final Function<" +
         focusType +
         ", " +
         focusType +
@@ -238,7 +234,7 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     );
     out.println();
     out.println(
-      "  public R updateIndexed(final R source, final java.util.function.BiFunction<Integer, ? super " +
+      "  public R updateIndexed(final R source, final BiFunction<Integer, ? super " +
         focusType +
         ", ? extends " +
         focusType +
@@ -249,9 +245,9 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     out.println();
     // Effectful writes.
     out.println(
-      "  public java.util.concurrent.CompletableFuture<R> updateAsync(final R source, final java.util.function.Function<? super " +
+      "  public CompletableFuture<R> updateAsync(final R source, final Function<? super " +
         focusType +
-        ", ? extends java.util.concurrent.CompletableFuture<" +
+        ", ? extends CompletableFuture<" +
         focusType +
         ">> fn) { return " +
         pathField +
@@ -259,19 +255,19 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     );
     out.println();
     out.println(
-      "  public java.util.concurrent.CompletableFuture<R> updateAsync(final R source, final java.util.function.Function<? super " +
+      "  public CompletableFuture<R> updateAsync(final R source, final Function<? super " +
         focusType +
-        ", ? extends java.util.concurrent.CompletableFuture<" +
+        ", ? extends CompletableFuture<" +
         focusType +
-        ">> fn, final java.util.concurrent.Executor executor) { return " +
+        ">> fn, final Executor executor) { return " +
         pathField +
         ".updateAsync(source, fn, executor); }"
     );
     out.println();
     out.println(
-      "  public java.util.Optional<R> updateOptional(final R source, final java.util.function.Function<? super " +
+      "  public Optional<R> updateOptional(final R source, final Function<? super " +
         focusType +
-        ", ? extends java.util.Optional<" +
+        ", ? extends Optional<" +
         focusType +
         ">> fn) { return " +
         pathField +
@@ -279,9 +275,9 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     );
     out.println();
     out.println(
-      "  public <E> org.telescope.Either<E, R> updateEither(final R source, final java.util.function.Function<? super " +
+      "  public <E> Either<E, R> updateEither(final R source, final Function<? super " +
         focusType +
-        ", ? extends org.telescope.Either<E, " +
+        ", ? extends Either<E, " +
         focusType +
         ">> fn) { return " +
         pathField +
@@ -289,9 +285,9 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     );
     out.println();
     out.println(
-      "  public <E> org.telescope.Validated<E, R> updateValidated(final R source, final java.util.function.Function<? super " +
+      "  public <E> Validated<E, R> updateValidated(final R source, final Function<? super " +
         focusType +
-        ", ? extends org.telescope.Validated<E, " +
+        ", ? extends Validated<E, " +
         focusType +
         ">> fn) { return " +
         pathField +
@@ -307,6 +303,38 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         ".then(next); }"
     );
     out.println();
+  }
+
+  /**
+   * Shorten well-known FQNs to their imported short forms, assuming the standard import block
+   * emitted by {@link #writeInstanceClass} is present in the generated file. Cross-package types
+   * (the user's own records / POJOs / etc.) stay fully-qualified — only the auto-imported and
+   * always-imported standard names are collapsed.
+   */
+  protected static String shortenStdImports(final String typeName) {
+    if (typeName == null) return null;
+    return typeName
+      .replace("java.util.concurrent.CompletableFuture", "CompletableFuture")
+      .replace("java.util.concurrent.Executor", "Executor")
+      .replace("java.util.function.BiFunction", "BiFunction")
+      .replace("java.util.function.Function", "Function")
+      .replace("java.util.Optional", "Optional")
+      .replace("java.util.List", "List")
+      .replace("java.util.Map", "Map")
+      .replace("java.util.Set", "Set")
+      .replace("org.telescope.Either", "Either")
+      .replace("org.telescope.Validated", "Validated")
+      .replace("org.telescope.Indexed", "Indexed")
+      .replace("java.lang.String", "String")
+      .replace("java.lang.Integer", "Integer")
+      .replace("java.lang.Long", "Long")
+      .replace("java.lang.Double", "Double")
+      .replace("java.lang.Float", "Float")
+      .replace("java.lang.Boolean", "Boolean")
+      .replace("java.lang.Character", "Character")
+      .replace("java.lang.Byte", "Byte")
+      .replace("java.lang.Short", "Short")
+      .replace("java.lang.Object", "Object");
   }
 
   /**
@@ -333,7 +361,17 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
           out.println("package " + pkg + ";");
           out.println();
         }
+        out.println("import java.util.List;");
+        out.println("import java.util.Map;");
+        out.println("import java.util.Optional;");
+        out.println("import java.util.concurrent.CompletableFuture;");
+        out.println("import java.util.concurrent.Executor;");
+        out.println("import java.util.function.BiFunction;");
+        out.println("import java.util.function.Function;");
+        out.println("import org.telescope.Either;");
+        out.println("import org.telescope.Indexed;");
         out.println("import org.telescope.Telescope;");
+        out.println("import org.telescope.Validated;");
         out.println();
         out.println("/** " + javadoc + " */");
         out.println("public final class " + simpleName + typeParams + " {");

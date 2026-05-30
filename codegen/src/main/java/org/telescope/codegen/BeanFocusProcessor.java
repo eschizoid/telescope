@@ -198,7 +198,7 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
       out.println();
       return;
     }
-    final var typeStr = boxedType(target.type());
+    final var typeStr = shortenStdImports(boxedType(target.type()));
     out.println("  public Telescope<R, " + typeStr + "> " + target.name() + "() {");
     out.println("    return path.then(Telescope.lens(" + pojoName + "::" + target.getter() + ", " + setter + "));");
     out.println("  }");
@@ -214,10 +214,11 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
   ) {
     final var stepName = pojoName + capitalize(prop.name()) + "Step";
     final var qualifiedStep = pkg.isEmpty() ? stepName : pkg + "." + stepName;
-    final var containerType = prop.type().toString();
-    final var elementType = shape.elementType();
+    final var containerType = shortenStdImports(prop.type().toString());
+    final var rawElementType = shape.elementType();
+    final var elementType = shortenStdImports(rawElementType);
     final var stepMethod = shape.stepMethod();
-    final var elementIsNavigable = isBeanFocusAnnotatedClass(elementType);
+    final var elementIsNavigable = isBeanFocusAnnotatedClass(rawElementType);
     final var elementResultType = elementIsNavigable ? elementType + "Path<R>" : "Telescope<R, " + elementType + ">";
     final var elementBody = elementIsNavigable
       ? "new " + elementType + "Path<>(path.<" + elementType + ">each())"

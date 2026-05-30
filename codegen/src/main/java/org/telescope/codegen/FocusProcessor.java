@@ -162,7 +162,7 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
       out.println();
       return;
     }
-    final var typeStr = boxedType(compType);
+    final var typeStr = shortenStdImports(boxedType(compType));
     out.println("  public Telescope<R, " + typeStr + "> " + compName + "() {");
     out.println("    return path.then(Telescope.lens(" + recordName + "::" + compName + ", " + setter + "));");
     out.println("  }");
@@ -183,10 +183,11 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
     final var compName = comp.getSimpleName().toString();
     final var stepName = recordName + capitalize(compName) + "Step";
     final var qualifiedStep = pkg.isEmpty() ? stepName : pkg + "." + stepName;
-    final var containerType = comp.asType().toString();
-    final var elementType = shape.elementType();
+    final var containerType = shortenStdImports(comp.asType().toString());
+    final var rawElementType = shape.elementType();
+    final var elementType = shortenStdImports(rawElementType);
     final var stepMethod = shape.stepMethod();
-    final var elementIsNavigable = isFocusAnnotatedRecord(elementType);
+    final var elementIsNavigable = isFocusAnnotatedRecord(rawElementType);
     final var elementResultType = elementIsNavigable ? elementType + "Path<R>" : "Telescope<R, " + elementType + ">";
     final var elementBody = elementIsNavigable
       ? "new " + elementType + "Path<>(path.<" + elementType + ">each())"

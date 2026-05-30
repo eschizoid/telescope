@@ -2,9 +2,14 @@ package org.telescope.focus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.telescope.Either;
 
 /**
  * End-to-end probe of the {@code @Focus} fluent path navigator. The processor runs against this
@@ -67,7 +72,7 @@ class FocusCodegenTest {
     void listTraversal() {
       final var team = new FocusTeam(
         "eng",
-        java.util.List.of(
+        List.of(
           new FocusPerson("alice", 30, new FocusAddress("nyc", "10001")),
           new FocusPerson("bob", 25, new FocusAddress("sf", "94016"))
         )
@@ -79,7 +84,7 @@ class FocusCodegenTest {
       // reflection-free.
       final var memberNames = FocusTeamPath.start().members().each().name();
 
-      assertEquals(java.util.List.of("alice", "bob"), memberNames.toList(team));
+      assertEquals(List.of("alice", "bob"), memberNames.toList(team));
 
       final var shouted = memberNames.update(team, String::toUpperCase);
       assertEquals("ALICE", shouted.members().get(0).name());
@@ -92,33 +97,26 @@ class FocusCodegenTest {
     @Test
     @DisplayName("Container hops: Map values via .eachValue() (keys preserved) and Optional via .whenPresent()")
     void mapAndOptionalTraversal() {
-      final var bag = new FocusBag(
-        java.util.Map.of("a", "x", "b", "y"),
-        java.util.Optional.of("hi"),
-        java.util.List.of("p", "q")
-      );
+      final var bag = new FocusBag(Map.of("a", "x", "b", "y"), Optional.of("hi"), List.of("p", "q"));
 
       // Map<String, String> values: eachValue() returns terminal Telescope<FocusBag, String>.
       final var labelValues = FocusBagPath.start().labels().eachValue();
       final var upperValues = labelValues.update(bag, String::toUpperCase);
-      assertEquals(java.util.Map.of("a", "X", "b", "Y"), upperValues.labels());
+      assertEquals(Map.of("a", "X", "b", "Y"), upperValues.labels());
 
       // Optional<String>: whenPresent() returns terminal Telescope<FocusBag, String>.
       final var noteValue = FocusBagPath.start().note().whenPresent();
       final var upperNote = noteValue.update(bag, String::toUpperCase);
-      assertEquals(java.util.Optional.of("HI"), upperNote.note());
+      assertEquals(Optional.of("HI"), upperNote.note());
 
       // List<String>: each() returns terminal Telescope<FocusBag, String>.
-      assertEquals(java.util.List.of("p", "q"), FocusBagPath.start().tags().each().toList(bag));
+      assertEquals(List.of("p", "q"), FocusBagPath.start().tags().each().toList(bag));
     }
 
     @Test
     @DisplayName(".get() returns the current Telescope at any hop (terminal use of a step)")
     void stepGetReturnsCurrentTelescope() {
-      final var team = new FocusTeam(
-        "eng",
-        java.util.List.of(new FocusPerson("alice", 30, new FocusAddress("nyc", "10001")))
-      );
+      final var team = new FocusTeam("eng", List.of(new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"))));
 
       // The members() step exposes the whole List as a Telescope<FocusTeam, List<FocusPerson>>.
       final var membersList = FocusTeamPath.start().members().get();
@@ -140,26 +138,22 @@ class FocusCodegenTest {
       final var movedFuture = FocusPersonPath.start()
         .address()
         .updateAsync(alice, addr ->
-          java.util.concurrent.CompletableFuture.completedFuture(
-            new FocusAddress(addr.city().toUpperCase(), addr.zip())
-          )
+          CompletableFuture.completedFuture(new FocusAddress(addr.city().toUpperCase(), addr.zip()))
         );
       assertEquals("NYC", movedFuture.get().address().city());
 
       // updateEither at an intermediate Step → Path chain.
       final var team = new FocusTeam(
         "eng",
-        java.util.List.of(
+        List.of(
           new FocusPerson("alice", 30, new FocusAddress("nyc", "10001")),
           new FocusPerson("bob", 25, new FocusAddress("sf", "94016"))
         )
       );
-      final org.telescope.Either<String, FocusTeam> ok = FocusTeamPath.start()
+      final Either<String, FocusTeam> ok = FocusTeamPath.start()
         .members()
         .each()
-        .updateEither(team, p ->
-          org.telescope.Either.right(new FocusPerson(p.name().toUpperCase(), p.age(), p.address()))
-        );
+        .updateEither(team, p -> Either.right(new FocusPerson(p.name().toUpperCase(), p.age(), p.address())));
       assertEquals(
         "ALICE",
         ok.fold(

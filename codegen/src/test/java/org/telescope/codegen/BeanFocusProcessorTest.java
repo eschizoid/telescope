@@ -62,7 +62,7 @@ class BeanFocusProcessorTest {
 
       assertTrue(generated.contains("public final class BuilderPojoPath<R>"), generated);
       assertTrue(generated.contains("public static BuilderPojoPath<BuilderPojo> start()"), generated);
-      assertTrue(generated.contains("public Telescope<R, java.lang.String> id()"), generated);
+      assertTrue(generated.contains("public Telescope<R, String> id()"), generated);
       assertTrue(generated.contains("Telescope.lens(BuilderPojo::getId,"), generated);
       assertTrue(generated.contains("BuilderPojo.builder()"), generated);
       assertTrue(generated.contains(".build()"), generated);
@@ -158,7 +158,7 @@ class BeanFocusProcessorTest {
       final var step = compilation.generated().get("demo.RosterNamesStep");
       assertNotNull(step, () -> "RosterNamesStep not generated; saw " + compilation.generated().keySet());
       assertTrue(step.contains("public final class RosterNamesStep<R>"), step);
-      assertTrue(step.contains("public Telescope<R, java.lang.String> each()"), step);
+      assertTrue(step.contains("public Telescope<R, String> each()"), step);
 
       final var path = compilation.generated().get("demo.RosterPath");
       assertNotNull(path);
@@ -192,11 +192,11 @@ class BeanFocusProcessorTest {
 
       final var labelsStep = compilation.generated().get("demo.StoreLabelsStep");
       assertNotNull(labelsStep, () -> "StoreLabelsStep not generated; saw " + compilation.generated().keySet());
-      assertTrue(labelsStep.contains("public Telescope<R, java.lang.String> eachValue()"), labelsStep);
+      assertTrue(labelsStep.contains("public Telescope<R, String> eachValue()"), labelsStep);
 
       final var noteStep = compilation.generated().get("demo.StoreNoteStep");
       assertNotNull(noteStep, () -> "StoreNoteStep not generated; saw " + compilation.generated().keySet());
-      assertTrue(noteStep.contains("public Telescope<R, java.lang.String> whenPresent()"), noteStep);
+      assertTrue(noteStep.contains("public Telescope<R, String> whenPresent()"), noteStep);
     }
   }
 
