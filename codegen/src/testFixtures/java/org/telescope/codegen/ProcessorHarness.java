@@ -1,7 +1,5 @@
 package org.telescope.codegen;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -24,23 +22,34 @@ import javax.tools.StandardLocation;
 import javax.tools.ToolProvider;
 
 /**
- * Shared in-memory compilation harness for the annotation-processor tests. Drives a single
- * processor through the JDK's {@link ToolProvider#getSystemJavaCompiler()} over in-memory source
+ * Shared in-memory compilation harness for the annotation-processor tests. Drives one or more
+ * processors through the JDK's {@link ToolProvider#getSystemJavaCompiler()} over in-memory source
  * strings, capturing generated {@code SOURCE} outputs and all diagnostics — no third-party
- * compile-testing dependency. Used by {@link FocusProcessorTest}, {@link BeanFocusProcessorTest},
- * and {@link BridgeProcessorTest}.
+ * compile-testing dependency. Exposed via this module's {@code testFixtures} source set so the
+ * downstream {@code :lombok} tests can reuse it alongside the in-tree processor tests.
  */
-final class ProcessorHarness {
+public final class ProcessorHarness {
 
   private ProcessorHarness() {}
 
   /**
-   * Compile {@code sources} with {@code processor} attached, capturing generated source +
-   * diagnostics.
+   * Compile {@code sources} with the single {@code processor} attached, capturing generated source
+   * + diagnostics.
    */
-  static Compilation compile(final Processor processor, final JavaFileObject... sources) {
+  public static Compilation compile(final Processor processor, final JavaFileObject... sources) {
+    return compile(List.of(processor), sources);
+  }
+
+  /**
+   * Compile {@code sources} with every processor in {@code processors} attached, capturing
+   * generated source + diagnostics. List ordering is preserved — javac runs each processor once per
+   * round.
+   */
+  public static Compilation compile(final List<? extends Processor> processors, final JavaFileObject... sources) {
     final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-    assertNotNull(compiler, "no system Java compiler available (need a JDK, not a JRE)");
+    if (compiler == null) {
+      throw new IllegalStateException("no system Java compiler available (need a JDK, not a JRE)");
+    }
 
     final var diagnostics = new DiagnosticCollector<JavaFileObject>();
     final var capturing = new CapturingFileManager(
@@ -57,25 +66,25 @@ final class ProcessorHarness {
       null,
       List.of(sources)
     );
-    task.setProcessors(List.of(processor));
+    task.setProcessors(List.copyOf(processors));
 
     final boolean success = task.call();
     return new Compilation(success, diagnostics.getDiagnostics(), capturing.generatedSources());
   }
 
-  static JavaFileObject source(final String fqcn, final String code) {
+  public static JavaFileObject source(final String fqcn, final String code) {
     return new StringSource(fqcn, code);
   }
 
   /**
    * Outcome of one in-memory compilation: success flag, diagnostics, and captured generated source.
    */
-  record Compilation(
+  public record Compilation(
     boolean success,
     List<Diagnostic<? extends JavaFileObject>> diagnostics,
     Map<String, String> generated
   ) {
-    List<Diagnostic<? extends JavaFileObject>> errors() {
+    public List<Diagnostic<? extends JavaFileObject>> errors() {
       final var out = new ArrayList<Diagnostic<? extends JavaFileObject>>();
       for (final var d : diagnostics) {
         if (d.getKind() == Diagnostic.Kind.ERROR) out.add(d);
@@ -83,14 +92,14 @@ final class ProcessorHarness {
       return out;
     }
 
-    boolean hasError(final String fragment) {
+    public boolean hasError(final String fragment) {
       for (final var d : errors()) {
         if (d.getMessage(Locale.ROOT).contains(fragment)) return true;
       }
       return false;
     }
 
-    String errorMessages() {
+    public String errorMessages() {
       final var sb = new StringBuilder();
       for (final var d : diagnostics) {
         sb.append(d.getKind()).append(": ").append(d.getMessage(Locale.ROOT)).append('\n');

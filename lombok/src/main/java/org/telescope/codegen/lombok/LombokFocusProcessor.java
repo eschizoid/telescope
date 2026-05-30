@@ -1,6 +1,6 @@
 package org.telescope.codegen.lombok;
 
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
@@ -22,19 +22,24 @@ import org.telescope.codegen.AbstractTelescopeProcessor;
  * {@code eachValue} / {@code whenPresent} method; sub-properties whose class also carries a Lombok
  * bean annotation descend into their own generated Path.
  *
- * <p>Annotation-processing order: Lombok injects the synthesised getters / setters / builder during
- * the same compilation, so this processor sees them via {@link
- * javax.lang.model.util.Elements#getAllMembers}. Place both processors in the same {@code
- * annotationProcessor} configuration; Lombok runs first by convention.
+ * <p><b>Round-deferred emission.</b> Lombok installs lazy AST visitors during processor init that
+ * patch class declarations on traversal. In a non-trivial annotation-processor pipeline those
+ * visitors haven't necessarily fired by the time round 1 starts, so a processor that queries {@link
+ * javax.lang.model.util.Elements#getAllMembers} for a {@code @Data} class in round 1 may see the
+ * un-patched member list (no getters / setters / builder). To stay correct regardless of round
+ * ordering, this processor <em>collects</em> Lombok-annotated targets every round and only
+ * <em>emits</em> when {@link RoundEnvironment#processingOver} is true — by then Lombok is
+ * guaranteed done patching.
  */
 @SupportedAnnotationTypes({ "lombok.Data", "lombok.Value", "lombok.Builder" })
 @SupportedSourceVersion(SourceVersion.RELEASE_25)
 public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
 
+  private final Set<TypeElement> pending = new LinkedHashSet<>();
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var elements = processingEnv.getElementUtils();
-    final var alreadyEmitted = new HashSet<String>();
     for (final var triggerFqn : LOMBOK_BEAN_ANNOTATIONS) {
       final var anno = elements.getTypeElement(triggerFqn);
       if (anno == null) continue;
@@ -44,11 +49,14 @@ public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
           error(element, "telescope-lombok: only top-level classes are supported");
           continue;
         }
-        final var pojo = (TypeElement) element;
-        if (alreadyEmitted.add(pojo.getQualifiedName().toString())) {
-          emitBeanNavigator(pojo, "@Data/@Value/@Builder", LOMBOK_BEAN_ANNOTATIONS);
-        }
+        pending.add((TypeElement) element);
       }
+    }
+    if (roundEnv.processingOver()) {
+      for (final var pojo : pending) {
+        emitBeanNavigator(pojo, "@Data/@Value/@Builder", LOMBOK_BEAN_ANNOTATIONS);
+      }
+      pending.clear();
     }
     return false;
   }

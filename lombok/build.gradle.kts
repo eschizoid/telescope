@@ -28,6 +28,7 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-parameters"))
 }
 
+
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     testLogging {
@@ -53,6 +54,22 @@ dependencies {
     testImplementation(platform(libs.junitBom))
     testImplementation(libs.junitJupiter)
     testRuntimeOnly(libs.junitPlatformLauncher)
+    // Lombok annotations on the test compile classpath so the fixtures (DataUser, BuilderUser,
+    // ...) compile. Not on runtime — the synthesised members are baked into the .class files.
+    testCompileOnly(libs.lombok)
+
+    // The integration tests are file-based: Gradle's standard compileTestJava runs Lombok AND
+    // our LombokFocusProcessor on the fixtures under src/test/java, and we verify the generated
+    // <X>Path classes by reflection at test runtime. Both processors must be on the test
+    // annotation-processor classpath. testAnnotationProcessor is an isolated configuration —
+    // deps don't flow in from main implementation — so the transitive trail (:core for Telescope
+    // referenced by emitted code; :codegen for AbstractTelescopeProcessor extended by ours; the
+    // built classes + META-INF/services of this module for the SPI registration) is wired
+    // explicitly here.
+    testAnnotationProcessor(libs.lombok)
+    testAnnotationProcessor(project(":core"))
+    testAnnotationProcessor(project(":codegen"))
+    testAnnotationProcessor(files(tasks.named("jar")))
 }
 
 publishing {

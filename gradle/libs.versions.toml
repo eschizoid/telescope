@@ -10,6 +10,7 @@ jmh = "0.7.3"
 axion = "1.18.7"
 jreleaser = "1.19.0"
 jgit = "6.10.0.202406032230-r"
+lombok = "1.18.42"
 
 [libraries]
 junitBom = { module = "org.junit:junit-bom", version.ref = "junit" }
@@ -20,6 +21,7 @@ testcontainersJunit = { module = "org.testcontainers:testcontainers-junit-jupite
 slf4jSimple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 jgit = { module = "org.eclipse.jgit:org.eclipse.jgit", version.ref = "jgit" }
 jgitGpgBc = { module = "org.eclipse.jgit:org.eclipse.jgit.gpg.bc", version.ref = "jgit" }
+lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
 
 [plugins]
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
