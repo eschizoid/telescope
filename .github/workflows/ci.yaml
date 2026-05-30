@@ -30,6 +30,31 @@ jobs:
       - name: Build and test
         run: ./gradlew check --no-daemon --stacktrace
 
+      - name: Jacoco
+        run: |
+          ./gradlew :core:jacocoTestReport \
+            :codegen:jacocoTestReport \
+            :lombok:jacocoTestReport
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: eschizoid/telescope
+          files: |
+            ./core/build/reports/jacoco/test/jacocoTestReport.xml
+            ./codegen/build/reports/jacoco/test/jacocoTestReport.xml
+            ./lombok/build/reports/jacoco/test/jacocoTestReport.xml
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: eschizoid/telescope
+          files: |
+            ./**/build/test-results/test/*.xml
+
       - name: Upload test report
         if: failure()
         uses: actions/upload-artifact@v4

@@ -2,6 +2,7 @@ plugins {
     `java-library`
     `maven-publish`
     signing
+    jacoco
 }
 
 description = "telescope-lombok — annotation processor that emits *Path<R> navigators for Lombok @Data/@Value/@Builder classes"
@@ -33,6 +34,14 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     testLogging {
         events("passed", "failed", "skipped")
+    }
+}
+
+tasks.jacocoTestReport {
+    reports {
+        csv.required.set(true)
+        xml.required.set(true)
+        html.required.set(true)
     }
 }
 

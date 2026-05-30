@@ -3,6 +3,7 @@ plugins {
     `java-test-fixtures`
     `maven-publish`
     signing
+    jacoco
 }
 
 description = "telescope-codegen — @Focus annotation processor that emits *Focus Lens-constant companions"
@@ -33,6 +34,14 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     testLogging {
         events("passed", "failed", "skipped")
+    }
+}
+
+tasks.jacocoTestReport {
+    reports {
+        csv.required.set(true)
+        xml.required.set(true)
+        html.required.set(true)
     }
 }
 

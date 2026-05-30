@@ -10,6 +10,13 @@ One type. No category-theory jargon. Update fields deep inside immutable records
 and sealed-type variants — without writing copy constructors by hand. Got POJOs? Navigate them natively or bridge them
 to records; the same DSL applies.
 
+[![JVM 25+](https://img.shields.io/badge/JVM-25%2B-brightgreen.svg?&logo=openjdk)](https://openjdk.org/projects/jdk/25/)
+[![Build](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml/badge.svg)](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml)
+[![Codecov](https://codecov.io/gh/eschizoid/telescope/graph/badge.svg?token=a235ea8b-e6dc-45c6-8fea-e5050940c5d4)](https://codecov.io/gh/eschizoid/telescope)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.eschizoid/telescope.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.eschizoid/telescope)
+[![Javadoc](https://javadoc.io/badge2/io.github.eschizoid/telescope/javadoc.svg?color=purple)](https://javadoc.io/doc/io.github.eschizoid/telescope)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 ---
 
 ## 30 seconds
