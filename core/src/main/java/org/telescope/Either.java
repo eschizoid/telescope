@@ -239,11 +239,7 @@ public sealed interface Either<L, R> {
   ) {
     return switch (this) {
       case Left<L, R> l -> CompletableFuture.completedFuture(Either.left(l.value()));
-      case Right<L, R> r -> {
-        @SuppressWarnings("unchecked")
-        final var next = (CompletableFuture<T>) f.apply(r.value());
-        yield next.thenApply(Either::right);
-      }
+      case Right<L, R> r -> f.apply(r.value()).thenApply(Either::<L, T>right);
     };
   }
 }

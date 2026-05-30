@@ -256,11 +256,7 @@ public sealed interface Validated<E, A> {
   ) {
     return switch (this) {
       case Invalid<E, A> inv -> CompletableFuture.completedFuture(Validated.invalid(inv.errors()));
-      case Valid<E, A> v -> {
-        @SuppressWarnings("unchecked")
-        final var next = (CompletableFuture<B>) f.apply(v.value());
-        yield next.thenApply(Validated::valid);
-      }
+      case Valid<E, A> v -> f.apply(v.value()).thenApply(Validated::<E, B>valid);
     };
   }
 

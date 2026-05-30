@@ -839,12 +839,10 @@ public final class Telescope<S, A> {
 
     private final Iso<A, B> iso;
     private final java.util.List<MapBuilder.Link> links;
-    private final Class<A> sourceType;
 
     private Mapper(final Iso<A, B> iso, final java.util.List<MapBuilder.Link> links, final Class<A> sourceType) {
       this.iso = iso;
       this.links = links;
-      this.sourceType = sourceType;
     }
 
     /**
@@ -1395,7 +1393,7 @@ public final class Telescope<S, A> {
     public <A, B> Lens<A, B> lensFor(final Accessor<A, ?> getter) {
       final Class<A> implClass = implClassOf(getter);
       final var property = Beans.propertyOf(methodNameOf(getter));
-      return Beans.<A, B>lens(implClass, property, Beans.autoWriter(implClass));
+      return Beans.lens(implClass, property, Beans.autoWriter(implClass));
     }
 
     // The bean's class is recovered from the method reference's SerializedLambda — the navigation
