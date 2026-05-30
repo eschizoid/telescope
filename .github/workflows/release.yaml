@@ -1,9 +1,17 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      releaseType:
+        description: "Release Type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 jobs:
   release:
@@ -16,8 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # axion-release derives the version from the git tag; it needs the full
-          # history (the checkout for a tag push is shallow by default).
+          # axion-release derives the version from the git history; needs full depth.
           fetch-depth: 0
 
       - name: Set up JDK 25
@@ -38,18 +45,26 @@ jobs:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
-      - name: Resolve version
+      - name: Update Version and Create Tag
         id: version
         run: |
+          # axion-release bumps the version per the chosen incrementer, creates the v* tag,
+          # commits the SNAPSHOT bump-back, and pushes both. -Prelease.disableChecks skips the
+          # uncommitted-changes guard so the release commit itself isn't rejected.
+          ./gradlew release -Prelease.incrementer=${{ inputs.releaseType }} -Prelease.disableChecks -x test
+
           RAW_VERSION=$(./gradlew currentVersion -q -Prelease.quiet)
+          TAG_VERSION="v$RAW_VERSION"
           echo "version=$RAW_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Releasing $RAW_VERSION (tag ${GITHUB_REF_NAME})"
+          echo "tagName=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $RAW_VERSION (tag $TAG_VERSION)"
 
       - name: Build and publish artifacts
         run: |
           ./gradlew clean \
             :core:build :core:publish \
             :codegen:build :codegen:publish \
+            :lombok:build :lombok:publish \
             -x test
         env:
           JRELEASER_GITHUB_TOKEN: ${{ secrets.JRELEASER_GITHUB_TOKEN }}
