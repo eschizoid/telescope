@@ -256,6 +256,98 @@ class FocusProcessorTest {
     }
 
     @Test
+    @DisplayName("Bridge hop: a record with @Focus + @Bridge gets as<Target>() returning the target's Path")
+    void bridgeHopReturnsTargetPath() {
+      final var compilation = compile(
+        source(
+          "demo.Entity",
+          """
+          package demo;
+          import org.telescope.annotations.Bridge;
+          import org.telescope.annotations.Focus;
+          @Focus
+          @Bridge(demo.Dto.class)
+          public record Entity(String id, String email) {}
+          """
+        ),
+        source(
+          "demo.Dto",
+          """
+          package demo;
+          import org.telescope.annotations.Focus;
+          @Focus
+          public record Dto(String id, String email) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.EntityPath");
+      assertNotNull(generated, () -> "EntityPath not generated; saw " + compilation.generated().keySet());
+
+      // Target is itself navigable (@Focus'd) → return its Path.
+      assertTrue(generated.contains("public demo.DtoPath<R> asDto()"), generated);
+      assertTrue(generated.contains("new demo.DtoPath<>(path.then(EntityBridge.BRIDGE))"), generated);
+    }
+
+    @Test
+    @DisplayName("Bridge hop: target without @Focus gets terminal Telescope<R, Target>")
+    void bridgeHopTerminalWhenTargetIsNotNavigable() {
+      final var compilation = compile(
+        source(
+          "demo.Entity",
+          """
+          package demo;
+          import org.telescope.annotations.Bridge;
+          import org.telescope.annotations.Focus;
+          @Focus
+          @Bridge(demo.Plain.class)
+          public record Entity(String id) {}
+          """
+        ),
+        source(
+          "demo.Plain",
+          """
+          package demo;
+          public record Plain(String id) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.EntityPath");
+      assertNotNull(generated, () -> "EntityPath not generated; saw " + compilation.generated().keySet());
+
+      // Target isn't @Focus'd → return terminal Telescope, not a Path.
+      assertTrue(generated.contains("public Telescope<R, demo.Plain> asPlain()"), generated);
+      assertTrue(generated.contains("return path.then(EntityBridge.BRIDGE);"), generated);
+      assertFalse(generated.contains("PlainPath"), generated);
+    }
+
+    @Test
+    @DisplayName("No @Bridge means no as<Target>() method")
+    void noBridgeNoHop() {
+      final var compilation = compile(
+        source(
+          "demo.PlainRec",
+          """
+          package demo;
+          import org.telescope.annotations.Focus;
+          @Focus
+          public record PlainRec(String id) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.PlainRecPath");
+      assertNotNull(generated, () -> "PlainRecPath not generated; saw " + compilation.generated().keySet());
+
+      // No @Bridge → no bridge hop (no reference to a <Source>Bridge.BRIDGE constant).
+      assertFalse(generated.contains("Bridge.BRIDGE"), () -> "unexpected bridge hop in: " + generated);
+    }
+
+    @Test
     @DisplayName("Map values use eachValue() (keys preserved); Optional uses whenPresent()")
     void mapAndOptionalUseDistinctStepMethods() {
       final var compilation = compile(

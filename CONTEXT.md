@@ -17,6 +17,16 @@ value the reflective DSL would produce, so the navigator and the reflective DSL 
 End-to-end compile-time type-checked; method bodies use only `Telescope.lens(getter, setter)` plus the no-arg `.each()`
 — fully reflection-free for the same surface `@Focus`/`@BeanFocus` covered before the navigator.
 
+### Bridge hop (`as<Target>()`)
+
+A generated navigator method emitted on `<X>Path<R>` when the annotated type `X` is also the source of an `@Bridge`
+(i.e. `@Bridge(Target.class) X` exists). The method chains `XBridge.BRIDGE` onto the current path, crossing to the
+target type in a single fluent hop. Returns `<Target>Path<R>` when the target is itself navigable (carries `@Focus` if
+it's a record or `@BeanFocus` if it's a POJO), otherwise terminal `Telescope<R, Target>`. The hop crosses paradigms
+naturally — a record source can bridge to a POJO target's Path, and vice-versa — so the navigator becomes a single
+compile-checked surface for navigation _and_ conversion. Forward direction only today; the reverse direction (target's
+Path getting `.asSource()`) stays expressible via `.then(XBridge.BRIDGE)` or `BRIDGE.reverse()`.
+
 ### Container step (`<X><Cap>Step<R>`)
 
 A generated step class emitted alongside `<X>Path<R>` for each collection-shaped component of `X` (List/Set/Iterable,

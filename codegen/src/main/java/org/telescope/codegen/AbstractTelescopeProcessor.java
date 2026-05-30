@@ -169,6 +169,90 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
+   * The fully-qualified name of the {@code @Bridge} target on {@code source}, or {@code null} if
+   * {@code source} doesn't carry an {@code @Bridge} annotation. Drives the "bridge hop" emission on
+   * a Path navigator — if the type also carries {@code @Focus} or {@code @BeanFocus}, the navigator
+   * gains an {@code as<Target>()} method that chains the generated {@code <Source>Bridge.BRIDGE}
+   * constant.
+   */
+  protected String bridgeTargetFqn(final TypeElement source) {
+    final var anno = processingEnv.getElementUtils().getTypeElement("org.telescope.annotations.Bridge");
+    if (anno == null) return null;
+    for (final var am : source.getAnnotationMirrors()) {
+      if (!am.getAnnotationType().asElement().equals(anno)) continue;
+      for (final var entry : am.getElementValues().entrySet()) {
+        if (entry.getKey().getSimpleName().contentEquals("value")) {
+          final var value = (TypeMirror) entry.getValue().getValue();
+          if (value.getKind() == TypeKind.DECLARED) {
+            return ((TypeElement) ((DeclaredType) value).asElement()).getQualifiedName().toString();
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Whether the type named by {@code qualifiedName} is itself navigable — i.e. has a generated
+   * {@code <X>Path<R>} via {@code @Focus} (on records) or {@code @BeanFocus} (on classes). Drives
+   * the bridge hop's return type: navigable target → {@code <Target>Path<R>}; otherwise terminal
+   * {@code Telescope<R, Target>}.
+   */
+  protected boolean isNavigablePath(final String qualifiedName) {
+    final var elements = processingEnv.getElementUtils();
+    final var element = elements.getTypeElement(qualifiedName);
+    if (element == null) return false;
+    if (element.getKind() == ElementKind.RECORD) {
+      return hasAnnotation(element, "org.telescope.annotations.Focus");
+    }
+    if (element.getKind() == ElementKind.CLASS) {
+      return hasAnnotation(element, "org.telescope.annotations.BeanFocus");
+    }
+    return false;
+  }
+
+  private boolean hasAnnotation(final Element element, final String annotationFqn) {
+    final var anno = processingEnv.getElementUtils().getTypeElement(annotationFqn);
+    if (anno == null) return false;
+    for (final var am : element.getAnnotationMirrors()) {
+      if (am.getAnnotationType().asElement().equals(anno)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The simple name of a fully-qualified type — the part after the last {@code .} (or the whole
+   * name).
+   */
+  protected static String simpleNameOf(final String qualifiedName) {
+    final var dot = qualifiedName.lastIndexOf('.');
+    return dot < 0 ? qualifiedName : qualifiedName.substring(dot + 1);
+  }
+
+  /**
+   * Emit a bridge hop method on a Path navigator: {@code as<TargetSimpleName>()} that chains the
+   * generated {@code <SourceSimpleName>Bridge.BRIDGE} constant onto the current path. The return
+   * type is the target's Path when navigable, else a terminal Telescope. Bridge constant is
+   * referenced by simple name because {@code @Bridge} always emits the bridge class in the source's
+   * package — the same package as the navigator.
+   */
+  protected void emitBridgeHop(final PrintWriter out, final String sourceSimpleName, final String targetFqn) {
+    final var targetSimple = simpleNameOf(targetFqn);
+    final var bridgeName = sourceSimpleName + "Bridge";
+    final var methodName = "as" + targetSimple;
+    if (isNavigablePath(targetFqn)) {
+      out.println("  public " + targetFqn + "Path<R> " + methodName + "() {");
+      out.println("    return new " + targetFqn + "Path<>(path.then(" + bridgeName + ".BRIDGE));");
+      out.println("  }");
+    } else {
+      out.println("  public Telescope<R, " + targetFqn + "> " + methodName + "() {");
+      out.println("    return path.then(" + bridgeName + ".BRIDGE);");
+      out.println("  }");
+    }
+    out.println();
+  }
+
+  /**
    * The fully-qualified name of {@code type}'s element if it's a top-level type carrying the
    * annotation named by {@code annotationFqn} and of the given {@code requiredKind} (typically
    * {@link ElementKind#RECORD} for {@code @Focus} or {@link ElementKind#CLASS} for

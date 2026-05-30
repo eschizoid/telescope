@@ -147,6 +147,8 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
         for (var i = 0; i < props.size(); i++) {
           emitPropertyMethod(out, pojoName, props, setters, useBuilder, props.get(i));
         }
+        final var bridgeTarget = bridgeTargetFqn(pojo);
+        if (bridgeTarget != null) emitBridgeHop(out, pojoName, bridgeTarget);
         emitTelescopeForwarders(out, "path", pojoName);
       }
     );

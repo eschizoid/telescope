@@ -166,6 +166,44 @@ class BeanFocusProcessorTest {
     }
 
     @Test
+    @DisplayName("Bridge hop: a POJO with @BeanFocus + @Bridge gets as<Target>() chaining the bridge")
+    void bridgeHop() {
+      final var compilation = compile(
+        source(
+          "demo.UserBean",
+          """
+          package demo;
+          import org.telescope.annotations.Bridge;
+          import org.telescope.annotations.BeanFocus;
+          @BeanFocus
+          @Bridge(demo.UserDto.class)
+          public class UserBean {
+            private String id;
+            public UserBean() {}
+            public String getId() { return id; }
+            public void setId(String id) { this.id = id; }
+          }
+          """
+        ),
+        source(
+          "demo.UserDto",
+          """
+          package demo;
+          public record UserDto(String id) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.UserBeanPath");
+      assertNotNull(generated, () -> "UserBeanPath not generated; saw " + compilation.generated().keySet());
+
+      // Target is not @Focus'd (just a record) → terminal Telescope.
+      assertTrue(generated.contains("public Telescope<R, demo.UserDto> asUserDto()"), generated);
+      assertTrue(generated.contains("return path.then(UserBeanBridge.BRIDGE);"), generated);
+    }
+
+    @Test
     @DisplayName("a Map property's step exposes eachValue(); an Optional property's step exposes whenPresent()")
     void mapAndOptionalUseDistinctStepMethods() {
       final var compilation = compile(

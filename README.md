@@ -764,6 +764,31 @@ surface — `read` / `find` / `toList` / `count` / `exists` / `set` / `update` /
 any intermediate hop. So `CompanyPath.start().teams().each().users().each().updateAsync(company, svc::lookup, pool)`
 returns a `CompletableFuture<Company>` directly, with the effect threaded through the generated chain.
 
+**Bridge hops — conversion as a navigator step.** If a type carries both `@Focus`/`@BeanFocus` (so it has a `*Path`) and
+`@Bridge(Target.class)` (so it has a `*Bridge.BRIDGE`), the navigator gains a fluent **`as<Target>()`** method that
+chains the bridge in. The navigator becomes a single compile-checked surface for _both_ navigation _and_ conversion,
+crossing paradigms naturally (record↔record, record↔POJO, POJO↔POJO):
+
+```java
+@Focus
+@Bridge(UserDto.class)
+record UserEntity(String id, String email) {}
+
+@Focus
+record UserDto(String id, String email) {}
+
+// Navigate through the bridge into a target field, then update. The Iso round-trips, so the
+// result is a new UserEntity:
+final UserEntity lowered = UserEntityPath.start()
+  .asUserDto() // → UserDtoPath<UserEntity>
+  .email() // → Telescope<UserEntity, String>
+  .update(entity, String::toLowerCase);
+```
+
+The return type degrades to a terminal `Telescope<R, Target>` when the target isn't itself annotated (so there's no
+`<Target>Path` to chain into). The reverse direction (target's Path getting `.asSource()`) still goes through
+`.then(SourceBridge.BRIDGE.reverse())` for now — forward only at the navigator level.
+
 Gradle wiring:
 
 ```kotlin

@@ -108,6 +108,8 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
         out.println("  public Telescope<R, " + recordName + "> get() { return path; }");
         out.println();
         for (final var comp : components) emitComponentMethod(out, recordName, components, comp);
+        final var bridgeTarget = bridgeTargetFqn(recordType);
+        if (bridgeTarget != null) emitBridgeHop(out, recordName, bridgeTarget);
         emitTelescopeForwarders(out, "path", recordName);
       }
     );

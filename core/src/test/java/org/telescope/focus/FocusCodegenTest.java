@@ -124,6 +124,23 @@ class FocusCodegenTest {
     }
 
     @Test
+    @DisplayName("Bridge hop: as<Target>() chains @Bridge into the navigator, returning the target's Path")
+    void bridgeHop() {
+      final var entity = new FocusEntity("u1", "Alice@Example.com");
+
+      // Direct read across the bridge: FocusEntity -> FocusDto.
+      final FocusDto dto = FocusEntityPath.start().asFocusDto().read(entity);
+      assertEquals("u1", dto.id());
+      assertEquals("Alice@Example.com", dto.email());
+
+      // Compose through the bridge into a target field and update — the Iso round-trips back to
+      // FocusEntity, so we get an updated entity back.
+      final var lowered = FocusEntityPath.start().asFocusDto().email().update(entity, String::toLowerCase);
+      assertEquals("alice@example.com", lowered.email());
+      assertEquals("u1", lowered.id());
+    }
+
+    @Test
     @DisplayName("Every Path and Step forwards the full Telescope op surface (incl. effects) at any hop")
     void forwardersAtIntermediateHops() throws Exception {
       final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
