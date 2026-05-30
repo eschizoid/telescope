@@ -2,7 +2,11 @@ package org.telescope.codegen;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 import javax.annotation.processing.AbstractProcessor;
 import javax.lang.model.element.Element;
@@ -18,12 +22,25 @@ import javax.tools.Diagnostic;
 
 /**
  * Shared machinery for the telescope annotation processors ({@link FocusProcessor}, {@link
- * BeanFocusProcessor}, {@link BridgeProcessor}): generated-source emission and the {@code
- * javax.lang.model} probes (setter/builder discovery, no-arg-constructor and static-factory checks,
- * name casing, primitive boxing) they all rely on. Each concrete processor keeps only its own
- * element discovery and the member body it writes.
+ * BeanFocusProcessor}, {@link BridgeProcessor}, and any out-of-tree extensions such as the {@code
+ * telescope-lombok} module's {@code LombokFocusProcessor}): generated-source emission, the
+ * bean-style navigator emit pipeline ({@link #emitBeanNavigator}), and the {@code javax.lang.model}
+ * probes (setter/builder discovery, no-arg-constructor and static-factory checks, name casing,
+ * primitive boxing) they all rely on. Each concrete processor keeps only its own element discovery;
+ * the body it writes is shared here.
+ *
+ * <p>Public so an external module can subclass it and reuse {@link #emitBeanNavigator} without
+ * needing to live in this package.
  */
-abstract class AbstractTelescopeProcessor extends AbstractProcessor {
+public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
+
+  /**
+   * A discovered bean-style property: its lowercase name (e.g. {@code email}), its public getter
+   * (e.g. {@code getEmail} or {@code isActive}), and its declared return type. Used by {@link
+   * #emitBeanNavigator} to drive both the per-property method emission and the rebuild expression
+   * construction.
+   */
+  protected record Prop(String name, String getter, TypeMirror type) {}
 
   /**
    * Emit a generated {@code public final} class: the package declaration, the single {@code
@@ -194,9 +211,12 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   /**
    * Whether the type named by {@code qualifiedName} is itself navigable — i.e. has a generated
-   * {@code <X>Path<R>} via {@code @Focus} (on records) or {@code @BeanFocus} (on classes). Drives
-   * the bridge hop's return type: navigable target → {@code <Target>Path<R>}; otherwise terminal
-   * {@code Telescope<R, Target>}.
+   * {@code <X>Path<R>} via {@code @Focus} (on records), {@code @BeanFocus} (on classes), or one of
+   * the Lombok bean annotations ({@code @lombok.Data} / {@code @lombok.Value} /
+   * {@code @lombok.Builder}) when the {@code telescope-lombok} module is on the processor path.
+   * Drives the bridge hop's return type: navigable target → {@code <Target>Path<R>}; otherwise
+   * terminal {@code Telescope<R, Target>}. Lombok annotations are looked up by string FQN so this
+   * module incurs no compile-time Lombok dependency.
    */
   protected boolean isNavigablePath(final String qualifiedName) {
     final var elements = processingEnv.getElementUtils();
@@ -206,10 +226,22 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       return hasAnnotation(element, "org.telescope.annotations.Focus");
     }
     if (element.getKind() == ElementKind.CLASS) {
-      return hasAnnotation(element, "org.telescope.annotations.BeanFocus");
+      if (hasAnnotation(element, "org.telescope.annotations.BeanFocus")) return true;
+      for (final var fqn : LOMBOK_BEAN_ANNOTATIONS) {
+        if (hasAnnotation(element, fqn)) return true;
+      }
     }
     return false;
   }
+
+  /**
+   * Lombok annotations that the {@code telescope-lombok} processor treats as bean-style triggers.
+   * Kept here as bare strings (looked up reflectively via {@link
+   * javax.lang.model.util.Elements#getTypeElement}) so this module — and its consumers — never gain
+   * a hard Lombok dependency. {@link #isNavigablePath} consults this set to recognise that a
+   * Lombok-annotated sub-component has its own generated Path.
+   */
+  protected static final Set<String> LOMBOK_BEAN_ANNOTATIONS = Set.of("lombok.Data", "lombok.Value", "lombok.Builder");
 
   private boolean hasAnnotation(final Element element, final String annotationFqn) {
     final var anno = processingEnv.getElementUtils().getTypeElement(annotationFqn);
@@ -517,5 +549,312 @@ abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       case DOUBLE -> "Double";
       default -> type.toString();
     };
+  }
+
+  /**
+   * Emit the full bean-style {@code <X>Path<R>} navigator plus one container step class per
+   * collection-shaped property. Shared between {@link BeanFocusProcessor} (driven by
+   * {@code @BeanFocus}) and the out-of-tree {@code LombokFocusProcessor} (driven by
+   * {@code @lombok.Data} / {@code @lombok.Value} / {@code @lombok.Builder}).
+   *
+   * @param pojo the annotated POJO to emit a navigator for
+   * @param triggerLabel display name of the triggering annotation, used in error messages (e.g.
+   *     {@code "@BeanFocus"} or {@code "@Data/@Value/@Builder"})
+   * @param navigableAnnotations annotation FQNs that mark a class as having its own generated Path,
+   *     so that sub-component navigation descends into {@code <Sub>Path<R>} rather than terminating
+   *     in {@code Telescope<R, Sub>}
+   */
+  protected void emitBeanNavigator(
+    final TypeElement pojo,
+    final String triggerLabel,
+    final Set<String> navigableAnnotations
+  ) {
+    final var elements = processingEnv.getElementUtils();
+    final var pkg = elements.getPackageOf(pojo).getQualifiedName().toString();
+    final var pojoName = pojo.getSimpleName().toString();
+    final var pathName = pojoName + "Path";
+    final var qualifiedPath = pkg.isEmpty() ? pathName : pkg + "." + pathName;
+
+    final var props = beanProperties(pojo);
+    if (props.isEmpty()) {
+      error(pojo, triggerLabel + ": " + pojo.getQualifiedName() + " has no readable properties (getX()/isX())");
+      return;
+    }
+
+    final var builder = staticNoArgMethod(pojo, "builder");
+    final var builderType =
+      builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED
+        ? (TypeElement) ((DeclaredType) builder.getReturnType()).asElement()
+        : null;
+    final var useBuilder = builderType != null && hasBuildMethod(builderType);
+    if (!useBuilder && !hasPublicNoArgConstructor(pojo)) {
+      error(
+        pojo,
+        triggerLabel +
+          ": " +
+          pojo.getQualifiedName() +
+          " needs a static builder() or a public no-arg constructor with setters (field injection " +
+          "isn't available to generated code — use Telescope.ofBean for the runtime path)"
+      );
+      return;
+    }
+
+    final var setters = new String[props.size()];
+    for (var i = 0; i < props.size(); i++) {
+      final var s = useBuilder
+        ? builderSetter(builderType, props.get(i).name())
+        : setterName(pojo, props.get(i).name());
+      if (s == null) {
+        error(
+          pojo,
+          triggerLabel +
+            ": no " +
+            (useBuilder ? "builder method" : "setter") +
+            " for property '" +
+            props.get(i).name() +
+            "' on " +
+            (useBuilder ? builderType.getQualifiedName() : pojo.getQualifiedName())
+        );
+        return;
+      }
+      setters[i] = s;
+    }
+
+    for (final var p : props) {
+      final var shape = traversalKind(p.type());
+      if (shape != null) emitBeanStep(pojo, pojoName, pkg, p, shape, navigableAnnotations);
+    }
+
+    writeInstanceClass(
+      qualifiedPath,
+      pathName,
+      "<R>",
+      "Generated by telescope-codegen for " + triggerLabel + " POJO " + pojoName + ".",
+      pojo,
+      out -> {
+        out.println("  private final Telescope<R, " + pojoName + "> path;");
+        out.println();
+        out.println("  " + pathName + "(final Telescope<R, " + pojoName + "> path) { this.path = path; }");
+        out.println();
+        out.println(
+          "  public static " +
+            pathName +
+            "<" +
+            pojoName +
+            "> start() { return new " +
+            pathName +
+            "<>(Telescope.of(" +
+            pojoName +
+            ".class)); }"
+        );
+        out.println();
+        out.println("  public Telescope<R, " + pojoName + "> get() { return path; }");
+        out.println();
+        for (final var p : props) {
+          emitBeanPropertyMethod(out, pojoName, props, setters, useBuilder, p, navigableAnnotations);
+        }
+        final var bridgeTarget = bridgeTargetFqn(pojo);
+        if (bridgeTarget != null) emitBridgeHop(out, pojoName, bridgeTarget);
+        emitTelescopeForwarders(out, "path", pojoName);
+      }
+    );
+  }
+
+  private void emitBeanPropertyMethod(
+    final PrintWriter out,
+    final String pojoName,
+    final List<Prop> props,
+    final String[] setters,
+    final boolean useBuilder,
+    final Prop target,
+    final Set<String> navigableAnnotations
+  ) {
+    final var setter = beanRebuild(target, props, setters, useBuilder, pojoName);
+    final var shape = traversalKind(target.type());
+    if (shape != null) {
+      final var stepName = pojoName + capitalize(target.name()) + "Step";
+      out.println("  public " + stepName + "<R> " + target.name() + "() {");
+      out.println(
+        "    return new " +
+          stepName +
+          "<>(path.then(Telescope.lens(" +
+          pojoName +
+          "::" +
+          target.getter() +
+          ", " +
+          setter +
+          ")));"
+      );
+      out.println("  }");
+      out.println();
+      return;
+    }
+    final var subFq = navigableType(target.type(), ElementKind.CLASS, navigableAnnotations);
+    if (subFq != null) {
+      out.println("  public " + subFq + "Path<R> " + target.name() + "() {");
+      out.println(
+        "    return new " +
+          subFq +
+          "Path<>(path.then(Telescope.lens(" +
+          pojoName +
+          "::" +
+          target.getter() +
+          ", " +
+          setter +
+          ")));"
+      );
+      out.println("  }");
+      out.println();
+      return;
+    }
+    final var typeStr = shortenStdImports(boxedType(target.type()));
+    out.println("  public Telescope<R, " + typeStr + "> " + target.name() + "() {");
+    out.println("    return path.then(Telescope.lens(" + pojoName + "::" + target.getter() + ", " + setter + "));");
+    out.println("  }");
+    out.println();
+  }
+
+  private void emitBeanStep(
+    final TypeElement pojo,
+    final String pojoName,
+    final String pkg,
+    final Prop prop,
+    final TraversalShape shape,
+    final Set<String> navigableAnnotations
+  ) {
+    final var stepName = pojoName + capitalize(prop.name()) + "Step";
+    final var qualifiedStep = pkg.isEmpty() ? stepName : pkg + "." + stepName;
+    final var containerType = shortenStdImports(prop.type().toString());
+    final var rawElementType = shape.elementType();
+    final var elementType = shortenStdImports(rawElementType);
+    final var stepMethod = shape.stepMethod();
+    final var elementIsNavigable = isAnnotatedClass(rawElementType, navigableAnnotations);
+    final var elementResultType = elementIsNavigable ? elementType + "Path<R>" : "Telescope<R, " + elementType + ">";
+    final var elementBody = elementIsNavigable
+      ? "new " + elementType + "Path<>(path.<" + elementType + ">each())"
+      : "path.<" + elementType + ">each()";
+
+    writeInstanceClass(
+      qualifiedStep,
+      stepName,
+      "<R>",
+      "Generated by telescope-codegen container hop " + pojoName + "." + prop.name() + ".",
+      pojo,
+      out -> {
+        out.println("  private final Telescope<R, " + containerType + "> path;");
+        out.println();
+        out.println("  " + stepName + "(final Telescope<R, " + containerType + "> path) { this.path = path; }");
+        out.println();
+        out.println("  public Telescope<R, " + containerType + "> get() { return path; }");
+        out.println();
+        out.println("  public " + elementResultType + " " + stepMethod + "() {");
+        out.println("    return " + elementBody + ";");
+        out.println("  }");
+        out.println();
+        emitTelescopeForwarders(out, "path", containerType);
+      }
+    );
+  }
+
+  // The rebuild expression for property `target`: builder chain or no-arg ctor + per-property
+  // setters, with every other property read from `p` and `target` set to `v`.
+  private static String beanRebuild(
+    final Prop target,
+    final List<Prop> all,
+    final String[] setters,
+    final boolean useBuilder,
+    final String pojoName
+  ) {
+    if (useBuilder) {
+      final var sb = new StringBuilder("(p, v) -> " + pojoName + ".builder()");
+      for (var i = 0; i < all.size(); i++) {
+        final var arg = all.get(i).name().equals(target.name()) ? "v" : "p." + all.get(i).getter() + "()";
+        sb.append(".").append(setters[i]).append("(").append(arg).append(")");
+      }
+      return sb.append(".build()").toString();
+    }
+    final var sb = new StringBuilder("(p, v) -> { final var c = new " + pojoName + "(); ");
+    for (var i = 0; i < all.size(); i++) {
+      final var arg = all.get(i).name().equals(target.name()) ? "v" : "p." + all.get(i).getter() + "()";
+      sb.append("c.").append(setters[i]).append("(").append(arg).append("); ");
+    }
+    return sb.append("return c; }").toString();
+  }
+
+  /**
+   * Discover the bean-style readable properties of {@code pojo}: every public, no-arg, non-void
+   * instance method named {@code getX} or {@code isX} (the latter only for {@code boolean} / {@code
+   * Boolean} returns). Walks {@code getAllMembers}, so inherited and Lombok-synthesised getters are
+   * both picked up. The reserved property {@code class} (from {@link Object#getClass}) is filtered
+   * out. Insertion order is preserved.
+   */
+  protected List<Prop> beanProperties(final TypeElement pojo) {
+    final Map<String, Prop> byName = new LinkedHashMap<>();
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(pojo))) {
+      if (!isPublicInstance(m) || !m.getParameters().isEmpty() || m.getReturnType().getKind() == TypeKind.VOID) {
+        continue;
+      }
+      final var name = m.getSimpleName().toString();
+      final String prop;
+      if (name.length() > 3 && name.startsWith("get")) {
+        prop = decapitalize(name.substring(3));
+      } else if (
+        name.length() > 2 &&
+        name.startsWith("is") &&
+        (m.getReturnType().getKind() == TypeKind.BOOLEAN || "java.lang.Boolean".equals(m.getReturnType().toString()))
+      ) {
+        prop = decapitalize(name.substring(2));
+      } else {
+        continue;
+      }
+      if (!"class".equals(prop)) byName.putIfAbsent(prop, new Prop(prop, name, m.getReturnType()));
+    }
+    return new ArrayList<>(byName.values());
+  }
+
+  /** Whether {@code builderType} exposes a public no-arg {@code build()} method. */
+  protected boolean hasBuildMethod(final TypeElement builderType) {
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(builderType))) {
+      if (isPublicInstance(m) && m.getParameters().isEmpty() && m.getSimpleName().contentEquals("build")) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether the class named by {@code qualifiedName} is annotated with any of {@code
+   * annotationFqns}. Used to decide a container step's element-result shape: a List/Set/Map element
+   * type whose class carries a navigable annotation gets routed into its own {@code
+   * <Element>Path<R>} rather than terminating in {@code Telescope<R, Element>}.
+   */
+  protected boolean isAnnotatedClass(final String qualifiedName, final Set<String> annotationFqns) {
+    final var elements = processingEnv.getElementUtils();
+    final var element = elements.getTypeElement(qualifiedName);
+    if (element == null || element.getKind() != ElementKind.CLASS) return false;
+    for (final var fqn : annotationFqns) {
+      final var anno = elements.getTypeElement(fqn);
+      if (anno == null) continue;
+      for (final var am : element.getAnnotationMirrors()) {
+        if (am.getAnnotationType().asElement().equals(anno)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Overload of {@link #navigableType(TypeMirror, ElementKind, String)} that returns the first type
+   * whose element carries any of {@code annotationFqns}. Used by {@link #emitBeanNavigator} to
+   * thread the per-processor set of "this class has its own Path" annotations through sub-component
+   * navigation.
+   */
+  protected String navigableType(
+    final TypeMirror type,
+    final ElementKind requiredKind,
+    final Set<String> annotationFqns
+  ) {
+    for (final var fqn : annotationFqns) {
+      final var found = navigableType(type, requiredKind, fqn);
+      if (found != null) return found;
+    }
+    return null;
   }
 }

@@ -1,4 +1,4 @@
-import com.diffplug.gradle.spotless.SpotlessExtension;
+import com.diffplug.gradle.spotless.SpotlessExtension
 import org.jreleaser.model.Active.ALWAYS
 import org.jreleaser.model.Active.NEVER
 
@@ -81,6 +81,7 @@ spotless {
 }
 
 // Java formatting belongs to the modules that actually have Java sources.
+@Suppress("UnstableApiUsage")
 subprojects {
     apply(plugin = "com.diffplug.spotless")
     configure<SpotlessExtension> {
@@ -144,6 +145,12 @@ jreleaser {
                     )
                     stagingRepository(
                         project(":codegen").layout.buildDirectory
+                            .dir("staging-deploy")
+                            .get()
+                            .asFile.absolutePath,
+                    )
+                    stagingRepository(
+                        project(":lombok").layout.buildDirectory
                             .dir("staging-deploy")
                             .get()
                             .asFile.absolutePath,
