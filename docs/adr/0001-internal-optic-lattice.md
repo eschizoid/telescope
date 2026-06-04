@@ -11,7 +11,7 @@ ergonomic in the first place.
 
 ## Decision
 
-`com.github.eschizoid.telescope.internal.optics` stays package-private to the library, and the `internal` packages are
+`io.github.eschizoid.telescope.internal.optics` stays package-private to the library, and the `internal` packages are
 deliberately not exported by `module-info.java`. The single public type users see is `Telescope<S, A>`.
 
 ## Consequences
