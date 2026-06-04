@@ -16,9 +16,6 @@ java {
 }
 
 dependencies {
-    // The DSL and the @Focus/@Bridge annotations live in :core. :codegen is the processor that turns those
-    // annotations into generated *Focus/*Bridge constants — on the jmh annotation-processor path so it runs
-    // over src/jmh and the benchmark measures real generated output, not a hand-rolled stand-in.
     implementation(project(":core"))
     jmhAnnotationProcessor(project(":codegen"))
 }
@@ -26,6 +23,18 @@ dependencies {
 tasks.withType<JavaCompile>().configureEach {
     options.release = 25
     options.encoding = "UTF-8"
+    modularity.inferModulePath = true
+}
+
+tasks.named<JavaCompile>("compileJmhJava") {
+    val jmhCompileClasspath = configurations.named("jmhCompileClasspath")
+    doFirst {
+        options.compilerArgs.addAll(listOf("--module-path", jmhCompileClasspath.get().asPath))
+        classpath = files()
+    }
+    doLast {
+        destinationDirectory.file("module-info.class").get().asFile.delete()
+    }
 }
 
 jmh {

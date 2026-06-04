@@ -24,7 +24,7 @@ to records; the same DSL applies.
 ### Records
 
 ```java
-import org.telescope.Telescope;
+import com.github.eschizoid.telescope.Telescope;
 
 record Address(String city, String zip) {}
 
@@ -196,10 +196,10 @@ Maven:
 
 ### JPMS / modular consumers
 
-`core` is a named module, `org.telescope`. If your project has a `module-info.java`, add:
+`core` is a named module, `com.github.eschizoid.telescope`. If your project has a `module-info.java`, add:
 
 ```java
-requires org.telescope;
+requires com.github.eschizoid.telescope;
 ```
 
 `telescope-codegen` is a compile-time-only processor and isn't required on the module path.
@@ -637,7 +637,7 @@ sides may be records or POJOs — record⇄record, record⇄POJO, POJO⇄POJO. F
 mismatch or a missing construction strategy is a compile error, not a runtime one:
 
 ```java
-import org.telescope.annotations.Bridge;
+import com.github.eschizoid.telescope.annotations.Bridge;
 
 @Bridge(UserDto.class)
 record UserEntity(String id, String email) {}
@@ -703,8 +703,8 @@ shared parts as effectively immutable.
 
 `fromBean` / `mapBean` / `@Bridge` match by exact name and need a same-named field on each side; nested collections need
 `.viaEach`. `viaFields` (and `ofBean`'s field-injection fallback) use `setAccessible`, so under JPMS the POJO's package
-must be `opens`'d to `org.telescope` — `viaConstructor` / `viaBuilder` / setters (and all of `@Bridge`) use public
-members only.
+must be `opens`'d to `com.github.eschizoid.telescope` — `viaConstructor` / `viaBuilder` / setters (and all of `@Bridge`)
+use public members only.
 
 ---
 
@@ -736,7 +736,7 @@ CompanyPath.start()
 ```
 
 ```java
-import org.telescope.annotations.Focus;
+import com.github.eschizoid.telescope.annotations.Focus;
 
 @Focus record Address(String city, String zip) {}
 @Focus record User(String name, int age, Address address) {}
@@ -814,7 +814,7 @@ path vs ~15 ns for a generated `@Bridge` conversion in the benchmark — the nav
 win for navigation.
 
 ```java
-import org.telescope.annotations.BeanFocus;
+import com.github.eschizoid.telescope.annotations.BeanFocus;
 
 @BeanFocus public class UserBean { /* getId/getEmail + setters, or a static builder() */ }
 
@@ -1032,10 +1032,10 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
 
 Two layers, one library:
 
-- **`org.telescope.Telescope<S, A>`**: the DSL. The only thing users import. Wraps a `Traversal<S, A>` from the internal
-  optics package.
-- **`org.telescope.internal.optics.*`**: the optic lattice (`Fold`, `Getter`, `Setter`, `Traversal`, `Affine`, `Lens`,
-  `Prism`, `Iso`) plus `Focus` factories and collection traversals. Package-private to the library.
+- **`com.github.eschizoid.telescope.Telescope<S, A>`**: the DSL. The only thing users import. Wraps a `Traversal<S, A>`
+  from the internal optics package.
+- **`com.github.eschizoid.telescope.internal.optics.*`**: the optic lattice (`Fold`, `Getter`, `Setter`, `Traversal`,
+  `Affine`, `Lens`, `Prism`, `Iso`) plus `Focus` factories and collection traversals. Package-private to the library.
 
 Each DSL method builds the appropriate optic and composes it via the lattice:
 

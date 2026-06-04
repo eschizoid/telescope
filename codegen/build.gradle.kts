@@ -52,9 +52,6 @@ tasks.withType<Javadoc>().configureEach {
 }
 
 dependencies {
-    // The processor reads the @Focus annotation type, which lives in the core module, and the
-    // *Focus classes it emits reference core's optic types — so consumers need core at runtime.
-    // `api` (rather than `compileOnly`) makes the dependency appear in the published POM.
     api(project(":core"))
 
     testImplementation(project(":core"))

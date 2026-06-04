@@ -81,7 +81,6 @@ spotless {
 }
 
 // Java formatting belongs to the modules that actually have Java sources.
-@Suppress("UnstableApiUsage")
 subprojects {
     apply(plugin = "com.diffplug.spotless")
     configure<SpotlessExtension> {
