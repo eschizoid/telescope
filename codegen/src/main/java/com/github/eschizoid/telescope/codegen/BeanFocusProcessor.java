@@ -23,6 +23,13 @@ import javax.lang.model.element.TypeElement;
 @SupportedSourceVersion(SourceVersion.RELEASE_25)
 public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
 
+  /**
+   * Public no-arg constructor required by the {@link javax.annotation.processing.Processor} SPI.
+   */
+  public BeanFocusProcessor() {
+    super();
+  }
+
   private static final Set<String> TRIGGER = Set.of("com.github.eschizoid.telescope.annotations.BeanFocus");
 
   @Override

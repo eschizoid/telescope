@@ -44,6 +44,13 @@ import javax.lang.model.element.TypeElement;
 @SupportedSourceVersion(SourceVersion.RELEASE_25)
 public final class FocusProcessor extends AbstractTelescopeProcessor {
 
+  /**
+   * Public no-arg constructor required by the {@link javax.annotation.processing.Processor} SPI.
+   */
+  public FocusProcessor() {
+    super();
+  }
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     for (final Element element : roundEnv.getElementsAnnotatedWith(

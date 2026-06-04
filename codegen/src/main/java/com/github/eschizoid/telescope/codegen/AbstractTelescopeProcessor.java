@@ -34,6 +34,11 @@ import javax.tools.Diagnostic;
  */
 public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
+  /** For subclasses; this type is not instantiated directly. */
+  protected AbstractTelescopeProcessor() {
+    super();
+  }
+
   /**
    * A discovered bean-style property: its lowercase name (e.g. {@code email}), its public getter
    * (e.g. {@code getEmail} or {@code isActive}), and its declared return type. Used by {@link

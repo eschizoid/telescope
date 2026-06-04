@@ -39,6 +39,13 @@ import javax.lang.model.util.ElementFilter;
 @SupportedSourceVersion(SourceVersion.RELEASE_25)
 public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
+  /**
+   * Public no-arg constructor required by the {@link javax.annotation.processing.Processor} SPI.
+   */
+  public BridgeProcessor() {
+    super();
+  }
+
   private static final String ANNOTATION = "com.github.eschizoid.telescope.annotations.Bridge";
 
   // A named field on either side: a record component or a POJO getter-property, with its type.

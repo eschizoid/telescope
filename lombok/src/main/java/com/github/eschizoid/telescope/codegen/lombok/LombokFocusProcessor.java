@@ -36,6 +36,13 @@ import javax.lang.model.element.TypeElement;
 @SupportedSourceVersion(SourceVersion.RELEASE_25)
 public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
 
+  /**
+   * Public no-arg constructor required by the {@link javax.annotation.processing.Processor} SPI.
+   */
+  public LombokFocusProcessor() {
+    super();
+  }
+
   private final Set<TypeElement> pending = new LinkedHashSet<>();
 
   @Override
