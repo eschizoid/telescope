@@ -121,6 +121,53 @@ public final class Telescope<S, A> {
   }
 
   /**
+   * Combine several {@link Edit edits} into one reusable {@code Telescope<S, S>} normalizer. Each
+   * {@link Edit#over(Telescope, Function) over(PATH, fn)} pairs a pre-built telescope with its
+   * per-leaf transformation; {@code Telescope.all(...)} folds them into a single {@link
+   * #apply(Object)}-able value that runs each edit in argument order.
+   *
+   * <pre>{@code
+   * import static io.github.eschizoid.telescope.Edit.over;
+   *
+   * static final Telescope<Company, String> EMAILS     = ...;
+   * static final Telescope<Company, String> DEPT_NAMES = ...;
+   * static final Telescope<Company, String> USER_NAMES = ...;
+   *
+   * final Telescope<Company, Company> normalize = Telescope.all(
+   *     over(EMAILS,     String::toLowerCase),
+   *     over(DEPT_NAMES, String::trim),
+   *     over(USER_NAMES, titleCase));
+   *
+   * final Company a = normalize.apply(companyA);
+   * normalize.apply(companyB);   // reusable across sources
+   * }</pre>
+   *
+   * <p><b>Preferred multi-edit shape.</b> For two or more distinct paths this is the recommended
+   * form over the chained {@link #update(Telescope, Function)} / {@link #with(Function)}
+   * accumulator: each edit lives on its own line, the count is visible at a glance, and
+   * back-to-back navigation segments cannot visually blur into one chain. The accumulator stays for
+   * single edits and for the fluent inline form.
+   *
+   * <p><b>Sequential semantics.</b> Edits run in argument order; the second sees the first edit's
+   * result, not the original source. An empty argument list returns an identity telescope (apply
+   * returns the source unchanged).
+   *
+   * <p><b>Cost.</b> One structural pass per edit — no fusion across shared prefixes in this
+   * version. Costs the same as the equivalent chain accumulator.
+   *
+   * @param edits the edits to apply, in order
+   * @param <S> the shared root type — all edits must target the same {@code S}
+   * @see Edit#over(Telescope, Function)
+   * @see #apply(Object)
+   */
+  @SafeVarargs
+  public static <S> Telescope<S, S> all(final Edit<S>... edits) {
+    Function<S, S> fused = Function.identity();
+    for (final var e : edits) fused = fused.andThen(e::apply);
+    return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, fused);
+  }
+
+  /**
    * Start a <em>native POJO</em> telescope. Unlike {@link #of(Class)} (records only), the resulting
    * telescope navigates JavaBeans-style POJOs directly: {@code .field(Pojo::getX)} reads via the
    * getter, and {@code set}/{@code update} rebuild the POJO immutably with that one property
@@ -322,6 +369,93 @@ public final class Telescope<S, A> {
    */
   public static <A> MapTo<A> map(final Class<A> source) {
     return new MapTo<>(source);
+  }
+
+  /**
+   * Declarative-multi-row sibling of {@link #map(Class)} — pass a varargs pack of {@link Mapping}
+   * rows and get back the {@code Telescope<A, B>} directly. Each {@link Mapping#to to(...)}, {@link
+   * Mapping#via via(...)}, and {@link Mapping#auto auto()} row lives on its own argument line; the
+   * count is visible at a glance; no fluent chain to visually blur.
+   *
+   * <pre>{@code
+   * import static io.github.eschizoid.telescope.Mapping.to;
+   * import static io.github.eschizoid.telescope.Mapping.via;
+   * import static io.github.eschizoid.telescope.Mapping.auto;
+   *
+   * final Telescope<UserEntity, UserDto> userMapper = Telescope.map(
+   *     to (UserEntity::name,    UserDto::fullName),                   // rename, same type
+   *     via(UserEntity::address, UserDto::address, addressMapper),     // nested mapper
+   *     auto());                                                       // backfill same-name fields
+   * }</pre>
+   *
+   * <p><b>Class inference.</b> The source/target record classes are recovered at runtime from the
+   * first row that carries accessors ({@code to(...)} or {@code via(...)}), via {@code
+   * SerializedLambda} on the method references. {@code auto()} has no accessors and rides on a
+   * sibling row's inference. If <em>every</em> row is {@code auto()}, there's no row to infer from
+   * — use {@link Mapping#auto(Class, Class)} (which carries the classes explicitly) instead, or
+   * fall back to the fluent {@link #map(Class)} chain.
+   *
+   * <p>Symmetrical with {@link #all(Edit[])}: same varargs-of-rows shape, same compile-checked
+   * per-row type alignment ({@code to(A::x, B::y)} requires matching leaf types; {@code javac}
+   * rejects mismatches). The runtime hole is the all-{@code auto()} case described above.
+   *
+   * @param mappings the field correspondences, in declaration order
+   * @param <A> the source record type
+   * @param <B> the target record type
+   * @see Mapping
+   * @see #mapper(Mapping[])
+   * @see #all(Edit[])
+   */
+  @SafeVarargs
+  public static <A, B> Telescope<A, B> map(final Mapping<A, B>... mappings) {
+    Class<A> source = null;
+    Class<B> target = null;
+    for (final var m : mappings) {
+      if (source == null) source = m.sourceClass();
+      if (target == null) target = m.targetClass();
+      if (source != null && target != null) break;
+    }
+    if (source == null || target == null) throw classInferenceFailure(mappings.length);
+    final var mb = new MapBuilder<>(source, target);
+    for (final var m : mappings) m.apply(mb);
+    return mb.build();
+  }
+
+  /**
+   * {@link Mapper} variant of {@link #map(Mapping[])} — same declarative row pack, but returns a
+   * {@link Mapper Mapper<A, B>} (which exposes {@link Mapper#patch} for sparse overlays and is
+   * nestable in another mapping via {@link Mapping#via}).
+   *
+   * @param mappings the field correspondences, in declaration order
+   * @param <A> the source record type
+   * @param <B> the target record type
+   * @see #map(Mapping[])
+   */
+  @SafeVarargs
+  public static <A, B> Mapper<A, B> mapper(final Mapping<A, B>... mappings) {
+    Class<A> source = null;
+    Class<B> target = null;
+    for (final var m : mappings) {
+      if (source == null) source = m.sourceClass();
+      if (target == null) target = m.targetClass();
+      if (source != null && target != null) break;
+    }
+    if (source == null || target == null) throw classInferenceFailure(mappings.length);
+    final var mb = new MapBuilder<>(source, target);
+    for (final var m : mappings) m.apply(mb);
+    return mb.buildMapper();
+  }
+
+  // Thrown by Telescope.map / Telescope.mapper when every row is auto() with no explicit
+  // source/target classes for the factory to recover via SerializedLambda. Used in both entries so
+  // the message stays consistent.
+  private static IllegalArgumentException classInferenceFailure(final int rowCount) {
+    return new IllegalArgumentException(
+      "Telescope.map(Mapping<A, B>...) needs at least one row that carries the source/target " +
+        "classes (a to(...) or via(...) row, or auto(A.class, B.class)). Got " +
+        rowCount +
+        " row(s), all auto() with no explicit classes."
+    );
   }
 
   /**
@@ -1024,6 +1158,23 @@ public final class Telescope<S, A> {
     }
   }
 
+  // Package-private — shared with the Mapping helpers and BeanFieldOptics. Recovers the declaring
+  // class of a method-reference accessor (e.g. UserEntity.class from UserEntity::name) via
+  // SerializedLambda. Records can't extend other types, so for record accessors the declaring class
+  // is always the receiver type; for beans, a method inherited from a superclass returns the
+  // superclass — callers that need the receiver type must obtain it some other way.
+  @SuppressWarnings("unchecked")
+  static <A> Class<A> implClassOf(final Serializable lambda) {
+    try {
+      final var writeReplace = lambda.getClass().getDeclaredMethod("writeReplace");
+      writeReplace.setAccessible(true);
+      final var serialized = (SerializedLambda) writeReplace.invoke(lambda);
+      return (Class<A>) Class.forName(serialized.getImplClass().replace('/', '.'));
+    } catch (final ReflectiveOperationException e) {
+      throw new IllegalArgumentException("expected a method reference; got: " + lambda, e);
+    }
+  }
+
   /**
    * The seam between record-backed and bean-backed telescopes: how accessor-based navigation
    * ({@link #field(Accessor)}, {@link #each(Accessor)}, {@link #eachValue}, {@link #whenPresent})
@@ -1051,26 +1202,9 @@ public final class Telescope<S, A> {
 
     @Override
     public <A, B> Lens<A, B> lensFor(final Accessor<A, ?> getter) {
-      final Class<A> implClass = implClassOf(getter);
+      final Class<A> implClass = Telescope.implClassOf(getter);
       final var property = Beans.propertyOf(methodNameOf(getter));
       return Beans.lens(implClass, property, Beans.autoWriter(implClass));
-    }
-
-    // The bean's class is recovered from the method reference's SerializedLambda — the navigation
-    // hop's owner type (Pojo for Pojo::getX), needed to discover the getter and write strategy.
-    @SuppressWarnings("unchecked")
-    private static <A> Class<A> implClassOf(final Accessor<A, ?> getter) {
-      try {
-        final var writeReplace = getter.getClass().getDeclaredMethod("writeReplace");
-        writeReplace.setAccessible(true);
-        final var serialized = (SerializedLambda) writeReplace.invoke(getter);
-        return (Class<A>) Class.forName(serialized.getImplClass().replace('/', '.'));
-      } catch (final ReflectiveOperationException e) {
-        throw new IllegalArgumentException(
-          "ofBean navigation requires a method reference to a getter (e.g. Pojo::getX)",
-          e
-        );
-      }
     }
   }
 }

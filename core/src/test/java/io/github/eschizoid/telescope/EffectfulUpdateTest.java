@@ -181,8 +181,6 @@ class EffectfulUpdateTest {
 
     record Updated(String id, String diff) implements Event {}
 
-    record Stream(List<Event> events) {}
-
     record Profile(String id, Optional<String> nickname) {}
 
     @Test

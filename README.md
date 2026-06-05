@@ -215,11 +215,11 @@ A single class, `Telescope<S, A>`, where `S` is the root type and `A` is the lea
 Two questions decide it: are you working with **records** or **POJOs**, and do you want to **navigate** one type in
 place or **convert** between two types?
 
-| You want to…                          | Records                                              | POJOs                        | POJO ⇄ record                                  |
-| ------------------------------------- | ---------------------------------------------------- | ---------------------------- | ---------------------------------------------- |
-| **Navigate & update** in place        | `Telescope.of(R.class)`                              | `Telescope.ofBean(P.class)`  | bridge first (below), then navigate the record |
-| **Convert / map** between two types   | `Telescope.map(A).to(B)` or `from(A).to(B).using(…)` | `Telescope.mapBean(A).to(B)` | `Telescope.fromBean(P).to(R)`                  |
-| **Reflection-free** (compile-checked) | `@Focus` (navigate)                                  | `@BeanFocus` (navigate)      | `@Bridge` (convert, any pair)                  |
+| You want to…                          | Records                                                                | POJOs                        | POJO ⇄ record                                  |
+| ------------------------------------- | ---------------------------------------------------------------------- | ---------------------------- | ---------------------------------------------- |
+| **Navigate & update** in place        | `Telescope.of(R.class)`                                                | `Telescope.ofBean(P.class)`  | bridge first (below), then navigate the record |
+| **Convert / map** between two types   | `Telescope.map(to(...), via(...), auto())` or `from(A).to(B).using(…)` | `Telescope.mapBean(A).to(B)` | `Telescope.fromBean(P).to(R)`                  |
+| **Reflection-free** (compile-checked) | `@Focus` (navigate)                                                    | `@BeanFocus` (navigate)      | `@Bridge` (convert, any pair)                  |
 
 Conversions are bidirectional `Iso`s, so any cell in the middle row composes into a longer navigation path with
 `.then(...)`. Mismatched names and dropped fields are handled by `.rename(...)` / `.ignoreUnmatched()`, covered under
@@ -232,7 +232,8 @@ Conversions are bidirectional `Iso`s, so any cell in the middle row composes int
 | `Telescope.of(Class<S>)`                                      | Start at the root type.                                                                                                                                                                                       |
 | `Telescope.lens(getter, setter)`                              | Build a single-focus telescope directly, no reflection. Used by `@Focus` codegen; handy for hot paths.                                                                                                        |
 | `Telescope.from(A).to(B).using(fwd, back)`                    | Build a `Telescope<A, B>` backed by an `Iso` — bidirectional type conversion that composes into longer paths.                                                                                                 |
-| `Telescope.map(A).to(B).field(...).to(...).build()`           | Declarative field-by-field record mapping; synthesizes a bidirectional `Telescope<A, B>`.                                                                                                                     |
+| `Telescope.map(Mapping<A, B>...)`                             | Declarative varargs record mapping — pack rows with `to(...)`, `via(...)`, `auto()`; synthesizes a bidirectional `Telescope<A, B>`. Sibling `Telescope.mapper(...)` returns a `Mapper<A, B>`.                 |
+| `Telescope.map(A).to(B).field(...).to(...).build()`           | Fluent-chain alternative to the varargs form; still works for chained mapping.                                                                                                                                |
 | `Telescope.ofBean(Class<P>)`                                  | Start a native POJO telescope — `.field`/`.each` navigate the bean directly, rebuilding via strategy (see [Working with POJOs](#working-with-pojos)).                                                         |
 | `Telescope.fromBean(P).to(R).viaFields/Constructor/Builder()` | Bridge a POJO ⇄ record at runtime; `.via`/`.viaEach` convert nested objects/collections.                                                                                                                      |
 | `Telescope.mapBean(A).to(B).build()`                          | Convert one POJO ⇄ another (name-matched, auto-detected rebuild strategy).                                                                                                                                    |
@@ -260,16 +261,23 @@ Conversions are bidirectional `Iso`s, so any cell in the middle row composes int
 
 ### Write
 
-| Method                                         | Returns                                                                                                                                                            |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `.set(S, A)`                                   | New `S` with every focused value replaced by the given one.                                                                                                        |
-| `.update(S, Function<A, A>)`                   | New `S` with every focused value transformed.                                                                                                                      |
-| `.updateAsync(S, fn, Executor)`                | Bounded-concurrency async update; pass a fixed pool to cap concurrent invocations.                                                                                 |
-| `.updateIndexed(S, BiFunction<Integer, A, A>)` | Transform every focused value with its 0-based position in traversal order.                                                                                        |
-| `.toListIndexed(S)`                            | `List<Indexed<A>>` — every focused value paired with its position.                                                                                                 |
-| `.update(Telescope<S, X>, Function<X, X>)`     | Accumulate an edit through a pre-built path; returns `Telescope<S, S>` carrying the running chain. See [Multi-edit chain](#multi-edit-chain). **Compile-checked.** |
-| `.with(Function<A, A>)`                        | Accumulate an edit at the current focus (inline-path equivalent of `.update(path, fn)`); returns `Telescope<S, S>`. **Compile-checked.**                           |
-| `.apply(S)`                                    | Run every accumulated `.update(path, fn)` / `.with(fn)` edit against the source, in insertion order. Returns a new `S`.                                            |
+| Method                                         | Returns                                                                                                                                                |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `.set(S, A)`                                   | New `S` with every focused value replaced by the given one.                                                                                            |
+| `.update(S, Function<A, A>)`                   | New `S` with every focused value transformed.                                                                                                          |
+| `.updateAsync(S, fn, Executor)`                | Bounded-concurrency async update; pass a fixed pool to cap concurrent invocations.                                                                     |
+| `.updateIndexed(S, BiFunction<Integer, A, A>)` | Transform every focused value with its 0-based position in traversal order.                                                                            |
+| `.toListIndexed(S)`                            | `List<Indexed<A>>` — every focused value paired with its position.                                                                                     |
+| `.update(Telescope<S, X>, Function<X, X>)`     | Accumulate an edit through a pre-built path; returns `Telescope<S, S>` carrying the running chain. See [Multi-edit](#multi-edit). **Compile-checked.** |
+| `.with(Function<A, A>)`                        | Accumulate an edit at the current focus (inline-path equivalent of `.update(path, fn)`); returns `Telescope<S, S>`. **Compile-checked.**               |
+| `.apply(S)`                                    | Run every accumulated `.update(path, fn)` / `.with(fn)` edit against the source, in insertion order. Returns a new `S`.                                |
+
+Multi-edit packing (static factories — see [Multi-edit](#multi-edit)):
+
+| Method                                       | Returns                                                                                                                           |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `Telescope.all(Edit<S>...)`                  | Reusable `Telescope<S, S>` normalizer that runs every edit, in argument order, on `apply(s)`. **Compile-checked.**                |
+| `Edit.over(Telescope<S, X>, Function<X, X>)` | Pair a pre-built path with its per-leaf transformation. Static-import-friendly: `import static …Edit.over;`. **Compile-checked.** |
 
 ---
 
@@ -350,8 +358,8 @@ traversal order (flat across nested `each` levels):
 ```java
 final Telescope<Team, String> members = Telescope.of(Team.class).each(Team::members);
 
-members.toListIndexed(team);                       // [Indexed[0, "alice"], Indexed[1, "bob"], ...]
-members.updateIndexed(team, (i, name) -> i + ": " + name);   // "0: alice", "1: bob", ...
+members.toListIndexed(team);                               // [Indexed[0, "alice"], Indexed[1, "bob"], ...]
+members.updateIndexed(team, (i, name) -> i + ": " + name); // "0: alice", "1: bob", ...
 ```
 
 ### Filter mid-path
@@ -403,15 +411,17 @@ This works for every variant — `updateAsync`, `updateEither`, `updateValidated
 lambda needs is the same value you already hold. If the source is an expression rather than a variable, hoist it to a
 local first (`final var team = fetchTeam();`) and close over that.
 
-### Multi-edit chain
+### Multi-edit
 
-To apply several edits at different paths in one go, accumulate them with `.update(path, fn)` for pre-built paths or
-`.with(fn)` for inline paths, then end with `.apply(source)`. Every step is fully compile-checked.
+To apply several edits at different paths in one go, declare each path once as a static final, then pack the edits with
+`Telescope.all(over(...), over(...))`. Every step is fully compile-checked.
 
-**Preferred form — pre-built paths as static finals.** Declare each navigation once, then the multi-edit reads like a
-list of operations with no per-edit path repetition:
+**Recommended form — `Telescope.all(over(...), over(...))`.** Each `over(PATH, fn)` is one edit; `Telescope.all(...)`
+folds them into a reusable `Telescope<S, S>` whose `.apply(s)` runs every edit in argument order.
 
 ```java
+import static io.github.eschizoid.telescope.Edit.over;
+
 static final Telescope<Company, String> EMAILS = Telescope.of(Company.class)
   .each(Company::departments)
   .each(Department::teams)
@@ -428,56 +438,46 @@ static final Telescope<Company, String> USER_NAMES = Telescope.of(Company.class)
   .each(Team::users)
   .field(User::name);
 
-final Company done = Telescope.of(Company.class)
-  .update(EMAILS, String::toLowerCase)
+final Telescope<Company, Company> normalize = Telescope.all(
+  over(EMAILS,     String::toLowerCase),
+  over(DEPT_NAMES, String::trim),
+  over(USER_NAMES, titleCase));
+
+final Company done = normalize.apply(company);
+normalize.apply(companyB);   // reusable across sources
+```
+
+`over(path, fn)` ties a `Telescope<S, X>` to a `Function<X, X>`; `javac` enforces the leaf type match. Each edit lives
+on its own line, the count is visible at a glance, and there is no chain-blur between paths.
+
+**Single-edit shortcut.** For one edit, just call `update` on the path:
+
+```java
+EMAILS.update(company, String::toLowerCase);
+```
+
+**Chain accumulator (alternative).** The same semantics as `Telescope.all(...)` are also available as a fluent chain via
+`.update(path, fn)` and `.with(fn)` terminated by `.apply(source)` — useful when you want an inline path mid-chain
+without naming it. The chain reads less clearly for multiple distinct paths (the navigation segments visually blur), so
+prefer `Telescope.all(over(...))` when packing two or more edits.
+
+```java
+// Equivalent to the Telescope.all(...) form above:
+Telescope.of(Company.class)
+  .update(EMAILS,     String::toLowerCase)
   .update(DEPT_NAMES, String::trim)
   .update(USER_NAMES, titleCase)
   .apply(company);
-```
 
-Each `.update(path, fn)` ties a `Telescope<S, X>` to a `Function<X, X>`; `javac` enforces the leaf type match. The
-`.update(...)` overload is disambiguated by first-argument type: a `Telescope` accumulates into the chain (returns
-`Telescope<S, S>`), a source instance is the single-shot terminal (returns `S`).
-
-**Inline form — for one-off paths you don't want to name.** Terminate the navigation with `.with(fn)` instead of
-`.update(source, fn)`; same chain semantics:
-
-```java
-final Company done = Telescope.of(Company.class)
-  .each(Company::departments)
-  .each(Department::teams)
-  .each(Team::users)
-  .field(User::email)
-  .with(String::toLowerCase)
-  .each(Company::departments)
-  .field(Department::name)
-  .with(String::trim)
+// Inline one-shot trailing edit on a pre-built chain:
+Telescope.of(Company.class)
+  .update(EMAILS, String::toLowerCase)
+  .each(Company::departments).field(Department::name).with(String::trim)
   .apply(company);
 ```
 
-Mix and match in the same chain — pre-built where reuse pays, inline where it doesn't:
-
-```java
-Telescope.of(Company.class)
-    .update(EMAILS, String::toLowerCase)                              // pre-built
-    .each(Company::departments).field(Department::name).with(String::trim)    // inline
-    .apply(company);
-```
-
-**Reusable across sources.** Hold onto the resulting `Telescope<Company, Company>` instead of calling `.apply` at the
-end — it's the multi-edit equivalent of a stored single-path telescope:
-
-```java
-final Telescope<Company, Company> normalize = Telescope.of(Company.class)
-    .update(EMAILS,     String::toLowerCase)
-    .update(DEPT_NAMES, String::trim);
-
-normalize.apply(companyA);
-normalize.apply(companyB);
-```
-
-Edits run sequentially in insertion order; the second edit sees the first edit's result, not the original source. An
-empty chain (no `.update(...)` / `.with(...)` calls) returns the source unchanged from `.apply(...)`.
+Edits run sequentially in argument / insertion order; the second sees the first's result, not the original source. An
+empty `Telescope.all()` (or an unedited chain) returns the source unchanged from `.apply(...)`.
 
 ---
 
@@ -516,32 +516,31 @@ Telescope.of(EntityPage.class)
         .update(page, String::toLowerCase);
 ```
 
-### Field-by-field (`map / to / field / build`)
+### Field-by-field (`Telescope.map(to(...), via(...), auto())`)
 
-When the two records line up field-for-field (the common `Entity ↔ Dto` case), declaring the whole conversion function
-twice is tedious. `Telescope.map(...)` lets you declare per-field correspondences and synthesizes the bidirectional
-conversion for you:
+When the two records line up field-for-field (the common `Entity ↔ Dto` case), declare per-field correspondences as a
+varargs pack of rows. Each row lives on its own argument line; the factory synthesizes the bidirectional conversion.
 
 ```java
+import static io.github.eschizoid.telescope.Mapping.auto;
+import static io.github.eschizoid.telescope.Mapping.to;
+import static io.github.eschizoid.telescope.Mapping.via;
+
 record UserEntity(String id, String email, String name) {}
 
 record UserDto(String id, String email, String fullName) {}
 
-final Telescope<UserEntity, UserDto> userMapper = Telescope.map(UserEntity.class)
-  .to(UserDto.class)
-  .field(UserEntity::id)
-  .to(UserDto::id)
-  .field(UserEntity::email)
-  .to(UserDto::email)
-  .field(UserEntity::name)
-  .to(UserDto::fullName) // rename across the boundary
-  .build();
+final Telescope<UserEntity, UserDto> userMapper = Telescope.map(
+  to(UserEntity::name, UserDto::fullName), // rename across the boundary
+  auto()
+); // backfill same-name fields (id, email)
 
 UserDto dto = userMapper.read(entity);
 ```
 
-Field types are checked at compile time — `.field(UserEntity::name)` (a `String`) requires `.to(UserDto::...)` to also
-be a `String`. The result is an `Iso`, so it threads through longer paths exactly like the `from/to/using` form:
+Each row is compile-checked: `to(UserEntity::name, UserDto::fullName)` requires both accessors' leaf types to match
+(here, both `String`), and every row must be `Mapping<UserEntity, UserDto>` — `javac` rejects A/B mismatches across
+rows. The result is an `Iso`-backed `Telescope<A, B>` and threads through longer paths like the `from/to/using` form:
 
 ```java
 Telescope.of(EntityPage.class)
@@ -552,67 +551,68 @@ Telescope.of(EntityPage.class)
 ```
 
 Because the result is a bidirectional `Iso`, **every component on both records must be mapped** — a lossless round-trip
-needs a value for every constructor parameter in both directions. `build()` throws if the mapping isn't a bijection.
+needs a value for every constructor parameter in both directions. The factory throws if the mapping isn't a bijection.
 
-**`.auto()` for same-name fields.** When the records line up (the common case), don't declare each pair — `.auto()` maps
-every component whose name and type match, and you only spell out the renames:
+**`auto()` for same-name fields.** Use it as a row in the pack — it backfills every target component whose name matches
+a source component, leaving any explicitly-declared correspondences untouched. `auto()` reads its source/target classes
+from a sibling explicit row; if the mapping is _only_ `auto()` rows, use `auto(A.class, B.class)` to supply the classes
+explicitly:
 
 ```java
 record OrderEntity(String id, long amount, String currency) {}
 
 record OrderDto(String id, long amount, String currency) {}
 
-final Telescope<OrderEntity, OrderDto> orderMapper = Telescope.map(OrderEntity.class).to(OrderDto.class).auto().build();
-
-// auto() + explicit override for the one rename:
-final Telescope<UserEntity, UserDto> userMapper = Telescope.map(UserEntity.class)
-  .to(UserDto.class)
-  .auto() // id, email map themselves
-  .field(UserEntity::name)
-  .to(UserDto::fullName) // the one rename
-  .build();
+// All same-name fields — single auto() row with explicit classes (the degenerate case):
+final Telescope<OrderEntity, OrderDto> orderMapper = Telescope.map(auto(OrderEntity.class, OrderDto.class));
 ```
 
-`.auto()` is exact name + type match only — no fuzzy heuristics, no nested traversal. Explicit `.field(...).to(...)`
-overrides the auto-mapped link for that target.
+`auto()` is exact name match only — no fuzzy heuristics, no nested traversal. Type mismatches on an auto-linked pair
+surface at record construction time (not at the row), so when in doubt declare the row with `to(...)` explicitly.
 
 **Transforms** for type-converting fields, with both directions so the mapping stays a bijection:
 
 ```java
-.field(Event::at).to(EventDto::at, Instant::toString, Instant::parse)
+to(Event::at, EventDto::at, Instant::toString, Instant::parse)
 ```
 
-**Nested mappers** with `.via(...)` for sub-records (the nested mapper supplies both directions):
+**Nested mappers** with `via(...)` for sub-records (the nested mapper supplies both directions):
 
 ```java
-final Mapper<AddrEntity, AddrDto> addressMapper = Telescope.map(AddrEntity.class)
-  .to(AddrDto.class)
-  .auto()
-  .buildMapper();
+final Mapper<AddrEntity, AddrDto> addressMapper = Telescope.mapper(auto(AddrEntity.class, AddrDto.class));
 
-final Telescope<UserEntity, UserDto> userMapper = Telescope.map(UserEntity.class)
-  .to(UserDto.class)
-  .field(UserEntity::name)
-  .to(UserDto::name)
-  .field(UserEntity::address)
-  .via(UserDto::address, addressMapper)
-  .build();
+final Telescope<UserEntity, UserDto> userMapper = Telescope.map(
+  via(UserEntity::address, UserDto::address, addressMapper),
+  auto()
+);
 ```
 
-**`patch()` for sparse updates.** `buildMapper()` (instead of `build()`) returns a `Mapper<A, B>` that retains the field
-links, so it can overlay a partially-populated target onto a full source — only the non-null patch fields change:
+**`Telescope.mapper(...)` for sparse patches.** Same row pack as `Telescope.map(...)` but returns a `Mapper<A, B>` that
+retains the field links — it can overlay a partially-populated target onto a full source (only non-null patch fields
+change) and be nested in another mapping via `via(...)`:
 
 ```java
-final Mapper<User, UserPatch> mapper = Telescope.map(User.class).to(UserPatch.class).auto().buildMapper();
+final Mapper<User, UserPatch> mapper = Telescope.mapper(auto(User.class, UserPatch.class));
 
 // dtoPatch has a new email, null everything else → only the email changes:
 User updated = mapper.patch(user, new UserPatch(null, "new@x.com", null));
 ```
 
-`Mapper.asTelescope()` gives you the composable telescope for threading through paths; `Mapper.read(a)` does a one-shot
-forward conversion. For lossy or one-way conversions (dropping fields, non-invertible transforms), use `from/to/using`
-with hand-written functions. This is still not auto-discovery: `.auto()` only matches exact names, and you name every
-rename and transform explicitly.
+**Fluent chain (alternative).** The fluent `Telescope.map(A.class).to(B.class).field(...).to(...).build()` form still
+works for cases where you'd rather chain than name a row pack. The varargs form above is the recommended shape for two
+or more correspondences (each row on its own line, no chain-blur between rows):
+
+```java
+// Equivalent to the varargs form:
+Telescope.map(UserEntity.class).to(UserDto.class)
+  .field(UserEntity::name).to(UserDto::fullName)
+  .auto()
+  .build();
+```
+
+For lossy or one-way conversions (dropping fields, non-invertible transforms), use `from/to/using` with hand-written
+functions. Telescope still won't auto-discover anything — `auto()` is the only inference, and it only matches exact
+names.
 
 ---
 

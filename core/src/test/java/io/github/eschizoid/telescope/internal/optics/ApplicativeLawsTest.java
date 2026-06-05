@@ -87,7 +87,7 @@ class ApplicativeLawsTest {
     @Test
     @DisplayName("homomorphism")
     void homomorphism() {
-      assertEquals(EitherK.unbox(A.<Integer>pure(43)), EitherK.unbox(A.map(A.<Integer>pure(42), x -> x + 1)));
+      assertEquals(EitherK.unbox(A.pure(43)), EitherK.unbox(A.map(A.pure(42), x -> x + 1)));
     }
 
     @Test
@@ -95,13 +95,7 @@ class ApplicativeLawsTest {
     void map2BothRight() {
       assertEquals(
         Either.right("1-2"),
-        EitherK.unbox(
-          A.map2(
-            EitherK.<String, Integer>box(Either.right(1)),
-            EitherK.<String, Integer>box(Either.right(2)),
-            (a, b) -> a + "-" + b
-          )
-        )
+        EitherK.unbox(A.map2(EitherK.box(Either.right(1)), EitherK.box(Either.right(2)), (a, b) -> a + "-" + b))
       );
     }
 
@@ -111,11 +105,7 @@ class ApplicativeLawsTest {
       assertEquals(
         Either.left("err"),
         EitherK.unbox(
-          A.map2(
-            EitherK.<String, Integer>box(Either.left("err")),
-            EitherK.<String, Integer>box(Either.right(2)),
-            (a, b) -> "" + a + b
-          )
+          A.map2(EitherK.<String, Integer>box(Either.left("err")), EitherK.box(Either.right(2)), (a, b) -> "" + a + b)
         )
       );
     }
@@ -126,11 +116,7 @@ class ApplicativeLawsTest {
       assertEquals(
         Either.left("err2"),
         EitherK.unbox(
-          A.map2(
-            EitherK.<String, Integer>box(Either.right(1)),
-            EitherK.<String, Integer>box(Either.left("err2")),
-            (a, b) -> "" + a + b
-          )
+          A.map2(EitherK.box(Either.right(1)), EitherK.<String, Integer>box(Either.left("err2")), (a, b) -> "" + a + b)
         )
       );
     }
@@ -152,7 +138,7 @@ class ApplicativeLawsTest {
     @Test
     @DisplayName("homomorphism")
     void homomorphism() {
-      assertEquals(ValidatedK.unbox(A.<Integer>pure(43)), ValidatedK.unbox(A.map(A.<Integer>pure(42), x -> x + 1)));
+      assertEquals(ValidatedK.unbox(A.pure(43)), ValidatedK.unbox(A.map(A.pure(42), x -> x + 1)));
     }
 
     @Test
@@ -161,11 +147,7 @@ class ApplicativeLawsTest {
       assertEquals(
         Validated.valid("1-2"),
         ValidatedK.unbox(
-          A.map2(
-            ValidatedK.<String, Integer>box(Validated.valid(1)),
-            ValidatedK.<String, Integer>box(Validated.valid(2)),
-            (a, b) -> a + "-" + b
-          )
+          A.map2(ValidatedK.box(Validated.valid(1)), ValidatedK.box(Validated.valid(2)), (a, b) -> a + "-" + b)
         )
       );
     }
@@ -193,7 +175,7 @@ class ApplicativeLawsTest {
         ValidatedK.unbox(
           A.map2(
             ValidatedK.<String, Integer>box(Validated.invalid("err")),
-            ValidatedK.<String, Integer>box(Validated.valid(2)),
+            ValidatedK.box(Validated.valid(2)),
             (a, b) -> "" + a + b
           )
         )

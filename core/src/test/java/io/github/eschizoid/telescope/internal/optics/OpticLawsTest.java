@@ -149,7 +149,7 @@ class OpticLawsTest {
     @Test
     @DisplayName("Iso.then(Iso) returns an Iso")
     void isoThenIso() {
-      final var toStr = Focus.<Integer, String>iso(Object::toString, Integer::parseInt);
+      final var toStr = Focus.iso(Object::toString, Integer::parseInt);
       final var upper = Focus.<String, String>iso(String::toUpperCase, String::toLowerCase);
       final var composed = toStr.then(upper);
       assertInstanceOf(Iso.class, composed);

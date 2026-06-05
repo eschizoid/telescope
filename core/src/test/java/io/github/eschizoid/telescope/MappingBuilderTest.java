@@ -1,7 +1,6 @@
 package io.github.eschizoid.telescope;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -100,7 +99,7 @@ class MappingBuilderTest {
         IllegalStateException.class,
         () -> Telescope.map(A.class).to(B.class).field(A::x).to(B::p).build() // q unmapped
       );
-      assertEquals(true, ex.getMessage().contains("'q'"));
+      assertTrue(ex.getMessage().contains("'q'"));
     }
 
     @Test
@@ -111,7 +110,7 @@ class MappingBuilderTest {
         // both B fields mapped from x, but A.y is never a source
         () -> Telescope.map(A.class).to(B.class).field(A::x).to(B::p).field(A::x).to(B::q).build()
       );
-      assertEquals(true, ex.getMessage().contains("'y'"));
+      assertTrue(ex.getMessage().contains("'y'"));
     }
 
     @Test
