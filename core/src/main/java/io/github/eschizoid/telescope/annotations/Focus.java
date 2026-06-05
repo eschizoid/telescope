@@ -28,7 +28,7 @@ import java.lang.annotation.Target;
  *
  * <pre>{@code
  * // Gradle:
- * annotationProcessor("io.github.eschizoid:telescope-codegen:0.1.0")
+ * annotationProcessor("io.github.eschizoid:telescope-codegen:0.3.0")
  *
  * // Source:
  * @Focus

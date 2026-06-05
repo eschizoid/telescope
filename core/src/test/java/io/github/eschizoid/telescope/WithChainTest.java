@@ -26,6 +26,29 @@ class WithChainTest {
 
   record Company(String name, List<Department> departments) {}
 
+  // Pre-built paths reused across the whole test suite. Each typed Telescope<Company, String>;
+  // every step compile-checked.
+  private static final Telescope<Company, String> EMAILS = Telescope.of(Company.class)
+    .each(Company::departments)
+    .each(Department::teams)
+    .each(Team::users)
+    .field(User::email);
+
+  private static final Telescope<Company, String> DEPT_NAMES = Telescope.of(Company.class)
+    .each(Company::departments)
+    .field(Department::name);
+
+  private static final Telescope<Company, String> TEAM_NAMES = Telescope.of(Company.class)
+    .each(Company::departments)
+    .each(Department::teams)
+    .field(Team::name);
+
+  private static final Telescope<Company, String> USER_NAMES = Telescope.of(Company.class)
+    .each(Company::departments)
+    .each(Department::teams)
+    .each(Team::users)
+    .field(User::name);
+
   private static Company sample() {
     return new Company(
       "Acme",
@@ -44,30 +67,17 @@ class WithChainTest {
   class SingleEdit {
 
     @Test
-    @DisplayName("one with(fn).apply(source) equals one update(source, fn)")
+    @DisplayName("one update(path, fn).apply(source) equals one path.update(source, fn)")
     void mirrorsDirectUpdate() {
       final var company = sample();
-      final var viaChain = Telescope.of(Company.class)
-        .each(Company::departments)
-        .each(Department::teams)
-        .each(Team::users)
-        .field(User::email)
-        .with(String::toLowerCase)
-        .apply(company);
-
-      final var viaDirect = Telescope.of(Company.class)
-        .each(Company::departments)
-        .each(Department::teams)
-        .each(Team::users)
-        .field(User::email)
-        .update(company, String::toLowerCase);
-
+      final var viaChain = Telescope.of(Company.class).update(EMAILS, String::toLowerCase).apply(company);
+      final var viaDirect = EMAILS.update(company, String::toLowerCase);
       assertEquals(viaDirect, viaChain);
     }
   }
 
   @Nested
-  @DisplayName("Multi-edit — chain accumulates all .with() edits in order")
+  @DisplayName("Multi-edit — chain accumulates edits in order")
   class MultiEdit {
 
     @Test
@@ -75,45 +85,24 @@ class WithChainTest {
     void twoEditsHeterogeneous() {
       final var company = sample();
       final var out = Telescope.of(Company.class)
-        .each(Company::departments)
-        .each(Department::teams)
-        .each(Team::users)
-        .field(User::email)
-        .with(String::toLowerCase)
-        .each(Company::departments)
-        .field(Department::name)
-        .with(String::trim)
+        .update(EMAILS, String::toLowerCase)
+        .update(DEPT_NAMES, String::trim)
         .apply(company);
-
       assertEquals("Engineering", out.departments().get(0).name());
       assertEquals("Sales", out.departments().get(1).name());
       assertEquals("alice@acme.com", out.departments().get(0).teams().get(0).users().get(0).email());
     }
 
     @Test
-    @DisplayName("four-edit chain applies all edits without restart markers")
+    @DisplayName("four-edit chain applies all edits in one declarative pass")
     void fourEdits() {
       final var company = sample();
       final var out = Telescope.of(Company.class)
-        .each(Company::departments)
-        .each(Department::teams)
-        .each(Team::users)
-        .field(User::email)
-        .with(String::toLowerCase)
-        .each(Company::departments)
-        .field(Department::name)
-        .with(String::trim)
-        .each(Company::departments)
-        .each(Department::teams)
-        .field(Team::name)
-        .with(String::trim)
-        .each(Company::departments)
-        .each(Department::teams)
-        .each(Team::users)
-        .field(User::name)
-        .with(String::toUpperCase)
+        .update(EMAILS, String::toLowerCase)
+        .update(DEPT_NAMES, String::trim)
+        .update(TEAM_NAMES, String::trim)
+        .update(USER_NAMES, String::toUpperCase)
         .apply(company);
-
       assertEquals("Engineering", out.departments().getFirst().name());
       assertEquals("Platform", out.departments().getFirst().teams().get(0).name());
       assertEquals("ALICE", out.departments().getFirst().teams().getFirst().users().getFirst().name());
@@ -125,18 +114,9 @@ class WithChainTest {
     void laterSeesEarlier() {
       final var company = sample();
       final var out = Telescope.of(Company.class)
-        .each(Company::departments)
-        .each(Department::teams)
-        .each(Team::users)
-        .field(User::email)
-        .with(String::toLowerCase)
-        .each(Company::departments)
-        .each(Department::teams)
-        .each(Team::users)
-        .field(User::email)
-        .with(e -> e + "!")
+        .update(EMAILS, String::toLowerCase)
+        .update(EMAILS, e -> e + "!")
         .apply(company);
-
       assertEquals("alice@acme.com!", out.departments().get(0).teams().get(0).users().get(0).email());
     }
   }
@@ -161,6 +141,34 @@ class WithChainTest {
   }
 
   @Nested
+  @DisplayName("Mix-and-match — pre-built update(path, fn) and inline with(fn) in the same chain")
+  class MixedForms {
+
+    @Test
+    @DisplayName("pre-built update(path, fn) interleaved with inline with(fn) works")
+    void mixPrebuiltAndInline() {
+      final var company = sample();
+      final var out = Telescope.of(Company.class)
+        .update(EMAILS, String::toLowerCase)
+        .each(Company::departments)
+        .field(Department::name)
+        .with(String::trim)
+        .apply(company);
+      assertEquals("Engineering", out.departments().get(0).name());
+      assertEquals("alice@acme.com", out.departments().get(0).teams().get(0).users().get(0).email());
+    }
+
+    @Test
+    @DisplayName("Java picks the right overload by first-arg type — Telescope vs source instance")
+    void overloadResolution() {
+      final var company = sample();
+      final Company viaTerminal = EMAILS.update(company, String::toLowerCase);
+      final Company viaChain = Telescope.of(Company.class).update(EMAILS, String::toLowerCase).apply(company);
+      assertEquals(viaTerminal, viaChain);
+    }
+  }
+
+  @Nested
   @DisplayName("Reuse — a stored multi-edit telescope applies cleanly to many sources")
   class Reuse {
 
@@ -168,14 +176,8 @@ class WithChainTest {
     @DisplayName("the same multi-edit chain applies independently to many sources")
     void appliedToManySources() {
       final Telescope<Company, Company> normalize = Telescope.of(Company.class)
-        .each(Company::departments)
-        .each(Department::teams)
-        .each(Team::users)
-        .field(User::email)
-        .with(String::toLowerCase)
-        .each(Company::departments)
-        .field(Department::name)
-        .with(String::trim);
+        .update(EMAILS, String::toLowerCase)
+        .update(DEPT_NAMES, String::trim);
 
       final var company1 = sample();
       final var company2 = new Company(
