@@ -522,6 +522,7 @@ automatically. You only spell the _differences_.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.via;
 
 // All same-name, no overrides — the pure-copy 1-liner:
 final Telescope<UserEntity, UserDto> userMapper = Telescope.map(UserEntity.class, UserDto.class);

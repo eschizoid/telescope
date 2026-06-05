@@ -125,11 +125,30 @@ public final class DeepMap {
       // "name".
       final var srcField = srcRefl.normalize(row.sourceField());
       final var tgtField = tgtRefl.normalize(row.targetField());
+      // Fail fast on duplicates within this type-pair — two rows that target the same source or
+      // target field would silently overwrite each other in byTargetName/bySourceName and could
+      // produce non-bijective forward/backward (each direction using a different correspondence).
+      if (!claimedTgt.add(tgtField)) throw new IllegalArgumentException(
+        "Deep map " +
+          source.getSimpleName() +
+          " → " +
+          target.getSimpleName() +
+          ": duplicate override row for target field '" +
+          tgtField +
+          "'. Each (source, target) type pair may declare at most one row per target field."
+      );
+      if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
+        "Deep map " +
+          source.getSimpleName() +
+          " → " +
+          target.getSimpleName() +
+          ": duplicate override row for source field '" +
+          srcField +
+          "'. Each (source, target) type pair may declare at most one row per source field."
+      );
       final var step = new FieldStep(srcField, tgtField, row.fieldIso());
       byTargetName.put(tgtField, step);
       bySourceName.put(srcField, step);
-      claimedTgt.add(tgtField);
-      claimedSrc.add(srcField);
     }
 
     final var srcNames = srcRefl.names(source);
@@ -271,16 +290,20 @@ public final class DeepMap {
     final Map<String, FieldStep> bySourceName
   ) {
     return Iso.of(
-      s ->
-        (T) tgtRefl.construct(target, tName -> {
+      s -> {
+        if (s == null) return null;
+        return (T) tgtRefl.construct(target, tName -> {
           final var step = byTargetName.get(tName);
           return ((Iso<Object, Object>) step.iso).to(srcRefl.read(s, step.sourceName));
-        }),
-      t ->
-        (S) srcRefl.construct(source, sName -> {
+        });
+      },
+      t -> {
+        if (t == null) return null;
+        return (S) srcRefl.construct(source, sName -> {
           final var step = bySourceName.get(sName);
           return ((Iso<Object, Object>) step.iso).from(tgtRefl.read(t, step.targetName));
-        })
+        });
+      }
     );
   }
 

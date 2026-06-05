@@ -105,7 +105,7 @@ public final class Mapper<A, B> {
    */
   @SuppressWarnings("unchecked")
   public A patch(final A base, final B partial) {
-    if (base == null) return null;
+    if (base == null || partial == null) return base;
     if (patchByTargetField.isEmpty()) return base;
     final var patched = new HashMap<String, Object>();
     for (final var entry : patchByTargetField.entrySet()) {

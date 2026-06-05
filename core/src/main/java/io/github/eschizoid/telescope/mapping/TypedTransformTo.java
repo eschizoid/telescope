@@ -39,8 +39,7 @@ record TypedTransformTo<A, B, X, Y>(
   }
 
   @Override
-  @SuppressWarnings("unchecked")
   public Iso<X, Y> fieldIso() {
-    return Iso.of(x -> ((Function<X, Y>) forward).apply(x), y -> ((Function<Y, X>) backward).apply(y));
+    return Iso.of(forward, backward);
   }
 }

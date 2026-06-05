@@ -332,6 +332,8 @@ public final class Telescope<S, A> {
    * @see Mapping
    * @see DeepMap
    */
+  // No @SafeVarargs needed: Mapping<?, ?> is reifiable (wildcards), so this varargs method does
+  // not produce heap-pollution warnings for callers.
   public static <A, B> Telescope<A, B> map(
     final Class<A> source,
     final Class<B> target,
@@ -347,6 +349,8 @@ public final class Telescope<S, A> {
    *
    * @see #map(Class, Class, Mapping[])
    */
+  // No @SafeVarargs needed: Mapping<?, ?> is reifiable (wildcards), so this varargs method does
+  // not produce heap-pollution warnings for callers.
   public static <A, B> Mapper<A, B> mapper(
     final Class<A> source,
     final Class<B> target,
