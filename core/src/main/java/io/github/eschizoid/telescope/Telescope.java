@@ -290,13 +290,14 @@ public final class Telescope<S, A> {
   }
 
   /**
-   * Deep recursive mapping: pass the source/target record classes up front, then varargs of
-   * overrides. Recursion does the rest — same-name components identity-map, nested records recurse,
-   * {@code List<X>↔List<Y>} / {@code Map<K, X>↔Map<K, Y>} / {@code Optional<X>↔Optional<Y>} lift
-   * the inner Iso through the container automatically. Override rows are typed by their accessors
-   * and apply <em>wherever</em> recursion lands on the matching {@code (sourceClass, targetClass)}
-   * pair — a single {@code to(UserEntity::name, UserDto::fullName)} at the top of a multi-level
-   * mapping affects every User↔UserDto encounter in the tree.
+   * Deep recursive mapping: pass the source/target root classes up front (either side may be a
+   * record or a POJO — {@link io.github.eschizoid.telescope.internal.Reflective} dispatches per
+   * side), then varargs of overrides. Recursion does the rest — same-name components identity-map,
+   * nested records/POJOs recurse, {@code List<X>↔List<Y>} / {@code Map<K, X>↔Map<K, Y>} / {@code
+   * Optional<X>↔Optional<Y>} lift the inner Iso through the container automatically. Override rows
+   * are typed by their accessors and apply <em>wherever</em> recursion lands on the matching {@code
+   * (sourceClass, targetClass)} pair — a single {@code to(UserEntity::name, UserDto::fullName)} at
+   * the top of a multi-level mapping affects every User↔UserDto encounter in the tree.
    *
    * <pre>{@code
    * import static io.github.eschizoid.telescope.mapping.Mapping.to;
@@ -323,8 +324,8 @@ public final class Telescope<S, A> {
    * to(src, tgt, fwd, bwd)}, {@link Mapping#via(Accessor, Accessor, Mapper) via(src, tgt, mapper)}.
    * That's it — recursion handles every "auto" case, so no explicit auto row exists.
    *
-   * @param source the source record class (root of the recursion)
-   * @param target the target record class (root of the recursion)
+   * @param source the source root class — record or POJO (root of the recursion)
+   * @param target the target root class — record or POJO (root of the recursion)
    * @param overrides rename / typed-transform / nested-mapper rows; applied wherever recursion
    *     encounters their {@code (sourceClass, targetClass)} pair
    * @param <A> the source root type
