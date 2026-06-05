@@ -11,8 +11,9 @@
  *       (including Lombok {@code @Data} / {@code @Value} / {@code @Builder} classes via the {@code
  *       :lombok} processor).
  *   <li>{@link io.github.eschizoid.telescope.annotations.Bridge} — applied to a record to generate
- *       a reflection-free, compile-checked bridge to a sibling POJO; the runtime counterpart of
- *       {@link io.github.eschizoid.telescope.Telescope#fromBean}.
+ *       a reflection-free, compile-checked bridge to a sibling POJO; the runtime counterpart of the
+ *       deep recursive {@link io.github.eschizoid.telescope.Telescope#map(Class, Class,
+ *       io.github.eschizoid.telescope.mapping.Mapping[])} factory.
  * </ul>
  *
  * <p>The annotations themselves carry no runtime behavior — they are read by the {@code

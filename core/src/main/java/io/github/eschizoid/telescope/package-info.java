@@ -35,16 +35,17 @@
  * box and unbox at the boundary so user code only sees JDK types and the library's own {@code
  * Either} / {@code Validated}.
  *
- * <h2>Records-only, with a POJO bridge</h2>
+ * <h2>Records and beans, uniformly</h2>
  *
- * <p>Field navigation rebuilds via a record's canonical constructor. Non-record types throw at
- * runtime with a clear message. For mutable POJOs / Hibernate entities / Lombok classes, bridge
- * once at the seam: {@link io.github.eschizoid.telescope.Telescope#fromBean} reflectively maps a
- * POJO to a record and back, and the annotation {@link
- * io.github.eschizoid.telescope.annotations.Bridge} is its reflection-free, compile-checked
- * counterpart (annotate the record to have the bridge generated and validated at compile time). The
- * {@link io.github.eschizoid.telescope.Telescope#from} / {@code .to} / {@code .using} factory
- * covers the simpler record-to-record case via an {@code Iso}.
+ * <p>{@code .field(...)} navigation rebuilds via a record's canonical constructor or a bean's
+ * auto-detected write strategy. The deep recursive mapping factory {@link
+ * io.github.eschizoid.telescope.Telescope#map(Class, Class,
+ * io.github.eschizoid.telescope.mapping.Mapping[])} handles record↔record, POJO↔POJO, and any
+ * cross-paradigm mix at any depth — the per-side {@code Reflective} is picked independently from
+ * each class. The annotation {@link io.github.eschizoid.telescope.annotations.Bridge} is the
+ * reflection-free, compile-checked counterpart (annotate the record to have the bridge generated
+ * and validated at compile time). The {@link io.github.eschizoid.telescope.Telescope#from} / {@code
+ * .to} / {@code .using} factory covers the simpler hand-written conversion case via an {@code Iso}.
  *
  * <h2>Codegen</h2>
  *

@@ -7,8 +7,10 @@
  *       canonical-constructor lookup, component accessors, structural rebuilds. Field navigation in
  *       {@code Telescope} ultimately funnels through here.
  *   <li>{@link io.github.eschizoid.telescope.internal.Beans} — getter/setter reflection helpers
- *       used by {@link io.github.eschizoid.telescope.Telescope#fromBean} and by the generated
- *       {@code @Bridge} code to map POJOs to records and back.
+ *       used by the bean side of the deep mapping factory and by the generated {@code @Bridge} code
+ *       to map POJOs to records and back.
+ *   <li>{@link io.github.eschizoid.telescope.internal.Reflective} — the uniform read/construct
+ *       interface DeepMap drives, with implementations for records and beans.
  * </ul>
  *
  * <p>The optic lattice and the HKT-emulation machinery live under {@code

@@ -29,8 +29,9 @@ public final class Records {
 
   /**
    * A {@link Lens} over a record component, identified by name. The {@code get} reads the
-   * component; {@code set}/{@code modify} return a copy of the record with that one part replaced.
-   * Backs {@link io.github.eschizoid.telescope.Telescope}'s {@code .fieldByName(String)} overload.
+   * component; {@code set}/{@code modify} return a copy of the record with that one component
+   * replaced. Backs {@link io.github.eschizoid.telescope.Telescope}'s {@code .fieldByName(String)}
+   * overload.
    *
    * <pre>{@code
    * record User(String name, int age) {}
@@ -73,6 +74,18 @@ public final class Records {
     final var names = new String[comps.length];
     for (var i = 0; i < comps.length; i++) names[i] = comps[i].getName();
     return names;
+  }
+
+  /**
+   * The generic type of a record component by name (used by {@link
+   * io.github.eschizoid.telescope.mapping.DeepMap DeepMap} for container shape detection — {@code
+   * List<X>}, {@code Map<K, V>}, {@code Optional<X>}).
+   *
+   * @throws IllegalArgumentException if the name doesn't match a component on {@code recordClass}
+   */
+  public static java.lang.reflect.Type componentType(final Class<?> recordClass, final String name) {
+    for (final var c : info(recordClass).components()) if (c.getName().equals(name)) return c.getGenericType();
+    throw noField(name, recordClass);
   }
 
   /**

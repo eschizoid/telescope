@@ -1,8 +1,8 @@
 package io.github.eschizoid.telescope.beans;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.List;
@@ -199,17 +199,17 @@ class PojoOpticsTest {
   }
 
   @Nested
-  @DisplayName("mapBean — POJO to POJO")
+  @DisplayName("Telescope.map(...) — POJO ↔ POJO via the unified deep factory")
   class MapBean {
 
     @Test
-    @DisplayName("forward + backward round-trip")
+    @DisplayName("forward + backward round-trip on same-name properties")
     void roundTrip() {
       final var a = new PersonA();
       a.setId("u1");
       a.setName("Alice");
 
-      final var bridge = Telescope.mapBean(PersonA.class).to(PersonB.class).build();
+      final var bridge = Telescope.map(PersonA.class, PersonB.class);
       final var b = bridge.read(a);
       assertEquals("u1", b.getId());
       assertEquals("Alice", b.getName());
@@ -218,33 +218,13 @@ class PojoOpticsTest {
       assertEquals("u1", backA.getId());
       assertEquals("Alice", backA.getName());
     }
-
-    @Test
-    @DisplayName("rename maps a differently-named property; ignoreUnmatched drops the rest")
-    void renameAndIgnore() {
-      final var a = new PersonA();
-      a.setId("u1");
-      a.setName("Alice");
-
-      final var bridge = Telescope.mapBean(PersonA.class)
-        .to(PersonView.class)
-        .rename(PersonA::getName, PersonView::getFullName) // name <-> fullName
-        .ignoreUnmatched() // PersonView.role has no PersonA counterpart
-        .build();
-
-      final var view = bridge.read(a);
-      assertEquals("u1", view.getId());
-      assertEquals("Alice", view.getFullName());
-      assertNull(view.getRole());
-
-      final var backA = bridge.set(a, view);
-      assertEquals("Alice", backA.getName());
-    }
   }
 
   static final class OrderPojo {
 
-    private final String sku;
+    private String sku;
+
+    public OrderPojo() {}
 
     public OrderPojo(final String sku) {
       this.sku = sku;
@@ -252,6 +232,10 @@ class PojoOpticsTest {
 
     public String getSku() {
       return sku;
+    }
+
+    public void setSku(final String sku) {
+      this.sku = sku;
     }
   }
 
@@ -355,21 +339,6 @@ class PojoOpticsTest {
     }
   }
 
-  @Nested
-  @DisplayName("viaConstructor — name matching survives a reordered constructor")
-  class ViaConstructorNameMatching {
-
-    @Test
-    @DisplayName("a constructor with reversed parameter order still maps by name, not position")
-    void reorderedCtor() {
-      final var bridge = Telescope.fromBean(SwapPojo.class).to(SwapRecord.class).viaConstructor();
-      final var pojo = new SwapPojo("SECOND", "FIRST"); // ctor(second, first): first="FIRST", second="SECOND"
-      final var back = bridge.set(pojo, new SwapRecord("FIRST", "SECOND"));
-      assertEquals("FIRST", back.getFirst());
-      assertEquals("SECOND", back.getSecond());
-    }
-  }
-
   // Record component 'displayName' has no same-named getter on the POJO; rename maps it to 'name'.
   record AccountRecord(String id, String displayName) {}
 
@@ -398,16 +367,17 @@ class PojoOpticsTest {
   }
 
   @Nested
-  @DisplayName("fromBean — rename a record component to a differently-named POJO property")
+  @DisplayName("Telescope.map(...) — rename a record component to a differently-named POJO property")
   class FromBeanRename {
 
     @Test
-    @DisplayName("rename maps component <-> property both ways")
+    @DisplayName("to(record::component, bean::getProperty) keys the rename to the type pair both ways")
     void renameBothWays() {
-      final var bridge = Telescope.fromBean(AccountBean.class)
-        .to(AccountRecord.class)
-        .rename(AccountRecord::displayName, AccountBean::getName)
-        .viaFields();
+      final var bridge = Telescope.map(
+        AccountBean.class,
+        AccountRecord.class,
+        to(AccountBean::getName, AccountRecord::displayName)
+      );
 
       final var bean = new AccountBean();
       bean.setId("a1");
@@ -424,17 +394,13 @@ class PojoOpticsTest {
   }
 
   @Nested
-  @DisplayName("nested collections — viaEach element bridge")
+  @DisplayName("Telescope.map(...) — nested List<Pojo> ↔ List<Record> via deep recursion")
   class NestedCollections {
 
     @Test
-    @DisplayName("List<Pojo> <-> List<Record> converts element-wise both ways")
+    @DisplayName("recursion lifts the element-pair mapping through the List automatically")
     void elementWise() {
-      final var orderBridge = Telescope.fromBean(OrderPojo.class).to(OrderRecord.class).viaConstructor();
-      final var cartBridge = Telescope.fromBean(CartPojo.class)
-        .to(CartRecord.class)
-        .viaEach(CartRecord::orders, orderBridge)
-        .viaFields();
+      final var cartBridge = Telescope.map(CartPojo.class, CartRecord.class);
 
       final var cart = new CartPojo();
       cart.setOrders(List.of(new OrderPojo("A"), new OrderPojo("B")));

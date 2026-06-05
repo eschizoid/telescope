@@ -1,7 +1,11 @@
 package io.github.eschizoid.telescope.internal.optics;
 
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -98,6 +102,50 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
   /** Identity Iso — useful as the root for path composition. */
   static <X> Iso<X, X> identity() {
     return of(x -> x, x -> x);
+  }
+
+  /**
+   * Lift an element-level {@code Iso<X, Y>} into a {@code List}-level {@code Iso<List<X>,
+   * List<Y>>}. Element-wise forward / backward via streaming. Used by the deep mapping factory to
+   * derive a container-level conversion from a record-pair conversion automatically.
+   */
+  static <X, Y> Iso<List<X>, List<Y>> liftList(final Iso<X, Y> element) {
+    return of(
+      xs -> xs == null ? null : xs.stream().map(element::to).collect(Collectors.toList()),
+      ys -> ys == null ? null : ys.stream().map(element::from).collect(Collectors.toList())
+    );
+  }
+
+  /**
+   * Lift an element-level {@code Iso<X, Y>} into an {@code Optional}-level {@code Iso<Optional<X>,
+   * Optional<Y>>}. {@code Optional.empty()} round-trips to {@code Optional.empty()}; a {@code null}
+   * Optional reference round-trips to {@code null} (records/beans may legally hold null references
+   * and deep mapping treats nulls as pass-through).
+   */
+  static <X, Y> Iso<Optional<X>, Optional<Y>> liftOptional(final Iso<X, Y> element) {
+    return of(ox -> ox == null ? null : ox.map(element::to), oy -> oy == null ? null : oy.map(element::from));
+  }
+
+  /**
+   * Lift a value-level {@code Iso<X, Y>} into a {@code Map}-values-level {@code Iso<Map<K, X>,
+   * Map<K, Y>>}. Keys are preserved; iteration order follows {@link LinkedHashMap}. A {@code null}
+   * map round-trips to {@code null}.
+   */
+  static <K, X, Y> Iso<Map<K, X>, Map<K, Y>> liftMapValues(final Iso<X, Y> value) {
+    return of(
+      mx -> {
+        if (mx == null) return null;
+        final var out = new LinkedHashMap<K, Y>();
+        mx.forEach((k, x) -> out.put(k, value.to(x)));
+        return out;
+      },
+      my -> {
+        if (my == null) return null;
+        final var out = new LinkedHashMap<K, X>();
+        my.forEach((k, y) -> out.put(k, value.from(y)));
+        return out;
+      }
+    );
   }
 
   /** Swap directions — {@code to} and {@code from} trade places. */

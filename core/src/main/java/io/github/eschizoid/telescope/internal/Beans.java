@@ -60,6 +60,21 @@ public final class Beans {
     return getters(beanClass).containsKey(name);
   }
 
+  /**
+   * The generic return type of {@code beanClass}'s getter for {@code name} (used by {@link
+   * io.github.eschizoid.telescope.mapping.DeepMap DeepMap} for container shape detection — {@code
+   * List<X>}, {@code Map<K, V>}, {@code Optional<X>}).
+   *
+   * @throws IllegalArgumentException if no getter is found
+   */
+  public static java.lang.reflect.Type propertyType(final Class<?> beanClass, final String name) {
+    final var getter = getters(beanClass).get(name);
+    if (getter == null) throw new IllegalArgumentException(
+      "No getter for property '" + name + "' on " + beanClass.getName()
+    );
+    return getter.getGenericReturnType();
+  }
+
   private static Map<String, Method> getters(final Class<?> cls) {
     return GETTERS.computeIfAbsent(cls, Beans::scanGetters);
   }
