@@ -114,7 +114,7 @@ jreleaser {
 
     project {
         name.set("telescope")
-        description.set("Deep-copy DSL for Java records.")
+        description.set("Deep-copy DSL for Java records and POJOs.")
         authors.set(listOf("Mariano Gonzalez"))
         license.set("Apache-2.0")
         links {

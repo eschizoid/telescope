@@ -1,1 +1,1 @@
-com.github.eschizoid.telescope.codegen.lombok.LombokFocusProcessor
+io.github.eschizoid.telescope.codegen.lombok.LombokFocusProcessor

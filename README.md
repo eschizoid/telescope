@@ -24,7 +24,7 @@ to records; the same DSL applies.
 ### Records
 
 ```java
-import com.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.Telescope;
 
 record Address(String city, String zip) {}
 
@@ -196,10 +196,10 @@ Maven:
 
 ### JPMS / modular consumers
 
-`core` is a named module, `com.github.eschizoid.telescope`. If your project has a `module-info.java`, add:
+`core` is a named module, `io.github.eschizoid.telescope`. If your project has a `module-info.java`, add:
 
 ```java
-requires com.github.eschizoid.telescope;
+requires io.github.eschizoid.telescope;
 ```
 
 `telescope-codegen` is a compile-time-only processor and isn't required on the module path.
@@ -227,25 +227,25 @@ Conversions are bidirectional `Iso`s, so any cell in the middle row composes int
 
 ### Build
 
-| Method                                                        | What it does                                                                                                                                          |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Telescope.of(Class<S>)`                                      | Start at the root type.                                                                                                                               |
-| `Telescope.lens(getter, setter)`                              | Build a single-focus telescope directly, no reflection. Used by `@Focus` codegen; handy for hot paths.                                                |
-| `Telescope.from(A).to(B).using(fwd, back)`                    | Build a `Telescope<A, B>` backed by an `Iso` — bidirectional type conversion that composes into longer paths.                                         |
-| `Telescope.map(A).to(B).field(...).to(...).build()`           | Declarative field-by-field record mapping; synthesizes a bidirectional `Telescope<A, B>`.                                                             |
-| `Telescope.ofBean(Class<P>)`                                  | Start a native POJO telescope — `.field`/`.each` navigate the bean directly, rebuilding via strategy (see [Working with POJOs](#working-with-pojos)). |
-| `Telescope.fromBean(P).to(R).viaFields/Constructor/Builder()` | Bridge a POJO ⇄ record at runtime; `.via`/`.viaEach` convert nested objects/collections.                                                              |
-| `Telescope.mapBean(A).to(B).build()`                          | Convert one POJO ⇄ another (name-matched, auto-detected rebuild strategy).                                                                            |
-| `.field(Class::accessor)`                                     | Descend into a record field via method reference.                                                                                                     |
-| `.field(String)`                                              | Descend by field name (when method refs aren't possible).                                                                                             |
-| `.field(String, Class<B>)`                                    | Same as above with an inline type witness — removes the leading `.<B>field(...)` ceremony.                                                            |
-| `.each(Class::collectionAccessor)`                            | Descend into a `List`/`Set`/`Iterable` field and broadcast over elements. Element type inferred from the method ref.                                  |
-| `.each()` (no-arg)                                            | Broadcast over elements when you already hold a `Telescope<S, SomeContainer>` — also the only form that works for primitive arrays (`int[]`, etc.).   |
-| `.eachValue(Class::mapAccessor)`                              | Like `each`, but for `Map` values (keys preserved).                                                                                                   |
-| `.whenPresent(Class::optionalAccessor)`                       | Like `each`, but for `Optional` — no-op if empty.                                                                                                     |
-| `.as(Class)`                                                  | Narrow to a sealed-type case. Non-matching values pass through.                                                                                       |
-| `.filter(Predicate)`                                          | Restrict to elements matching the predicate.                                                                                                          |
-| `.then(otherTelescope)`                                       | Compose two telescopes.                                                                                                                               |
+| Method                                                        | What it does                                                                                                                                                                                                  |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Telescope.of(Class<S>)`                                      | Start at the root type.                                                                                                                                                                                       |
+| `Telescope.lens(getter, setter)`                              | Build a single-focus telescope directly, no reflection. Used by `@Focus` codegen; handy for hot paths.                                                                                                        |
+| `Telescope.from(A).to(B).using(fwd, back)`                    | Build a `Telescope<A, B>` backed by an `Iso` — bidirectional type conversion that composes into longer paths.                                                                                                 |
+| `Telescope.map(A).to(B).field(...).to(...).build()`           | Declarative field-by-field record mapping; synthesizes a bidirectional `Telescope<A, B>`.                                                                                                                     |
+| `Telescope.ofBean(Class<P>)`                                  | Start a native POJO telescope — `.field`/`.each` navigate the bean directly, rebuilding via strategy (see [Working with POJOs](#working-with-pojos)).                                                         |
+| `Telescope.fromBean(P).to(R).viaFields/Constructor/Builder()` | Bridge a POJO ⇄ record at runtime; `.via`/`.viaEach` convert nested objects/collections.                                                                                                                      |
+| `Telescope.mapBean(A).to(B).build()`                          | Convert one POJO ⇄ another (name-matched, auto-detected rebuild strategy).                                                                                                                                    |
+| `.field(Class::accessor)`                                     | Descend into a record field via method reference. **Compile-checked.**                                                                                                                                        |
+| `.fieldByName(String)`                                        | Descend by field name — the runtime escape hatch for late-binding (config-driven paths). **Runtime-checked:** wrong name → runtime error.                                                                     |
+| `.fieldByName(String, Class<B>)`                              | Same as above with an inline type witness for cleaner `var` inference. The `Class<B>` is inference sugar, **not validated** against the actual field.                                                         |
+| `.each(Class::collectionAccessor)`                            | Descend into a `List`/`Set`/`Iterable` field and broadcast over elements. Element type inferred from the method ref. **Compile-checked.**                                                                     |
+| `.each()` (no-arg)                                            | Broadcast over elements when you already hold a `Telescope<S, SomeContainer>` — also the only form that works for primitive arrays (`int[]`, etc.). **Runtime-checked:** non-container focus → runtime error. |
+| `.eachValue(Class::mapAccessor)`                              | Like `each`, but for `Map` values (keys preserved).                                                                                                                                                           |
+| `.whenPresent(Class::optionalAccessor)`                       | Like `each`, but for `Optional` — no-op if empty.                                                                                                                                                             |
+| `.as(Class)`                                                  | Narrow to a sealed-type case. Non-matching values pass through.                                                                                                                                               |
+| `.filter(Predicate)`                                          | Restrict to elements matching the predicate.                                                                                                                                                                  |
+| `.then(otherTelescope)`                                       | Compose two telescopes.                                                                                                                                                                                       |
 
 ### Read
 
@@ -259,13 +259,15 @@ Conversions are bidirectional `Iso`s, so any cell in the middle row composes int
 
 ### Write
 
-| Method                                         | Returns                                                                            |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `.set(S, A)`                                   | New `S` with every focused value replaced by the given one.                        |
-| `.update(S, Function<A, A>)`                   | New `S` with every focused value transformed.                                      |
-| `.updateAsync(S, fn, Executor)`                | Bounded-concurrency async update; pass a fixed pool to cap concurrent invocations. |
-| `.updateIndexed(S, BiFunction<Integer, A, A>)` | Transform every focused value with its 0-based position in traversal order.        |
-| `.toListIndexed(S)`                            | `List<Indexed<A>>` — every focused value paired with its position.                 |
+| Method                                         | Returns                                                                                                                                                                          |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.set(S, A)`                                   | New `S` with every focused value replaced by the given one.                                                                                                                      |
+| `.update(S, Function<A, A>)`                   | New `S` with every focused value transformed.                                                                                                                                    |
+| `.updateAsync(S, fn, Executor)`                | Bounded-concurrency async update; pass a fixed pool to cap concurrent invocations.                                                                                               |
+| `.updateIndexed(S, BiFunction<Integer, A, A>)` | Transform every focused value with its 0-based position in traversal order.                                                                                                      |
+| `.toListIndexed(S)`                            | `List<Indexed<A>>` — every focused value paired with its position.                                                                                                               |
+| `.with(Function<A, A>)`                        | Accumulate an edit at the current focus and return a fresh identity `Telescope<S, S>` ready for the next path. See [Multi-edit chain](#multi-edit-chain). **Compile-checked.**   |
+| `.apply(S)`                                    | Run every accumulated `.with(...)` edit against the source, in insertion order. Returns a new `S`.                                                                               |
 
 ---
 
@@ -398,6 +400,41 @@ final Team stamped = USERS.update(team, (user) -> new User(user.name(), "Member 
 This works for every variant — `updateAsync`, `updateEither`, `updateValidated`, `updateOptional` — because the root the
 lambda needs is the same value you already hold. If the source is an expression rather than a variable, hoist it to a
 local first (`final var team = fetchTeam();`) and close over that.
+
+### Multi-edit chain
+
+To apply several edits at different paths in one go, terminate each navigation with `.with(fn)` instead of
+`.update(source, fn)`. Each `.with(...)` accumulates the edit and returns a fresh identity `Telescope<S, S>` — ready for
+the next path. End the whole chain with `.apply(source)`. Every step is compile-checked (same typed `.each` / `.field`
+calls you already use); the runtime cost is the sum of the individual updates.
+
+```java
+final Company done = Telescope.of(Company.class)
+    .each(Company::departments).each(Department::teams).each(Team::users).field(User::email)
+        .with(String::toLowerCase)
+    .each(Company::departments).field(Department::name)
+        .with(String::trim)
+    .each(Company::departments).each(Department::teams).each(Team::users).field(User::name)
+        .with(titleCase)
+    .apply(company);
+```
+
+The chain is reusable across sources — hold onto the `Telescope<Company, Company>` instead of calling `.apply` at the
+end:
+
+```java
+final Telescope<Company, Company> normalize = Telescope.of(Company.class)
+    .each(Company::departments).each(Department::teams).each(Team::users).field(User::email)
+        .with(String::toLowerCase)
+    .each(Company::departments).field(Department::name)
+        .with(String::trim);
+
+normalize.apply(companyA);
+normalize.apply(companyB);
+```
+
+Edits run sequentially in insertion order; the second `.with(...)` sees the first edit's result, not the original
+source. An empty chain (no `.with(...)` calls) returns the source unchanged from `.apply(...)`.
 
 ---
 
@@ -637,7 +674,7 @@ sides may be records or POJOs — record⇄record, record⇄POJO, POJO⇄POJO. F
 mismatch or a missing construction strategy is a compile error, not a runtime one:
 
 ```java
-import com.github.eschizoid.telescope.annotations.Bridge;
+import io.github.eschizoid.telescope.annotations.Bridge;
 
 @Bridge(UserDto.class)
 record UserEntity(String id, String email) {}
@@ -703,7 +740,7 @@ shared parts as effectively immutable.
 
 `fromBean` / `mapBean` / `@Bridge` match by exact name and need a same-named field on each side; nested collections need
 `.viaEach`. `viaFields` (and `ofBean`'s field-injection fallback) use `setAccessible`, so under JPMS the POJO's package
-must be `opens`'d to `com.github.eschizoid.telescope` — `viaConstructor` / `viaBuilder` / setters (and all of `@Bridge`)
+must be `opens`'d to `io.github.eschizoid.telescope` — `viaConstructor` / `viaBuilder` / setters (and all of `@Bridge`)
 use public members only.
 
 ---
@@ -736,7 +773,7 @@ CompanyPath.start()
 ```
 
 ```java
-import com.github.eschizoid.telescope.annotations.Focus;
+import io.github.eschizoid.telescope.annotations.Focus;
 
 @Focus record Address(String city, String zip) {}
 @Focus record User(String name, int age, Address address) {}
@@ -814,7 +851,7 @@ path vs ~15 ns for a generated `@Bridge` conversion in the benchmark — the nav
 win for navigation.
 
 ```java
-import com.github.eschizoid.telescope.annotations.BeanFocus;
+import io.github.eschizoid.telescope.annotations.BeanFocus;
 
 @BeanFocus public class UserBean { /* getId/getEmail + setters, or a static builder() */ }
 
@@ -1025,6 +1062,17 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
    to read sibling fields (e.g. focus `LineItem::unitPrice` but want the sibling `sku` to call a price service), the
    source is already in scope as the first argument — just reference it inside the lambda
    (`update(order, item -> … order.sku() …)`). Hoist the source to a local first if it's an expression.
+6. **Two documented runtime-check points on the runtime DSL.** Every typed entry point (`.field(Accessor)`,
+   `.each(Accessor)`, `.eachValue(Accessor)`, `.whenPresent(Accessor)`, the bridges, `.with(fn)`, `.apply(S)`, every
+   `update*` variant) is fully compile-checked. Two escape hatches are *not* compile-checked, by design, and they're
+   named so the call site says so:
+   - `.fieldByName(String)` / `.fieldByName(String, Class<B>)` — late-bound field name (config-driven paths). `javac`
+     can't verify the name exists or that the inferred type matches the actual field. Wrong name → runtime error.
+   - `.each()` (no-arg) — used when you already hold a `Telescope<S, SomeContainer>` (e.g. a pre-built path). `javac`
+     can't verify that `A` is actually a container. Wrong focus → runtime error.
+
+   For zero runtime-check points, use the **`@Focus` / `@BeanFocus` / `@Bridge` annotation processors** — they generate
+   a typed `<X>Path<R>` navigator at compile time where every step is a typed method call.
 
 ---
 
@@ -1032,9 +1080,9 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
 
 Two layers, one library:
 
-- **`com.github.eschizoid.telescope.Telescope<S, A>`**: the DSL. The only thing users import. Wraps a `Traversal<S, A>`
+- **`io.github.eschizoid.telescope.Telescope<S, A>`**: the DSL. The only thing users import. Wraps a `Traversal<S, A>`
   from the internal optics package.
-- **`com.github.eschizoid.telescope.internal.optics.*`**: the optic lattice (`Fold`, `Getter`, `Setter`, `Traversal`,
+- **`io.github.eschizoid.telescope.internal.optics.*`**: the optic lattice (`Fold`, `Getter`, `Setter`, `Traversal`,
   `Affine`, `Lens`, `Prism`, `Iso`) plus `Focus` factories and collection traversals. Package-private to the library.
 
 Each DSL method builds the appropriate optic and composes it via the lattice:
