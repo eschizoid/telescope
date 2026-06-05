@@ -116,7 +116,7 @@ public final class Telescope<S, A> {
    * @see #lens
    * @see #fromBean(Class)
    */
-  public static <S> Telescope<S, S> of(final Class<S> rootType) {
+  public static <S> Telescope<S, S> of(@SuppressWarnings("unused") final Class<S> rootType) {
     return new Telescope<>(Iso.identity());
   }
 
@@ -194,7 +194,7 @@ public final class Telescope<S, A> {
    * POJO&harr;record or POJO&harr;POJO <em>conversion</em>, use {@link #fromBean(Class)} / {@link
    * #mapBean(Class)}.
    */
-  public static <P> Telescope<P, P> ofBean(final Class<P> pojoClass) {
+  public static <P> Telescope<P, P> ofBean(@SuppressWarnings("unused") final Class<P> pojoClass) {
     return new Telescope<>(Iso.identity(), BeanFieldOptics.INSTANCE);
   }
 
@@ -253,7 +253,7 @@ public final class Telescope<S, A> {
    * @see #map(Class)
    * @see #fromBean(Class)
    */
-  public static <A> From<A> from(final Class<A> source) {
+  public static <A> From<A> from(@SuppressWarnings("unused") final Class<A> source) {
     return new From<>();
   }
 
@@ -383,7 +383,7 @@ public final class Telescope<S, A> {
    * import static io.github.eschizoid.telescope.Mapping.auto;
    *
    * final Telescope<UserEntity, UserDto> userMapper = Telescope.map(
-   *     to (UserEntity::name,    UserDto::fullName),                   // rename, same type
+   *     to(UserEntity::name,    UserDto::fullName),                    // rename, same type
    *     via(UserEntity::address, UserDto::address, addressMapper),     // nested mapper
    *     auto());                                                       // backfill same-name fields
    * }</pre>
@@ -407,18 +407,9 @@ public final class Telescope<S, A> {
    * @see #all(Edit[])
    */
   @SafeVarargs
+  @SuppressWarnings("varargs") // mapInternal receives the array as-is; no heap pollution risk.
   public static <A, B> Telescope<A, B> map(final Mapping<A, B>... mappings) {
-    Class<A> source = null;
-    Class<B> target = null;
-    for (final var m : mappings) {
-      if (source == null) source = m.sourceClass();
-      if (target == null) target = m.targetClass();
-      if (source != null && target != null) break;
-    }
-    if (source == null || target == null) throw classInferenceFailure(mappings.length);
-    final var mb = new MapBuilder<>(source, target);
-    for (final var m : mappings) m.apply(mb);
-    return mb.build();
+    return mapInternal(mappings).build();
   }
 
   /**
@@ -432,7 +423,15 @@ public final class Telescope<S, A> {
    * @see #map(Mapping[])
    */
   @SafeVarargs
+  @SuppressWarnings("varargs") // mapInternal receives the array as-is; no heap pollution risk.
   public static <A, B> Mapper<A, B> mapper(final Mapping<A, B>... mappings) {
+    return mapInternal(mappings).buildMapper();
+  }
+
+  // Recover source/target classes from the first row that carries them and apply every row onto a
+  // fresh MapBuilder. Non-varargs receiver — both @SafeVarargs entries (map, mapper) hand off the
+  // existing array; the only thing that differs between them is the terminal build vs buildMapper.
+  private static <A, B> MapBuilder<A, B> mapInternal(final Mapping<A, B>[] mappings) {
     Class<A> source = null;
     Class<B> target = null;
     for (final var m : mappings) {
@@ -440,22 +439,14 @@ public final class Telescope<S, A> {
       if (target == null) target = m.targetClass();
       if (source != null && target != null) break;
     }
-    if (source == null || target == null) throw classInferenceFailure(mappings.length);
+    if (source == null || target == null) throw new IllegalArgumentException(
+      "Telescope.map(Mapping<A, B>...) / Telescope.mapper(...) needs at least one row that carries " +
+        "the source/target classes (a to(...) or via(...) row, or auto(A.class, B.class)). " +
+        (mappings.length == 0 ? "No rows were passed." : "Got " + mappings.length + " bare auto() row(s).")
+    );
     final var mb = new MapBuilder<>(source, target);
     for (final var m : mappings) m.apply(mb);
-    return mb.buildMapper();
-  }
-
-  // Thrown by Telescope.map / Telescope.mapper when every row is auto() with no explicit
-  // source/target classes for the factory to recover via SerializedLambda. Used in both entries so
-  // the message stays consistent.
-  private static IllegalArgumentException classInferenceFailure(final int rowCount) {
-    return new IllegalArgumentException(
-      "Telescope.map(Mapping<A, B>...) needs at least one row that carries the source/target " +
-        "classes (a to(...) or via(...) row, or auto(A.class, B.class)). Got " +
-        rowCount +
-        " row(s), all auto() with no explicit classes."
-    );
+    return mb;
   }
 
   /**
@@ -520,7 +511,7 @@ public final class Telescope<S, A> {
    * <p>For a fully compile-checked path, use {@link #field(Accessor)} (e.g. {@code
    * .field(User::email)}) or the {@code @Focus} annotation processor.
    */
-  public <B> Telescope<S, B> fieldByName(final String fieldName, final Class<B> fieldType) {
+  public <B> Telescope<S, B> fieldByName(final String fieldName, @SuppressWarnings("unused") final Class<B> fieldType) {
     return fieldByName(fieldName);
   }
 
@@ -1056,7 +1047,7 @@ public final class Telescope<S, A> {
    * @see #updateEither
    */
   public <E> Validated<E, S> updateValidated(final S source, final Function<? super A, ? extends Validated<E, A>> fn) {
-    return ValidatedK.unbox(optic.modifyF(ValidatedK.<E>forError(), source, a -> ValidatedK.box(fn.apply(a))));
+    return ValidatedK.unbox(optic.modifyF(ValidatedK.forError(), source, a -> ValidatedK.box(fn.apply(a))));
   }
 
   /**
@@ -1069,7 +1060,7 @@ public final class Telescope<S, A> {
    * @see #updateValidated
    */
   public <E> Either<E, S> updateEither(final S source, final Function<? super A, ? extends Either<E, A>> fn) {
-    return EitherK.unbox(optic.modifyF(EitherK.<E>forLeft(), source, a -> EitherK.box(fn.apply(a))));
+    return EitherK.unbox(optic.modifyF(EitherK.forLeft(), source, a -> EitherK.box(fn.apply(a))));
   }
 
   /**
@@ -1140,7 +1131,7 @@ public final class Telescope<S, A> {
   // Package-private — shared with the conversion-builder classes (BeanTo, MapBuilder,
   // FieldMapping, Mapper) which live in sibling files in this same package.
   static String methodNameOf(final Serializable lambda) {
-    return METHOD_NAME_CACHE.computeIfAbsent(lambda.getClass(), cls -> resolveMethodName(lambda));
+    return METHOD_NAME_CACHE.computeIfAbsent(lambda.getClass(), _ -> resolveMethodName(lambda));
   }
 
   private static String resolveMethodName(final Serializable lambda) {
@@ -1162,13 +1153,18 @@ public final class Telescope<S, A> {
   // class of a method-reference accessor (e.g. UserEntity.class from UserEntity::name) via
   // SerializedLambda. Records can't extend other types, so for record accessors the declaring class
   // is always the receiver type; for beans, a method inherited from a superclass returns the
-  // superclass — callers that need the receiver type must obtain it some other way.
+  // superclass — callers that need the receiver type must obtain it some other way. Lambdas
+  // (a -> a.x()) are rejected the same way methodNameOf rejects them: a lambda's implClass is the
+  // enclosing class (not the receiver), which silently breaks Mapping class inference.
   @SuppressWarnings("unchecked")
   static <A> Class<A> implClassOf(final Serializable lambda) {
     try {
       final var writeReplace = lambda.getClass().getDeclaredMethod("writeReplace");
       writeReplace.setAccessible(true);
       final var serialized = (SerializedLambda) writeReplace.invoke(lambda);
+      if (serialized.getImplMethodName().startsWith("lambda$")) throw new IllegalArgumentException(
+        "expected a method reference (e.g. UserEntity::name); got a lambda: " + serialized.getImplMethodName()
+      );
       return (Class<A>) Class.forName(serialized.getImplClass().replace('/', '.'));
     } catch (final ReflectiveOperationException e) {
       throw new IllegalArgumentException("expected a method reference; got: " + lambda, e);

@@ -4,8 +4,8 @@ import static io.github.eschizoid.telescope.Mapping.auto;
 import static io.github.eschizoid.telescope.Mapping.to;
 import static io.github.eschizoid.telescope.Mapping.via;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -105,13 +105,24 @@ class MappingVarargsTest {
     void pureBareAutoFails() {
       final Mapping<SameA, SameB> bare = auto();
       final var ex = assertThrows(IllegalArgumentException.class, () -> Telescope.map(bare));
-      assertEquals(true, ex.getMessage().contains("auto(A.class, B.class)"));
+      assertTrue(ex.getMessage().contains("auto(A.class, B.class)"), ex.getMessage());
     }
 
     @Test
-    @DisplayName("Telescope.map() with no rows at all throws IAE")
+    @DisplayName("Telescope.map() with no rows at all says \"No rows were passed\"")
     void zeroRowsFails() {
-      assertThrows(IllegalArgumentException.class, () -> Telescope.<SameA, SameB>map());
+      final var ex = assertThrows(IllegalArgumentException.class, () -> Telescope.<SameA, SameB>map());
+      assertTrue(ex.getMessage().contains("No rows were passed"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("a lambda passed to to(...) is rejected at map(...) time (not silently misclassified)")
+    void lambdaInToIsRejected() {
+      // a -> a.x() is a lambda, not a method reference. Mapping.sourceClass() must throw via
+      // Telescope.implClassOf rather than silently returning the lambda's enclosing class.
+      final Telescope.Accessor<SameA, String> lambda = a -> a.x();
+      final Mapping<SameA, SameB> bad = to(lambda, SameB::x);
+      assertThrows(IllegalArgumentException.class, () -> Telescope.map(bad, auto()));
     }
   }
 
@@ -227,8 +238,8 @@ class MappingVarargsTest {
       final var dto = mapper.read(src);
       assertEquals("x", dto.x());
       assertEquals(7, dto.y());
-      // ADDR mapper above is constructed exactly the same way; the field roundtrips via its iso
-      assertSame(ADDR, ADDR);
+      // Reverse direction closes the bijection — the iso must round-trip identically.
+      assertEquals(src, mapper.backward(dto));
     }
   }
 }

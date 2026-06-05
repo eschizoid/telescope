@@ -29,9 +29,8 @@ public final class Records {
 
   /**
    * A {@link Lens} over a record component, identified by name. The {@code get} reads the
-   * component; {@code set}/{@code modify} return a copy of the record with that one component
-   * replaced. Backs {@link io.github.eschizoid.telescope.Telescope}'s {@code .field(String)}
-   * overload.
+   * component; {@code set}/{@code modify} return a copy of the record with that one part replaced.
+   * Backs {@link io.github.eschizoid.telescope.Telescope}'s {@code .fieldByName(String)} overload.
    *
    * <pre>{@code
    * record User(String name, int age) {}
@@ -90,9 +89,9 @@ public final class Records {
   }
 
   /**
-   * Return a copy of {@code source} with one component replaced by {@code value}; all other
-   * components carry over. Returns {@code null} for a {@code null} source; throws "Not a record"
-   * for a non-record, "No field" for an unknown name.
+   * Return a copy of {@code source} with one part replaced by {@code value}; all other components
+   * carry over. Returns {@code null} for a {@code null} source; throws "Not a record" for a
+   * non-record, "No field" for an unknown name.
    *
    * <pre>{@code
    * record User(String name, int age) {}
