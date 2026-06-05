@@ -260,16 +260,23 @@ Conversions are bidirectional `Iso`s, so any cell in the middle row composes int
 
 ### Write
 
-| Method                                         | Returns                                                                                                                                                            |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `.set(S, A)`                                   | New `S` with every focused value replaced by the given one.                                                                                                        |
-| `.update(S, Function<A, A>)`                   | New `S` with every focused value transformed.                                                                                                                      |
-| `.updateAsync(S, fn, Executor)`                | Bounded-concurrency async update; pass a fixed pool to cap concurrent invocations.                                                                                 |
-| `.updateIndexed(S, BiFunction<Integer, A, A>)` | Transform every focused value with its 0-based position in traversal order.                                                                                        |
-| `.toListIndexed(S)`                            | `List<Indexed<A>>` — every focused value paired with its position.                                                                                                 |
-| `.update(Telescope<S, X>, Function<X, X>)`     | Accumulate an edit through a pre-built path; returns `Telescope<S, S>` carrying the running chain. See [Multi-edit chain](#multi-edit-chain). **Compile-checked.** |
-| `.with(Function<A, A>)`                        | Accumulate an edit at the current focus (inline-path equivalent of `.update(path, fn)`); returns `Telescope<S, S>`. **Compile-checked.**                           |
-| `.apply(S)`                                    | Run every accumulated `.update(path, fn)` / `.with(fn)` edit against the source, in insertion order. Returns a new `S`.                                            |
+| Method                                         | Returns                                                                                                                                                |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `.set(S, A)`                                   | New `S` with every focused value replaced by the given one.                                                                                            |
+| `.update(S, Function<A, A>)`                   | New `S` with every focused value transformed.                                                                                                          |
+| `.updateAsync(S, fn, Executor)`                | Bounded-concurrency async update; pass a fixed pool to cap concurrent invocations.                                                                     |
+| `.updateIndexed(S, BiFunction<Integer, A, A>)` | Transform every focused value with its 0-based position in traversal order.                                                                            |
+| `.toListIndexed(S)`                            | `List<Indexed<A>>` — every focused value paired with its position.                                                                                     |
+| `.update(Telescope<S, X>, Function<X, X>)`     | Accumulate an edit through a pre-built path; returns `Telescope<S, S>` carrying the running chain. See [Multi-edit](#multi-edit). **Compile-checked.** |
+| `.with(Function<A, A>)`                        | Accumulate an edit at the current focus (inline-path equivalent of `.update(path, fn)`); returns `Telescope<S, S>`. **Compile-checked.**               |
+| `.apply(S)`                                    | Run every accumulated `.update(path, fn)` / `.with(fn)` edit against the source, in insertion order. Returns a new `S`.                                |
+
+Multi-edit packing (static factories — see [Multi-edit](#multi-edit)):
+
+| Method                                       | Returns                                                                                                                           |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `Telescope.all(Edit<S>...)`                  | Reusable `Telescope<S, S>` normalizer that runs every edit, in argument order, on `apply(s)`. **Compile-checked.**                |
+| `Edit.over(Telescope<S, X>, Function<X, X>)` | Pair a pre-built path with its per-leaf transformation. Static-import-friendly: `import static …Edit.over;`. **Compile-checked.** |
 
 ---
 
@@ -403,15 +410,17 @@ This works for every variant — `updateAsync`, `updateEither`, `updateValidated
 lambda needs is the same value you already hold. If the source is an expression rather than a variable, hoist it to a
 local first (`final var team = fetchTeam();`) and close over that.
 
-### Multi-edit chain
+### Multi-edit
 
-To apply several edits at different paths in one go, accumulate them with `.update(path, fn)` for pre-built paths or
-`.with(fn)` for inline paths, then end with `.apply(source)`. Every step is fully compile-checked.
+To apply several edits at different paths in one go, declare each path once as a static final, then pack the edits with
+`Telescope.all(over(...), over(...))`. Every step is fully compile-checked.
 
-**Preferred form — pre-built paths as static finals.** Declare each navigation once, then the multi-edit reads like a
-list of operations with no per-edit path repetition:
+**Recommended form — `Telescope.all(over(...), over(...))`.** Each `over(PATH, fn)` is one edit; `Telescope.all(...)`
+folds them into a reusable `Telescope<S, S>` whose `.apply(s)` runs every edit in argument order.
 
 ```java
+import static io.github.eschizoid.telescope.Edit.over;
+
 static final Telescope<Company, String> EMAILS = Telescope.of(Company.class)
   .each(Company::departments)
   .each(Department::teams)
@@ -428,56 +437,46 @@ static final Telescope<Company, String> USER_NAMES = Telescope.of(Company.class)
   .each(Team::users)
   .field(User::name);
 
-final Company done = Telescope.of(Company.class)
-  .update(EMAILS, String::toLowerCase)
+final Telescope<Company, Company> normalize = Telescope.all(
+  over(EMAILS,     String::toLowerCase),
+  over(DEPT_NAMES, String::trim),
+  over(USER_NAMES, titleCase));
+
+final Company done = normalize.apply(company);
+normalize.apply(companyB);   // reusable across sources
+```
+
+`over(path, fn)` ties a `Telescope<S, X>` to a `Function<X, X>`; `javac` enforces the leaf type match. Each edit lives
+on its own line, the count is visible at a glance, and there is no chain-blur between paths.
+
+**Single-edit shortcut.** For one edit, just call `update` on the path:
+
+```java
+EMAILS.update(company, String::toLowerCase);
+```
+
+**Chain accumulator (alternative).** The same semantics as `Telescope.all(...)` are also available as a fluent chain via
+`.update(path, fn)` and `.with(fn)` terminated by `.apply(source)` — useful when you want an inline path mid-chain
+without naming it. The chain reads less clearly for multiple distinct paths (the navigation segments visually blur), so
+prefer `Telescope.all(over(...))` when packing two or more edits.
+
+```java
+// Equivalent to the Telescope.all(...) form above:
+Telescope.of(Company.class)
+  .update(EMAILS,     String::toLowerCase)
   .update(DEPT_NAMES, String::trim)
   .update(USER_NAMES, titleCase)
   .apply(company);
-```
 
-Each `.update(path, fn)` ties a `Telescope<S, X>` to a `Function<X, X>`; `javac` enforces the leaf type match. The
-`.update(...)` overload is disambiguated by first-argument type: a `Telescope` accumulates into the chain (returns
-`Telescope<S, S>`), a source instance is the single-shot terminal (returns `S`).
-
-**Inline form — for one-off paths you don't want to name.** Terminate the navigation with `.with(fn)` instead of
-`.update(source, fn)`; same chain semantics:
-
-```java
-final Company done = Telescope.of(Company.class)
-  .each(Company::departments)
-  .each(Department::teams)
-  .each(Team::users)
-  .field(User::email)
-  .with(String::toLowerCase)
-  .each(Company::departments)
-  .field(Department::name)
-  .with(String::trim)
+// Inline one-shot trailing edit on a pre-built chain:
+Telescope.of(Company.class)
+  .update(EMAILS, String::toLowerCase)
+  .each(Company::departments).field(Department::name).with(String::trim)
   .apply(company);
 ```
 
-Mix and match in the same chain — pre-built where reuse pays, inline where it doesn't:
-
-```java
-Telescope.of(Company.class)
-    .update(EMAILS, String::toLowerCase)                              // pre-built
-    .each(Company::departments).field(Department::name).with(String::trim)    // inline
-    .apply(company);
-```
-
-**Reusable across sources.** Hold onto the resulting `Telescope<Company, Company>` instead of calling `.apply` at the
-end — it's the multi-edit equivalent of a stored single-path telescope:
-
-```java
-final Telescope<Company, Company> normalize = Telescope.of(Company.class)
-    .update(EMAILS,     String::toLowerCase)
-    .update(DEPT_NAMES, String::trim);
-
-normalize.apply(companyA);
-normalize.apply(companyB);
-```
-
-Edits run sequentially in insertion order; the second edit sees the first edit's result, not the original source. An
-empty chain (no `.update(...)` / `.with(...)` calls) returns the source unchanged from `.apply(...)`.
+Edits run sequentially in argument / insertion order; the second sees the first's result, not the original source. An
+empty `Telescope.all()` (or an unedited chain) returns the source unchanged from `.apply(...)`.
 
 ---
 

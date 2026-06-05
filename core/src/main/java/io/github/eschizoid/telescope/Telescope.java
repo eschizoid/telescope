@@ -121,6 +121,53 @@ public final class Telescope<S, A> {
   }
 
   /**
+   * Combine several {@link Edit edits} into one reusable {@code Telescope<S, S>} normalizer. Each
+   * {@link Edit#over(Telescope, Function) over(PATH, fn)} pairs a pre-built telescope with its
+   * per-leaf transformation; {@code Telescope.all(...)} folds them into a single {@link
+   * #apply(Object)}-able value that runs each edit in argument order.
+   *
+   * <pre>{@code
+   * import static io.github.eschizoid.telescope.Edit.over;
+   *
+   * static final Telescope<Company, String> EMAILS     = ...;
+   * static final Telescope<Company, String> DEPT_NAMES = ...;
+   * static final Telescope<Company, String> USER_NAMES = ...;
+   *
+   * final Telescope<Company, Company> normalize = Telescope.all(
+   *     over(EMAILS,     String::toLowerCase),
+   *     over(DEPT_NAMES, String::trim),
+   *     over(USER_NAMES, titleCase));
+   *
+   * final Company a = normalize.apply(companyA);
+   * normalize.apply(companyB);   // reusable across sources
+   * }</pre>
+   *
+   * <p><b>Preferred multi-edit shape.</b> For two or more distinct paths this is the recommended
+   * form over the chained {@link #update(Telescope, Function)} / {@link #with(Function)}
+   * accumulator: each edit lives on its own line, the count is visible at a glance, and
+   * back-to-back navigation segments cannot visually blur into one chain. The accumulator stays for
+   * single edits and for the fluent inline form.
+   *
+   * <p><b>Sequential semantics.</b> Edits run in argument order; the second sees the first edit's
+   * result, not the original source. An empty argument list returns an identity telescope (apply
+   * returns the source unchanged).
+   *
+   * <p><b>Cost.</b> One structural pass per edit — no fusion across shared prefixes in this
+   * version. Costs the same as the equivalent chain accumulator.
+   *
+   * @param edits the edits to apply, in order
+   * @param <S> the shared root type — all edits must target the same {@code S}
+   * @see Edit#over(Telescope, Function)
+   * @see #apply(Object)
+   */
+  @SafeVarargs
+  public static <S> Telescope<S, S> all(final Edit<S>... edits) {
+    Function<S, S> fused = Function.identity();
+    for (final var e : edits) fused = fused.andThen(e::apply);
+    return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, fused);
+  }
+
+  /**
    * Start a <em>native POJO</em> telescope. Unlike {@link #of(Class)} (records only), the resulting
    * telescope navigates JavaBeans-style POJOs directly: {@code .field(Pojo::getX)} reads via the
    * getter, and {@code set}/{@code update} rebuild the POJO immutably with that one property

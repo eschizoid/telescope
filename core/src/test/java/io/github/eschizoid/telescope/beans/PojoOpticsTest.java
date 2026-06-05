@@ -441,11 +441,11 @@ class PojoOpticsTest {
 
       final var rec = cartBridge.read(cart);
       assertEquals(new CartRecord(List.of(new OrderRecord("A"), new OrderRecord("B"))), rec);
-      assertInstanceOf(OrderRecord.class, rec.orders().get(0));
+      assertInstanceOf(OrderRecord.class, rec.orders().getFirst());
 
       final var back = cartBridge.set(cart, rec);
-      assertEquals("A", back.getOrders().get(0).getSku());
-      assertInstanceOf(OrderPojo.class, back.getOrders().get(0));
+      assertEquals("A", back.getOrders().getFirst().getSku());
+      assertInstanceOf(OrderPojo.class, back.getOrders().getFirst());
     }
   }
 }
