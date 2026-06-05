@@ -33,8 +33,8 @@ record SameTypedTo<A, B, X>(Accessor<A, X> src, Accessor<B, X> tgt) implements M
     return LambdaIntrospection.methodNameOf(tgt);
   }
 
-  @Override
-  public Iso<X, X> fieldIso() {
+  /** Leaf-level Iso this row contributes. Package-private — consumed by DeepMap. */
+  Iso<X, X> fieldIso() {
     return Iso.identity();
   }
 }

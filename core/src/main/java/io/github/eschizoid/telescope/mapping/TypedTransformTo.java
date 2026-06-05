@@ -38,8 +38,8 @@ record TypedTransformTo<A, B, X, Y>(
     return LambdaIntrospection.methodNameOf(tgt);
   }
 
-  @Override
-  public Iso<X, Y> fieldIso() {
+  /** Leaf-level Iso this row contributes. Package-private — consumed by DeepMap. */
+  Iso<X, Y> fieldIso() {
     return Iso.of(forward, backward);
   }
 }

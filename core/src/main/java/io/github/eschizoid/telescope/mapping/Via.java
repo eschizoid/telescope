@@ -34,8 +34,8 @@ record Via<A, B, X, Y>(Accessor<A, X> src, Accessor<B, Y> tgt, Mapper<X, Y> nest
     return LambdaIntrospection.methodNameOf(tgt);
   }
 
-  @Override
-  public Iso<X, Y> fieldIso() {
+  /** Leaf-level Iso this row contributes. Package-private — consumed by DeepMap. */
+  Iso<X, Y> fieldIso() {
     return Iso.of(nested::forward, nested::backward);
   }
 }

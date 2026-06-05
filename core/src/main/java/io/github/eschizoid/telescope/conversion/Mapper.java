@@ -51,7 +51,8 @@ public final class Mapper<A, B> {
     this.sourceClass = sourceClass;
     this.sourceRefl = Reflective.of(sourceClass);
     this.targetRefl = Reflective.of(targetClass);
-    this.patchByTargetField = patchByTargetField;
+    // Defensive copy — patch behavior must not mutate after construction.
+    this.patchByTargetField = Map.copyOf(patchByTargetField);
   }
 
   /**

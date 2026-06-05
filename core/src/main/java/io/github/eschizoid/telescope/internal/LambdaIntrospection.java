@@ -25,6 +25,7 @@ public final class LambdaIntrospection {
   private LambdaIntrospection() {}
 
   private static final Map<Class<?>, String> METHOD_NAME_CACHE = new ConcurrentHashMap<>();
+  private static final Map<Class<?>, Class<?>> IMPL_CLASS_CACHE = new ConcurrentHashMap<>();
 
   /**
    * The impl method name of a Serializable method reference (e.g. {@code "name"} from {@code
@@ -66,16 +67,21 @@ public final class LambdaIntrospection {
    */
   @SuppressWarnings("unchecked")
   public static <A> Class<A> implClassOf(final Serializable lambda) {
+    return (Class<A>) IMPL_CLASS_CACHE.computeIfAbsent(lambda.getClass(), _ -> resolveImplClass(lambda));
+  }
+
+  private static Class<?> resolveImplClass(final Serializable lambda) {
     try {
       final var writeReplace = lambda.getClass().getDeclaredMethod("writeReplace");
       writeReplace.setAccessible(true);
       final var serialized = (SerializedLambda) writeReplace.invoke(lambda);
       if (serialized.getImplMethodName().startsWith("lambda$")) throw new IllegalArgumentException(
-        "expected a method reference (e.g. UserEntity::name); got a lambda: " + serialized.getImplMethodName()
+        "Expected a method reference (e.g. User::name, User::getName), not a lambda. Got: " +
+          serialized.getImplMethodName()
       );
-      return (Class<A>) Class.forName(serialized.getImplClass().replace('/', '.'));
+      return Class.forName(serialized.getImplClass().replace('/', '.'));
     } catch (final ReflectiveOperationException e) {
-      throw new IllegalArgumentException("expected a method reference; got: " + lambda, e);
+      throw new IllegalArgumentException("Expected a method reference; got: " + lambda, e);
     }
   }
 }

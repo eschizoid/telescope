@@ -4,6 +4,7 @@ import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.List;
@@ -234,6 +235,46 @@ class DeepMappingTest {
   }
 
   @Nested
+  @DisplayName("Nested containers — List<Optional<X>>, Optional<List<X>>, Map<K, List<X>> auto-lift")
+  class NestedContainers {
+
+    record InnerE(String name) {}
+
+    record InnerD(String name) {}
+
+    record OuterE(List<Optional<InnerE>> items) {}
+
+    record OuterD(List<Optional<InnerD>> items) {}
+
+    @Test
+    @DisplayName("List<Optional<Record>> auto-lifts both layers; empty Optional round-trips")
+    void listOfOptional() {
+      final var mapper = Telescope.mapper(OuterE.class, OuterD.class);
+      final var src = new OuterE(List.of(Optional.of(new InnerE("a")), Optional.empty(), Optional.of(new InnerE("b"))));
+      final var dto = mapper.read(src);
+      assertEquals("a", dto.items().get(0).orElseThrow().name());
+      assertEquals(Optional.empty(), dto.items().get(1));
+      assertEquals("b", dto.items().get(2).orElseThrow().name());
+      assertEquals(src, mapper.backward(dto));
+    }
+
+    record MapE(Map<String, List<InnerE>> byKey) {}
+
+    record MapD(Map<String, List<InnerD>> byKey) {}
+
+    @Test
+    @DisplayName("Map<K, List<Record>> auto-lifts values + list element")
+    void mapOfList() {
+      final var mapper = Telescope.mapper(MapE.class, MapD.class);
+      final var src = new MapE(Map.of("a", List.of(new InnerE("x"), new InnerE("y"))));
+      final var dto = mapper.read(src);
+      assertEquals("x", dto.byKey().get("a").get(0).name());
+      assertEquals("y", dto.byKey().get("a").get(1).name());
+      assertEquals(src, mapper.backward(dto));
+    }
+  }
+
+  @Nested
   @DisplayName("Mapper.patch — sparse overlay using the per-component backward Iso")
   class Patch {
 
@@ -324,7 +365,10 @@ class DeepMappingTest {
     @DisplayName("unmatched names on either side throw IllegalStateException at construction")
     void unmatchedNamesThrow() {
       final var ex = assertThrows(IllegalStateException.class, () -> Telescope.map(OddSrc.class, OddTgt.class));
-      assertEquals(true, ex.getMessage().contains("extraOnTarget") || ex.getMessage().contains("extraOnSource"));
+      assertTrue(
+        ex.getMessage().contains("extraOnTarget") || ex.getMessage().contains("extraOnSource"),
+        ex.getMessage()
+      );
     }
 
     record MixedSrc(String name, AddressEntity address) {}
@@ -335,7 +379,21 @@ class DeepMappingTest {
     @DisplayName("incompatible component shapes throw — record vs scalar")
     void incompatibleShapesThrow() {
       final var ex = assertThrows(IllegalStateException.class, () -> Telescope.map(MixedSrc.class, MixedTgt.class));
-      assertEquals(true, ex.getMessage().contains("address"));
+      assertTrue(ex.getMessage().contains("address"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("duplicate override rows for the same target field fail fast at construction")
+    void duplicateOverrideRowsRejected() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.map(
+          UserEntity.class,
+          UserDto.class,
+          to(UserEntity::name, UserDto::fullName),
+          to(UserEntity::email, UserDto::fullName) // same target — silent overwrite was the bug
+        )
+      );
+      assertTrue(ex.getMessage().contains("duplicate"), ex.getMessage());
     }
   }
 }

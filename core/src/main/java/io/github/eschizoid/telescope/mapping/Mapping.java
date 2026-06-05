@@ -4,7 +4,6 @@ import io.github.eschizoid.telescope.Edit;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;
-import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.util.function.Function;
 
 /**
@@ -87,12 +86,4 @@ public sealed interface Mapping<A, B> permits SameTypedTo, TypedTransformTo, Via
 
   /** Target record component name this row claims (the {@code tgt} accessor's method name). */
   String targetField();
-
-  /**
-   * The leaf-level {@link Iso} this row contributes — between {@link #sourceField}'s leaf type and
-   * {@link #targetField}'s leaf type. Used by {@link DeepMap} to assemble per-record Isos from
-   * per-component ones.
-   */
-  @SuppressWarnings("exports") // Iso is module-internal; this method is consumed only by DeepMap.
-  Iso<?, ?> fieldIso();
 }

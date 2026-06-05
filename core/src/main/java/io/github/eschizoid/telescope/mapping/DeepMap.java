@@ -146,7 +146,7 @@ public final class DeepMap {
           srcField +
           "'. Each (source, target) type pair may declare at most one row per source field."
       );
-      final var step = new FieldStep(srcField, tgtField, row.fieldIso());
+      final var step = new FieldStep(srcField, tgtField, fieldIsoOf(row));
       byTargetName.put(tgtField, step);
       bySourceName.put(srcField, step);
     }
@@ -160,14 +160,15 @@ public final class DeepMap {
           source.getSimpleName() +
           " → " +
           target.getSimpleName() +
-          ": target component '" +
+          ": target " +
+          slot(tgtRefl) +
+          " '" +
           name +
-          "' has no same-name source component. Add a rename row " +
-          "(to(SourceSomething::other, " +
-          target.getSimpleName() +
-          "::" +
+          "' has no same-name source " +
+          slot(srcRefl) +
+          ". Add a rename row to(sourceAccessor, targetAccessor) that maps to '" +
           name +
-          "))."
+          "'."
       );
       final var step = new FieldStep(
         name,
@@ -185,14 +186,15 @@ public final class DeepMap {
           source.getSimpleName() +
           " → " +
           target.getSimpleName() +
-          ": source component '" +
+          ": source " +
+          slot(srcRefl) +
+          " '" +
           name +
-          "' has no same-name target component. Add a rename row " +
-          "(to(" +
-          source.getSimpleName() +
-          "::" +
+          "' has no same-name target " +
+          slot(tgtRefl) +
+          ". Add a rename row to(sourceAccessor, targetAccessor) that consumes '" +
           name +
-          ", TargetSomething::other))."
+          "'."
       );
     }
 
@@ -220,7 +222,9 @@ public final class DeepMap {
       }
     }
 
-    // (c) Both containers of reflectable elements → lift the element Iso through the container.
+    // (c) Both same-kind containers → recurse on the element TYPE so nested containers work
+    //     (List<Optional<X>>, Optional<List<X>>, Map<K, List<X>>, etc.). Scalar/record/container
+    //     elements all dispatch through this same autoIso recursion.
     final var srcShape = ContainerShape.of(srcType);
     final var tgtShape = ContainerShape.of(tgtType);
     if (srcShape != null && tgtShape != null && srcShape.kind == tgtShape.kind) {
@@ -236,15 +240,18 @@ public final class DeepMap {
             ". Key types must match exactly; auto-lifting preserves the source keys."
         );
       }
-      if (isReflectable(srcShape.elementClass) && isReflectable(tgtShape.elementClass)) {
-        populateIso(srcShape.elementClass, tgtShape.elementClass, overrides, cache, null);
-        final var elementIso = lazyCacheIso(cache, new TypePair(srcShape.elementClass, tgtShape.elementClass));
-        return switch (srcShape.kind) {
-          case LIST -> Iso.liftList(eraseIso(elementIso));
-          case MAP_VALUES -> Iso.liftMapValues(eraseIso(elementIso));
-          case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
-        };
-      }
+      final var elementIso = autoIso(
+        srcShape.elementType,
+        tgtShape.elementType,
+        componentName + "[*]",
+        overrides,
+        cache
+      );
+      return switch (srcShape.kind) {
+        case LIST -> Iso.liftList(eraseIso(elementIso));
+        case MAP_VALUES -> Iso.liftMapValues(eraseIso(elementIso));
+        case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
+      };
     }
 
     throw new IllegalStateException(
@@ -254,8 +261,28 @@ public final class DeepMap {
         srcType.getTypeName() +
         " vs " +
         tgtType.getTypeName() +
-        ". Shapes must match: same scalar, both records/beans, or both same-kind container of records/beans."
+        ". Shapes must match: same scalar, both records/beans, or both same-kind container."
     );
+  }
+
+  /**
+   * The leaf-level {@link Iso} contributed by an override row. Pattern-matches on the sealed
+   * permitted records so the {@code fieldIso()} accessor stays package-private and never leaks the
+   * internal {@link Iso} type out of {@link Mapping}'s public surface.
+   */
+  private static Iso<?, ?> fieldIsoOf(final Mapping<?, ?> row) {
+    return switch (row) {
+      case SameTypedTo<?, ?, ?> r -> r.fieldIso();
+      case TypedTransformTo<?, ?, ?, ?> r -> r.fieldIso();
+      case Via<?, ?, ?, ?> r -> r.fieldIso();
+    };
+  }
+
+  /**
+   * "field" for records, "property" for beans — used in error messages to read correctly per side.
+   */
+  private static String slot(final Reflective refl) {
+    return refl == Reflective.RECORDS ? "field" : "property";
   }
 
   /** A record or any non-scalar class — anything Reflective can drive. */
@@ -337,14 +364,15 @@ public final class DeepMap {
   private record Resolution<A, B>(Iso<A, B> iso, Map<String, Mapper.PatchEntry> patchTable) {}
 
   /**
-   * Shape of a container-typed component: kind (list / map values / optional), value/element class,
-   * and — for {@code Map} — the key class. Two shapes are compatible for auto-lifting when their
-   * kinds match and (for {@code MAP_VALUES}) their key classes are equal. The key check matters
-   * because {@code Iso.liftMapValues} preserves the source keys; mapping a {@code Map<String, X>}
-   * to a {@code Map<Long, Y>} target would silently produce a {@code Map<String, Y>} at runtime,
-   * which violates the target's declared key type.
+   * Shape of a container-typed component: kind (list / map values / optional), value/element {@link
+   * Type} (preserved as Type so nested containers like {@code List<Optional<X>>} can be resolved by
+   * recursive {@link #autoIso}), and — for {@code Map} — the key class. Two shapes are compatible
+   * for auto-lifting when their kinds match and (for {@code MAP_VALUES}) their key classes are
+   * equal. The key check matters because {@code Iso.liftMapValues} preserves the source keys;
+   * mapping a {@code Map<String, X>} to a {@code Map<Long, Y>} target would silently produce a
+   * {@code Map<String, Y>} at runtime, which violates the target's declared key type.
    */
-  private record ContainerShape(Kind kind, Class<?> elementClass, Class<?> keyClass) {
+  private record ContainerShape(Kind kind, Type elementType, Class<?> keyClass) {
     enum Kind {
       LIST,
       MAP_VALUES,
@@ -354,22 +382,13 @@ public final class DeepMap {
     static ContainerShape of(final Type t) {
       if (!(t instanceof ParameterizedType pt)) return null;
       if (!(pt.getRawType() instanceof Class<?> raw)) return null;
-      if (raw == List.class) return classElement(pt, 0, Kind.LIST);
-      if (raw == Optional.class) return classElement(pt, 0, Kind.OPTIONAL);
-      if (raw == Map.class) return mapShape(pt);
-      return null;
-    }
-
-    private static ContainerShape mapShape(final ParameterizedType pt) {
-      final var keyArg = pt.getActualTypeArguments()[0];
-      final var valArg = pt.getActualTypeArguments()[1];
-      if (!(keyArg instanceof Class<?> keyCls) || !(valArg instanceof Class<?> valCls)) return null;
-      return new ContainerShape(Kind.MAP_VALUES, valCls, keyCls);
-    }
-
-    private static ContainerShape classElement(final ParameterizedType pt, final int index, final Kind kind) {
-      final var arg = pt.getActualTypeArguments()[index];
-      if (arg instanceof Class<?> c) return new ContainerShape(kind, c, null);
+      if (raw == List.class) return new ContainerShape(Kind.LIST, pt.getActualTypeArguments()[0], null);
+      if (raw == Optional.class) return new ContainerShape(Kind.OPTIONAL, pt.getActualTypeArguments()[0], null);
+      if (raw == Map.class) {
+        final var keyArg = pt.getActualTypeArguments()[0];
+        if (!(keyArg instanceof Class<?> keyCls)) return null;
+        return new ContainerShape(Kind.MAP_VALUES, pt.getActualTypeArguments()[1], keyCls);
+      }
       return null;
     }
   }
