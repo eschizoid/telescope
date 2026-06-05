@@ -4,7 +4,6 @@ import static io.github.eschizoid.telescope.Mapping.auto;
 import static io.github.eschizoid.telescope.Mapping.to;
 import static io.github.eschizoid.telescope.Mapping.via;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.DisplayName;
@@ -109,9 +108,20 @@ class MappingVarargsTest {
     }
 
     @Test
-    @DisplayName("Telescope.map() with no rows at all throws IAE")
+    @DisplayName("Telescope.map() with no rows at all says \"No rows were passed\"")
     void zeroRowsFails() {
-      assertThrows(IllegalArgumentException.class, () -> Telescope.<SameA, SameB>map());
+      final var ex = assertThrows(IllegalArgumentException.class, () -> Telescope.<SameA, SameB>map());
+      assertEquals(true, ex.getMessage().contains("No rows were passed"));
+    }
+
+    @Test
+    @DisplayName("a lambda passed to to(...) is rejected at map(...) time (not silently misclassed)")
+    void lambdaInToIsRejected() {
+      // a -> a.x() is a lambda, not a method reference. Mapping.sourceClass() must throw via
+      // Telescope.implClassOf rather than silently returning the lambda's enclosing class.
+      final Telescope.Accessor<SameA, String> lambda = a -> a.x();
+      final Mapping<SameA, SameB> bad = to(lambda, SameB::x);
+      assertThrows(IllegalArgumentException.class, () -> Telescope.map(bad, auto()));
     }
   }
 
@@ -227,8 +237,8 @@ class MappingVarargsTest {
       final var dto = mapper.read(src);
       assertEquals("x", dto.x());
       assertEquals(7, dto.y());
-      // ADDR mapper above is constructed exactly the same way; the field roundtrips via its iso
-      assertSame(ADDR, ADDR);
+      // Reverse direction closes the bijection — the iso must round-trip identically.
+      assertEquals(src, mapper.backward(dto));
     }
   }
 }

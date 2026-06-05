@@ -150,7 +150,7 @@ public sealed interface Validated<E, A> {
    */
   default <T> Validated<T, A> mapErrors(final Function<? super E, ? extends T> f) {
     return switch (this) {
-      case Invalid<E, A> inv -> new Invalid<>(inv.errors().stream().<T>map(f::apply).toList());
+      case Invalid<E, A> inv -> new Invalid<>(inv.errors().stream().<T>map(f).toList());
       case Valid<E, A> v -> new Valid<>(v.value());
     };
   }

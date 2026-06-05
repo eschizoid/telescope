@@ -185,7 +185,7 @@ public final class BeanTo<P, R extends Record> {
     if (!(list instanceof Iterable<?> it)) throw new IllegalArgumentException(
       "viaEach expects a collection component but got " + (list == null ? "null" : list.getClass().getName())
     );
-    final var out = new ArrayList<Object>();
+    final var out = new ArrayList<>();
     for (final var e : it) out.add(fn.apply(e));
     return List.copyOf(out);
   }

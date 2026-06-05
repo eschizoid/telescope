@@ -132,7 +132,7 @@ public sealed interface Either<L, R> {
 
   /**
    * Map the left side. Leaves a {@code Right} unchanged. Useful for translating typed errors to a
-   * different error type at a boundary (e.g. mapping a {@code ParseError} to a {@code String}
+   * different error type at a boundary (e.g., mapping a {@code ParseError} to a {@code String}
    * before reporting).
    *
    * <pre>{@code

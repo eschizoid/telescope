@@ -172,8 +172,8 @@ public final class Beans {
    * static {@code builder()}, then a no-arg constructor with setters, then a no-arg constructor
    * with field injection. Used by the record-less POJO APIs ({@code Telescope.ofBean} / {@code
    * mapBean}) where there is no canonical component order, so the positional {@link
-   * #constructorWriter} is not a candidate. Throws if none applies (e.g. an immutable all-args-only
-   * POJO).
+   * #constructorWriter} is not a candidate. Throws if none applies (e.g., an immutable
+   * all-args-only POJO).
    */
   public static <P> BeanWriter<P> autoWriter(final Class<P> cls) {
     if (hasStaticBuilder(cls)) return builderWriter(cls);

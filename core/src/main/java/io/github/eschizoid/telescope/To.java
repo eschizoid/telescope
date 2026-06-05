@@ -5,7 +5,7 @@ import java.util.function.Function;
 
 /**
  * Intermediate of {@link From#to(Class)} — call {@link #using(Function, Function)} to supply both
- * directions of the conversion and materialise the resulting {@code Telescope<A, B>}.
+ * directions of the conversion and materialize the resulting {@code Telescope<A, B>}.
  */
 public final class To<A, B> {
 
