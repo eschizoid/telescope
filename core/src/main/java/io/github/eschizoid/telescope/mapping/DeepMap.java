@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Engine for {@link Telescope#map(Class, Class, Mapping[])} / {@link Telescope#mapper(Class, Class,
@@ -292,10 +293,13 @@ public final class DeepMap {
     if (cls.isArray()) return false;
     if (cls.isEnum()) return false;
     if (cls.isInterface()) return false;
-    // Common scalars that should NOT be treated as reflectable beans.
-    if (cls == String.class || cls == CharSequence.class) return false;
+    // Common scalars that should NOT be treated as reflectable beans. CharSequence covers String,
+    // StringBuilder, StringBuffer, and any other implementation — assignableFrom catches subtypes.
+    if (CharSequence.class.isAssignableFrom(cls)) return false;
     if (Number.class.isAssignableFrom(cls)) return false;
     if (cls == Boolean.class || cls == Character.class) return false;
+    if (java.time.temporal.Temporal.class.isAssignableFrom(cls)) return false;
+    if (UUID.class.isAssignableFrom(cls)) return false;
     return true;
   }
 

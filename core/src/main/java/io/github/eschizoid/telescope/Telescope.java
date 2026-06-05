@@ -142,8 +142,9 @@ public final class Telescope<S, A> {
    * Expose the underlying {@link Traversal} optic. Public so the {@code conversion} sub-package can
    * do a downcast check (e.g. {@code .optic() instanceof Iso<?, ?>}) when unwrapping a
    * bidirectional bridge. The returned value's type lives in the unexported {@code internal.optics}
-   * package, so consumers of the module can name it but can't do anything meaningful with it beyond
-   * passing it back to {@link #wrap(Traversal)}.
+   * package, so module consumers cannot reference {@code Traversal} at compile time — this method
+   * is effectively module-internal even though declared public, and pairs with {@link
+   * #wrap(Traversal)} for code inside the module.
    */
   @SuppressWarnings("exports") // Intentional: Traversal is module-internal; pairs with wrap().
   public Traversal<S, A> optic() {
@@ -1012,33 +1013,6 @@ public final class Telescope<S, A> {
     return updateAsync(source, a ->
       CompletableFuture.supplyAsync(() -> fn.apply(a), executor).thenCompose(Function.identity())
     );
-  }
-
-  /**
-   * Shared name-correspondence check for the bean conversions (fromBean / mapBean). Each name in
-   * {@code ownerNames} is mapped to its counterpart via {@code remap} (identity when absent); names
-   * whose counterpart exists on {@code other} are returned in order. A missing counterpart throws
-   * the {@code onMissing}-built exception unless {@code dropUnmatched} is set. One place for the
-   * matching policy; each caller keeps its own error wording via the factory.
-   *
-   * <p>Public so the {@code conversion} sub-package can call it. The signature uses only exported
-   * types, so consumers of the module that want to reproduce the matching logic can actually use
-   * this — though there's no obvious user-facing case for it.
-   */
-  public static List<String> matchedNames(
-    final String[] ownerNames,
-    final Map<String, String> remap,
-    final Class<?> other,
-    final boolean dropUnmatched,
-    final BiFunction<String, String, RuntimeException> onMissing
-  ) {
-    final var keep = new ArrayList<String>();
-    for (final var name : ownerNames) {
-      final var counterpart = remap.getOrDefault(name, name);
-      if (Beans.hasProperty(other, counterpart)) keep.add(name);
-      else if (!dropUnmatched) throw onMissing.apply(name, counterpart);
-    }
-    return keep;
   }
 
   // methodNameOf + implClassOf live in internal/LambdaIntrospection.java so the new
