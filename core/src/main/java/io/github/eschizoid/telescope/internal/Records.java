@@ -30,7 +30,7 @@ public final class Records {
   /**
    * A {@link Lens} over a record component, identified by name. The {@code get} reads the
    * component; {@code set}/{@code modify} return a copy of the record with that one part replaced.
-   * Backs {@link io.github.eschizoid.telescope.Telescope}'s {@code .field(String)} overload.
+   * Backs {@link io.github.eschizoid.telescope.Telescope}'s {@code .fieldByName(String)} overload.
    *
    * <pre>{@code
    * record User(String name, int age) {}
