@@ -231,21 +231,34 @@ public final class Beans {
         "or exactly one public constructor whose arity matches the property count (" +
         props.length +
         "), was compiled with -parameters, and whose parameter names line up with the getter-derived properties. " +
-        "For ambiguous multi-constructor POJOs, classes compiled without -parameters, or constructor/getter " +
-        "name mismatches, declare an explicit writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site."
+        "Primary fix: recompile the target class with javac -parameters so its constructor arguments can be " +
+        "matched by name. The writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site is " +
+        "an escape hatch, but note it falls back to POSITIONAL argument matching when -parameters is absent — " +
+        "argument order is then the getter-discovery order (not a stable, user-defined canonical order), so " +
+        "the hint should still be paired with -parameters to be safe."
     );
   }
 
+  /**
+   * Probe for the unique public constructor of {@code arity}. Two passes so the probe matches what
+   * {@link ConstructorWriter} actually does: that writer scans {@code getDeclaredConstructors()}
+   * (any access) and throws on multiple matches. So a class with one public + one non-public ctor
+   * of the requested arity would survive a public-only check but blow up later when {@code
+   * ConstructorWriter} sees both. We refuse here in both cases — non-public same-arity sibling or
+   * multiple publics — so the auto path stays consistent with its delegate.
+   */
   private static <P> Constructor<P> solePublicConstructor(final Class<P> cls, final int arity) {
+    var declaredCount = 0;
+    for (final var c : cls.getDeclaredConstructors()) if (c.getParameterCount() == arity) declaredCount++;
+    if (declaredCount != 1) return null; // ambiguous declared-set, or zero matches
     Constructor<P> found = null;
     for (final var c : cls.getConstructors()) {
       if (c.getParameterCount() != arity) continue;
-      if (found != null) return null; // ambiguous — auto path refuses
       @SuppressWarnings("unchecked")
       final var cast = (Constructor<P>) c;
       found = cast;
     }
-    return found;
+    return found; // non-null only if the unique declared ctor of that arity is public
   }
 
   private static boolean allParameterNamesMatchProperties(final Constructor<?> ctor, final String[] propertyNames) {

@@ -381,7 +381,7 @@ class BeansTest {
     @DisplayName("construct throws IllegalArgumentException for a name without a matching setter")
     void settersMissingSetterThrows() {
       final var writer = Beans.settersWriter(NoArgFields.class); // has fields but no setters
-      assertThrows(RuntimeException.class, () -> writer.construct(new String[] { "name" }, n -> "x"));
+      assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "name" }, n -> "x"));
     }
   }
 
@@ -425,7 +425,7 @@ class BeansTest {
     @DisplayName("construct throws if no setter on the builder matches a given name")
     void builderUnknownSetterThrows() {
       final var writer = Beans.builderWriter(WithBuilder.class);
-      assertThrows(RuntimeException.class, () -> writer.construct(new String[] { "ghost" }, n -> "x"));
+      assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "ghost" }, n -> "x"));
     }
   }
 

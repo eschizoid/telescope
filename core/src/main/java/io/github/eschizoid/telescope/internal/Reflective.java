@@ -83,9 +83,10 @@ public interface Reflective {
       @Override
       @SuppressWarnings({ "rawtypes", "unchecked" })
       public Object construct(final Class<?> cls, final Function<String, Object> valueByName) {
-        // Lazy fallback — Beans.autoWriter may throw for classes that REQUIRE a hint (e.g.
-        // immutable all-args POJOs the auto path refuses). getOrDefault would eagerly evaluate
-        // the default and short-circuit the hint mechanism entirely.
+        // Lazy fallback — Beans.autoWriter may throw for classes the auto path refuses (ambiguous
+        // multi-ctor POJOs, classes compiled without -parameters, or ctor/getter name mismatches);
+        // when a hint exists it MUST win, otherwise autoWriter's pre-emptive throw would defeat the
+        // hint mechanism. getOrDefault would eagerly evaluate the default and short-circuit it.
         final var hinted = (Beans.BeanWriter) hints.get(cls);
         final var writer = hinted != null ? hinted : Beans.autoWriter((Class) cls);
         return writer.construct(Beans.propertyNames(cls), valueByName);

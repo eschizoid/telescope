@@ -16,8 +16,6 @@ import io.github.eschizoid.telescope.internal.optics.instances.OptionalK;
 import io.github.eschizoid.telescope.internal.optics.instances.ValidatedK;
 import io.github.eschizoid.telescope.mapping.DeepMap;
 import io.github.eschizoid.telescope.mapping.MapStep;
-import io.github.eschizoid.telescope.mapping.Mapping;
-import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
@@ -326,13 +324,17 @@ public final class Telescope<S, A> {
    * <p><b>Row kinds accepted.</b>
    *
    * <ul>
-   *   <li>{@link Mapping#to(Accessor, Accessor) to(src, tgt)} — same-typed rename
-   *   <li>{@link Mapping#to(Accessor, Accessor, java.util.function.Function,
-   *       java.util.function.Function) to(src, tgt, fwd, bwd)} — typed transform
-   *   <li>{@link Mapping#via(Accessor, Accessor, Mapper) via(src, tgt, mapper)} — nested mapper
-   *   <li>{@link WriteHint#writeBean(Class, WriteHint.WriteStrategy) writeBean(target, strategy)} —
-   *       per-target write-strategy override (e.g. force {@code CONSTRUCTOR} for an immutable
-   *       all-args-only POJO that {@code Beans.autoWriter} refuses)
+   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#to(Accessor, Accessor) to(src, tgt)}
+   *       — same-typed rename
+   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#to(Accessor, Accessor,
+   *       java.util.function.Function, java.util.function.Function) to(src, tgt, fwd, bwd)} — typed
+   *       transform
+   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#via(Accessor, Accessor, Mapper)
+   *       via(src, tgt, mapper)} — nested mapper
+   *   <li>{@link io.github.eschizoid.telescope.mapping.WriteHint#writeBean(Class,
+   *       io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy) writeBean(target,
+   *       strategy)} — per-target write-strategy override (e.g. force {@code CONSTRUCTOR} for an
+   *       immutable all-args-only POJO that {@code Beans.autoWriter} refuses)
    * </ul>
    *
    * @param source the source root class — record or POJO (root of the recursion)
@@ -341,8 +343,8 @@ public final class Telescope<S, A> {
    * @param <A> the source root type
    * @param <B> the target root type
    * @see #mapper(Class, Class, MapStep...)
-   * @see Mapping
-   * @see WriteHint
+   * @see io.github.eschizoid.telescope.mapping.Mapping
+   * @see io.github.eschizoid.telescope.mapping.WriteHint
    * @see DeepMap
    */
   // No @SafeVarargs needed: MapStep is reifiable (no type parameter), so this varargs method does
@@ -354,7 +356,8 @@ public final class Telescope<S, A> {
   /**
    * {@link Mapper} sibling of {@link #map(Class, Class, MapStep...)} — same deep recursion, but
    * returns a {@code Mapper<A, B>} (exposes {@link Mapper#patch} for sparse overlays at the top
-   * level and is nestable in another mapping via {@link Mapping#via(Accessor, Accessor, Mapper)}).
+   * level and is nestable in another mapping via {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#via(Accessor, Accessor, Mapper)}).
    *
    * @see #map(Class, Class, MapStep...)
    */
