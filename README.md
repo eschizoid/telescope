@@ -139,7 +139,7 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope:0.1.0")
+    implementation("io.github.eschizoid:telescope:0.3.0")
 }
 ```
 
@@ -149,7 +149,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope</artifactId>
-  <version>0.1.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
@@ -161,8 +161,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope:0.1.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:0.1.0")
+    implementation("io.github.eschizoid:telescope:0.3.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:0.3.0")
 }
 ```
 
@@ -172,7 +172,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope</artifactId>
-  <version>0.1.0</version>
+  <version>0.3.0</version>
 </dependency>
 
 <build>
@@ -185,7 +185,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>0.1.0</version>
+            <version>0.3.0</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
@@ -249,25 +249,27 @@ Conversions are bidirectional `Iso`s, so any cell in the middle row composes int
 
 ### Read
 
-| Method       | Returns                                    |
-| ------------ | ------------------------------------------ |
-| `.read(S)`   | The first focused value. Throws if absent. |
-| `.find(S)`   | `Optional<A>` of the first focused value.  |
-| `.toList(S)` | `List<A>` of all focused values.           |
-| `.count(S)`  | How many values are focused.               |
-| `.exists(S)` | `true` if there's at least one.            |
+| Method         | Returns                                                                                                                                                                                                                                                                                      |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.read(S)`     | The first focused value. Throws if absent.                                                                                                                                                                                                                                                   |
+| `.find(S)`     | `Optional<A>` of the first focused value.                                                                                                                                                                                                                                                    |
+| `.toList(S)`   | `List<A>` of all focused values.                                                                                                                                                                                                                                                             |
+| `.count(S)`    | How many values are focused.                                                                                                                                                                                                                                                                 |
+| `.exists(S)`   | `true` if there's at least one.                                                                                                                                                                                                                                                              |
+| `.withIndex()` | Index-aware chainable view (`Telescope.WithIndex<S, A>`). Exposes `.update(S, BiFunction<Integer, A, A>)`, `.toList(S)` → `List<Indexed<A>>`, `.find(S)`, `.count(S)`, `.exists(S)` — the same operations as the parent, with each focused value paired with its 0-based traversal position. |
 
 ### Write
 
-| Method                                         | Returns                                                                                                                                                                          |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.set(S, A)`                                   | New `S` with every focused value replaced by the given one.                                                                                                                      |
-| `.update(S, Function<A, A>)`                   | New `S` with every focused value transformed.                                                                                                                                    |
-| `.updateAsync(S, fn, Executor)`                | Bounded-concurrency async update; pass a fixed pool to cap concurrent invocations.                                                                                               |
-| `.updateIndexed(S, BiFunction<Integer, A, A>)` | Transform every focused value with its 0-based position in traversal order.                                                                                                      |
-| `.toListIndexed(S)`                            | `List<Indexed<A>>` — every focused value paired with its position.                                                                                                               |
-| `.with(Function<A, A>)`                        | Accumulate an edit at the current focus and return a fresh identity `Telescope<S, S>` ready for the next path. See [Multi-edit chain](#multi-edit-chain). **Compile-checked.**   |
-| `.apply(S)`                                    | Run every accumulated `.with(...)` edit against the source, in insertion order. Returns a new `S`.                                                                               |
+| Method                                         | Returns                                                                                                                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `.set(S, A)`                                   | New `S` with every focused value replaced by the given one.                                                                                                        |
+| `.update(S, Function<A, A>)`                   | New `S` with every focused value transformed.                                                                                                                      |
+| `.updateAsync(S, fn, Executor)`                | Bounded-concurrency async update; pass a fixed pool to cap concurrent invocations.                                                                                 |
+| `.updateIndexed(S, BiFunction<Integer, A, A>)` | Transform every focused value with its 0-based position in traversal order.                                                                                        |
+| `.toListIndexed(S)`                            | `List<Indexed<A>>` — every focused value paired with its position.                                                                                                 |
+| `.update(Telescope<S, X>, Function<X, X>)`     | Accumulate an edit through a pre-built path; returns `Telescope<S, S>` carrying the running chain. See [Multi-edit chain](#multi-edit-chain). **Compile-checked.** |
+| `.with(Function<A, A>)`                        | Accumulate an edit at the current focus (inline-path equivalent of `.update(path, fn)`); returns `Telescope<S, S>`. **Compile-checked.**                           |
+| `.apply(S)`                                    | Run every accumulated `.update(path, fn)` / `.with(fn)` edit against the source, in insertion order. Returns a new `S`.                                            |
 
 ---
 
@@ -403,38 +405,79 @@ local first (`final var team = fetchTeam();`) and close over that.
 
 ### Multi-edit chain
 
-To apply several edits at different paths in one go, terminate each navigation with `.with(fn)` instead of
-`.update(source, fn)`. Each `.with(...)` accumulates the edit and returns a fresh identity `Telescope<S, S>` — ready for
-the next path. End the whole chain with `.apply(source)`. Every step is compile-checked (same typed `.each` / `.field`
-calls you already use); the runtime cost is the sum of the individual updates.
+To apply several edits at different paths in one go, accumulate them with `.update(path, fn)` for pre-built paths or
+`.with(fn)` for inline paths, then end with `.apply(source)`. Every step is fully compile-checked.
+
+**Preferred form — pre-built paths as static finals.** Declare each navigation once, then the multi-edit reads like a
+list of operations with no per-edit path repetition:
+
+```java
+static final Telescope<Company, String> EMAILS = Telescope.of(Company.class)
+  .each(Company::departments)
+  .each(Department::teams)
+  .each(Team::users)
+  .field(User::email);
+
+static final Telescope<Company, String> DEPT_NAMES = Telescope.of(Company.class)
+  .each(Company::departments)
+  .field(Department::name);
+
+static final Telescope<Company, String> USER_NAMES = Telescope.of(Company.class)
+  .each(Company::departments)
+  .each(Department::teams)
+  .each(Team::users)
+  .field(User::name);
+
+final Company done = Telescope.of(Company.class)
+  .update(EMAILS, String::toLowerCase)
+  .update(DEPT_NAMES, String::trim)
+  .update(USER_NAMES, titleCase)
+  .apply(company);
+```
+
+Each `.update(path, fn)` ties a `Telescope<S, X>` to a `Function<X, X>`; `javac` enforces the leaf type match. The
+`.update(...)` overload is disambiguated by first-argument type: a `Telescope` accumulates into the chain (returns
+`Telescope<S, S>`), a source instance is the single-shot terminal (returns `S`).
+
+**Inline form — for one-off paths you don't want to name.** Terminate the navigation with `.with(fn)` instead of
+`.update(source, fn)`; same chain semantics:
 
 ```java
 final Company done = Telescope.of(Company.class)
-    .each(Company::departments).each(Department::teams).each(Team::users).field(User::email)
-        .with(String::toLowerCase)
-    .each(Company::departments).field(Department::name)
-        .with(String::trim)
-    .each(Company::departments).each(Department::teams).each(Team::users).field(User::name)
-        .with(titleCase)
+  .each(Company::departments)
+  .each(Department::teams)
+  .each(Team::users)
+  .field(User::email)
+  .with(String::toLowerCase)
+  .each(Company::departments)
+  .field(Department::name)
+  .with(String::trim)
+  .apply(company);
+```
+
+Mix and match in the same chain — pre-built where reuse pays, inline where it doesn't:
+
+```java
+Telescope.of(Company.class)
+    .update(EMAILS, String::toLowerCase)                              // pre-built
+    .each(Company::departments).field(Department::name).with(String::trim)    // inline
     .apply(company);
 ```
 
-The chain is reusable across sources — hold onto the `Telescope<Company, Company>` instead of calling `.apply` at the
-end:
+**Reusable across sources.** Hold onto the resulting `Telescope<Company, Company>` instead of calling `.apply` at the
+end — it's the multi-edit equivalent of a stored single-path telescope:
 
 ```java
 final Telescope<Company, Company> normalize = Telescope.of(Company.class)
-    .each(Company::departments).each(Department::teams).each(Team::users).field(User::email)
-        .with(String::toLowerCase)
-    .each(Company::departments).field(Department::name)
-        .with(String::trim);
+    .update(EMAILS,     String::toLowerCase)
+    .update(DEPT_NAMES, String::trim);
 
 normalize.apply(companyA);
 normalize.apply(companyB);
 ```
 
-Edits run sequentially in insertion order; the second `.with(...)` sees the first edit's result, not the original
-source. An empty chain (no `.with(...)` calls) returns the source unchanged from `.apply(...)`.
+Edits run sequentially in insertion order; the second edit sees the first edit's result, not the original source. An
+empty chain (no `.update(...)` / `.with(...)` calls) returns the source unchanged from `.apply(...)`.
 
 ---
 
@@ -836,8 +879,8 @@ The return type degrades to a terminal `Telescope<R, Target>` when the target is
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope:0.1.0")
-annotationProcessor("io.github.eschizoid:telescope-codegen:0.1.0")
+implementation("io.github.eschizoid:telescope:0.3.0")
+annotationProcessor("io.github.eschizoid:telescope-codegen:0.3.0")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
@@ -1064,7 +1107,7 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
    (`update(order, item -> … order.sku() …)`). Hoist the source to a local first if it's an expression.
 6. **Two documented runtime-check points on the runtime DSL.** Every typed entry point (`.field(Accessor)`,
    `.each(Accessor)`, `.eachValue(Accessor)`, `.whenPresent(Accessor)`, the bridges, `.with(fn)`, `.apply(S)`, every
-   `update*` variant) is fully compile-checked. Two escape hatches are *not* compile-checked, by design, and they're
+   `update*` variant) is fully compile-checked. Two escape hatches are _not_ compile-checked, by design, and they're
    named so the call site says so:
    - `.fieldByName(String)` / `.fieldByName(String, Class<B>)` — late-bound field name (config-driven paths). `javac`
      can't verify the name exists or that the inferred type matches the actual field. Wrong name → runtime error.
@@ -1073,6 +1116,21 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
 
    For zero runtime-check points, use the **`@Focus` / `@BeanFocus` / `@Bridge` annotation processors** — they generate
    a typed `<X>Path<R>` navigator at compile time where every step is a typed method call.
+
+7. **Pre-1.0 versioning policy — minor versions can break source and binary compatibility.** Telescope is still 0.x; we
+   hold the right to evolve the public surface between minor releases when it improves the DSL. Two breaks shipped
+   recently are worth knowing about explicitly:
+   - **`.field(String)` / `.field(String, Class<B>)` renamed to `.fieldByName(...)`** so the runtime-check nature is
+     loud at the call site (see constraint #6). Source-incompatible. No `@Deprecated` shim — clean break.
+   - **The conversion / mapping builder intermediate types** (`From`, `To`, `BeanFrom`, `BeanTo`, `MapBeanFrom`,
+     `MapBeanTo`, `MapTo`, `MapBuilder`, `FieldMapping`, `Mapper`) moved from nested `Telescope.Xxx` to top-level
+     classes in the same `io.github.eschizoid.telescope` package. **Source-compatible** for the common case (users write
+     `Telescope.from(A).to(B).using(...)` without ever naming the intermediates), but **binary-incompatible** because
+     the factory methods' return types changed from `Telescope.From` to `From`. Recompile against the new version. JPMS
+     exports are unchanged.
+
+   After 1.0 these guarantees tighten — source + binary compat across minor versions, breaks only on majors. We're not
+   there yet; keep your build configured to rebuild against each minor.
 
 ---
 

@@ -111,10 +111,7 @@ class MappingExtrasTest {
 
     record UserPatch(String id, String email, String name) {}
 
-    static final Telescope.Mapper<User, UserPatch> MAPPER = Telescope.map(User.class)
-      .to(UserPatch.class)
-      .auto()
-      .buildMapper();
+    static final Mapper<User, UserPatch> MAPPER = Telescope.map(User.class).to(UserPatch.class).auto().buildMapper();
 
     @Test
     @DisplayName("only non-null patch fields are applied")

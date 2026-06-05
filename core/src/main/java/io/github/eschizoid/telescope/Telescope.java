@@ -14,12 +14,10 @@ import io.github.eschizoid.telescope.internal.optics.instances.ValidatedK;
 import java.io.Serializable;
 import java.lang.invoke.SerializedLambda;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
@@ -68,7 +66,9 @@ public final class Telescope<S, A> {
   @FunctionalInterface
   public interface Accessor<A, B> extends Function<A, B>, Serializable {}
 
-  private final Traversal<S, A> optic;
+  // Package-private — read by the conversion-builder classes in this same package (e.g.
+  // BeanTo's iso-unwrap check, Mapper's asTelescope).
+  final Traversal<S, A> optic;
   // How accessor-based navigation (field/each/eachValue/whenPresent) turns a method reference into
   // a field Lens: records read/rebuild via the canonical constructor, beans via getters +
   // rebuild-via-strategy (see ofBean). Propagated to derived telescopes.
@@ -79,7 +79,10 @@ public final class Telescope<S, A> {
   // accumulates both edits and runs them in order against {@code s}.
   private final Function<S, S> chain;
 
-  private Telescope(final Traversal<S, A> optic) {
+  // Package-private so that the conversion-builder classes (From, To, BeanTo, MapBuilder, Mapper,
+  // …) — extracted to sibling files in this same package to keep Telescope.java navigable — can
+  // construct Telescope instances without needing us to expose internals through the JPMS export.
+  Telescope(final Traversal<S, A> optic) {
     this(optic, RecordFieldOptics.INSTANCE, Function.identity());
   }
 
@@ -207,35 +210,6 @@ public final class Telescope<S, A> {
     return new From<>();
   }
 
-  /** Intermediate of {@link #from(Class)}. */
-  public static final class From<A> {
-
-    private From() {}
-
-    public <B> To<A, B> to(final Class<B> target) {
-      return new To<>();
-    }
-  }
-
-  /** Intermediate of {@link From#to(Class)}. */
-  public static final class To<A, B> {
-
-    private To() {}
-
-    /**
-     * Supply both directions of the conversion. {@code forward} converts {@code A → B}; {@code
-     * backward} must satisfy the iso laws ({@code from(to(a)).equals(a)} and {@code
-     * to(from(b)).equals(b)} for the components involved). The resulting {@code Telescope<A, B>}
-     * composes into longer paths via {@link #then}. See {@link #from(Class)} for a worked example.
-     */
-    public Telescope<A, B> using(
-      final Function<? super A, ? extends B> forward,
-      final Function<? super B, ? extends A> backward
-    ) {
-      return new Telescope<>(Iso.of(forward, backward));
-    }
-  }
-
   /**
    * Begin a bidirectional bridge between a JavaBeans-style POJO and a record. The forward direction
    * reads the POJO's properties via its getters and builds the record; the reverse rebuilds the
@@ -292,198 +266,6 @@ public final class Telescope<S, A> {
     return new BeanFrom<>(pojoClass);
   }
 
-  /** Intermediate of {@link #fromBean(Class)}. */
-  public static final class BeanFrom<P> {
-
-    private final Class<P> pojoClass;
-
-    private BeanFrom(final Class<P> pojoClass) {
-      this.pojoClass = pojoClass;
-    }
-
-    public <R extends Record> BeanTo<P, R> to(final Class<R> recordClass) {
-      return new BeanTo<>(pojoClass, recordClass);
-    }
-  }
-
-  /**
-   * Intermediate of {@link BeanFrom#to(Class)}. Each terminal chooses how the reverse direction
-   * (record &rarr; POJO) reconstructs the POJO.
-   */
-  public static final class BeanTo<P, R extends Record> {
-
-    private final Class<P> pojoClass;
-    private final Class<R> recordClass;
-    private final Map<String, Function<Object, Object>> forwardVia = new LinkedHashMap<>();
-    private final Map<String, Function<Object, Object>> backwardVia = new LinkedHashMap<>();
-    private final Map<String, String> componentToProperty = new LinkedHashMap<>();
-
-    private BeanTo(final Class<P> pojoClass, final Class<R> recordClass) {
-      this.pojoClass = pojoClass;
-      this.recordClass = recordClass;
-    }
-
-    /**
-     * Map a record component to a differently-named POJO property: the record's {@code component}
-     * is read from (and written back to) the POJO's {@code property}. Types must match. Components
-     * not named here are matched to a same-named getter/setter as usual.
-     *
-     * <pre>{@code
-     * Telescope.fromBean(LegacyUser.class).to(UserRecord.class)
-     *     .rename(UserRecord::fullName, LegacyUser::getName)  // fullName <-> name
-     *     .viaConstructor();
-     * }</pre>
-     */
-    public <X> BeanTo<P, R> rename(final Accessor<R, X> component, final Accessor<P, X> property) {
-      componentToProperty.put(methodNameOf(component), Beans.propertyOf(methodNameOf(property)));
-      return this;
-    }
-
-    /**
-     * Convert a nested sub-object component through another bridge instead of copying it as-is. Use
-     * for a record component whose POJO counterpart is a different (sub-POJO) type that has its own
-     * {@code fromBean}/{@code mapBean}/{@code from-to-using} bridge.
-     *
-     * <pre>{@code
-     * final var addr = Telescope.fromBean(AddrPojo.class).to(AddrRecord.class).viaFields();
-     * final var user = Telescope.fromBean(UserPojo.class).to(UserRecord.class)
-     *     .via(UserRecord::address, addr)   // AddrPojo <-> AddrRecord at the 'address' component
-     *     .viaFields();
-     * }</pre>
-     */
-    public <X> BeanTo<P, R> via(final Accessor<R, X> targetAccessor, final Telescope<?, X> subBridge) {
-      final var name = methodNameOf(targetAccessor);
-      final var iso = isoOf(subBridge);
-      forwardVia.put(name, iso::to);
-      backwardVia.put(name, iso::from);
-      return this;
-    }
-
-    /**
-     * Convert each element of a collection component through an element bridge — the fix for nested
-     * collections (a record's {@code List<SubRecord>} component whose POJO counterpart is a {@code
-     * List<SubPojo>}). Without this, the whole-object bridge copies the list reference shallowly
-     * and type erasure lets {@code List<SubPojo>} sit in a {@code List<SubRecord>} slot (a latent
-     * {@code ClassCastException}); {@code viaEach} maps the element bridge over the list both ways.
-     *
-     * <pre>{@code
-     * final var order = Telescope.fromBean(OrderPojo.class).to(OrderRecord.class).viaConstructor();
-     * final var cart  = Telescope.fromBean(CartPojo.class).to(CartRecord.class)
-     *     .viaEach(CartRecord::orders, order)  // List<OrderPojo> <-> List<OrderRecord>
-     *     .viaFields();
-     * }</pre>
-     */
-    public <X> BeanTo<P, R> viaEach(
-      final Accessor<R, ? extends Iterable<X>> targetAccessor,
-      final Telescope<?, X> elementBridge
-    ) {
-      final var name = methodNameOf(targetAccessor);
-      final var iso = isoOf(elementBridge);
-      forwardVia.put(name, list -> mapList(list, iso::to));
-      backwardVia.put(name, list -> mapList(list, iso::from));
-      return this;
-    }
-
-    /**
-     * Reverse via a no-arg constructor + reflective field injection (no setters required). Use this
-     * when the POJO has a default constructor but no all-args constructor or builder — the bridge
-     * instantiates it and writes each field directly.
-     *
-     * <p><strong>JPMS caveat:</strong> reflective field injection requires the POJO's package to be
-     * open to this module. If the POJO lives in another module, add {@code opens <pkg> to
-     * io.github.eschizoid.telescope;} to that module's {@code module-info.java}. The other two
-     * strategies, which go through public constructors/builders, don't need this.
-     *
-     * <pre>{@code
-     * final var bridge = Telescope.fromBean(LegacyUser.class).to(UserRecord.class).viaFields();
-     * }</pre>
-     */
-    public Telescope<P, R> viaFields() {
-      return bridge(Beans.fieldsWriter(pojoClass));
-    }
-
-    /**
-     * Reverse via an all-args constructor matched <em>positionally</em>: the constructor must take
-     * its parameters in the record's component order. Use this when the POJO is immutable (or
-     * exposes a single canonical constructor) and its constructor argument order lines up with the
-     * record's components.
-     *
-     * <pre>{@code
-     * final var bridge = Telescope.fromBean(LegacyUser.class).to(UserRecord.class).viaConstructor();
-     * }</pre>
-     */
-    public Telescope<P, R> viaConstructor() {
-      return bridge(Beans.constructorWriter(pojoClass, Records.componentNames(recordClass).length));
-    }
-
-    /**
-     * Reverse via a static {@code builder()} method, a setter per component, then {@code build()}.
-     * Use this when the POJO follows the builder pattern (one setter per property named for the
-     * component, plus a terminal {@code build()}).
-     *
-     * <pre>{@code
-     * final var bridge = Telescope.fromBean(LegacyUser.class).to(UserRecord.class).viaBuilder();
-     * }</pre>
-     */
-    public Telescope<P, R> viaBuilder() {
-      return bridge(Beans.builderWriter(pojoClass));
-    }
-
-    private Telescope<P, R> bridge(final Beans.BeanWriter<P> writer) {
-      final var names = Records.componentNames(recordClass);
-      matchedNames(names, componentToProperty, pojoClass, false, (comp, prop) ->
-        new IllegalArgumentException(
-          "fromBean: record component '" +
-            comp +
-            "' on " +
-            recordClass.getSimpleName() +
-            " has no matching getter '" +
-            prop +
-            "' on " +
-            pojoClass.getSimpleName() +
-            " (matched by exact name; rename it with .rename(...) or add a getter)."
-        )
-      );
-      // The POJO property each record component reads from / writes to (identity unless renamed).
-      final var beanKeys = new String[names.length];
-      for (var i = 0; i < names.length; i++) beanKeys[i] = componentToProperty.getOrDefault(names[i], names[i]);
-      final var propertyToComponent = new LinkedHashMap<String, String>();
-      componentToProperty.forEach((comp, prop) -> propertyToComponent.put(prop, comp));
-      final Function<P, R> forward = pojo ->
-        Records.construct(recordClass, comp -> {
-          final var raw = Beans.readProperty(pojo, componentToProperty.getOrDefault(comp, comp));
-          final var conv = forwardVia.get(comp);
-          return conv == null ? raw : conv.apply(raw);
-        });
-      final Function<R, P> backward = record ->
-        writer.construct(beanKeys, prop -> {
-          final var comp = propertyToComponent.getOrDefault(prop, prop);
-          final var raw = Records.read(record, comp);
-          final var conv = backwardVia.get(comp);
-          return conv == null ? raw : conv.apply(raw);
-        });
-      return new Telescope<>(Iso.of(forward, backward));
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Iso<Object, Object> isoOf(final Telescope<?, ?> bridge) {
-      if (bridge.optic instanceof Iso<?, ?> iso) return (Iso<Object, Object>) iso;
-      throw new IllegalArgumentException(
-        "via/viaEach requires a bidirectional bridge (fromBean / mapBean / from-to-using); got a " +
-          bridge.optic.getClass().getSimpleName()
-      );
-    }
-
-    private static List<Object> mapList(final Object list, final Function<Object, Object> fn) {
-      if (!(list instanceof Iterable<?> it)) throw new IllegalArgumentException(
-        "viaEach expects a collection component but got " + (list == null ? "null" : list.getClass().getName())
-      );
-      final var out = new ArrayList<Object>();
-      for (final var e : it) out.add(fn.apply(e));
-      return List.copyOf(out);
-    }
-  }
-
   /**
    * Begin a bidirectional POJO&harr;POJO conversion — the bean analog of {@link #map(Class)}.
    * {@code mapBean(A.class).to(B.class).build()} produces a {@code Telescope<A, B>} (an {@link
@@ -502,98 +284,6 @@ public final class Telescope<S, A> {
    */
   public static <A> MapBeanFrom<A> mapBean(final Class<A> source) {
     return new MapBeanFrom<>(source);
-  }
-
-  /** Intermediate of {@link #mapBean(Class)}. */
-  public static final class MapBeanFrom<A> {
-
-    private final Class<A> source;
-
-    private MapBeanFrom(final Class<A> source) {
-      this.source = source;
-    }
-
-    public <B> MapBeanTo<A, B> to(final Class<B> target) {
-      return new MapBeanTo<>(source, target);
-    }
-  }
-
-  /** Intermediate of {@link MapBeanFrom#to(Class)}. */
-  public static final class MapBeanTo<A, B> {
-
-    private final Class<A> source;
-    private final Class<B> target;
-    private final Map<String, String> sourceToTarget = new LinkedHashMap<>();
-    private boolean ignoreUnmatched = false;
-
-    private MapBeanTo(final Class<A> source, final Class<B> target) {
-      this.source = source;
-      this.target = target;
-    }
-
-    /**
-     * Map a differently-named property across the boundary: {@code A}'s {@code from} property
-     * supplies (and is supplied by) {@code B}'s {@code to} property. Types must match. Properties
-     * not named here still match by name.
-     *
-     * <pre>{@code
-     * Telescope.mapBean(LegacyUser.class).to(UserView.class)
-     *     .rename(LegacyUser::getName, UserView::getFullName)
-     *     .build();
-     * }</pre>
-     */
-    public <X> MapBeanTo<A, B> rename(final Accessor<A, X> from, final Accessor<B, X> to) {
-      sourceToTarget.put(Beans.propertyOf(methodNameOf(from)), Beans.propertyOf(methodNameOf(to)));
-      return this;
-    }
-
-    /**
-     * Drop the bijection requirement: a property with no counterpart on the other side is simply
-     * not transferred (it keeps the rebuilt object's default). The result is lossy — a round-trip
-     * won't restore the dropped fields.
-     */
-    public MapBeanTo<A, B> ignoreUnmatched() {
-      this.ignoreUnmatched = true;
-      return this;
-    }
-
-    /** Build the bidirectional {@code Telescope<A, B>}. */
-    public Telescope<A, B> build() {
-      final var targetToSource = new LinkedHashMap<String, String>();
-      sourceToTarget.forEach((s, t) -> targetToSource.put(t, s));
-      final var bKeys = matchedNames(Beans.propertyNames(target), targetToSource, source, ignoreUnmatched, (name, cp) ->
-        mismatch(name, target, cp, source)
-      ).toArray(String[]::new);
-      final var aKeys = matchedNames(Beans.propertyNames(source), sourceToTarget, target, ignoreUnmatched, (name, cp) ->
-        mismatch(name, source, cp, target)
-      ).toArray(String[]::new);
-      final var writerA = Beans.autoWriter(source);
-      final var writerB = Beans.autoWriter(target);
-      final Function<A, B> forward = a ->
-        writerB.construct(bKeys, bProp -> Beans.readProperty(a, targetToSource.getOrDefault(bProp, bProp)));
-      final Function<B, A> backward = b ->
-        writerA.construct(aKeys, aProp -> Beans.readProperty(b, sourceToTarget.getOrDefault(aProp, aProp)));
-      return new Telescope<>(Iso.of(forward, backward));
-    }
-
-    private static RuntimeException mismatch(
-      final String name,
-      final Class<?> owner,
-      final String counterpart,
-      final Class<?> other
-    ) {
-      return new IllegalArgumentException(
-        "mapBean: property '" +
-          name +
-          "' on " +
-          owner.getSimpleName() +
-          " has no matching getter '" +
-          counterpart +
-          "' on " +
-          other.getSimpleName() +
-          " (rename it with .rename(...), or call .ignoreUnmatched() to drop it)."
-      );
-    }
   }
 
   /**
@@ -632,293 +322,6 @@ public final class Telescope<S, A> {
    */
   public static <A> MapTo<A> map(final Class<A> source) {
     return new MapTo<>(source);
-  }
-
-  /** Intermediate of {@link #map(Class)}. */
-  public static final class MapTo<A> {
-
-    private final Class<A> source;
-
-    private MapTo(final Class<A> source) {
-      this.source = source;
-    }
-
-    /**
-     * Name the target record; returns the {@link MapBuilder} that collects field correspondences.
-     */
-    public <B> MapBuilder<A, B> to(final Class<B> target) {
-      return new MapBuilder<>(source, target);
-    }
-  }
-
-  /**
-   * Accumulates field correspondences for {@link #map(Class)}. {@link #build()} synthesizes a
-   * bidirectional {@code Telescope<A, B>}; {@link #buildMapper()} additionally retains the field
-   * links so the result supports {@link Mapper#patch}.
-   */
-  public static final class MapBuilder<A, B> {
-
-    /** One field correspondence with (possibly identity) transforms in each direction. */
-    private record Link(
-      String sourceField,
-      String targetField,
-      Function<Object, Object> forward,
-      Function<Object, Object> backward
-    ) {}
-
-    private static final Function<Object, Object> IDENTITY = x -> x;
-
-    private final Class<A> source;
-    private final Class<B> target;
-    private final List<Link> links = new ArrayList<>();
-
-    private MapBuilder(final Class<A> source, final Class<B> target) {
-      this.source = source;
-      this.target = target;
-    }
-
-    /**
-     * Auto-map every target component whose name and type match a source component, leaving any
-     * already-declared correspondences untouched. Only exact name matches — no fuzzy heuristics, no
-     * nested traversal. Declare {@code .field(...).to(...)} explicitly for renames or transforms
-     * (those override the auto-mapped link for the same target).
-     *
-     * <pre>{@code
-     * // id + email map by name; only the renamed field is declared by hand:
-     * final var userMapper = Telescope.map(UserEntity.class).to(UserDto.class)
-     *     .field(UserEntity::name).to(UserDto::fullName)   // wins over auto for this target
-     *     .auto()                                          // id, email
-     *     .build();
-     * }</pre>
-     */
-    public MapBuilder<A, B> auto() {
-      final var sourceNames = Set.of(Records.componentNames(source));
-      for (final var name : Records.componentNames(target)) {
-        final var alreadyLinked = links.stream().anyMatch(l -> l.targetField().equals(name));
-        if (!alreadyLinked && sourceNames.contains(name)) {
-          links.add(new Link(name, name, IDENTITY, IDENTITY));
-        }
-      }
-      return this;
-    }
-
-    /**
-     * Declare the source side of a field correspondence; complete it on the returned {@link
-     * FieldMapping} with {@link FieldMapping#to(Accessor) .to(...)} (same-typed), {@link
-     * FieldMapping#to(Accessor, Function, Function) .to(..., fwd, bwd)} (typed transform), or
-     * {@link FieldMapping#via .via(..., mapper)} (nested record).
-     */
-    public <X> FieldMapping<A, B, X> field(final Accessor<A, X> sourceGetter) {
-      return new FieldMapping<>(this, methodNameOf(sourceGetter));
-    }
-
-    private MapBuilder<A, B> link(final Link link) {
-      links.removeIf(l -> l.targetField().equals(link.targetField()));
-      links.add(link);
-      return this;
-    }
-
-    /**
-     * Synthesize the bidirectional {@code Telescope<A, B>}. Throws {@link IllegalStateException} if
-     * the mapping isn't a bijection (some component on either side is left unmapped). Use {@link
-     * #buildMapper()} instead when you also want {@link Mapper#patch} or to nest the mapping via
-     * {@link FieldMapping#via}.
-     */
-    public Telescope<A, B> build() {
-      return new Telescope<>(iso());
-    }
-
-    /**
-     * Synthesize a {@link Mapper} — the same bidirectional conversion as {@link #build()}, plus the
-     * field links retained so it can do {@link Mapper#patch sparse patches}.
-     */
-    public Mapper<A, B> buildMapper() {
-      return new Mapper<>(iso(), List.copyOf(links), source);
-    }
-
-    private Iso<A, B> iso() {
-      final var byTarget = new LinkedHashMap<String, Link>();
-      final var bySource = new LinkedHashMap<String, Link>();
-      for (final var l : links) {
-        byTarget.put(l.targetField(), l);
-        bySource.put(l.sourceField(), l);
-      }
-      requireAllMapped(Records.componentNames(target), byTarget.keySet(), target, "target");
-      requireAllMapped(Records.componentNames(source), bySource.keySet(), source, "source");
-
-      final Function<A, B> forward = a ->
-        Records.construct(target, t -> {
-          final var l = byTarget.get(t);
-          return l.forward().apply(Records.read(a, l.sourceField()));
-        });
-      final Function<B, A> backward = b ->
-        Records.construct(source, s -> {
-          final var l = bySource.get(s);
-          return l.backward().apply(Records.read(b, l.targetField()));
-        });
-      return Iso.of(forward, backward);
-    }
-
-    private static void requireAllMapped(
-      final String[] names,
-      final Set<String> mapped,
-      final Class<?> type,
-      final String side
-    ) {
-      for (final var name : names) {
-        if (!mapped.contains(name)) throw new IllegalStateException(
-          "Mapping is not a bijection: " +
-            side +
-            " field '" +
-            name +
-            "' on " +
-            type.getSimpleName() +
-            " is unmapped. Every component on both sides must be mapped (try .auto() for same-name fields)."
-        );
-      }
-    }
-  }
-
-  /**
-   * Intermediate of {@link MapBuilder#field(Accessor)} — expects a {@code .to(...)} or {@code
-   * .via(...)}.
-   */
-  public static final class FieldMapping<A, B, X> {
-
-    private final MapBuilder<A, B> builder;
-    private final String sourceField;
-
-    private FieldMapping(final MapBuilder<A, B> builder, final String sourceField) {
-      this.builder = builder;
-      this.sourceField = sourceField;
-    }
-
-    /** Complete the correspondence with a same-typed target field. */
-    public MapBuilder<A, B> to(final Accessor<B, X> targetGetter) {
-      return builder.link(new MapBuilder.Link(sourceField, methodNameOf(targetGetter), x -> x, y -> y));
-    }
-
-    /**
-     * Complete the correspondence with a target field of a different type, supplying both
-     * directions of the conversion. Keeps the overall mapping a bijection (composition-safe).
-     *
-     * <pre>{@code
-     * .field(UserEntity::createdAt).to(UserDto::createdAtIso, Instant::toString, Instant::parse)
-     * }</pre>
-     */
-    @SuppressWarnings("unchecked")
-    public <Y> MapBuilder<A, B> to(
-      final Accessor<B, Y> targetGetter,
-      final Function<? super X, ? extends Y> forward,
-      final Function<? super Y, ? extends X> backward
-    ) {
-      return builder.link(
-        new MapBuilder.Link(
-          sourceField,
-          methodNameOf(targetGetter),
-          x -> forward.apply((X) x),
-          y -> backward.apply((Y) y)
-        )
-      );
-    }
-
-    /**
-     * Map a nested record field through another {@link Mapper}. The nested mapper supplies both
-     * directions, so the correspondence stays bidirectional.
-     *
-     * <pre>{@code
-     * .field(UserEntity::address).via(UserDto::address, addressMapper)
-     * }</pre>
-     */
-    @SuppressWarnings("unchecked")
-    public <Y> MapBuilder<A, B> via(final Accessor<B, Y> targetGetter, final Mapper<X, Y> nested) {
-      return builder.link(
-        new MapBuilder.Link(
-          sourceField,
-          methodNameOf(targetGetter),
-          x -> nested.forward((X) x),
-          y -> nested.backward((Y) y)
-        )
-      );
-    }
-  }
-
-  /**
-   * A bidirectional record mapper produced by {@link MapBuilder#buildMapper()}. Beyond the
-   * conversion that {@link MapBuilder#build()} gives you, a {@code Mapper} retains the field links
-   * so it can apply a sparse {@link #patch} and be nested inside another mapping via {@link
-   * FieldMapping#via}.
-   */
-  public static final class Mapper<A, B> {
-
-    private final Iso<A, B> iso;
-    private final List<MapBuilder.Link> links;
-
-    private Mapper(final Iso<A, B> iso, final List<MapBuilder.Link> links, final Class<A> sourceType) {
-      this.iso = iso;
-      this.links = links;
-    }
-
-    /**
-     * Convert forward, {@code A → B}.
-     *
-     * <pre>{@code
-     * final var mapper = Telescope.map(UserEntity.class).to(UserDto.class).auto().buildMapper();
-     * final UserDto dto = mapper.read(entity);
-     * }</pre>
-     *
-     * For the reverse direction, or to thread the conversion through a longer path, use {@link
-     * #asTelescope()} (which exposes {@code set}/{@code update}/{@code then}); for a sparse
-     * overlay, use {@link #patch}.
-     */
-    public B read(final A a) {
-      return iso.to(a);
-    }
-
-    /**
-     * The mapper as a composable {@code Telescope<A, B>}, for threading the conversion through
-     * longer paths via {@link #then}.
-     *
-     * <pre>{@code
-     * Telescope.of(EntityPage.class)
-     *     .each(EntityPage::items)
-     *     .then(userMapper.asTelescope())
-     *     .field(UserDto::email)
-     *     .update(page, String::toLowerCase);
-     * }</pre>
-     */
-    public Telescope<A, B> asTelescope() {
-      return new Telescope<>(iso);
-    }
-
-    /**
-     * Sparse update: overlay the non-null fields of {@code patch} (a partially-populated target)
-     * onto {@code base}, leaving the rest of {@code base} untouched. Each present target field is
-     * run back through its link's reverse transform before being written to the source.
-     *
-     * <pre>{@code
-     * // dtoPatch has a new email, null everything else — only the email changes on the entity:
-     * UserEntity updated = userMapper.patch(entity, dtoPatch);
-     * }</pre>
-     */
-    public A patch(final A base, final B patch) {
-      var result = base;
-      for (final var l : links) {
-        final var targetValue = Records.read(patch, l.targetField());
-        if (targetValue != null) {
-          result = Records.with(result, l.sourceField(), l.backward().apply(targetValue));
-        }
-      }
-      return result;
-    }
-
-    B forward(final A a) {
-      return iso.to(a);
-    }
-
-    A backward(final B b) {
-      return iso.from(b);
-    }
   }
 
   /**
@@ -1237,6 +640,46 @@ public final class Telescope<S, A> {
   }
 
   /**
+   * Accumulate an edit through a <em>pre-built</em> telescope path and return a fresh identity
+   * {@code Telescope<S, S>} carrying the running chain — the multi-edit form that pairs with {@link
+   * #with(Function)} for inline paths and {@link #apply(Object)} for the terminal.
+   *
+   * <p>The natural shape when paths are reusable: declare each as a static {@code final
+   * Telescope<S, X>} value once, then list the operations cleanly without re-walking the navigation
+   * tree per edit:
+   *
+   * <pre>{@code
+   * static final Telescope<Company, String> EMAILS    = Telescope.of(Company.class)
+   *     .each(Company::departments).each(Department::teams).each(Team::users).field(User::email);
+   * static final Telescope<Company, String> DEPT_NAMES = Telescope.of(Company.class)
+   *     .each(Company::departments).field(Department::name);
+   *
+   * final Company done = Telescope.of(Company.class)
+   *     .update(EMAILS,     String::toLowerCase)
+   *     .update(DEPT_NAMES, String::trim)
+   *     .apply(company);
+   * }</pre>
+   *
+   * <p><b>Fully compile-checked.</b> {@code path} carries its leaf type {@code X}; {@code fn} must
+   * be {@code Function<X, X>} to match. A wrong-type function → compile error.
+   *
+   * <p>Java overload-resolves this against {@link #update(Object, Function)} by the first
+   * argument's type — a {@code Telescope} starts (or continues) a multi-edit chain; anything else
+   * is the single-shot terminal that returns {@code S} immediately. Mixes cleanly with {@link
+   * #with(Function)} in the same chain when some edits use inline paths and others use pre-built
+   * ones.
+   *
+   * @param path the pre-built telescope to navigate when this edit runs
+   * @param fn the per-leaf transformation
+   * @param <X> the focused leaf type for this edit (independent of any other edit's leaf type)
+   * @see #with(Function)
+   * @see #apply(Object)
+   */
+  public <X> Telescope<S, S> update(final Telescope<S, X> path, final Function<X, X> fn) {
+    return new Telescope<>(Iso.identity(), fieldOptics, chain.andThen(s -> path.update(s, fn)));
+  }
+
+  /**
    * Transform every focused value with access to its 0-based position in traversal order. The
    * lambda receives {@code (index, value)} and returns the new value. Useful for position-dependent
    * edits, e.g. "uppercase only the first match" or "prefix each with its index".
@@ -1540,7 +983,9 @@ public final class Telescope<S, A> {
   // counterpart exists on `other` are returned in order. A missing counterpart throws the
   // `onMissing`-built exception unless `dropUnmatched` is set. One place for the matching policy;
   // each caller keeps its own error wording via the factory.
-  private static List<String> matchedNames(
+  // Package-private — shared with the conversion-builder classes (BeanTo, MapBuilder) which live
+  // in sibling files in this same package.
+  static List<String> matchedNames(
     final String[] ownerNames,
     final Map<String, String> remap,
     final Class<?> other,
@@ -1558,7 +1003,9 @@ public final class Telescope<S, A> {
 
   private static final Map<Class<?>, String> METHOD_NAME_CACHE = new ConcurrentHashMap<>();
 
-  private static String methodNameOf(final Serializable lambda) {
+  // Package-private — shared with the conversion-builder classes (BeanTo, MapBuilder,
+  // FieldMapping, Mapper) which live in sibling files in this same package.
+  static String methodNameOf(final Serializable lambda) {
     return METHOD_NAME_CACHE.computeIfAbsent(lambda.getClass(), cls -> resolveMethodName(lambda));
   }
 
