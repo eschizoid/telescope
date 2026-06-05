@@ -7,8 +7,10 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
@@ -31,6 +33,13 @@ public final class Beans {
   private Beans() {}
 
   private static final Map<Class<?>, Map<String, Method>> GETTERS = new ConcurrentHashMap<>();
+  // WeakHashMap so a long-running JVM with classloader churn (servlet containers, OSGi, JRebel)
+  // doesn't accumulate stale Class<?> keys keeping their loaders alive. Synchronized wrap because
+  // WeakHashMap is not threadsafe; the lookup/compute race is benign — both threads would compute
+  // an equivalent writer.
+  private static final Map<Class<?>, BeanWriter<?>> AUTO_WRITER_CACHE = Collections.synchronizedMap(
+    new WeakHashMap<>()
+  );
 
   /**
    * Read a bean property by name via its {@code getX()} / {@code isX()} accessor. Throws if no
@@ -185,21 +194,62 @@ public final class Beans {
   /**
    * Pick a <em>name-based</em> write strategy for {@code cls} by probing in priority order: a
    * static {@code builder()}, then a no-arg constructor with setters, then a no-arg constructor
-   * with field injection. Used by the record-less POJO APIs ({@code Telescope.ofBean} / {@code
-   * mapBean}) where there is no canonical component order, so the positional {@link
-   * #constructorWriter} is not a candidate. Throws if none applies (e.g., an immutable
-   * all-args-only POJO).
+   * with field injection, then — as a last resort — a single public all-args constructor (compiled
+   * with {@code -parameters} so its arguments can be matched by name without positional ambiguity).
+   * The result is cached per class.
+   *
+   * <p>Used by both the record-less POJO APIs ({@link
+   * io.github.eschizoid.telescope.Telescope#ofBean(Class) Telescope.ofBean}) and by the deep
+   * mapping path when no explicit {@code writeBean} hint applies. Throws if none of the strategies
+   * applies (e.g., an immutable all-args-only POJO compiled without {@code -parameters}); the
+   * recommended escape is to declare a {@code writeBean(target, CONSTRUCTOR)} hint at the {@code
+   * Telescope.map(...)} call site.
    */
+  @SuppressWarnings("unchecked")
   public static <P> BeanWriter<P> autoWriter(final Class<P> cls) {
+    final var cached = (BeanWriter<P>) AUTO_WRITER_CACHE.get(cls);
+    if (cached != null) return cached;
+    final var computed = computeAutoWriter(cls);
+    AUTO_WRITER_CACHE.put(cls, computed);
+    return computed;
+  }
+
+  private static <P> BeanWriter<P> computeAutoWriter(final Class<P> cls) {
     if (hasStaticBuilder(cls)) return builderWriter(cls);
     if (hasNoArgConstructor(cls)) return hasAnySetter(cls) ? settersWriter(cls) : fieldsWriter(cls);
+    final var props = propertyNames(cls);
+    final var sole = solePublicConstructor(cls, props.length);
+    // Refuse to silently use positional fallback: getter-iteration order is not guaranteed to match
+    // constructor parameter order. Requiring -parameters yields named matching and eliminates the
+    // silent-data-shuffle hazard the explicit writeBean(...) hint accepts.
+    if (sole != null && allParameterNamesPresent(sole)) return constructorWriter(cls, props.length);
     throw new IllegalStateException(
       "No name-based write strategy for " +
         cls.getName() +
-        " — needs a static builder(), a no-arg constructor with setters, or a no-arg constructor (field injection). " +
-        "Immutable all-args-only POJOs aren't supported by the auto path; use a record, or the " +
-        "fromBean(...).viaConstructor() bridge where the record gives a canonical parameter order."
+        " — needs a static builder(), a no-arg constructor with setters, a no-arg constructor (field injection), " +
+        "or exactly one public constructor whose arity matches the property count (" +
+        props.length +
+        ") and was compiled with -parameters. " +
+        "For ambiguous multi-constructor POJOs or classes compiled without -parameters, declare an explicit " +
+        "writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site."
     );
+  }
+
+  private static <P> Constructor<P> solePublicConstructor(final Class<P> cls, final int arity) {
+    Constructor<P> found = null;
+    for (final var c : cls.getConstructors()) {
+      if (c.getParameterCount() != arity) continue;
+      if (found != null) return null; // ambiguous — auto path refuses
+      @SuppressWarnings("unchecked")
+      final var cast = (Constructor<P>) c;
+      found = cast;
+    }
+    return found;
+  }
+
+  private static boolean allParameterNamesPresent(final Constructor<?> ctor) {
+    for (final var p : ctor.getParameters()) if (!p.isNamePresent()) return false;
+    return true;
   }
 
   /**

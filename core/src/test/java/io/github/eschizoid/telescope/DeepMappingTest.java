@@ -2,25 +2,33 @@ package io.github.eschizoid.telescope;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.via;
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.BUILDER;
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.FIELDS;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
-import io.github.eschizoid.telescope.mapping.Mapping;
+import io.github.eschizoid.telescope.mapping.MapStep;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * Tests for the deep recursive {@link Telescope#map(Class, Class, Mapping[])} / {@link
- * Telescope#mapper(Class, Class, Mapping[])} factories — the "explore the academia boundaries"
+ * Tests for the deep recursive {@link Telescope#map(Class, Class, MapStep...)} / {@link
+ * Telescope#mapper(Class, Class, MapStep...)} factories — the "explore the academia boundaries"
  * shape. Each test exercises a different facet of the recursion: same-name copy, container
- * traversal at multiple depths, renames keyed by type pair applying at any depth, typed transforms,
- * nested mappers via {@code via}, and self-referencing structures (cycle handling).
+ * traversal at multiple depths (List, Set, Map, Optional — N-level nestable), renames keyed by type
+ * pair applying at any depth, typed transforms, nested mappers via {@code via}, per-target {@code
+ * writeBean} construction hints, and self-referencing structures (cycle handling).
  */
 class DeepMappingTest {
 
@@ -395,6 +403,297 @@ class DeepMappingTest {
         )
       );
       assertTrue(ex.getMessage().contains("duplicate"), ex.getMessage());
+    }
+  }
+
+  // ----- writeBean hint fixtures -----
+
+  // Immutable all-args POJO: no setters, no no-arg ctor, no builder. autoWriter without the new
+  // 4th rung would refuse; with the 4th rung (and -parameters compiled in) it auto-detects.
+  static final class ImmutablePojo {
+
+    private final String sku;
+    private final int qty;
+
+    public ImmutablePojo(final String sku, final int qty) {
+      this.sku = sku;
+      this.qty = qty;
+    }
+
+    public String getSku() {
+      return sku;
+    }
+
+    public int getQty() {
+      return qty;
+    }
+
+    @Override
+    public boolean equals(final Object o) {
+      return o instanceof ImmutablePojo p && Objects.equals(p.sku, sku) && p.qty == qty;
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(sku, qty);
+    }
+  }
+
+  record OrderRecord(String sku, int qty) {}
+
+  // A bean with both a builder AND a no-arg ctor + fields, so the precedence test
+  // (writeBean FIELDS over the autoWriter-chosen BUILDER) is observable.
+  static final class DualPojo {
+
+    private String name;
+    private int score;
+
+    public DualPojo() {}
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public int getScore() {
+      return score;
+    }
+
+    @Override
+    public boolean equals(final Object o) {
+      return o instanceof DualPojo p && Objects.equals(p.name, name) && p.score == score;
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(name, score);
+    }
+
+    static final class Builder {
+
+      // Mark the builder path: the resulting DualPojo's name has "[built]" appended. The fields-
+      // strategy path bypasses this entirely, so a FIELDS-hinted mapping yields "alice" while a
+      // BUILDER-hinted (or autoWriter-default) mapping yields "alice[built]".
+      private String name;
+      private int score;
+
+      public Builder name(final String n) {
+        this.name = n + "[built]";
+        return this;
+      }
+
+      public Builder score(final int s) {
+        this.score = s;
+        return this;
+      }
+
+      public DualPojo build() {
+        final var p = new DualPojo();
+        p.name = name;
+        p.score = score;
+        return p;
+      }
+    }
+  }
+
+  record DualRecord(String name, int score) {}
+
+  // POJO with no builder, no no-arg ctor, and TWO public constructors of matching arity →
+  // autoWriter
+  // CTOR fallback must refuse (ambiguous). With an explicit writeBean(...) hint it could be made to
+  // work — but the simpler test is that autoWriter refuses cleanly without a hint.
+  static final class AmbiguousCtorPojo {
+
+    private final String a;
+    private final String b;
+
+    public AmbiguousCtorPojo(final String a, final String b) {
+      this.a = a;
+      this.b = b;
+    }
+
+    // Decoy ctor of the same arity — auto fallback must reject.
+    public AmbiguousCtorPojo(final String a, final Integer ignoredSentinel) {
+      this.a = a;
+      this.b = String.valueOf(ignoredSentinel);
+    }
+
+    public String getA() {
+      return a;
+    }
+
+    public String getB() {
+      return b;
+    }
+  }
+
+  record AmbiguousRecord(String a, String b) {}
+
+  @Nested
+  @DisplayName("writeBean hints — explicit per-target construction strategy")
+  class WriteHints {
+
+    @Test
+    @DisplayName("CONSTRUCTOR hint constructs an immutable all-args-only POJO round-trip")
+    void constructorHintForImmutablePojo() {
+      final var mapper = Telescope.mapper(
+        OrderRecord.class,
+        ImmutablePojo.class,
+        writeBean(ImmutablePojo.class, CONSTRUCTOR)
+      );
+      final var src = new OrderRecord("SKU-1", 42);
+      final var pojo = mapper.read(src);
+      assertEquals("SKU-1", pojo.getSku());
+      assertEquals(42, pojo.getQty());
+      assertEquals(src, mapper.backward(pojo));
+    }
+
+    @Test
+    @DisplayName("autoWriter constructor fallback handles a same-arity unambiguous immutable POJO without a hint")
+    void autoWriterConstructorFallback() {
+      // No writeBean hint — the new 4th rung in Beans.autoWriter picks ConstructorWriter on its own
+      // because ImmutablePojo has exactly one public 2-arg ctor compiled with -parameters.
+      final var mapper = Telescope.mapper(OrderRecord.class, ImmutablePojo.class);
+      final var pojo = mapper.read(new OrderRecord("SKU-2", 7));
+      assertEquals("SKU-2", pojo.getSku());
+      assertEquals(7, pojo.getQty());
+    }
+
+    @Test
+    @DisplayName("FIELDS hint wins over autoWriter when target also has a builder")
+    void fieldsHintWinsOverBuilder() {
+      // DualPojo has BOTH a builder() (autoWriter would pick BuilderWriter) and writable fields.
+      // The FIELDS hint must bypass the builder entirely — observable because the builder mutates
+      // the name (appends "[built]"), so a fields path yields the raw value.
+      final var mapper = Telescope.mapper(DualRecord.class, DualPojo.class, writeBean(DualPojo.class, FIELDS));
+      final var pojo = mapper.read(new DualRecord("alice", 9));
+      assertEquals("alice", pojo.getName()); // not "alice[built]"
+      assertEquals(9, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("record-class hint is rejected at resolve time with a descriptive message")
+    void recordClassHintRejected() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.map(ImmutablePojo.class, OrderRecord.class, writeBean(OrderRecord.class, CONSTRUCTOR))
+      );
+      assertTrue(ex.getMessage().contains("record"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("duplicate hints for the same target class are rejected at resolve time")
+    void duplicateHintsRejected() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.map(
+          OrderRecord.class,
+          ImmutablePojo.class,
+          writeBean(ImmutablePojo.class, CONSTRUCTOR),
+          writeBean(ImmutablePojo.class, FIELDS)
+        )
+      );
+      assertTrue(ex.getMessage().contains("Duplicate"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("BUILDER hint on a class without a static builder() throws eagerly (not at first to())")
+    void incompatibleStrategyEager() {
+      assertThrows(IllegalStateException.class, () ->
+        Telescope.map(OrderRecord.class, ImmutablePojo.class, writeBean(ImmutablePojo.class, BUILDER))
+      );
+    }
+
+    @Test
+    @DisplayName("a hint whose target class is never reached during recursion is reported, not silently dropped")
+    void unusedHintRejected() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.map(OrderRecord.class, ImmutablePojo.class, writeBean(DualPojo.class, FIELDS))
+      );
+      assertTrue(ex.getMessage().contains("Unused"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("autoWriter throws cleanly for ambiguous multi-ctor POJO when no hint is supplied")
+    void ambiguousAutoFallbackRefuses() {
+      // resolve() returns successfully — the Iso is built lazily. The throw fires when
+      // Reflective.BEANS.construct runs (first iso.to() call) and Beans.autoWriter can't pick a
+      // strategy.
+      final var mapper = Telescope.mapper(AmbiguousRecord.class, AmbiguousCtorPojo.class);
+      final var ex = assertThrows(IllegalStateException.class, () -> mapper.read(new AmbiguousRecord("x", "y")));
+      assertTrue(
+        ex.getMessage().contains("name-based write strategy") || ex.getMessage().contains("writeBean"),
+        ex.getMessage()
+      );
+    }
+  }
+
+  // ----- Set + deeper-nesting fixtures -----
+
+  record TagE(String name) {}
+
+  record TagD(String name) {}
+
+  record TaggedE(Set<TagE> tags) {}
+
+  record TaggedD(Set<TagD> tags) {}
+
+  record SetOptE(Set<Optional<TagE>> items) {}
+
+  record SetOptD(Set<Optional<TagD>> items) {}
+
+  // List<Map<String, Set<Record>>> — four levels of mixed containers nesting a record leaf.
+  record FourLevelE(List<Map<String, Set<TagE>>> data) {}
+
+  record FourLevelD(List<Map<String, Set<TagD>>> data) {}
+
+  @Nested
+  @DisplayName("Set containers and N-level mixed nesting")
+  class SetAndDeepNesting {
+
+    @Test
+    @DisplayName("Set<Record> round-trips via Iso.liftSet")
+    void setOfRecord() {
+      final var mapper = Telescope.mapper(TaggedE.class, TaggedD.class);
+      final var src = new TaggedE(new LinkedHashSet<>(List.of(new TagE("red"), new TagE("blue"))));
+      final var dto = mapper.read(src);
+      assertEquals(Set.of(new TagD("red"), new TagD("blue")), dto.tags());
+      assertEquals(src, mapper.backward(dto));
+    }
+
+    @Test
+    @DisplayName("Set<Optional<Record>> works at two container levels (Set.equals semantics)")
+    void setOfOptional() {
+      // Set semantics: Optional.empty() is one element regardless of how many empties are added —
+      // the liftSet javadoc documents this. We assert via Set.equals, not multiset semantics.
+      final var mapper = Telescope.mapper(SetOptE.class, SetOptD.class);
+      final var src = new SetOptE(
+        new LinkedHashSet<>(List.of(Optional.of(new TagE("a")), Optional.empty(), Optional.of(new TagE("b"))))
+      );
+      final var dto = mapper.read(src);
+      assertEquals(Set.of(Optional.of(new TagD("a")), Optional.<TagD>empty(), Optional.of(new TagD("b"))), dto.items());
+      assertEquals(src, mapper.backward(dto));
+    }
+
+    @Test
+    @DisplayName("List<Map<K, Set<Record>>> resolves four nested container levels by construction")
+    void fourLevelMixedContainer() {
+      final var mapper = Telescope.mapper(FourLevelE.class, FourLevelD.class);
+      final var src = new FourLevelE(
+        List.of(
+          Map.of(
+            "alpha",
+            new LinkedHashSet<>(List.of(new TagE("x"), new TagE("y"))),
+            "beta",
+            new LinkedHashSet<>(List.of(new TagE("z")))
+          )
+        )
+      );
+      final var dto = mapper.read(src);
+      assertEquals(Set.of(new TagD("x"), new TagD("y")), dto.data().get(0).get("alpha"));
+      assertEquals(Set.of(new TagD("z")), dto.data().get(0).get("beta"));
+      assertEquals(src, mapper.backward(dto));
     }
   }
 }

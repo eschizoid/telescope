@@ -40,7 +40,7 @@
  * <p>{@code .field(...)} navigation rebuilds via a record's canonical constructor or a bean's
  * auto-detected write strategy. The deep recursive mapping factory {@link
  * io.github.eschizoid.telescope.Telescope#map(Class, Class,
- * io.github.eschizoid.telescope.mapping.Mapping[])} handles record↔record, POJO↔POJO, and any
+ * io.github.eschizoid.telescope.mapping.MapStep...)} handles record↔record, POJO↔POJO, and any
  * cross-paradigm mix at any depth — the per-side {@code Reflective} is picked independently from
  * each class. The annotation {@link io.github.eschizoid.telescope.annotations.Bridge} is the
  * reflection-free, compile-checked counterpart (annotate the record to have the bridge generated

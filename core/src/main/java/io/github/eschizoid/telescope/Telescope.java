@@ -15,7 +15,9 @@ import io.github.eschizoid.telescope.internal.optics.instances.EitherK;
 import io.github.eschizoid.telescope.internal.optics.instances.OptionalK;
 import io.github.eschizoid.telescope.internal.optics.instances.ValidatedK;
 import io.github.eschizoid.telescope.mapping.DeepMap;
+import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
+import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
@@ -223,7 +225,7 @@ public final class Telescope<S, A> {
    * that is always safe; with mutable POJOs the new and old object share those sub-objects, so
    * treat the shared parts as effectively immutable (don't mutate them afterward). For
    * POJO&harr;record or POJO&harr;POJO <em>conversion</em>, use {@link #map(Class, Class,
-   * io.github.eschizoid.telescope.mapping.Mapping[])} — the same deep recursive factory handles
+   * io.github.eschizoid.telescope.mapping.MapStep...)} — the same deep recursive factory handles
    * both kinds and any cross-paradigm mix.
    */
   public static <P> Telescope<P, P> ofBean(final Class<P> pojoClass) {
@@ -280,10 +282,10 @@ public final class Telescope<S, A> {
    *
    * <p>For a field-by-field declarative mapping between two records or POJOs (no hand-written
    * conversion functions), use {@link #map(Class, Class,
-   * io.github.eschizoid.telescope.mapping.Mapping[])} — it handles both record↔record, POJO↔POJO,
+   * io.github.eschizoid.telescope.mapping.MapStep...)} — it handles both record↔record, POJO↔POJO,
    * and any cross-paradigm mix at any depth.
    *
-   * @see #map(Class, Class, io.github.eschizoid.telescope.mapping.Mapping[])
+   * @see #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)
    */
   public static <A> From<A> from(final Class<A> source) {
     return new From<>();
@@ -292,12 +294,14 @@ public final class Telescope<S, A> {
   /**
    * Deep recursive mapping: pass the source/target root classes up front (either side may be a
    * record or a POJO — {@link io.github.eschizoid.telescope.internal.Reflective} dispatches per
-   * side), then varargs of overrides. Recursion does the rest — same-name components identity-map,
-   * nested records/POJOs recurse, {@code List<X>↔List<Y>} / {@code Map<K, X>↔Map<K, Y>} / {@code
-   * Optional<X>↔Optional<Y>} lift the inner Iso through the container automatically. Override rows
-   * are typed by their accessors and apply <em>wherever</em> recursion lands on the matching {@code
-   * (sourceClass, targetClass)} pair — a single {@code to(UserEntity::name, UserDto::fullName)} at
-   * the top of a multi-level mapping affects every User↔UserDto encounter in the tree.
+   * side), then varargs of {@link MapStep} rows. Recursion does the rest — same-name components
+   * identity-map, nested records/POJOs recurse, {@code List<X>↔List<Y>} / {@code Set<X>↔Set<Y>} /
+   * {@code Map<K, X>↔Map<K, Y>} / {@code Optional<X>↔Optional<Y>} lift the inner Iso through the
+   * container automatically. Containers nest to any depth ({@code List<Map<K, Set<X>>>} resolves by
+   * construction). Override rows are typed by their accessors and apply <em>wherever</em> recursion
+   * lands on the matching {@code (sourceClass, targetClass)} pair — a single {@code
+   * to(UserEntity::name, UserDto::fullName)} at the top of a multi-level mapping affects every
+   * User↔UserDto encounter in the tree.
    *
    * <pre>{@code
    * import static io.github.eschizoid.telescope.mapping.Mapping.to;
@@ -309,7 +313,7 @@ public final class Telescope<S, A> {
    * // Everything else — Address, nested Lists, Map values, Optional<User> — figures itself out.
    * }</pre>
    *
-   * <p><b>Same-name 1-liner.</b> No overrides means pure deep auto-recursion:
+   * <p><b>Same-name 1-liner.</b> No rows means pure deep auto-recursion:
    *
    * <pre>{@code
    * Telescope.map(UserEntity.class, UserDto.class);   // recurses; every component lines up by name
@@ -319,46 +323,43 @@ public final class Telescope<S, A> {
    * Optional<User>}) terminate naturally — the recursion caches the in-progress type pair and
    * re-uses it instead of descending infinitely.
    *
-   * <p><b>Override rows accepted.</b> {@link Mapping#to(Accessor, Accessor) to(src, tgt)}, {@link
-   * Mapping#to(Accessor, Accessor, java.util.function.Function, java.util.function.Function)
-   * to(src, tgt, fwd, bwd)}, {@link Mapping#via(Accessor, Accessor, Mapper) via(src, tgt, mapper)}.
-   * That's it — recursion handles every "auto" case, so no explicit auto row exists.
+   * <p><b>Row kinds accepted.</b>
+   *
+   * <ul>
+   *   <li>{@link Mapping#to(Accessor, Accessor) to(src, tgt)} — same-typed rename
+   *   <li>{@link Mapping#to(Accessor, Accessor, java.util.function.Function,
+   *       java.util.function.Function) to(src, tgt, fwd, bwd)} — typed transform
+   *   <li>{@link Mapping#via(Accessor, Accessor, Mapper) via(src, tgt, mapper)} — nested mapper
+   *   <li>{@link WriteHint#writeBean(Class, WriteHint.WriteStrategy) writeBean(target, strategy)} —
+   *       per-target write-strategy override (e.g. force {@code CONSTRUCTOR} for an immutable
+   *       all-args-only POJO that {@code Beans.autoWriter} refuses)
+   * </ul>
    *
    * @param source the source root class — record or POJO (root of the recursion)
    * @param target the target root class — record or POJO (root of the recursion)
-   * @param overrides rename / typed-transform / nested-mapper rows; applied wherever recursion
-   *     encounters their {@code (sourceClass, targetClass)} pair
+   * @param steps {@code Mapping} field overrides and/or {@code WriteHint} construction directives
    * @param <A> the source root type
    * @param <B> the target root type
-   * @see #mapper(Class, Class, Mapping[])
+   * @see #mapper(Class, Class, MapStep...)
    * @see Mapping
+   * @see WriteHint
    * @see DeepMap
    */
-  // No @SafeVarargs needed: Mapping<?, ?> is reifiable (wildcards), so this varargs method does
+  // No @SafeVarargs needed: MapStep is reifiable (no type parameter), so this varargs method does
   // not produce heap-pollution warnings for callers.
-  public static <A, B> Telescope<A, B> map(
-    final Class<A> source,
-    final Class<B> target,
-    final Mapping<?, ?>... overrides
-  ) {
-    return new Telescope<>(DeepMap.resolve(source, target, overrides));
+  public static <A, B> Telescope<A, B> map(final Class<A> source, final Class<B> target, final MapStep... steps) {
+    return new Telescope<>(DeepMap.resolve(source, target, steps));
   }
 
   /**
-   * {@link Mapper} sibling of {@link #map(Class, Class, Mapping[])} — same deep recursion, but
+   * {@link Mapper} sibling of {@link #map(Class, Class, MapStep...)} — same deep recursion, but
    * returns a {@code Mapper<A, B>} (exposes {@link Mapper#patch} for sparse overlays at the top
    * level and is nestable in another mapping via {@link Mapping#via(Accessor, Accessor, Mapper)}).
    *
-   * @see #map(Class, Class, Mapping[])
+   * @see #map(Class, Class, MapStep...)
    */
-  // No @SafeVarargs needed: Mapping<?, ?> is reifiable (wildcards), so this varargs method does
-  // not produce heap-pollution warnings for callers.
-  public static <A, B> Mapper<A, B> mapper(
-    final Class<A> source,
-    final Class<B> target,
-    final Mapping<?, ?>... overrides
-  ) {
-    return DeepMap.resolveMapper(source, target, overrides);
+  public static <A, B> Mapper<A, B> mapper(final Class<A> source, final Class<B> target, final MapStep... steps) {
+    return DeepMap.resolveMapper(source, target, steps);
   }
 
   /**
@@ -547,7 +548,7 @@ public final class Telescope<S, A> {
   /**
    * Compose this telescope with another via the lattice's {@code .then}. Lets you build a path in
    * pieces and stitch them together, and is how reusable conversions ({@link #from}, {@link
-   * #map(Class, Class, io.github.eschizoid.telescope.mapping.Mapping[])}) get threaded into a
+   * #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)}) get threaded into a
    * longer path.
    *
    * <pre>{@code

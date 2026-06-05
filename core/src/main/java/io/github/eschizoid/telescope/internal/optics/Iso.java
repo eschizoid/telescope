@@ -1,9 +1,12 @@
 package io.github.eschizoid.telescope.internal.optics;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -111,8 +114,8 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    */
   static <X, Y> Iso<List<X>, List<Y>> liftList(final Iso<X, Y> element) {
     return of(
-      xs -> xs == null ? null : xs.stream().map(element::to).collect(Collectors.toList()),
-      ys -> ys == null ? null : ys.stream().map(element::from).collect(Collectors.toList())
+      xs -> xs == null ? null : xs.stream().map(element::to).collect(Collectors.toCollection(ArrayList::new)),
+      ys -> ys == null ? null : ys.stream().map(element::from).collect(Collectors.toCollection(ArrayList::new))
     );
   }
 
@@ -124,6 +127,24 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    */
   static <X, Y> Iso<Optional<X>, Optional<Y>> liftOptional(final Iso<X, Y> element) {
     return of(ox -> ox == null ? null : ox.map(element::to), oy -> oy == null ? null : oy.map(element::from));
+  }
+
+  /**
+   * Lift an element-level {@code Iso<X, Y>} into a {@code Set}-level {@code Iso<Set<X>, Set<Y>>}.
+   * Output is a {@link LinkedHashSet} preserving forward-pass iteration order. A {@code null} set
+   * round-trips to {@code null}.
+   *
+   * <p><b>Lawfulness caveat.</b> Set semantics are non-injective for element types whose {@code
+   * equals} collapses distinct values (e.g. {@code Set<Optional<X>>} where every {@code
+   * Optional.empty()} compares equal). Round-trip equality holds under {@code Set.equals} on the
+   * resulting set, not on the multiset of source elements. Use {@link #liftList} when element
+   * identity must survive.
+   */
+  static <X, Y> Iso<Set<X>, Set<Y>> liftSet(final Iso<X, Y> element) {
+    return of(
+      xs -> xs == null ? null : xs.stream().map(element::to).collect(Collectors.toCollection(LinkedHashSet::new)),
+      ys -> ys == null ? null : ys.stream().map(element::from).collect(Collectors.toCollection(LinkedHashSet::new))
+    );
   }
 
   /**

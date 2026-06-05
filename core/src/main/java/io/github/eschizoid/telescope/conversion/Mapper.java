@@ -9,7 +9,7 @@ import java.util.function.Function;
 
 /**
  * A bidirectional mapper produced by the deep recursive factory {@link Telescope#mapper(Class,
- * Class, io.github.eschizoid.telescope.mapping.Mapping[])}. Wraps an {@link Iso} for the
+ * Class, io.github.eschizoid.telescope.mapping.MapStep...)}. Wraps an {@link Iso} for the
  * forward/backward conversion and (optionally) a per-target-component patch table for sparse {@link
  * #patch} overlays.
  *

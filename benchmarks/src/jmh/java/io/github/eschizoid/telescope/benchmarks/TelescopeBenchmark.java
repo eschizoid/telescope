@@ -252,15 +252,11 @@ public class TelescopeBenchmark {
     lensCity = companyDepartment.then(departmentAddress).then(addressCity);
 
     // (d) reflection-based record-to-record mapper (renames name -> fullName across the boundary).
-    userMapper = Telescope.map(UserEntity.class)
-      .to(UserDto.class)
-      .field(UserEntity::id)
-      .to(UserDto::id)
-      .field(UserEntity::email)
-      .to(UserDto::email)
-      .field(UserEntity::name)
-      .to(UserDto::fullName)
-      .build();
+    userMapper = Telescope.map(
+      UserEntity.class,
+      UserDto.class,
+      io.github.eschizoid.telescope.mapping.Mapping.to(UserEntity::name, UserDto::fullName)
+    );
 
     // POJO mirror of the record tree.
     final var addr = new AddressBean();
@@ -291,11 +287,11 @@ public class TelescopeBenchmark {
       .field(DepartmentBean::getAddress)
       .field(AddressBean::getCity);
 
-    // (f) POJO<->POJO conversion.
-    mapBeanConv = Telescope.mapBean(UserBeanA.class).to(UserBeanB.class).build();
+    // (f) POJO<->POJO conversion via the unified deep-map factory.
+    mapBeanConv = Telescope.map(UserBeanA.class, UserBeanB.class);
 
-    // (g) POJO->record bridge (forward read uses getters; viaFields picks the reverse strategy).
-    fromBeanConv = Telescope.fromBean(UserBeanA.class).to(UserEntity.class).viaFields();
+    // (g) POJO->record bridge via the unified deep-map factory.
+    fromBeanConv = Telescope.map(UserBeanA.class, UserEntity.class);
   }
 
   // ---- (a) deep-field update via reflection ----------------------------------------------------

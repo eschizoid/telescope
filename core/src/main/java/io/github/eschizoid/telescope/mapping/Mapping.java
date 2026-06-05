@@ -7,7 +7,7 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.function.Function;
 
 /**
- * One field correspondence in a {@link Telescope#map(Class, Class, Mapping[])} call — supplies an
+ * One field correspondence in a {@link Telescope#map(Class, Class, MapStep...)} call — supplies an
  * override for a specific {@code (sourceClass, targetClass)} type pair anywhere in the deep
  * recursive traversal. Build with the static factories ({@link #to}, {@link #via}) — intended to be
  * static-imported so the call site reads as a list of rows.
@@ -27,14 +27,14 @@ import java.util.function.Function;
  *
  * <p><b>Type-pair keying.</b> Each {@link #to to(srcAcc, tgtAcc)} / {@link #via via(srcAcc, tgtAcc,
  * mapper)} row carries the declaring classes of its accessors via {@code SerializedLambda}. {@link
- * Telescope#map(Class, Class, Mapping[])} keys overrides by {@code (sourceClass, targetClass)} so a
- * single row applies wherever the recursion lands on that pair — top level or N levels deep.
+ * Telescope#map(Class, Class, MapStep...)} keys overrides by {@code (sourceClass, targetClass)} so
+ * a single row applies wherever the recursion lands on that pair — top level or N levels deep.
  *
  * <p><b>Permitted impls.</b> Sealed over three package-private records in sibling files in this
  * package — {@link SameTypedTo}, {@link TypedTransformTo}, {@link Via}. Users construct via the
  * static factories below; the record types are not public API.
  */
-public sealed interface Mapping<A, B> permits SameTypedTo, TypedTransformTo, Via {
+public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, TypedTransformTo, Via {
   /** Same-typed correspondence: {@code src↔tgt}, both with leaf type {@code X}. Identity. */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Accessor<B, X> tgt) {
     return new SameTypedTo<>(src, tgt);
@@ -73,8 +73,8 @@ public sealed interface Mapping<A, B> permits SameTypedTo, TypedTransformTo, Via
 
   /**
    * Source class this row keys against (the declaring class of {@code src}'s accessor, recovered
-   * via {@code SerializedLambda}). Used by {@link Telescope#map(Class, Class, Mapping[])} to decide
-   * which type pairs this override applies to.
+   * via {@code SerializedLambda}). Used by {@link Telescope#map(Class, Class, MapStep...)} to
+   * decide which type pairs this override applies to.
    */
   Class<A> sourceClass();
 
