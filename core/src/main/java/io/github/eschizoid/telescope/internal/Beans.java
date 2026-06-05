@@ -7,10 +7,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
@@ -33,13 +31,17 @@ public final class Beans {
   private Beans() {}
 
   private static final Map<Class<?>, Map<String, Method>> GETTERS = new ConcurrentHashMap<>();
-  // WeakHashMap so a long-running JVM with classloader churn (servlet containers, OSGi, JRebel)
-  // doesn't accumulate stale Class<?> keys keeping their loaders alive. Synchronized wrap because
-  // WeakHashMap is not threadsafe; the lookup/compute race is benign — both threads would compute
-  // an equivalent writer.
-  private static final Map<Class<?>, BeanWriter<?>> AUTO_WRITER_CACHE = Collections.synchronizedMap(
-    new WeakHashMap<>()
-  );
+  // ClassValue is the JDK-provided cache that genuinely permits class unloading: the entry is held
+  // off-heap from the Class, so a cached BeanWriter (which strongly references reflective members
+  // and therefore the Class itself) cannot prevent its key from becoming unreachable. WeakHashMap
+  // wouldn't work here — its strong values would chain back to the weak key, keeping the entry
+  // alive. ClassValue is threadsafe by construction.
+  private static final ClassValue<BeanWriter<?>> AUTO_WRITER_CACHE = new ClassValue<>() {
+    @Override
+    protected BeanWriter<?> computeValue(final Class<?> type) {
+      return computeAutoWriter(type);
+    }
+  };
 
   /**
    * Read a bean property by name via its {@code getX()} / {@code isX()} accessor. Throws if no
@@ -207,11 +209,7 @@ public final class Beans {
    */
   @SuppressWarnings("unchecked")
   public static <P> BeanWriter<P> autoWriter(final Class<P> cls) {
-    final var cached = (BeanWriter<P>) AUTO_WRITER_CACHE.get(cls);
-    if (cached != null) return cached;
-    final var computed = computeAutoWriter(cls);
-    AUTO_WRITER_CACHE.put(cls, computed);
-    return computed;
+    return (BeanWriter<P>) AUTO_WRITER_CACHE.get(cls);
   }
 
   private static <P> BeanWriter<P> computeAutoWriter(final Class<P> cls) {
@@ -221,17 +219,20 @@ public final class Beans {
     final var sole = solePublicConstructor(cls, props.length);
     // Refuse to silently use positional fallback: getter-iteration order is not guaranteed to match
     // constructor parameter order. Requiring -parameters yields named matching and eliminates the
-    // silent-data-shuffle hazard the explicit writeBean(...) hint accepts.
-    if (sole != null && allParameterNamesPresent(sole)) return constructorWriter(cls, props.length);
+    // silent-data-shuffle hazard the explicit writeBean(...) hint accepts. Also require every ctor
+    // parameter name to appear in the getter-derived property set — otherwise `getURL()` → property
+    // `"URL"` mismatched against a ctor parameter named `"url"` would silently pass null into the
+    // constructor under the lookup `valueByName("url")`.
+    if (sole != null && allParameterNamesMatchProperties(sole, props)) return constructorWriter(cls, props.length);
     throw new IllegalStateException(
       "No name-based write strategy for " +
         cls.getName() +
         " — needs a static builder(), a no-arg constructor with setters, a no-arg constructor (field injection), " +
         "or exactly one public constructor whose arity matches the property count (" +
         props.length +
-        ") and was compiled with -parameters. " +
-        "For ambiguous multi-constructor POJOs or classes compiled without -parameters, declare an explicit " +
-        "writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site."
+        "), was compiled with -parameters, and whose parameter names line up with the getter-derived properties. " +
+        "For ambiguous multi-constructor POJOs, classes compiled without -parameters, or constructor/getter " +
+        "name mismatches, declare an explicit writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site."
     );
   }
 
@@ -247,8 +248,12 @@ public final class Beans {
     return found;
   }
 
-  private static boolean allParameterNamesPresent(final Constructor<?> ctor) {
-    for (final var p : ctor.getParameters()) if (!p.isNamePresent()) return false;
+  private static boolean allParameterNamesMatchProperties(final Constructor<?> ctor, final String[] propertyNames) {
+    final var props = new java.util.HashSet<>(java.util.Arrays.asList(propertyNames));
+    for (final var p : ctor.getParameters()) {
+      if (!p.isNamePresent()) return false;
+      if (!props.contains(p.getName())) return false;
+    }
     return true;
   }
 

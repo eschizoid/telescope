@@ -11,7 +11,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
-import io.github.eschizoid.telescope.mapping.MapStep;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -23,12 +22,14 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * Tests for the deep recursive {@link Telescope#map(Class, Class, MapStep...)} / {@link
- * Telescope#mapper(Class, Class, MapStep...)} factories — the "explore the academia boundaries"
- * shape. Each test exercises a different facet of the recursion: same-name copy, container
- * traversal at multiple depths (List, Set, Map, Optional — N-level nestable), renames keyed by type
- * pair applying at any depth, typed transforms, nested mappers via {@code via}, per-target {@code
- * writeBean} construction hints, and self-referencing structures (cycle handling).
+ * Tests for the deep recursive {@link Telescope#map(Class, Class,
+ * io.github.eschizoid.telescope.mapping.MapStep...)} / {@link Telescope#mapper(Class, Class,
+ * io.github.eschizoid.telescope.mapping.MapStep...)} factories — the "explore the academia
+ * boundaries" shape. Each test exercises a different facet of the recursion: same-name copy,
+ * container traversal at multiple depths (List, Set, Map, Optional — N-level nestable), renames
+ * keyed by type pair applying at any depth, typed transforms, nested mappers via {@code via},
+ * per-target {@code writeBean} construction hints, and self-referencing structures (cycle
+ * handling).
  */
 class DeepMappingTest {
 

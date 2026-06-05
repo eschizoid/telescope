@@ -23,9 +23,11 @@ import java.util.UUID;
  * Engine for {@link Telescope#map(Class, Class, MapStep...)} / {@link Telescope#mapper(Class,
  * Class, MapStep...)}. Walks the source/target structure pair-by-pair and caches an {@link Iso} per
  * {@code (sourceClass, targetClass)} pair encountered — same-named scalar components identity-link
- * via {@link Iso#identity()}, nested records/beans recurse, {@code List<X>↔List<Y>} / {@code Map<K,
- * X>↔Map<K, Y>} / {@code Optional<X>↔Optional<Y>} lift the inner element {@code Iso} through the
- * container via {@link Iso#liftList}, {@link Iso#liftOptional}, {@link Iso#liftMapValues}.
+ * via {@link Iso#identity()}, nested records/beans recurse, and same-kind container components
+ * ({@code List<X>↔List<Y>} / {@code Set<X>↔Set<Y>} / {@code Map<K, X>↔Map<K, Y>} / {@code
+ * Optional<X>↔Optional<Y>}) lift the inner element {@code Iso} through the container via {@link
+ * Iso#liftList}, {@link Iso#liftSet}, {@link Iso#liftMapValues}, {@link Iso#liftOptional}.
+ * Containers nest to any depth — the recursion peels one shape per pass and dispatches the rest.
  *
  * <p><b>Lattice-first.</b> The cache value is {@link Iso} directly — the lattice primitive. No
  * intermediate Object-typed plumbing, no parallel link tables. Per-record assembly composes
@@ -124,33 +126,48 @@ public final class DeepMap {
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Beans.BeanWriter<?> writerFor(final WriteHint<?> hint) {
     final var cls = (Class) hint.targetClass();
-    return switch (hint.strategy()) {
-      case BUILDER -> Beans.builderWriter(cls);
-      case SETTERS -> Beans.settersWriter(cls);
-      case FIELDS -> Beans.fieldsWriter(cls);
-      case CONSTRUCTOR -> Beans.constructorWriter(cls, Beans.propertyNames(cls).length);
-    };
+    try {
+      return switch (hint.strategy()) {
+        case BUILDER -> Beans.builderWriter(cls);
+        case SETTERS -> Beans.settersWriter(cls);
+        case FIELDS -> Beans.fieldsWriter(cls);
+        case CONSTRUCTOR -> Beans.constructorWriter(cls, Beans.propertyNames(cls).length);
+      };
+    } catch (final IllegalStateException e) {
+      // The underlying *Writer constructors throw with messages that still reference the demolished
+      // fromBean(...).viaX() API surface. Rewrap with a writeBean(...)-shaped message so the user
+      // sees the actually-callable API in the error, keeping the original as the cause.
+      throw new IllegalStateException(
+        "writeBean(" + hint.targetClass().getName() + ", " + hint.strategy() + ") is not applicable: " + e.getMessage(),
+        e
+      );
+    }
   }
 
   /**
-   * Reject any {@code writeBean(...)} hint whose target class was never encountered as a target
-   * during recursion. Silently swallowed hints (typo in the class literal, refactored class) would
-   * mean the user believes they've forced a strategy but the default fires instead — catch that at
-   * resolve time rather than letting it slip into production.
+   * Reject any {@code writeBean(...)} hint whose target class was never encountered <em>on either
+   * side</em> of a resolved type pair. Source-side classes are constructed during {@code
+   * Mapper.backward} / {@code Iso.from}, so a hint on a bean source root (e.g. {@code map(Bean,
+   * Record, writeBean(Bean, ...))}) is genuinely used — it governs the backward direction. Silently
+   * swallowed hints (typo in the class literal, refactored class) still surface here at resolve
+   * time rather than slipping into production.
    */
   private static void validateAllHintsConsumed(
     final Map<Class<?>, Beans.BeanWriter<?>> hintMap,
     final Map<TypePair, Iso<?, ?>> cache
   ) {
     if (hintMap.isEmpty()) return;
-    final var seenTargets = new HashSet<Class<?>>();
-    for (final var pair : cache.keySet()) seenTargets.add(pair.target);
+    final var seen = new HashSet<Class<?>>();
+    for (final var pair : cache.keySet()) {
+      seen.add(pair.source);
+      seen.add(pair.target);
+    }
     final var unused = new ArrayList<String>();
-    for (final var hintCls : hintMap.keySet()) if (!seenTargets.contains(hintCls)) unused.add(hintCls.getName());
+    for (final var hintCls : hintMap.keySet()) if (!seen.contains(hintCls)) unused.add(hintCls.getName());
     if (!unused.isEmpty()) throw new IllegalArgumentException(
-      "Unused writeBean hints — targets never encountered during deep-mapping recursion: " +
+      "Unused writeBean hints — classes never encountered during deep-mapping recursion: " +
         String.join(", ", unused) +
-        ". Remove the row, or verify the class is actually reached by the source structure."
+        ". Remove the row, or verify the class is actually reached by the source/target structure."
     );
   }
 
