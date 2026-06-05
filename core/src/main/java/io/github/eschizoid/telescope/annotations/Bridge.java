@@ -28,10 +28,10 @@ import java.lang.annotation.Target;
  * sides — the generated top-level {@code *Bridge} class cannot name a nested type's constructor.
  *
  * <p>This is the reflection-free, compile-checked counterpart to the runtime {@link
- * io.github.eschizoid.telescope.Telescope#map(Class)} / {@link
- * io.github.eschizoid.telescope.Telescope#mapBean(Class)} / {@link
- * io.github.eschizoid.telescope.Telescope#fromBean(Class)}. For renames or per-field transforms
- * (which can't be expressed in an annotation), use those runtime forms instead.
+ * io.github.eschizoid.telescope.Telescope#map(Class, Class,
+ * io.github.eschizoid.telescope.mapping.Mapping[])} — that single factory handles record↔record,
+ * POJO↔POJO, and POJO↔record at any depth. For renames or per-field transforms (which can't be
+ * expressed in an annotation), use the runtime form instead.
  *
  * <pre>{@code
  * // Source — the entity points at the DTO it bridges to:
@@ -49,9 +49,8 @@ import java.lang.annotation.Target;
  * UserDto dto = UserEntityBridge.BRIDGE.read(entity);
  * }</pre>
  *
- * @see io.github.eschizoid.telescope.Telescope#map(Class)
- * @see io.github.eschizoid.telescope.Telescope#mapBean(Class)
- * @see io.github.eschizoid.telescope.Telescope#fromBean(Class)
+ * @see io.github.eschizoid.telescope.Telescope#map(Class, Class,
+ *     io.github.eschizoid.telescope.mapping.Mapping[])
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)

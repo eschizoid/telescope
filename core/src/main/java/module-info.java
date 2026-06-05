@@ -16,4 +16,6 @@
 module io.github.eschizoid.telescope {
   exports io.github.eschizoid.telescope;
   exports io.github.eschizoid.telescope.annotations;
+  exports io.github.eschizoid.telescope.conversion;
+  exports io.github.eschizoid.telescope.mapping;
 }

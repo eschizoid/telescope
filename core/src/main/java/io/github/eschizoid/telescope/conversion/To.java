@@ -1,5 +1,6 @@
-package io.github.eschizoid.telescope;
+package io.github.eschizoid.telescope.conversion;
 
+import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.util.function.Function;
 
@@ -9,7 +10,7 @@ import java.util.function.Function;
  */
 public final class To<A, B> {
 
-  To() {}
+  public To() {}
 
   /**
    * Supply both directions of the conversion. {@code forward} converts {@code A → B}; {@code
@@ -22,6 +23,6 @@ public final class To<A, B> {
     final Function<? super A, ? extends B> forward,
     final Function<? super B, ? extends A> backward
   ) {
-    return new Telescope<>(Iso.of(forward, backward));
+    return Telescope.wrap(Iso.of(forward, backward));
   }
 }

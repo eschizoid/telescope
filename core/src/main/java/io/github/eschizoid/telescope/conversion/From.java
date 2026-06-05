@@ -1,4 +1,6 @@
-package io.github.eschizoid.telescope;
+package io.github.eschizoid.telescope.conversion;
+
+import io.github.eschizoid.telescope.Telescope;
 
 /**
  * Intermediate of {@link Telescope#from(Class)} — call {@link #to(Class)} to bind the target type
@@ -6,7 +8,7 @@ package io.github.eschizoid.telescope;
  */
 public final class From<A> {
 
-  From() {}
+  public From() {}
 
   public <B> To<A, B> to(final Class<B> target) {
     return new To<>();
