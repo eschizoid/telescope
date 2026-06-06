@@ -30,12 +30,19 @@ public final class Beans {
 
   private Beans() {}
 
-  private static final Map<Class<?>, Map<String, Method>> GETTERS = new ConcurrentHashMap<>();
   // ClassValue is the JDK-provided cache that genuinely permits class unloading: the entry is held
-  // off-heap from the Class, so a cached BeanWriter (which strongly references reflective members
-  // and therefore the Class itself) cannot prevent its key from becoming unreachable. WeakHashMap
+  // off-heap from the Class, so a cached value (which strongly references reflective members and
+  // therefore the Class itself) cannot prevent its key from becoming unreachable. WeakHashMap
   // wouldn't work here — its strong values would chain back to the weak key, keeping the entry
-  // alive. ClassValue is threadsafe by construction.
+  // alive. ClassValue is threadsafe by construction. Both the per-class getter map and the
+  // auto-writer use it for the same reason — keep classloader-unload behavior consistent.
+  private static final ClassValue<Map<String, Method>> GETTERS = new ClassValue<>() {
+    @Override
+    protected Map<String, Method> computeValue(final Class<?> type) {
+      return scanGetters(type);
+    }
+  };
+
   private static final ClassValue<BeanWriter<?>> AUTO_WRITER_CACHE = new ClassValue<>() {
     @Override
     protected BeanWriter<?> computeValue(final Class<?> type) {
@@ -87,7 +94,7 @@ public final class Beans {
   }
 
   private static Map<String, Method> getters(final Class<?> cls) {
-    return GETTERS.computeIfAbsent(cls, Beans::scanGetters);
+    return GETTERS.get(cls);
   }
 
   private static Map<String, Method> scanGetters(final Class<?> cls) {
@@ -213,6 +220,28 @@ public final class Beans {
   }
 
   private static <P> BeanWriter<P> computeAutoWriter(final Class<P> cls) {
+    // Each *Writer constructor still throws IllegalStateException with messages referencing the
+    // demolished fromBean(...).viaX() APIs (kept for source compatibility inside the writer
+    // classes). When autoWriter surfaces those at the public Telescope.map(...) layer, rewrite the
+    // message to point at the current API. The original exception becomes the cause.
+    try {
+      return computeAutoWriterUnsafe(cls);
+    } catch (final IllegalStateException e) {
+      final var msg = e.getMessage();
+      if (msg != null && msg.contains("fromBean")) throw new IllegalStateException(
+        "Auto write-strategy detection for " +
+          cls.getName() +
+          " selected a strategy whose underlying writer rejected the class: " +
+          msg.replaceAll("fromBean\\(\\.\\.\\.\\)\\.via(\\w+)\\(\\)", "writeBean(targetClass, $1)") +
+          " Either fix the class shape (add a builder() / no-arg ctor / etc.) or declare an explicit " +
+          "writeBean(targetClass, strategy) hint at the Telescope.map(...) call site.",
+        e
+      );
+      throw e;
+    }
+  }
+
+  private static <P> BeanWriter<P> computeAutoWriterUnsafe(final Class<P> cls) {
     if (hasStaticBuilder(cls)) return builderWriter(cls);
     if (hasNoArgConstructor(cls)) return hasAnySetter(cls) ? settersWriter(cls) : fieldsWriter(cls);
     final var props = propertyNames(cls);
