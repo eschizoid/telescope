@@ -86,15 +86,26 @@ public final class Beans {
 
   /**
    * Read a bean property by name via its {@code getX()} / {@code isX()} accessor. Throws if no
-   * getter matches {@code name}. Thin convenience over {@link #getter}.
+   * getter matches {@code name}.
+   *
+   * <p>Invokes the cached {@link Method} directly rather than routing through {@link #getter} — the
+   * latter allocates a capturing lambda per call, which matters in hot loops (e.g. {@code
+   * Reflective.structuralIso(...).from(...)} reads every property of a target).
    *
    * <pre>{@code
    * final var name = (String) Beans.readProperty(userPojo, "name"); // userPojo.getName()
    * }</pre>
    */
-  @SuppressWarnings({ "rawtypes", "unchecked" })
   public static Object readProperty(final Object pojo, final String name) {
-    return getter((Class) pojo.getClass(), name).get(pojo);
+    final var method = getters(pojo.getClass()).get(name);
+    if (method == null) throw new IllegalArgumentException(
+      "No getter for property '" + name + "' on " + pojo.getClass().getName()
+    );
+    try {
+      return method.invoke(pojo);
+    } catch (final ReflectiveOperationException e) {
+      throw new RuntimeException("Failed to read property '" + name + "' on " + pojo.getClass().getName(), e);
+    }
   }
 
   /**

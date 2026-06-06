@@ -77,9 +77,12 @@ public sealed class Telescope<
   final Traversal<S, A> optic;
   // How accessor-based navigation (field/each/eachValue/whenPresent) turns a method reference into
   // a field Lens: records read/rebuild via the canonical constructor, beans via getters +
-  // rebuild-via-strategy (see ofBean). Propagated to derived telescopes. Package-private so the
-  // typed container subclasses (ListPath, SetPath, MapPath, OptionalPath) at the bottom of this
-  // file can read it when threading state into the descended Telescope.
+  // rebuild-via-strategy (see ofBean). Propagated to derived telescopes. Package-private (not
+  // private) because the typed container subclasses (ListPath, SetPath, MapPath, OptionalPath)
+  // at the bottom of this file access this as an INHERITED field via `this.fieldOptics` — Java's
+  // nested-class private-access rule lets a nested class read a private field through an
+  // enclosing instance reference, but NOT through inheritance, so private here would break the
+  // subclass bodies. Package-private is the narrowest visibility that compiles.
   final FieldOptics fieldOptics;
   // Accumulated pending edits — appended to by {@link #with(Function)}, reset to identity by the
   // static factories, run by {@link #apply(Object)}. Threaded through every navigation method so a

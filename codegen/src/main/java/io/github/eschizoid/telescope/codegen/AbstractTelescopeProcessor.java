@@ -744,8 +744,19 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       case "set" -> "Telescope.<R, " + elementType + ">asSet(path).each()";
       case "optional" -> "Telescope.<R, " + elementType + ">asOptional(path).present()";
       case "map" -> "Telescope.asMap(path).values()";
-      default -> "path.then(Telescope.wrap(io.github.eschizoid.telescope.internal.optics.collections." +
-      "Traversals.eachIterable()))";
+      // Iterable case: declared leaf is some `? extends Iterable<E>` shape (e.g. Iterable<E>,
+      // Collection<E>, a custom user iterable). Java's type inference can't always work
+      // backward
+      // from path's leaf type to `eachIterable()`'s bounded type parameter, so we pin both type
+      // arguments to `Telescope.wrap(...)` explicitly — that way the produced
+      // `Telescope<containerType, elementType>` matches the `path.then(...)` left side
+      // regardless
+      // of whether the declared container is `Iterable`, `Collection`, or any other subtype.
+      default -> "path.then(Telescope.<" +
+      containerType +
+      ", " +
+      elementType +
+      ">wrap(io.github.eschizoid.telescope.internal.optics.collections.Traversals.eachIterable()))";
     };
     final var elementBody = elementIsNavigable ? "new " + elementType + "Path<>(" + stepCore + ")" : stepCore;
 
