@@ -121,9 +121,10 @@ That's the library. No `Iso`, `Lens`, `Prism`, `Affine`, `Traversal`, `Getter`, 
 
 - Not a MapStruct competitor. MapStruct owns compile-time bean mapping. For flat `Entity → Dto` work, write a static
   method or use MapStruct.
-- Not a fuzzy auto-mapper. `.auto()` matches fields by exact name and type, nothing more — no fuzzy name heuristics, no
-  flattening, no inferred relationships (that's ModelMapper / Dozer territory, and they lost to MapStruct for good
-  reasons). Anything that isn't an exact match you declare yourself with `.field(...).to(...)`.
+- Not a fuzzy auto-mapper. `Telescope.map(...)` matches fields by exact name and type, nothing more — no fuzzy name
+  heuristics, no flattening, no inferred relationships (that's ModelMapper / Dozer territory, and they lost to MapStruct
+  for good reasons). Anything that isn't an exact name match you declare yourself with a `Mapping.to(srcAcc, tgtAcc)` or
+  `Mapping.via(srcAcc, tgtAcc, nestedMapper)` row.
 - Not category theory. Internally, it's the same idea as a Monocle "Traversal" (get-many + modify-many), but you never
   have to type those words.
 
@@ -222,7 +223,8 @@ place or **convert** between two types?
 | **Reflection-free** (compile-checked) | `@Focus` (navigate)                           | `@BeanFocus` (navigate)              | `@Bridge` (convert, any pair)                  |
 
 Conversions are bidirectional `Iso`s, so any cell in the middle row composes into a longer navigation path with
-`.then(...)`. Mismatched names and dropped fields are handled by `.rename(...)` / `.ignoreUnmatched()`, covered under
+`.then(...)`. Mismatched names get an explicit `Mapping.to(srcAccessor, tgtAccessor)` row in the `Telescope.map(...)`
+call; classes the auto-detect can't handle get a `WriteHint.writeBean(target, strategy)` row. Both are covered under
 [Working with POJOs](#working-with-pojos).
 
 ### Build
@@ -548,10 +550,11 @@ Telescope.of(EntityPage.class)
 
 ### Deep recursive mapping (`Telescope.map(A.class, B.class, to(...)...)`)
 
-The recommended shape for record-to-record conversion: pass the source and target record classes up front, then varargs
-of override rows. **Recursion is the default.** Same-named components identity-map, nested records recurse,
-`List<X>↔List<Y>` / `Map<K, X>↔Map<K, Y>` / `Optional<X>↔Optional<Y>` lift the inner-element Iso through the container
-automatically. You only spell the _differences_.
+The recommended shape for record-to-record (and POJO↔POJO, and cross-paradigm) conversion: pass the source and target
+classes up front, then varargs of `MapStep` rows. **Recursion is the default.** Same-named components identity-map,
+nested records / POJOs recurse, `List<X>↔List<Y>` / `Set<X>↔Set<Y>` / `Map<K, X>↔Map<K, Y>` / `Optional<X>↔Optional<Y>`
+lift the inner-element Iso through the container automatically (to any depth — `List<Map<K, Set<X>>>` works by
+construction). You only spell the _differences_.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
