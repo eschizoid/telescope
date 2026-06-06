@@ -1,6 +1,8 @@
 package io.github.eschizoid.telescope.internal;
 
+import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.lang.reflect.Type;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -40,6 +42,32 @@ public interface Reflective {
 
   /** Construct a fresh instance by reading each component's value from the function. */
   Object construct(Class<?> cls, Function<String, Object> valueByName);
+
+  /**
+   * The class as a structural {@link Iso} mediating between a name-keyed {@code Map<String,
+   * Object>} and a concrete instance of {@code T}. Forward: {@link #construct} from the map.
+   * Backward: read every component / property of the instance into a fresh {@link LinkedHashMap}
+   * keyed by the structural name.
+   *
+   * <p>This is the lattice-routed shape of "rebuild an instance from named values" and "decompose
+   * an instance into named values" — the two operations {@link
+   * io.github.eschizoid.telescope.mapping.DeepMap DeepMap} previously performed inline in the body
+   * of {@code assembleIso}. Lifting them to an {@link Iso} lets {@code assembleIso} express the
+   * per-pair {@code Iso<S, T>} as the composition {@code
+   * srcReader.reverse().then(middle).then(tgtBuilder)} — pure lattice {@code .then()}, no manual
+   * function-body construction.
+   */
+  default <T> Iso<Map<String, Object>, T> structuralIso(final Class<T> cls) {
+    final var names = names(cls);
+    return Iso.of(
+      map -> cls.cast(construct(cls, map::get)),
+      instance -> {
+        final var out = new LinkedHashMap<String, Object>();
+        for (final var name : names) out.put(name, read(instance, name));
+        return out;
+      }
+    );
+  }
 
   /**
    * Translate a raw method name from an {@code Accessor} (recovered via {@code SerializedLambda})

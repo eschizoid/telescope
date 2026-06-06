@@ -30,8 +30,12 @@ import java.util.UUID;
  * Containers nest to any depth — the recursion peels one shape per pass and dispatches the rest.
  *
  * <p><b>Lattice-first.</b> The cache value is {@link Iso} directly — the lattice primitive. No
- * intermediate Object-typed plumbing, no parallel link tables. Per-record assembly composes
- * per-component Isos through {@link Reflective#construct} on each side.
+ * intermediate Object-typed plumbing, no parallel link tables. Per-pair assembly composes three
+ * Isos via {@code .then(...)}: source-side {@link Reflective#structuralIso} (reversed) decomposes
+ * {@code S} into a name-keyed map, a remap step renames keys and applies per-field Isos, and
+ * target-side {@link Reflective#structuralIso} builds {@code T} from the remapped map. The
+ * structural decomposition is itself an {@link Iso}, so the bidirection falls out by lattice
+ * composition without an inline lambda body.
  *
  * <p><b>Records and beans, uniformly.</b> Each side of each type pair picks its {@link Reflective}
  * independently via {@link Reflective#of(Class)}. A single deep-mapping call can mix and match
@@ -125,23 +129,16 @@ public final class DeepMap {
 
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Beans.BeanWriter<?> writerFor(final WriteHint<?> hint) {
+    // Each *Writer constructor throws IllegalStateException with a writeBean(class, STRATEGY)-
+    // shaped message when its prerequisite is missing, so no rewrap is needed — the underlying
+    // exception already names the actual API the user called.
     final var cls = (Class) hint.targetClass();
-    try {
-      return switch (hint.strategy()) {
-        case BUILDER -> Beans.builderWriter(cls);
-        case SETTERS -> Beans.settersWriter(cls);
-        case FIELDS -> Beans.fieldsWriter(cls);
-        case CONSTRUCTOR -> Beans.constructorWriter(cls, Beans.propertyNames(cls).length);
-      };
-    } catch (final IllegalStateException e) {
-      // The underlying *Writer constructors throw with messages that still reference the demolished
-      // fromBean(...).viaX() API surface. Rewrap with a writeBean(...)-shaped message so the user
-      // sees the actually-callable API in the error, keeping the original as the cause.
-      throw new IllegalStateException(
-        "writeBean(" + hint.targetClass().getName() + ", " + hint.strategy() + ") is not applicable: " + e.getMessage(),
-        e
-      );
-    }
+    return switch (hint.strategy()) {
+      case BUILDER -> Beans.builderWriter(cls);
+      case SETTERS -> Beans.settersWriter(cls);
+      case FIELDS -> Beans.fieldsWriter(cls);
+      case CONSTRUCTOR -> Beans.constructorWriter(cls, Beans.propertyNames(cls).length);
+    };
   }
 
   /**
@@ -402,15 +399,26 @@ public final class DeepMap {
     return !UUID.class.isAssignableFrom(cls);
   }
 
-  // ---------- Iso assembly ----------
+  // ---------- Iso assembly (lattice-routed) ----------
 
   /**
-   * Build the per-pair {@code Iso<S, T>} by walking each side's "construct" through its {@link
-   * Reflective} and running the per-component Iso forward (for {@code S → T}) or backward (for
-   * {@code T → S}). The step tables are name-keyed so this works regardless of component
-   * declaration order.
+   * Build the per-pair {@code Iso<S, T>} as a three-step lattice composition:
+   *
+   * <ol>
+   *   <li>{@code srcReader = srcRefl.structuralIso(source).reverse()} — peels S into a {@code
+   *       Map<String, Object>} keyed by source field names.
+   *   <li>{@code remap} — transforms that source-keyed map into a target-keyed map by walking the
+   *       step table: rename keys ({@code sourceName} → {@code targetName}) and apply each
+   *       per-field {@code Iso} forward/backward.
+   *   <li>{@code tgtBuilder = tgtRefl.structuralIso(target)} — builds T from the target-keyed map.
+   * </ol>
+   *
+   * <p>The composed {@code Iso<S, T>} is {@code srcReader.then(remap).then(tgtBuilder)} — pure
+   * {@code .then(...)} all the way down. No inline forward/backward lambda bodies; the
+   * structural-decomposition primitive lives on {@link Reflective#structuralIso} and the per-field
+   * {@link Iso}s are already lattice values.
    */
-  @SuppressWarnings("unchecked")
+  @SuppressWarnings({ "unchecked", "rawtypes" })
   private static <S, T> Iso<S, T> assembleIso(
     final Class<S> source,
     final Class<T> target,
@@ -419,22 +427,51 @@ public final class DeepMap {
     final Map<String, FieldStep> byTargetName,
     final Map<String, FieldStep> bySourceName
   ) {
+    final Iso<S, Map<String, Object>> srcReader = ((Iso) srcRefl.structuralIso(source)).reverse();
+    final Iso<Map<String, Object>, T> tgtBuilder = tgtRefl.structuralIso(target);
+    final Iso<Map<String, Object>, Map<String, Object>> remap = remapIso(byTargetName, bySourceName);
+    return nullable(srcReader.then(remap).then(tgtBuilder));
+  }
+
+  /**
+   * Key + value remap between a source-keyed and a target-keyed structural map. Forward: for each
+   * target name, look up the source name via the step table and apply the per-field {@code Iso}
+   * forward; key the result under the target name. Backward: mirror image, with per-field {@code
+   * Iso.from} and source-name keying.
+   */
+  @SuppressWarnings("unchecked")
+  private static Iso<Map<String, Object>, Map<String, Object>> remapIso(
+    final Map<String, FieldStep> byTargetName,
+    final Map<String, FieldStep> bySourceName
+  ) {
     return Iso.of(
-      s -> {
-        if (s == null) return null;
-        return (T) tgtRefl.construct(target, tName -> {
-          final var step = byTargetName.get(tName);
-          return ((Iso<Object, Object>) step.iso).to(srcRefl.read(s, step.sourceName));
-        });
+      srcMap -> {
+        final var out = new LinkedHashMap<String, Object>();
+        for (final var entry : byTargetName.entrySet()) {
+          final var step = entry.getValue();
+          out.put(entry.getKey(), ((Iso<Object, Object>) step.iso).to(srcMap.get(step.sourceName)));
+        }
+        return out;
       },
-      t -> {
-        if (t == null) return null;
-        return (S) srcRefl.construct(source, sName -> {
-          final var step = bySourceName.get(sName);
-          return ((Iso<Object, Object>) step.iso).from(tgtRefl.read(t, step.targetName));
-        });
+      tgtMap -> {
+        final var out = new LinkedHashMap<String, Object>();
+        for (final var entry : bySourceName.entrySet()) {
+          final var step = entry.getValue();
+          out.put(entry.getKey(), ((Iso<Object, Object>) step.iso).from(tgtMap.get(step.targetName)));
+        }
+        return out;
       }
     );
+  }
+
+  /**
+   * Wrap an {@link Iso} so {@code null} on either side short-circuits to {@code null}. The
+   * structural-iso decomposition would otherwise NPE on {@code structuralIso(...).from(null)} (the
+   * read loop dereferences the instance); preserving the prior null-pass-through behavior at the
+   * outermost layer keeps DeepMap drop-in compatible with the prior {@code assembleIso}.
+   */
+  private static <A, B> Iso<A, B> nullable(final Iso<A, B> inner) {
+    return Iso.of(a -> a == null ? null : inner.to(a), b -> b == null ? null : inner.from(b));
   }
 
   // ---------- Cycle-safe cache reader ----------
