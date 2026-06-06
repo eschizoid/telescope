@@ -56,7 +56,7 @@ class FocusProcessorTest {
       final var generated = compilation.generated().get("demo.PersonPath");
       assertNotNull(generated, () -> "PersonPath not generated; saw " + compilation.generated().keySet());
 
-      // Parameterised class + the import header are emitted by writeInstanceClass.
+      // Parameterized class + the import header are emitted by writeInstanceClass.
       assertTrue(generated.contains("public final class PersonPath<R>"), generated);
       assertTrue(generated.contains("import io.github.eschizoid.telescope.Telescope;"), generated);
 
