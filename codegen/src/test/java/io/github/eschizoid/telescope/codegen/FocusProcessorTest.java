@@ -56,7 +56,7 @@ class FocusProcessorTest {
       final var generated = compilation.generated().get("demo.PersonPath");
       assertNotNull(generated, () -> "PersonPath not generated; saw " + compilation.generated().keySet());
 
-      // Parameterised class + the import header are emitted by writeInstanceClass.
+      // Parameterized class + the import header are emitted by writeInstanceClass.
       assertTrue(generated.contains("public final class PersonPath<R>"), generated);
       assertTrue(generated.contains("import io.github.eschizoid.telescope.Telescope;"), generated);
 
@@ -222,9 +222,10 @@ class FocusProcessorTest {
       assertNotNull(step, () -> "TeamMembersStep not generated; saw " + compilation.generated().keySet());
       assertTrue(step.contains("public final class TeamMembersStep<R>"), step);
       assertTrue(step.contains("public Telescope<R, List<demo.Member>> get()"), step);
-      // each() returns the element's Path (Member is a record).
+      // each() returns the element's Path (Member is a record). The body uses the typed
+      // Telescope.asList(path).each() factory — no runtime container dispatch, all lattice.
       assertTrue(step.contains("public demo.MemberPath<R> each()"), step);
-      assertTrue(step.contains("path.<demo.Member>each()"), step);
+      assertTrue(step.contains("Telescope.<R, demo.Member>asList(path).each()"), step);
 
       // The Path itself routes the members() method to the Step.
       final var path = compilation.generated().get("demo.TeamPath");

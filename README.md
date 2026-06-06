@@ -110,7 +110,7 @@ final User moved = Telescope.ofBean(User.class)
   .update(user, String::toUpperCase); // new User; `user` untouched
 ```
 
-Prefer to stay in records? Bridge a POJO to one with `fromBean` and navigate that instead — see
+Prefer to stay in records? Convert a POJO with `Telescope.map(Pojo.class, Record.class, ...)` and navigate that — see
 [Working with POJOs](#working-with-pojos).
 
 That's the library. No `Iso`, `Lens`, `Prism`, `Affine`, `Traversal`, `Getter`, `Setter`, `Fold` in user-facing code.
@@ -121,9 +121,10 @@ That's the library. No `Iso`, `Lens`, `Prism`, `Affine`, `Traversal`, `Getter`, 
 
 - Not a MapStruct competitor. MapStruct owns compile-time bean mapping. For flat `Entity → Dto` work, write a static
   method or use MapStruct.
-- Not a fuzzy auto-mapper. `.auto()` matches fields by exact name and type, nothing more — no fuzzy name heuristics, no
-  flattening, no inferred relationships (that's ModelMapper / Dozer territory, and they lost to MapStruct for good
-  reasons). Anything that isn't an exact match you declare yourself with `.field(...).to(...)`.
+- Not a fuzzy auto-mapper. `Telescope.map(...)` matches fields by exact name and type, nothing more — no fuzzy name
+  heuristics, no flattening, no inferred relationships (that's ModelMapper / Dozer territory, and they lost to MapStruct
+  for good reasons). Anything that isn't an exact name match you declare yourself with a `Mapping.to(srcAcc, tgtAcc)` or
+  `Mapping.via(srcAcc, tgtAcc, nestedMapper)` row.
 - Not category theory. Internally, it's the same idea as a Monocle "Traversal" (get-many + modify-many), but you never
   have to type those words.
 
@@ -222,28 +223,30 @@ place or **convert** between two types?
 | **Reflection-free** (compile-checked) | `@Focus` (navigate)                           | `@BeanFocus` (navigate)              | `@Bridge` (convert, any pair)                  |
 
 Conversions are bidirectional `Iso`s, so any cell in the middle row composes into a longer navigation path with
-`.then(...)`. Mismatched names and dropped fields are handled by `.rename(...)` / `.ignoreUnmatched()`, covered under
+`.then(...)`. Mismatched names get an explicit `Mapping.to(srcAccessor, tgtAccessor)` row in the `Telescope.map(...)`
+call; classes the auto-detect can't handle get a `WriteHint.writeBean(target, strategy)` row. Both are covered under
 [Working with POJOs](#working-with-pojos).
 
 ### Build
 
-| Method                                              | What it does                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Telescope.of(Class<S>)`                            | Start at the root type.                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `Telescope.lens(getter, setter)`                    | Build a single-focus telescope directly, no reflection. Used by `@Focus` codegen; handy for hot paths.                                                                                                                                                                                                                                                                                                                           |
-| `Telescope.from(A).to(B).using(fwd, back)`          | Build a `Telescope<A, B>` backed by an `Iso` — bidirectional type conversion that composes into longer paths.                                                                                                                                                                                                                                                                                                                    |
-| `Telescope.map(A.class, B.class, Mapping<?, ?>...)` | **Recommended.** Deep recursive mapping for any combination of records and POJOs (record↔record, POJO↔POJO, cross-paradigm at any depth). Same-name components identity-map, nested records/beans recurse, `List`/`Map`/`Optional` lift the inner Iso through the container automatically. Override rows (`to`, `via`) apply at any depth where their type pair appears. Sibling `Telescope.mapper(...)` returns `Mapper<A, B>`. |
-| `Telescope.ofBean(Class<P>)`                        | Start a native POJO telescope — `.field`/`.each` navigate the bean directly, rebuilding via strategy (see [Working with POJOs](#working-with-pojos)).                                                                                                                                                                                                                                                                            |
-| `.field(Class::accessor)`                           | Descend into a record field via method reference. **Compile-checked.**                                                                                                                                                                                                                                                                                                                                                           |
-| `.fieldByName(String)`                              | Descend by field name — the runtime escape hatch for late-binding (config-driven paths). **Runtime-checked:** wrong name → runtime error.                                                                                                                                                                                                                                                                                        |
-| `.fieldByName(String, Class<B>)`                    | Same as above with an inline type witness for cleaner `var` inference. The `Class<B>` is inference sugar, **not validated** against the actual field.                                                                                                                                                                                                                                                                            |
-| `.each(Class::collectionAccessor)`                  | Descend into a `List`/`Set`/`Iterable` field and broadcast over elements. Element type inferred from the method ref. **Compile-checked.**                                                                                                                                                                                                                                                                                        |
-| `.each()` (no-arg)                                  | Broadcast over elements when you already hold a `Telescope<S, SomeContainer>` — also the only form that works for primitive arrays (`int[]`, etc.). **Runtime-checked:** non-container focus → runtime error.                                                                                                                                                                                                                    |
-| `.eachValue(Class::mapAccessor)`                    | Like `each`, but for `Map` values (keys preserved).                                                                                                                                                                                                                                                                                                                                                                              |
-| `.whenPresent(Class::optionalAccessor)`             | Like `each`, but for `Optional` — no-op if empty.                                                                                                                                                                                                                                                                                                                                                                                |
-| `.as(Class)`                                        | Narrow to a sealed-type case. Non-matching values pass through.                                                                                                                                                                                                                                                                                                                                                                  |
-| `.filter(Predicate)`                                | Restrict to elements matching the predicate.                                                                                                                                                                                                                                                                                                                                                                                     |
-| `.then(otherTelescope)`                             | Compose two telescopes.                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Method                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Telescope.of(Class<S>)`                                    | Start at the root type.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `Telescope.lens(getter, setter)`                            | Build a single-focus telescope directly, no reflection. Used by `@Focus` codegen; handy for hot paths.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `Telescope.from(A).to(B).using(fwd, back)`                  | Build a `Telescope<A, B>` backed by an `Iso` — bidirectional type conversion that composes into longer paths.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `Telescope.map(A.class, B.class, MapStep...)`               | **Recommended.** Deep recursive mapping for any combination of records and POJOs (record↔record, POJO↔POJO, cross-paradigm at any depth). Same-name components identity-map, nested records/beans recurse, `List`/`Set`/`Map`/`Optional` lift the inner Iso through the container automatically. Override rows (`Mapping.to`, `Mapping.via`) and write-strategy hints (`WriteHint.writeBean(target, strategy)`) apply at any depth where their type pair appears. Sibling `Telescope.mapper(...)` returns `Mapper<A, B>`. |
+| `Telescope.ofBean(Class<P>)`                                | Start a native POJO telescope — `.field`/`.each` navigate the bean directly, rebuilding via strategy (see [Working with POJOs](#working-with-pojos)).                                                                                                                                                                                                                                                                                                                                                                     |
+| `.field(Class::accessor)`                                   | Descend into a record field via method reference. **Compile-checked.**                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `.fieldByName(String)`                                      | Descend by field name — the runtime escape hatch for late-binding (config-driven paths). **Runtime-checked:** wrong name → runtime error.                                                                                                                                                                                                                                                                                                                                                                                 |
+| `.fieldByName(String, Class<B>)`                            | Same as above with an inline type witness for cleaner `var` inference. The `Class<B>` is inference sugar, **not validated** against the actual field.                                                                                                                                                                                                                                                                                                                                                                     |
+| `.each(Class::collectionAccessor)`                          | Descend into a `List`/`Set`/`Iterable` field and broadcast over elements. Element type inferred from the method ref. **Compile-checked.**                                                                                                                                                                                                                                                                                                                                                                                 |
+| `.list(Class::accessor)` / `.set` / `.map` / `.optional`    | Typed-container variants: keep the container type for later traversal. Return `ListPath<S, X>` / `SetPath<S, X>` / `MapPath<S, K, V>` / `OptionalPath<S, X>` — sealed subclasses of `Telescope` whose typed terminal (`.each()` / `.values()` / `.present()`) descends into elements via pure lattice composition. **Compile-checked, no runtime dispatch.**                                                                                                                                                              |
+| `Telescope.asList(path)` / `asSet` / `asMap` / `asOptional` | Promote a pre-built `Telescope<S, List<X>>` (or `Set`/`Map`/`Optional`) into the typed subclass so the compile-checked terminal becomes available. Useful when composing path fragments.                                                                                                                                                                                                                                                                                                                                  |
+| `.eachValue(Class::mapAccessor)`                            | Like `each`, but for `Map` values (keys preserved).                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `.whenPresent(Class::optionalAccessor)`                     | Like `each`, but for `Optional` — no-op if empty.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `.as(Class)`                                                | Narrow to a sealed-type case. Non-matching values pass through.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `.filter(Predicate)`                                        | Restrict to elements matching the predicate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `.then(otherTelescope)`                                     | Compose two telescopes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ### Read
 
@@ -345,6 +348,38 @@ record Index(Map<String, Integer> byKey) {}
 final Telescope<Index, Integer> values = Telescope.of(Index.class).eachValue(Index::byKey);
 
 values.update(index, v -> v * 10);
+```
+
+### Typed container leaves (pre-built fragments)
+
+When you want a path that ends _at_ the container (not at its elements), use the typed `.list(Class::accessor)` /
+`.set(...)` / `.map(...)` / `.optional(...)` instance methods. They return narrower subclasses (`ListPath`, `SetPath`,
+`MapPath`, `OptionalPath`) whose typed terminal step (`.each()` / `.values()` / `.present()`) descends into elements
+with zero runtime container dispatch — pure lattice composition, fully compile-checked.
+
+```java
+record Box(List<String> tags) {}
+
+// Build the list-typed path once; descend on demand.
+final ListPath<Box, String> tags = Telescope.of(Box.class).list(Box::tags);
+final Telescope<Box, String> elements = tags.each(); // typed .each() — compile-checked
+
+elements.update(box, String::toUpperCase);
+
+// Set / Map / Optional follow the same shape.
+record Cart(Set<Item> items) {}
+
+final SetPath<Cart, Item> items = Telescope.of(Cart.class).set(Cart::items);
+items.each().field(Item::sku).update(cart, String::toUpperCase);
+```
+
+For pre-built paths from elsewhere — composed `Telescope.then(...)` fragments, return types of helper methods, etc. —
+promote them with `Telescope.asList(...)` / `.asSet(...)` / `.asMap(...)` / `.asOptional(...)` so the typed terminal
+becomes available:
+
+```java
+final Telescope<Company, List<Department>> raw = ...; // built somewhere else
+Telescope.asList(raw).each().field(Department::name).update(co, String::toLowerCase);
 ```
 
 ### Indexed traversal
@@ -515,10 +550,11 @@ Telescope.of(EntityPage.class)
 
 ### Deep recursive mapping (`Telescope.map(A.class, B.class, to(...)...)`)
 
-The recommended shape for record-to-record conversion: pass the source and target record classes up front, then varargs
-of override rows. **Recursion is the default.** Same-named components identity-map, nested records recurse,
-`List<X>↔List<Y>` / `Map<K, X>↔Map<K, Y>` / `Optional<X>↔Optional<Y>` lift the inner-element Iso through the container
-automatically. You only spell the _differences_.
+The recommended shape for record-to-record (and POJO↔POJO, and cross-paradigm) conversion: pass the source and target
+classes up front, then varargs of `MapStep` rows. **Recursion is the default.** Same-named components identity-map,
+nested records / POJOs recurse, `List<X>↔List<Y>` / `Set<X>↔Set<Y>` / `Map<K, X>↔Map<K, Y>` / `Optional<X>↔Optional<Y>`
+lift the inner-element Iso through the container automatically (to any depth — `List<Map<K, Set<X>>>` works by
+construction). You only spell the _differences_.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
@@ -580,103 +616,121 @@ same-shape container rule.
 
 ## Working with POJOs
 
-Telescope's core is records-only, but JavaBeans-style POJOs (Hibernate entities, Lombok `@Data`, any mutable bean) have
-two routes: **convert** a POJO to/from a record (or another POJO) and operate on the result, or **navigate it natively**
-with `ofBean`. Either way updates are immutable — nothing you pass in is mutated.
+Telescope's deep-mapping factory handles any combination of records and POJOs through one entry point. The same
+`Telescope.map(A.class, B.class, ...)` call covers record↔record, POJO↔POJO, and the cross-paradigm record↔POJO mix at
+any depth — the engine picks per side whether to drive the canonical constructor (records) or `Beans.autoWriter` (POJOs)
+at every type pair the recursion encounters. The alternative is to navigate the POJO directly with
+`Telescope.ofBean(...)`. Either way updates are immutable.
 
-### Convert — bridges and mappers
+### Convert — `Telescope.map` / `Telescope.mapper`
 
-**`fromBean` — POJO ⇄ record, runtime.** Matches the record's components to the POJO's getters by name; you pick how the
-reverse (record → POJO) direction rebuilds the bean.
+**Unified deep mapping.** Pass the two root classes plus any override / hint rows; recursion does the rest. Same-name
+components identity-map, nested records/POJOs recurse, `List`/`Set`/`Map`/`Optional` lift the inner Iso through the
+container automatically (to any depth — `List<Map<K, Set<X>>>` resolves by construction). The result is a
+`Telescope<A, B>` (an `Iso`), so it composes with anything else.
 
 ```java
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.via;
+
 class LegacyUser {
   /* getId(), getEmail(), getName() + a no-arg ctor / all-args ctor / builder() */
 }
 
 record UserRecord(String id, String email, String name) {}
 
-// pick the reverse strategy at the terminal call:
-final Telescope<LegacyUser, UserRecord> bridge = Telescope.fromBean(LegacyUser.class).to(UserRecord.class).viaFields(); // no-arg ctor + field injection
+// Same-name 1-liner — every component lines up by getter/component name.
+final Telescope<LegacyUser, UserRecord> bridge = Telescope.map(LegacyUser.class, UserRecord.class);
 
-//                                                                                          .viaConstructor(); // all-args ctor, in component order
-//                                                                                          .viaBuilder();     // static builder()
+UserRecord rec = bridge.read(legacyUser); // forward
 
-UserRecord rec = bridge.read(legacyUser); // forward:  POJO   -> record
-
-LegacyUser back = bridge.set(legacyUser, rec); // reverse: record -> POJO
+LegacyUser back = bridge.set(legacyUser, rec); // backward
 ```
 
-The result is a `Telescope<LegacyUser, UserRecord>` (an `Iso`), so it composes. The common shape is traversing a
-collection of POJOs that hangs off a record:
+**Renames and transforms.** When names differ, supply `Mapping.to(srcAcc, tgtAcc)`; for typed transforms,
+`Mapping.to(srcAcc, tgtAcc, forward, backward)`; for pre-built nested mappers, `Mapping.via(srcAcc, tgtAcc, mapper)`.
+Each row is keyed by the declaring class of its accessors via `SerializedLambda`, so a single row applies wherever the
+recursion lands on that type pair — top level or N levels deep.
 
 ```java
-Telescope.of(Page.class)            // Page is a record holding List<LegacyUser>
-        .each(Page::items)
-        .then(bridge)               // each POJO ↔ record at this hop
-        .field(UserRecord::email)
-        .update(page, String::toLowerCase);
+final Telescope<AccountBean, AccountRecord> bridge = Telescope.map(
+  AccountBean.class,
+  AccountRecord.class,
+  to(AccountBean::getName, AccountRecord::displayName), // rename
+  to(EventBean::getYear, EventRecord::year, Integer::toString, Integer::parseInt)
+); // typed transform
 ```
 
-**Nested collections — `.viaEach` / `.via`.** A whole-object bridge is _shallow_: a record component that's a
-`List<SubRecord>` whose POJO side is `List<SubPojo>` won't auto-convert (erasure would otherwise let the wrong element
-type through). Supply an element bridge:
+**Nested-collection bridges work automatically.** A record component `List<SubRecord>` whose POJO side is
+`List<SubPojo>` recurses without a special hop — the container `Iso` is lifted by `Iso.liftList` once the inner pair is
+resolved. Same for `Set`, `Map`-values, `Optional`, and arbitrarily-deep nesting:
 
 ```java
-final Telescope<OrderPojo, OrderRecord> order = Telescope.fromBean(OrderPojo.class)
-  .to(OrderRecord.class)
-  .viaConstructor();
+record OrderRecord(String sku, int qty) {}
 
-final Telescope<CartPojo, CartRecord> cart = Telescope.fromBean(CartPojo.class)
-  .to(CartRecord.class)
-  .viaEach(CartRecord::orders, order) // List<OrderPojo> ⇄ List<OrderRecord>, element-wise
-  .viaFields();
-// .via(component, subBridge) does the same for a single nested sub-object.
-```
+record CartRecord(String id, List<OrderRecord> orders) {}
 
-**`mapBean` — POJO ⇄ POJO.** The bean analog of `map(...)`: properties matched by name, each side rebuilt via its
-auto-detected strategy. Bidirectional, so it round-trips and composes.
-
-```java
-class LegacyUser {
-  /* getId(), getEmail() + setters (or an all-args ctor / builder) */
+class OrderPojo {
+  /* getSku(), getQty() + ... */
 }
 
-class UserView {
-  /* getId(), getEmail() + setters */
+class CartPojo {
+  /* getId(), getOrders() returns List<OrderPojo> */
 }
 
-final Telescope<LegacyUser, UserView> bridge = Telescope.mapBean(LegacyUser.class).to(UserView.class).build();
-
-UserView view = bridge.read(legacyUser); // forward:  LegacyUser -> UserView
-
-LegacyUser back = bridge.set(legacyUser, view); // reverse: UserView   -> LegacyUser
+final Telescope<CartPojo, CartRecord> cart = Telescope.map(CartPojo.class, CartRecord.class);
+// CartPojo ↔ CartRecord, with the List<OrderPojo> ↔ List<OrderRecord> hop handled automatically.
 ```
 
-**Renames and unmatched properties.** Both bridges match by name; when names differ, map them with `.rename(...)` —
-`fromBean` maps a record component to a POJO property, `mapBean` maps property to property. By default every property
-needs a counterpart, so the conversion stays a bijection. `mapBean.ignoreUnmatched()` drops that requirement: a property
-with no match on the other side is left out (lossy, one-way). `fromBean` already tolerates extra POJO properties — the
-record drives the mapping, so a POJO field with no matching component keeps its rebuilt default and doesn't round-trip.
+**`writeBean` — pin a POJO write strategy.** `Beans.autoWriter` picks a ladder: `builder()` → no-arg ctor + setters →
+no-arg ctor + reflective field injection → single public all-args ctor (when compiled with `-parameters` and ctor
+parameter names match the property names). For classes the auto path refuses (immutable all-args-only POJOs without
+`-parameters`, ambiguous multi-ctor classes), pass an explicit `WriteHint.writeBean(target, strategy)` row to force one
+of `BUILDER` / `SETTERS` / `FIELDS` / `CONSTRUCTOR`:
 
 ```java
-// fromBean: record component 'displayName' <-> POJO property 'name'
-Telescope.fromBean(AccountBean.class).to(AccountRecord.class)
-  .rename(AccountRecord::displayName, AccountBean::getName)
-  .viaFields();
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 
-// mapBean: 'name' <-> 'fullName', and PersonView.role has no source -> drop it
-Telescope.mapBean(PersonA.class).to(PersonView.class)
-  .rename(PersonA::getName, PersonView::getFullName)
-  .ignoreUnmatched()
-  .build();
+// OrderPojo has a public (String sku, int qty) ctor, no builder, no setters — autoWriter would
+// refuse without -parameters. The hint forces the CONSTRUCTOR strategy explicitly.
+final Telescope<OrderRecord, OrderPojo> conv = Telescope.map(
+  OrderRecord.class,
+  OrderPojo.class,
+  writeBean(OrderPojo.class, CONSTRUCTOR),
+  to(OrderRecord::sku, OrderPojo::getSku)
+);
 ```
 
-**`@Bridge` — reflection-free, compile-checked (any pair).** The codegen counterpart to `fromBean` / `mapBean` / `map`.
-Annotate the source you own with the target type; the processor generates `<Source>Bridge.BRIDGE`, a
-`Telescope<Source, Target>` built from direct component/getter reads and constructor / builder / setter calls. Both
-sides may be records or POJOs — record⇄record, record⇄POJO, POJO⇄POJO. Fields match by name (a bijection); a name
-mismatch or a missing construction strategy is a compile error, not a runtime one:
+Validation is eager: a misconfigured hint (`BUILDER` on a no-builder class, hint targeting a record, duplicate hint,
+unused hint) throws at `Telescope.map(...)` time — not on first `iso.to()` deep in production.
+
+**Composing through a bridge.** The mapping result is a `Telescope<A, B>`, so it threads through a longer path the same
+way any other telescope does:
+
+```java
+Telescope.of(Page.class)                  // Page is a record holding List<LegacyUser>
+    .each(Page::items)
+    .then(bridge)                         // each POJO ↔ record at this hop
+    .field(UserRecord::email)
+    .update(page, String::toLowerCase);
+```
+
+**`Telescope.mapper(...)` — the `Mapper<A, B>` sibling.** Same deep recursion, but the return is a `Mapper<A, B>`
+exposing `read`/`forward`/`backward`/`patch`/`asTelescope`. `patch(base, partial)` overlays non-null fields of `partial`
+onto `base` — useful for sparse JSON / form updates.
+
+```java
+final Mapper<UserBean, UserView> mapper = Telescope.mapper(UserBean.class, UserView.class);
+
+final UserView withFresh = mapper.patch(view, new UserView(null, "new@x", null));
+```
+
+**`@Bridge` — reflection-free, compile-checked (any pair).** The codegen counterpart to `Telescope.map(...)`. Annotate
+the source you own with the target type; the processor generates `<Source>Bridge.BRIDGE`, a `Telescope<Source, Target>`
+built from direct component/getter reads and constructor / builder / setter calls. Both sides may be records or POJOs —
+record⇄record, record⇄POJO, POJO⇄POJO. Fields match by name (a bijection); a name mismatch or a missing construction
+strategy is a compile error, not a runtime one:
 
 ```java
 import io.github.eschizoid.telescope.annotations.Bridge;
@@ -732,9 +786,10 @@ Telescope.ofBean(LegacyUser.class)
 
 **Cost — measured.** `ofBean` rebuilds the whole POJO and re-reads every getter at _each_ level of the path: a 3-level
 update benchmarks at ~442 ns/op (~18x a hand-written copy, ~1.8x record reflection — see
-[`benchmarks/`](benchmarks/README.md)). Fine for ordinary use (sub-microsecond), but for a hot loop over many objects,
-bridge to a record once with `fromBean` and navigate the record (or use `@BeanFocus` codegen) instead. The conversion
-bridges are cheaper — `fromBean` ~123 ns, `mapBean` ~170 ns, in line with the record→record mapper (~112 ns).
+[`benchmarks/`](benchmarks/README.md)). Fine for ordinary use (sub-microsecond); for a hot loop over many objects,
+convert to a record once with `Telescope.map(Pojo.class, Record.class)` and navigate the record (or use `@BeanFocus`
+codegen) instead. The runtime deep-mapping bridges are cheaper — ~114 ns (POJO→record) and ~142 ns (POJO↔POJO), in line
+with the record→record mapper (~112 ns).
 
 **Aliasing — beans aren't records.** An update rebuilds the _spine_ (the path to the changed field) with fresh objects
 and shares references to untouched subtrees. With records that's always safe; with mutable POJOs the new and old object
@@ -743,10 +798,10 @@ shared parts as effectively immutable.
 
 ### Scope
 
-`fromBean` / `mapBean` / `@Bridge` match by exact name and need a same-named field on each side; nested collections need
-`.viaEach`. `viaFields` (and `ofBean`'s field-injection fallback) use `setAccessible`, so under JPMS the POJO's package
-must be `opens`'d to `io.github.eschizoid.telescope` — `viaConstructor` / `viaBuilder` / setters (and all of `@Bridge`)
-use public members only.
+`Telescope.map(...)` / `@Bridge` match by exact name and need a same-named field on each side (with optional rename rows
+via `Mapping.to(srcAcc, tgtAcc)`); nested collections recurse automatically. The `FIELDS` write strategy (and `ofBean`'s
+field-injection fallback) uses `setAccessible`, so under JPMS the POJO's package must be `opens`'d to
+`io.github.eschizoid.telescope` — `CONSTRUCTOR` / `BUILDER` / `SETTERS` (and all of `@Bridge`) use public members only.
 
 ---
 
@@ -1067,29 +1122,31 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
    to read sibling fields (e.g. focus `LineItem::unitPrice` but want the sibling `sku` to call a price service), the
    source is already in scope as the first argument — just reference it inside the lambda
    (`update(order, item -> … order.sku() …)`). Hoist the source to a local first if it's an expression.
-6. **Two documented runtime-check points on the runtime DSL.** Every typed entry point (`.field(Accessor)`,
-   `.each(Accessor)`, `.eachValue(Accessor)`, `.whenPresent(Accessor)`, the bridges, `.with(fn)`, `.apply(S)`, every
-   `update*` variant) is fully compile-checked. Two escape hatches are _not_ compile-checked, by design, and they're
-   named so the call site says so:
+6. **One documented runtime-check point on the runtime DSL.** Every typed entry point (`.field(Accessor)`,
+   `.each(Accessor)`, `.list(Accessor)` / `.set` / `.map` / `.optional` and their typed terminals,
+   `.eachValue(Accessor)`, `.whenPresent(Accessor)`, the static `Telescope.asList` / `asSet` / `asMap` / `asOptional`
+   promotions, the bridges, `.with(fn)`, `.apply(S)`, every `update*` variant) is fully compile-checked. One escape
+   hatch is _not_ compile-checked, by design, and it's named so the call site says so:
    - `.fieldByName(String)` / `.fieldByName(String, Class<B>)` — late-bound field name (config-driven paths). `javac`
      can't verify the name exists or that the inferred type matches the actual field. Wrong name → runtime error.
-   - `.each()` (no-arg) — used when you already hold a `Telescope<S, SomeContainer>` (e.g. a pre-built path). `javac`
-     can't verify that `A` is actually a container. Wrong focus → runtime error.
 
    For zero runtime-check points, use the **`@Focus` / `@BeanFocus` / `@Bridge` annotation processors** — they generate
    a typed `<X>Path<R>` navigator at compile time where every step is a typed method call.
 
 7. **Pre-1.0 versioning policy — minor versions can break source and binary compatibility.** Telescope is still 0.x; we
-   hold the right to evolve the public surface between minor releases when it improves the DSL. Two breaks shipped
-   recently are worth knowing about explicitly:
+   hold the right to evolve the public surface between minor releases when it improves the DSL. Recent breaks worth
+   knowing about:
+   - **The `Telescope.fromBean(...).viaX()` / `Telescope.mapBean(...).build()` fluent chains were demolished** in favor
+     of the unified `Telescope.map(A.class, B.class, ...)` factory that handles record↔record, POJO↔POJO, and
+     cross-paradigm in one entry point. Forcing a specific bean write strategy is now an explicit
+     `WriteHint.writeBean(target, strategy)` row instead of `.viaFields()` / `.viaConstructor()` / `.viaBuilder()`.
+   - **`Telescope.each()` no-arg (runtime-dispatched escape hatch) was deleted**; arrays are no longer first-class
+     containers (wrap as `List`). Replacement: the typed `.list/.set/.map/.optional(accessor)` instance methods return
+     narrower subclasses (`ListPath` / `SetPath` / `MapPath` / `OptionalPath`) whose `.each()` / `.values()` /
+     `.present()` terminals are compile-checked; pre-built `Telescope<S, List<X>>` paths use
+     `Telescope.asList(path).each()` (and friends).
    - **`.field(String)` / `.field(String, Class<B>)` renamed to `.fieldByName(...)`** so the runtime-check nature is
      loud at the call site (see constraint #6). Source-incompatible. No `@Deprecated` shim — clean break.
-   - **The conversion / mapping builder intermediate types** (`From`, `To`, `BeanFrom`, `BeanTo`, `MapBeanFrom`,
-     `MapBeanTo`, `MapTo`, `MapBuilder`, `FieldMapping`, `Mapper`) moved from nested `Telescope.Xxx` to top-level
-     classes in the same `io.github.eschizoid.telescope` package. **Source-compatible** for the common case (users write
-     `Telescope.from(A).to(B).using(...)` without ever naming the intermediates), but **binary-incompatible** because
-     the factory methods' return types changed from `Telescope.From` to `From`. Recompile against the new version. JPMS
-     exports are unchanged.
 
    After 1.0 these guarantees tighten — source + binary compat across minor versions, breaks only on majors. We're not
    there yet; keep your build configured to rebuild against each minor.
@@ -1107,13 +1164,14 @@ Two layers, one library:
 
 Each DSL method builds the appropriate optic and composes it via the lattice:
 
-| DSL call                | Built internally                                  | Composed via            |
-| ----------------------- | ------------------------------------------------- | ----------------------- |
-| `Telescope.of(C.class)` | `Iso.identity()`                                  | —                       |
-| `.field(C::name)`       | `Records.fieldLens(name)` → `Lens<C, X>`          | `Traversal.then(Lens)`  |
-| `.each(C::items)`       | `Lens<C, List<X>>` + `Traversals.eachContainer()` | two `.then` calls       |
-| `.as(Updated.class)`    | `Prism.downcast(Updated.class)`                   | `Traversal.then(Prism)` |
-| `.filter(p)`            | —                                                 | `Traversal.filter`      |
+| DSL call                | Built internally                                           | Composed via            |
+| ----------------------- | ---------------------------------------------------------- | ----------------------- |
+| `Telescope.of(C.class)` | `Iso.identity()`                                           | —                       |
+| `.field(C::name)`       | `Records.fieldLens(name)` → `Lens<C, X>`                   | `Traversal.then(Lens)`  |
+| `.each(C::items)`       | `Lens<C, Iterable<X>>` + `Traversals.eachIterable()`       | two `.then` calls       |
+| `.list(C::items)`       | `Lens<C, List<X>>`; `.each()` adds `Traversals.eachList()` | one `.then` per step    |
+| `.as(Updated.class)`    | `Prism.downcast(Updated.class)`                            | `Traversal.then(Prism)` |
+| `.filter(p)`            | —                                                          | `Traversal.filter`      |
 
 Operations (`read`, `set`, `update`, `toList`, `count`, `exists`) delegate to the underlying optic's methods. The
 lattice handles all composition rules (`Lens.then(Prism) = Affine`, `Iso.then(Iso) = Iso`, etc.) and laws (get-set,

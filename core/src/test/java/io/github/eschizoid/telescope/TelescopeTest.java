@@ -128,38 +128,10 @@ class TelescopeTest {
       assertEquals(Optional.empty(), nick.update(noNick, String::toUpperCase).nickname());
     }
 
-    @Test
-    @DisplayName("each() over a primitive int[] field updates every value")
-    void eachOverPrimitiveArray() {
-      record Bag(String name, int[] xs) {}
-
-      final var nums = Telescope.of(Bag.class).field(Bag::xs).<Integer>each();
-      final var bag = new Bag("a", new int[] { 1, 2, 3 });
-
-      assertEquals(3L, nums.count(bag));
-      assertEquals(List.of(1, 2, 3), nums.toList(bag));
-
-      final var doubled = nums.update(bag, n -> n * 2);
-      assertEquals("a", doubled.name());
-      assertEquals(2, doubled.xs()[0]);
-      assertEquals(4, doubled.xs()[1]);
-      assertEquals(6, doubled.xs()[2]);
-    }
-
-    @Test
-    @DisplayName("each() over a String[] field works the same as Object[]")
-    void eachOverObjectArray() {
-      record Tags(String[] tags) {}
-
-      final var t = Telescope.of(Tags.class).field(Tags::tags).<String>each();
-      final var input = new Tags(new String[] { "a", "b", "c" });
-
-      assertEquals(List.of("a", "b", "c"), t.toList(input));
-      final var upper = t.update(input, String::toUpperCase);
-      assertEquals("A", upper.tags()[0]);
-      assertEquals("B", upper.tags()[1]);
-      assertEquals("C", upper.tags()[2]);
-    }
+    // Array containers (int[], String[], etc.) are no longer supported by the typed each() — the
+    // runtime-dispatched no-arg form is gone, and java.lang.reflect.Array reflection has been
+    // dropped. Users with array fields wrap them as List/Set. See PLAN.md item #6 for the
+    // migration note.
   }
 
   @Nested

@@ -1,13 +1,11 @@
 package io.github.eschizoid.telescope.internal.optics;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
@@ -15,7 +13,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
@@ -430,88 +427,36 @@ class LatticeCoverageTest {
     }
   }
 
-  // ----- Traversals.eachContainer runtime dispatch -----
+  // ----- Traversals.eachIterable (polymorphic Iterable case) -----
 
   @Nested
-  @DisplayName("Traversals.eachContainer — runtime dispatch over List/Set/Map/Optional/array/null")
-  class EachContainerDispatch {
+  @DisplayName("Traversals.eachIterable — polymorphic over List / Set / custom Iterable")
+  class EachIterable {
 
     @Test
-    @DisplayName("List branch: streams elements and rebuilds via modify")
-    void listBranch() {
-      final Traversal<List<Integer>, Integer> each = Traversals.eachContainer();
-      assertEquals(List.of(1, 2, 3), each.getAll(List.of(1, 2, 3)).toList());
-      assertEquals(List.of(2, 4, 6), each.modify(List.of(1, 2, 3), n -> n * 2));
-    }
-
-    @Test
-    @DisplayName("Set branch: streams and rebuilds into LinkedHashSet (order preserved)")
-    void setBranch() {
-      final Traversal<Set<Integer>, Integer> each = Traversals.eachContainer();
-      final var src = new LinkedHashSet<>(List.of(1, 2, 3));
-      assertEquals(Set.of(1, 2, 3), each.getAll(src).collect(java.util.stream.Collectors.toSet()));
-      assertEquals(Set.of(2, 4, 6), each.modify(src, n -> n * 2));
-    }
-
-    @Test
-    @DisplayName("Map branch: streams values; rebuilds preserving keys")
-    void mapBranch() {
-      final Traversal<Map<String, Integer>, Integer> each = Traversals.eachContainer();
-      final var src = Map.of("a", 1, "b", 2);
-      assertEquals(Set.of(1, 2), each.getAll(src).collect(java.util.stream.Collectors.toSet()));
-      final var out = each.modify(src, n -> n + 10);
-      assertEquals(11, out.get("a"));
-      assertEquals(12, out.get("b"));
-    }
-
-    @Test
-    @DisplayName("Optional branch: present streams one element; modify lifts through")
-    void optionalBranch() {
-      final Traversal<Optional<Integer>, Integer> each = Traversals.eachContainer();
-      assertEquals(List.of(7), each.getAll(Optional.of(7)).toList());
-      assertEquals(Optional.of(8), each.modify(Optional.of(7), n -> n + 1));
-      assertEquals(Optional.empty(), each.modify(Optional.empty(), n -> n + 1));
-    }
-
-    @Test
-    @DisplayName("Array branch: int[] is dispatched via reflection — modify rebuilds an int[]")
-    void arrayPrimitiveBranch() {
-      final Traversal<int[], Integer> each = Traversals.eachContainer();
-      final int[] src = { 1, 2, 3 };
+    @DisplayName("List source: streams + rebuilds as an unmodifiable List preserving order")
+    void listSource() {
+      final Traversal<Iterable<Integer>, Integer> each = Traversals.eachIterable();
+      final Iterable<Integer> src = List.of(1, 2, 3);
       assertEquals(List.of(1, 2, 3), each.getAll(src).toList());
-      final int[] doubled = each.modify(src, n -> n * 2);
-      assertArrayEquals(new int[] { 2, 4, 6 }, doubled);
+      assertEquals(List.of(2, 4, 6), List.copyOf((java.util.Collection<Integer>) each.modify(src, n -> n * 2)));
     }
 
     @Test
-    @DisplayName("Array branch: Object[] is rebuilt as Object[]")
-    void arrayObjectBranch() {
-      final Traversal<String[], String> each = Traversals.eachContainer();
-      final String[] src = { "a", "b" };
-      assertEquals(List.of("a", "b"), each.getAll(src).toList());
-      final String[] upper = each.modify(src, String::toUpperCase);
-      assertArrayEquals(new String[] { "A", "B" }, upper);
+    @DisplayName("Set source: streams + rebuilds as an unmodifiable LinkedHashSet")
+    void setSource() {
+      final Traversal<Iterable<Integer>, Integer> each = Traversals.eachIterable();
+      final Iterable<Integer> src = new LinkedHashSet<>(List.of(1, 2, 3));
+      assertEquals(Set.of(1, 2, 3), each.getAll(src).collect(java.util.stream.Collectors.toSet()));
+      assertEquals(Set.of(2, 4, 6), Set.copyOf((java.util.Collection<Integer>) each.modify(src, n -> n * 2)));
     }
 
     @Test
-    @DisplayName("null source streams empty / modify returns null (no NPE)")
-    void nullBranch() {
-      final Traversal<List<Integer>, Integer> each = Traversals.eachContainer();
+    @DisplayName("null source: streams empty / modify returns null (no NPE)")
+    void nullSource() {
+      final Traversal<Iterable<Integer>, Integer> each = Traversals.eachIterable();
       assertEquals(0L, each.getAll(null).count());
       assertNull(each.modify(null, n -> n + 1));
-    }
-
-    @Test
-    @DisplayName("Unsupported container type throws IllegalArgumentException with a clear message")
-    void unsupportedThrows() {
-      final Traversal<Object, Object> each = Traversals.eachContainer();
-      // Plain Object (not a recognized container, not an array) → throw.
-      final var ex = assertThrows(IllegalArgumentException.class, () ->
-        each.getAll(Objects.requireNonNull("x")).count()
-      );
-      assertTrue(ex.getMessage().contains("each()"), ex.getMessage());
-      final var ex2 = assertThrows(IllegalArgumentException.class, () -> each.modify("x", o -> o));
-      assertTrue(ex2.getMessage().contains("each()"), ex2.getMessage());
     }
   }
 

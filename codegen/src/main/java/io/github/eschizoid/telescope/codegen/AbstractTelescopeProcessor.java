@@ -113,14 +113,16 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     return null;
   }
 
-  // A directly-declared public static no-arg method by name (e.g. builder()), or null.
-  protected static ExecutableElement staticNoArgMethod(final TypeElement type, final String name) {
+  // The directly-declared public static no-arg builder() factory on `type`, or null. Only used to
+  // detect builder-style classes for the @BeanFocus / Lombok @Builder path and for the bridge
+  // processor; if a future processor needs a different name, generalize back to taking a String.
+  protected static ExecutableElement staticBuilderMethod(final TypeElement type) {
     for (final var m : ElementFilter.methodsIn(type.getEnclosedElements())) {
       if (
         m.getModifiers().contains(Modifier.PUBLIC) &&
         m.getModifiers().contains(Modifier.STATIC) &&
         m.getParameters().isEmpty() &&
-        m.getSimpleName().contentEquals(name)
+        m.getSimpleName().contentEquals("builder")
       ) {
         return m;
       }
@@ -155,7 +157,16 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * whenPresent}). Returned by {@link #traversalKind}; {@code null} when the type isn't a
    * traversable container.
    */
-  protected record TraversalShape(String elementType, String stepMethod) {}
+  protected record TraversalShape(String elementType, String stepMethod, String containerKind) {
+    /**
+     * One of {@code "list"}, {@code "set"}, {@code "map"}, {@code "optional"}, {@code "iterable"}.
+     * Drives which {@code Telescope.asX(...)} static factory the codegen emits to step into
+     * elements without runtime container dispatch.
+     */
+    public String containerKind() {
+      return containerKind;
+    }
+  }
 
   /**
    * The traversal shape of a collection-shaped {@code type}, or {@code null} if it isn't
@@ -176,17 +187,29 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var map = elements.getTypeElement("java.util.Map");
     if (map != null && types.isAssignable(erasure, types.erasure(map.asType()))) {
       final var elem = concreteArg(args, 1);
-      return elem == null ? null : new TraversalShape(elem, "eachValue");
+      return elem == null ? null : new TraversalShape(elem, "eachValue", "map");
     }
     final var optional = elements.getTypeElement("java.util.Optional");
     if (optional != null && types.isSameType(erasure, types.erasure(optional.asType()))) {
       final var elem = concreteArg(args, 0);
-      return elem == null ? null : new TraversalShape(elem, "whenPresent");
+      return elem == null ? null : new TraversalShape(elem, "whenPresent", "optional");
+    }
+    // Differentiate List vs Set vs raw Iterable so the codegen can emit the right typed
+    // Telescope.asList/asSet factory at the step (zero runtime container dispatch).
+    final var list = elements.getTypeElement("java.util.List");
+    if (list != null && types.isAssignable(erasure, types.erasure(list.asType()))) {
+      final var elem = concreteArg(args, 0);
+      return elem == null ? null : new TraversalShape(elem, "each", "list");
+    }
+    final var set = elements.getTypeElement("java.util.Set");
+    if (set != null && types.isAssignable(erasure, types.erasure(set.asType()))) {
+      final var elem = concreteArg(args, 0);
+      return elem == null ? null : new TraversalShape(elem, "each", "set");
     }
     final var iterable = elements.getTypeElement("java.lang.Iterable");
     if (iterable != null && types.isAssignable(erasure, types.erasure(iterable.asType()))) {
       final var elem = concreteArg(args, 0);
-      return elem == null ? null : new TraversalShape(elem, "each");
+      return elem == null ? null : new TraversalShape(elem, "each", "iterable");
     }
     return null;
   }
@@ -314,45 +337,38 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   /**
    * Emit forwarding methods for every public {@link io.github.eschizoid.telescope.Telescope}
-   * operation on the wrapped path field {@code pathField} whose focus type is {@code focusType}.
-   * Lets a generated {@code <X>Path<R>} or {@code <X><Cap>Step<R>} stand in for the wrapped {@code
+   * operation on the wrapped {@code path} field whose focus type is {@code focusType}. Lets a
+   * generated {@code <X>Path<R>} or {@code <X><Cap>Step<R>} stand in for the wrapped {@code
    * Telescope<R, focusType>}: callers can do {@code update} / {@code updateAsync} / {@code read} /
    * {@code toList} / etc. (including the four effect methods and {@code then}) at any hop without
-   * first unwrapping with {@code get()}.
+   * first unwrapping with {@code get()}. The wrapped field is always named {@code path} by
+   * convention (see {@link #emitPathClassHeader} / {@link #emitContainerStep}).
    */
-  protected void emitTelescopeForwarders(final PrintWriter out, final String pathField, final String focusType) {
+  protected void emitTelescopeForwarders(final PrintWriter out, final String focusType) {
     // Sync reads.
-    out.println("  public " + focusType + " read(final R source) { return " + pathField + ".read(source); }");
+    out.println("  public " + focusType + " read(final R source) { return path.read(source); }");
     out.println();
-    out.println("  public Optional<" + focusType + "> find(final R source) { return " + pathField + ".find(source); }");
+    out.println("  public Optional<" + focusType + "> find(final R source) { return path.find(source); }");
     out.println();
-    out.println("  public List<" + focusType + "> toList(final R source) { return " + pathField + ".toList(source); }");
+    out.println("  public List<" + focusType + "> toList(final R source) { return path.toList(source); }");
     out.println();
     out.println(
-      "  public List<Indexed<" +
-        focusType +
-        ">> toListIndexed(final R source) { return " +
-        pathField +
-        ".toListIndexed(source); }"
+      "  public List<Indexed<" + focusType + ">> toListIndexed(final R source) { return path.toListIndexed(source); }"
     );
     out.println();
-    out.println("  public long count(final R source) { return " + pathField + ".count(source); }");
+    out.println("  public long count(final R source) { return path.count(source); }");
     out.println();
-    out.println("  public boolean exists(final R source) { return " + pathField + ".exists(source); }");
+    out.println("  public boolean exists(final R source) { return path.exists(source); }");
     out.println();
     // Sync writes.
-    out.println(
-      "  public R set(final R source, final " + focusType + " value) { return " + pathField + ".set(source, value); }"
-    );
+    out.println("  public R set(final R source, final " + focusType + " value) { return path.set(source, value); }");
     out.println();
     out.println(
       "  public R update(final R source, final Function<" +
         focusType +
         ", " +
         focusType +
-        "> fn) { return " +
-        pathField +
-        ".update(source, fn); }"
+        "> fn) { return path.update(source, fn); }"
     );
     out.println();
     out.println(
@@ -360,9 +376,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         focusType +
         ", ? extends " +
         focusType +
-        "> fn) { return " +
-        pathField +
-        ".updateIndexed(source, fn); }"
+        "> fn) { return path.updateIndexed(source, fn); }"
     );
     out.println();
     // Effectful writes.
@@ -371,9 +385,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         focusType +
         ", ? extends CompletableFuture<" +
         focusType +
-        ">> fn) { return " +
-        pathField +
-        ".updateAsync(source, fn); }"
+        ">> fn) { return path.updateAsync(source, fn); }"
     );
     out.println();
     out.println(
@@ -381,9 +393,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         focusType +
         ", ? extends CompletableFuture<" +
         focusType +
-        ">> fn, final Executor executor) { return " +
-        pathField +
-        ".updateAsync(source, fn, executor); }"
+        ">> fn, final Executor executor) { return path.updateAsync(source, fn, executor); }"
     );
     out.println();
     out.println(
@@ -391,9 +401,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         focusType +
         ", ? extends Optional<" +
         focusType +
-        ">> fn) { return " +
-        pathField +
-        ".updateOptional(source, fn); }"
+        ">> fn) { return path.updateOptional(source, fn); }"
     );
     out.println();
     out.println(
@@ -401,9 +409,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         focusType +
         ", ? extends Either<E, " +
         focusType +
-        ">> fn) { return " +
-        pathField +
-        ".updateEither(source, fn); }"
+        ">> fn) { return path.updateEither(source, fn); }"
     );
     out.println();
     out.println(
@@ -411,19 +417,40 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         focusType +
         ", ? extends Validated<E, " +
         focusType +
-        ">> fn) { return " +
-        pathField +
-        ".updateValidated(source, fn); }"
+        ">> fn) { return path.updateValidated(source, fn); }"
     );
     out.println();
     // Composition with an external Telescope.
     out.println(
-      "  public <B> Telescope<R, B> then(final Telescope<" +
-        focusType +
-        ", B> next) { return " +
-        pathField +
-        ".then(next); }"
+      "  public <B> Telescope<R, B> then(final Telescope<" + focusType + ", B> next) { return path.then(next); }"
     );
+    out.println();
+  }
+
+  /**
+   * Emit the standard header members of a generated {@code <X>Path<R>} class: the private {@code
+   * path} field, the package-private constructor, a {@code start()} static factory, and a {@code
+   * get()} accessor. Used by every navigator-emitting processor (records via {@link FocusProcessor}
+   * and beans via {@link #emitBeanNavigator}) so the boilerplate lives in one place.
+   */
+  protected void emitPathClassHeader(final PrintWriter out, final String pathName, final String targetTypeName) {
+    out.println("  private final Telescope<R, " + targetTypeName + "> path;");
+    out.println();
+    out.println("  " + pathName + "(final Telescope<R, " + targetTypeName + "> path) { this.path = path; }");
+    out.println();
+    out.println(
+      "  public static " +
+        pathName +
+        "<" +
+        targetTypeName +
+        "> start() { return new " +
+        pathName +
+        "<>(Telescope.of(" +
+        targetTypeName +
+        ".class)); }"
+    );
+    out.println();
+    out.println("  public Telescope<R, " + targetTypeName + "> get() { return path; }");
     out.println();
   }
 
@@ -587,7 +614,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       return;
     }
 
-    final var builder = staticNoArgMethod(pojo, "builder");
+    final var builder = staticBuilderMethod(pojo);
     final var builderType =
       builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED
         ? (TypeElement) ((DeclaredType) builder.getReturnType()).asElement()
@@ -638,30 +665,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       "Generated by telescope-codegen for " + triggerLabel + " POJO " + pojoName + ".",
       pojo,
       out -> {
-        out.println("  private final Telescope<R, " + pojoName + "> path;");
-        out.println();
-        out.println("  " + pathName + "(final Telescope<R, " + pojoName + "> path) { this.path = path; }");
-        out.println();
-        out.println(
-          "  public static " +
-            pathName +
-            "<" +
-            pojoName +
-            "> start() { return new " +
-            pathName +
-            "<>(Telescope.of(" +
-            pojoName +
-            ".class)); }"
-        );
-        out.println();
-        out.println("  public Telescope<R, " + pojoName + "> get() { return path; }");
-        out.println();
+        emitPathClassHeader(out, pathName, pojoName);
         for (final var p : props) {
           emitBeanPropertyMethod(out, pojoName, props, setters, useBuilder, p, navigableAnnotations);
         }
         final var bridgeTarget = bridgeTargetFqn(pojo);
         if (bridgeTarget != null) emitBridgeHop(out, pojoName, bridgeTarget);
-        emitTelescopeForwarders(out, "path", pojoName);
+        emitTelescopeForwarders(out, pojoName);
       }
     );
   }
@@ -675,49 +685,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final Prop target,
     final Set<String> navigableAnnotations
   ) {
-    final var setter = beanRebuild(target, props, setters, useBuilder, pojoName);
-    final var shape = traversalKind(target.type());
-    if (shape != null) {
-      final var stepName = pojoName + capitalize(target.name()) + "Step";
-      out.println("  public " + stepName + "<R> " + target.name() + "() {");
-      out.println(
-        "    return new " +
-          stepName +
-          "<>(path.then(Telescope.lens(" +
-          pojoName +
-          "::" +
-          target.getter() +
-          ", " +
-          setter +
-          ")));"
-      );
-      out.println("  }");
-      out.println();
-      return;
-    }
-    final var subFq = navigableType(target.type(), navigableAnnotations);
-    if (subFq != null) {
-      out.println("  public " + subFq + "Path<R> " + target.name() + "() {");
-      out.println(
-        "    return new " +
-          subFq +
-          "Path<>(path.then(Telescope.lens(" +
-          pojoName +
-          "::" +
-          target.getter() +
-          ", " +
-          setter +
-          ")));"
-      );
-      out.println("  }");
-      out.println();
-      return;
-    }
-    final var typeStr = shortenStdImports(boxedType(target.type()));
-    out.println("  public Telescope<R, " + typeStr + "> " + target.name() + "() {");
-    out.println("    return path.then(Telescope.lens(" + pojoName + "::" + target.getter() + ", " + setter + "));");
-    out.println("  }");
-    out.println();
+    final var lensArgs =
+      pojoName + "::" + target.getter() + ", " + beanRebuild(target, props, setters, useBuilder, pojoName);
+    emitNavigatorMethod(out, pojoName, target.name(), target.type(), lensArgs, navigableAnnotations);
   }
 
   private void emitBeanStep(
@@ -728,38 +698,123 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final TraversalShape shape,
     final Set<String> navigableAnnotations
   ) {
-    final var stepName = pojoName + capitalize(prop.name()) + "Step";
+    emitContainerStep(
+      pojo,
+      pojoName,
+      pkg,
+      prop.name(),
+      shortenStdImports(prop.type().toString()),
+      shape,
+      navigableAnnotations,
+      "Generated by telescope-codegen container hop " + pojoName + "." + prop.name() + "."
+    );
+  }
+
+  /**
+   * Emit one container-step class for a List/Set/Map/Optional/Iterable component or property. The
+   * step holds a {@code Telescope<R, ContainerType>} and exposes the matching typed terminal
+   * ({@code each} / {@code eachValue} / {@code whenPresent}) that descends into elements via the
+   * static {@code Telescope.asList/.asSet/.asMap/.asOptional} factory — no runtime container
+   * dispatch.
+   *
+   * <p>Shared by both record-flavored ({@link FocusProcessor}) and bean-flavored ({@link
+   * BeanFocusProcessor}, {@code LombokFocusProcessor}) navigators — the only difference between the
+   * two emission flavors used to be the navigable-element check, which is now expressed uniformly
+   * via the {@code navigableAnnotations} set.
+   */
+  protected void emitContainerStep(
+    final TypeElement origin,
+    final String enclosingSimpleName,
+    final String pkg,
+    final String componentName,
+    final String containerType,
+    final TraversalShape shape,
+    final Set<String> navigableAnnotations,
+    final String javadoc
+  ) {
+    final var stepName = enclosingSimpleName + capitalize(componentName) + "Step";
     final var qualifiedStep = pkg.isEmpty() ? stepName : pkg + "." + stepName;
-    final var containerType = shortenStdImports(prop.type().toString());
     final var rawElementType = shape.elementType();
     final var elementType = shortenStdImports(rawElementType);
     final var stepMethod = shape.stepMethod();
     final var elementIsNavigable = isAnnotatedClass(rawElementType, navigableAnnotations);
     final var elementResultType = elementIsNavigable ? elementType + "Path<R>" : "Telescope<R, " + elementType + ">";
-    final var elementBody = elementIsNavigable
-      ? "new " + elementType + "Path<>(path.<" + elementType + ">each())"
-      : "path.<" + elementType + ">each()";
+    final var stepCore = switch (shape.containerKind()) {
+      case "list" -> "Telescope.<R, " + elementType + ">asList(path).each()";
+      case "set" -> "Telescope.<R, " + elementType + ">asSet(path).each()";
+      case "optional" -> "Telescope.<R, " + elementType + ">asOptional(path).present()";
+      case "map" -> "Telescope.asMap(path).values()";
+      // Iterable case: declared leaf is some `? extends Iterable<E>` shape (e.g. Iterable<E>,
+      // Collection<E>, a custom user iterable). Java's type inference can't always work
+      // backward
+      // from path's leaf type to `eachIterable()`'s bounded type parameter, so we pin both type
+      // arguments to `Telescope.wrap(...)` explicitly — that way the produced
+      // `Telescope<containerType, elementType>` matches the `path.then(...)` left side
+      // regardless
+      // of whether the declared container is `Iterable`, `Collection`, or any other subtype.
+      default -> "path.then(Telescope.<" +
+      containerType +
+      ", " +
+      elementType +
+      ">wrap(io.github.eschizoid.telescope.internal.optics.collections.Traversals.eachIterable()))";
+    };
+    final var elementBody = elementIsNavigable ? "new " + elementType + "Path<>(" + stepCore + ")" : stepCore;
 
-    writeInstanceClass(
-      qualifiedStep,
-      stepName,
-      "<R>",
-      "Generated by telescope-codegen container hop " + pojoName + "." + prop.name() + ".",
-      pojo,
-      out -> {
-        out.println("  private final Telescope<R, " + containerType + "> path;");
-        out.println();
-        out.println("  " + stepName + "(final Telescope<R, " + containerType + "> path) { this.path = path; }");
-        out.println();
-        out.println("  public Telescope<R, " + containerType + "> get() { return path; }");
-        out.println();
-        out.println("  public " + elementResultType + " " + stepMethod + "() {");
-        out.println("    return " + elementBody + ";");
-        out.println("  }");
-        out.println();
-        emitTelescopeForwarders(out, "path", containerType);
-      }
-    );
+    writeInstanceClass(qualifiedStep, stepName, "<R>", javadoc, origin, out -> {
+      out.println("  private final Telescope<R, " + containerType + "> path;");
+      out.println();
+      out.println("  " + stepName + "(final Telescope<R, " + containerType + "> path) { this.path = path; }");
+      out.println();
+      out.println("  public Telescope<R, " + containerType + "> get() { return path; }");
+      out.println();
+      out.println("  public " + elementResultType + " " + stepMethod + "() {");
+      out.println("    return " + elementBody + ";");
+      out.println("  }");
+      out.println();
+      emitTelescopeForwarders(out, containerType);
+    });
+  }
+
+  /**
+   * Emit one per-component navigator method on a {@code <X>Path<R>} class. Dispatches on the
+   * component's shape: container → step-class returning method; sub-navigable type → sub-path
+   * returning method; scalar → terminal {@code Telescope<R, T>} method.
+   *
+   * <p>Shared by both record and bean flavors. The caller supplies the lens-construction expression
+   * that goes inside {@code Telescope.lens(...)} — {@code "Record::comp, (r, v) -> ..."} for
+   * records, or {@code "Pojo::getX, beanRebuild..."} for beans — so the rest of the emission is
+   * identical.
+   */
+  protected void emitNavigatorMethod(
+    final PrintWriter out,
+    final String enclosingSimpleName,
+    final String componentName,
+    final TypeMirror componentType,
+    final String lensArgs,
+    final Set<String> navigableAnnotations
+  ) {
+    final var shape = traversalKind(componentType);
+    if (shape != null) {
+      final var stepName = enclosingSimpleName + capitalize(componentName) + "Step";
+      out.println("  public " + stepName + "<R> " + componentName + "() {");
+      out.println("    return new " + stepName + "<>(path.then(Telescope.lens(" + lensArgs + ")));");
+      out.println("  }");
+      out.println();
+      return;
+    }
+    final var subFq = navigableType(componentType, navigableAnnotations);
+    if (subFq != null) {
+      out.println("  public " + subFq + "Path<R> " + componentName + "() {");
+      out.println("    return new " + subFq + "Path<>(path.then(Telescope.lens(" + lensArgs + ")));");
+      out.println("  }");
+      out.println();
+      return;
+    }
+    final var typeStr = shortenStdImports(boxedType(componentType));
+    out.println("  public Telescope<R, " + typeStr + "> " + componentName + "() {");
+    out.println("    return path.then(Telescope.lens(" + lensArgs + "));");
+    out.println("  }");
+    out.println();
   }
 
   // The rebuild expression for property `target`: builder chain or no-arg ctor + per-property
@@ -835,7 +890,11 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   protected boolean isAnnotatedClass(final String qualifiedName, final Set<String> annotationFqns) {
     final var elements = processingEnv.getElementUtils();
     final var element = elements.getTypeElement(qualifiedName);
-    if (element == null || element.getKind() != ElementKind.CLASS) return false;
+    if (element == null) return false;
+    final var kind = element.getKind();
+    // Accept both classes (@BeanFocus, Lombok @Data/@Value/@Builder targets) and records
+    // (@Focus targets); the per-annotation registration decides which is actually navigable.
+    if (kind != ElementKind.CLASS && kind != ElementKind.RECORD) return false;
     for (final var fqn : annotationFqns) {
       final var anno = elements.getTypeElement(fqn);
       if (anno == null) continue;
@@ -848,14 +907,18 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   /**
    * Overload of {@link #navigableType(TypeMirror, ElementKind, String)} that returns the first type
-   * whose element carries any of {@code annotationFqns}. Used by {@link #emitBeanNavigator} to
-   * thread the per-processor set of "this class has its own Path" annotations through sub-component
-   * navigation.
+   * whose element carries any of {@code annotationFqns} and is either a class or a record. Used by
+   * both {@link #emitBeanNavigator} (POJO targets) and {@link #emitNavigatorMethod} (record /
+   * cross-paradigm targets) so the same "is this sub-type navigable" check fires regardless of
+   * whether the sub-element is a record-flavored {@code @Focus} target or a bean-flavored
+   * {@code @BeanFocus} / Lombok target.
    */
   protected String navigableType(final TypeMirror type, final Set<String> annotationFqns) {
     for (final var fqn : annotationFqns) {
-      final var found = navigableType(type, ElementKind.CLASS, fqn);
-      if (found != null) return found;
+      final var asClass = navigableType(type, ElementKind.CLASS, fqn);
+      if (asClass != null) return asClass;
+      final var asRecord = navigableType(type, ElementKind.RECORD, fqn);
+      if (asRecord != null) return asRecord;
     }
     return null;
   }

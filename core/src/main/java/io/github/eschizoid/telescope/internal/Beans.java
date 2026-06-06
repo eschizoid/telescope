@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.internal;
 
+import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Constructor;
@@ -13,18 +14,24 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 /**
- * Reflection-based machinery for bridging JavaBeans-style POJOs to records. Powers {@code
- * io.github.eschizoid.telescope.Telescope.fromBean(...)}.
+ * Reflection-based machinery for navigating and constructing JavaBeans-style POJOs. Powers {@code
+ * io.github.eschizoid.telescope.Telescope.ofBean(...)} (runtime navigation), {@code
+ * Telescope.map(A.class, B.class, ...)} / {@code Telescope.mapper(...)} when either side is a POJO,
+ * and the {@code WriteHint.writeBean(target, strategy)} explicit-strategy escape hatch.
  *
- * <p>Read direction (POJO &rarr; record): getters are discovered by convention — a no-arg {@code
- * getX()} with a non-void return, or {@code isX()} returning {@code boolean}/{@code Boolean} — and
- * the {@code X} is {@link #decapitalize(String) decapitalized} to a property name. This
+ * <p><b>Read direction (POJO &rarr; record/Map).</b> Getters are discovered by convention — a
+ * no-arg {@code getX()} with a non-void return, or {@code isX()} returning {@code boolean}/ {@code
+ * Boolean} — and {@code X} is {@link #decapitalize(String) decapitalized} to a property name. This
  * deliberately avoids {@code java.beans.Introspector} so the library keeps zero dependencies
- * (Introspector lives in the {@code java.desktop} module). The discovered getter map is cached per
- * class.
+ * ({@code Introspector} lives in the {@code java.desktop} module). The discovered getter map is
+ * cached per class via {@link ClassValue}. The lattice-primitive read for one property is {@link
+ * #getter(Class, String)} — a {@link Getter Getter&lt;P, Object&gt;} backed by the cached {@link
+ * Method}; {@link #readProperty} is a thin convenience over it.
  *
- * <p>Write direction (record &rarr; POJO): three strategies behind the sealed {@link BeanWriter} —
- * {@link FieldsWriter}, {@link ConstructorWriter}, {@link BuilderWriter}.
+ * <p><b>Write direction (Map/record &rarr; POJO).</b> Four strategies behind the sealed {@link
+ * BeanWriter} — {@link BuilderWriter}, {@link SettersWriter}, {@link FieldsWriter}, {@link
+ * ConstructorWriter} — chosen by {@link #autoWriter} or selected explicitly by a {@code
+ * WriteHint.writeBean(target, strategy)} row passed to {@code Telescope.map(...)}.
  */
 public final class Beans {
 
@@ -51,20 +58,51 @@ public final class Beans {
   };
 
   /**
+   * The lattice-primitive read for one bean property — a {@link Getter Getter&lt;P, Object&gt;}
+   * over the {@code getX()} / {@code isX()} accessor. Built once per {@code (beanClass, name)} pair
+   * (the underlying {@link Method} comes from the {@link #GETTERS} ClassValue cache, so the Getter
+   * is a thin wrapper around an already-resolved method reference).
+   *
+   * <p>Throws {@link IllegalArgumentException} at build time if the named property has no getter.
+   *
+   * <p>{@link #readProperty(Object, String)} is the convenience caller; {@code
+   * io.github.eschizoid.telescope.internal.Reflective.BEANS#read} delegates here so the read side
+   * of {@code DeepMap} stays routed through the lattice rather than through bare {@code
+   * Method.invoke}.
+   */
+  public static <P> Getter<P, Object> getter(final Class<P> beanClass, final String name) {
+    final var method = getters(beanClass).get(name);
+    if (method == null) throw new IllegalArgumentException(
+      "No getter for property '" + name + "' on " + beanClass.getName()
+    );
+    return source -> {
+      try {
+        return method.invoke(source);
+      } catch (final ReflectiveOperationException e) {
+        throw new RuntimeException("Failed to read property '" + name + "' on " + beanClass.getName(), e);
+      }
+    };
+  }
+
+  /**
    * Read a bean property by name via its {@code getX()} / {@code isX()} accessor. Throws if no
    * getter matches {@code name}.
+   *
+   * <p>Invokes the cached {@link Method} directly rather than routing through {@link #getter} — the
+   * latter allocates a capturing lambda per call, which matters in hot loops (e.g. {@code
+   * Reflective.structuralIso(...).from(...)} reads every property of a target).
    *
    * <pre>{@code
    * final var name = (String) Beans.readProperty(userPojo, "name"); // userPojo.getName()
    * }</pre>
    */
   public static Object readProperty(final Object pojo, final String name) {
-    final var getter = getters(pojo.getClass()).get(name);
-    if (getter == null) throw new IllegalArgumentException(
+    final var method = getters(pojo.getClass()).get(name);
+    if (method == null) throw new IllegalArgumentException(
       "No getter for property '" + name + "' on " + pojo.getClass().getName()
     );
     try {
-      return getter.invoke(pojo);
+      return method.invoke(pojo);
     } catch (final ReflectiveOperationException e) {
       throw new RuntimeException("Failed to read property '" + name + "' on " + pojo.getClass().getName(), e);
     }
@@ -220,28 +258,6 @@ public final class Beans {
   }
 
   private static <P> BeanWriter<P> computeAutoWriter(final Class<P> cls) {
-    // Each *Writer constructor still throws IllegalStateException with messages referencing the
-    // demolished fromBean(...).viaX() APIs (kept for source compatibility inside the writer
-    // classes). When autoWriter surfaces those at the public Telescope.map(...) layer, rewrite the
-    // message to point at the current API. The original exception becomes the cause.
-    try {
-      return computeAutoWriterUnsafe(cls);
-    } catch (final IllegalStateException e) {
-      final var msg = e.getMessage();
-      if (msg != null && msg.contains("fromBean")) throw new IllegalStateException(
-        "Auto write-strategy detection for " +
-          cls.getName() +
-          " selected a strategy whose underlying writer rejected the class: " +
-          msg.replaceAll("fromBean\\(\\.\\.\\.\\)\\.via(\\w+)\\(\\)", "writeBean(targetClass, $1)") +
-          " Either fix the class shape (add a builder() / no-arg ctor / etc.) or declare an explicit " +
-          "writeBean(targetClass, strategy) hint at the Telescope.map(...) call site.",
-        e
-      );
-      throw e;
-    }
-  }
-
-  private static <P> BeanWriter<P> computeAutoWriterUnsafe(final Class<P> cls) {
     if (hasStaticBuilder(cls)) return builderWriter(cls);
     if (hasNoArgConstructor(cls)) return hasAnySetter(cls) ? settersWriter(cls) : fieldsWriter(cls);
     final var props = propertyNames(cls);
@@ -375,10 +391,7 @@ public final class Beans {
       try {
         this.ctor = cls.getDeclaredConstructor();
       } catch (final NoSuchMethodException e) {
-        throw new IllegalStateException(
-          "fromBean(...).viaFields() requires a no-arg constructor on " + cls.getName(),
-          e
-        );
+        throw new IllegalStateException("writeBean(" + cls.getName() + ", FIELDS) requires a no-arg constructor", e);
       }
       access(ctor);
       final var fs = new LinkedHashMap<String, Field>();
@@ -400,7 +413,9 @@ public final class Beans {
       }
       for (final var name : names) {
         final var f = fields.get(name);
-        if (f == null) throw new IllegalArgumentException("viaFields: no field '" + name + "' on " + cls.getName());
+        if (f == null) throw new IllegalArgumentException(
+          "writeBean(" + cls.getName() + ", FIELDS): no field '" + name + "'"
+        );
         try {
           f.set(pojo, valueByName.apply(name));
         } catch (final IllegalAccessException e) {
@@ -417,10 +432,10 @@ public final class Beans {
         throw new IllegalStateException(
           "Cannot access members of " +
             cls.getName() +
-            " for viaFields(). Add 'opens " +
+            " for the FIELDS strategy. Add 'opens " +
             cls.getPackageName() +
-            " to io.github.eschizoid.telescope;' to that module's module-info.java, or use viaConstructor() / viaBuilder() " +
-            "(which use public members only).",
+            " to io.github.eschizoid.telescope;' to that module's module-info.java, or switch the writeBean " +
+            "hint to CONSTRUCTOR / BUILDER (which use public members only).",
           e
         );
       }
@@ -451,20 +466,20 @@ public final class Beans {
       for (final var c : cls.getDeclaredConstructors()) {
         if (c.getParameterCount() != arity) continue;
         if (found != null) throw new IllegalStateException(
-          "fromBean(...).viaConstructor(): " +
+          "writeBean(" +
             cls.getName() +
-            " has more than one " +
+            ", CONSTRUCTOR): more than one " +
             arity +
-            "-parameter constructor; cannot disambiguate."
+            "-parameter constructor declared; cannot disambiguate."
         );
         found = (Constructor<P>) c;
       }
       if (found == null) throw new IllegalStateException(
-        "fromBean(...).viaConstructor() requires a constructor with " +
-          arity +
-          " parameters on " +
+        "writeBean(" +
           cls.getName() +
-          " (parameters are matched positionally to record components, in component order)."
+          ", CONSTRUCTOR) requires a constructor with " +
+          arity +
+          " parameters (parameters are matched by name when compiled with -parameters, otherwise positionally)."
       );
       found.setAccessible(true);
       this.ctor = found;
@@ -523,7 +538,7 @@ public final class Beans {
         // fall through to the error below
       }
       if (factory == null) throw new IllegalStateException(
-        "fromBean(...).viaBuilder() requires a static builder() method on " + cls.getName()
+        "writeBean(" + cls.getName() + ", BUILDER) requires a static builder() method"
       );
       this.builderFactory = factory;
       this.builderFactory.setAccessible(true);
@@ -532,7 +547,7 @@ public final class Beans {
         this.buildMethod = builderType.getMethod("build");
       } catch (final NoSuchMethodException e) {
         throw new IllegalStateException(
-          "fromBean(...).viaBuilder(): builder " + builderType.getName() + " has no build() method",
+          "writeBean(" + cls.getName() + ", BUILDER): builder " + builderType.getName() + " has no build() method",
           e
         );
       }
@@ -564,7 +579,12 @@ public final class Beans {
           }
         }
         throw new IllegalArgumentException(
-          "viaBuilder: no single-argument builder method for '" + n + "' on " + builderType.getName()
+          "writeBean(" +
+            cls.getName() +
+            ", BUILDER): no single-argument builder method for '" +
+            n +
+            "' on " +
+            builderType.getName()
         );
       });
     }
@@ -586,7 +606,7 @@ public final class Beans {
       try {
         this.ctor = cls.getDeclaredConstructor();
       } catch (final NoSuchMethodException e) {
-        throw new IllegalStateException("viaSetters() requires a no-arg constructor on " + cls.getName(), e);
+        throw new IllegalStateException("writeBean(" + cls.getName() + ", SETTERS) requires a no-arg constructor", e);
       }
       ctor.setAccessible(true);
     }
@@ -618,7 +638,7 @@ public final class Beans {
             return m;
           }
         }
-        throw new IllegalArgumentException("viaSetters: no setter '" + set + "' on " + cls.getName());
+        throw new IllegalArgumentException("writeBean(" + cls.getName() + ", SETTERS): no setter '" + set + "'");
       });
     }
   }
