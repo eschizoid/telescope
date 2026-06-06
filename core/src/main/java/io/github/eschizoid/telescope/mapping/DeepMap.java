@@ -2,10 +2,12 @@ package io.github.eschizoid.telescope.mapping;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.time.temporal.Temporal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -14,15 +16,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
- * Engine for {@link Telescope#map(Class, Class, Mapping[])} / {@link Telescope#mapper(Class, Class,
- * Mapping[])}. Walks the source/target structure pair-by-pair and caches an {@link Iso} per {@code
- * (sourceClass, targetClass)} pair encountered — same-named scalar components identity-link via
- * {@link Iso#identity()}, nested records/beans recurse, {@code List<X>↔List<Y>} / {@code Map<K,
- * X>↔Map<K, Y>} / {@code Optional<X>↔Optional<Y>} lift the inner element {@code Iso} through the
- * container via {@link Iso#liftList}, {@link Iso#liftOptional}, {@link Iso#liftMapValues}.
+ * Engine for {@link Telescope#map(Class, Class, MapStep...)} / {@link Telescope#mapper(Class,
+ * Class, MapStep...)}. Walks the source/target structure pair-by-pair and caches an {@link Iso} per
+ * {@code (sourceClass, targetClass)} pair encountered — same-named scalar components identity-link
+ * via {@link Iso#identity()}, nested records/beans recurse, and same-kind container components
+ * ({@code List<X>↔List<Y>} / {@code Set<X>↔Set<Y>} / {@code Map<K, X>↔Map<K, Y>} / {@code
+ * Optional<X>↔Optional<Y>}) lift the inner element {@code Iso} through the container via {@link
+ * Iso#liftList}, {@link Iso#liftSet}, {@link Iso#liftMapValues}, {@link Iso#liftOptional}.
+ * Containers nest to any depth — the recursion peels one shape per pass and dispatches the rest.
  *
  * <p><b>Lattice-first.</b> The cache value is {@link Iso} directly — the lattice primitive. No
  * intermediate Object-typed plumbing, no parallel link tables. Per-record assembly composes
@@ -48,20 +53,12 @@ public final class DeepMap {
   // ---------- Public entries (called from Telescope.map / Telescope.mapper) ----------
 
   @SuppressWarnings("exports") // Intentional: Iso is module-internal; consumed only by Telescope.
-  public static <A, B> Iso<A, B> resolve(
-    final Class<A> source,
-    final Class<B> target,
-    final Mapping<?, ?>[] overrides
-  ) {
-    return resolution(source, target, overrides).iso;
+  public static <A, B> Iso<A, B> resolve(final Class<A> source, final Class<B> target, final MapStep[] steps) {
+    return resolution(source, target, steps).iso;
   }
 
-  public static <A, B> Mapper<A, B> resolveMapper(
-    final Class<A> source,
-    final Class<B> target,
-    final Mapping<?, ?>[] overrides
-  ) {
-    final var r = resolution(source, target, overrides);
+  public static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {
+    final var r = resolution(source, target, steps);
     return new Mapper<>(r.iso, source, target, r.patchTable);
   }
 
@@ -71,18 +68,107 @@ public final class DeepMap {
   private static <A, B> Resolution<A, B> resolution(
     final Class<A> source,
     final Class<B> target,
-    final Mapping<?, ?>[] overrides
+    final MapStep[] steps
   ) {
-    final var overrideTable = groupOverridesByPair(overrides);
+    final var overrides = new ArrayList<Mapping<?, ?>>();
+    final var hints = new ArrayList<WriteHint<?>>();
+    for (final var step : steps) {
+      if (step instanceof Mapping<?, ?> m) overrides.add(m);
+      else if (step instanceof WriteHint<?> h) hints.add(h);
+    }
+    final var hintMap = buildHintMap(hints);
+    // One bean-side Reflective per resolution call: a singleton Reflective.BEANS when no hints
+    // exist, otherwise one hint-aware Reflective threaded through every recursion call so the
+    // anonymous instance isn't re-allocated per type pair.
+    final var beanRefl = hintMap.isEmpty() ? Reflective.BEANS : Reflective.beansWithHints(hintMap);
+    final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new));
     final var cache = new HashMap<TypePair, Iso<?, ?>>();
     final var topSteps = new LinkedHashMap<String, FieldStep>();
-    populateIso(source, target, overrideTable, cache, topSteps);
+    populateIso(source, target, overrideTable, beanRefl, cache, topSteps);
+    validateAllHintsConsumed(hintMap, cache);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
     final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
     topSteps.forEach((tgtName, step) ->
       patchTable.put(tgtName, new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v)))
     );
     return new Resolution<>(iso, patchTable);
+  }
+
+  // ---------- Hint validation + writer eager construction ----------
+
+  /**
+   * Build the {@code targetClass -> BeanWriter} map from the hint list. Validates eagerly:
+   * duplicate-target hints, record-targeted hints, and incompatible strategies (e.g. {@code
+   * BUILDER} on a class with no static {@code builder()}) all throw at this point — so a
+   * misconfigured hint surfaces at {@code Telescope.map(...)} call time rather than at the first
+   * {@code iso.to()} invocation.
+   */
+  private static Map<Class<?>, Beans.BeanWriter<?>> buildHintMap(final List<WriteHint<?>> hints) {
+    final var map = new HashMap<Class<?>, Beans.BeanWriter<?>>();
+    for (final var hint : hints) {
+      final var cls = hint.targetClass();
+      if (cls.isRecord()) throw new IllegalArgumentException(
+        "writeBean hint targets a record class (" +
+          cls.getName() +
+          "). Records are always reconstructed via the canonical constructor; the hint cannot apply. " +
+          "Remove the writeBean(...) row, or move it to the bean side of the mapping."
+      );
+      if (map.containsKey(cls)) throw new IllegalArgumentException(
+        "Duplicate writeBean hint for " +
+          cls.getName() +
+          ". Each target class may declare at most one writeBean(...) row per Telescope.map(...) call."
+      );
+      map.put(cls, writerFor(hint));
+    }
+    return map;
+  }
+
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Beans.BeanWriter<?> writerFor(final WriteHint<?> hint) {
+    final var cls = (Class) hint.targetClass();
+    try {
+      return switch (hint.strategy()) {
+        case BUILDER -> Beans.builderWriter(cls);
+        case SETTERS -> Beans.settersWriter(cls);
+        case FIELDS -> Beans.fieldsWriter(cls);
+        case CONSTRUCTOR -> Beans.constructorWriter(cls, Beans.propertyNames(cls).length);
+      };
+    } catch (final IllegalStateException e) {
+      // The underlying *Writer constructors throw with messages that still reference the demolished
+      // fromBean(...).viaX() API surface. Rewrap with a writeBean(...)-shaped message so the user
+      // sees the actually-callable API in the error, keeping the original as the cause.
+      throw new IllegalStateException(
+        "writeBean(" + hint.targetClass().getName() + ", " + hint.strategy() + ") is not applicable: " + e.getMessage(),
+        e
+      );
+    }
+  }
+
+  /**
+   * Reject any {@code writeBean(...)} hint whose target class was never encountered <em>on either
+   * side</em> of a resolved type pair. Source-side classes are constructed during {@code
+   * Mapper.backward} / {@code Iso.from}, so a hint on a bean source root (e.g. {@code map(Bean,
+   * Record, writeBean(Bean, ...))}) is genuinely used — it governs the backward direction. Silently
+   * swallowed hints (typo in the class literal, refactored class) still surface here at resolve
+   * time rather than slipping into production.
+   */
+  private static void validateAllHintsConsumed(
+    final Map<Class<?>, Beans.BeanWriter<?>> hintMap,
+    final Map<TypePair, Iso<?, ?>> cache
+  ) {
+    if (hintMap.isEmpty()) return;
+    final var seen = new HashSet<Class<?>>();
+    for (final var pair : cache.keySet()) {
+      seen.add(pair.source);
+      seen.add(pair.target);
+    }
+    final var unused = new ArrayList<String>();
+    for (final var hintCls : hintMap.keySet()) if (!seen.contains(hintCls)) unused.add(hintCls.getName());
+    if (!unused.isEmpty()) throw new IllegalArgumentException(
+      "Unused writeBean hints — classes never encountered during deep-mapping recursion: " +
+        String.join(", ", unused) +
+        ". Remove the row, or verify the class is actually reached by the source/target structure."
+    );
   }
 
   // ---------- Override grouping ----------
@@ -106,6 +192,7 @@ public final class DeepMap {
     final Class<S> source,
     final Class<T> target,
     final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final Reflective beanRefl,
     final Map<TypePair, Iso<?, ?>> cache,
     final Map<String, FieldStep> topStepsOut
   ) {
@@ -113,8 +200,8 @@ public final class DeepMap {
     if (cache.containsKey(key)) return;
     cache.put(key, null); // reserve slot so cycle-re-entry short-circuits
 
-    final var srcRefl = Reflective.of(source);
-    final var tgtRefl = Reflective.of(target);
+    final var srcRefl = pickReflective(source, beanRefl);
+    final var tgtRefl = pickReflective(target, beanRefl);
 
     final var byTargetName = new LinkedHashMap<String, FieldStep>();
     final var bySourceName = new LinkedHashMap<String, FieldStep>();
@@ -174,7 +261,7 @@ public final class DeepMap {
       final var step = new FieldStep(
         name,
         name,
-        autoIso(srcRefl.genericType(source, name), tgtRefl.genericType(target, name), name, overrides, cache)
+        autoIso(srcRefl.genericType(source, name), tgtRefl.genericType(target, name), name, overrides, beanRefl, cache)
       );
       byTargetName.put(name, step);
       bySourceName.put(name, step);
@@ -210,6 +297,7 @@ public final class DeepMap {
     final Type tgtType,
     final String componentName,
     final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final Reflective beanRefl,
     final Map<TypePair, Iso<?, ?>> cache
   ) {
     // (a) Same generic type → identity Iso.
@@ -218,7 +306,7 @@ public final class DeepMap {
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
     if (srcType instanceof Class<?> srcCls && tgtType instanceof Class<?> tgtCls) {
       if (isReflectable(srcCls) && isReflectable(tgtCls)) {
-        populateIso(srcCls, tgtCls, overrides, cache, null);
+        populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null);
         return lazyCacheIso(cache, new TypePair(srcCls, tgtCls));
       }
     }
@@ -246,10 +334,12 @@ public final class DeepMap {
         tgtShape.elementType,
         componentName + "[*]",
         overrides,
+        beanRefl,
         cache
       );
       return switch (srcShape.kind) {
         case LIST -> Iso.liftList(eraseIso(elementIso));
+        case SET -> Iso.liftSet(eraseIso(elementIso));
         case MAP_VALUES -> Iso.liftMapValues(eraseIso(elementIso));
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
       };
@@ -280,6 +370,16 @@ public final class DeepMap {
   }
 
   /**
+   * Pick the right {@link Reflective} for {@code cls}: records always go through {@link
+   * Reflective#RECORDS}; beans go through {@code beanRefl}, which is built once per {@link
+   * #resolution} call (a singleton {@link Reflective#BEANS} when no hints exist, otherwise a single
+   * hint-aware instance shared across the entire recursion).
+   */
+  private static Reflective pickReflective(final Class<?> cls, final Reflective beanRefl) {
+    return cls.isRecord() ? Reflective.RECORDS : beanRefl;
+  }
+
+  /**
    * "field" for records, "property" for beans — used in error messages to read correctly per side.
    */
   private static String slot(final Reflective refl) {
@@ -298,9 +398,8 @@ public final class DeepMap {
     if (CharSequence.class.isAssignableFrom(cls)) return false;
     if (Number.class.isAssignableFrom(cls)) return false;
     if (cls == Boolean.class || cls == Character.class) return false;
-    if (java.time.temporal.Temporal.class.isAssignableFrom(cls)) return false;
-    if (UUID.class.isAssignableFrom(cls)) return false;
-    return true;
+    if (Temporal.class.isAssignableFrom(cls)) return false;
+    return !UUID.class.isAssignableFrom(cls);
   }
 
   // ---------- Iso assembly ----------
@@ -363,7 +462,8 @@ public final class DeepMap {
   private record FieldStep(String sourceName, String targetName, Iso<?, ?> iso) {}
 
   /**
-   * Bundled return from {@link #resolution(Class, Class, Mapping[])} — the Iso and the patch table.
+   * Bundled return from {@link #resolution(Class, Class, MapStep...)} — the Iso and the patch
+   * table.
    */
   private record Resolution<A, B>(Iso<A, B> iso, Map<String, Mapper.PatchEntry> patchTable) {}
 
@@ -379,6 +479,7 @@ public final class DeepMap {
   private record ContainerShape(Kind kind, Type elementType, Class<?> keyClass) {
     enum Kind {
       LIST,
+      SET,
       MAP_VALUES,
       OPTIONAL,
     }
@@ -387,6 +488,7 @@ public final class DeepMap {
       if (!(t instanceof ParameterizedType pt)) return null;
       if (!(pt.getRawType() instanceof Class<?> raw)) return null;
       if (raw == List.class) return new ContainerShape(Kind.LIST, pt.getActualTypeArguments()[0], null);
+      if (raw == Set.class) return new ContainerShape(Kind.SET, pt.getActualTypeArguments()[0], null);
       if (raw == Optional.class) return new ContainerShape(Kind.OPTIONAL, pt.getActualTypeArguments()[0], null);
       if (raw == Map.class) {
         final var keyArg = pt.getActualTypeArguments()[0];

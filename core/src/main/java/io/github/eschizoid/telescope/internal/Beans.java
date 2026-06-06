@@ -30,7 +30,25 @@ public final class Beans {
 
   private Beans() {}
 
-  private static final Map<Class<?>, Map<String, Method>> GETTERS = new ConcurrentHashMap<>();
+  // ClassValue is the JDK-provided cache that genuinely permits class unloading: the entry is held
+  // off-heap from the Class, so a cached value (which strongly references reflective members and
+  // therefore the Class itself) cannot prevent its key from becoming unreachable. WeakHashMap
+  // wouldn't work here — its strong values would chain back to the weak key, keeping the entry
+  // alive. ClassValue is threadsafe by construction. Both the per-class getter map and the
+  // auto-writer use it for the same reason — keep classloader-unload behavior consistent.
+  private static final ClassValue<Map<String, Method>> GETTERS = new ClassValue<>() {
+    @Override
+    protected Map<String, Method> computeValue(final Class<?> type) {
+      return scanGetters(type);
+    }
+  };
+
+  private static final ClassValue<BeanWriter<?>> AUTO_WRITER_CACHE = new ClassValue<>() {
+    @Override
+    protected BeanWriter<?> computeValue(final Class<?> type) {
+      return computeAutoWriter(type);
+    }
+  };
 
   /**
    * Read a bean property by name via its {@code getX()} / {@code isX()} accessor. Throws if no
@@ -76,7 +94,7 @@ public final class Beans {
   }
 
   private static Map<String, Method> getters(final Class<?> cls) {
-    return GETTERS.computeIfAbsent(cls, Beans::scanGetters);
+    return GETTERS.get(cls);
   }
 
   private static Map<String, Method> scanGetters(final Class<?> cls) {
@@ -185,21 +203,100 @@ public final class Beans {
   /**
    * Pick a <em>name-based</em> write strategy for {@code cls} by probing in priority order: a
    * static {@code builder()}, then a no-arg constructor with setters, then a no-arg constructor
-   * with field injection. Used by the record-less POJO APIs ({@code Telescope.ofBean} / {@code
-   * mapBean}) where there is no canonical component order, so the positional {@link
-   * #constructorWriter} is not a candidate. Throws if none applies (e.g., an immutable
-   * all-args-only POJO).
+   * with field injection, then — as a last resort — a single public all-args constructor (compiled
+   * with {@code -parameters} so its arguments can be matched by name without positional ambiguity).
+   * The result is cached per class.
+   *
+   * <p>Used by both the record-less POJO APIs ({@link
+   * io.github.eschizoid.telescope.Telescope#ofBean(Class) Telescope.ofBean}) and by the deep
+   * mapping path when no explicit {@code writeBean} hint applies. Throws if none of the strategies
+   * applies (e.g., an immutable all-args-only POJO compiled without {@code -parameters}); the
+   * recommended escape is to declare a {@code writeBean(target, CONSTRUCTOR)} hint at the {@code
+   * Telescope.map(...)} call site.
    */
+  @SuppressWarnings("unchecked")
   public static <P> BeanWriter<P> autoWriter(final Class<P> cls) {
+    return (BeanWriter<P>) AUTO_WRITER_CACHE.get(cls);
+  }
+
+  private static <P> BeanWriter<P> computeAutoWriter(final Class<P> cls) {
+    // Each *Writer constructor still throws IllegalStateException with messages referencing the
+    // demolished fromBean(...).viaX() APIs (kept for source compatibility inside the writer
+    // classes). When autoWriter surfaces those at the public Telescope.map(...) layer, rewrite the
+    // message to point at the current API. The original exception becomes the cause.
+    try {
+      return computeAutoWriterUnsafe(cls);
+    } catch (final IllegalStateException e) {
+      final var msg = e.getMessage();
+      if (msg != null && msg.contains("fromBean")) throw new IllegalStateException(
+        "Auto write-strategy detection for " +
+          cls.getName() +
+          " selected a strategy whose underlying writer rejected the class: " +
+          msg.replaceAll("fromBean\\(\\.\\.\\.\\)\\.via(\\w+)\\(\\)", "writeBean(targetClass, $1)") +
+          " Either fix the class shape (add a builder() / no-arg ctor / etc.) or declare an explicit " +
+          "writeBean(targetClass, strategy) hint at the Telescope.map(...) call site.",
+        e
+      );
+      throw e;
+    }
+  }
+
+  private static <P> BeanWriter<P> computeAutoWriterUnsafe(final Class<P> cls) {
     if (hasStaticBuilder(cls)) return builderWriter(cls);
     if (hasNoArgConstructor(cls)) return hasAnySetter(cls) ? settersWriter(cls) : fieldsWriter(cls);
+    final var props = propertyNames(cls);
+    final var sole = solePublicConstructor(cls, props.length);
+    // Refuse to silently use positional fallback: getter-iteration order is not guaranteed to match
+    // constructor parameter order. Requiring -parameters yields named matching and eliminates the
+    // silent-data-shuffle hazard the explicit writeBean(...) hint accepts. Also require every ctor
+    // parameter name to appear in the getter-derived property set — otherwise `getURL()` → property
+    // `"URL"` mismatched against a ctor parameter named `"url"` would silently pass null into the
+    // constructor under the lookup `valueByName("url")`.
+    if (sole != null && allParameterNamesMatchProperties(sole, props)) return constructorWriter(cls, props.length);
     throw new IllegalStateException(
       "No name-based write strategy for " +
         cls.getName() +
-        " — needs a static builder(), a no-arg constructor with setters, or a no-arg constructor (field injection). " +
-        "Immutable all-args-only POJOs aren't supported by the auto path; use a record, or the " +
-        "fromBean(...).viaConstructor() bridge where the record gives a canonical parameter order."
+        " — needs a static builder(), a no-arg constructor with setters, a no-arg constructor (field injection), " +
+        "or exactly one public constructor whose arity matches the property count (" +
+        props.length +
+        "), was compiled with -parameters, and whose parameter names line up with the getter-derived properties. " +
+        "Primary fix: recompile the target class with javac -parameters so its constructor arguments can be " +
+        "matched by name. The writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site is " +
+        "an escape hatch, but note it falls back to POSITIONAL argument matching when -parameters is absent — " +
+        "argument order is then the getter-discovery order (not a stable, user-defined canonical order), so " +
+        "the hint should still be paired with -parameters to be safe."
     );
+  }
+
+  /**
+   * Probe for the unique public constructor of {@code arity}. Two passes so the probe matches what
+   * {@link ConstructorWriter} actually does: that writer scans {@code getDeclaredConstructors()}
+   * (any access) and throws on multiple matches. So a class with one public + one non-public ctor
+   * of the requested arity would survive a public-only check but blow up later when {@code
+   * ConstructorWriter} sees both. We refuse here in both cases — non-public same-arity sibling or
+   * multiple publics — so the auto path stays consistent with its delegate.
+   */
+  private static <P> Constructor<P> solePublicConstructor(final Class<P> cls, final int arity) {
+    var declaredCount = 0;
+    for (final var c : cls.getDeclaredConstructors()) if (c.getParameterCount() == arity) declaredCount++;
+    if (declaredCount != 1) return null; // ambiguous declared-set, or zero matches
+    Constructor<P> found = null;
+    for (final var c : cls.getConstructors()) {
+      if (c.getParameterCount() != arity) continue;
+      @SuppressWarnings("unchecked")
+      final var cast = (Constructor<P>) c;
+      found = cast;
+    }
+    return found; // non-null only if the unique declared ctor of that arity is public
+  }
+
+  private static boolean allParameterNamesMatchProperties(final Constructor<?> ctor, final String[] propertyNames) {
+    final var props = new java.util.HashSet<>(java.util.Arrays.asList(propertyNames));
+    for (final var p : ctor.getParameters()) {
+      if (!p.isNamePresent()) return false;
+      if (!props.contains(p.getName())) return false;
+    }
+    return true;
   }
 
   /**

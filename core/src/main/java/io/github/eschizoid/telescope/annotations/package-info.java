@@ -13,7 +13,7 @@
  *   <li>{@link io.github.eschizoid.telescope.annotations.Bridge} — applied to a record to generate
  *       a reflection-free, compile-checked bridge to a sibling POJO; the runtime counterpart of the
  *       deep recursive {@link io.github.eschizoid.telescope.Telescope#map(Class, Class,
- *       io.github.eschizoid.telescope.mapping.Mapping[])} factory.
+ *       io.github.eschizoid.telescope.mapping.MapStep...)} factory.
  * </ul>
  *
  * <p>The annotations themselves carry no runtime behavior — they are read by the {@code

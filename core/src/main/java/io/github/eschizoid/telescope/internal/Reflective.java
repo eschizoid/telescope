@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal;
 
 import java.lang.reflect.Type;
+import java.util.Map;
 import java.util.function.Function;
 
 /**
@@ -53,6 +54,49 @@ public interface Reflective {
    */
   static Reflective of(final Class<?> cls) {
     return cls.isRecord() ? RECORDS : BEANS;
+  }
+
+  /**
+   * Bean reflective that consults {@code hints} before falling back to {@link Beans#autoWriter}.
+   * Used by {@link io.github.eschizoid.telescope.mapping.DeepMap DeepMap} when the user supplies
+   * {@code writeBean(targetClass, strategy)} rows — the hint map is keyed on target class and
+   * provides a pre-instantiated {@link Beans.BeanWriter}, so eager construction has already
+   * validated strategy applicability.
+   */
+  static Reflective beansWithHints(final Map<Class<?>, Beans.BeanWriter<?>> hints) {
+    return new Reflective() {
+      @Override
+      public String[] names(final Class<?> cls) {
+        return Beans.propertyNames(cls);
+      }
+
+      @Override
+      public Type genericType(final Class<?> cls, final String name) {
+        return Beans.propertyType(cls, name);
+      }
+
+      @Override
+      public Object read(final Object value, final String name) {
+        return Beans.readProperty(value, name);
+      }
+
+      @Override
+      @SuppressWarnings({ "rawtypes", "unchecked" })
+      public Object construct(final Class<?> cls, final Function<String, Object> valueByName) {
+        // Lazy fallback — Beans.autoWriter may throw for classes the auto path refuses (ambiguous
+        // multi-ctor POJOs, classes compiled without -parameters, or ctor/getter name mismatches);
+        // when a hint exists it MUST win, otherwise autoWriter's pre-emptive throw would defeat the
+        // hint mechanism. getOrDefault would eagerly evaluate the default and short-circuit it.
+        final var hinted = (Beans.BeanWriter) hints.get(cls);
+        final var writer = hinted != null ? hinted : Beans.autoWriter((Class) cls);
+        return writer.construct(Beans.propertyNames(cls), valueByName);
+      }
+
+      @Override
+      public String normalize(final String rawMethodName) {
+        return Beans.propertyOf(rawMethodName);
+      }
+    };
   }
 
   Reflective RECORDS = new Reflective() {
