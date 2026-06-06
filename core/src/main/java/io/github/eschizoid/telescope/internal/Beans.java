@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.internal;
 
+import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Constructor;
@@ -51,23 +52,43 @@ public final class Beans {
   };
 
   /**
+   * The lattice-primitive read for one bean property — a {@link Getter Getter&lt;P, Object&gt;}
+   * over the {@code getX()} / {@code isX()} accessor. Built once per {@code (beanClass, name)} pair
+   * (the underlying {@link Method} comes from the {@link #GETTERS} ClassValue cache, so the Getter
+   * is a thin wrapper around an already-resolved method reference).
+   *
+   * <p>Throws {@link IllegalArgumentException} at build time if the named property has no getter.
+   *
+   * <p>{@link #readProperty(Object, String)} is the convenience caller; {@code
+   * io.github.eschizoid.telescope.internal.Reflective.BEANS#read} delegates here so the read side
+   * of {@code DeepMap} stays routed through the lattice rather than through bare {@code
+   * Method.invoke}.
+   */
+  public static <P> Getter<P, Object> getter(final Class<P> beanClass, final String name) {
+    final var method = getters(beanClass).get(name);
+    if (method == null) throw new IllegalArgumentException(
+      "No getter for property '" + name + "' on " + beanClass.getName()
+    );
+    return source -> {
+      try {
+        return method.invoke(source);
+      } catch (final ReflectiveOperationException e) {
+        throw new RuntimeException("Failed to read property '" + name + "' on " + beanClass.getName(), e);
+      }
+    };
+  }
+
+  /**
    * Read a bean property by name via its {@code getX()} / {@code isX()} accessor. Throws if no
-   * getter matches {@code name}.
+   * getter matches {@code name}. Thin convenience over {@link #getter}.
    *
    * <pre>{@code
    * final var name = (String) Beans.readProperty(userPojo, "name"); // userPojo.getName()
    * }</pre>
    */
+  @SuppressWarnings({ "rawtypes", "unchecked" })
   public static Object readProperty(final Object pojo, final String name) {
-    final var getter = getters(pojo.getClass()).get(name);
-    if (getter == null) throw new IllegalArgumentException(
-      "No getter for property '" + name + "' on " + pojo.getClass().getName()
-    );
-    try {
-      return getter.invoke(pojo);
-    } catch (final ReflectiveOperationException e) {
-      throw new RuntimeException("Failed to read property '" + name + "' on " + pojo.getClass().getName(), e);
-    }
+    return getter((Class) pojo.getClass(), name).get(pojo);
   }
 
   /**
