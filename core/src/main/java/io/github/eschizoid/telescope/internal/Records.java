@@ -1,22 +1,26 @@
 package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import java.lang.invoke.LambdaMetafactory;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 /**
- * Reflection-based machinery for building {@link Lens}es over record components by name. Backs the
+ * Lattice-routed machinery for building {@link Lens}es over record components by name. Backs the
  * field navigation of {@link io.github.eschizoid.telescope.Telescope}.
  *
- * <p>State is a single per-record-class {@code RecordInfo} cache: the record's {@link
- * RecordComponent} array (in canonical-constructor order) and the canonical {@link Constructor},
- * resolved once via reflection and stored in a {@link ConcurrentHashMap}. On the first lookup for a
- * class, accessors and the constructor are {@code setAccessible(true)} so later reads and rebuilds
- * skip access checks; every subsequent operation is constant-time.
+ * <p>State is a single per-record-class {@code RecordInfo}, held in a {@link ClassValue} so a
+ * stored entry doesn't pin its key's classloader. The cache carries (a) the {@link RecordComponent}
+ * array for metadata (name, generic type, index lookup), (b) one {@link Function
+ * Function&lt;Object, Object&gt;} per component built once via {@link LambdaMetafactory} for the
+ * hot-path read, and (c) the canonical {@link Constructor} for rebuild. The hot path never touches
+ * {@link java.lang.reflect.Method#invoke} — component reads dispatch through the synthetic {@code
+ * Function} the LambdaMetafactory call site materializes, which the JIT inlines just like a direct
+ * method-ref invocation.
  *
  * <p>Records only. Mutating helpers reject any non-record argument with {@code "Not a record"}, and
  * {@code RecordInfo.of} does the same when a class is first cached.
@@ -25,7 +29,17 @@ public final class Records {
 
   private Records() {}
 
-  private static final Map<Class<?>, RecordInfo> CACHE = new ConcurrentHashMap<>();
+  // ClassValue (not ConcurrentHashMap) so the cached RecordInfo — which strongly references the
+  // RecordComponent[], the Constructor, and the LambdaMetafactory-built reader Functions — can't
+  // pin a classloader through the strongly-held value chain back to the weak key. ClassValue
+  // holds entries off-heap from the Class itself, the JDK-native pattern for class-keyed caches
+  // that permit classloader unloading.
+  private static final ClassValue<RecordInfo> CACHE = new ClassValue<>() {
+    @Override
+    protected RecordInfo computeValue(final Class<?> type) {
+      return RecordInfo.of(type);
+    }
+  };
 
   /**
    * A {@link Lens} over a record component, identified by name. The {@code get} reads the
@@ -145,11 +159,7 @@ public final class Records {
     final var info = info(source.getClass());
     final var idx = info.indexOf(fieldName);
     if (idx < 0) throw noField(fieldName, source.getClass());
-    try {
-      return info.components()[idx].getAccessor().invoke(source);
-    } catch (final ReflectiveOperationException e) {
-      throw new RuntimeException("Failed to read field " + fieldName, e);
-    }
+    return info.readers()[idx].apply(source);
   }
 
   @SuppressWarnings("unchecked")
@@ -160,12 +170,13 @@ public final class Records {
     final var info = info(cls);
     final var idx = info.indexOf(fieldName);
     if (idx < 0) throw noField(fieldName, cls);
-    final var args = new Object[info.components().length];
+    final var readers = info.readers();
+    final var args = new Object[readers.length];
+    for (var i = 0; i < args.length; i++) {
+      final var current = readers[i].apply(source);
+      args[i] = (i == idx) ? fn.apply(current) : current;
+    }
     try {
-      for (var i = 0; i < args.length; i++) {
-        final var current = info.components()[i].getAccessor().invoke(source);
-        args[i] = (i == idx) ? fn.apply(current) : current;
-      }
       return (S) info.ctor().newInstance(args);
     } catch (final ReflectiveOperationException e) {
       throw new RuntimeException("Failed to rebuild " + cls.getSimpleName(), e);
@@ -173,7 +184,7 @@ public final class Records {
   }
 
   private static RecordInfo info(final Class<?> cls) {
-    return CACHE.computeIfAbsent(cls, RecordInfo::of);
+    return CACHE.get(cls);
   }
 
   private static IllegalArgumentException noField(final String fieldName, final Class<?> cls) {
@@ -181,11 +192,12 @@ public final class Records {
   }
 
   /**
-   * Cached per-class reflection: the component array (canonical order) and the canonical
-   * constructor, both made accessible once at {@link #of(Class)} time. {@code indexOf} maps a
-   * component name to its position; the cache lives in {@link #CACHE}.
+   * Cached per-class metadata: the component array (canonical order) for name / type lookups, one
+   * {@link Function Function&lt;Object, Object&gt;} per component built once via {@link
+   * LambdaMetafactory} for hot-path reads, and the canonical {@link Constructor} for rebuild.
+   * {@code indexOf} maps a component name to its position; the cache lives in {@link #CACHE}.
    */
-  private record RecordInfo(RecordComponent[] components, Constructor<?> ctor) {
+  private record RecordInfo(RecordComponent[] components, Function<Object, Object>[] readers, Constructor<?> ctor) {
     static RecordInfo of(final Class<?> cls) {
       if (!cls.isRecord()) throw new IllegalArgumentException("Not a record: " + cls.getName());
       final var comps = cls.getRecordComponents();
@@ -193,11 +205,64 @@ public final class Records {
       try {
         final var ctor = cls.getDeclaredConstructor(paramTypes);
         ctor.setAccessible(true);
-        for (final var c : comps) c.getAccessor().setAccessible(true);
-        return new RecordInfo(comps, ctor);
+        final var readers = buildReaders(cls, comps);
+        return new RecordInfo(comps, readers, ctor);
       } catch (final NoSuchMethodException e) {
         throw new IllegalStateException("Cannot find canonical constructor for " + cls.getName(), e);
       }
+    }
+
+    /**
+     * Build one {@link Function} per component via {@link LambdaMetafactory}. Forward: the
+     * metafactory synthesizes a class implementing {@link Function} whose {@code apply(Object)}
+     * directly calls the component accessor and auto-boxes any primitive return. After the first
+     * call per class the dispatch is a single virtual call the JIT inlines — no {@link
+     * java.lang.reflect.Method#invoke}, no per-call argument array, no access-check.
+     */
+    @SuppressWarnings("unchecked")
+    private static Function<Object, Object>[] buildReaders(final Class<?> cls, final RecordComponent[] comps) {
+      final var readers = (Function<Object, Object>[]) new Function<?, ?>[comps.length];
+      final MethodHandles.Lookup lookup;
+      try {
+        // `privateLookupIn` is needed when the record (or its module's package) isn't open to the
+        // telescope module; for fully-public records in the same module this is equivalent to a
+        // plain `MethodHandles.lookup()`. Same JPMS constraint as `setAccessible(true)` — no
+        // worse than the previous reflection path.
+        lookup = MethodHandles.privateLookupIn(cls, MethodHandles.lookup());
+      } catch (final IllegalAccessException e) {
+        throw new IllegalStateException(
+          "Cannot access " +
+            cls.getName() +
+            " to build LambdaMetafactory readers. Add 'opens " +
+            cls.getPackageName() +
+            " to io.github.eschizoid.telescope;' to that module's module-info.java.",
+          e
+        );
+      }
+      for (var i = 0; i < comps.length; i++) {
+        final var comp = comps[i];
+        try {
+          final var handle = lookup.unreflect(comp.getAccessor());
+          // SAM signature is `Object apply(Object)`; the instantiatedMethodType pins the actual
+          // (recordClass) -> componentType signature so the metafactory generates the right
+          // bridge — including auto-boxing for primitive returns (`int`, `long`, etc).
+          final var callSite = LambdaMetafactory.metafactory(
+            lookup,
+            "apply",
+            MethodType.methodType(Function.class),
+            MethodType.methodType(Object.class, Object.class),
+            handle,
+            MethodType.methodType(comp.getType(), cls)
+          );
+          readers[i] = (Function<Object, Object>) callSite.getTarget().invoke();
+        } catch (final Throwable t) {
+          throw new IllegalStateException(
+            "Failed to build LambdaMetafactory reader for " + cls.getName() + "." + comp.getName(),
+            t
+          );
+        }
+      }
+      return readers;
     }
 
     int indexOf(final String name) {
