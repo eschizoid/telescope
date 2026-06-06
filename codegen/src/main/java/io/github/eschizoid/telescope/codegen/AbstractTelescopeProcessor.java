@@ -744,14 +744,16 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       case "set" -> "Telescope.<R, " + elementType + ">asSet(path).each()";
       case "optional" -> "Telescope.<R, " + elementType + ">asOptional(path).present()";
       case "map" -> "Telescope.asMap(path).values()";
-      // Iterable case: declared leaf is some `? extends Iterable<E>` shape (e.g. Iterable<E>,
-      // Collection<E>, a custom user iterable). Java's type inference can't always work
-      // backward
-      // from path's leaf type to `eachIterable()`'s bounded type parameter, so we pin both type
-      // arguments to `Telescope.wrap(...)` explicitly — that way the produced
-      // `Telescope<containerType, elementType>` matches the `path.then(...)` left side
-      // regardless
-      // of whether the declared container is `Iterable`, `Collection`, or any other subtype.
+      // Iterable case: declared leaf is some `? extends Iterable<E>` shape that isn't List,
+      // Set,
+      // Map, or Optional (e.g. bare `Iterable<E>` or `Collection<E>`). Pin both type arguments
+      // on `Telescope.wrap(...)` explicitly so the produced `Telescope<containerType,
+      // elementType>` matches the `path.then(...)` left side regardless of the exact declared
+      // container subtype. NOTE: `Traversals.eachIterable()` only safely rebuilds List and Set
+      // sources — other Iterable subtypes (Queue, Deque, custom iterables) trigger a runtime
+      // IllegalArgumentException at update time. The generated step still compiles; if your
+      // model uses Queue/Deque, re-declare the leaf as `List<E>` or `Set<E>` at the source so
+      // the codegen lands on the typed `list`/`set` branches above instead.
       default -> "path.then(Telescope.<" +
       containerType +
       ", " +

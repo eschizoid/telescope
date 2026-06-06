@@ -26,7 +26,9 @@ import java.util.stream.Stream;
  * <p>{@link #eachIterable()} is the polymorphic {@code Iterable<E>} variant used by the typed
  * {@code Telescope.each(Accessor)} form when the declared leaf type is {@code Iterable<E>} rather
  * than a specific {@code List}/{@code Set}. It dispatches once on the runtime class to pick the
- * concrete rebuild shape (List → ArrayList, Set → LinkedHashSet, other → ArrayList fallback).
+ * concrete rebuild shape (List → ArrayList, Set → LinkedHashSet). Other {@code Iterable} subtypes
+ * (Queue, Deque, custom iterables) are rejected at {@code modify} time — see {@link
+ * #eachIterable()} for the rationale.
  */
 public final class Traversals {
 
@@ -97,15 +99,22 @@ public final class Traversals {
   }
 
   /**
-   * A {@link Traversal} over any {@link Iterable} container ({@code List}, {@code Set}, any custom
-   * {@code Iterable}). Streams via {@link Iterable#iterator()} and rebuilds via the concrete
-   * container's typed {@code Traversals.each*} primitive when the actual class is known (List →
-   * {@code ArrayList}, Set → {@code LinkedHashSet}); other Iterables rebuild as unmodifiable lists.
+   * A {@link Traversal} over an {@link Iterable} container — rebuilds {@link List} sources as an
+   * unmodifiable {@code ArrayList}-backed list, {@link Set} sources as an unmodifiable {@link
+   * LinkedHashSet}-backed set.
    *
-   * <p>Used by the typed {@code Telescope.each(Accessor<A, ? extends Iterable<E>>)} form on
-   * Telescope, which declares the leaf as Iterable to accept either List or Set without locking the
-   * caller into one concrete shape. Arrays are NOT supported — wrap as a List or Set if your model
-   * uses arrays.
+   * <p><b>Supported shapes are List and Set only.</b> Used by the typed {@code
+   * Telescope.each(Accessor<A, ? extends Iterable<E>>)} form on Telescope so a getter declared as
+   * {@code Iterable<E>} accepts either concrete kind without locking the call site to one. Any
+   * other {@code Iterable} subtype ({@link java.util.Queue Queue}, {@link java.util.Deque Deque}, a
+   * custom {@code FooIterable}) is rejected at {@code modify(...)} time with a {@link
+   * ClassCastException}-equivalent {@link IllegalArgumentException} — the rebuild can only preserve
+   * container identity (i.e. honor the {@code C} type parameter without a downstream cast failure)
+   * for {@code List} and {@code Set}. If your model uses {@code Queue}/{@code Deque} /custom
+   * iterables, declare the getter as {@code List<E>} or {@code Set<E>} and explicitly convert at
+   * the boundary instead.
+   *
+   * <p>Arrays are NOT supported — wrap as a List or Set if your model uses arrays.
    */
   @SuppressWarnings({ "unchecked", "cast" })
   public static <C extends Iterable<E>, E> Traversal<C, E> eachIterable() {
@@ -129,11 +138,15 @@ public final class Traversals {
           for (final var e : source) out.add(f.apply(e));
           return (C) Collections.unmodifiableSet(out);
         }
-        // Other Iterable shapes — rebuild as an immutable List (best-effort; the typed leaf
-        // .each(Accessor<A, List<X>>) or .each(Accessor<A, Set<X>>) preserves the original shape).
-        final var out = new ArrayList<E>();
-        for (final var e : source) out.add(f.apply(e));
-        return (C) Collections.unmodifiableList(out);
+        // No safe rebuild for other Iterable shapes — the (C) cast would succeed on a List but
+        // throw ClassCastException downstream when callers store it into a field typed as e.g.
+        // Queue<E>. Refuse upfront with a clear message instead of fabricating an unsafe cast.
+        throw new IllegalArgumentException(
+          "Traversals.eachIterable() supports only List and Set sources; got " +
+            source.getClass().getName() +
+            ". Declare your record component / bean property as List<E> or Set<E>, " +
+            "not the raw Iterable subtype, so the rebuild can preserve container identity."
+        );
       }
     };
   }
