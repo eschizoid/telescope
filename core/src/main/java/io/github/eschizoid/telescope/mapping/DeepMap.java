@@ -418,7 +418,6 @@ public final class DeepMap {
    * structural-decomposition primitive lives on {@link Reflective#structuralIso} and the per-field
    * {@link Iso}s are already lattice values.
    */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
   private static <S, T> Iso<S, T> assembleIso(
     final Class<S> source,
     final Class<T> target,
@@ -427,7 +426,7 @@ public final class DeepMap {
     final Map<String, FieldStep> byTargetName,
     final Map<String, FieldStep> bySourceName
   ) {
-    final Iso<S, Map<String, Object>> srcReader = ((Iso) srcRefl.structuralIso(source)).reverse();
+    final Iso<S, Map<String, Object>> srcReader = srcRefl.structuralIso(source).reverse();
     final Iso<Map<String, Object>, T> tgtBuilder = tgtRefl.structuralIso(target);
     final Iso<Map<String, Object>, Map<String, Object>> remap = remapIso(byTargetName, bySourceName);
     return nullable(srcReader.then(remap).then(tgtBuilder));
