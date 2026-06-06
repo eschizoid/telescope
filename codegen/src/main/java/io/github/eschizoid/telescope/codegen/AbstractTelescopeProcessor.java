@@ -155,7 +155,16 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * whenPresent}). Returned by {@link #traversalKind}; {@code null} when the type isn't a
    * traversable container.
    */
-  protected record TraversalShape(String elementType, String stepMethod) {}
+  protected record TraversalShape(String elementType, String stepMethod, String containerKind) {
+    /**
+     * One of {@code "list"}, {@code "set"}, {@code "map"}, {@code "optional"}, {@code "iterable"}.
+     * Drives which {@code Telescope.asX(...)} static factory the codegen emits to step into
+     * elements without runtime container dispatch.
+     */
+    public String containerKind() {
+      return containerKind;
+    }
+  }
 
   /**
    * The traversal shape of a collection-shaped {@code type}, or {@code null} if it isn't
@@ -176,17 +185,29 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var map = elements.getTypeElement("java.util.Map");
     if (map != null && types.isAssignable(erasure, types.erasure(map.asType()))) {
       final var elem = concreteArg(args, 1);
-      return elem == null ? null : new TraversalShape(elem, "eachValue");
+      return elem == null ? null : new TraversalShape(elem, "eachValue", "map");
     }
     final var optional = elements.getTypeElement("java.util.Optional");
     if (optional != null && types.isSameType(erasure, types.erasure(optional.asType()))) {
       final var elem = concreteArg(args, 0);
-      return elem == null ? null : new TraversalShape(elem, "whenPresent");
+      return elem == null ? null : new TraversalShape(elem, "whenPresent", "optional");
+    }
+    // Differentiate List vs Set vs raw Iterable so the codegen can emit the right typed
+    // Telescope.asList/asSet factory at the step (zero runtime container dispatch).
+    final var list = elements.getTypeElement("java.util.List");
+    if (list != null && types.isAssignable(erasure, types.erasure(list.asType()))) {
+      final var elem = concreteArg(args, 0);
+      return elem == null ? null : new TraversalShape(elem, "each", "list");
+    }
+    final var set = elements.getTypeElement("java.util.Set");
+    if (set != null && types.isAssignable(erasure, types.erasure(set.asType()))) {
+      final var elem = concreteArg(args, 0);
+      return elem == null ? null : new TraversalShape(elem, "each", "set");
     }
     final var iterable = elements.getTypeElement("java.lang.Iterable");
     if (iterable != null && types.isAssignable(erasure, types.erasure(iterable.asType()))) {
       final var elem = concreteArg(args, 0);
-      return elem == null ? null : new TraversalShape(elem, "each");
+      return elem == null ? null : new TraversalShape(elem, "each", "iterable");
     }
     return null;
   }
@@ -736,9 +757,17 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var stepMethod = shape.stepMethod();
     final var elementIsNavigable = isAnnotatedClass(rawElementType, navigableAnnotations);
     final var elementResultType = elementIsNavigable ? elementType + "Path<R>" : "Telescope<R, " + elementType + ">";
-    final var elementBody = elementIsNavigable
-      ? "new " + elementType + "Path<>(path.<" + elementType + ">each())"
-      : "path.<" + elementType + ">each()";
+    // Emit the typed static factory that promotes the container path to the right subclass, then
+    // call the subclass's typed terminal. No runtime container dispatch.
+    final var stepCore = switch (shape.containerKind()) {
+      case "list" -> "Telescope.<R, " + elementType + ">asList(path).each()";
+      case "set" -> "Telescope.<R, " + elementType + ">asSet(path).each()";
+      case "optional" -> "Telescope.<R, " + elementType + ">asOptional(path).present()";
+      case "map" -> "Telescope.asMap(path).values()";
+      default -> "path.then(Telescope.wrap(io.github.eschizoid.telescope.internal.optics.collections." +
+      "Traversals.eachIterable()))";
+    };
+    final var elementBody = elementIsNavigable ? "new " + elementType + "Path<>(" + stepCore + ")" : stepCore;
 
     writeInstanceClass(
       qualifiedStep,

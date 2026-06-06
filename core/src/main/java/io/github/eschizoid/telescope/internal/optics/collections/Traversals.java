@@ -2,7 +2,6 @@ package io.github.eschizoid.telescope.internal.optics.collections;
 
 import io.github.eschizoid.telescope.internal.optics.Affine;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
-import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -12,7 +11,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 /**
@@ -25,8 +23,10 @@ import java.util.stream.Stream;
  * final var doubled = each.modify(List.of(1, 2, 3), n -> n * 2); // [2, 4, 6], unmodifiable
  * }</pre>
  *
- * <p>{@link #eachContainer()} is the runtime-dispatching fallback used when the container shape
- * isn't known statically — it inspects the value and delegates to the right branch.
+ * <p>{@link #eachIterable()} is the polymorphic {@code Iterable<E>} variant used by the typed
+ * {@code Telescope.each(Accessor)} form when the declared leaf type is {@code Iterable<E>} rather
+ * than a specific {@code List}/{@code Set}. It dispatches once on the runtime class to pick the
+ * concrete rebuild shape (List → ArrayList, Set → LinkedHashSet, other → ArrayList fallback).
  */
 public final class Traversals {
 
@@ -97,100 +97,44 @@ public final class Traversals {
   }
 
   /**
-   * A {@link Traversal} that handles any container type ({@code List}, {@code Set}, {@code Map}
-   * values, {@code Optional}, or array) by runtime dispatch. Used internally by {@code
-   * Telescope.each()} when the container shape isn't known statically.
+   * A {@link Traversal} over any {@link Iterable} container ({@code List}, {@code Set}, any custom
+   * {@code Iterable}). Streams via {@link Iterable#iterator()} and rebuilds via the concrete
+   * container's typed {@code Traversals.each*} primitive when the actual class is known (List →
+   * {@code ArrayList}, Set → {@code LinkedHashSet}); other Iterables rebuild as unmodifiable lists.
+   *
+   * <p>Used by the typed {@code Telescope.each(Accessor<A, ? extends Iterable<E>>)} form on
+   * Telescope, which declares the leaf as Iterable to accept either List or Set without locking the
+   * caller into one concrete shape. Arrays are NOT supported — wrap as a List or Set if your model
+   * uses arrays.
    */
   @SuppressWarnings({ "unchecked", "cast" })
-  public static <C, E> Traversal<C, E> eachContainer() {
+  public static <C extends Iterable<E>, E> Traversal<C, E> eachIterable() {
     return new Traversal<>() {
       @Override
       public Stream<E> getAll(final C source) {
-        return (Stream<E>) containerStream(source);
+        if (source == null) return Stream.empty();
+        return java.util.stream.StreamSupport.stream(source.spliterator(), false);
       }
 
       @Override
       public C modify(final C source, final Function<? super E, ? extends E> f) {
-        return (C) containerUpdate(source, (Function<Object, Object>) f);
+        if (source == null) return null;
+        if (source instanceof List<?>) {
+          final var out = new ArrayList<E>();
+          for (final var e : source) out.add(f.apply(e));
+          return (C) Collections.unmodifiableList(out);
+        }
+        if (source instanceof Set<?>) {
+          final var out = new LinkedHashSet<E>();
+          for (final var e : source) out.add(f.apply(e));
+          return (C) Collections.unmodifiableSet(out);
+        }
+        // Other Iterable shapes — rebuild as an immutable List (best-effort; the typed leaf
+        // .each(Accessor<A, List<X>>) or .each(Accessor<A, Set<X>>) preserves the original shape).
+        final var out = new ArrayList<E>();
+        for (final var e : source) out.add(f.apply(e));
+        return (C) Collections.unmodifiableList(out);
       }
     };
-  }
-
-  private static Stream<?> containerStream(final Object container) {
-    switch (container) {
-      case null -> {
-        return Stream.empty();
-      }
-      case List<?> l -> {
-        return l.stream();
-      }
-      case Set<?> s -> {
-        return s.stream();
-      }
-      case Map<?, ?> m -> {
-        return m.values().stream();
-      }
-      case Optional<?> o -> {
-        return o.stream();
-      }
-      default -> {
-      }
-    }
-    if (container.getClass().isArray()) return arrayStream(container);
-    throw new IllegalArgumentException(
-      "each() requires List/Set/Map/Optional/array, got " + container.getClass().getName()
-    );
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Object containerUpdate(final Object container, final Function<Object, Object> fn) {
-    switch (container) {
-      case null -> {
-        return null;
-      }
-      case List<?> l -> {
-        final var out = new ArrayList<>(l.size());
-        for (final var e : l) out.add(fn.apply(e));
-        return Collections.unmodifiableList(out);
-      }
-      case Set<?> s -> {
-        final var out = new LinkedHashSet<>(s.size());
-        for (final var e : s) out.add(fn.apply(e));
-        return Collections.unmodifiableSet(out);
-      }
-      case Map<?, ?> m -> {
-        final var out = new LinkedHashMap<>(m.size());
-        for (final var e : ((Map<Object, Object>) m).entrySet()) {
-          out.put(e.getKey(), fn.apply(e.getValue()));
-        }
-        return Collections.unmodifiableMap(out);
-      }
-      case Optional<?> o -> {
-        return o.isPresent() ? Optional.of(fn.apply(o.get())) : o;
-      }
-      default -> {
-      }
-    }
-    if (container.getClass().isArray()) return arrayUpdate(container, fn);
-    throw new IllegalArgumentException(
-      "each() requires List/Set/Map/Optional/array, got " + container.getClass().getName()
-    );
-  }
-
-  // Reflection-based array handling that works uniformly for primitive arrays (int[], long[],
-  // double[], ...) and Object arrays. `java.lang.reflect.Array.get` boxes primitive values into
-  // their wrapper types; `Array.set` auto-unboxes them on the way back into a fresh array of the
-  // original component type.
-  private static Stream<?> arrayStream(final Object array) {
-    final var len = Array.getLength(array);
-    return IntStream.range(0, len).mapToObj(i -> Array.get(array, i));
-  }
-
-  private static Object arrayUpdate(final Object array, final Function<Object, Object> fn) {
-    final var len = Array.getLength(array);
-    final var componentType = array.getClass().getComponentType();
-    final var out = Array.newInstance(componentType, len);
-    for (var i = 0; i < len; i++) Array.set(out, i, fn.apply(Array.get(array, i)));
-    return out;
   }
 }

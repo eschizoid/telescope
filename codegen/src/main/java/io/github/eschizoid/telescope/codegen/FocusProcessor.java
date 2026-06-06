@@ -198,9 +198,15 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
     final var stepMethod = shape.stepMethod();
     final var elementIsNavigable = isFocusAnnotatedRecord(rawElementType);
     final var elementResultType = elementIsNavigable ? elementType + "Path<R>" : "Telescope<R, " + elementType + ">";
-    final var elementBody = elementIsNavigable
-      ? "new " + elementType + "Path<>(path.<" + elementType + ">each())"
-      : "path.<" + elementType + ">each()";
+    final var stepCore = switch (shape.containerKind()) {
+      case "list" -> "Telescope.<R, " + elementType + ">asList(path).each()";
+      case "set" -> "Telescope.<R, " + elementType + ">asSet(path).each()";
+      case "optional" -> "Telescope.<R, " + elementType + ">asOptional(path).present()";
+      case "map" -> "Telescope.asMap(path).values()";
+      default -> "path.then(Telescope.wrap(io.github.eschizoid.telescope.internal.optics.collections." +
+      "Traversals.eachIterable()))";
+    };
+    final var elementBody = elementIsNavigable ? "new " + elementType + "Path<>(" + stepCore + ")" : stepCore;
 
     writeInstanceClass(
       qualifiedStep,
