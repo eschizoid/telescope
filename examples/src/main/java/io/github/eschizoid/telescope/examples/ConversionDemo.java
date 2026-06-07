@@ -13,6 +13,10 @@ final class ConversionDemo {
 
   private ConversionDemo() {}
 
+  static void main() {
+    run();
+  }
+
   record UserEntity(String id, String email, String name) {}
 
   record UserDto(String id, String email, String name) {}

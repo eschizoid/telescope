@@ -10,6 +10,10 @@ final class RuntimeNavigationDemo {
 
   private RuntimeNavigationDemo() {}
 
+  static void main() {
+    run();
+  }
+
   // ---------- record fixtures ----------
 
   record Address(String city, String zip) {}

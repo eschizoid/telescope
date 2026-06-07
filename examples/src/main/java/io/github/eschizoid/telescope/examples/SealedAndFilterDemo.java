@@ -13,6 +13,10 @@ final class SealedAndFilterDemo {
 
   private SealedAndFilterDemo() {}
 
+  static void main() {
+    run();
+  }
+
   sealed interface Event permits Created, Updated, Deleted {}
 
   record Created(String id) implements Event {}

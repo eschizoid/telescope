@@ -15,6 +15,10 @@ final class MultiEditDemo {
 
   private MultiEditDemo() {}
 
+  static void main() {
+    run();
+  }
+
   record User(String name, String email) {}
 
   record Team(String name, List<User> users) {}

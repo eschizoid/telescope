@@ -19,6 +19,10 @@ final class EffectfulUpdateDemo {
 
   private EffectfulUpdateDemo() {}
 
+  static void main() {
+    run();
+  }
+
   record User(String name, int age, String email) {}
 
   record Team(String name, List<User> users) {}

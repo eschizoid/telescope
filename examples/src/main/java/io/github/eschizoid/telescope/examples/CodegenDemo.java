@@ -23,6 +23,10 @@ final class CodegenDemo {
 
   private CodegenDemo() {}
 
+  static void main() {
+    run();
+  }
+
   static void run() {
     focusRecordNavigator();
     focusRecordCrossPathThen();

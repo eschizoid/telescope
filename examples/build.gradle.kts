@@ -1,6 +1,5 @@
 plugins {
     java
-    application
 }
 
 description = "telescope-examples — first downstream consumer; smoke-tests every public entry point end-to-end"
@@ -22,8 +21,35 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-parameters"))
 }
 
-application {
-    mainClass.set("io.github.eschizoid.telescope.examples.Main")
+// One JavaExec per demo so a failing demo trips its own task rather than getting buried in a
+// single-JVM stack trace, and so individual demos can be re-run via `:examples:run<Demo>`.
+// `:examples:runAllDemos` aggregates them as the canonical smoke-test entry point.
+val demos = listOf(
+    "RuntimeNavigationDemo",
+    "ContainerNavigationDemo",
+    "SealedAndFilterDemo",
+    "MultiEditDemo",
+    "IndexedDemo",
+    "EffectfulUpdateDemo",
+    "ConversionDemo",
+    "DeepMappingDemo",
+    "CodegenDemo",
+    "LombokDemo",
+)
+
+val demoTasks = demos.map { demo ->
+    tasks.register<JavaExec>("run$demo") {
+        group = "demos"
+        description = "Run $demo as a smoke test"
+        mainClass.set("io.github.eschizoid.telescope.examples.$demo")
+        classpath = sourceSets["main"].runtimeClasspath
+    }
+}
+
+tasks.register("runAllDemos") {
+    group = "demos"
+    description = "Run every example demo end-to-end as a smoke test"
+    dependsOn(demoTasks)
 }
 
 dependencies {
