@@ -70,20 +70,4 @@ public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, Typed
   static <A, B, X, Y> Mapping<A, B> via(final Accessor<A, X> src, final Accessor<B, Y> tgt, final Mapper<X, Y> nested) {
     return new Via<>(src, tgt, nested);
   }
-
-  /**
-   * Source class this row keys against (the declaring class of {@code src}'s accessor, recovered
-   * via {@code SerializedLambda}). Used by {@link Telescope#map(Class, Class, MapStep...)} to
-   * decide which type pairs this override applies to.
-   */
-  Class<A> sourceClass();
-
-  /** Target class this row keys against — declaring class of {@code tgt}'s accessor. */
-  Class<B> targetClass();
-
-  /** Source record component name this row claims (the {@code src} accessor's method name). */
-  String sourceField();
-
-  /** Target record component name this row claims (the {@code tgt} accessor's method name). */
-  String targetField();
 }

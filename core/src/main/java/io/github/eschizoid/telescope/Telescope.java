@@ -133,14 +133,16 @@ public sealed class Telescope<
   }
 
   /**
-   * Wrap an internal optic ({@link Traversal} or any of its subtypes — {@link Iso}, {@link Lens},
-   * {@link Prism}) as a {@code Telescope<S, A>}. Used by the conversion-builder sub-package and the
-   * mapping sub-package to produce telescopes from internally-composed optics without depending on
-   * a package-private constructor.
+   * <b>Module-internal seam — NOT public API.</b> Wrap an internal optic ({@link Traversal} or any
+   * of its subtypes — {@link Iso}, {@link Lens}, {@link Prism}) as a {@code Telescope<S, A>}.
    *
-   * <p>The {@link Traversal} type itself lives in the unexported {@code internal.optics} package,
-   * so consumers of the module cannot construct one to pass in — this factory is effectively
-   * module-internal even though declared public.
+   * <p>This method is declared {@code public} purely so the {@code conversion} and {@code mapping}
+   * sub-packages — and the {@code <X>Path<R>} navigators emitted by the codegen processors — can
+   * construct {@code Telescope} instances from internally-composed optics. The {@link Traversal}
+   * type lives in the unexported {@code internal.optics} package, so module consumers cannot supply
+   * a real argument. Treat this signature as part of the module's internal contract: it may change
+   * or disappear without a deprecation cycle. External code must use the documented entry points
+   * ({@link #of(Class)}, {@link #ofBean(Class)}, {@link #lens}, {@link #from(Class)}, etc.).
    */
   @SuppressWarnings("exports") // Intentional: Traversal is module-internal; users can't construct one.
   public static <S, A> Telescope<S, A> wrap(final Traversal<S, A> optic) {
@@ -186,12 +188,15 @@ public sealed class Telescope<
   }
 
   /**
-   * Expose the underlying {@link Traversal} optic. Public so the {@code conversion} sub-package can
-   * do a downcast check (e.g. {@code .optic() instanceof Iso<?, ?>}) when unwrapping a
-   * bidirectional bridge. The returned value's type lives in the unexported {@code internal.optics}
-   * package, so module consumers cannot reference {@code Traversal} at compile time — this method
-   * is effectively module-internal even though declared public, and pairs with {@link
-   * #wrap(Traversal)} for code inside the module.
+   * <b>Module-internal seam — NOT public API.</b> Expose the underlying {@link Traversal} optic so
+   * code inside the module (e.g. the {@code conversion} sub-package) can downcast-check (e.g.
+   * {@code .optic() instanceof Iso<?, ?>}) when unwrapping a bidirectional bridge.
+   *
+   * <p>The returned value's type lives in the unexported {@code internal.optics} package, so module
+   * consumers cannot reference {@link Traversal} at compile time. This method pairs with {@link
+   * #wrap(Traversal)} for code inside the module; it may change or disappear without a deprecation
+   * cycle. External code should use the documented terminal operations ({@link #read}, {@link
+   * #find}, {@link #toList}, {@link #set}, {@link #update}, etc.) instead.
    */
   @SuppressWarnings("exports") // Intentional: Traversal is module-internal; pairs with wrap().
   public Traversal<S, A> optic() {
