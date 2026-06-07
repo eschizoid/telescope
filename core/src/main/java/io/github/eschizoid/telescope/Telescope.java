@@ -460,8 +460,12 @@ public sealed class Telescope<
   /**
    * Typed-container variant of {@link #field(Accessor)} for {@code Set<X>} components. Returns a
    * {@link SetPath} carrying the set type for later {@link SetPath#each()} navigation.
+   *
+   * <p>Named {@code setField} (rather than {@code set}) to avoid cognitive collision with the write
+   * terminal {@link #set(Object, Object)} — they take different argument types, but the shared verb
+   * load is real enough that disambiguation pays off at the call site.
    */
-  public <X> SetPath<S, X> set(final Accessor<A, java.util.Set<X>> getter) {
+  public <X> SetPath<S, X> setField(final Accessor<A, java.util.Set<X>> getter) {
     final Lens<A, java.util.Set<X>> lens = fieldOptics.lensFor(getter);
     return new SetPath<>(optic.then(lens), fieldOptics, chain);
   }
@@ -469,8 +473,12 @@ public sealed class Telescope<
   /**
    * Typed-container variant of {@link #field(Accessor)} for {@code Map<K, V>} components. Returns a
    * {@link MapPath} carrying the map type for later {@link MapPath#values()} navigation.
+   *
+   * <p>Named {@code mapField} (rather than {@code map}) to disambiguate from the sibling static
+   * deep-conversion factory {@link #map(Class, Class, Mapping[])} — those do conceptually different
+   * things and share the same verb otherwise.
    */
-  public <K, V> MapPath<S, K, V> map(final Accessor<A, Map<K, V>> getter) {
+  public <K, V> MapPath<S, K, V> mapField(final Accessor<A, Map<K, V>> getter) {
     final Lens<A, Map<K, V>> lens = fieldOptics.lensFor(getter);
     return new MapPath<>(optic.then(lens), fieldOptics, chain);
   }
