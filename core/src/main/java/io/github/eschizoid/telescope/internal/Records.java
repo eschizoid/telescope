@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.invoke.LambdaMetafactory;
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
@@ -17,10 +18,14 @@ import java.util.function.Function;
  * stored entry doesn't pin its key's classloader. The cache carries (a) the {@link RecordComponent}
  * array for metadata (name, generic type, index lookup), (b) one {@link Function
  * Function&lt;Object, Object&gt;} per component built once via {@link LambdaMetafactory} for the
- * hot-path read, and (c) the canonical {@link Constructor} for rebuild. The hot path never touches
- * {@link java.lang.reflect.Method#invoke} — component reads dispatch through the synthetic {@code
- * Function} the LambdaMetafactory call site materializes, which the JIT inlines just like a direct
- * method-ref invocation.
+ * hot-path read, (c) the canonical {@link Constructor} kept for metadata, and (d) a single
+ * canonical-constructor invoker built once over a {@link MethodHandle#asSpreader(Class, int)
+ * asSpreader}-wrapped {@link MethodHandle} for the hot-path rebuild. The hot path never touches
+ * {@link java.lang.reflect.Method#invoke} or {@link Constructor#newInstance} — reads dispatch
+ * through the synthetic LMF call site (which the JIT inlines just like a direct method-ref
+ * invocation), and rebuilds dispatch through a cached MethodHandle (LMF rejects the non-direct
+ * spread adapter, so the JDK-standard MethodHandle path is used; it still skips the per-call access
+ * check and varargs allocation that {@code Constructor.newInstance} pays).
  *
  * <p>Records only. Mutating helpers reject any non-record argument with {@code "Not a record"}, and
  * {@code RecordInfo.of} does the same when a class is first cached.
@@ -147,11 +152,7 @@ public final class Records {
     final var comps = info.components();
     final var args = new Object[comps.length];
     for (var i = 0; i < comps.length; i++) args[i] = valueByName.apply(comps[i].getName());
-    try {
-      return (R) info.ctor().newInstance(args);
-    } catch (final ReflectiveOperationException e) {
-      throw new RuntimeException("Failed to construct " + recordClass.getSimpleName(), e);
-    }
+    return (R) info.ctorFn().apply(args);
   }
 
   private static Object readField(final Object source, final String fieldName) {
@@ -176,10 +177,14 @@ public final class Records {
       final var current = readers[i].apply(source);
       args[i] = (i == idx) ? fn.apply(current) : current;
     }
+    // Wrap with the rebuild-specific context the pre-LMF Constructor#newInstance path used: the
+    // shared `ctorFn` would otherwise rethrow as "Failed to construct <Record>" from
+    // `RecordInfo.buildCtorFn`, losing the "this happened during a single-field update" context
+    // useful for debugging Records.with / lens modifications.
     try {
-      return (S) info.ctor().newInstance(args);
-    } catch (final ReflectiveOperationException e) {
-      throw new RuntimeException("Failed to rebuild " + cls.getSimpleName(), e);
+      return (S) info.ctorFn().apply(args);
+    } catch (final RuntimeException re) {
+      throw new RuntimeException("Failed to rebuild " + cls.getSimpleName(), re);
     }
   }
 
@@ -194,21 +199,62 @@ public final class Records {
   /**
    * Cached per-class metadata: the component array (canonical order) for name / type lookups, one
    * {@link Function Function&lt;Object, Object&gt;} per component built once via {@link
-   * LambdaMetafactory} for hot-path reads, and the canonical {@link Constructor} for rebuild.
-   * {@code indexOf} maps a component name to its position; the cache lives in {@link #CACHE}.
+   * LambdaMetafactory} for hot-path reads, the canonical {@link Constructor} retained for its
+   * metadata, and a single {@link Function Function&lt;Object, Object&gt;} canonical-constructor
+   * invoker that wraps a cached spread {@link MethodHandle} for hot-path rebuild. {@code indexOf}
+   * maps a component name to its position; the cache lives in {@link #CACHE}.
+   *
+   * <p>The {@code ctorFn} is typed {@code Function<Object, Object>} (Function's only SAM) but its
+   * input is interpreted as an {@code Object[]} of canonical-constructor arguments — the wrapper
+   * casts it back to {@code Object[]} before invoking the spread handle. Callers always pass a
+   * sized-{@code components.length} {@code Object[]}; the spread handle pulls each element by index
+   * and the JVM applies the same implicit boxed/primitive conversions a direct constructor
+   * invocation would.
    */
-  private record RecordInfo(RecordComponent[] components, Function<Object, Object>[] readers, Constructor<?> ctor) {
+  private record RecordInfo(
+    RecordComponent[] components,
+    Function<Object, Object>[] readers,
+    Constructor<?> ctor,
+    Function<Object, Object> ctorFn
+  ) {
     static RecordInfo of(final Class<?> cls) {
       if (!cls.isRecord()) throw new IllegalArgumentException("Not a record: " + cls.getName());
       final var comps = cls.getRecordComponents();
       final var paramTypes = Arrays.stream(comps).map(RecordComponent::getType).toArray(Class<?>[]::new);
       try {
         final var ctor = cls.getDeclaredConstructor(paramTypes);
-        ctor.setAccessible(true);
-        final var readers = buildReaders(cls, comps);
-        return new RecordInfo(comps, readers, ctor);
+        // No raw setAccessible — access flows through privateLookupIn, which routes JPMS failures
+        // through the tailored opens-pointing IllegalStateException below. A raw setAccessible
+        // before that path would throw InaccessibleObjectException with a less-actionable message.
+        final var lookup = privateLookupIn(cls);
+        final var readers = buildReaders(cls, comps, lookup);
+        final var ctorFn = buildCtorFn(cls, ctor, lookup);
+        return new RecordInfo(comps, readers, ctor, ctorFn);
       } catch (final NoSuchMethodException e) {
         throw new IllegalStateException("Cannot find canonical constructor for " + cls.getName(), e);
+      }
+    }
+
+    /**
+     * One {@link MethodHandles.Lookup} per class — used for both the reader and the ctor LMF call
+     * sites so we only walk the JPMS access check once per cache-warm.
+     */
+    private static MethodHandles.Lookup privateLookupIn(final Class<?> cls) {
+      try {
+        // `privateLookupIn` is needed when the record (or its module's package) isn't open to the
+        // telescope module; for fully-public records in the same module this is equivalent to a
+        // plain `MethodHandles.lookup()`. Same JPMS constraint as `setAccessible(true)` — no
+        // worse than the previous reflection path.
+        return MethodHandles.privateLookupIn(cls, MethodHandles.lookup());
+      } catch (final IllegalAccessException e) {
+        throw new IllegalStateException(
+          "Cannot access " +
+            cls.getName() +
+            " to build LambdaMetafactory call sites. Add 'opens " +
+            cls.getPackageName() +
+            " to io.github.eschizoid.telescope;' to that module's module-info.java.",
+          e
+        );
       }
     }
 
@@ -220,25 +266,12 @@ public final class Records {
      * java.lang.reflect.Method#invoke}, no per-call argument array, no access-check.
      */
     @SuppressWarnings("unchecked")
-    private static Function<Object, Object>[] buildReaders(final Class<?> cls, final RecordComponent[] comps) {
+    private static Function<Object, Object>[] buildReaders(
+      final Class<?> cls,
+      final RecordComponent[] comps,
+      final MethodHandles.Lookup lookup
+    ) {
       final var readers = (Function<Object, Object>[]) new Function<?, ?>[comps.length];
-      final MethodHandles.Lookup lookup;
-      try {
-        // `privateLookupIn` is needed when the record (or its module's package) isn't open to the
-        // telescope module; for fully-public records in the same module this is equivalent to a
-        // plain `MethodHandles.lookup()`. Same JPMS constraint as `setAccessible(true)` — no
-        // worse than the previous reflection path.
-        lookup = MethodHandles.privateLookupIn(cls, MethodHandles.lookup());
-      } catch (final IllegalAccessException e) {
-        throw new IllegalStateException(
-          "Cannot access " +
-            cls.getName() +
-            " to build LambdaMetafactory readers. Add 'opens " +
-            cls.getPackageName() +
-            " to io.github.eschizoid.telescope;' to that module's module-info.java.",
-          e
-        );
-      }
       for (var i = 0; i < comps.length; i++) {
         final var comp = comps[i];
         try {
@@ -263,6 +296,45 @@ public final class Records {
         }
       }
       return readers;
+    }
+
+    /**
+     * Build a {@code Function<Object, Object>} canonical-constructor invoker over an {@link
+     * MethodHandle#asSpreader(Class, int) asSpreader}-wrapped {@link MethodHandle}. The raw
+     * constructor handle has type {@code (T1, T2, …, Tn) → R}; {@code asSpreader(Object[].class,
+     * arity)} converts it to {@code (Object[]) → R}, and {@link MethodHandle#asType(MethodType)
+     * asType} relaxes the return to {@code Object} so {@link MethodHandle#invokeExact invokeExact}
+     * can be called from a generic context. Primitive args auto-unbox per the same implicit
+     * conversions a direct constructor call would apply.
+     *
+     * <p>This intentionally does <em>not</em> route through {@link LambdaMetafactory}: {@code
+     * asSpreader} returns a non-direct adapter handle, and LMF rejects non-direct handles with
+     * {@code "MethodHandle(Object[])R is not direct or cannot be cracked"}. The MethodHandle path
+     * is the standard JDK alternative — it still skips the per-call access check and varargs
+     * allocation that {@link Constructor#newInstance} pays, and the JIT inlines {@code invokeExact}
+     * calls through {@code final} fields. The hot path never reaches {@code
+     * Constructor.newInstance}.
+     */
+    private static Function<Object, Object> buildCtorFn(
+      final Class<?> cls,
+      final Constructor<?> ctor,
+      final MethodHandles.Lookup lookup
+    ) {
+      try {
+        final var spread = lookup
+          .unreflectConstructor(ctor)
+          .asSpreader(Object[].class, ctor.getParameterCount())
+          .asType(MethodType.methodType(Object.class, Object[].class));
+        return args -> {
+          try {
+            return (Object) spread.invokeExact((Object[]) args);
+          } catch (final Throwable t) {
+            throw new RuntimeException("Failed to construct " + cls.getSimpleName(), t);
+          }
+        };
+      } catch (final IllegalAccessException e) {
+        throw new IllegalStateException("Failed to build canonical-constructor invoker for " + cls.getName(), e);
+      }
     }
 
     int indexOf(final String name) {
