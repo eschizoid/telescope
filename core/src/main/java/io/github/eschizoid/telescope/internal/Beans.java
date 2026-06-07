@@ -26,7 +26,9 @@ import java.util.function.Function;
  * ({@code Introspector} lives in the {@code java.desktop} module). The discovered getter map is
  * cached per class via {@link ClassValue}. The lattice-primitive read for one property is {@link
  * #getter(Class, String)} — a {@link Getter Getter&lt;P, Object&gt;} backed by the cached {@link
- * Method}; {@link #readProperty} is a thin convenience over it.
+ * Method} that allocates a capturing lambda per call (the lattice-shape entry for composing the
+ * read with other optics). {@link #readProperty} is the hot-path shortcut that invokes the same
+ * cached {@link Method} directly, skipping the lambda allocation — preferred from inner loops.
  *
  * <p><b>Write direction (Map/record &rarr; POJO).</b> Four strategies behind the sealed {@link
  * BeanWriter} — {@link BuilderWriter}, {@link SettersWriter}, {@link FieldsWriter}, {@link
@@ -58,17 +60,17 @@ public final class Beans {
   };
 
   /**
-   * The lattice-primitive read for one bean property — a {@link Getter Getter&lt;P, Object&gt;}
-   * over the {@code getX()} / {@code isX()} accessor. Built once per {@code (beanClass, name)} pair
-   * (the underlying {@link Method} comes from the {@link #GETTERS} ClassValue cache, so the Getter
-   * is a thin wrapper around an already-resolved method reference).
+   * The lattice-primitive form of "read one bean property" — a {@link Getter Getter&lt;P,
+   * Object&gt;} over the {@code getX()} / {@code isX()} accessor. The underlying {@link Method} is
+   * resolved from the {@link #GETTERS} ClassValue cache (so the per-class probe is one-shot), but
+   * each call to {@code getter(...)} <em>does</em> allocate a fresh capturing lambda — this is the
+   * lattice-shape entry point for callers that want to compose a {@code Getter} into other optics.
+   * Hot paths that just want the value (e.g. {@link
+   * io.github.eschizoid.telescope.internal.Reflective Reflective}'s bean-side {@code read}) should
+   * call {@link #readProperty(Object, String)} instead; it invokes the cached {@link Method}
+   * directly without the lambda allocation.
    *
    * <p>Throws {@link IllegalArgumentException} at build time if the named property has no getter.
-   *
-   * <p>{@link #readProperty(Object, String)} is the convenience caller; {@code
-   * io.github.eschizoid.telescope.internal.Reflective.BEANS#read} delegates here so the read side
-   * of {@code DeepMap} stays routed through the lattice rather than through bare {@code
-   * Method.invoke}.
    */
   public static <P> Getter<P, Object> getter(final Class<P> beanClass, final String name) {
     final var method = getters(beanClass).get(name);
@@ -377,8 +379,11 @@ public final class Beans {
    * construction it resolves the no-arg constructor and maps each non-static, non-synthetic
    * declared field by name, calling {@code setAccessible(true)} on all of them. If the JPMS layer
    * forbids that, {@link InaccessibleObjectException} is rethrown as an {@link
-   * IllegalStateException} telling the caller to add an {@code opens} directive or switch to {@link
-   * ConstructorWriter} / {@link BuilderWriter} (which touch public members only).
+   * IllegalStateException} telling the caller to add an {@code opens} directive. Switching the hint
+   * to {@link ConstructorWriter} / {@link BuilderWriter} / {@link SettersWriter} only helps when
+   * their target members are already public — all three still call {@code setAccessible} on the
+   * constructor / methods they resolve, so a fully closed package will keep failing under the same
+   * JPMS constraint; the {@code opens} directive is the real fix.
    */
   static final class FieldsWriter<P> implements BeanWriter<P> {
 
@@ -434,8 +439,11 @@ public final class Beans {
             cls.getName() +
             " for the FIELDS strategy. Add 'opens " +
             cls.getPackageName() +
-            " to io.github.eschizoid.telescope;' to that module's module-info.java, or switch the writeBean " +
-            "hint to CONSTRUCTOR / BUILDER (which use public members only).",
+            " to io.github.eschizoid.telescope;' to that module's module-info.java. " +
+            "Switching the writeBean hint to CONSTRUCTOR / BUILDER / SETTERS will only help if " +
+            "those strategies' members are already public (no setAccessible call needed) — they " +
+            "still invoke setAccessible on the ctor / methods they resolve, so a closed package " +
+            "may keep failing under the same JPMS constraint.",
           e
         );
       }

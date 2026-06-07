@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
@@ -457,6 +458,17 @@ class LatticeCoverageTest {
       final Traversal<Iterable<Integer>, Integer> each = Traversals.eachIterable();
       assertEquals(0L, each.getAll(null).count());
       assertNull(each.modify(null, n -> n + 1));
+    }
+
+    @Test
+    @DisplayName("non-List / non-Set Iterable source: modify rejects with IllegalArgumentException")
+    void nonListNonSetRejected() {
+      final Traversal<Iterable<Integer>, Integer> each = Traversals.eachIterable();
+      // Plain Iterable<Integer> that is neither List nor Set — e.g. a Queue. We can't safely
+      // rebuild Queue (the C cast would lie), so modify must throw.
+      final Iterable<Integer> src = new java.util.ArrayDeque<>(List.of(1, 2, 3));
+      final var ex = assertThrows(IllegalArgumentException.class, () -> each.modify(src, n -> n + 1));
+      assertTrue(ex.getMessage().contains("List and Set"), ex.getMessage());
     }
   }
 
