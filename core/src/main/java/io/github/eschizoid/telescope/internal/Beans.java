@@ -26,7 +26,9 @@ import java.util.function.Function;
  * ({@code Introspector} lives in the {@code java.desktop} module). The discovered getter map is
  * cached per class via {@link ClassValue}. The lattice-primitive read for one property is {@link
  * #getter(Class, String)} — a {@link Getter Getter&lt;P, Object&gt;} backed by the cached {@link
- * Method}; {@link #readProperty} is a thin convenience over it.
+ * Method} that allocates a capturing lambda per call (the lattice-shape entry for composing the
+ * read with other optics). {@link #readProperty} is the hot-path shortcut that invokes the same
+ * cached {@link Method} directly, skipping the lambda allocation — preferred from inner loops.
  *
  * <p><b>Write direction (Map/record &rarr; POJO).</b> Four strategies behind the sealed {@link
  * BeanWriter} — {@link BuilderWriter}, {@link SettersWriter}, {@link FieldsWriter}, {@link
@@ -377,8 +379,11 @@ public final class Beans {
    * construction it resolves the no-arg constructor and maps each non-static, non-synthetic
    * declared field by name, calling {@code setAccessible(true)} on all of them. If the JPMS layer
    * forbids that, {@link InaccessibleObjectException} is rethrown as an {@link
-   * IllegalStateException} telling the caller to add an {@code opens} directive or switch to {@link
-   * ConstructorWriter} / {@link BuilderWriter} (which touch public members only).
+   * IllegalStateException} telling the caller to add an {@code opens} directive. Switching the hint
+   * to {@link ConstructorWriter} / {@link BuilderWriter} / {@link SettersWriter} only helps when
+   * their target members are already public — all three still call {@code setAccessible} on the
+   * constructor / methods they resolve, so a fully closed package will keep failing under the same
+   * JPMS constraint; the {@code opens} directive is the real fix.
    */
   static final class FieldsWriter<P> implements BeanWriter<P> {
 
