@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal;
 import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.invoke.LambdaMetafactory;
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.AccessibleObject;
@@ -16,6 +17,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Reflection-based machinery for navigating and constructing JavaBeans-style POJOs. Powers {@code
@@ -484,26 +486,41 @@ public final class Beans {
   }
 
   /**
-   * {@link BeanWriter} backed by a no-arg constructor plus reflective field injection. At
-   * construction it resolves the no-arg constructor and maps each non-static, non-synthetic
-   * declared field by name, calling {@code setAccessible(true)} on all of them. If the JPMS layer
-   * forbids that, {@link InaccessibleObjectException} is rethrown as an {@link
-   * IllegalStateException} telling the caller to add an {@code opens} directive. Switching the hint
-   * to {@link ConstructorWriter} / {@link BuilderWriter} / {@link SettersWriter} only helps when
-   * their target members are already public — all three still call {@code setAccessible} on the
-   * constructor / methods they resolve, so a fully closed package will keep failing under the same
-   * JPMS constraint; the {@code opens} directive is the real fix.
+   * {@link BeanWriter} backed by a no-arg constructor plus field injection routed through one
+   * cached invoker per member. At construction it resolves the no-arg constructor, walks each
+   * non-static / non-synthetic declared field, calls {@code setAccessible(true)} (still needed for
+   * the {@link MethodHandles.Lookup#unreflectSetter(Field) unreflectSetter} call on non-public
+   * fields, exactly mirroring the previous {@link Field#set} permission model), and binds a {@link
+   * Supplier Supplier&lt;Object&gt;} no-arg-constructor invoker built via {@link LambdaMetafactory}
+   * plus a {@code BiConsumer<Object, Object>} setter per field. The per-field setters wrap a cached
+   * {@link MethodHandle} adapted to {@code (Object, Object) -> void} via {@link MethodHandle#asType
+   * asType} — LMF won't accept setter handles ({@code "Unsupported MethodHandle kind: putField"}),
+   * so the cached MH is the JDK-standard alternative. It still skips the per-call access check that
+   * {@code Field.set} pays; {@code invokeExact} through the captured {@code final} reference is
+   * JIT-inlinable.
+   *
+   * <p>If the JPMS layer forbids access, {@link InaccessibleObjectException} is rethrown as an
+   * {@link IllegalStateException} telling the caller to add an {@code opens} directive. Every
+   * sibling strategy ({@link ConstructorWriter} / {@link BuilderWriter} / {@link SettersWriter})
+   * now reaches the bean through {@link MethodHandles#privateLookupIn} — same JPMS gate — so
+   * switching the hint to a sibling only avoids this error when the sibling's target members are
+   * already accessible (e.g. the bean's {@code builder()} factory is public and lives in a package
+   * the module exports). For a fully closed package, the {@code opens} directive is the real fix
+   * regardless of strategy. The hot path — {@link #construct(String[], Function)} — calls {@code
+   * ctorFn.get()} once and then {@code setter.accept(pojo, value)} per name; neither call reaches
+   * {@link Field#set} or {@link Constructor#newInstance}.
    */
   static final class FieldsWriter<P> implements BeanWriter<P> {
 
     private final Class<P> cls;
-    private final Constructor<P> ctor;
-    private final Map<String, Field> fields;
+    private final Supplier<Object> ctorFn;
+    private final Map<String, BiConsumer<Object, Object>> setters;
 
     FieldsWriter(final Class<P> cls) {
       this.cls = cls;
+      final Constructor<P> ctor;
       try {
-        this.ctor = cls.getDeclaredConstructor();
+        ctor = cls.getDeclaredConstructor();
       } catch (final NoSuchMethodException e) {
         throw new IllegalStateException("writeBean(" + cls.getName() + ", FIELDS) requires a no-arg constructor", e);
       }
@@ -514,27 +531,38 @@ public final class Beans {
         access(f);
         fs.put(f.getName(), f);
       }
-      this.fields = fs;
+      final var lookup = privateLookupOrThrow(cls, cls, "FIELDS strategy");
+      this.ctorFn = buildCtorSupplier(cls, ctor, lookup);
+      final var setterMap = new LinkedHashMap<String, BiConsumer<Object, Object>>();
+      for (final var entry : fs.entrySet()) {
+        setterMap.put(entry.getKey(), buildFieldSetter(cls, entry.getValue(), lookup));
+      }
+      this.setters = setterMap;
     }
 
     @Override
     public P construct(final String[] names, final Function<String, Object> valueByName) {
+      // Wrap the LMF-built Supplier invocation in the same stable RuntimeException shape the
+      // pre-LMF Constructor#newInstance path used. Unlike Constructor#newInstance (which surfaced
+      // body failures via InvocationTargetException → checked-exception wrap), the LMF Supplier is
+      // signature-polymorphic and can propagate checked exceptions and Errors directly, so we
+      // catch the same width here. Errors propagate untouched.
       final P pojo;
       try {
-        pojo = ctor.newInstance();
-      } catch (final ReflectiveOperationException e) {
-        throw new RuntimeException("Failed to instantiate " + cls.getName(), e);
+        @SuppressWarnings("unchecked")
+        final var built = (P) ctorFn.get();
+        pojo = built;
+      } catch (final Error error) {
+        throw error;
+      } catch (final Throwable t) {
+        throw new RuntimeException("Failed to instantiate " + cls.getName(), t);
       }
       for (final var name : names) {
-        final var f = fields.get(name);
-        if (f == null) throw new IllegalArgumentException(
+        final var setter = setters.get(name);
+        if (setter == null) throw new IllegalArgumentException(
           "writeBean(" + cls.getName() + ", FIELDS): no field '" + name + "'"
         );
-        try {
-          f.set(pojo, valueByName.apply(name));
-        } catch (final IllegalAccessException e) {
-          throw new RuntimeException("Failed to set field '" + name + "' on " + cls.getName(), e);
-        }
+        setter.accept(pojo, valueByName.apply(name));
       }
       return pojo;
     }
@@ -549,28 +577,90 @@ public final class Beans {
             " for the FIELDS strategy. Add 'opens " +
             cls.getPackageName() +
             " to io.github.eschizoid.telescope;' to that module's module-info.java. " +
-            "Switching the writeBean hint to CONSTRUCTOR / BUILDER / SETTERS will only help if " +
-            "those strategies' members are already public (no setAccessible call needed) — they " +
-            "still invoke setAccessible on the ctor / methods they resolve, so a closed package " +
-            "may keep failing under the same JPMS constraint.",
+            "Switching the writeBean hint to CONSTRUCTOR / BUILDER / SETTERS reaches the bean " +
+            "through privateLookupIn rather than raw setAccessible, but the JPMS gate is the same " +
+            "— the open directive is the real fix for a fully closed package.",
           e
         );
       }
     }
+
+    @SuppressWarnings("unchecked")
+    private static Supplier<Object> buildCtorSupplier(
+      final Class<?> cls,
+      final Constructor<?> ctor,
+      final MethodHandles.Lookup lookup
+    ) {
+      try {
+        final var handle = lookup.unreflectConstructor(ctor);
+        final var callSite = LambdaMetafactory.metafactory(
+          lookup,
+          "get",
+          MethodType.methodType(Supplier.class),
+          MethodType.methodType(Object.class),
+          handle,
+          MethodType.methodType(cls)
+        );
+        return (Supplier<Object>) callSite.getTarget().invoke();
+      } catch (final Throwable t) {
+        throw new RuntimeException("Failed to instantiate " + cls.getName(), t);
+      }
+    }
+
+    private static BiConsumer<Object, Object> buildFieldSetter(
+      final Class<?> cls,
+      final Field field,
+      final MethodHandles.Lookup lookup
+    ) {
+      // LambdaMetafactory rejects setter handles ("Unsupported MethodHandle kind: putField"), so
+      // the cached MethodHandle path is the JDK-standard alternative — `unreflectSetter` resolves
+      // a `(receiver, value) -> void` handle, then `asType` adapts it to the erased
+      // `(Object, Object) -> void` so it can be invoked from a `BiConsumer<Object, Object>` shape.
+      // Still skips the per-call access check {@link Field#set} pays; the JIT inlines invokeExact
+      // through the captured `final` reference.
+      final MethodHandle setterHandle;
+      try {
+        setterHandle = lookup
+          .unreflectSetter(field)
+          .asType(MethodType.methodType(void.class, Object.class, Object.class));
+      } catch (final IllegalAccessException e) {
+        throw new RuntimeException("Failed to set field '" + field.getName() + "' on " + cls.getName(), e);
+      }
+      return (pojo, value) -> {
+        try {
+          setterHandle.invokeExact(pojo, value);
+        } catch (final Throwable t) {
+          throw new RuntimeException("Failed to set field '" + field.getName() + "' on " + cls.getName(), t);
+        }
+      };
+    }
   }
 
   /**
-   * {@link BeanWriter} backed by an all-args constructor. At construction it finds the unique
-   * declared constructor with the requested arity (throwing if there are zero or more than one) and
-   * makes it accessible. If the POJO was compiled with {@code -parameters}, {@code construct}
-   * matches each argument to its source value by the constructor parameter's <em>name</em> — so a
-   * reordered constructor is safe; otherwise it falls back to positional, assembling arguments in
-   * {@code names} order and relying on the constructor parameters lining up with the components.
+   * {@link BeanWriter} backed by an all-args constructor routed through a cached spread {@link
+   * MethodHandle}. At construction it finds the unique declared constructor with the requested
+   * arity (throwing if there are zero or more than one), makes it accessible, and binds a {@code
+   * Function<Object, Object>} invoker that wraps the {@link MethodHandle#asSpreader(Class, int)
+   * asSpreader}-wrapped handle: the raw constructor handle has type {@code (T1, T2, …, Tn) → P} and
+   * the spreader converts it to {@code (Object[]) → P}. Primitive args auto-unbox per the same
+   * implicit conversions a direct constructor call would apply.
+   *
+   * <p>The invoker is intentionally <em>not</em> built via {@link LambdaMetafactory} — the spread
+   * adapter is a non-direct {@link MethodHandle}, which LMF rejects with {@code "MethodHandle
+   * (Object[])P is not direct or cannot be cracked"}. The cached MethodHandle path is the standard
+   * JDK alternative — it still skips the per-call access check and the varargs allocation that
+   * {@link Constructor#newInstance} pays, and {@code invokeExact} through a {@code final} field
+   * inlines under the JIT. The hot path never reaches {@code Constructor.newInstance}.
+   *
+   * <p>If the POJO was compiled with {@code -parameters}, {@code construct} matches each argument
+   * to its source value by the constructor parameter's <em>name</em> — so a reordered constructor
+   * is safe; otherwise it falls back to positional, assembling arguments in {@code names} order and
+   * relying on the constructor parameters lining up with the components.
    */
   static final class ConstructorWriter<P> implements BeanWriter<P> {
 
     private final Class<P> cls;
-    private final Constructor<P> ctor;
+    private final Function<Object, Object> ctorFn;
     // Constructor parameter names when the POJO was compiled with -parameters (enables
     // order-independent name matching); null when names are synthetic, so we fall back to
     // positional.
@@ -598,9 +688,11 @@ public final class Beans {
           arity +
           " parameters (parameters are matched by name when compiled with -parameters, otherwise positionally)."
       );
-      found.setAccessible(true);
-      this.ctor = found;
+      // No raw setAccessible — buildCtorFn acquires private access through privateLookupOrThrow,
+      // which is consistent with the FIELDS strategy and routes JPMS failures through the same
+      // opens-pointing message instead of a low-context InaccessibleObjectException.
       this.paramNames = resolveParamNames(found);
+      this.ctorFn = buildCtorFn(cls, found, arity);
     }
 
     private static String[] resolveParamNames(final Constructor<?> ctor) {
@@ -613,7 +705,35 @@ public final class Beans {
       return names;
     }
 
+    private static <P> Function<Object, Object> buildCtorFn(
+      final Class<P> cls,
+      final Constructor<P> ctor,
+      final int arity
+    ) {
+      // Constructors are not inherited in Java — `cls.getDeclaredConstructors()` returns only the
+      // ones declared directly on `cls`, so `ctor.getDeclaringClass() == cls` always. No
+      // inherited-accessor concern here (unlike methods); pin the lookup straight to `cls`.
+      final var lookup = privateLookupOrThrow(cls, cls, "CONSTRUCTOR strategy");
+      final MethodHandle spread;
+      try {
+        spread = lookup
+          .unreflectConstructor(ctor)
+          .asSpreader(Object[].class, arity)
+          .asType(MethodType.methodType(Object.class, Object[].class));
+      } catch (final IllegalAccessException e) {
+        throw new RuntimeException("Failed to construct " + cls.getName() + " via its constructor", e);
+      }
+      return args -> {
+        try {
+          return (Object) spread.invokeExact((Object[]) args);
+        } catch (final Throwable t) {
+          throw new RuntimeException("Failed to construct " + cls.getName() + " via its constructor", t);
+        }
+      };
+    }
+
     @Override
+    @SuppressWarnings("unchecked")
     public P construct(final String[] names, final Function<String, Object> valueByName) {
       // Prefer matching by parameter name (order-independent) when names are present; otherwise
       // fall
@@ -622,11 +742,7 @@ public final class Beans {
       final var keys = paramNames != null ? paramNames : names;
       final var args = new Object[keys.length];
       for (var i = 0; i < keys.length; i++) args[i] = valueByName.apply(keys[i]);
-      try {
-        return ctor.newInstance(args);
-      } catch (final ReflectiveOperationException e) {
-        throw new RuntimeException("Failed to construct " + cls.getName() + " via its constructor", e);
-      }
+      return (P) ctorFn.apply(args);
     }
   }
 

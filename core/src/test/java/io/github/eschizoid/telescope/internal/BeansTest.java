@@ -253,6 +253,71 @@ class BeansTest {
     }
   }
 
+  // Multi-primitive fixture pinning the spread-MethodHandle auto-unboxing path used by
+  // ConstructorWriter (and by Records.RecordInfo.ctorFn — see PrimitiveRecord). LMF rejects the
+  // asSpreader adapter ("not direct or cannot be cracked"), so the ctor invoker is a cached
+  // MethodHandle invoked via `invokeExact` rather than an LMF-synthesized Function. Boxed
+  // `int`/`long`/`double`/`boolean` values flowing in via the Object[] get unboxed by the
+  // implicit conversions the spread handle applies, the same way a direct constructor call would.
+  static final class PrimitiveCtor {
+
+    private final int i;
+    private final long l;
+    private final double d;
+    private final boolean b;
+
+    public PrimitiveCtor(final int i, final long l, final double d, final boolean b) {
+      this.i = i;
+      this.l = l;
+      this.d = d;
+      this.b = b;
+    }
+
+    public int getI() {
+      return i;
+    }
+
+    public long getL() {
+      return l;
+    }
+
+    public double getD() {
+      return d;
+    }
+
+    public boolean isB() {
+      return b;
+    }
+  }
+
+  // Multi-primitive FIELDS fixture pinning the cached-setter unbox path: each declared field is
+  // written through the MethodHandle setter built once at construction time.
+  static final class PrimitiveFields {
+
+    private int i;
+    private long l;
+    private double d;
+    private boolean b;
+
+    public PrimitiveFields() {}
+
+    public int getI() {
+      return i;
+    }
+
+    public long getL() {
+      return l;
+    }
+
+    public double getD() {
+      return d;
+    }
+
+    public boolean isB() {
+      return b;
+    }
+  }
+
   static final class TwoCtorsSameArity {
 
     private final String a;
@@ -466,6 +531,30 @@ class BeansTest {
       final var writer = Beans.fieldsWriter(NoArgFields.class);
       assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "ghost" }, n -> "x"));
     }
+
+    @Test
+    @DisplayName("primitive-typed fields auto-unbox through the cached MethodHandle setter")
+    void fieldsAutoUnboxesPrimitives() {
+      final var writer = Beans.fieldsWriter(PrimitiveFields.class);
+      // Boxed wrappers arrive via valueByName; the cached setter MH unboxes them per the same
+      // implicit conversions a direct Field.set call would apply (the setter handle was bound
+      // with field-typed signature at cache-warm time).
+      final var values = Map.<String, Object>of(
+        "i",
+        Integer.valueOf(7),
+        "l",
+        Long.valueOf(42L),
+        "d",
+        Double.valueOf(3.14),
+        "b",
+        Boolean.TRUE
+      );
+      final var pojo = writer.construct(new String[] { "i", "l", "d", "b" }, values::get);
+      assertEquals(7, pojo.getI());
+      assertEquals(42L, pojo.getL());
+      assertEquals(3.14, pojo.getD());
+      assertEquals(true, pojo.isB());
+    }
   }
 
   // ----- SettersWriter -----
@@ -597,6 +686,31 @@ class BeansTest {
     @DisplayName("constructorWriter throws when more than one constructor matches the arity")
     void constructorAmbiguousArityThrows() {
       assertThrows(IllegalStateException.class, () -> Beans.constructorWriter(TwoCtorsSameArity.class, 1));
+    }
+
+    @Test
+    @DisplayName("primitive-typed ctor args auto-unbox through the cached spread MethodHandle")
+    void constructorAutoUnboxesPrimitives() {
+      final var writer = Beans.constructorWriter(PrimitiveCtor.class, 4);
+      // Boxed wrappers arrive via valueByName; the spread MH unboxes them per the implicit
+      // conversions a direct constructor call would apply. Order matches the constructor
+      // parameter order (positional fallback when -parameters is not present at test compile
+      // time, or by-name when it is — both produce the same result here).
+      final var values = Map.<String, Object>of(
+        "i",
+        Integer.valueOf(5),
+        "l",
+        Long.valueOf(99L),
+        "d",
+        Double.valueOf(2.5),
+        "b",
+        Boolean.TRUE
+      );
+      final var pojo = writer.construct(new String[] { "i", "l", "d", "b" }, values::get);
+      assertEquals(5, pojo.getI());
+      assertEquals(99L, pojo.getL());
+      assertEquals(2.5, pojo.getD());
+      assertEquals(true, pojo.isB());
     }
   }
 
