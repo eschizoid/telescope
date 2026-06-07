@@ -75,13 +75,13 @@ class TypedContainerPathTest {
   }
 
   @Nested
-  @DisplayName("Typed `.set(getter)` returns SetPath with compile-checked .each()")
+  @DisplayName("Typed `.setField(getter)` returns SetPath with compile-checked .each()")
   class SetContainer {
 
     @Test
     @DisplayName("Set leaf type is preserved as SetPath; .each() steps into elements via lattice")
     void typedSetPath() {
-      final SetPath<TagSet, Tag> tags = Telescope.of(TagSet.class).set(TagSet::tags);
+      final SetPath<TagSet, Tag> tags = Telescope.of(TagSet.class).setField(TagSet::tags);
       final var src = new TagSet("alice", new LinkedHashSet<>(List.of(new Tag("a"), new Tag("b"))));
 
       final var upper = tags.each().update(src, t -> new Tag(t.name().toUpperCase()));
@@ -102,13 +102,13 @@ class TypedContainerPathTest {
   }
 
   @Nested
-  @DisplayName("Typed `.map(getter)` returns MapPath with compile-checked .values()")
+  @DisplayName("Typed `.mapField(getter)` returns MapPath with compile-checked .values()")
   class MapContainer {
 
     @Test
     @DisplayName("Map leaf is preserved as MapPath; .values() steps into values, keys retained")
     void typedMapPath() {
-      final MapPath<TagMap, String, Tag> tagsByKey = Telescope.of(TagMap.class).map(TagMap::tagsByKey);
+      final MapPath<TagMap, String, Tag> tagsByKey = Telescope.of(TagMap.class).mapField(TagMap::tagsByKey);
       final var src = new TagMap("alice", Map.of("a", new Tag("x"), "b", new Tag("y")));
 
       final var upper = tagsByKey.values().update(src, t -> new Tag(t.name().toUpperCase()));
