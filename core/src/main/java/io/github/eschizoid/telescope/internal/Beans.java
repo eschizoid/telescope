@@ -2,6 +2,9 @@ package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import java.lang.invoke.LambdaMetafactory;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -24,11 +27,17 @@ import java.util.function.Function;
  * Boolean} — and {@code X} is {@link #decapitalize(String) decapitalized} to a property name. This
  * deliberately avoids {@code java.beans.Introspector} so the library keeps zero dependencies
  * ({@code Introspector} lives in the {@code java.desktop} module). The discovered getter map is
- * cached per class via {@link ClassValue}. The lattice-primitive read for one property is {@link
- * #getter(Class, String)} — a {@link Getter Getter&lt;P, Object&gt;} backed by the cached {@link
- * Method} that allocates a capturing lambda per call (the lattice-shape entry for composing the
- * read with other optics). {@link #readProperty} is the hot-path shortcut that invokes the same
- * cached {@link Method} directly, skipping the lambda allocation — preferred from inner loops.
+ * cached per class via {@link ClassValue}. Alongside the {@link Method} cache, a sibling {@link
+ * ClassValue} caches one {@link Function Function&lt;Object, Object&gt;} per property, built once
+ * via {@link LambdaMetafactory} from the resolved accessor — the metafactory synthesizes a {@link
+ * Function}-implementing class whose {@code apply(Object)} directly calls the getter and auto-boxes
+ * any primitive return, so the hot path never touches {@link Method#invoke}. The lattice-primitive
+ * read for one property is {@link #getter(Class, String)} — a {@link Getter Getter&lt;P,
+ * Object&gt;} whose body delegates to the cached {@link Function} and allocates a fresh capturing
+ * lambda per call (the lattice-shape entry for composing the read with other optics). {@link
+ * #readProperty} is the hot-path shortcut that calls the cached {@link Function} directly, skipping
+ * the per-call lambda allocation — preferred from inner loops (e.g. {@code
+ * Reflective.structuralIso(...).from(...)} reads every property of a target).
  *
  * <p><b>Write direction (Map/record &rarr; POJO).</b> Four strategies behind the sealed {@link
  * BeanWriter} — {@link BuilderWriter}, {@link SettersWriter}, {@link FieldsWriter}, {@link
@@ -52,6 +61,19 @@ public final class Beans {
     }
   };
 
+  // Sibling cache: one LambdaMetafactory-built Function<Object, Object> per property, derived from
+  // the GETTERS map on first miss. Same ClassValue rationale as GETTERS / AUTO_WRITER_CACHE — the
+  // value strongly references reflective members + synthetic-class function instances; ClassValue
+  // is the JDK-native pattern for class-keyed caches that doesn't pin the class through the value
+  // chain. After build, dispatch is a single virtual call the JIT inlines — no Method.invoke, no
+  // per-call argument array, no access-check.
+  private static final ClassValue<Map<String, Function<Object, Object>>> GETTER_INVOKERS = new ClassValue<>() {
+    @Override
+    protected Map<String, Function<Object, Object>> computeValue(final Class<?> type) {
+      return buildGetterInvokers(type, GETTERS.get(type));
+    }
+  };
+
   private static final ClassValue<BeanWriter<?>> AUTO_WRITER_CACHE = new ClassValue<>() {
     @Override
     protected BeanWriter<?> computeValue(final Class<?> type) {
@@ -61,53 +83,47 @@ public final class Beans {
 
   /**
    * The lattice-primitive form of "read one bean property" — a {@link Getter Getter&lt;P,
-   * Object&gt;} over the {@code getX()} / {@code isX()} accessor. The underlying {@link Method} is
-   * resolved from the {@link #GETTERS} ClassValue cache (so the per-class probe is one-shot), but
-   * each call to {@code getter(...)} <em>does</em> allocate a fresh capturing lambda — this is the
-   * lattice-shape entry point for callers that want to compose a {@code Getter} into other optics.
-   * Hot paths that just want the value (e.g. {@link
-   * io.github.eschizoid.telescope.internal.Reflective Reflective}'s bean-side {@code read}) should
-   * call {@link #readProperty(Object, String)} instead; it invokes the cached {@link Method}
-   * directly without the lambda allocation.
+   * Object&gt;} over the {@code getX()} / {@code isX()} accessor. The underlying read is the {@link
+   * LambdaMetafactory}-built {@link Function} from the {@link #GETTER_INVOKERS} ClassValue cache
+   * (so the per-class probe is one-shot and per-call dispatch is a single virtual call the JIT
+   * inlines — no {@link Method#invoke}, no per-call argument array), but each call to {@code
+   * getter(...)} <em>does</em> allocate a fresh capturing lambda — this is the lattice-shape entry
+   * point for callers that want to compose a {@code Getter} into other optics. Hot paths that just
+   * want the value (e.g. {@link io.github.eschizoid.telescope.internal.Reflective Reflective}'s
+   * bean-side {@code read}) should call {@link #readProperty(Object, String)} instead; it calls the
+   * cached {@link Function} directly without the lambda allocation.
    *
    * <p>Throws {@link IllegalArgumentException} at build time if the named property has no getter.
    */
   public static <P> Getter<P, Object> getter(final Class<P> beanClass, final String name) {
-    final var method = getters(beanClass).get(name);
-    if (method == null) throw new IllegalArgumentException(
+    final var reader = GETTER_INVOKERS.get(beanClass).get(name);
+    if (reader == null) throw new IllegalArgumentException(
       "No getter for property '" + name + "' on " + beanClass.getName()
     );
-    return source -> {
-      try {
-        return method.invoke(source);
-      } catch (final ReflectiveOperationException e) {
-        throw new RuntimeException("Failed to read property '" + name + "' on " + beanClass.getName(), e);
-      }
-    };
+    return source -> reader.apply(source);
   }
 
   /**
    * Read a bean property by name via its {@code getX()} / {@code isX()} accessor. Throws if no
    * getter matches {@code name}.
    *
-   * <p>Invokes the cached {@link Method} directly rather than routing through {@link #getter} — the
+   * <p>Calls the cached {@link Function} directly rather than routing through {@link #getter} — the
    * latter allocates a capturing lambda per call, which matters in hot loops (e.g. {@code
-   * Reflective.structuralIso(...).from(...)} reads every property of a target).
+   * Reflective.structuralIso(...).from(...)} reads every property of a target). The underlying
+   * function is built once per {@code (beanClass, property)} via {@link LambdaMetafactory} and
+   * cached in {@link #GETTER_INVOKERS}; subsequent dispatch is a single virtual call the JIT
+   * inlines — no {@link Method#invoke}.
    *
    * <pre>{@code
    * final var name = (String) Beans.readProperty(userPojo, "name"); // userPojo.getName()
    * }</pre>
    */
   public static Object readProperty(final Object pojo, final String name) {
-    final var method = getters(pojo.getClass()).get(name);
-    if (method == null) throw new IllegalArgumentException(
+    final var reader = GETTER_INVOKERS.get(pojo.getClass()).get(name);
+    if (reader == null) throw new IllegalArgumentException(
       "No getter for property '" + name + "' on " + pojo.getClass().getName()
     );
-    try {
-      return method.invoke(pojo);
-    } catch (final ReflectiveOperationException e) {
-      throw new RuntimeException("Failed to read property '" + name + "' on " + pojo.getClass().getName(), e);
-    }
+    return reader.apply(pojo);
   }
 
   /**
@@ -135,6 +151,73 @@ public final class Beans {
 
   private static Map<String, Method> getters(final Class<?> cls) {
     return GETTERS.get(cls);
+  }
+
+  /**
+   * Build one {@link Function} per discovered getter via {@link LambdaMetafactory}. The metafactory
+   * synthesizes a {@link Function}-implementing class whose {@code apply(Object)} directly calls
+   * the getter and auto-boxes any primitive return ({@code int}, {@code boolean}, etc). After the
+   * first call per class the dispatch is a single virtual call the JIT inlines — no {@link
+   * Method#invoke}, no per-call argument array, no access-check.
+   *
+   * <p>JPMS access has the same rules as {@link AccessibleObject#setAccessible(boolean)}: if the
+   * bean's package is not {@code opens}-exposed to {@code io.github.eschizoid.telescope}, the
+   * {@code privateLookupIn} call will fail with {@link IllegalAccessException}. That's re-thrown as
+   * an {@link IllegalStateException} pointing the caller at the {@code opens} directive — the exact
+   * same constraint and message shape as Phase 1's record-reader path.
+   */
+  private static Map<String, Function<Object, Object>> buildGetterInvokers(
+    final Class<?> cls,
+    final Map<String, Method> getters
+  ) {
+    if (getters.isEmpty()) return Map.of();
+    final MethodHandles.Lookup lookup;
+    try {
+      // `privateLookupIn` is needed when the bean's module/package isn't open to the telescope
+      // module; for fully-public types in the same module this is equivalent to a plain
+      // `MethodHandles.lookup()`. Same JPMS constraint as `setAccessible(true)` — no worse than
+      // the previous reflection path.
+      lookup = MethodHandles.privateLookupIn(cls, MethodHandles.lookup());
+    } catch (final IllegalAccessException e) {
+      throw new IllegalStateException(
+        "Cannot access " +
+          cls.getName() +
+          " to build LambdaMetafactory getter invokers. Add 'opens " +
+          cls.getPackageName() +
+          " to io.github.eschizoid.telescope;' to that module's module-info.java.",
+        e
+      );
+    }
+    final var invokers = new LinkedHashMap<String, Function<Object, Object>>(getters.size());
+    for (final var entry : getters.entrySet()) {
+      final var name = entry.getKey();
+      final var method = entry.getValue();
+      try {
+        final var handle = lookup.unreflect(method);
+        // SAM signature is `Object apply(Object)`; the instantiatedMethodType pins the actual
+        // (declaringClass) -> returnType signature so the metafactory generates the right bridge
+        // — including auto-boxing for primitive returns (`int`, `boolean`, etc). Using
+        // `method.getDeclaringClass()` (not `cls`) keeps the receiver type aligned with the
+        // unreflected handle's leading parameter for getters inherited from a superclass.
+        final var callSite = LambdaMetafactory.metafactory(
+          lookup,
+          "apply",
+          MethodType.methodType(Function.class),
+          MethodType.methodType(Object.class, Object.class),
+          handle,
+          MethodType.methodType(method.getReturnType(), method.getDeclaringClass())
+        );
+        @SuppressWarnings("unchecked")
+        final var reader = (Function<Object, Object>) callSite.getTarget().invoke();
+        invokers.put(name, reader);
+      } catch (final Throwable t) {
+        throw new IllegalStateException(
+          "Failed to build LambdaMetafactory getter invoker for " + cls.getName() + "." + name,
+          t
+        );
+      }
+    }
+    return invokers;
   }
 
   private static Map<String, Method> scanGetters(final Class<?> cls) {
