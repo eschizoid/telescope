@@ -74,26 +74,36 @@ publication-grade) gave:
 Both deep-field benchmarks walk three levels — divide by three for per-level cost: record reflection ≈87 ns/level, the
 `lens` path ≈15 ns/level, native `ofBean` ≈163 ns/level.
 
-A second-run capture of the LMF-tier benchmarks (single-step dispatch, no composition) gave:
+A tighter LMF-tier capture at **5 warmup + 10 measurement × 3 fork** (single-step dispatch, no composition) gave:
 
-| Benchmark                          |                                                             ns/op |                       vs hand-rolled |
-| ---------------------------------- | ----------------------------------------------------------------: | -----------------------------------: |
-| `recordComponentRead_handRolled`   |                                                              ~0.8 |                    record-read floor |
-| `recordComponentRead_lmf`          |                                                               ~15 |                                 ~18× |
-| `recordComponentRead_methodInvoke` | _to be captured at 5 warmup + 10 measurement × 3 fork before 1.0_ | apples-to-apples reflection baseline |
-| `beanGetterRead_handRolled`        |                                                              ~0.8 |                    bean-getter floor |
-| `beanGetterRead_lmf`               |                                                               ~26 |                                 ~33× |
-| `beanGetterRead_methodInvoke`      | _to be captured at 5 warmup + 10 measurement × 3 fork before 1.0_ | apples-to-apples reflection baseline |
-| `beanSetterDispatch_handRolled`    |                                                                ~4 |                    bean-setter floor |
-| `beanSetterDispatch_lmf`           |                                                               ~36 |                                  ~9× |
-| `beanSetterDispatch_methodInvoke`  | _to be captured at 5 warmup + 10 measurement × 3 fork before 1.0_ | apples-to-apples reflection baseline |
+| Benchmark                          |    ns/op |   ±error |             vs hand-rolled |
+| ---------------------------------- | -------: | -------: | -------------------------: |
+| `recordComponentRead_handRolled`   |    1.334 |  ± 0.845 |          record-read floor |
+| `recordComponentRead_lmf`          |    9.394 |  ± 4.190 |                       ~7×  |
+| `recordComponentRead_methodInvoke` |   18.260 |  ± 7.588 | apples-to-apples reflection |
+| `beanGetterRead_handRolled`        |    1.008 |  ± 0.354 |          bean-getter floor |
+| `beanGetterRead_lmf`               |   13.083 |  ± 5.309 |                      ~13×  |
+| `beanGetterRead_methodInvoke`      |   10.660 |  ± 1.635 | apples-to-apples reflection |
+| `beanSetterDispatch_handRolled`    |    3.203 |  ± 0.954 |          bean-setter floor |
+| `beanSetterDispatch_lmf`           |   22.285 |  ± 9.487 |                       ~7×  |
+| `beanSetterDispatch_methodInvoke`  |   12.001 |  ± 4.192 | apples-to-apples reflection |
 
-These are atomic-dispatch numbers, not deep-tree costs — comparable to the per-level estimates above. The LMF wrapper
-adds ~15-35 ns of dispatch overhead per call (a synthetic-class virtual dispatch plus boxing) on top of the directly
-inlined Java call. That overhead is what made swapping `Method.invoke` for `LambdaMetafactory` worthwhile: pre-Phase-1
-the same dispatch went through `Method.invoke` and ran ~100-260 ns, depending on JIT state — the in-flight 5+10×3 run
-will land hard numbers on the `_methodInvoke` rows above, closing the apples-to-apples claim without needing to
-extrapolate from the (deeper-workload) `TelescopeBenchmark` runtime rows.
+**Honest read of the numbers.** At the single-step dispatch primitive level, **LMF and `Method.invoke` are roughly
+comparable** — and on the bean getter and setter, `Method.invoke` is actually a touch faster in this micro-benchmark
+(though the error bars overlap). Modern HotSpot has been aggressively optimizing `Method.invoke` for years; the
+historical "100-260 ns per call" reflection cost no longer holds at this scale for trivial accessors after warmup.
+
+The case for the LMF substrate ([ADR-0005](../docs/adr/0005-lambdametafactory-over-method-handle-invoke.md)) was
+**structural, not per-call**: removing the per-call `Object[]` argument allocation, eliminating the access-check, and
+giving the JIT a normal functional-interface call site it can inline through composed lens chains. Those wins don't
+show up in a JMH benchmark that times a single isolated read — they show up at the boundary of bigger workloads where
+`Method.invoke` becomes an inlining barrier. The `TelescopeBenchmark` deep-tree numbers above are too noisy on this
+machine to make the inlining claim quantitatively here, but the architectural argument still stands: post-LMF, the hot
+path is a normal SAM call, not an opaque reflection invocation.
+
+Caveats on the numbers: error bars are wide (±20–70% of the mean) because the operations are 1–22 ns and JMH's
+`Blackhole` overhead is in the same order of magnitude. JIT-Blackhole interaction is noted in the JMH output itself.
+Direction is reliable; absolute values aren't tight.
 
 Takeaways:
 
