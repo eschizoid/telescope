@@ -3,10 +3,14 @@ package io.github.eschizoid.telescope.internal;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
+import java.lang.invoke.LambdaMetafactory;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Modifier;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * Probes the user's classpath for a sibling {@code <X>Telescope} metadata holder emitted by
@@ -32,6 +36,18 @@ import java.util.Optional;
  * package; the constants are {@code public static final}. The holder is plain public Java — no
  * {@code privateLookupIn} required, and the JPMS {@code opens} directive that the LMF substrate
  * needs for non-annotated types is not required for the probe itself.
+ *
+ * <p><b>ADR-0006 Phase D.</b> Holders also expose a {@code public static <X>
+ * construct(Function<String, Object> values)} method that mirrors the {@code <X>Path<R>}'s write
+ * strategy (canonical constructor for records; builder chain or no-arg ctor + setters for beans).
+ * Probing binds the static method via {@link LambdaMetafactory} into a cached {@code
+ * Function<Function<String, Object>, Object>} on {@link HolderRef}. {@link
+ * io.github.eschizoid.telescope.internal.Reflective#structuralIso Reflective.structuralIso}'s
+ * forward branch routes through it when present, skipping the reflective {@link
+ * io.github.eschizoid.telescope.internal.Records#construct Records.construct} / {@link
+ * io.github.eschizoid.telescope.internal.Beans.BeanWriter Beans.BeanWriter} path. Older holders
+ * that predate Phase D (no {@code construct} method) degrade gracefully — the constructor field is
+ * {@code null} and the reflective path runs.
  */
 public final class MetadataHolderProbe {
 
@@ -39,13 +55,24 @@ public final class MetadataHolderProbe {
 
   /**
    * A discovered sibling {@code <X>Telescope} metadata holder for some class: the holder class
-   * itself (used in diagnostics) plus the immutable name &rarr; constant lookup table. Each
-   * constant is a {@link io.github.eschizoid.telescope.Telescope Telescope} instance built via
-   * {@link io.github.eschizoid.telescope.Telescope#lens(java.util.function.Function,
+   * itself (used in diagnostics), the immutable name &rarr; constant lookup table, and — when the
+   * holder was emitted with ADR-0006 Phase D — a cached {@link Function} bound to the holder's
+   * static {@code construct(Function<String, Object>)} method. Each constant is a {@link
+   * io.github.eschizoid.telescope.Telescope Telescope} instance built via {@link
+   * io.github.eschizoid.telescope.Telescope#lens(java.util.function.Function,
    * java.util.function.BiFunction) Telescope.lens(...)} at codegen time. {@link #lensFor} unwraps
    * one to a {@link Lens} for the dispatch site.
+   *
+   * <p>The {@code constructor} field is {@code null} when the holder doesn't expose a {@code
+   * construct} method — older Phase A holders, or future processors that opt out. {@link
+   * io.github.eschizoid.telescope.internal.Reflective#structuralIso Reflective.structuralIso}
+   * checks for {@code null} and falls back to the reflective constructor path.
    */
-  public record HolderRef(Class<?> holderClass, Map<String, Telescope<?, ?>> constantsByName) {
+  public record HolderRef(
+    Class<?> holderClass,
+    Map<String, Telescope<?, ?>> constantsByName,
+    Function<Function<String, Object>, Object> constructor
+  ) {
     /**
      * The {@link Lens} backing the holder constant named {@code name}, or {@code null} if the
      * holder doesn't expose that name. Dispatch sites in {@link
@@ -131,11 +158,56 @@ public final class MetadataHolderProbe {
         final var value = field.get(null);
         if (value instanceof Telescope<?, ?> t) constants.put(field.getName(), t);
       }
-      return Optional.of(new HolderRef(holder, Map.copyOf(constants)));
+      final var constructor = bindConstructor(holder, cls);
+      return Optional.of(new HolderRef(holder, Map.copyOf(constants), constructor));
     } catch (final ClassNotFoundException e) {
       return Optional.empty();
     } catch (final ReflectiveOperationException e) {
       throw new IllegalStateException("Failed to probe metadata holder " + holderName, e);
+    }
+  }
+
+  /**
+   * Bind the holder's {@code public static <X> construct(Function<String, Object> values)} method
+   * to a cached {@link Function} via {@link LambdaMetafactory}, so the runtime forward branch in
+   * {@link Reflective#structuralIso} can invoke it directly without per-call reflection. Returns
+   * {@code null} when the holder doesn't expose a matching {@code construct} method (older Phase A
+   * holders that predate Phase D, or future opt-out paths) — callers fall back to the reflective
+   * {@link Reflective#construct} path.
+   *
+   * <p>The holder is plain public Java in the user's package, so a default {@link
+   * MethodHandles#lookup} suffices; no {@code privateLookupIn} dance, no JPMS {@code opens}
+   * requirement beyond what the holder's package already grants.
+   */
+  @SuppressWarnings("unchecked")
+  private static Function<Function<String, Object>, Object> bindConstructor(
+    final Class<?> holder,
+    final Class<?> target
+  ) {
+    try {
+      final var method = holder.getDeclaredMethod("construct", Function.class);
+      if (
+        !Modifier.isPublic(method.getModifiers()) ||
+        !Modifier.isStatic(method.getModifiers()) ||
+        !target.isAssignableFrom(method.getReturnType())
+      ) {
+        return null;
+      }
+      final var lookup = MethodHandles.lookup();
+      final var handle = lookup.unreflect(method);
+      final var callSite = LambdaMetafactory.metafactory(
+        lookup,
+        "apply",
+        MethodType.methodType(Function.class),
+        MethodType.methodType(Object.class, Object.class),
+        handle,
+        MethodType.methodType(method.getReturnType(), Function.class)
+      );
+      return (Function<Function<String, Object>, Object>) callSite.getTarget().invoke();
+    } catch (final NoSuchMethodException e) {
+      return null;
+    } catch (final Throwable t) {
+      throw new IllegalStateException("Failed to bind construct(Function) on holder " + holder.getName(), t);
     }
   }
 }

@@ -505,4 +505,89 @@ class FocusProcessorTest {
       assertTrue(noteStep.contains("public Telescope<R, String> whenPresent()"), noteStep);
     }
   }
+
+  @Nested
+  @DisplayName("Metadata holder construct(...) emission (ADR-0006 Phase D)")
+  class MetadataHolderConstruct {
+
+    @Test
+    @DisplayName("scalar record: emits a public static construct(Function) calling the canonical constructor")
+    void scalarRecordConstruct() {
+      final var compilation = compile(
+        source(
+          "demo.Person",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Person(String name, int age) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.PersonTelescope");
+      assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
+
+      // Phase D signature: public static Person construct(final Function<String, Object> values)
+      assertTrue(holder.contains("public static Person construct(final Function<String, Object> values)"), holder);
+      // The body must call the canonical constructor with per-component casts pulled from
+      // values.apply(...). Primitives surface as their boxed equivalents (the auto-unbox happens
+      // implicitly at the canonical-ctor call site).
+      assertTrue(holder.contains("return new Person("), holder);
+      assertTrue(holder.contains("(String) values.apply(\"name\")"), holder);
+      assertTrue(holder.contains("(Integer) values.apply(\"age\")"), holder);
+      // Function import has to be in the holder's import block — extra import collected by
+      // emitMetadataHolder, alongside any java.util container imports.
+      assertTrue(holder.contains("import java.util.function.Function;"), holder);
+      // @SuppressWarnings("unchecked") on the construct method so generic-component casts compile
+      // clean under -Werror.
+      assertTrue(holder.contains("@SuppressWarnings(\"unchecked\")"), holder);
+    }
+
+    @Test
+    @DisplayName("container components: construct casts to the generic container type")
+    void containerComponentConstruct() {
+      final var compilation = compile(
+        source(
+          "demo.Bag",
+          """
+          package demo;
+          import java.util.List;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Bag(List<String> tags) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BagTelescope");
+      assertNotNull(holder, () -> "BagTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains("public static Bag construct(final Function<String, Object> values)"), holder);
+      assertTrue(holder.contains("return new Bag((List<String>) values.apply(\"tags\"));"), holder);
+    }
+
+    @Test
+    @DisplayName("rejected holder: no construct method emitted when component types are un-emittable")
+    void rejectedHolderHasNoConstruct() {
+      final var compilation = compile(
+        source(
+          "demo.Wild",
+          """
+          package demo;
+          import java.util.List;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Wild(List<? extends Comparable<?>> values) {}
+          """
+        )
+      );
+
+      // The wildcard rejection already covers this — re-asserted here as a Phase D regression
+      // guard: no holder means no construct.
+      assertFalse(compilation.generated().containsKey("demo.WildTelescope"), "no holder, no construct method");
+    }
+  }
 }

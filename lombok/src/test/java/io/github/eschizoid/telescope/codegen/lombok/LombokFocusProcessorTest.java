@@ -148,6 +148,46 @@ class LombokFocusProcessorTest {
       assertEquals("foo@bar.com", updated.getEmail());
       assertEquals("ABC", updated.getId(), "the non-focused property should round-trip untouched");
     }
+
+    @Test
+    @DisplayName("Phase D: @Data holder exposes a public static construct(Function) that rebuilds via setters")
+    void dataHolderConstruct() throws Exception {
+      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
+      final var constructMethod = holder.getDeclaredMethod("construct", java.util.function.Function.class);
+      final var mods = constructMethod.getModifiers();
+      assertTrue(java.lang.reflect.Modifier.isPublic(mods), "construct must be public");
+      assertTrue(java.lang.reflect.Modifier.isStatic(mods), "construct must be static");
+      assertEquals(DataUser.class, constructMethod.getReturnType(), "construct must return DataUser");
+
+      // Drive it directly with a name-keyed lookup function.
+      final java.util.function.Function<String, Object> values = name ->
+        switch (name) {
+          case "id" -> "X-123";
+          case "email" -> "noreply@example.com";
+          default -> throw new IllegalArgumentException("Unexpected: " + name);
+        };
+      final var built = (DataUser) constructMethod.invoke(null, values);
+      assertEquals("X-123", built.getId());
+      assertEquals("noreply@example.com", built.getEmail());
+    }
+
+    @Test
+    @DisplayName("Phase D: @Builder holder exposes a public static construct(Function) that chains the builder")
+    void builderHolderConstruct() throws Exception {
+      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserTelescope");
+      final var constructMethod = holder.getDeclaredMethod("construct", java.util.function.Function.class);
+      assertEquals(BuilderUser.class, constructMethod.getReturnType());
+
+      final java.util.function.Function<String, Object> values = name ->
+        switch (name) {
+          case "id" -> "B-1";
+          case "email" -> "builder@example.com";
+          default -> throw new IllegalArgumentException("Unexpected: " + name);
+        };
+      final var built = (BuilderUser) constructMethod.invoke(null, values);
+      assertEquals("B-1", built.getId());
+      assertEquals("builder@example.com", built.getEmail());
+    }
   }
 
   private static void assertHolderField(final Class<?> holder, final String name) throws Exception {
