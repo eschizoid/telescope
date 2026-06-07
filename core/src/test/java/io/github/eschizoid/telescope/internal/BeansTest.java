@@ -448,6 +448,21 @@ class BeansTest {
       final var writer = Beans.settersWriter(NoArgFields.class); // has fields but no setters
       assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "name" }, n -> "x"));
     }
+
+    @Test
+    @DisplayName("LambdaMetafactory invoker auto-unboxes a boxed Integer source value into a setX(int) setter")
+    void settersAutoUnboxesPrimitiveArg() {
+      // NoArgSetters has setScore(int). The source map carries an Object value (boxed Integer);
+      // the LambdaMetafactory-built BiConsumer<Object, Object> must auto-unbox to int. This pins
+      // the primitive bridge that LambdaMetafactory's instantiatedMethodType (cls, Integer) ->
+      // void generates — a Method.invoke regression would still work here, so the test value is
+      // in exercising the unboxing bridge end-to-end.
+      final var writer = Beans.settersWriter(NoArgSetters.class);
+      final Map<String, Object> values = Map.of("name", "evan", "score", Integer.valueOf(42));
+      final var pojo = writer.construct(new String[] { "name", "score" }, values::get);
+      assertEquals("evan", pojo.getName());
+      assertEquals(42, pojo.getScore());
+    }
   }
 
   // ----- BuilderWriter -----

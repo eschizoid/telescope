@@ -14,6 +14,7 @@ import java.lang.reflect.Modifier;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 /**
@@ -684,13 +685,29 @@ public final class Beans {
   /**
    * {@link BeanWriter} backed by a no-arg constructor plus public {@code setX(value)} setters,
    * matched by name. Public-member only — unlike {@link FieldsWriter} it needs no {@code opens}
-   * directive under JPMS. The natural rebuild strategy for classic JavaBeans / Hibernate entities.
+   * directive under JPMS for the setter dispatch itself. The natural rebuild strategy for classic
+   * JavaBeans / Hibernate entities.
+   *
+   * <p>Hot-path setter dispatch goes through one {@link BiConsumer BiConsumer&lt;Object,
+   * Object&gt;} per property, built once via {@link LambdaMetafactory} over the cached setter
+   * {@link Method} and stored in a {@link ConcurrentHashMap}. The metafactory synthesizes a class
+   * implementing {@code BiConsumer} whose {@code accept(Object, Object)} directly calls the
+   * underlying setter, auto-unboxing any primitive argument (e.g. {@code setAge(int)} consumes a
+   * boxed {@link Integer} through {@code BiConsumer<Object, Object>::accept}). After the first call
+   * per setter, dispatch is a single virtual call the JIT inlines — no {@link
+   * java.lang.reflect.Method#invoke}, no per-call argument array, no access-check.
+   *
+   * <p>Building the {@code BiConsumer} requires a private lookup on the target class via {@link
+   * MethodHandles#privateLookupIn}. For fully-public POJOs in the same module this is equivalent to
+   * a plain lookup; for closed-package targets under the module path, the POJO's module needs an
+   * {@code opens} directive — the same JPMS constraint as the previous {@code setAccessible(true)}
+   * path.
    */
   static final class SettersWriter<P> implements BeanWriter<P> {
 
     private final Class<P> cls;
     private final Constructor<P> ctor;
-    private final Map<String, Method> setters = new ConcurrentHashMap<>();
+    private final Map<String, BiConsumer<Object, Object>> setterInvokers = new ConcurrentHashMap<>();
 
     SettersWriter(final Class<P> cls) {
       this.cls = cls;
@@ -711,26 +728,93 @@ public final class Beans {
         throw new RuntimeException("Failed to instantiate " + cls.getName(), e);
       }
       for (final var name : names) {
-        try {
-          setterFor(name).invoke(pojo, valueByName.apply(name));
-        } catch (final ReflectiveOperationException e) {
-          throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), e);
-        }
+        setterFor(name).accept(pojo, valueByName.apply(name));
       }
       return pojo;
     }
 
-    private Method setterFor(final String name) {
-      return setters.computeIfAbsent(name, n -> {
-        final var set = "set" + capitalize(n);
-        for (final var m : cls.getMethods()) {
-          if (m.getParameterCount() == 1 && m.getName().equals(set)) {
-            m.setAccessible(true);
-            return m;
-          }
+    private BiConsumer<Object, Object> setterFor(final String name) {
+      return setterInvokers.computeIfAbsent(name, this::buildSetterInvoker);
+    }
+
+    /**
+     * Resolve the {@code setX(value)} {@link Method} for {@code name} and build a {@link
+     * BiConsumer} that dispatches directly to it via {@link LambdaMetafactory}. The SAM signature
+     * is {@code void accept(Object, Object)}; the {@code instantiatedMethodType} pins the actual
+     * {@code (cls, paramType) -> void} signature so the metafactory generates the right bridge —
+     * including auto-unboxing for primitive setter parameters (e.g. {@code setAge(int)}). For a
+     * primitive {@code int} parameter the instantiated parameter must be the wrapper class {@link
+     * Integer} (the metafactory validator rejects a raw {@code int} against the SAM's {@code
+     * Object}); the metafactory then synthesizes the {@code Object → Integer → int} unbox bridge
+     * automatically.
+     */
+    @SuppressWarnings("unchecked")
+    private BiConsumer<Object, Object> buildSetterInvoker(final String name) {
+      final var set = "set" + capitalize(name);
+      Method setter = null;
+      for (final var m : cls.getMethods()) {
+        if (m.getParameterCount() == 1 && m.getName().equals(set)) {
+          setter = m;
+          break;
         }
-        throw new IllegalArgumentException("writeBean(" + cls.getName() + ", SETTERS): no setter '" + set + "'");
-      });
+      }
+      if (setter == null) throw new IllegalArgumentException(
+        "writeBean(" + cls.getName() + ", SETTERS): no setter '" + set + "'"
+      );
+      final MethodHandles.Lookup lookup;
+      try {
+        // `privateLookupIn` is needed when the POJO (or its module's package) isn't open to the
+        // telescope module; for fully-public POJOs in the same module this is equivalent to a
+        // plain `MethodHandles.lookup()`. Same JPMS constraint as `setAccessible(true)` — no
+        // worse than the previous reflection path.
+        lookup = MethodHandles.privateLookupIn(cls, MethodHandles.lookup());
+      } catch (final IllegalAccessException e) {
+        throw new IllegalStateException(
+          "Cannot access " +
+            cls.getName() +
+            " to build LambdaMetafactory setter invoker. Add 'opens " +
+            cls.getPackageName() +
+            " to io.github.eschizoid.telescope;' to that module's module-info.java.",
+          e
+        );
+      }
+      final var paramType = setter.getParameterTypes()[0];
+      final var instantiatedParamType = wrap(paramType);
+      try {
+        final var handle = lookup.unreflect(setter);
+        final var callSite = LambdaMetafactory.metafactory(
+          lookup,
+          "accept",
+          MethodType.methodType(BiConsumer.class),
+          MethodType.methodType(void.class, Object.class, Object.class),
+          handle,
+          MethodType.methodType(void.class, cls, instantiatedParamType)
+        );
+        return (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+      } catch (final Throwable t) {
+        throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
+      }
+    }
+
+    /**
+     * Box a primitive type to its wrapper; non-primitives pass through unchanged. Required for the
+     * LambdaMetafactory {@code instantiatedMethodType}: a SAM parameter typed {@code Object} can't
+     * directly match an instantiated primitive {@code int} (validator rejects "int is not a subtype
+     * of class java.lang.Object"); the wrapper class is the bridge type, and the metafactory
+     * generates the corresponding unbox.
+     */
+    private static Class<?> wrap(final Class<?> c) {
+      if (!c.isPrimitive()) return c;
+      if (c == int.class) return Integer.class;
+      if (c == long.class) return Long.class;
+      if (c == double.class) return Double.class;
+      if (c == float.class) return Float.class;
+      if (c == boolean.class) return Boolean.class;
+      if (c == byte.class) return Byte.class;
+      if (c == short.class) return Short.class;
+      if (c == char.class) return Character.class;
+      if (c == void.class) return Void.class;
+      throw new IllegalStateException("Unknown primitive type: " + c);
     }
   }
 }
