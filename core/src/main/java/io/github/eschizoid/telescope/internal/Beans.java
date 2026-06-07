@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -246,6 +247,27 @@ public final class Beans {
         e
       );
     }
+  }
+
+  /**
+   * Box a primitive type to its wrapper; non-primitives pass through unchanged. Required for the
+   * LambdaMetafactory {@code instantiatedMethodType}: a SAM parameter typed {@code Object} can't
+   * directly match an instantiated primitive {@code int} (validator rejects "int is not a subtype
+   * of class java.lang.Object"); the wrapper class is the bridge type, and the metafactory
+   * generates the corresponding unbox.
+   */
+  private static Class<?> wrap(final Class<?> c) {
+    if (!c.isPrimitive()) return c;
+    if (c == int.class) return Integer.class;
+    if (c == long.class) return Long.class;
+    if (c == double.class) return Double.class;
+    if (c == float.class) return Float.class;
+    if (c == boolean.class) return Boolean.class;
+    if (c == byte.class) return Byte.class;
+    if (c == short.class) return Short.class;
+    if (c == char.class) return Character.class;
+    if (c == void.class) return Void.class;
+    throw new IllegalStateException("Unknown primitive type: " + c);
   }
 
   private static Map<String, Method> scanGetters(final Class<?> cls) {
@@ -752,14 +774,42 @@ public final class Beans {
    * calls {@code builder()}, then for each name invokes a single-arg setter — matched by exact
    * name, {@code setX}, or {@code withX} (lazily resolved and cached per name) — and finally {@code
    * build()}.
+   *
+   * <p>Hot-path dispatch is fully de-reflected via {@link LambdaMetafactory}:
+   *
+   * <ul>
+   *   <li>the static {@code builder()} factory is captured once as a {@link Supplier
+   *       Supplier&lt;Object&gt;} at construction time;
+   *   <li>each setter is captured lazily on first use and cached per name. Two shapes are
+   *       supported: fluent setters (return the builder type) are bound as a {@link BiFunction
+   *       BiFunction&lt;Object, Object, Object&gt;} — LMF refuses non-direct handles, so a
+   *       {@code BiConsumer} via {@code asType}-discard isn't viable; the returned builder is
+   *       simply discarded at the call site. Void-returning setters (classic JavaBean style) are
+   *       bound directly as a {@link BiConsumer BiConsumer&lt;Object, Object&gt;}, whose SAM
+   *       return is {@code void} — a direct MethodHandle match.
+   *   <li>{@code build()} is captured once as a {@link Function Function&lt;Object, Object&gt;} at
+   *       construction time.
+   * </ul>
+   *
+   * <p>After the first call per setter, dispatch is a single virtual call the JIT inlines — no
+   * {@link java.lang.reflect.Method#invoke}, no per-call argument array, no access-check.
+   *
+   * <p>Building the synthetic SAMs requires a private lookup on both the target class and the
+   * builder type via {@link MethodHandles#privateLookupIn}. For fully-public POJOs in the same
+   * module this is equivalent to a plain lookup; for closed-package targets under the module path,
+   * the POJO's module needs an {@code opens} directive — the same JPMS constraint as the previous
+   * {@code setAccessible(true)} path.
    */
   static final class BuilderWriter<P> implements BeanWriter<P> {
 
     private final Class<P> cls;
-    private final Method builderFactory;
     private final Class<?> builderType;
-    private final Method buildMethod;
-    private final Map<String, Method> setters = new ConcurrentHashMap<>();
+    private final Supplier<Object> builderSupplier;
+    private final Function<Object, Object> buildFn;
+    // Each value is one of: BiConsumer<Object, Object> for a void-returning setter, or
+    // BiFunction<Object, Object, Object> for a fluent setter. Per-call dispatch checks the type
+    // once; after a few calls the JIT specializes the call site against the observed shape.
+    private final Map<String, Object> setterInvokers = new ConcurrentHashMap<>();
 
     BuilderWriter(final Class<P> cls) {
       this.cls = cls;
@@ -773,53 +823,198 @@ public final class Beans {
       if (factory == null) throw new IllegalStateException(
         "writeBean(" + cls.getName() + ", BUILDER) requires a static builder() method"
       );
-      this.builderFactory = factory;
-      this.builderFactory.setAccessible(true);
       this.builderType = factory.getReturnType();
+      final Method buildMethod;
       try {
-        this.buildMethod = builderType.getMethod("build");
+        buildMethod = builderType.getMethod("build");
       } catch (final NoSuchMethodException e) {
         throw new IllegalStateException(
           "writeBean(" + cls.getName() + ", BUILDER): builder " + builderType.getName() + " has no build() method",
           e
         );
       }
-      this.buildMethod.setAccessible(true);
+      this.builderSupplier = buildBuilderSupplier(cls, factory);
+      this.buildFn = buildBuildFn(cls, builderType, buildMethod);
     }
 
     @Override
     @SuppressWarnings("unchecked")
     public P construct(final String[] names, final Function<String, Object> valueByName) {
+      // Dispatch-time exceptions (from builder() / setter / build() execution, or from auto-unbox
+      // bridges in LMF setter dispatch) propagate raw, matching the other writer strategies
+      // (FIELDS / SETTERS / CONSTRUCTOR) and the pre-LMF BuilderWriter (which only wrapped
+      // `ReflectiveOperationException` — a class that doesn't exist on the LMF hot path).
+      // Build-time LMF failures are wrapped at construction time in the respective build*Fn
+      // methods with the class-context message; runtime is consistent with the rest of the
+      // writer family.
+      final var builder = builderSupplier.get();
+      for (final var name : names) {
+        final var inv = setterFor(name);
+        final var value = valueByName.apply(name);
+        // Fluent setters return the builder (typically `this`); discard the return — the previous
+        // Method#invoke path did the same. Void-returning setters dispatch through BiConsumer; the
+        // builder pattern works either way (build() doesn't depend on setter return type).
+        if (inv instanceof BiConsumer<?, ?>) {
+          ((BiConsumer<Object, Object>) inv).accept(builder, value);
+        } else {
+          ((BiFunction<Object, Object, Object>) inv).apply(builder, value);
+        }
+      }
+      return (P) buildFn.apply(builder);
+    }
+
+    private Object setterFor(final String name) {
+      return setterInvokers.computeIfAbsent(name, this::buildSetterInvoker);
+    }
+
+    /**
+     * Resolve the {@code name} / {@code setX} / {@code withX} single-arg setter on the builder type
+     * and bind it via {@link LambdaMetafactory}. Returns one of two SAM shapes depending on the
+     * setter's return type:
+     *
+     * <ul>
+     *   <li>{@code void setX(X)} → {@link BiConsumer BiConsumer&lt;Object, Object&gt;} (classic
+     *       JavaBean-style builder setters)
+     *   <li>fluent {@code Builder setX(X)} returning the builder → {@link BiFunction
+     *       BiFunction&lt;Object, Object, Object&gt;} (the return is discarded at the call site)
+     * </ul>
+     *
+     * <p>LMF only accepts direct {@link java.lang.invoke.MethodHandle}s; modeling each shape
+     * directly avoids the {@code asType}-discard trick LMF rejects. Primitive setter parameters
+     * auto-unbox through a boxed {@code instantiatedMethodType} parameter.
+     */
+    @SuppressWarnings("unchecked")
+    private Object buildSetterInvoker(final String name) {
+      final var set = "set" + capitalize(name);
+      final var with = "with" + capitalize(name);
+      Method setter = null;
+      for (final var m : builderType.getMethods()) {
+        if (m.getParameterCount() != 1) continue;
+        final var mn = m.getName();
+        if (mn.equals(name) || mn.equals(set) || mn.equals(with)) {
+          setter = m;
+          break;
+        }
+      }
+      if (setter == null) throw new IllegalArgumentException(
+        "writeBean(" +
+          cls.getName() +
+          ", BUILDER): no single-argument builder method for '" +
+          name +
+          "' on " +
+          builderType.getName()
+      );
+      // Inherited-accessor correctness: a builder type may extend another builder type whose
+      // setters live in a different package / module. Pin the lookup, error message, and
+      // instantiatedMethodType receiver to the setter's declaring class so a closed inheritor
+      // package doesn't mask an open declaring package (or vice-versa).
+      final var declaringClass = setter.getDeclaringClass();
+      final var lookup = privateLookupOrThrow(declaringClass, builderType, "builder setter");
+      final var paramType = setter.getParameterTypes()[0];
+      // LMF rejects primitives in instantiatedMethodType parameters when the SAM parameter is
+      // erased to Object (e.g. `setScore(int)` against `BiFunction.apply(Object, Object)`). When
+      // the setter takes a primitive, pin the instantiatedMethodType parameter to the matching
+      // boxed type so LMF inserts a single auto-unbox adapter in the synthesized bridge — the
+      // call site still passes a boxed Integer, the bridge unboxes once before invoking the
+      // primitive setter.
+      final var samParamType = paramType.isPrimitive() ? wrap(paramType) : paramType;
       try {
-        final var builder = builderFactory.invoke(null);
-        for (final var name : names) setterFor(name).invoke(builder, valueByName.apply(name));
-        return (P) buildMethod.invoke(builder);
-      } catch (final ReflectiveOperationException e) {
-        throw new RuntimeException("Failed to build " + cls.getName() + " via its builder", e);
+        final var handle = lookup.unreflect(setter);
+        if (setter.getReturnType() == void.class) {
+          // Void-returning setter (classic JavaBean style): bind directly as BiConsumer.
+          final var callSite = LambdaMetafactory.metafactory(
+            lookup,
+            "accept",
+            MethodType.methodType(BiConsumer.class),
+            MethodType.methodType(void.class, Object.class, Object.class),
+            handle,
+            MethodType.methodType(void.class, declaringClass, samParamType)
+          );
+          return (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+        }
+        // Fluent setter: bind as BiFunction; the returned builder is discarded at the call site.
+        final var callSite = LambdaMetafactory.metafactory(
+          lookup,
+          "apply",
+          MethodType.methodType(BiFunction.class),
+          MethodType.methodType(Object.class, Object.class, Object.class),
+          handle,
+          MethodType.methodType(setter.getReturnType(), declaringClass, samParamType)
+        );
+        return (BiFunction<Object, Object, Object>) callSite.getTarget().invoke();
+      } catch (final Throwable t) {
+        throw new RuntimeException(
+          "Failed to build LambdaMetafactory invoker for builder setter '" + name + "' on " + builderType.getName(),
+          t
+        );
       }
     }
 
-    private Method setterFor(final String name) {
-      return setters.computeIfAbsent(name, n -> {
-        final var set = "set" + capitalize(n);
-        final var with = "with" + capitalize(n);
-        for (final var m : builderType.getMethods()) {
-          if (m.getParameterCount() != 1) continue;
-          final var mn = m.getName();
-          if (mn.equals(n) || mn.equals(set) || mn.equals(with)) {
-            m.setAccessible(true);
-            return m;
-          }
-        }
-        throw new IllegalArgumentException(
-          "writeBean(" +
-            cls.getName() +
-            ", BUILDER): no single-argument builder method for '" +
-            n +
-            "' on " +
-            builderType.getName()
+    /**
+     * Capture the zero-arg static {@code builder()} factory as a {@link Supplier
+     * Supplier&lt;Object&gt;} via {@link LambdaMetafactory}. The synthesized class' {@code get()}
+     * dispatches directly to the static factory — no per-call {@code Method#invoke}.
+     */
+    @SuppressWarnings("unchecked")
+    private static Supplier<Object> buildBuilderSupplier(final Class<?> cls, final Method factory) {
+      // Pin to factory.getDeclaringClass() — `builder()` may be inherited from a base type whose
+      // package is the one that needs `opens`, not `cls`'s.
+      final var lookup = privateLookupOrThrow(factory.getDeclaringClass(), cls, "builder factory");
+      try {
+        final var handle = lookup.unreflect(factory);
+        final var callSite = LambdaMetafactory.metafactory(
+          lookup,
+          "get",
+          MethodType.methodType(Supplier.class),
+          MethodType.methodType(Object.class),
+          handle,
+          MethodType.methodType(factory.getReturnType())
         );
-      });
+        return (Supplier<Object>) callSite.getTarget().invoke();
+      } catch (final Throwable t) {
+        throw new RuntimeException(
+          "Failed to build LambdaMetafactory invoker for static builder() factory on " + cls.getName(),
+          t
+        );
+      }
+    }
+
+    /**
+     * Capture the {@code build()} method on the builder type as a {@link Function
+     * Function&lt;Object, Object&gt;} via {@link LambdaMetafactory}. The synthesized class' {@code
+     * apply(Object)} dispatches directly to {@code build()} on the builder instance.
+     */
+    @SuppressWarnings("unchecked")
+    private static Function<Object, Object> buildBuildFn(
+      final Class<?> cls,
+      final Class<?> builderType,
+      final Method buildMethod
+    ) {
+      // Pin the lookup to `build()`'s declaring class — it may be inherited from a base builder
+      // type in a different module than the concrete builderType.
+      final var declaringClass = buildMethod.getDeclaringClass();
+      final var lookup = privateLookupOrThrow(declaringClass, builderType, "builder build()");
+      try {
+        final var handle = lookup.unreflect(buildMethod);
+        // Pin the `instantiatedMethodType` return to the build method's actual return type, not
+        // `cls`. A covariant `build()` (e.g. on a generic builder hierarchy) returns a subtype of
+        // `cls`, and LMF will refuse the binding ("incorrect return type") if we pin to `cls`.
+        // Mirrors the pattern in buildGetterInvokers (`method.getReturnType()`).
+        final var callSite = LambdaMetafactory.metafactory(
+          lookup,
+          "apply",
+          MethodType.methodType(Function.class),
+          MethodType.methodType(Object.class, Object.class),
+          handle,
+          MethodType.methodType(buildMethod.getReturnType(), declaringClass)
+        );
+        return (Function<Object, Object>) callSite.getTarget().invoke();
+      } catch (final Throwable t) {
+        throw new RuntimeException(
+          "Failed to build LambdaMetafactory invoker for build() on " + builderType.getName(),
+          t
+        );
+      }
     }
   }
 
@@ -924,27 +1119,6 @@ public final class Beans {
       } catch (final Throwable t) {
         throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
       }
-    }
-
-    /**
-     * Box a primitive type to its wrapper; non-primitives pass through unchanged. Required for the
-     * LambdaMetafactory {@code instantiatedMethodType}: a SAM parameter typed {@code Object} can't
-     * directly match an instantiated primitive {@code int} (validator rejects "int is not a subtype
-     * of class java.lang.Object"); the wrapper class is the bridge type, and the metafactory
-     * generates the corresponding unbox.
-     */
-    private static Class<?> wrap(final Class<?> c) {
-      if (!c.isPrimitive()) return c;
-      if (c == int.class) return Integer.class;
-      if (c == long.class) return Long.class;
-      if (c == double.class) return Double.class;
-      if (c == float.class) return Float.class;
-      if (c == boolean.class) return Boolean.class;
-      if (c == byte.class) return Byte.class;
-      if (c == short.class) return Short.class;
-      if (c == char.class) return Character.class;
-      if (c == void.class) return Void.class;
-      throw new IllegalStateException("Unknown primitive type: " + c);
     }
   }
 }
