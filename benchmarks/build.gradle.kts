@@ -47,11 +47,13 @@ tasks.named<JavaCompile>("compileJmhJava") {
 }
 
 jmh {
-    warmupIterations = 3
-    iterations = 5
-    fork = 1
+    warmupIterations = (project.findProperty("jmh.warmup") as String? ?: "3").toInt()
+    iterations = (project.findProperty("jmh.iterations") as String? ?: "5").toInt()
+    fork = (project.findProperty("jmh.fork") as String? ?: "1").toInt()
     threads = 1
     benchmarkMode = listOf("avgt")
     timeUnit = "ns"
     failOnError = true
+    // Optional filter — `-Pjmh.includes=HolderDispatchBenchmark` runs only matching benchmarks.
+    (project.findProperty("jmh.includes") as String?)?.let { includes = listOf(it) }
 }
