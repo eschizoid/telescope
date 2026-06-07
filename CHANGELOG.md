@@ -17,11 +17,13 @@ story.
   `public static final Telescope<X, FieldType>` constant per record component / bean property. Pure additive codegen
   output; no runtime consumer in Phase A. See
   [ADR-0006](docs/adr/0006-codegen-runtime-1-1-lookup-via-metadata-holder.md).
-- **Phase B (in flight).** `ClassValue<Optional<HolderRef>>` short-circuit in front of `Records.fieldLens(...)` /
-  `Beans.lens(...)`. When the holder is present on the classpath, the SerializedLambda-derived field name routes to the
-  pre-baked constant directly; when absent, the LMF substrate path runs unchanged.
-- **Phase C (planned).** `DeepMap` consults holders on both source and target; the per-pair `Iso<A, B>` composes from
-  per-field constants when both holders are present.
+- **Phase B.** `ClassValue<Optional<HolderRef>>` short-circuit in front of `Records.fieldLens(...)` / `Beans.lens(...)`.
+  When the holder is present on the classpath, the SerializedLambda-derived field name routes to the pre-baked constant
+  directly; when absent, the LMF substrate path runs unchanged.
+- **Phase C.** `Reflective#structuralIso(cls)` — the engine behind `Telescope.map(...)` / `Telescope.mapper(...)` —
+  probes for a sibling `<X>Telescope` holder per side. When the holder covers every component, every per-component read
+  during instance decomposition routes through the pre-baked `Lens` constants instead of `Records.read` /
+  `Beans.readProperty`. Holder-absent types and partial holders fall through to the reflective path unchanged.
 
 ### Changed
 

@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.reflect.Type;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -126,17 +127,60 @@ public record Reflective(
    * per-pair {@code Iso<S, T>} as the composition {@code
    * srcReader.reverse().then(middle).then(tgtBuilder)} — pure lattice {@code .then()}, no manual
    * function-body construction.
+   *
+   * <p><b>ADR-0006 Phase C.</b> When {@code cls} carries a sibling {@code <X>Telescope} metadata
+   * holder (codegen by {@link io.github.eschizoid.telescope.annotations.Focus @Focus} / {@link
+   * io.github.eschizoid.telescope.annotations.BeanFocus @BeanFocus} / Lombok), the backward
+   * direction's per-component reads route through the holder's pre-baked {@link Lens} constants
+   * directly — bypassing the per-call {@link Records#read} / {@link Beans#readProperty} dispatch.
+   * The forward {@link #construct} path is unchanged; it still routes through the cached canonical
+   * constructor (records) or {@link Beans.BeanWriter} (beans), because the holder doesn't expose a
+   * constructor primitive. When the holder is absent or doesn't cover every component, the prior
+   * reflective {@link #read} path remains the fallback. See ADR-0006 §3.
    */
   public <T> Iso<Map<String, Object>, T> structuralIso(final Class<T> cls) {
     final var componentNames = names(cls);
+    final var holderReaders = resolveHolderReaders(cls, componentNames);
     return Iso.of(
       map -> cls.cast(construct(cls, map::get)),
       instance -> {
         final var out = new LinkedHashMap<String, Object>();
-        for (final var name : componentNames) out.put(name, read(instance, name));
+        if (holderReaders != null) {
+          for (final var name : componentNames) out.put(name, holderReaders.get(name).get(instance));
+        } else {
+          for (final var name : componentNames) out.put(name, read(instance, name));
+        }
         return out;
       }
     );
+  }
+
+  /**
+   * If a sibling {@code <X>Telescope} holder is on the classpath AND it exposes a lens constant for
+   * every component in {@code componentNames}, return the {@code name -> Lens} table the backward
+   * branch of {@link #structuralIso} uses to bypass {@link #read} entirely. Otherwise return {@code
+   * null} — the caller falls back to the reflective {@link #read} path. The
+   * pre-resolution-or-nothing posture avoids per-component branching inside the {@link Iso}'s hot
+   * loop (one branch outside vs. {@code N} branches inside) and matches the Phase B dispatch shape
+   * in {@link
+   * io.github.eschizoid.telescope.Telescope#field(io.github.eschizoid.telescope.Telescope.Accessor)
+   * Telescope.field(Accessor)}.
+   */
+  @SuppressWarnings("unchecked")
+  private static Map<String, Lens<Object, Object>> resolveHolderReaders(
+    final Class<?> cls,
+    final String[] componentNames
+  ) {
+    final var maybeHolder = MetadataHolderProbe.probeFor(cls);
+    if (maybeHolder.isEmpty()) return null;
+    final var holder = maybeHolder.get();
+    final var readers = new LinkedHashMap<String, Lens<Object, Object>>();
+    for (final var name : componentNames) {
+      final var lens = holder.lensFor(name);
+      if (lens == null) return null;
+      readers.put(name, (Lens<Object, Object>) lens);
+    }
+    return readers;
   }
 
   @SuppressWarnings({ "rawtypes", "unchecked" })
