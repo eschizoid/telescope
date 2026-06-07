@@ -173,7 +173,10 @@ public final class DeepMap {
   private static Map<TypePair, List<Mapping<?, ?>>> groupOverridesByPair(final Mapping<?, ?>[] overrides) {
     final var grouped = new HashMap<TypePair, List<Mapping<?, ?>>>();
     for (final var row : overrides) {
-      grouped.computeIfAbsent(new TypePair(row.sourceClass(), row.targetClass()), k -> new ArrayList<>()).add(row);
+      final var internals = internalsOf(row);
+      grouped
+        .computeIfAbsent(new TypePair(internals.sourceClass(), internals.targetClass()), k -> new ArrayList<>())
+        .add(row);
     }
     return grouped;
   }
@@ -208,8 +211,9 @@ public final class DeepMap {
     for (final var row : overrides.getOrDefault(key, List.of())) {
       // Normalize raw method names per side — record::name stays "name", bean::getName becomes
       // "name".
-      final var srcField = srcRefl.normalize(row.sourceField());
-      final var tgtField = tgtRefl.normalize(row.targetField());
+      final var internals = internalsOf(row);
+      final var srcField = srcRefl.normalize(internals.sourceField());
+      final var tgtField = tgtRefl.normalize(internals.targetField());
       // Fail fast on duplicates within this type-pair — two rows that target the same source or
       // target field would silently overwrite each other in byTargetName/bySourceName and could
       // produce non-bijective forward/backward (each direction using a different correspondence).
@@ -364,6 +368,17 @@ public final class DeepMap {
       case TypedTransformTo<?, ?, ?, ?> r -> r.fieldIso();
       case Via<?, ?, ?, ?> r -> r.fieldIso();
     };
+  }
+
+  /**
+   * Recover the {@link MappingInternals} view of a {@link Mapping} row — the {@code
+   * SerializedLambda}-derived declaring classes and method names that key overrides by {@code
+   * (sourceClass, targetClass)} pair. The cast is safe because the three permitted {@link Mapping}
+   * record impls ({@link SameTypedTo}, {@link TypedTransformTo}, {@link Via}) all implement {@link
+   * MappingInternals} — same sealed permit list on both interfaces.
+   */
+  private static MappingInternals<?, ?> internalsOf(final Mapping<?, ?> row) {
+    return (MappingInternals<?, ?>) row;
   }
 
   /**
