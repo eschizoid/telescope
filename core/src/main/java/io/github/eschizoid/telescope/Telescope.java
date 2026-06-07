@@ -475,8 +475,9 @@ public sealed class Telescope<
    * {@link MapPath} carrying the map type for later {@link MapPath#values()} navigation.
    *
    * <p>Named {@code mapField} (rather than {@code map}) to disambiguate from the sibling static
-   * deep-conversion factory {@link #map(Class, Class, Mapping[])} — those do conceptually different
-   * things and share the same verb otherwise.
+   * deep-conversion factory {@link #map(Class, Class,
+   * io.github.eschizoid.telescope.mapping.MapStep...)} — those do conceptually different things and
+   * share the same verb otherwise.
    */
   public <K, V> MapPath<S, K, V> mapField(final Accessor<A, Map<K, V>> getter) {
     final Lens<A, Map<K, V>> lens = fieldOptics.lensFor(getter);
@@ -1047,7 +1048,7 @@ public sealed class Telescope<
    * @see #updateEither
    */
   public <E> Validated<E, S> updateValidated(final S source, final Function<? super A, ? extends Validated<E, A>> fn) {
-    return ValidatedK.unbox(optic.modifyF(ValidatedK.<E>forError(), source, a -> ValidatedK.box(fn.apply(a))));
+    return ValidatedK.unbox(optic.modifyF(ValidatedK.forError(), source, a -> ValidatedK.box(fn.apply(a))));
   }
 
   /**
@@ -1060,7 +1061,7 @@ public sealed class Telescope<
    * @see #updateValidated
    */
   public <E> Either<E, S> updateEither(final S source, final Function<? super A, ? extends Either<E, A>> fn) {
-    return EitherK.unbox(optic.modifyF(EitherK.<E>forLeft(), source, a -> EitherK.box(fn.apply(a))));
+    return EitherK.unbox(optic.modifyF(EitherK.forLeft(), source, a -> EitherK.box(fn.apply(a))));
   }
 
   /**
