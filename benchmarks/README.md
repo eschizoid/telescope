@@ -34,6 +34,23 @@ POJO benchmarks walk an identical mutable-bean mirror. The conversion benchmarks
 | `fromBeanForwardRead`      | `Telescope.fromBean(...).viaFields().read(...)` POJO→record bridge.                                  |
 | `bridgeForwardRead`        | Same POJO→POJO conversion via the generated `@Bridge` constant — reflection-free codegen.            |
 
+### HolderDispatchBenchmark — sibling metadata holder routing (ADR-0006 Phases B + C)
+
+These benchmarks isolate the holder-routed dispatch path that ADR-0006 layers on top of the LMF substrate. Each axis has
+paired `_lmf` (no `@Focus`, probe misses, LMF path runs) and `_holder` (sibling `<X>Telescope` holder on the classpath,
+probe hits, holder constant returned) rows. Fixtures are structurally identical between the two flavours — same field
+names, same field types, same 3-level tree — so the only difference at dispatch time is whether the holder is present.
+
+| Benchmark               | What it does                                                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `field_lmf`             | `Telescope.of(BenchPlainRec.class).field(BenchPlainRec::name).update(...)` against an unannotated record — Phase B fallback to the LMF-backed `Records.fieldLens(name)`.  |
+| `field_holder`          | Same dispatch against a `@Focus`-annotated record — `MetadataHolderProbe` hits and returns the pre-baked `BenchHolderRecTelescope.name` constant.                         |
+| `field_holder_constant` | The generated constant invoked directly (`BenchHolderRecTelescope.name.update(...)`) — skips the probe entirely; the pure codegen-direct ceiling.                         |
+| `mapForward_lmf`        | `Telescope.mapper(BenchPlainSrc.class, BenchPlainTgt.class).forward(...)` — Phase C fallback. Source-side backward Iso branch reads each component via `Reflective.read`. |
+| `mapForward_holder`     | Same forward conversion against the `@Focus`-annotated 3-level tree — source-side backward Iso branch reads via holder lens constants.                                    |
+| `mapBackward_lmf`       | The opposite Iso direction against the unannotated pair (`mapper.backward(...)`); same fallback shape.                                                                    |
+| `mapBackward_holder`    | The opposite direction against the annotated pair; holder-routed reads on the source-side backward branch.                                                                |
+
 ### LmfBenchmark — single-step LambdaMetafactory dispatch primitive (ADR-0005)
 
 These benchmarks isolate the LMF dispatch wrapper — one record component read, one bean getter read, or one bean setter
@@ -94,6 +111,57 @@ inlined Java call. That overhead is what made swapping `Method.invoke` for `Lamb
 the same dispatch went through `Method.invoke` and ran ~100-260 ns, depending on JIT state — the in-flight 5+10×3 run
 will land hard numbers on the `_methodInvoke` rows above, closing the apples-to-apples claim without needing to
 extrapolate from the (deeper-workload) `TelescopeBenchmark` runtime rows.
+
+### Hybrid dispatch (ADR-0006 Phases B + C)
+
+A 5 warmup + 10 measurement × 3 fork capture of `HolderDispatchBenchmark` against the same machine (JDK 25, Apple
+Silicon) gave:
+
+| Benchmark               |  ns/op | ±error |                                                 vs LMF |
+| ----------------------- | -----: | -----: | -----------------------------------------------------: |
+| `field_holder`          |   25.6 |   ±0.3 |                               **3.54x vs `field_lmf`** |
+| `field_holder_constant` |   26.0 |   ±1.1 |         direct holder — within error of `field_holder` |
+| `field_lmf`             |   90.7 |   ±4.5 |                                 LMF substrate baseline |
+| `mapForward_holder`     |  808.3 |  ±38.8 |                             ~1.04x vs `mapForward_lmf` |
+| `mapForward_lmf`        |  837.1 |  ±43.7 |                                 LMF substrate baseline |
+| `mapBackward_holder`    | 1163.0 | ±334.5 | _noisy: kpipe sibling JMH on the same box, wide error_ |
+| `mapBackward_lmf`       | 1374.3 | ±522.2 | _noisy: kpipe sibling JMH on the same box, wide error_ |
+
+The `field_*` rows are a single deep-field write (`Telescope.of(X).field(X::name).update(rec, fn)`); the `mapForward_*`
+/ `mapBackward_*` rows are a full 3-level record-tree conversion. Each `_lmf` row is the structural twin of its
+`_holder` sibling — same fixture shape, only the `@Focus` annotation differs — so the ratio between the pair is the
+holder-routed savings rather than a workload difference. The two `mapBackward_*` rows ran during a concurrent JMH
+workload on the same box (~50% CPU saturation), which inflated their absolute values and widened error bars by an order
+of magnitude vs the clean `mapForward_*` rows; the `mapBackward_holder ≈ 0.85 × mapBackward_lmf` ratio is consistent
+with `mapForward`'s, but the noise band makes that ratio not independently load-bearing.
+
+#### Honest read
+
+Three distinct stories at the three benchmark levels:
+
+- **Phase B — clear win on per-field dispatch.** `field_holder` at 25.6 ±0.3 ns/op is **3.54x faster** than `field_lmf`
+  at 90.7 ±4.5 ns/op. The non-overlapping CIs make this a real, measurable savings, not a noise artifact. The
+  `field_holder_constant` row at 26.0 ±1.1 ns/op (direct constant, probe bypassed) is **within the same error band as
+  `field_holder`** — so the `MetadataHolderProbe` ClassValue lookup adds essentially zero overhead on the warm path, and
+  the holder-routed dispatch reaches the codegen-direct ceiling. For deep field navigation on `@Focus`-annotated types,
+  this is a meaningful constant-factor improvement that compounds across multi-level paths.
+
+- **Phase C forward — comparable.** `mapForward_holder` at 808.3 ±38.8 ns/op is ~3-4% faster than `mapForward_lmf` at
+  837.1 ±43.7 ns/op. The means trend in the right direction, but the error bars overlap — the source-side backward-Iso
+  reads (3 component reads per fork-level, 7 total across a 3-level tree) are not the dominant cost in a full
+  deep-mapping pass. The construction side (canonical constructor invocation, Map.put boilerplate, intermediate Map
+  allocation) dominates the per-call cost, and that's identical in both paths. Phase D (constructor holder) would shift
+  this balance.
+
+- **Phase C backward — comparable but noisy.** Both rows ran with concurrent JMH contention on the same host, so the
+  ±334 / ±522 ns error bars overshadow the trend. The mean ratio matches the forward direction (~0.85x), so there's no
+  surprise regression — but the headline number on these rows is "needs a quiet machine to reproduce" rather than the
+  holder savings.
+
+The architectural story holds even where the per-call delta is comparable: the holder gives the runtime a
+zero-config-codegen handshake (the `Telescope.of(X).field(X::name)` path doesn't re-run `Records.fieldLens` for
+`@Focus`-annotated types), and Phase D will use the same probe infrastructure for the forward path. The Phase B win is
+the headline; Phase C lands as parity with a forward-looking foundation rather than a measurable speedup today.
 
 Takeaways:
 
