@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
+import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
@@ -1132,7 +1133,11 @@ public sealed class Telescope<
 
     @Override
     public <A, B> Lens<A, B> lensFor(final Accessor<A, ?> getter) {
-      return Records.fieldLens(methodNameOf(getter));
+      final var name = methodNameOf(getter);
+      final Class<A> implClass = Telescope.implClassOf(getter);
+      final var holderLens = MetadataHolderProbe.<A, B>lensFromHolder(implClass, name);
+      if (holderLens != null) return holderLens;
+      return Records.fieldLens(name);
     }
   }
 
@@ -1143,7 +1148,13 @@ public sealed class Telescope<
     @Override
     public <A, B> Lens<A, B> lensFor(final Accessor<A, ?> getter) {
       final Class<A> implClass = Telescope.implClassOf(getter);
-      final var property = Beans.propertyOf(methodNameOf(getter));
+      final var rawName = methodNameOf(getter);
+      // The holder names its constants by the property name (lowerCamel, no getX/isX prefix), to
+      // match how @BeanFocus codegen emits them — Beans.propertyOf strips the same prefixes the
+      // codegen would have stripped when naming the per-property method on <X>Path.
+      final var property = Beans.propertyOf(rawName);
+      final var holderLens = MetadataHolderProbe.<A, B>lensFromHolder(implClass, property);
+      if (holderLens != null) return holderLens;
       return Beans.lens(implClass, property, Beans.autoWriter(implClass));
     }
   }
