@@ -349,6 +349,135 @@ class FocusProcessorTest {
     }
 
     @Test
+    @DisplayName("emits a sibling <X>Telescope holder with one typed Telescope constant per component (ADR-0006)")
+    void generatesTelescopeHolder() {
+      final var compilation = compile(
+        source(
+          "demo.Person",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Person(String name, int age) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.PersonTelescope");
+      assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
+
+      // Holder is a top-level public final class in the user's package, no instances permitted.
+      assertTrue(holder.contains("public final class PersonTelescope"), holder);
+      assertTrue(holder.contains("private PersonTelescope() {}"), holder);
+
+      // One static-final constant per component, with the field type as the Telescope's second
+      // type parameter (primitive `int` is boxed to Integer).
+      assertTrue(holder.contains("public static final Telescope<Person, String> name"), holder);
+      assertTrue(holder.contains("public static final Telescope<Person, Integer> age"), holder);
+
+      // Each constant uses Telescope.lens(...) with the same canonical-setter expression the Path
+      // navigator would emit.
+      assertTrue(holder.contains("Telescope.lens(Person::name,"), holder);
+      assertTrue(holder.contains("Telescope.lens(Person::age,"), holder);
+
+      // Standard javadoc and Telescope import.
+      assertTrue(holder.contains("import io.github.eschizoid.telescope.Telescope;"), holder);
+      assertTrue(holder.contains("Per-component Telescope constants for runtime hybrid dispatch"), holder);
+    }
+
+    @Test
+    @DisplayName("a container-shaped component surfaces as a raw Telescope<X, Container<E>> constant (not lifted)")
+    void telescopeHolderForContainerComponent() {
+      final var compilation = compile(
+        source(
+          "demo.Bag",
+          """
+          package demo;
+          import java.util.List;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Bag(List<String> tags) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BagTelescope");
+      assertNotNull(holder, () -> "BagTelescope not generated; saw " + compilation.generated().keySet());
+
+      // Raw container lens on the holder — the Path's container step lifts; the holder does not.
+      // Consumers compose via .then(...) if they want element-level navigation.
+      assertTrue(holder.contains("public static final Telescope<Bag, List<String>> tags"), holder);
+      assertTrue(holder.contains("import java.util.List;"), holder);
+    }
+
+    @Test
+    @DisplayName("a sub-@Focus record component surfaces as Telescope<X, SubRecord> — terminal-to-record, not composed")
+    void telescopeHolderForSubFocusComponent() {
+      final var compilation = compile(
+        source(
+          "demo.User",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record User(String name, demo.Address address) {}
+          """
+        ),
+        source(
+          "demo.Address",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Address(String city) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.UserTelescope");
+      assertNotNull(holder, () -> "UserTelescope not generated; saw " + compilation.generated().keySet());
+
+      // Sub-record component is just a typed lens to the sub-value; no composition with the
+      // sub-record's own holder (consumers compose via .then(...) themselves).
+      assertTrue(holder.contains("public static final Telescope<User, demo.Address> address"), holder);
+      assertTrue(holder.contains("Telescope.lens(User::address,"), holder);
+    }
+
+    @Test
+    @DisplayName("a component with wildcard-bound generics is rejected with a precise diagnostic (ADR-0006 §7)")
+    void wildcardGenericsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Wild",
+          """
+          package demo;
+          import java.util.List;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Wild(List<? extends Comparable<?>> values) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "compilation should have failed for wildcard-bound generics");
+      assertTrue(
+        compilation.hasError("cannot emit metadata constant"),
+        () -> "expected wildcard diagnostic; saw " + compilation.errorMessages()
+      );
+      assertTrue(
+        compilation.hasError("wildcard or self-referential bounds"),
+        () -> "expected wildcard diagnostic; saw " + compilation.errorMessages()
+      );
+      assertFalse(
+        compilation.generated().containsKey("demo.WildTelescope"),
+        "no Telescope holder should be generated for a rejected type"
+      );
+    }
+
+    @Test
     @DisplayName("Map values use eachValue() (keys preserved); Optional uses whenPresent()")
     void mapAndOptionalUseDistinctStepMethods() {
       final var compilation = compile(
