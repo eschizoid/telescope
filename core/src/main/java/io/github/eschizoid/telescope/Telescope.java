@@ -161,30 +161,26 @@ public sealed class Telescope<
    * final Telescope<Company, Department> elements = Telescope.asList(built).each();
    * }</pre>
    */
-  @SuppressWarnings({ "unchecked", "exports" })
+  @SuppressWarnings("exports")
   public static <S, X> ListPath<S, X> asList(final Telescope<S, List<X>> path) {
-    if (path instanceof ListPath<?, ?> lp) return (ListPath<S, X>) lp;
     return new ListPath<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Set&lt;X&gt;} paths. */
-  @SuppressWarnings({ "unchecked", "exports" })
+  @SuppressWarnings("exports")
   public static <S, X> SetPath<S, X> asSet(final Telescope<S, java.util.Set<X>> path) {
-    if (path instanceof SetPath<?, ?> sp) return (SetPath<S, X>) sp;
     return new SetPath<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Map&lt;K, V&gt;} paths. */
-  @SuppressWarnings({ "unchecked", "exports" })
+  @SuppressWarnings("exports")
   public static <S, K, V> MapPath<S, K, V> asMap(final Telescope<S, Map<K, V>> path) {
-    if (path instanceof MapPath<?, ?, ?> mp) return (MapPath<S, K, V>) mp;
     return new MapPath<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Optional&lt;X&gt;} paths. */
-  @SuppressWarnings({ "unchecked", "exports" })
+  @SuppressWarnings("exports")
   public static <S, X> OptionalPath<S, X> asOptional(final Telescope<S, Optional<X>> path) {
-    if (path instanceof OptionalPath<?, ?> op) return (OptionalPath<S, X>) op;
     return new OptionalPath<>(path.optic, path.fieldOptics, path.chain);
   }
 

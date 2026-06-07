@@ -1,7 +1,6 @@
 package io.github.eschizoid.telescope;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope.ListPath;
@@ -66,11 +65,14 @@ class TypedContainerPathTest {
     }
 
     @Test
-    @DisplayName("asList on an already-ListPath returns it unchanged (no rewrap)")
-    void asListIdempotent() {
+    @DisplayName("asList on an already-ListPath rewraps to an equivalent ListPath (behavior-preserving)")
+    void asListBehaviorPreserving() {
       final ListPath<TagList, Tag> tags = Telescope.of(TagList.class).list(TagList::tags);
       final ListPath<TagList, Tag> promoted = Telescope.asList(tags);
-      assertSame(tags, promoted);
+      final var src = new TagList("alice", List.of(new Tag("a"), new Tag("b")));
+      assertEquals(tags.read(src), promoted.read(src), "rewrapped ListPath must read identical values");
+      final var updated = promoted.each().update(src, t -> new Tag(t.name().toUpperCase()));
+      assertEquals(List.of(new Tag("A"), new Tag("B")), updated.tags(), "rewrapped ListPath must update identically");
     }
   }
 
