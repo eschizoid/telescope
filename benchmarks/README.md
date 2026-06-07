@@ -41,17 +41,17 @@ call — without composing through a multi-level optic. They measure the residua
 `Function<Object, Object>` / `BiConsumer<Object, Object>` synthesized once via `LambdaMetafactory` against a directly
 inlined Java call. The delta is the per-dispatch overhead the LMF wrapper adds on top of an inlined accessor / setter.
 
-| Benchmark                         | What it does                                                                                          |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `recordComponentRead_lmf`         | `Records.read(record, "name")` — Phase 1 LMF reader hot path.                                         |
-| `recordComponentRead_methodInvoke`| Cached `RecordComponent.getAccessor()` + `Method.invoke` per call — the pre-LMF baseline Phase 1 replaced. |
-| `recordComponentRead_handRolled`  | Direct `record.name()` — record accessor baseline.                                                    |
-| `beanGetterRead_lmf`              | `Beans.readProperty(pojo, "name")` — Phase 2 LMF getter hot path.                                     |
-| `beanGetterRead_methodInvoke`     | Cached `Method` for `getName()` + `Method.invoke` per call — the pre-LMF baseline Phase 2 replaced.   |
-| `beanGetterRead_handRolled`       | Direct `pojo.getName()` — bean getter baseline.                                                       |
-| `beanSetterDispatch_lmf`          | `Beans.settersWriter(BenchPojo.class).construct(["name"], …)` — Phase 3 LMF setter dispatch hot path. |
-| `beanSetterDispatch_methodInvoke` | `new BenchPojo()` + cached `Method` for `setName(...)` + `Method.invoke` — the pre-LMF baseline Phase 3 replaced. |
-| `beanSetterDispatch_handRolled`   | `new BenchPojo()` + direct `setName(...)` — bean setter baseline.                                     |
+| Benchmark                          | What it does                                                                                                      |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `recordComponentRead_lmf`          | `Records.read(record, "name")` — Phase 1 LMF reader hot path.                                                     |
+| `recordComponentRead_methodInvoke` | Cached `RecordComponent.getAccessor()` + `Method.invoke` per call — the pre-LMF baseline Phase 1 replaced.        |
+| `recordComponentRead_handRolled`   | Direct `record.name()` — record accessor baseline.                                                                |
+| `beanGetterRead_lmf`               | `Beans.readProperty(pojo, "name")` — Phase 2 LMF getter hot path.                                                 |
+| `beanGetterRead_methodInvoke`      | Cached `Method` for `getName()` + `Method.invoke` per call — the pre-LMF baseline Phase 2 replaced.               |
+| `beanGetterRead_handRolled`        | Direct `pojo.getName()` — bean getter baseline.                                                                   |
+| `beanSetterDispatch_lmf`           | `Beans.settersWriter(BenchPojo.class).construct(["name"], …)` — Phase 3 LMF setter dispatch hot path.             |
+| `beanSetterDispatch_methodInvoke`  | `new BenchPojo()` + cached `Method` for `setName(...)` + `Method.invoke` — the pre-LMF baseline Phase 3 replaced. |
+| `beanSetterDispatch_handRolled`    | `new BenchPojo()` + direct `setName(...)` — bean setter baseline.                                                 |
 
 ## Results
 
@@ -76,17 +76,17 @@ Both deep-field benchmarks walk three levels — divide by three for per-level c
 
 A second-run capture of the LMF-tier benchmarks (single-step dispatch, no composition) gave:
 
-| Benchmark                         | ns/op |    vs hand-rolled |
-| --------------------------------- | ----: | ----------------: |
-| `recordComponentRead_handRolled`  |  ~0.8 | record-read floor |
-| `recordComponentRead_lmf`         |   ~15 |              ~18× |
-| `recordComponentRead_methodInvoke`| _to be captured at 5 warmup + 10 measurement × 3 fork before 1.0_ | apples-to-apples reflection baseline |
-| `beanGetterRead_handRolled`       |  ~0.8 | bean-getter floor |
-| `beanGetterRead_lmf`              |   ~26 |              ~33× |
-| `beanGetterRead_methodInvoke`     | _to be captured at 5 warmup + 10 measurement × 3 fork before 1.0_ | apples-to-apples reflection baseline |
-| `beanSetterDispatch_handRolled`   |    ~4 | bean-setter floor |
-| `beanSetterDispatch_lmf`          |   ~36 |               ~9× |
-| `beanSetterDispatch_methodInvoke` | _to be captured at 5 warmup + 10 measurement × 3 fork before 1.0_ | apples-to-apples reflection baseline |
+| Benchmark                          |                                                             ns/op |                       vs hand-rolled |
+| ---------------------------------- | ----------------------------------------------------------------: | -----------------------------------: |
+| `recordComponentRead_handRolled`   |                                                              ~0.8 |                    record-read floor |
+| `recordComponentRead_lmf`          |                                                               ~15 |                                 ~18× |
+| `recordComponentRead_methodInvoke` | _to be captured at 5 warmup + 10 measurement × 3 fork before 1.0_ | apples-to-apples reflection baseline |
+| `beanGetterRead_handRolled`        |                                                              ~0.8 |                    bean-getter floor |
+| `beanGetterRead_lmf`               |                                                               ~26 |                                 ~33× |
+| `beanGetterRead_methodInvoke`      | _to be captured at 5 warmup + 10 measurement × 3 fork before 1.0_ | apples-to-apples reflection baseline |
+| `beanSetterDispatch_handRolled`    |                                                                ~4 |                    bean-setter floor |
+| `beanSetterDispatch_lmf`           |                                                               ~36 |                                  ~9× |
+| `beanSetterDispatch_methodInvoke`  | _to be captured at 5 warmup + 10 measurement × 3 fork before 1.0_ | apples-to-apples reflection baseline |
 
 These are atomic-dispatch numbers, not deep-tree costs — comparable to the per-level estimates above. The LMF wrapper
 adds ~15-35 ns of dispatch overhead per call (a synthetic-class virtual dispatch plus boxing) on top of the directly
