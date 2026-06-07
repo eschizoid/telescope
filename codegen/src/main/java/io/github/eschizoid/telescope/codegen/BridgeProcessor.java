@@ -1,7 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -203,6 +202,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   // The named fields of a type: record components, or POJO getter-properties (getX/isX), in order.
+  // For the bean case, delegates to the inherited beanProperties(...) scan in
+  // AbstractTelescopeProcessor — same algorithm, lives in one place. Drops the getter-name field
+  // (this processor uses its own getterName(...) resolver below).
   private List<Field> fieldsOf(final TypeElement type) {
     if (type.getKind() == ElementKind.RECORD) {
       return type
@@ -211,27 +213,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         .map(c -> new Field(c.getSimpleName().toString(), c.asType()))
         .toList();
     }
-    final var byName = new LinkedHashMap<String, Field>();
-    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(type))) {
-      if (!isPublicInstance(m) || !m.getParameters().isEmpty() || m.getReturnType().getKind() == TypeKind.VOID) {
-        continue;
-      }
-      final var name = m.getSimpleName().toString();
-      final String prop;
-      if (name.length() > 3 && name.startsWith("get")) {
-        prop = decapitalize(name.substring(3));
-      } else if (
-        name.length() > 2 &&
-        name.startsWith("is") &&
-        (m.getReturnType().getKind() == TypeKind.BOOLEAN || "java.lang.Boolean".equals(m.getReturnType().toString()))
-      ) {
-        prop = decapitalize(name.substring(2));
-      } else {
-        continue;
-      }
-      if (!"class".equals(prop)) byName.putIfAbsent(prop, new Field(prop, m.getReturnType()));
-    }
-    return List.copyOf(byName.values());
+    return beanProperties(type)
+      .stream()
+      .map(p -> new Field(p.name(), p.type()))
+      .toList();
   }
 
   private String getterName(final TypeElement pojo, final String field, final TypeMirror type) {
