@@ -324,6 +324,42 @@ class BeansTest {
     }
   }
 
+  // Fixture pinning support for void-returning builder setters (classic JavaBean-style builders,
+  // where setters mutate the builder in place rather than returning `this`). BuilderWriter binds
+  // such setters as a BiConsumer<Object, Object> through LambdaMetafactory and dispatches them
+  // alongside fluent BiFunction-shaped setters; build() works the same regardless of setter
+  // return type.
+  static final class BuilderWithVoidSetter {
+
+    private final String id;
+
+    private BuilderWithVoidSetter(final String id) {
+      this.id = id;
+    }
+
+    public String getId() {
+      return id;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      private String id;
+
+      // void-returning setter — supported via the BiConsumer binding path.
+      public void id(final String id) {
+        this.id = id;
+      }
+
+      public BuilderWithVoidSetter build() {
+        return new BuilderWithVoidSetter(id);
+      }
+    }
+  }
+
   // ----- Getter scan / property metadata -----
 
   @Nested
@@ -568,6 +604,63 @@ class BeansTest {
     void builderUnknownSetterThrows() {
       final var writer = Beans.builderWriter(WithBuilder.class);
       assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "ghost" }, n -> "x"));
+    }
+
+    @Test
+    @DisplayName("primitive-arg setter (setScore(int)) auto-unboxes the boxed Integer value")
+    void builderPrimitiveSetterUnboxes() {
+      // Pin the LMF auto-unboxing path: the setter signature is `setScore(int)` but the value
+      // flows through valueByName as a boxed `Integer`. The LMF-built BiFunction must unbox it
+      // before dispatching to the primitive-int setter.
+      final var writer = Beans.builderWriter(WithBuilder.class);
+      final var pojo = writer.construct(new String[] { "name", "score" }, n ->
+        n.equals("name") ? "x" : Integer.valueOf(42)
+      );
+      assertEquals("x", pojo.getName());
+      assertEquals(42, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("builderWriter supports a void-returning setter via the BiConsumer LMF binding")
+    void builderSupportsVoidSetter() {
+      // Classic JavaBean-style builder: setter mutates the builder in place and returns void.
+      // BuilderWriter binds it as a BiConsumer<Object, Object> through LambdaMetafactory and
+      // dispatches it alongside fluent BiFunction setters. build() doesn't care about the setter
+      // return type.
+      final var writer = Beans.builderWriter(BuilderWithVoidSetter.class);
+      final var pojo = writer.construct(new String[] { "id" }, n -> "x");
+      assertEquals("x", pojo.getId());
+    }
+
+    @Test
+    @DisplayName(
+      "construct propagates dispatch-time failures raw (matching the other writer strategies and pre-LMF BuilderWriter)"
+    )
+    void builderConstructPropagatesDispatchFailures() {
+      // A String value flows into a setter expecting an int — the LMF auto-unbox bridge throws
+      // ClassCastException at setter-dispatch time. Dispatch-time exceptions propagate raw,
+      // matching the FIELDS / SETTERS / CONSTRUCTOR strategies and the pre-LMF BuilderWriter
+      // (which only wrapped `ReflectiveOperationException`, a class that doesn't exist on the
+      // LMF hot path). Class-context information lives in the bind-time failure messages, not
+      // the dispatch path.
+      final var writer = Beans.builderWriter(WithBuilder.class);
+      assertThrows(ClassCastException.class, () ->
+        writer.construct(new String[] { "name", "score" }, n -> n.equals("score") ? "not-an-int" : "x")
+      );
+    }
+
+    @Test
+    @DisplayName("repeated construct calls reuse the same writer (LMF setter invokers cached per name)")
+    void builderReusesAcrossConstructs() {
+      // The setter invokers map is populated lazily on first use of each name and reused on
+      // subsequent calls. A second construct on the same writer must not rebuild the LMF call site.
+      final var writer = Beans.builderWriter(WithBuilder.class);
+      final var first = writer.construct(new String[] { "name", "score" }, n -> n.equals("name") ? "a" : 1);
+      final var second = writer.construct(new String[] { "name", "score" }, n -> n.equals("name") ? "b" : 2);
+      assertEquals("a", first.getName());
+      assertEquals(1, first.getScore());
+      assertEquals("b", second.getName());
+      assertEquals(2, second.getScore());
     }
   }
 
