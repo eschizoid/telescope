@@ -26,10 +26,19 @@ tasks.withType<JavaCompile>().configureEach {
     modularity.inferModulePath = true
 }
 
+// Expose the internal package of :core to the benchmark module at COMPILE time so the LMF
+// benchmarks can call Records.read / Beans.readProperty / Beans.settersWriter directly — bypassing
+// the public DSL so we time the LambdaMetafactory dispatch primitive in isolation, not a
+// composed-lens path. At runtime, JMH bundles everything on the classpath (the benchmark JAR is a
+// fat JAR built by the jmh plugin and the JVM is launched with -cp, not --module-path), so all
+// classes live in the unnamed module and the export is unnecessary — no runtime --add-exports
+// needed.
+val internalExportCompileFlag = "--add-exports=io.github.eschizoid.telescope/io.github.eschizoid.telescope.internal=io.github.eschizoid.telescope.benchmarks"
+
 tasks.named<JavaCompile>("compileJmhJava") {
     val jmhCompileClasspath = configurations.named("jmhCompileClasspath")
     doFirst {
-        options.compilerArgs.addAll(listOf("--module-path", jmhCompileClasspath.get().asPath))
+        options.compilerArgs.addAll(listOf("--module-path", jmhCompileClasspath.get().asPath, internalExportCompileFlag))
         classpath = files()
     }
     doLast {

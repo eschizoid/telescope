@@ -20,6 +20,8 @@ The record benchmarks walk a `Company -> Department -> Address` tree and update 
 POJO benchmarks walk an identical mutable-bean mirror. The conversion benchmarks convert one whole object. Each
 `Telescope`/bridge is built once in `@Setup` and reused, so the numbers are per-operation cost, not construction.
 
+### TelescopeBenchmark — deep-tree updates and full conversions
+
 | Benchmark                  | What it does                                                                                         |
 | -------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `reflectionFieldUpdate`    | Record deep-field update via `Telescope.of(...).field(...)` — reflection.                            |
@@ -31,6 +33,22 @@ POJO benchmarks walk an identical mutable-bean mirror. The conversion benchmarks
 | `mapBeanForwardRead`       | `Telescope.mapBean(...).build().read(...)` POJO→POJO conversion (runtime reflective).                |
 | `fromBeanForwardRead`      | `Telescope.fromBean(...).viaFields().read(...)` POJO→record bridge.                                  |
 | `bridgeForwardRead`        | Same POJO→POJO conversion via the generated `@Bridge` constant — reflection-free codegen.            |
+
+### LmfBenchmark — single-step LambdaMetafactory dispatch primitive (ADR-0005)
+
+These benchmarks isolate the LMF dispatch wrapper — one record component read, one bean getter read, or one bean setter
+call — without composing through a multi-level optic. They measure the residual cost of the cached
+`Function<Object, Object>` / `BiConsumer<Object, Object>` synthesized once via `LambdaMetafactory` against a directly
+inlined Java call. The delta is the per-dispatch overhead the LMF wrapper adds on top of an inlined accessor / setter.
+
+| Benchmark                        | What it does                                                                                          |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `recordComponentRead_lmf`        | `Records.read(record, "name")` — Phase 1 LMF reader hot path.                                         |
+| `recordComponentRead_handRolled` | Direct `record.name()` — record accessor baseline.                                                    |
+| `beanGetterRead_lmf`             | `Beans.readProperty(pojo, "name")` — Phase 2 LMF getter hot path.                                     |
+| `beanGetterRead_handRolled`      | Direct `pojo.getName()` — bean getter baseline.                                                       |
+| `beanSetterDispatch_lmf`         | `Beans.settersWriter(BenchPojo.class).construct(["name"], …)` — Phase 3 LMF setter dispatch hot path. |
+| `beanSetterDispatch_handRolled`  | `new BenchPojo()` + direct `setName(...)` — bean setter baseline.                                     |
 
 ## Results
 
@@ -52,6 +70,22 @@ publication-grade) gave:
 
 Both deep-field benchmarks walk three levels — divide by three for per-level cost: record reflection ≈87 ns/level, the
 `lens` path ≈15 ns/level, native `ofBean` ≈163 ns/level.
+
+A second-run capture of the LMF-tier benchmarks (single-step dispatch, no composition) gave:
+
+| Benchmark                        | ns/op |    vs hand-rolled |
+| -------------------------------- | ----: | ----------------: |
+| `recordComponentRead_handRolled` |  ~0.8 | record-read floor |
+| `recordComponentRead_lmf`        |   ~15 |              ~18× |
+| `beanGetterRead_handRolled`      |  ~0.8 | bean-getter floor |
+| `beanGetterRead_lmf`             |   ~26 |              ~33× |
+| `beanSetterDispatch_handRolled`  |    ~4 | bean-setter floor |
+| `beanSetterDispatch_lmf`         |   ~36 |               ~9× |
+
+These are atomic-dispatch numbers, not deep-tree costs — comparable to the per-level estimates above. The LMF wrapper
+adds ~15-35 ns of dispatch overhead per call (a synthetic-class virtual dispatch plus boxing) on top of the directly
+inlined Java call. That overhead is what made swapping `Method.invoke` for `LambdaMetafactory` worthwhile: pre-Phase-1
+the same dispatch went through `Method.invoke` and ran ~100-260 ns, depending on JIT state.
 
 Takeaways:
 
