@@ -805,6 +805,47 @@ field-injection fallback) uses `setAccessible`, so under JPMS the POJO's package
 
 ---
 
+## JPMS (modular projects)
+
+If your project has a `module-info.java` and you use telescope's **runtime** navigation (`Telescope.of(...)`,
+`Telescope.ofBean(...)`, `Telescope.map(...)`, `Telescope.mapper(...)`), open the package containing your
+records/beans/POJOs to telescope:
+
+```java
+module com.acme.app {
+  requires io.github.eschizoid.telescope;
+
+  opens com.acme.model to io.github.eschizoid.telescope;
+}
+```
+
+Replace `com.acme.model` with the package that holds the types you navigate. The `opens` target is **your** package —
+the one telescope needs to reach into — not telescope's.
+
+### Why
+
+Runtime navigation binds accessors via `MethodHandles.privateLookupIn(yourClass, MethodHandles.lookup())` and feeds the
+handles to `LambdaMetafactory` for hot-path dispatch. Same access rules as `setAccessible(true)`: without an `opens`,
+the lookup fails with `IllegalAccessException`, surfaced as:
+
+> `Cannot access <YourClass> ... to build LambdaMetafactory <kind>. Add 'opens <pkg> to io.github.eschizoid.telescope;' to that module's module-info.java.`
+
+Copy the package from the error message into the `opens` directive and you're done.
+
+### Escape hatch — codegen
+
+The `@Focus` / `@BeanFocus` / `@Bridge` annotation processors emit compile-time navigators that read components and call
+constructors / builders / setters directly — no `privateLookupIn`, no `LambdaMetafactory`, no `opens` requirement. If
+adding the `opens` is awkward (e.g. a downstream module you don't own), the codegen path sidesteps the JPMS constraint
+entirely. See [Compile-time, reflection-free navigation](#compile-time-reflection-free-navigation-focus--beanfocus).
+
+### Unnamed-module (classpath) users
+
+No `module-info.java` means no `opens` needed — the JVM grants unnamed-module access automatically. This section is
+JPMS-only.
+
+---
+
 ## Compile-time, reflection-free navigation (`@Focus` / `@BeanFocus`)
 
 The reflection-based `Telescope.of(User.class).field(User::name)` path resolves the field name at runtime — fast enough
