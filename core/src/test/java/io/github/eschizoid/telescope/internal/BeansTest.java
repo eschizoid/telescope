@@ -55,6 +55,37 @@ class BeansTest {
     }
   }
 
+  /**
+   * Primitive-return getter fixture for the LambdaMetafactory auto-boxing path. {@code int
+   * getAge()} crosses the {@code Function<Object, Object>::apply} SAM as a boxed {@link Integer}
+   * thanks to the bridge the metafactory generates from the {@code instantiatedMethodType} passed
+   * to {@link Beans} on cache build.
+   */
+  static final class WithPrimitives {
+
+    private final int age;
+    private final long count;
+    private final boolean flagged;
+
+    WithPrimitives(final int age, final long count, final boolean flagged) {
+      this.age = age;
+      this.count = count;
+      this.flagged = flagged;
+    }
+
+    public int getAge() {
+      return age;
+    }
+
+    public long getCount() {
+      return count;
+    }
+
+    public boolean isFlagged() {
+      return flagged;
+    }
+  }
+
   static final class NoArgFields {
 
     private String name;
@@ -322,6 +353,40 @@ class BeansTest {
       assertEquals("active", Beans.propertyOf("isActive"));
       assertEquals("name", Beans.propertyOf("name")); // no prefix → returned as-is
       assertEquals("URL", Beans.propertyOf("getURL")); // two-caps rule preserved
+    }
+
+    @Test
+    @DisplayName("readProperty auto-boxes primitive getter returns (int → Integer, long → Long, boolean → Boolean)")
+    void readPropertyAutoBoxesPrimitives() {
+      // Pins the LambdaMetafactory instantiatedMethodType bridge: the (P -> int) MethodHandle
+      // surfaces through Function<Object, Object>::apply as a boxed Integer without a per-call
+      // reflective boxing dance.
+      final var pojo = new WithPrimitives(42, 1_000_000_000_000L, true);
+      final Object age = Beans.readProperty(pojo, "age");
+      assertEquals(Integer.class, age.getClass());
+      assertEquals(42, age);
+      final Object count = Beans.readProperty(pojo, "count");
+      assertEquals(Long.class, count.getClass());
+      assertEquals(1_000_000_000_000L, count);
+      final Object flagged = Beans.readProperty(pojo, "flagged");
+      assertEquals(Boolean.class, flagged.getClass());
+      assertEquals(Boolean.TRUE, flagged);
+    }
+
+    @Test
+    @DisplayName("getter Getter<P, Object> also auto-boxes primitive returns (lattice-shape path)")
+    void getterAutoBoxesPrimitives() {
+      // Same auto-boxing guarantee through the lattice-primitive Getter<P, Object>, so the
+      // capturing-lambda path stays equivalent to the direct readProperty path.
+      final var pojo = new WithPrimitives(7, 99L, false);
+      final var ageGetter = Beans.getter(WithPrimitives.class, "age");
+      final Object age = ageGetter.get(pojo);
+      assertEquals(Integer.class, age.getClass());
+      assertEquals(7, age);
+      final var flaggedGetter = Beans.getter(WithPrimitives.class, "flagged");
+      final Object flagged = flaggedGetter.get(pojo);
+      assertEquals(Boolean.class, flagged.getClass());
+      assertEquals(Boolean.FALSE, flagged);
     }
   }
 
