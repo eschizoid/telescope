@@ -144,6 +144,10 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
 
     final Set<String> extraImports = new LinkedHashSet<>();
     for (final var comp : components) collectStdImports(comp.asType(), extraImports);
+    // Phase D: the holder also exposes a static construct(Function<String, Object>) so the runtime
+    // forward branch in Reflective#structuralIso can skip the canonical-ctor reflective path. See
+    // ADR-0006 §3 (Phase D).
+    extraImports.add("java.util.function.Function");
 
     writeMetadataHolderClass(
       qualifiedHolder,
@@ -171,8 +175,34 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
           );
           out.println();
         }
+        emitRecordConstruct(out, recordName, components);
       }
     );
+  }
+
+  // Phase D: emit a `public static <Record> construct(Function<String, Object> values)` that calls
+  // the canonical constructor directly with cast-pulled values — the runtime hybrid dispatch in
+  // MetadataHolderProbe / Reflective#structuralIso routes here, bypassing the reflective
+  // Records.construct path for annotated records. See ADR-0006 §3 (Phase D).
+  private void emitRecordConstruct(
+    final PrintWriter out,
+    final String recordName,
+    final List<? extends RecordComponentElement> components
+  ) {
+    out.println("  /** Phase D (ADR-0006): canonical-constructor short-circuit for the runtime forward branch. */");
+    out.println("  @SuppressWarnings(\"unchecked\")");
+    out.println("  public static " + recordName + " construct(final Function<String, Object> values) {");
+    out.print("    return new " + recordName + "(");
+    for (var i = 0; i < components.size(); i++) {
+      final var comp = components.get(i);
+      final var compName = comp.getSimpleName().toString();
+      final var castType = shortenStdImports(boxedType(comp.asType()));
+      out.print("(" + castType + ") values.apply(\"" + compName + "\")");
+      if (i < components.size() - 1) out.print(", ");
+    }
+    out.println(");");
+    out.println("  }");
+    out.println();
   }
 
   // Emits one navigator method for the given record component, dispatching on its shape:

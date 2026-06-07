@@ -754,6 +754,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
     final Set<String> extraImports = new LinkedHashSet<>();
     for (final var p : props) collectStdImports(p.type(), extraImports);
+    // Phase D: the holder also exposes a static construct(Function<String, Object>) so the runtime
+    // forward branch in Reflective#structuralIso can skip the BeanWriter reflective path. See
+    // ADR-0006 §3 (Phase D).
+    extraImports.add("java.util.function.Function");
 
     writeMetadataHolderClass(
       qualifiedHolder,
@@ -783,8 +787,51 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
           );
           out.println();
         }
+        emitBeanConstruct(out, pojoName, props, setters, useBuilder);
       }
     );
+  }
+
+  /**
+   * Phase D (ADR-0006): emit a {@code public static <Pojo> construct(Function<String, Object>
+   * values)} on the bean holder. The emitted body mirrors the same write strategy {@link
+   * #emitBeanNavigator} already picked for the {@code <X>Path<R>} lens setters — builder chain when
+   * {@code useBuilder} is true, otherwise no-arg ctor plus per-property setters. The runtime hybrid
+   * dispatch in {@link io.github.eschizoid.telescope.internal.MetadataHolderProbe
+   * MetadataHolderProbe} / {@link io.github.eschizoid.telescope.internal.Reflective#structuralIso
+   * Reflective.structuralIso} routes here, bypassing the reflective {@link
+   * io.github.eschizoid.telescope.internal.Beans.BeanWriter Beans.BeanWriter} path for annotated
+   * beans. The cast types match the constants' fieldType (boxed primitives, shortened std imports).
+   */
+  private void emitBeanConstruct(
+    final PrintWriter out,
+    final String pojoName,
+    final List<Prop> props,
+    final String[] setters,
+    final boolean useBuilder
+  ) {
+    out.println("  /** Phase D (ADR-0006): bean rebuild short-circuit for the runtime forward branch. */");
+    out.println("  @SuppressWarnings(\"unchecked\")");
+    out.println("  public static " + pojoName + " construct(final Function<String, Object> values) {");
+    if (useBuilder) {
+      out.print("    return " + pojoName + ".builder()");
+      for (var i = 0; i < props.size(); i++) {
+        final var p = props.get(i);
+        final var castType = shortenStdImports(boxedType(p.type()));
+        out.print("." + setters[i] + "((" + castType + ") values.apply(\"" + p.name() + "\"))");
+      }
+      out.println(".build();");
+    } else {
+      out.println("    final var c = new " + pojoName + "();");
+      for (var i = 0; i < props.size(); i++) {
+        final var p = props.get(i);
+        final var castType = shortenStdImports(boxedType(p.type()));
+        out.println("    c." + setters[i] + "((" + castType + ") values.apply(\"" + p.name() + "\"));");
+      }
+      out.println("    return c;");
+    }
+    out.println("  }");
+    out.println();
   }
 
   /**

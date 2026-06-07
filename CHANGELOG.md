@@ -24,6 +24,15 @@ story.
   probes for a sibling `<X>Telescope` holder per side. When the holder covers every component, every per-component read
   during instance decomposition routes through the pre-baked `Lens` constants instead of `Records.read` /
   `Beans.readProperty`. Holder-absent types and partial holders fall through to the reflective path unchanged.
+- **Phase D.** `<X>Telescope` holders gain a `public static <X> construct(Function<String, Object> values)` method that
+  mirrors the same write strategy the `<X>Path<R>` lens setters chose (canonical constructor for records; builder chain
+  or no-arg ctor + setters for beans). `MetadataHolderProbe.HolderRef` adds an optional
+  `Function<Function<String, Object>, Object> constructor` field bound once via `LambdaMetafactory` at probe time.
+  `Reflective#structuralIso(cls)`'s forward branch (`Map → instance`) routes through it when present, bypassing the
+  reflective `Records.construct` / `Beans.BeanWriter` path. Legacy holders without a Phase D `construct` method degrade
+  gracefully (the `constructor` field is `null` and the reflective fallback runs). Combined with Phase C, both
+  directions of `structuralIso` are reflection-free for annotated type pairs; the only remaining runtime reflection is
+  `SerializedLambda` decode on user accessor method references.
 
 ### Changed
 

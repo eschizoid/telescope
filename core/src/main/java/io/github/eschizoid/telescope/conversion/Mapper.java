@@ -27,9 +27,9 @@ public final class Mapper<A, B> {
    *
    * <p>Declared {@code public} solely so the cross-package {@link
    * io.github.eschizoid.telescope.mapping.DeepMap} engine can construct entries when building a
-   * {@link Mapper} via {@link #Mapper(Iso, Class, Class, Map)}. The raw {@link Function} field is
-   * part of that internal contract; external code must not depend on this record's shape. Treat as
-   * private to the module — it may change or disappear without a deprecation cycle.
+   * {@link Mapper} via {@link Mapper#Mapper(Iso, Class, Class, Map)}. The raw {@link Function}
+   * field is part of that internal contract; external code must not depend on this record's shape.
+   * Treat as private to the module — it may change or disappear without a deprecation cycle.
    */
   public record PatchEntry(String sourceField, Function<Object, Object> backward) {}
 

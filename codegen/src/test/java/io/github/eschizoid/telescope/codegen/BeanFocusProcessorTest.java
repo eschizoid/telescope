@@ -550,4 +550,90 @@ class BeanFocusProcessorTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("Metadata holder construct(...) emission (ADR-0006 Phase D)")
+  class MetadataHolderConstruct {
+
+    @Test
+    @DisplayName("setter POJO: construct calls the no-arg ctor then setX per property")
+    void setterPojoConstruct() {
+      final var compilation = compile(
+        source(
+          "demo.Person",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Person {
+            private String name;
+            private int age;
+            public Person() {}
+            public String getName() { return name; }
+            public int getAge() { return age; }
+            public void setName(String name) { this.name = name; }
+            public void setAge(int age) { this.age = age; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.PersonTelescope");
+      assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
+
+      // Phase D signature.
+      assertTrue(holder.contains("public static Person construct(final Function<String, Object> values)"), holder);
+      // No-arg ctor + setX per property. The setter strategy chosen by emitBeanNavigator is
+      // mirrored here verbatim.
+      assertTrue(holder.contains("final var c = new Person();"), holder);
+      assertTrue(holder.contains("c.setName((String) values.apply(\"name\"));"), holder);
+      assertTrue(holder.contains("c.setAge((Integer) values.apply(\"age\"));"), holder);
+      assertTrue(holder.contains("return c;"), holder);
+      // Imports + @SuppressWarnings present.
+      assertTrue(holder.contains("import java.util.function.Function;"), holder);
+      assertTrue(holder.contains("@SuppressWarnings(\"unchecked\")"), holder);
+    }
+
+    @Test
+    @DisplayName("builder() POJO: construct chains builder().setX(...).setY(...).build()")
+    void builderPojoConstruct() {
+      final var compilation = compile(
+        source(
+          "demo.BuilderPojo",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class BuilderPojo {
+            private final String id;
+            private final String email;
+            private BuilderPojo(String id, String email) { this.id = id; this.email = email; }
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public static Builder builder() { return new Builder(); }
+            public static final class Builder {
+              private String id;
+              private String email;
+              public Builder id(String id) { this.id = id; return this; }
+              public Builder email(String email) { this.email = email; return this; }
+              public BuilderPojo build() { return new BuilderPojo(id, email); }
+            }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BuilderPojoTelescope");
+      assertNotNull(holder, () -> "BuilderPojoTelescope not generated; saw " + compilation.generated().keySet());
+
+      // Builder chain mirrors the per-property lens setter strategy.
+      assertTrue(holder.contains("public static BuilderPojo construct(final Function<String, Object> values)"), holder);
+      assertTrue(holder.contains("return BuilderPojo.builder()"), holder);
+      assertTrue(holder.contains(".id((String) values.apply(\"id\"))"), holder);
+      assertTrue(holder.contains(".email((String) values.apply(\"email\"))"), holder);
+      assertTrue(holder.contains(".build();"), holder);
+    }
+  }
 }

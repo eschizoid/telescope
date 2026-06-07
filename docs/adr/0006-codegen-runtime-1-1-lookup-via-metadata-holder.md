@@ -63,6 +63,16 @@ Phased rollout (each phase is a discrete PR, no public API change):
   doesn't expose a constructor primitive, so canonical-ctor / `BeanWriter` dispatch remains. Net effect: for type pairs
   where both sides are annotated, every per-component value read during deep-mapping decomposition uses a pre-baked
   lens.
+- **Phase D — holder construct(...) closes the forward branch.** The `<X>Telescope` holder gains a
+  `public static <X> construct(Function<String, Object> values)` method that mirrors the same write strategy the
+  `<X>Path<R>` lenses use (canonical constructor for records; builder chain or no-arg ctor + setters for beans). The
+  `MetadataHolderProbe.HolderRef` adds an optional `Function<Function<String, Object>, Object> constructor` field bound
+  once via `LambdaMetafactory` at probe time. `Reflective#structuralIso(cls)`'s forward branch routes through it when
+  present, bypassing the reflective `Records.construct` / `Beans.BeanWriter` path; older holders that predate Phase D
+  surface a `null` constructor and the engine falls back to today's reflective path unchanged. Net effect: for type
+  pairs where both sides are annotated, both the forward (construct) and the backward (read) branches of `structuralIso`
+  are reflection-free in the hot path; the only remaining runtime reflection is `SerializedLambda` decode on the user's
+  accessor method references.
 
 ## Decisions encoded in the design
 
