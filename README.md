@@ -828,7 +828,7 @@ Runtime navigation binds accessors via `MethodHandles.privateLookupIn(yourClass,
 handles to `LambdaMetafactory` for hot-path dispatch. Same access rules as `setAccessible(true)`: without an `opens`,
 the lookup fails with `IllegalAccessException`, surfaced as:
 
-> `Cannot access <YourClass> ... to build LambdaMetafactory <kind> invokers. Add 'opens <pkg> to io.github.eschizoid.telescope;' to that module's module-info.java.`
+> `Cannot access <YourClass> ... to build LambdaMetafactory <kind>. Add 'opens <pkg> to io.github.eschizoid.telescope;' to that module's module-info.java.`
 
 Copy the package from the error message into the `opens` directive and you're done.
 
