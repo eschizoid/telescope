@@ -343,4 +343,211 @@ class BeanFocusProcessorTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("Metadata holder emission (ADR-0006) — sibling <X>Telescope")
+  class MetadataHolder {
+
+    @Test
+    @DisplayName("emits a sibling <X>Telescope holder with one typed Telescope constant per property")
+    void generatesTelescopeHolderForBean() {
+      final var compilation = compile(
+        source(
+          "demo.Person",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Person {
+            private String name;
+            private int age;
+            public Person() {}
+            public String getName() { return name; }
+            public int getAge() { return age; }
+            public void setName(String name) { this.name = name; }
+            public void setAge(int age) { this.age = age; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.PersonTelescope");
+      assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
+
+      // Holder is a top-level public final class in the user's package, no instances permitted.
+      assertTrue(holder.contains("public final class PersonTelescope"), holder);
+      assertTrue(holder.contains("private PersonTelescope() {}"), holder);
+
+      // One static-final constant per property, with the property type as the Telescope's second
+      // type parameter (primitive `int` is boxed to Integer).
+      assertTrue(holder.contains("public static final Telescope<Person, String> name"), holder);
+      assertTrue(holder.contains("public static final Telescope<Person, Integer> age"), holder);
+
+      // Each constant uses Telescope.lens(...) with the same no-arg-ctor + setX rebuild expression
+      // the Path navigator would emit.
+      assertTrue(holder.contains("Telescope.lens(Person::getName,"), holder);
+      assertTrue(holder.contains("Telescope.lens(Person::getAge,"), holder);
+      assertTrue(holder.contains("new Person()"), holder);
+      assertTrue(holder.contains("c.setName("), holder);
+      assertTrue(holder.contains("c.setAge("), holder);
+
+      // Standard javadoc and Telescope import.
+      assertTrue(holder.contains("import io.github.eschizoid.telescope.Telescope;"), holder);
+      assertTrue(holder.contains("Per-property Telescope constants for runtime hybrid dispatch"), holder);
+    }
+
+    @Test
+    @DisplayName("builder() POJO: constants rebuild via the builder chain (same as the Path navigator)")
+    void telescopeHolderForBuilderBean() {
+      final var compilation = compile(
+        source(
+          "demo.BuilderPojo",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class BuilderPojo {
+            private final String id;
+            private final String email;
+            private BuilderPojo(String id, String email) { this.id = id; this.email = email; }
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public static Builder builder() { return new Builder(); }
+            public static final class Builder {
+              private String id;
+              private String email;
+              public Builder id(String id) { this.id = id; return this; }
+              public Builder email(String email) { this.email = email; return this; }
+              public BuilderPojo build() { return new BuilderPojo(id, email); }
+            }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BuilderPojoTelescope");
+      assertNotNull(holder, () -> "BuilderPojoTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains("public static final Telescope<BuilderPojo, String> id"), holder);
+      assertTrue(holder.contains("public static final Telescope<BuilderPojo, String> email"), holder);
+      assertTrue(holder.contains("BuilderPojo.builder()"), holder);
+      assertTrue(holder.contains(".build()"), holder);
+    }
+
+    @Test
+    @DisplayName("a container-shaped property surfaces as a raw Telescope<X, Container<E>> constant (not lifted)")
+    void telescopeHolderForBeanContainerProperty() {
+      final var compilation = compile(
+        source(
+          "demo.Bag",
+          """
+          package demo;
+          import java.util.List;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Bag {
+            private List<String> tags;
+            public Bag() {}
+            public List<String> getTags() { return tags; }
+            public void setTags(List<String> tags) { this.tags = tags; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BagTelescope");
+      assertNotNull(holder, () -> "BagTelescope not generated; saw " + compilation.generated().keySet());
+
+      // Raw container lens on the holder — the Path's container step lifts; the holder does not.
+      // Consumers compose via .then(...) if they want element-level navigation.
+      assertTrue(holder.contains("public static final Telescope<Bag, List<String>> tags"), holder);
+      assertTrue(holder.contains("import java.util.List;"), holder);
+    }
+
+    @Test
+    @DisplayName("a sub-@BeanFocus property surfaces as Telescope<X, SubBean> — terminal-to-sub-bean, not composed")
+    void telescopeHolderForBeanSubBeanProperty() {
+      final var compilation = compile(
+        source(
+          "demo.UserA",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class UserA {
+            private String name;
+            private demo.AddressB address;
+            public UserA() {}
+            public String getName() { return name; }
+            public demo.AddressB getAddress() { return address; }
+            public void setName(String name) { this.name = name; }
+            public void setAddress(demo.AddressB address) { this.address = address; }
+          }
+          """
+        ),
+        source(
+          "demo.AddressB",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class AddressB {
+            private String city;
+            public AddressB() {}
+            public String getCity() { return city; }
+            public void setCity(String city) { this.city = city; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.UserATelescope");
+      assertNotNull(holder, () -> "UserATelescope not generated; saw " + compilation.generated().keySet());
+
+      // Sub-bean property is just a typed lens to the sub-value; no composition with the
+      // sub-bean's own holder (consumers compose via .then(...) themselves).
+      assertTrue(holder.contains("public static final Telescope<UserA, demo.AddressB> address"), holder);
+      assertTrue(holder.contains("Telescope.lens(UserA::getAddress,"), holder);
+    }
+
+    @Test
+    @DisplayName("a property with wildcard-bound generics is rejected with a precise diagnostic (ADR-0006 §7)")
+    void wildcardBeanGenericsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Wild",
+          """
+          package demo;
+          import java.util.List;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Wild {
+            private List<? extends Comparable<?>> values;
+            public Wild() {}
+            public List<? extends Comparable<?>> getValues() { return values; }
+            public void setValues(List<? extends Comparable<?>> values) { this.values = values; }
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "compilation should have failed for wildcard-bound generics");
+      assertTrue(
+        compilation.hasError("cannot emit metadata constant"),
+        () -> "expected wildcard diagnostic; saw " + compilation.errorMessages()
+      );
+      assertTrue(
+        compilation.hasError("wildcard or self-referential bounds"),
+        () -> "expected wildcard diagnostic; saw " + compilation.errorMessages()
+      );
+      assertFalse(
+        compilation.generated().containsKey("demo.WildTelescope"),
+        "no Telescope holder should be generated for a rejected type"
+      );
+    }
+  }
 }

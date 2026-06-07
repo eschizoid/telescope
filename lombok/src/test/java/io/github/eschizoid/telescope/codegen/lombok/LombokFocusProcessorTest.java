@@ -91,6 +91,75 @@ class LombokFocusProcessorTest {
   }
 
   @Nested
+  @DisplayName("Sibling <X>Telescope metadata holders are emitted (ADR-0006)")
+  class MetadataHolder {
+
+    @Test
+    @DisplayName(
+      "@Data POJO yields a DataUserTelescope holder with public static final Telescope constants per property"
+    )
+    void dataHolder() throws Exception {
+      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
+      assertNotNull(holder);
+
+      // Utility holder — final class, private no-arg ctor only.
+      assertTrue(java.lang.reflect.Modifier.isFinal(holder.getModifiers()), "holder must be final");
+      assertEquals(1, holder.getDeclaredConstructors().length, "holder must have exactly one (private) constructor");
+      assertTrue(
+        java.lang.reflect.Modifier.isPrivate(holder.getDeclaredConstructors()[0].getModifiers()),
+        "holder ctor must be private"
+      );
+
+      assertHolderField(holder, "id");
+      assertHolderField(holder, "email");
+    }
+
+    @Test
+    @DisplayName("@Builder POJO yields a BuilderUserTelescope holder")
+    void builderHolder() throws Exception {
+      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserTelescope");
+      assertNotNull(holder);
+      assertHolderField(holder, "id");
+      assertHolderField(holder, "email");
+    }
+
+    @Test
+    @DisplayName("@Value + @Builder POJO yields a ValueBuilderUserTelescope holder")
+    void valueBuilderHolder() throws Exception {
+      final var holder = Class.forName(
+        "io.github.eschizoid.telescope.codegen.lombok.fixtures.ValueBuilderUserTelescope"
+      );
+      assertNotNull(holder);
+      assertHolderField(holder, "id");
+      assertHolderField(holder, "email");
+    }
+
+    @Test
+    @DisplayName("constants are functional Telescope<X, FieldType> values usable end-to-end")
+    void holderConstantsAreUsable() throws Exception {
+      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
+      final var emailField = holder.getDeclaredField("email");
+      @SuppressWarnings("unchecked")
+      final Telescope<DataUser, String> emailLens = (Telescope<DataUser, String>) emailField.get(null);
+      assertNotNull(emailLens, "email constant must be a non-null Telescope");
+
+      final var user = new DataUser("ABC", "FOO@BAR.COM");
+      final var updated = emailLens.update(user, String::toLowerCase);
+      assertEquals("foo@bar.com", updated.getEmail());
+      assertEquals("ABC", updated.getId(), "the non-focused property should round-trip untouched");
+    }
+  }
+
+  private static void assertHolderField(final Class<?> holder, final String name) throws Exception {
+    final var field = holder.getDeclaredField(name);
+    final var mods = field.getModifiers();
+    assertTrue(java.lang.reflect.Modifier.isPublic(mods), name + " must be public");
+    assertTrue(java.lang.reflect.Modifier.isStatic(mods), name + " must be static");
+    assertTrue(java.lang.reflect.Modifier.isFinal(mods), name + " must be final");
+    assertEquals(Telescope.class, field.getType(), () -> name + " must be a Telescope; was " + field.getType());
+  }
+
+  @Nested
   @DisplayName("Runtime behaviour — generated paths actually work end-to-end")
   class Runtime {
 

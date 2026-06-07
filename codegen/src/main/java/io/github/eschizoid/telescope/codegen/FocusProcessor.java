@@ -12,7 +12,6 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.RecordComponentElement;
 import javax.lang.model.element.TypeElement;
-import javax.lang.model.type.TypeMirror;
 
 /**
  * Annotation processor for {@link io.github.eschizoid.telescope.annotations.Focus}. For each
@@ -174,17 +173,6 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
         }
       }
     );
-  }
-
-  // Collect java.util.{List, Map, Optional, Set} imports needed for a component's typed-constant
-  // type signature on the holder. Only standard names that `shortenStdImports` shortens need an
-  // import; user-package types stay fully-qualified in the generated source.
-  private static void collectStdImports(final TypeMirror type, final Set<String> imports) {
-    final var raw = type.toString();
-    if (raw.contains("java.util.List")) imports.add("java.util.List");
-    if (raw.contains("java.util.Map")) imports.add("java.util.Map");
-    if (raw.contains("java.util.Optional")) imports.add("java.util.Optional");
-    if (raw.contains("java.util.Set")) imports.add("java.util.Set");
   }
 
   // Emits one navigator method for the given record component, dispatching on its shape:
