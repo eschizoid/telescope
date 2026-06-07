@@ -56,8 +56,13 @@ Phased rollout (each phase is a discrete PR, no public API change):
 - **Phase B — runtime probe.** `ClassValue<Optional<HolderRef>>` short-circuit added to the dispatch sites in
   `Records.fieldLens(...)` / `Beans.lens(...)`. Holder-present types navigate via constants; holder-absent types fall
   through to today's LMF path unchanged.
-- **Phase C — deep-mapping uses constants.** `DeepMap` checks for holders on both source and target. When both present,
-  the per-pair `Iso<A, B>` composes from the per-field constants; when either absent, today's reflective deep-map path.
+- **Phase C — deep-mapping uses constants.** `Reflective#structuralIso(cls)` probes for a sibling `<X>Telescope` and,
+  when present, pre-resolves a per-component `Lens` table. The backward branch (instance → name-keyed `Map`) reads via
+  those lenses instead of routing through `Records.read` / `Beans.readProperty`. Holder-absent types and partial holders
+  fall through to the reflective `read` path unchanged. The forward branch (`construct`) is untouched — the holder
+  doesn't expose a constructor primitive, so canonical-ctor / `BeanWriter` dispatch remains. Net effect: for type pairs
+  where both sides are annotated, every per-component value read during deep-mapping decomposition uses a pre-baked
+  lens.
 
 ## Decisions encoded in the design
 
