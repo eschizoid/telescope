@@ -782,11 +782,11 @@ public final class Beans {
    *       Supplier&lt;Object&gt;} at construction time;
    *   <li>each setter is captured lazily on first use and cached per name. Two shapes are
    *       supported: fluent setters (return the builder type) are bound as a {@link BiFunction
-   *       BiFunction&lt;Object, Object, Object&gt;} — LMF refuses non-direct handles, so a
-   *       {@code BiConsumer} via {@code asType}-discard isn't viable; the returned builder is
-   *       simply discarded at the call site. Void-returning setters (classic JavaBean style) are
-   *       bound directly as a {@link BiConsumer BiConsumer&lt;Object, Object&gt;}, whose SAM
-   *       return is {@code void} — a direct MethodHandle match.
+   *       BiFunction&lt;Object, Object, Object&gt;} — LMF refuses non-direct handles, so a {@code
+   *       BiConsumer} via {@code asType}-discard isn't viable; the returned builder is simply
+   *       discarded at the call site. Void-returning setters (classic JavaBean style) are bound
+   *       directly as a {@link BiConsumer BiConsumer&lt;Object, Object&gt;}, whose SAM return is
+   *       {@code void} — a direct MethodHandle match.
    *   <li>{@code build()} is captured once as a {@link Function Function&lt;Object, Object&gt;} at
    *       construction time.
    * </ul>
