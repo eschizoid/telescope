@@ -20,6 +20,10 @@ final class ContainerNavigationDemo {
 
   private ContainerNavigationDemo() {}
 
+  static void main() {
+    run();
+  }
+
   record Tag(String name) {}
 
   record TagList(String owner, List<Tag> tags) {}

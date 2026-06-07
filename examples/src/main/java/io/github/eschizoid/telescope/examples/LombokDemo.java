@@ -21,6 +21,10 @@ final class LombokDemo {
 
   private LombokDemo() {}
 
+  static void main() {
+    run();
+  }
+
   static void run() {
     dataLombok();
     builderLombok();

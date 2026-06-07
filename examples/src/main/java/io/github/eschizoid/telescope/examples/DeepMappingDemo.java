@@ -22,6 +22,10 @@ final class DeepMappingDemo {
 
   private DeepMappingDemo() {}
 
+  static void main() {
+    run();
+  }
+
   // ---------- same-name 5-level structure (with one rename) ----------
 
   record AddressEntity(String city, String zip) {}

@@ -12,6 +12,10 @@ final class IndexedDemo {
 
   private IndexedDemo() {}
 
+  static void main() {
+    run();
+  }
+
   record Step(String name) {}
 
   record Pipeline(String label, List<Step> steps) {}
