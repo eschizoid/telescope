@@ -147,20 +147,6 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
   // sub-component's element type has its own generated <X>Path<R>.
   private static final Set<String> FOCUS_ONLY = Set.of("io.github.eschizoid.telescope.annotations.Focus");
 
-  // Whether the type's qualified name names a record that itself carries @Focus — i.e. has its own
-  // generated *Path<R>. Used to decide a container step's element-result shape.
-  private boolean isFocusAnnotatedRecord(final String qualifiedName) {
-    final var elements = processingEnv.getElementUtils();
-    final var element = elements.getTypeElement(qualifiedName);
-    if (element == null || element.getKind() != ElementKind.RECORD) return false;
-    final var anno = elements.getTypeElement("io.github.eschizoid.telescope.annotations.Focus");
-    if (anno == null) return false;
-    for (final var am : element.getAnnotationMirrors()) {
-      if (am.getAnnotationType().asElement().equals(anno)) return true;
-    }
-    return false;
-  }
-
   // The canonical-constructor setter expression for a target component: (s, v) -> new Record(args)
   // where each arg is `v` for the target component or `s.other()` for the others.
   private static String canonicalSetter(

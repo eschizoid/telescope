@@ -152,21 +152,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * Describes a container-shaped component: its concrete element type plus the runtime-DSL method
-   * name the generated container step exposes ({@code each} / {@code eachValue} / {@code
-   * whenPresent}). Returned by {@link #traversalKind}; {@code null} when the type isn't a
-   * traversable container.
+   * Describes a container-shaped component: its concrete element type, the runtime-DSL method name
+   * the generated container step exposes ({@code each} / {@code eachValue} / {@code whenPresent}),
+   * and the container family ({@code "list"} / {@code "set"} / {@code "map"} / {@code "optional"} /
+   * {@code "iterable"}) used to pick which {@code Telescope.asX(...)} static factory the codegen
+   * emits. Returned by {@link #traversalKind}; {@code null} when the type isn't a traversable
+   * container.
    */
-  protected record TraversalShape(String elementType, String stepMethod, String containerKind) {
-    /**
-     * One of {@code "list"}, {@code "set"}, {@code "map"}, {@code "optional"}, {@code "iterable"}.
-     * Drives which {@code Telescope.asX(...)} static factory the codegen emits to step into
-     * elements without runtime container dispatch.
-     */
-    public String containerKind() {
-      return containerKind;
-    }
-  }
+  protected record TraversalShape(String elementType, String stepMethod, String containerKind) {}
 
   /**
    * The traversal shape of a collection-shaped {@code type}, or {@code null} if it isn't
@@ -531,34 +524,6 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     } catch (final IOException e) {
       error(origin, "Failed to write " + qualifiedName + ": " + e.getMessage());
     }
-  }
-
-  /**
-   * @deprecated Superseded by {@link #traversalKind}, which also reports the step method name.
-   *     Retained briefly during the navigator migration; remove when no caller remains.
-   */
-  @Deprecated
-  protected String traversalElement(final TypeMirror type) {
-    if (type.getKind() != TypeKind.DECLARED) return null;
-    final var declared = (DeclaredType) type;
-    final var types = processingEnv.getTypeUtils();
-    final var elements = processingEnv.getElementUtils();
-    final var args = declared.getTypeArguments();
-    final var erasure = types.erasure(declared);
-
-    final var map = elements.getTypeElement("java.util.Map");
-    if (map != null && types.isAssignable(erasure, types.erasure(map.asType()))) {
-      return concreteArg(args, 1); // Map<K,V> -> V (values; keys preserved)
-    }
-    final var optional = elements.getTypeElement("java.util.Optional");
-    if (optional != null && types.isSameType(erasure, types.erasure(optional.asType()))) {
-      return concreteArg(args, 0); // Optional<E> -> E
-    }
-    final var iterable = elements.getTypeElement("java.lang.Iterable");
-    if (iterable != null && types.isAssignable(erasure, types.erasure(iterable.asType()))) {
-      return concreteArg(args, 0); // List / Set / Iterable<E> -> E
-    }
-    return null;
   }
 
   // The type argument at {@code index} as a fully-qualified name, or null if absent or not a
