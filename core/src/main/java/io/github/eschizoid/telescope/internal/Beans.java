@@ -172,41 +172,30 @@ public final class Beans {
     final Map<String, Method> getters
   ) {
     if (getters.isEmpty()) return Map.of();
-    final MethodHandles.Lookup lookup;
-    try {
-      // `privateLookupIn` is needed when the bean's module/package isn't open to the telescope
-      // module; for fully-public types in the same module this is equivalent to a plain
-      // `MethodHandles.lookup()`. Same JPMS constraint as `setAccessible(true)` — no worse than
-      // the previous reflection path.
-      lookup = MethodHandles.privateLookupIn(cls, MethodHandles.lookup());
-    } catch (final IllegalAccessException e) {
-      throw new IllegalStateException(
-        "Cannot access " +
-          cls.getName() +
-          " to build LambdaMetafactory getter invokers. Add 'opens " +
-          cls.getPackageName() +
-          " to io.github.eschizoid.telescope;' to that module's module-info.java.",
-        e
-      );
-    }
+    // Cache one Lookup per declaring class — inherited getters live on a superclass / interface
+    // whose package may be in a different module than `cls`. A single lookup keyed to `cls` would
+    // fail to unreflect an inherited accessor whose declaring package isn't open to telescope.
+    final var lookupByDeclaringClass = new LinkedHashMap<Class<?>, MethodHandles.Lookup>();
     final var invokers = new LinkedHashMap<String, Function<Object, Object>>(getters.size());
     for (final var entry : getters.entrySet()) {
       final var name = entry.getKey();
       final var method = entry.getValue();
+      final var declaringClass = method.getDeclaringClass();
+      final var lookup = lookupByDeclaringClass.computeIfAbsent(declaringClass, dc ->
+        privateLookupOrThrow(dc, cls, "getter")
+      );
       try {
         final var handle = lookup.unreflect(method);
         // SAM signature is `Object apply(Object)`; the instantiatedMethodType pins the actual
         // (declaringClass) -> returnType signature so the metafactory generates the right bridge
-        // — including auto-boxing for primitive returns (`int`, `boolean`, etc). Using
-        // `method.getDeclaringClass()` (not `cls`) keeps the receiver type aligned with the
-        // unreflected handle's leading parameter for getters inherited from a superclass.
+        // — including auto-boxing for primitive returns (`int`, `boolean`, etc).
         final var callSite = LambdaMetafactory.metafactory(
           lookup,
           "apply",
           MethodType.methodType(Function.class),
           MethodType.methodType(Object.class, Object.class),
           handle,
-          MethodType.methodType(method.getReturnType(), method.getDeclaringClass())
+          MethodType.methodType(method.getReturnType(), declaringClass)
         );
         @SuppressWarnings("unchecked")
         final var reader = (Function<Object, Object>) callSite.getTarget().invoke();
@@ -219,6 +208,42 @@ public final class Beans {
       }
     }
     return invokers;
+  }
+
+  /**
+   * Resolve a {@link MethodHandles.Lookup} with private access to {@code declaringClass}, or throw
+   * an {@link IllegalStateException} with a JPMS-opens hint. When {@code declaringClass} is
+   * inherited (i.e. differs from {@code ownerClass}), the message points to the declaring class's
+   * package — that's the one that needs the {@code opens} directive, not the inheritor.
+   */
+  private static MethodHandles.Lookup privateLookupOrThrow(
+    final Class<?> declaringClass,
+    final Class<?> ownerClass,
+    final String accessorKind
+  ) {
+    try {
+      // `privateLookupIn` is needed when the type's module/package isn't open to the telescope
+      // module; for fully-public types in the same module this is equivalent to a plain
+      // `MethodHandles.lookup()`. Same JPMS constraint as `setAccessible(true)` — no worse than
+      // the previous reflection path.
+      return MethodHandles.privateLookupIn(declaringClass, MethodHandles.lookup());
+    } catch (final IllegalAccessException e) {
+      final var inheritedNote =
+        declaringClass == ownerClass
+          ? ""
+          : " (declaring class of an inherited " + accessorKind + " on " + ownerClass.getName() + ")";
+      throw new IllegalStateException(
+        "Cannot access " +
+          declaringClass.getName() +
+          inheritedNote +
+          " to build LambdaMetafactory " +
+          accessorKind +
+          " invokers. Add 'opens " +
+          declaringClass.getPackageName() +
+          " to io.github.eschizoid.telescope;' to that module's module-info.java.",
+        e
+      );
+    }
   }
 
   private static Map<String, Method> scanGetters(final Class<?> cls) {
@@ -761,23 +786,12 @@ public final class Beans {
       if (setter == null) throw new IllegalArgumentException(
         "writeBean(" + cls.getName() + ", SETTERS): no setter '" + set + "'"
       );
-      final MethodHandles.Lookup lookup;
-      try {
-        // `privateLookupIn` is needed when the POJO (or its module's package) isn't open to the
-        // telescope module; for fully-public POJOs in the same module this is equivalent to a
-        // plain `MethodHandles.lookup()`. Same JPMS constraint as `setAccessible(true)` — no
-        // worse than the previous reflection path.
-        lookup = MethodHandles.privateLookupIn(cls, MethodHandles.lookup());
-      } catch (final IllegalAccessException e) {
-        throw new IllegalStateException(
-          "Cannot access " +
-            cls.getName() +
-            " to build LambdaMetafactory setter invoker. Add 'opens " +
-            cls.getPackageName() +
-            " to io.github.eschizoid.telescope;' to that module's module-info.java.",
-          e
-        );
-      }
+      // Use the SETTER's declaring class — inherited setters live on a superclass / interface
+      // whose package may be in a different module than `cls`. Pinning the lookup, the
+      // instantiated receiver type, and the opens-error message to the declaring class keeps all
+      // three consistent.
+      final var declaringClass = setter.getDeclaringClass();
+      final var lookup = privateLookupOrThrow(declaringClass, cls, "setter");
       final var paramType = setter.getParameterTypes()[0];
       final var instantiatedParamType = wrap(paramType);
       try {
@@ -788,7 +802,7 @@ public final class Beans {
           MethodType.methodType(BiConsumer.class),
           MethodType.methodType(void.class, Object.class, Object.class),
           handle,
-          MethodType.methodType(void.class, cls, instantiatedParamType)
+          MethodType.methodType(void.class, declaringClass, instantiatedParamType)
         );
         return (BiConsumer<Object, Object>) callSite.getTarget().invoke();
       } catch (final Throwable t) {

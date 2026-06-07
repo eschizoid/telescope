@@ -86,6 +86,38 @@ class BeansTest {
     }
   }
 
+  // Fixture pair for the inherited-accessor LambdaMetafactory path. ChildBean inherits `getId()`
+  // and `setId(String)` from ParentBean; the LMF cache build must use the setter / getter's
+  // declaring class (ParentBean) for `privateLookupIn` and the instantiated receiver type — using
+  // ChildBean (the inheritor) would still happen to work in the same package but is semantically
+  // wrong, and breaks when the parent lives in a separate module whose package is opened to
+  // telescope (and the child's isn't, or vice-versa).
+  static class ParentBean {
+
+    private String id;
+
+    public String getId() {
+      return id;
+    }
+
+    public void setId(final String id) {
+      this.id = id;
+    }
+  }
+
+  static final class ChildBean extends ParentBean {
+
+    private String name;
+
+    public String getName() {
+      return name;
+    }
+
+    public void setName(final String name) {
+      this.name = name;
+    }
+  }
+
   static final class NoArgFields {
 
     private String name;
@@ -388,6 +420,22 @@ class BeansTest {
       assertEquals(Boolean.class, flagged.getClass());
       assertEquals(Boolean.FALSE, flagged);
     }
+
+    @Test
+    @DisplayName("inherited getter resolves through the parent's declaring class (no cross-class lookup error)")
+    void getterOnInheritedAccessor() {
+      // ChildBean inherits getId() from ParentBean. The LMF cache must build the invoker via a
+      // lookup pinned to ParentBean (the declaring class), not ChildBean — otherwise an
+      // inheritor whose own package isn't open to telescope would fail to bind an accessor whose
+      // declaring package IS open. This pins both the readProperty hot-path and the
+      // lattice-primitive Getter.
+      final var child = new ChildBean();
+      child.setId("inherited-id");
+      child.setName("only-on-child");
+      assertEquals("inherited-id", Beans.readProperty(child, "id"));
+      assertEquals("only-on-child", Beans.readProperty(child, "name"));
+      assertEquals("inherited-id", Beans.<ChildBean>getter(ChildBean.class, "id").get(child));
+    }
   }
 
   // ----- FieldsWriter -----
@@ -447,6 +495,20 @@ class BeansTest {
     void settersMissingSetterThrows() {
       final var writer = Beans.settersWriter(NoArgFields.class); // has fields but no setters
       assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "name" }, n -> "x"));
+    }
+
+    @Test
+    @DisplayName("settersWriter round-trips a value through an inherited setter (declared on a parent class)")
+    void settersOnInheritedSetter() {
+      // ChildBean inherits setId(String) from ParentBean. The LMF builder must use the setter's
+      // declaring class (ParentBean) for privateLookupIn and the instantiated receiver — using
+      // ChildBean's class would fail when the parent and child live in modules with different
+      // opens directives. This test pins the inheritance-correctness contract.
+      final var writer = Beans.settersWriter(ChildBean.class);
+      final var values = Map.<String, Object>of("id", "parent-id", "name", "child-name");
+      final var pojo = writer.construct(new String[] { "id", "name" }, values::get);
+      assertEquals("parent-id", pojo.getId());
+      assertEquals("child-name", pojo.getName());
     }
 
     @Test
