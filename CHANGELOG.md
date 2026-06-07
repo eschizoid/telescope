@@ -35,17 +35,43 @@ story.
   `SerializedLambda` decode on user accessor method references.
 - **Phase E.** `<X>Telescope` holders gain a `public static Map<String, Telescope<?, ?>> constants()` method returning
   the name → lens map directly. `MetadataHolderProbe.probe(...)` calls this method as the only path; a holder that's
-  missing the method (out-of-date codegen on the classpath) trips a precise `IllegalStateException` rather than
-  silently falling back. Same posture for the `construct(Function)` method emitted in Phase D — holder presence is a
-  full contract, not a probe of independent optional methods. Cuts the cold-path probe from `~3 + N` reflective ops
-  (N = holder field count) to `3` ops regardless of N. The probe is already `ClassValue`-cached, so this is a
+  missing the method (out-of-date codegen on the classpath) trips a precise `IllegalStateException` rather than silently
+  falling back. Same posture for the `construct(Function)` method emitted in Phase D — holder presence is a full
+  contract, not a probe of independent optional methods. Cuts the cold-path probe from `~3 + N` reflective ops (N =
+  holder field count) to `3` ops regardless of N. The probe is already `ClassValue`-cached, so this is a
   one-shot-per-class improvement, not a hot-path change — but it consolidates the holder's runtime contract into two
   named methods (`constants()` + `construct(Function)`) instead of a contract that depends on field-shape conventions.
   Pre-1.0 stance: no legacy fallback for older codegen output; users re-run the processor.
+- **JMH `HolderDispatchBenchmark`** — quantifies the actual perf delta from the hybrid dispatch path against the LMF
+  substrate baseline. Headline (5 warmup + 10 measurement × 3 fork, JDK 25, Apple Silicon): `field_holder` at 25.3 ±0.3
+  ns/op is **3.23× faster** than `field_lmf` at 81.8 ±1.7 ns/op with non-overlapping CIs, and the probe overhead is
+  essentially zero (`field_holder_constant` lands within the same error band). Deep-mapping forward rows
+  (`mapForward_holder` vs `mapForward_lmf`) post-Phase-D measure at **1.21× faster** (542.2 vs 655.9 ns/op,
+  non-overlapping CIs); backward rows at **1.26× faster** (536.4 vs 677.3 ns/op). See `benchmarks/README.md` "Hybrid
+  dispatch" section.
+- **JMH `_methodInvoke` rows** in `LmfBenchmark` — apples-to-apples reflection baselines
+  (`recordComponentRead_methodInvoke`, `beanGetterRead_methodInvoke`, `beanSetterDispatch_methodInvoke`) measured at
+  5+10×3 fork. Result: LMF and `Method.invoke` are roughly comparable per single-step dispatch (sometimes
+  `Method.invoke` is even a touch faster on bean accessors). The LMF substrate win is **structural** — per-call
+  `Object[]` arg allocation elimination, removed access-check, JIT inlining through composed lens chains — **not**
+  per-call on a trivial accessor. Honest framing added to `benchmarks/README.md`.
 
 ### Changed
 
 - Internal: holder-aware dispatch sites prepared in `Records` / `Beans` ahead of Phase B wiring.
+- **`Telescope.asList` / `.asSet` / `.asMap` / `.asOptional` no longer short-circuit on `instanceof`.** The four typed-
+  container promotion methods previously had `if (path instanceof ListPath<?, ?> lp) return (ListPath<S, X>) lp;`
+  branches that saved an allocation when the caller already held a typed subclass. The branches required
+  `@SuppressWarnings({"unchecked", "exports", "CastConflictsWithInstanceof"})` because of the wildcard projection; in
+  practice they almost never fired (`.list(getter)` returns `ListPath` directly; `asList(...)` callers are promoting
+  fresh `Telescope<S, List<X>>` builds that need the allocation regardless). Dropped — each method now shrinks to a
+  single `@SuppressWarnings("exports")`. Behaviour-equivalent; observable difference is only instance identity on the
+  rare already-typed-subclass case.
+- **Examples module reshaped from a single `Main.java` orchestrator to per-demo Gradle tasks.** Each demo class
+  (`CodegenDemo`, `DeepMappingDemo`, etc.) carries its own `static void main()`; `examples/build.gradle.kts` registers
+  one `JavaExec` task per demo plus an aggregator `runAllDemos`. `:examples:runAllDemos` replaces `:examples:run` as the
+  smoke-test entry point; targeted re-runs via `:examples:run<Demo>` (e.g. `:examples:runCodegenDemo`). The
+  `application` Gradle plugin is no longer needed and removed.
 
 ## [1.0.0] — Unreleased
 
