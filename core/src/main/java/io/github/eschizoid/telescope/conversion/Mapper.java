@@ -21,9 +21,15 @@ import java.util.function.Function;
 public final class Mapper<A, B> {
 
   /**
-   * One entry of the patch table — when overlaying a partially-populated target onto a source, each
-   * non-null target component value is fed to {@link #backward} and written to {@link #sourceField}
-   * on the source.
+   * <b>Module-internal seam — NOT public API.</b> One entry of the patch table — when overlaying a
+   * partially-populated target onto a source, each non-null target component value is fed to {@link
+   * #backward} and written to {@link #sourceField} on the source.
+   *
+   * <p>Declared {@code public} solely so the cross-package {@link
+   * io.github.eschizoid.telescope.mapping.DeepMap} engine can construct entries when building a
+   * {@link Mapper} via {@link #Mapper(Iso, Class, Class, Map)}. The raw {@link Function} field is
+   * part of that internal contract; external code must not depend on this record's shape. Treat as
+   * private to the module — it may change or disappear without a deprecation cycle.
    */
   public record PatchEntry(String sourceField, Function<Object, Object> backward) {}
 
@@ -34,11 +40,16 @@ public final class Mapper<A, B> {
   private final Map<String, PatchEntry> patchByTargetField;
 
   /**
-   * Construct a mapper directly from an {@link Iso}, the source/target classes, and a (possibly
-   * empty) patch table keyed by target component/property name. Public but effectively
-   * module-internal — {@link Iso} lives in the unexported {@code internal.optics} package, so
-   * consumers of the module can't supply a real argument. Used by {@link
-   * io.github.eschizoid.telescope.mapping.DeepMap}.
+   * <b>Module-internal seam — NOT public API.</b> Construct a mapper directly from an {@link Iso},
+   * the source/target classes, and a (possibly empty) patch table keyed by target component
+   * /property name.
+   *
+   * <p>Declared {@code public} solely so {@link io.github.eschizoid.telescope.mapping.DeepMap}
+   * (different package) can call it; {@link Iso} lives in the unexported {@code internal.optics}
+   * package, so module consumers cannot supply a real argument. External code must construct
+   * mappers via {@link Telescope#mapper(Class, Class,
+   * io.github.eschizoid.telescope.mapping.MapStep...)}. Treat this signature as part of the
+   * module's internal contract: it may change or disappear without a deprecation cycle.
    */
   @SuppressWarnings("exports") // Intentional: Iso is module-internal; consumers can't supply one.
   public Mapper(

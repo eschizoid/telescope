@@ -7,18 +7,21 @@ import java.lang.annotation.Target;
 
 /**
  * Marks a {@link Record} for codegen by the {@code telescope-codegen} annotation processor. For
- * each annotated record, the processor emits a sibling class {@code <RecordName>Focus} with {@code
- * public static final Telescope<Record, FieldType>} constants per record component, each built via
- * {@link io.github.eschizoid.telescope.Telescope#lens(java.util.function.Function,
- * java.util.function.BiFunction)}.
+ * each annotated record, the processor emits a sibling class {@code <RecordName>Path<R>} — a fluent
+ * navigator with one method per record component, plus the full Telescope op-surface forwarded so
+ * any hop reads / updates / traverses without reaching for {@code .get()}.
  *
- * <p>The generated constants are the reflection-free, compile-checked replacement for the runtime
- * {@code Telescope.of(Record.class).field(Record::component)} path: the field-name reference is
- * resolved by the processor (a typo is a compile error), and navigation never touches reflection.
- * The constants are plain {@link io.github.eschizoid.telescope.Telescope} values, so they compose
- * with {@code .field(...)}, {@code .each(...)}, {@code .then(...)} like any other telescope.
+ * <p>The generated navigator is the reflection-free, compile-checked replacement for the runtime
+ * {@code Telescope.of(Record.class).field(Record::component)} path: field names are resolved by the
+ * processor (a typo is a compile error), navigation never touches reflection, and the hot path
+ * inlines through generated method references. Container components ({@code List<E>}, {@code
+ * Set<E>}, {@code Map<K,V>}, {@code Optional<E>}, {@code Iterable<E>}) get their own typed {@code
+ * <X><Cap>Step<R>} sub-navigator with the right {@code .each() / .eachValue() / .whenPresent()}
+ * exposed; if the element type is itself navigable (carries {@code @Focus} / {@code @BeanFocus} / a
+ * Lombok bean annotation), the step's method returns the sub-element's {@code Path<R>} so
+ * navigation continues fluently.
  *
- * <p>Records only, and only top-level records — the generated top-level {@code *Focus} class cannot
+ * <p>Records only, and only top-level records — the generated top-level {@code *Path} class cannot
  * reference a nested record's canonical constructor, so a nested or non-record target is a compile
  * error.
  *
@@ -34,19 +37,24 @@ import java.lang.annotation.Target;
  * @Focus
  * record User(String name, int age, Address address) {}
  *
- * // Generated alongside (UserFocus.java):
- * // public final class UserFocus {
- * //   public static final Telescope<User, String> name = Telescope.lens(...);
- * //   public static final Telescope<User, Integer> age = Telescope.lens(...);
- * //   public static final Telescope<User, Address> address = Telescope.lens(...);
+ * @Focus
+ * record Address(String city) {}
+ *
+ * // Generated alongside (UserPath.java, AddressPath.java):
+ * // public final class UserPath<R> {
+ * //   public static UserPath<User> start() { ... }
+ * //   public Telescope<R, String> name() { ... }
+ * //   public Telescope<R, Integer> age() { ... }
+ * //   public AddressPath<R> address() { ... }
+ * //   // + read / find / set / update / toList / ... forwarders
  * // }
  *
  * // Usage — no reflection, field name checked at compile time:
  * final var alice = new User("alice", 30, new Address("NYC"));
- * final var loud  = UserFocus.name.update(alice, String::toUpperCase); // User[name=ALICE, ...]
+ * final var loud  = UserPath.start().name().update(alice, String::toUpperCase);
  *
- * // Composes like any Telescope value — drill into a nested @Focus record:
- * final var moved = UserFocus.address.then(AddressFocus.city).set(alice, "LA");
+ * // Drill into a nested @Focus record fluently — no .then(...) plumbing:
+ * final var moved = UserPath.start().address().city().set(alice, "LA");
  * }</pre>
  *
  * @see io.github.eschizoid.telescope.Telescope#lens(java.util.function.Function,

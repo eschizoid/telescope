@@ -17,7 +17,7 @@ record TypedTransformTo<A, B, X, Y>(
   Accessor<B, Y> tgt,
   Function<? super X, ? extends Y> forward,
   Function<? super Y, ? extends X> backward
-) implements Mapping<A, B> {
+) implements Mapping<A, B>, MappingInternals<A, B> {
   @Override
   public Class<A> sourceClass() {
     return LambdaIntrospection.implClassOf(src);

@@ -4,17 +4,23 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.lang.reflect.Type;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
- * The uniform reflective interface that {@link io.github.eschizoid.telescope.mapping.DeepMap
+ * The uniform reflective dispatch that {@link io.github.eschizoid.telescope.mapping.DeepMap
  * DeepMap} drives — abstracts over "this side is a record" vs "this side is a bean" so the
  * recursive resolver doesn't have to know. Per-side dispatch via {@link #of(Class)} lets a single
  * deep-mapping call mix and match records and POJOs at any depth: the source side of a given pair
  * uses one {@code Reflective}, the target side another, chosen independently from the pair's
  * classes.
  *
- * <p>Two implementations:
+ * <p>The record's fields are the five per-side function references; the forwarding instance methods
+ * ({@link #names(Class)}, {@link #genericType(Class, String)}, {@link #read(Object, String)},
+ * {@link #construct(Class, Function)}, {@link #normalize(String)}) preserve the prior
+ * interface-method calling convention so call sites don't have to spell {@code .read().apply(...)}.
+ *
+ * <p>Two singletons:
  *
  * <ul>
  *   <li>{@link #RECORDS} — backed by {@link Records}. Canonical-constructor rebuild, identity name
@@ -26,22 +32,86 @@ import java.util.function.Function;
  * </ul>
  *
  * <p>The lattice-first principle holds: {@link io.github.eschizoid.telescope.mapping.DeepMap
- * DeepMap} composes {@link io.github.eschizoid.telescope.internal.optics.Iso Iso}s; this interface
+ * DeepMap} composes {@link io.github.eschizoid.telescope.internal.optics.Iso Iso}s; this record
  * only handles "how do I read one component value" and "how do I rebuild one object from a
  * name-keyed function." No bidirectional plumbing lives here.
  */
-public interface Reflective {
+public record Reflective(
+  Function<Class<?>, String[]> names,
+  BiFunction<Class<?>, String, Type> genericType,
+  BiFunction<Object, String, Object> read,
+  BiFunction<Class<?>, Function<String, Object>, Object> construct,
+  Function<String, String> normalize
+) {
+  public static final Reflective RECORDS = new Reflective(
+    Records::componentNames,
+    Records::componentType,
+    Records::read,
+    Reflective::constructRecord,
+    name -> name
+  );
+
+  public static final Reflective BEANS = new Reflective(
+    Beans::propertyNames,
+    Beans::propertyType,
+    Beans::readProperty,
+    Reflective::constructBean,
+    Beans::propertyOf
+  );
+
+  /**
+   * Pick the right reflective for {@code cls}: records → {@link #RECORDS}; everything else → {@link
+   * #BEANS}.
+   */
+  public static Reflective of(final Class<?> cls) {
+    return cls.isRecord() ? RECORDS : BEANS;
+  }
+
+  /**
+   * Bean reflective that consults {@code hints} before falling back to {@link Beans#autoWriter}.
+   * Used by {@link io.github.eschizoid.telescope.mapping.DeepMap DeepMap} when the user supplies
+   * {@code writeBean(targetClass, strategy)} rows — the hint map is keyed on target class and
+   * provides a pre-instantiated {@link Beans.BeanWriter}, so eager construction has already
+   * validated strategy applicability.
+   */
+  public static Reflective beansWithHints(final Map<Class<?>, Beans.BeanWriter<?>> hints) {
+    return new Reflective(
+      BEANS.names,
+      BEANS.genericType,
+      BEANS.read,
+      (cls, valueByName) -> constructBeanWithHints(hints, cls, valueByName),
+      BEANS.normalize
+    );
+  }
+
   /** Component / property names in declaration order. */
-  String[] names(Class<?> cls);
+  public String[] names(final Class<?> cls) {
+    return names.apply(cls);
+  }
 
   /** Generic type of the named component / property (for container shape detection). */
-  Type genericType(Class<?> cls, String name);
+  public Type genericType(final Class<?> cls, final String name) {
+    return genericType.apply(cls, name);
+  }
 
   /** Read a value by name. */
-  Object read(Object value, String name);
+  public Object read(final Object value, final String name) {
+    return read.apply(value, name);
+  }
 
   /** Construct a fresh instance by reading each component's value from the function. */
-  Object construct(Class<?> cls, Function<String, Object> valueByName);
+  public Object construct(final Class<?> cls, final Function<String, Object> valueByName) {
+    return construct.apply(cls, valueByName);
+  }
+
+  /**
+   * Translate a raw method name from an {@code Accessor} (recovered via {@code SerializedLambda})
+   * into the component / property name DeepMap uses for lookups. For records: identity. For beans:
+   * strip {@code get} / {@code is} prefix and decapitalize.
+   */
+  public String normalize(final String rawMethodName) {
+    return normalize.apply(rawMethodName);
+  }
 
   /**
    * The class as a structural {@link Iso} mediating between a name-keyed {@code Map<String,
@@ -57,130 +127,41 @@ public interface Reflective {
    * srcReader.reverse().then(middle).then(tgtBuilder)} — pure lattice {@code .then()}, no manual
    * function-body construction.
    */
-  default <T> Iso<Map<String, Object>, T> structuralIso(final Class<T> cls) {
-    final var names = names(cls);
+  public <T> Iso<Map<String, Object>, T> structuralIso(final Class<T> cls) {
+    final var componentNames = names(cls);
     return Iso.of(
       map -> cls.cast(construct(cls, map::get)),
       instance -> {
         final var out = new LinkedHashMap<String, Object>();
-        for (final var name : names) out.put(name, read(instance, name));
+        for (final var name : componentNames) out.put(name, read(instance, name));
         return out;
       }
     );
   }
 
-  /**
-   * Translate a raw method name from an {@code Accessor} (recovered via {@code SerializedLambda})
-   * into the component / property name DeepMap uses for lookups. For records: identity. For beans:
-   * strip {@code get} / {@code is} prefix and decapitalize.
-   */
-  String normalize(String rawMethodName);
-
-  /**
-   * Pick the right reflective for {@code cls}: records → {@link #RECORDS}; everything else → {@link
-   * #BEANS}.
-   */
-  static Reflective of(final Class<?> cls) {
-    return cls.isRecord() ? RECORDS : BEANS;
+  @SuppressWarnings({ "rawtypes", "unchecked" })
+  private static Object constructRecord(final Class<?> cls, final Function<String, Object> valueByName) {
+    return Records.construct((Class) cls, valueByName);
   }
 
-  /**
-   * Bean reflective that consults {@code hints} before falling back to {@link Beans#autoWriter}.
-   * Used by {@link io.github.eschizoid.telescope.mapping.DeepMap DeepMap} when the user supplies
-   * {@code writeBean(targetClass, strategy)} rows — the hint map is keyed on target class and
-   * provides a pre-instantiated {@link Beans.BeanWriter}, so eager construction has already
-   * validated strategy applicability.
-   */
-  static Reflective beansWithHints(final Map<Class<?>, Beans.BeanWriter<?>> hints) {
-    return new Reflective() {
-      @Override
-      public String[] names(final Class<?> cls) {
-        return Beans.propertyNames(cls);
-      }
-
-      @Override
-      public Type genericType(final Class<?> cls, final String name) {
-        return Beans.propertyType(cls, name);
-      }
-
-      @Override
-      public Object read(final Object value, final String name) {
-        return Beans.readProperty(value, name);
-      }
-
-      @Override
-      @SuppressWarnings({ "rawtypes", "unchecked" })
-      public Object construct(final Class<?> cls, final Function<String, Object> valueByName) {
-        // Lazy fallback — Beans.autoWriter may throw for classes the auto path refuses (ambiguous
-        // multi-ctor POJOs, classes compiled without -parameters, or ctor/getter name mismatches);
-        // when a hint exists it MUST win, otherwise autoWriter's pre-emptive throw would defeat the
-        // hint mechanism. getOrDefault would eagerly evaluate the default and short-circuit it.
-        final var hinted = (Beans.BeanWriter) hints.get(cls);
-        final var writer = hinted != null ? hinted : Beans.autoWriter((Class) cls);
-        return writer.construct(Beans.propertyNames(cls), valueByName);
-      }
-
-      @Override
-      public String normalize(final String rawMethodName) {
-        return Beans.propertyOf(rawMethodName);
-      }
-    };
+  @SuppressWarnings({ "rawtypes", "unchecked" })
+  private static Object constructBean(final Class<?> cls, final Function<String, Object> valueByName) {
+    final var writer = Beans.autoWriter((Class) cls);
+    return writer.construct(Beans.propertyNames(cls), valueByName);
   }
 
-  Reflective RECORDS = new Reflective() {
-    @Override
-    public String[] names(final Class<?> cls) {
-      return Records.componentNames(cls);
-    }
-
-    @Override
-    public Type genericType(final Class<?> cls, final String name) {
-      return Records.componentType(cls, name);
-    }
-
-    @Override
-    public Object read(final Object value, final String name) {
-      return Records.read(value, name);
-    }
-
-    @Override
-    @SuppressWarnings({ "rawtypes", "unchecked" })
-    public Object construct(final Class<?> cls, final Function<String, Object> valueByName) {
-      return Records.construct((Class) cls, valueByName);
-    }
-
-    @Override
-    public String normalize(final String rawMethodName) {
-      return rawMethodName;
-    }
-  };
-
-  Reflective BEANS = new Reflective() {
-    @Override
-    public String[] names(final Class<?> cls) {
-      return Beans.propertyNames(cls);
-    }
-
-    @Override
-    public Type genericType(final Class<?> cls, final String name) {
-      return Beans.propertyType(cls, name);
-    }
-
-    @Override
-    public Object read(final Object value, final String name) {
-      return Beans.readProperty(value, name);
-    }
-
-    @Override
-    @SuppressWarnings({ "rawtypes", "unchecked" })
-    public Object construct(final Class<?> cls, final Function<String, Object> valueByName) {
-      final var writer = Beans.autoWriter((Class) cls);
-      return writer.construct(Beans.propertyNames(cls), valueByName);
-    }
-
-    @Override
-    public String normalize(final String rawMethodName) {
-      return Beans.propertyOf(rawMethodName);
-    }
-  };
+  @SuppressWarnings({ "rawtypes", "unchecked" })
+  private static Object constructBeanWithHints(
+    final Map<Class<?>, Beans.BeanWriter<?>> hints,
+    final Class<?> cls,
+    final Function<String, Object> valueByName
+  ) {
+    // Lazy fallback — Beans.autoWriter may throw for classes the auto path refuses (ambiguous
+    // multi-ctor POJOs, classes compiled without -parameters, or ctor/getter name mismatches);
+    // when a hint exists it MUST win, otherwise autoWriter's pre-emptive throw would defeat the
+    // hint mechanism. getOrDefault would eagerly evaluate the default and short-circuit it.
+    final var hinted = (Beans.BeanWriter) hints.get(cls);
+    final var writer = hinted != null ? hinted : Beans.autoWriter((Class) cls);
+    return writer.construct(Beans.propertyNames(cls), valueByName);
+  }
 }

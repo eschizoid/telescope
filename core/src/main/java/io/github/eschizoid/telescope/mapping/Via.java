@@ -13,7 +13,11 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
  * <p>Package-private — users construct via {@link Mapping#via(Accessor, Accessor, Mapper)} and
  * never see this type at the call site.
  */
-record Via<A, B, X, Y>(Accessor<A, X> src, Accessor<B, Y> tgt, Mapper<X, Y> nested) implements Mapping<A, B> {
+record Via<A, B, X, Y>(
+  Accessor<A, X> src,
+  Accessor<B, Y> tgt,
+  Mapper<X, Y> nested
+) implements Mapping<A, B>, MappingInternals<A, B> {
   @Override
   public Class<A> sourceClass() {
     return LambdaIntrospection.implClassOf(src);

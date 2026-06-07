@@ -12,7 +12,7 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
  * <p>Package-private — users construct via {@link Mapping#to(Accessor, Accessor)} and never see
  * this type at the call site.
  */
-record SameTypedTo<A, B, X>(Accessor<A, X> src, Accessor<B, X> tgt) implements Mapping<A, B> {
+record SameTypedTo<A, B, X>(Accessor<A, X> src, Accessor<B, X> tgt) implements Mapping<A, B>, MappingInternals<A, B> {
   @Override
   public Class<A> sourceClass() {
     return LambdaIntrospection.implClassOf(src);

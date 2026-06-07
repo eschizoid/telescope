@@ -10,7 +10,11 @@ import java.util.function.Function;
  */
 public final class To<A, B> {
 
-  public To() {}
+  /**
+   * Package-private. External code never constructs this — the only entry point is {@link
+   * From#to(Class)}, which lives in this same package.
+   */
+  To() {}
 
   /**
    * Supply both directions of the conversion. {@code forward} converts {@code A → B}; {@code
