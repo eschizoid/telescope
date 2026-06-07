@@ -107,6 +107,12 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
     return of(x -> x, x -> x);
   }
 
+  // Centralizes the "null in → null out" pass-through every lift uses — records and beans may
+  // legally hold null container references, and deep mapping treats them as pass-through.
+  private static <C, R> R nullablyMap(final C source, final Function<? super C, ? extends R> body) {
+    return source == null ? null : body.apply(source);
+  }
+
   /**
    * Lift an element-level {@code Iso<X, Y>} into a {@code List}-level {@code Iso<List<X>,
    * List<Y>>}. Element-wise forward / backward via streaming. Used by the deep mapping factory to
@@ -114,8 +120,8 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    */
   static <X, Y> Iso<List<X>, List<Y>> liftList(final Iso<X, Y> element) {
     return of(
-      xs -> xs == null ? null : xs.stream().map(element::to).collect(Collectors.toCollection(ArrayList::new)),
-      ys -> ys == null ? null : ys.stream().map(element::from).collect(Collectors.toCollection(ArrayList::new))
+      xs -> nullablyMap(xs, l -> l.stream().map(element::to).collect(Collectors.toCollection(ArrayList::new))),
+      ys -> nullablyMap(ys, l -> l.stream().map(element::from).collect(Collectors.toCollection(ArrayList::new)))
     );
   }
 
@@ -125,8 +131,9 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    * Optional reference round-trips to {@code null} (records/beans may legally hold null references
    * and deep mapping treats nulls as pass-through).
    */
+  @SuppressWarnings({ "OptionalAssignedToNull", "OptionalUsedAsFieldOrParameterType" })
   static <X, Y> Iso<Optional<X>, Optional<Y>> liftOptional(final Iso<X, Y> element) {
-    return of(ox -> ox == null ? null : ox.map(element::to), oy -> oy == null ? null : oy.map(element::from));
+    return of(ox -> nullablyMap(ox, o -> o.map(element::to)), oy -> nullablyMap(oy, o -> o.map(element::from)));
   }
 
   /**
@@ -142,8 +149,8 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    */
   static <X, Y> Iso<Set<X>, Set<Y>> liftSet(final Iso<X, Y> element) {
     return of(
-      xs -> xs == null ? null : xs.stream().map(element::to).collect(Collectors.toCollection(LinkedHashSet::new)),
-      ys -> ys == null ? null : ys.stream().map(element::from).collect(Collectors.toCollection(LinkedHashSet::new))
+      xs -> nullablyMap(xs, s -> s.stream().map(element::to).collect(Collectors.toCollection(LinkedHashSet::new))),
+      ys -> nullablyMap(ys, s -> s.stream().map(element::from).collect(Collectors.toCollection(LinkedHashSet::new)))
     );
   }
 
@@ -154,18 +161,18 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    */
   static <K, X, Y> Iso<Map<K, X>, Map<K, Y>> liftMapValues(final Iso<X, Y> value) {
     return of(
-      mx -> {
-        if (mx == null) return null;
-        final var out = new LinkedHashMap<K, Y>();
-        mx.forEach((k, x) -> out.put(k, value.to(x)));
-        return out;
-      },
-      my -> {
-        if (my == null) return null;
-        final var out = new LinkedHashMap<K, X>();
-        my.forEach((k, y) -> out.put(k, value.from(y)));
-        return out;
-      }
+      mx ->
+        nullablyMap(mx, m -> {
+          final var out = new LinkedHashMap<K, Y>();
+          m.forEach((k, x) -> out.put(k, value.to(x)));
+          return out;
+        }),
+      my ->
+        nullablyMap(my, m -> {
+          final var out = new LinkedHashMap<K, X>();
+          m.forEach((k, y) -> out.put(k, value.from(y)));
+          return out;
+        })
     );
   }
 
