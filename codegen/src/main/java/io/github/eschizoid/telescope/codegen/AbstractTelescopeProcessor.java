@@ -480,6 +480,71 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
+   * Emit a generated utility class with an extended import block: the package declaration, the
+   * standard {@code io.github.eschizoid.telescope.Telescope} import plus any caller-specified extra
+   * imports (typically container types like {@code java.util.List}), a one-line javadoc, a private
+   * constructor, then {@code body} writes the static-final constants, then the closing brace. Used
+   * by the {@code <X>Telescope} metadata-holder emission (ADR-0006). IO failures are reported on
+   * {@code origin}.
+   */
+  protected void writeMetadataHolderClass(
+    final String qualifiedName,
+    final String simpleName,
+    final String javadoc,
+    final Element origin,
+    final Set<String> extraImports,
+    final Consumer<PrintWriter> body
+  ) {
+    final var dot = qualifiedName.lastIndexOf('.');
+    final var pkg = dot < 0 ? "" : qualifiedName.substring(0, dot);
+    try {
+      final var file = processingEnv.getFiler().createSourceFile(qualifiedName, origin);
+      try (final var out = new PrintWriter(file.openWriter())) {
+        if (!pkg.isEmpty()) {
+          out.println("package " + pkg + ";");
+          out.println();
+        }
+        for (final var imp : extraImports) {
+          out.println("import " + imp + ";");
+        }
+        out.println("import io.github.eschizoid.telescope.Telescope;");
+        out.println();
+        out.println("/** " + javadoc + " */");
+        out.println("public final class " + simpleName + " {");
+        out.println();
+        out.println("  private " + simpleName + "() {}");
+        out.println();
+        body.accept(out);
+        out.println("}");
+      }
+    } catch (final IOException e) {
+      error(origin, "Failed to write " + qualifiedName + ": " + e.getMessage());
+    }
+  }
+
+  /**
+   * Whether the given {@code type} is safe to emit as a typed {@code Telescope<X, T>} constant on a
+   * metadata holder. Rejects wildcard-bound generics and type-variables at any depth — those would
+   * require the holder to expose either raw types or wildcards, neither of which composes cleanly
+   * with the runtime's {@code Telescope<X, FieldType>} expectations. Conservative posture matches
+   * the rest of the codegen story (ADR-0006 §7).
+   */
+  protected static boolean isEmittableAsTypedConstant(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case WILDCARD, TYPEVAR, ERROR, NONE, NULL, OTHER -> false;
+      case DECLARED -> {
+        final var declared = (DeclaredType) type;
+        for (final var arg : declared.getTypeArguments()) {
+          if (!isEmittableAsTypedConstant(arg)) yield false;
+        }
+        yield true;
+      }
+      case ARRAY -> isEmittableAsTypedConstant(((javax.lang.model.type.ArrayType) type).getComponentType());
+      default -> true; // primitives are valid (boxed at the call site)
+    };
+  }
+
+  /**
    * Emit a non-utility generated class — i.e., one with instance state and a non-{@code private}
    * constructor. Header (package, single {@code io.github.eschizoid.telescope.Telescope} import,
    * javadoc, class declaration with {@code typeParams}) is written before {@code body}, then the
