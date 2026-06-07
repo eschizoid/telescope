@@ -175,7 +175,7 @@ public final class DeepMap {
     for (final var row : overrides) {
       final var internals = internalsOf(row);
       grouped
-        .computeIfAbsent(new TypePair(internals.sourceClass(), internals.targetClass()), k -> new ArrayList<>())
+        .computeIfAbsent(new TypePair(internals.sourceClass(), internals.targetClass()), _ -> new ArrayList<>())
         .add(row);
     }
     return grouped;

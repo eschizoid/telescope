@@ -681,7 +681,6 @@ public final class Beans {
    */
   static final class ConstructorWriter<P> implements BeanWriter<P> {
 
-    private final Class<P> cls;
     private final Function<Object, Object> ctorFn;
     // Constructor parameter names when the POJO was compiled with -parameters (enables
     // order-independent name matching); null when names are synthetic, so we fall back to
@@ -690,7 +689,6 @@ public final class Beans {
 
     @SuppressWarnings("unchecked")
     ConstructorWriter(final Class<P> cls, final int arity) {
-      this.cls = cls;
       Constructor<P> found = null;
       for (final var c : cls.getDeclaredConstructors()) {
         if (c.getParameterCount() != arity) continue;
@@ -834,7 +832,7 @@ public final class Beans {
         );
       }
       this.builderSupplier = buildBuilderSupplier(cls, factory);
-      this.buildFn = buildBuildFn(cls, builderType, buildMethod);
+      this.buildFn = buildBuildFn(builderType, buildMethod);
     }
 
     @Override
@@ -985,11 +983,7 @@ public final class Beans {
      * apply(Object)} dispatches directly to {@code build()} on the builder instance.
      */
     @SuppressWarnings("unchecked")
-    private static Function<Object, Object> buildBuildFn(
-      final Class<?> cls,
-      final Class<?> builderType,
-      final Method buildMethod
-    ) {
+    private static Function<Object, Object> buildBuildFn(final Class<?> builderType, final Method buildMethod) {
       // Pin the lookup to `build()`'s declaring class — it may be inherited from a base builder
       // type in a different module than the concrete builderType.
       final var declaringClass = buildMethod.getDeclaringClass();
