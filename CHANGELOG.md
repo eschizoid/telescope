@@ -33,8 +33,8 @@ showcase. All changes are additive — no breaking changes vs 0.4.0.
   `via(Parent::children, Parent::getChildren, childMapper)`, instead of building a separate `Mapper<List<E>, List<F>>`
   or hoisting every child-level row up to the parent's slot.
 - **`WriteHint.writeBeans(WriteStrategy)` default writer.** Single-row default applied to every bean target the
-  recursion touches that lacks a more specific `writeBean(Class, WriteStrategy)` override. Collapses the common
-  "pin SETTERS across every JPA entity" enumeration from N rows to one. Per-class hints still win.
+  recursion touches that lacks a more specific `writeBean(Class, WriteStrategy)` override. Collapses the common "pin
+  SETTERS across every JPA entity" enumeration from N rows to one. Per-class hints still win.
 - **`Mapper#sourceClass()` / `Mapper#targetClass()` accessors** — expose the keying classes so the deep-mapping engine
   can detect when a user-supplied `Mapper` is element-level vs accessor-level and auto-lift accordingly.
 - **`Mapper#liftList()` / `liftSet()` / `liftOptional()` / `liftMapValues()`** — promote an element-level `Mapper<A, B>`
@@ -43,8 +43,8 @@ showcase. All changes are additive — no breaking changes vs 0.4.0.
 - **`examples-springboot/`** — Spring Boot 4.0.1 + Spring Framework 7 + Hibernate 7 + Jakarta EE 10 + Jackson + H2 demo
   project. Two controllers (`RuntimeOrderController`, `CodegenOrderController`) exercise every public Mapping / Mapper /
   Telescope API surface end-to-end through a real REST + JPA pipeline. Composite-build wired so iteration on the
-  telescope library shows up immediately in the demo. Tests boot embedded Tomcat on a random port and drive HTTP
-  through Spring 7's `RestClient`.
+  telescope library shows up immediately in the demo. Tests boot embedded Tomcat on a random port and drive HTTP through
+  Spring 7's `RestClient`.
 
 ### Fixed
 
@@ -59,9 +59,9 @@ showcase. All changes are additive — no breaking changes vs 0.4.0.
 
 - **`Mapping#via(Accessor<A, ?>, Accessor<B, ?>, Mapper<?, ?>)`** — relaxed signature replacing the prior
   `via(Accessor<A, X>, Accessor<B, X>, Mapper<X, X>)` and the proposed per-shape variants (`viaList`, `viaSet`, etc.).
-  The same row carries either an accessor-typed `Mapper<List<E>, List<F>>` or an element-typed `Mapper<E, F>`;
-  `DeepMap` detects which based on the accessor's field type at row resolution and lifts as needed. No call-site changes
-  for existing code (the API is wider, not narrower).
+  The same row carries either an accessor-typed `Mapper<List<E>, List<F>>` or an element-typed `Mapper<E, F>`; `DeepMap`
+  detects which based on the accessor's field type at row resolution and lifts as needed. No call-site changes for
+  existing code (the API is wider, not narrower).
 - **`Reflective.beansWithHints(Map, Function<Class<?>, Beans.BeanWriter<?>>)`** — signature widened to take a
   default-writer factory function in addition to the per-class hint map. Internal seam consumed only by `DeepMap`.
 
