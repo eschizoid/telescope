@@ -45,15 +45,33 @@ jobs:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
 
+      - name: Compute next version
+        id: nextver
+        run: |
+          # axion-release's auto-incrementer (`-Prelease.incrementer=<patch|minor|major>`) was
+          # silently skipping the bump on this repo — `release` kept resolving the current version
+          # to the latest tag (e.g. `v0.3.0`) and tried to recreate it. Compute the next version
+          # explicitly from `latest-tag + dropdown selection` and pass it via
+          # `-Prelease.forceVersion`, which axion honours unconditionally.
+          LATEST=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 | sed 's/^v//')
+          IFS='.' read -r MAJ MIN PATCH <<< "$LATEST"
+          case "${{ inputs.releaseType }}" in
+            patch) NEXT="$MAJ.$MIN.$((PATCH+1))" ;;
+            minor) NEXT="$MAJ.$((MIN+1)).0" ;;
+            major) NEXT="$((MAJ+1)).0.0" ;;
+            *) echo "Unknown release type: ${{ inputs.releaseType }}"; exit 1 ;;
+          esac
+          echo "Latest tag: v$LATEST → next: v$NEXT (${{ inputs.releaseType }})"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+
       - name: Update Version and Create Tag
         id: version
         run: |
-          # axion-release bumps the version per the chosen incrementer, creates the v* tag,
-          # commits the SNAPSHOT bump-back, and pushes both. -Prelease.disableChecks skips the
-          # uncommitted-changes guard so the release commit itself isn't rejected.
-          ./gradlew release -Prelease.incrementer=${{ inputs.releaseType }} -Prelease.disableChecks -x test
+          # axion-release creates the v* tag at `forceVersion` and pushes it. -Prelease.disableChecks
+          # skips the uncommitted-changes guard so the release commit itself isn't rejected.
+          ./gradlew release -Prelease.forceVersion=${{ steps.nextver.outputs.next }} -Prelease.disableChecks -x test
 
-          RAW_VERSION=$(./gradlew currentVersion -q -Prelease.quiet)
+          RAW_VERSION="${{ steps.nextver.outputs.next }}"
           TAG_VERSION="v$RAW_VERSION"
           echo "version=$RAW_VERSION" >> "$GITHUB_OUTPUT"
           echo "tagName=$TAG_VERSION" >> "$GITHUB_OUTPUT"
