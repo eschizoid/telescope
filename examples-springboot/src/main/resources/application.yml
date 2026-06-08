@@ -1,0 +1,32 @@
+# Telescope Spring Boot 4 demo — H2 in-memory DB, Hibernate 7 auto DDL, single config file.
+# Start with `./gradlew bootRun`, then POST a JSON order body to /orders/runtime or /orders/codegen.
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:telescope-demo;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.H2Dialect
+
+  # Jackson defaults — record canonical-constructor binding works out of the box on Spring Boot 4
+  # with the `jackson-module-parameter-names` module on the classpath. Explicitly setting these
+  # for clarity.
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+    default-property-inclusion: non_null
+
+logging:
+  level:
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.jdbc.bind: TRACE
+    io.github.eschizoid.telescope: DEBUG
