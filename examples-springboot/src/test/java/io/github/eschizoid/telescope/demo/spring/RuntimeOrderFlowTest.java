@@ -6,10 +6,10 @@ import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.client.HttpClientErrorException;
@@ -22,9 +22,9 @@ import org.springframework.web.client.RestClient;
  * <ol>
  *   <li><b>POST round-trip preserves shape.</b> JSON → record → entity → DB → entity → record →
  *       JSON returns equal nested values (modulo Hibernate-assigned ids).
- *   <li><b>Pre-write normalisation hits a nested field.</b> The controller lowercases
- *       {@code customer.email} via a single {@code Telescope.of(Order.class).field(...).field(...).update(...)}
- *       call before persistence.
+ *   <li><b>Pre-write normalisation hits a nested field.</b> The controller lowercases {@code
+ *       customer.email} via a single {@code
+ *       Telescope.of(Order.class).field(...).field(...).update(...)} call before persistence.
  *   <li><b>PATCH overlays only non-null fields.</b> Sending {@code {"orderNumber":"ORD-PATCHED"}}
  *       changes only the order number; customer, addresses, line items stay as the previous POST
  *       left them. Demonstrates {@code mapper.patch(existing, partial)}.
@@ -33,7 +33,8 @@ import org.springframework.web.client.RestClient;
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 class RuntimeOrderFlowTest {
 
-  @LocalServerPort private int port;
+  @LocalServerPort
+  private int port;
 
   private RestClient client;
 

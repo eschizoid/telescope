@@ -322,7 +322,8 @@ class DeepMappingTest {
   @DisplayName("via — drop a pre-built nested mapper instead of letting recursion build one")
   class PreBuiltViaMapper {
 
-    // -- RED: via with a List-typed accessor should lift the element-level mapper through the list --
+    // -- RED: via with a List-typed accessor should lift the element-level mapper through the list
+    // --
     //
     // Today this throws "incompatible source/target shapes" because Via stores the mapper at
     // src/tgt accessor type level. When srcAcc returns List<X> and tgtAcc returns List<Y>, the

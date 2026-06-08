@@ -8,8 +8,8 @@ import java.math.BigDecimal;
  * {@link BigDecimal} on the record side to preserve API-level fidelity, but the persistence
  * equivalent stores cents as a {@code long} (the standard "never trust BigDecimal in the database"
  * pattern). Telescope's typed-transform mapping rows (`Mapping.to(srcAcc, tgtAcc, fwd, bwd)`)
- * bridge the two representations bidirectionally — see {@code RuntimeOrderMappingConfig} and
- * {@code CodegenOrderMappingConfig} for the wire-up.
+ * bridge the two representations bidirectionally — see {@code RuntimeOrderMappingConfig} and {@code
+ * CodegenOrderMappingConfig} for the wire-up.
  */
 @Focus
 public record LineItem(Long id, String sku, int quantity, BigDecimal unitPrice) {}

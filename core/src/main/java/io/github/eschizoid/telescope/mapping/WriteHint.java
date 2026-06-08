@@ -89,9 +89,9 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    * <p>At most one {@code writeBeans(...)} default may appear per {@code Telescope.map(...)} call.
    * Per-class {@code writeBean(X.class, …)} rows always win for class {@code X}. The default is
    * resolved lazily — the writer for a given target is constructed the first time the recursion
-   * reaches that target, so a default strategy incompatible with a particular target (e.g.,
-   * {@code BUILDER} on a class with no static {@code builder()}) only throws when that target is
-   * actually visited.
+   * reaches that target, so a default strategy incompatible with a particular target (e.g., {@code
+   * BUILDER} on a class with no static {@code builder()}) only throws when that target is actually
+   * visited.
    */
   static WriteHint<?> writeBeans(final WriteStrategy strategy) {
     return new DefaultWriteHint(strategy);

@@ -9,8 +9,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Shared fixture builder for the two integration tests. Mirrors the JSON shape consumers would
- * POST to either controller, keeps {@link Customer#id} and {@link Order#id} null on the way in
+ * Shared fixture builder for the two integration tests. Mirrors the JSON shape consumers would POST
+ * to either controller, keeps {@link Customer#id} and {@link Order#id} null on the way in
  * (Hibernate assigns ids on save), and pins enough nesting (deep Address, Optional gift-wrap,
  * non-empty line-item list) to exercise every shape telescope's deep-mapping factory recurses
  * through.
@@ -35,9 +35,9 @@ public final class OrderFixtures {
   }
 
   /**
-   * Patch fixture — only fields that should change. Used by the runtime controller's PATCH test
-   * to demonstrate that {@code mapper.patch(existing, partial)} preserves non-null fields and
-   * lays partial ones on top.
+   * Patch fixture — only fields that should change. Used by the runtime controller's PATCH test to
+   * demonstrate that {@code mapper.patch(existing, partial)} preserves non-null fields and lays
+   * partial ones on top.
    */
   public static Order patchOrderNumberOnly(final String newOrderNumber) {
     return new Order(null, newOrderNumber, null, null, null, List.of(), Optional.empty());

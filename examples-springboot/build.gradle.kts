@@ -2,6 +2,7 @@ plugins {
     java
     id("org.springframework.boot") version "4.0.1"
     id("io.spring.dependency-management") version "1.1.7"
+    id("com.diffplug.spotless") version "7.0.0"
 }
 
 // Spring Boot 4.0.1 — the latest GA at the time of this demo. Brings Spring Framework 7.0,
@@ -39,9 +40,7 @@ dependencies {
     implementation("com.fasterxml.jackson.module:jackson-module-parameter-names")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
-    // Spring Boot 4's test starter dropped the AssertJ transitive that Boot 3 carried. AssertJ
-    // gives us the fluent .assertThat() the integration tests lean on.
-    testImplementation("org.assertj:assertj-core:3.27.6")
+    testImplementation("org.assertj:assertj-core:3.27.7")
 }
 
 tasks.withType<JavaCompile>().configureEach {
@@ -54,4 +53,32 @@ tasks.withType<JavaCompile>().configureEach {
 
 tasks.named<Test>("test") {
     useJUnitPlatform()
+}
+
+// Mirrors the :core / :codegen / :lombok spotless config in the parent telescope project:
+// googleJavaFormat for baseline formatting + prettier-plugin-java for final pass at 120 cols.
+spotless {
+    java {
+        target("src/**/*.java")
+        targetExclude("build/generated/**")
+        googleJavaFormat("1.35.0")
+        toggleOffOn()
+        importOrder()
+        removeUnusedImports()
+        trimTrailingWhitespace()
+        endWithNewline()
+        prettier(
+            mapOf(
+                "prettier" to "3.8.1",
+                "prettier-plugin-java" to "2.8.1",
+            ),
+        ).config(
+            mapOf(
+                "plugins" to listOf("prettier-plugin-java"),
+                "parser" to "java",
+                "tabWidth" to 2,
+                "printWidth" to 120,
+            ),
+        )
+    }
 }

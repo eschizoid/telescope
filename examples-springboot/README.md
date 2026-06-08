@@ -1,24 +1,23 @@
 # telescope-examples-springboot
 
-End-to-end demo: **Spring Boot 4.0.1 + Jackson + Hibernate 7 + H2 + telescope**, running on JDK 25.
-A real enterprise stack, with telescope handling the record↔entity conversion between the API
-layer and the persistence layer. Two parallel mapper implementations of the same domain show the
-trade-off between the runtime DSL and the codegen-emitted holders.
+End-to-end demo: **Spring Boot 4.0.1 + Jackson + Hibernate 7 + H2 + telescope**, running on JDK 25. A real enterprise
+stack, with telescope handling the record↔entity conversion between the API layer and the persistence layer. Two
+parallel mapper implementations of the same domain show the trade-off between the runtime DSL and the codegen-emitted
+holders.
 
 This project is **standalone** — its own `settings.gradle.kts`, its own Gradle wrapper, depends on
-`io.github.eschizoid:telescope` from Maven Central. It is intentionally **not** part of the main
-telescope build, so it exercises telescope the way a real downstream consumer would: as a
-versioned artifact, not a sibling subproject.
+`io.github.eschizoid:telescope` from Maven Central. It is intentionally **not** part of the main telescope build, so it
+exercises telescope the way a real downstream consumer would: as a versioned artifact, not a sibling subproject.
 
 ## What it shows
 
-The same `Order` domain record graph round-trips through Jackson → telescope → Hibernate → telescope
-→ Jackson, with two interchangeable mapper implementations:
+The same `Order` domain record graph round-trips through Jackson → telescope → Hibernate → telescope → Jackson, with two
+interchangeable mapper implementations:
 
-| Path                            | Implementation                                                                                  | When to pick it                                                            |
-| ------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `POST /orders/runtime`          | `Telescope.mapper(Order.class, OrderEntity.class, Mapping.to(...), Mapping.via(...), ...)`      | Fewer LOC; method-reference accessors; no codegen generation cost          |
-| `POST /orders/codegen`          | Hand-rolled `forward()` / `backward()` on top of the `@Focus` / `@BeanFocus`-emitted holders    | Maximum predictability; zero reflective bookkeeping at runtime             |
+| Path                   | Implementation                                                                               | When to pick it                                                   |
+| ---------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `POST /orders/runtime` | `Telescope.mapper(Order.class, OrderEntity.class, Mapping.to(...), Mapping.via(...), ...)`   | Fewer LOC; method-reference accessors; no codegen generation cost |
+| `POST /orders/codegen` | Hand-rolled `forward()` / `backward()` on top of the `@Focus` / `@BeanFocus`-emitted holders | Maximum predictability; zero reflective bookkeeping at runtime    |
 
 Both flows reuse the same `OrderRepository` (Spring Data JPA) and the same `OrderEntity` graph.
 
@@ -51,19 +50,18 @@ LineItem (record)               LineItemEntity (@Entity)
 - **`Telescope.mapper(A, B, Mapping... rows)`** — the runtime factory, used in `RuntimeOrderMappers`.
 - **`Mapping.to(srcAcc, tgtAcc)`** — same-typed correspondence (mostly inferred via auto-mapping).
 - **`Mapping.to(srcAcc, tgtAcc, fwd, bwd)`** — **typed transform** for `BigDecimal ↔ long-cents`.
-- **`Mapping.via(srcAcc, tgtAcc, nestedMapper)`** — compose sub-mappers (Customer, Address, LineItem)
-  into the top-level Order mapper.
-- **`WriteHint.writeBean(Class, SETTERS)`** — pin the bean write strategy to no-arg-ctor + setters
-  (required for Hibernate-managed identity assignment).
+- **`Mapping.via(srcAcc, tgtAcc, nestedMapper)`** — compose sub-mappers (Customer, Address, LineItem) into the top-level
+  Order mapper.
+- **`WriteHint.writeBean(Class, SETTERS)`** — pin the bean write strategy to no-arg-ctor + setters (required for
+  Hibernate-managed identity assignment).
 - **`Mapper.forward(...)` / `Mapper.backward(...)`** — both directions from one definition.
-- **`Mapper.patch(existing, partial)`** — sparse overlay; only non-null fields from `partial` land
-  on `existing`. Powers the `PATCH /orders/runtime/{id}` endpoint.
-- **`Telescope.of(Order.class).field(Order::customer).field(Customer::email).update(...)`** — deep
-  update through two levels of nesting; used in both controllers to lowercase the email pre-write.
-- **`@Focus` / `@BeanFocus`** — annotation-driven codegen that emits `<X>Path<R>` navigators and
-  `<X>Telescope` metadata holders. Consumed inline in `CodegenOrderMappers`.
-- **`Optional<Address>` and `List<LineItem>` cardinality** — recurse through the runtime factory
-  without special-casing.
+- **`Mapper.patch(existing, partial)`** — sparse overlay; only non-null fields from `partial` land on `existing`. Powers
+  the `PATCH /orders/runtime/{id}` endpoint.
+- **`Telescope.of(Order.class).field(Order::customer).field(Customer::email).update(...)`** — deep update through two
+  levels of nesting; used in both controllers to lowercase the email pre-write.
+- **`@Focus` / `@BeanFocus`** — annotation-driven codegen that emits `<X>Path<R>` navigators and `<X>Telescope` metadata
+  holders. Consumed inline in `CodegenOrderMappers`.
+- **`Optional<Address>` and `List<LineItem>` cardinality** — recurse through the runtime factory without special-casing.
 
 ## Running
 
@@ -112,29 +110,25 @@ curl -s -X POST http://localhost:8080/orders/codegen/normalise-emails/1 | jq
 ./gradlew test
 ```
 
-Two test classes, `RuntimeOrderFlowTest` and `CodegenOrderFlowTest`, drive the full Spring Boot
-context against an H2 in-memory database and assert that the JSON ↔ record ↔ entity round-trip
-preserves every nested value.
+Two test classes, `RuntimeOrderFlowTest` and `CodegenOrderFlowTest`, drive the full Spring Boot context against an H2
+in-memory database and assert that the JSON ↔ record ↔ entity round-trip preserves every nested value.
 
 ## What you should learn from this
 
-1. **Records + Jackson + telescope compose cleanly.** Jackson handles JSON ↔ record; telescope
-   handles record ↔ entity. No copy constructors anywhere. No reflection in the hot path on the
-   codegen route.
+1. **Records + Jackson + telescope compose cleanly.** Jackson handles JSON ↔ record; telescope handles record ↔ entity.
+   No copy constructors anywhere. No reflection in the hot path on the codegen route.
 
-2. **Bidirectional mapping is genuinely useful in production.** One `Telescope.mapper(...)` definition
-   feeds both the POST (forward to entity, save) and the GET (load entity, backward to record).
-   With MapStruct you'd write two separate `@Mapper` interfaces.
+2. **Bidirectional mapping is genuinely useful in production.** One `Telescope.mapper(...)` definition feeds both the
+   POST (forward to entity, save) and the GET (load entity, backward to record). With MapStruct you'd write two separate
+   `@Mapper` interfaces.
 
-3. **The runtime path is honest about what it costs.** First call to `Telescope.mapper(A, B, ...)`
-   builds the cached pair; subsequent calls are O(1) dispatch through the holder constants. The
-   codegen path makes that cost explicit and visible in source.
+3. **The runtime path is honest about what it costs.** First call to `Telescope.mapper(A, B, ...)` builds the cached
+   pair; subsequent calls are O(1) dispatch through the holder constants. The codegen path makes that cost explicit and
+   visible in source.
 
-4. **Hibernate doesn't fight telescope.** The bean side handles `@Entity` POJOs the same way it
-   handles plain POJOs — no JPA awareness in the library, just standard `getX()`/`setX()` conventions.
-   `@Embeddable` works without ceremony; `@OneToMany` cascades along the natural list-of-children
-   mapping.
+4. **Hibernate doesn't fight telescope.** The bean side handles `@Entity` POJOs the same way it handles plain POJOs — no
+   JPA awareness in the library, just standard `getX()`/`setX()` conventions. `@Embeddable` works without ceremony;
+   `@OneToMany` cascades along the natural list-of-children mapping.
 
-5. **You can pick your trade-off per call site.** The two flows share a domain and an entity graph
-   verbatim; only the mapper layer varies. Add or swap call sites without restructuring anything
-   else.
+5. **You can pick your trade-off per call site.** The two flows share a domain and an entity graph verbatim; only the
+   mapper layer varies. Add or swap call sites without restructuring anything else.

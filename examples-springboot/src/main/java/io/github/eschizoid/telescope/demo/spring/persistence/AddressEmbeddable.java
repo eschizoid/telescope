@@ -4,9 +4,9 @@ import io.github.eschizoid.telescope.annotations.BeanFocus;
 import jakarta.persistence.Embeddable;
 
 /**
- * The JPA-embedded form of {@code domain.Address}. {@code @Embeddable} means the columns live
- * on the parent entity's row (no join). Telescope's bean-side support handles {@code @Embeddable}
- * the same way it handles a plain POJO — no JPA awareness required.
+ * The JPA-embedded form of {@code domain.Address}. {@code @Embeddable} means the columns live on
+ * the parent entity's row (no join). Telescope's bean-side support handles {@code @Embeddable} the
+ * same way it handles a plain POJO — no JPA awareness required.
  *
  * <p>Has both a no-arg constructor (required by JPA) and per-property setters. {@link BeanFocus}
  * triggers the codegen processor to emit {@code AddressEmbeddablePath<R>} navigator + {@code

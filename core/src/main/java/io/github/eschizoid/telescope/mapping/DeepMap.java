@@ -87,9 +87,10 @@ public final class DeepMap {
     // One bean-side Reflective per resolution call: a singleton Reflective.BEANS when no hints
     // exist, otherwise one hint-aware Reflective threaded through every recursion call so the
     // anonymous instance isn't re-allocated per type pair.
-    final var beanRefl = hintMap.isEmpty() && defaultWriterFactory == null
-      ? Reflective.BEANS
-      : Reflective.beansWithHints(hintMap, defaultWriterFactory);
+    final var beanRefl =
+      hintMap.isEmpty() && defaultWriterFactory == null
+        ? Reflective.BEANS
+        : Reflective.beansWithHints(hintMap, defaultWriterFactory);
     final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new));
     final var cache = new HashMap<TypePair, Iso<?, ?>>();
     final var topSteps = new LinkedHashMap<String, FieldStep>();
@@ -134,8 +135,9 @@ public final class DeepMap {
   }
 
   /**
-   * Pull out the single optional {@link WriteHint#writeBeans(WriteHint.WriteStrategy) writeBeans(…)}
-   * default strategy. Returns {@code null} when no default is supplied; throws on duplicates.
+   * Pull out the single optional {@link WriteHint#writeBeans(WriteHint.WriteStrategy)
+   * writeBeans(…)} default strategy. Returns {@code null} when no default is supplied; throws on
+   * duplicates.
    */
   private static WriteHint.WriteStrategy extractDefaultStrategy(final List<WriteHint<?>> hints) {
     WriteHint.WriteStrategy defaultStrategy = null;
@@ -171,8 +173,8 @@ public final class DeepMap {
 
   /**
    * Build a per-class writer factory that materializes the {@code writeBeans(strategy)} default
-   * lazily on first encounter with each unhinted target. Results are cached so the lookup is
-   * O(1) after the first resolve. Returns {@code null} when no default was supplied.
+   * lazily on first encounter with each unhinted target. Results are cached so the lookup is O(1)
+   * after the first resolve. Returns {@code null} when no default was supplied.
    */
   private static Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactoryFor(
     final WriteHint.WriteStrategy defaultStrategy
@@ -419,8 +421,8 @@ public final class DeepMap {
    * internal {@link Iso} type out of {@link Mapping}'s public surface.
    *
    * <p>For {@link Via} rows, the user-supplied mapper may be at <em>element-level</em> ({@code
-   * Mapper<UserEntity, UserDto>} fed to a {@code List<UserEntity> ↔ List<UserDto>} accessor pair) or
-   * at <em>accessor-level</em> ({@code Mapper<List<UserEntity>, List<UserDto>>} fed to the same
+   * Mapper<UserEntity, UserDto>} fed to a {@code List<UserEntity> ↔ List<UserDto>} accessor pair)
+   * or at <em>accessor-level</em> ({@code Mapper<List<UserEntity>, List<UserDto>>} fed to the same
    * pair). The shape mismatch is detected by comparing the accessor's container shape against the
    * mapper's source/target classes; when the mapper's classes match the container element type, the
    * Iso is lifted through the matching container ({@code List} / {@code Set} / {@code Optional} /
@@ -436,10 +438,10 @@ public final class DeepMap {
 
   /**
    * Decide whether the {@link Via} row's nested mapper should be lifted through a container. When
-   * the accessor's source/target field types are same-kind containers and the mapper's source/target
-   * classes match the element classes, lift via {@link Iso#liftList} / {@link Iso#liftSet} / {@link
-   * Iso#liftOptional} / {@link Iso#liftMapValues}. Otherwise the element-level Iso flows through
-   * unchanged (scalar / record-pair case).
+   * the accessor's source/target field types are same-kind containers and the mapper's
+   * source/target classes match the element classes, lift via {@link Iso#liftList} / {@link
+   * Iso#liftSet} / {@link Iso#liftOptional} / {@link Iso#liftMapValues}. Otherwise the
+   * element-level Iso flows through unchanged (scalar / record-pair case).
    */
   private static Iso<?, ?> liftViaIfNeeded(final Via<?, ?> row, final Type srcType, final Type tgtType) {
     final var elementIso = row.elementIso();

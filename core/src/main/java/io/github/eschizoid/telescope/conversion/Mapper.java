@@ -167,10 +167,10 @@ public final class Mapper<A, B> {
   }
 
   /**
-   * Lift this element-level mapper to a {@code Mapper<List<A>, List<B>>}. Forward maps each
-   * element through {@link #forward}; backward maps each element through {@link #backward}.
-   * {@code null} lists round-trip to {@code null} (mirrors the null-pass-through convention of
-   * {@link io.github.eschizoid.telescope.internal.optics.Iso#liftList}).
+   * Lift this element-level mapper to a {@code Mapper<List<A>, List<B>>}. Forward maps each element
+   * through {@link #forward}; backward maps each element through {@link #backward}. {@code null}
+   * lists round-trip to {@code null} (mirrors the null-pass-through convention of {@link
+   * io.github.eschizoid.telescope.internal.optics.Iso#liftList}).
    *
    * <p>The lifted mapper has an empty patch table — sparse-overlay semantics aren't well-defined
    * for list-shaped roots. Use it as a building block in {@link

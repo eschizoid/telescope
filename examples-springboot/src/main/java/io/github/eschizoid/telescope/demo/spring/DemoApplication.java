@@ -8,13 +8,14 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  *
  * <ol>
  *   <li>Boots an embedded Tomcat (or Jetty/Undertow if swapped) on port 8080.
- *   <li>Wires Spring Data JPA + Hibernate 7 against the in-memory H2 database declared in
- *       {@code application.yml}.
- *   <li>Registers the two controllers ({@code RuntimeOrderController} / {@code CodegenOrderController})
- *       and the mapper {@code @Bean}s / {@code @Component}s they depend on.
+ *   <li>Wires Spring Data JPA + Hibernate 7 against the in-memory H2 database declared in {@code
+ *       application.yml}.
+ *   <li>Registers the two controllers ({@code RuntimeOrderController} / {@code
+ *       CodegenOrderController}) and the mapper {@code @Bean}s / {@code @Component}s they depend
+ *       on.
  *   <li>Hands Jackson the record types — Spring's auto-configured {@code ObjectMapper} picks up
- *       {@code jackson-module-parameter-names} so canonical-constructor binding works without
- *       extra annotations.
+ *       {@code jackson-module-parameter-names} so canonical-constructor binding works without extra
+ *       annotations.
  * </ol>
  *
  * <p>Smoke-test by curl: see {@code README.md}.

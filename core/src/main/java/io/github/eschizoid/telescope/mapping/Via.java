@@ -16,8 +16,11 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
  * <p>Package-private — users construct via {@link Mapping#via(Accessor, Accessor, Mapper)} and
  * never see this type at the call site.
  */
-record Via<A, B>(Accessor<A, ?> src, Accessor<B, ?> tgt, Mapper<?, ?> nested)
-  implements Mapping<A, B>, MappingInternals<A, B> {
+record Via<A, B>(
+  Accessor<A, ?> src,
+  Accessor<B, ?> tgt,
+  Mapper<?, ?> nested
+) implements Mapping<A, B>, MappingInternals<A, B> {
   @Override
   public Class<A> sourceClass() {
     return LambdaIntrospection.implClassOf(src);
@@ -41,8 +44,8 @@ record Via<A, B>(Accessor<A, ?> src, Accessor<B, ?> tgt, Mapper<?, ?> nested)
   /**
    * The element-level {@link Iso} the user-supplied mapper produces. {@link
    * io.github.eschizoid.telescope.mapping.DeepMap DeepMap} consumes this and, when the row's
-   * source/target field types are container shapes matching the mapper's element classes, lifts
-   * the Iso through the matching container (list / set / optional / map values).
+   * source/target field types are container shapes matching the mapper's element classes, lifts the
+   * Iso through the matching container (list / set / optional / map values).
    */
   @SuppressWarnings("unchecked")
   Iso<?, ?> elementIso() {

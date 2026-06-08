@@ -28,8 +28,8 @@ import java.util.List;
  *   <li>Two {@code @Embedded} {@link AddressEmbeddable} fields (shipping + billing) with column
  *       prefixes
  *   <li>{@code @OneToMany} {@code List<LineItemEntity>}
- *   <li>Optional embedded — a third {@code @Embedded} address that may be {@code null} when no
- *       gift wrap is requested; mirrors the record-side {@code Optional<Address>}
+ *   <li>Optional embedded — a third {@code @Embedded} address that may be {@code null} when no gift
+ *       wrap is requested; mirrors the record-side {@code Optional<Address>}
  * </ul>
  *
  * <p>{@link BeanFocus} drives the codegen processor; the runtime mapper consults the same

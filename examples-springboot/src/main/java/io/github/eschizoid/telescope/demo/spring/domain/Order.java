@@ -19,8 +19,8 @@ import java.util.Optional;
  *   <li>Optional nested record: {@code giftWrap} → {@code Optional<Address>}
  * </ul>
  *
- * <p>The order id is nullable on the way in (the client doesn't know the database id when POSTing
- * a new order) and populated on the way back out. Mirrors the {@link Customer#id} pattern.
+ * <p>The order id is nullable on the way in (the client doesn't know the database id when POSTing a
+ * new order) and populated on the way back out. Mirrors the {@link Customer#id} pattern.
  */
 @Focus
 public record Order(

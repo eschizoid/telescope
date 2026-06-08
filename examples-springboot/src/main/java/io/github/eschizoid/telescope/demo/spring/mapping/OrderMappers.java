@@ -23,13 +23,13 @@ import org.springframework.context.annotation.Configuration;
  * Customer, LineItem, Address) live under one {@link Telescope#mapper(Class, Class,
  * io.github.eschizoid.telescope.mapping.MapStep...)} call — the deep-mapping engine groups rows by
  * {@code (sourceClass, targetClass)} pair, so a row written here applies wherever that pair shows
- * up in the recursive walk (top-level for Order, depth-1 for Customer, depth-1 for the shipping
- * and billing addresses, depth-2 inside the list of line items).
+ * up in the recursive walk (top-level for Order, depth-1 for Customer, depth-1 for the shipping and
+ * billing addresses, depth-2 inside the list of line items).
  *
  * <p>The configuration is consumed by both controllers. Underlying dispatch is transparent: when
  * {@code @Focus} / {@code @BeanFocus} are present on the involved types (they are, for this demo),
- * the runtime probe routes through the codegen-emitted holder constants automatically. Without
- * the annotations, the same code falls back to {@code SerializedLambda} decode plus the cached
+ * the runtime probe routes through the codegen-emitted holder constants automatically. Without the
+ * annotations, the same code falls back to {@code SerializedLambda} decode plus the cached
  * MethodHandle substrate.
  *
  * <h2>Public-row cheat sheet — when to reach for each one</h2>
@@ -73,28 +73,35 @@ import org.springframework.context.annotation.Configuration;
  * <ul>
  *   <li>{@code mapper.forward(a)} / {@code mapper.read(a)} — A → B
  *   <li>{@code mapper.backward(b)} — B → A
- *   <li>{@code mapper.patch(base, partial)} — sparse overlay
- *   <li>{@code mapper.asTelescope()} — expose as {@code Telescope<A, B>} for {@code .then(...)}
+ *   <li>{@code mapper.patch(base, partial)} — sparse overlay (used by {@code
+ *       RuntimeOrderController.patch})
+ *   <li>{@code mapper.asTelescope()} — expose as {@code Telescope<A, B>} so it composes via {@code
+ *       .then(...)} into a longer typed path; lets a single fluent chain bridge between record-side
+ *       and entity-side leaf types (used by {@code CodegenOrderController.applyDiscount} — typed
+ *       {@code OrderPath} walks down to each {@code LineItem}, then {@code
+ *       .then(lineItemMapper.asTelescope())} hops into {@code LineItemEntity} so the leaf operation
+ *       runs on entity-side {@code unitPriceCents} (long))
  *   <li>{@code mapper.liftList()} / {@code liftSet} / {@code liftOptional} / {@code liftMapValues}
  *       — promote an element-level mapper to a container-level mapper without going through {@code
- *       via(...)}
+ *       via(...)} (used by {@code RuntimeOrderController.bulkCreate})
  * </ul>
  */
 @Configuration
 public class OrderMappers {
 
   /**
-   * A reusable {@code Customer ↔ CustomerEntity} mapper, broken out so {@link #orderMapper(Mapper, Mapper) orderMapper} can
-   * drop it in via {@link io.github.eschizoid.telescope.mapping.Mapping#via(
+   * A reusable {@code Customer ↔ CustomerEntity} mapper, broken out so {@link #orderMapper(Mapper,
+   * Mapper) orderMapper} can drop it in via {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#via(
    * io.github.eschizoid.telescope.Telescope.Accessor,
    * io.github.eschizoid.telescope.Telescope.Accessor, Mapper) via} as a <em>scalar</em> nested
    * mapper (one-to-one record-pair slot, no container lift). Same shape as the {@link
-   * #lineItemMapper()} bean below — the difference is the parent's accessor returns a scalar
-   * record here vs. a {@code List<LineItem>} there, so telescope skips the auto-lift.
+   * #lineItemMapper()} bean below — the difference is the parent's accessor returns a scalar record
+   * here vs. a {@code List<LineItem>} there, so telescope skips the auto-lift.
    *
-   * <p>Splitting reusable nested mappers into their own beans is a real-world pattern:
-   * other parts of the app can {@code @Autowired Mapper<Customer, CustomerEntity>} without
-   * having to rebuild the same correspondence twice.
+   * <p>Splitting reusable nested mappers into their own beans is a real-world pattern: other parts
+   * of the app can {@code @Autowired Mapper<Customer, CustomerEntity>} without having to rebuild
+   * the same correspondence twice.
    */
   @Bean
   public Mapper<Customer, CustomerEntity> customerMapper() {
@@ -103,8 +110,9 @@ public class OrderMappers {
 
   /**
    * A reusable {@code LineItem ↔ LineItemEntity} mapper that owns its own {@code BigDecimal ↔
-   * long-cents} transform row. Built once, handed to {@link #orderMapper(Mapper, Mapper) orderMapper} via {@code via(...)} —
-   * telescope auto-lifts through the {@code List<LineItem> ↔ List<LineItemEntity>} accessor pair.
+   * long-cents} transform row. Built once, handed to {@link #orderMapper(Mapper, Mapper)
+   * orderMapper} via {@code via(...)} — telescope auto-lifts through the {@code List<LineItem> ↔
+   * List<LineItemEntity>} accessor pair.
    */
   @Bean
   public Mapper<LineItem, LineItemEntity> lineItemMapper() {
