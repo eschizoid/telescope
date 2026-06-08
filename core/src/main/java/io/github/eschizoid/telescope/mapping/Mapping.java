@@ -4,10 +4,6 @@ import io.github.eschizoid.telescope.Edit;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;
-import List;
-import Map;
-import Optional;
-import Set;
 import java.util.function.Function;
 
 /**
@@ -64,63 +60,25 @@ public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, Typed
 
   /**
    * Nested correspondence: map {@code src}'s leaf through a pre-built {@link Mapper}. The mapper
-   * supplies both directions, and any custom rules it bakes in (typed transforms, nested mappers of
-   * its own) survive — the deep recursion uses it as-is at this slot instead of building its own.
+   * supplies both directions; any custom rules it bakes in (typed transforms, nested mappers of its
+   * own) survive — the deep recursion uses it as-is at this slot instead of building its own.
+   *
+   * <p>The mapper can be at <em>element-level</em> or at <em>accessor-level</em>; telescope detects
+   * which one the user passed and lifts through {@code List} / {@code Set} / {@code Optional} /
+   * {@code Map<K, V>} automatically when the accessor returns a container and the mapper's
+   * source/target classes are the element types.
    *
    * <pre>{@code
-   * via(UserEntity::address, UserDto::address, addressMapper)
+   * via(UserEntity::address,  UserDto::address,  addressMapper)   // scalar pair, no lift
+   * via(TeamEntity::members,  TeamDto::members,  userMapper)      // List pair, auto-lifts
+   * via(OrderEntity::giftWrap, OrderDto::giftWrap, addressMapper) // Optional pair, auto-lifts
    * }</pre>
    */
-  static <A, B, X, Y> Mapping<A, B> via(final Accessor<A, X> src, final Accessor<B, Y> tgt, final Mapper<X, Y> nested) {
-    return new Via<>(src, tgt, nested);
-  }
-
-  /**
-   * {@code via(...)} overload for {@code List}-typed accessors that accepts an <em>element-level</em>
-   * mapper and lifts it through the list internally. Without this overload, the user would have to
-   * either hoist every row from the element-pair mapper up to the parent factory or call
-   * {@code elementMapper.liftList()} explicitly.
-   *
-   * <pre>{@code
-   * via(TeamEntity::members, TeamDto::members, userMapper) // userMapper: Mapper<UserEntity, UserDto>
-   * }</pre>
-   */
-  static <A, B, X, Y> Mapping<A, B> via(
-    final Accessor<A, List<X>> src,
-    final Accessor<B, List<Y>> tgt,
-    final Mapper<X, Y> elementMapper
+  static <A, B> Mapping<A, B> via(
+    final Accessor<A, ?> src,
+    final Accessor<B, ?> tgt,
+    final Mapper<?, ?> elementMapper
   ) {
-    return new Via<>(src, tgt, elementMapper.liftList());
-  }
-
-  /** {@code via(...)} overload that lifts an element mapper through a {@code Set}-typed accessor pair. */
-  static <A, B, X, Y> Mapping<A, B> via(
-    final Accessor<A, Set<X>> src,
-    final Accessor<B, Set<Y>> tgt,
-    final Mapper<X, Y> elementMapper
-  ) {
-    return new Via<>(src, tgt, elementMapper.liftSet());
-  }
-
-  /** {@code via(...)} overload that lifts an element mapper through an {@code Optional}-typed accessor pair. */
-  static <A, B, X, Y> Mapping<A, B> via(
-    final Accessor<A, Optional<X>> src,
-    final Accessor<B, Optional<Y>> tgt,
-    final Mapper<X, Y> elementMapper
-  ) {
-    return new Via<>(src, tgt, elementMapper.liftOptional());
-  }
-
-  /**
-   * {@code via(...)} overload that lifts a value-element mapper through a {@code Map<K, X>} ↔
-   * {@code Map<K, Y>} accessor pair (keys must match exactly; only the values flow through the
-   * element mapper).
-   */
-  static <A, B, K, X, Y> Mapping<A, B> via(
-    final Accessor<A, Map<K, X>> src,
-    final Accessor<B, Map<K, Y>> tgt,
-    final Mapper<X, Y> elementMapper
-  ) {
-    return new Via<>(src, tgt, elementMapper.liftMapValues());
+    return new Via<>(src, tgt, elementMapper);
   }
 }

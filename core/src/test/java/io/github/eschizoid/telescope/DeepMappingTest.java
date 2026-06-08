@@ -6,6 +6,7 @@ import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.BUIL
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.FIELDS;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -334,9 +335,7 @@ class DeepMappingTest {
     record TeamHeadDto(String name, List<UserDto> members) {}
 
     @Test
-    @DisplayName(
-      "via(srcAcc -> List<X>, tgtAcc -> List<Y>, mapper<X, Y>) auto-lifts the element mapper through the list"
-    )
+    @DisplayName("viaList(srcAcc, tgtAcc, mapper<X, Y>) lifts the element mapper through a List-typed accessor pair")
     void viaAutoLiftsThroughList() {
       // Build a UserEntity → UserDto element mapper with a rename that should fire on every list
       // element, not just at the auto-recursive default.
@@ -345,7 +344,7 @@ class DeepMappingTest {
         UserDto.class,
         to(UserEntity::name, UserDto::fullName)
       );
-      // The team mapper hands the element mapper to via — telescope must lift it through List.
+      // The team mapper hands the element mapper to viaList — telescope lifts it through List.
       final var teamMapper = Telescope.mapper(
         TeamHeadEntity.class,
         TeamHeadDto.class,
@@ -661,6 +660,42 @@ class DeepMappingTest {
         Telescope.map(OrderRecord.class, ImmutablePojo.class, writeBean(DualPojo.class, FIELDS))
       );
       assertTrue(ex.getMessage().contains("Unused"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("writeBeans(STRATEGY) sets a default write strategy applied to every unhinted bean target")
+    void writeBeansDefaultAppliesToAllTargets() {
+      // DualPojo has both a builder() and field-injectable fields — autoWriter would pick BUILDER
+      // (and the builder appends "[built]" to name). With writeBeans(FIELDS) as the default, the
+      // engine must skip the builder and inject directly into fields, yielding the raw "alice".
+      final var mapper = Telescope.mapper(DualRecord.class, DualPojo.class, writeBeans(FIELDS));
+      final var pojo = mapper.read(new DualRecord("alice", 9));
+      assertEquals("alice", pojo.getName()); // not "alice[built]"
+      assertEquals(9, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("per-class writeBean(X.class, …) overrides the writeBeans(…) default for that target")
+    void perClassHintWinsOverDefault() {
+      // Default says FIELDS, but per-class hint says BUILDER — builder wins for DualPojo, so the
+      // built-in "[built]" suffix surfaces.
+      final var mapper = Telescope.mapper(
+        DualRecord.class,
+        DualPojo.class,
+        writeBeans(FIELDS),
+        writeBean(DualPojo.class, BUILDER)
+      );
+      final var pojo = mapper.read(new DualRecord("alice", 9));
+      assertEquals("alice[built]", pojo.getName());
+    }
+
+    @Test
+    @DisplayName("two writeBeans(…) defaults are rejected eagerly (at most one default per call)")
+    void duplicateDefaultRejected() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.map(DualRecord.class, DualPojo.class, writeBeans(FIELDS), writeBeans(BUILDER))
+      );
+      assertTrue(ex.getMessage().contains("writeBeans"), ex.getMessage());
     }
 
     @Test

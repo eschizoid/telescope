@@ -4,10 +4,10 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.util.HashMap;
-import List;
-import Map;
-import Optional;
-import Set;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -38,6 +38,7 @@ public final class Mapper<A, B> {
 
   private final Iso<A, B> iso;
   private final Class<A> sourceClass;
+  private final Class<B> targetClass;
   private final Reflective sourceRefl;
   private final Reflective targetRefl;
   private final Map<String, PatchEntry> patchByTargetField;
@@ -63,6 +64,7 @@ public final class Mapper<A, B> {
   ) {
     this.iso = iso;
     this.sourceClass = sourceClass;
+    this.targetClass = targetClass;
     this.sourceRefl = Reflective.of(sourceClass);
     this.targetRefl = Reflective.of(targetClass);
     // Defensive copy — patch behavior must not mutate after construction.
@@ -99,6 +101,20 @@ public final class Mapper<A, B> {
    */
   public Telescope<A, B> asTelescope() {
     return Telescope.wrap(iso);
+  }
+
+  /**
+   * The mapper's source class — exposed so the deep-mapping engine can decide whether to lift this
+   * mapper through a container shape ({@code List} / {@code Set} / {@code Optional} / {@code Map})
+   * when the user passed it as the {@code via(...)} element mapper.
+   */
+  public Class<A> sourceClass() {
+    return sourceClass;
+  }
+
+  /** The mapper's target class. See {@link #sourceClass()}. */
+  public Class<B> targetClass() {
+    return targetClass;
   }
 
   /**

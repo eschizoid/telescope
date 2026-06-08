@@ -1,15 +1,14 @@
 package io.github.eschizoid.telescope.demo.spring.mapping;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
-import io.github.eschizoid.telescope.demo.spring.persistence.AddressEmbeddable;
-import io.github.eschizoid.telescope.demo.spring.persistence.CustomerEntity;
 import io.github.eschizoid.telescope.demo.spring.persistence.LineItemEntity;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderEntity;
 import java.math.BigDecimal;
@@ -39,13 +38,17 @@ import org.springframework.context.annotation.Configuration;
  *   <li><b>Typed transforms.</b> {@code LineItem.unitPrice} (BigDecimal) ↔ {@code
  *       LineItemEntity.unitPriceCents} (long-cents). Demonstrates
  *       {@code Mapping.to(srcAcc, tgtAcc, forwardFn, backwardFn)} for non-bijective scalar pairs.
- *   <li><b>Write-strategy hint.</b> Each entity target carries a {@code writeBean(...,
- *       SETTERS)} row that pins the bean writer to no-arg-ctor + setters (required for
- *       Hibernate-managed identity assignment to fire).
- *   <li><b>Auto-list recursion.</b> {@code Order.lineItems} (List&lt;LineItem&gt;) ↔
- *       {@code OrderEntity.lineItems} (List&lt;LineItemEntity&gt;) needs no explicit row — the
- *       deep-mapping factory detects the matching List shape and recurses into the element pair,
- *       picking up the LineItem rows we declared at the top level.
+ *   <li><b>Nested mapper composition with auto-lift.</b> A standalone {@code Mapper<LineItem,
+ *       LineItemEntity>} is built first (carrying its own typed-transform row), then dropped into
+ *       the top-level mapper via {@code via(Order::lineItems, OrderEntity::getLineItems,
+ *       lineItemMapper)}. Telescope detects that the accessors return {@code List<LineItem>} /
+ *       {@code List<LineItemEntity>} and the element-level mapper matches the element type, so it
+ *       auto-lifts the mapper through {@link
+ *       io.github.eschizoid.telescope.internal.optics.Iso#liftList Iso.liftList} — no manual list
+ *       lifting at the call site.
+ *   <li><b>Write-strategy default.</b> One {@code writeBeans(SETTERS)} row pins every bean target
+ *       in the recursive walk (OrderEntity, CustomerEntity, LineItemEntity, AddressEmbeddable) to
+ *       no-arg-ctor + setters — required so Hibernate's identity assignment fires on every level.
  *   <li><b>Auto-optional recursion.</b> {@code Order.giftWrap} (Optional&lt;Address&gt;) ↔
  *       {@code OrderEntity.giftWrap} (AddressEmbeddable, nullable) — telescope handles the
  *       Optional⇄nullable bridge implicitly when both sides line up.
@@ -56,19 +59,25 @@ public class OrderMappers {
 
   @Bean
   public Mapper<Order, OrderEntity> orderMapper() {
+    // A reusable LineItem ↔ LineItemEntity mapper that owns its own BigDecimal ↔ long-cents
+    // transform. Build it once, hand it to the parent mapper via `via(...)` — telescope auto-lifts
+    // through the List<LineItem> ↔ List<LineItemEntity> accessor pair, so no list lifting ceremony
+    // at the call site.
+    final Mapper<LineItem, LineItemEntity> lineItemMapper = Telescope.mapper(
+      LineItem.class,
+      LineItemEntity.class,
+      to(LineItem::unitPrice, LineItemEntity::getUnitPriceCents, OrderMappers::toCents, OrderMappers::fromCents),
+      writeBeans(SETTERS)
+    );
     return Telescope.mapper(
       Order.class,
       OrderEntity.class,
-      // LineItem → LineItemEntity needs one explicit transform row: BigDecimal unitPrice ↔ long
-      // unitPriceCents. Telescope's auto-mapping handles id, sku, quantity at the same depth.
-      to(LineItem::unitPrice, LineItemEntity::getUnitPriceCents, OrderMappers::toCents, OrderMappers::fromCents),
-      // Bean write strategy hints — one per concrete entity in the recursive walk. Without these,
-      // `Beans.autoWriter` picks a strategy by probe (builder → no-arg ctor + setters → field
-      // injection). Pinning to SETTERS keeps Hibernate happy on every level.
-      writeBean(OrderEntity.class, SETTERS),
-      writeBean(CustomerEntity.class, SETTERS),
-      writeBean(LineItemEntity.class, SETTERS),
-      writeBean(AddressEmbeddable.class, SETTERS)
+      // Drop the pre-built element mapper at the List<LineItem> ↔ List<LineItemEntity> slot —
+      // telescope detects the matching container shape and lifts the element mapper through it.
+      via(Order::lineItems, OrderEntity::getLineItems, lineItemMapper),
+      // Single default write strategy applies to every other bean target the recursion touches
+      // (OrderEntity, CustomerEntity, AddressEmbeddable). Pinning SETTERS keeps Hibernate happy.
+      writeBeans(SETTERS)
     );
   }
 
