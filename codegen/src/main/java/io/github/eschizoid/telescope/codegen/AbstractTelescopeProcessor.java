@@ -485,8 +485,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * standard {@code io.github.eschizoid.telescope.Telescope} import plus any caller-specified extra
    * imports (typically container types like {@code java.util.List}), a one-line javadoc, a private
    * constructor, then {@code body} writes the static-final constants, then the closing brace. Used
-   * by the {@code <X>Telescope} metadata-holder emission (ADR-0006). IO failures are reported on
-   * {@code origin}.
+   * by the {@code <X>Telescope} metadata-holder emission. IO failures are reported on {@code
+   * origin}.
    */
   protected void writeMetadataHolderClass(
     final String qualifiedName,
@@ -528,7 +528,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * metadata holder. Rejects wildcard-bound generics and type-variables at any depth — those would
    * require the holder to expose either raw types or wildcards, neither of which composes cleanly
    * with the runtime's {@code Telescope<X, FieldType>} expectations. Conservative posture matches
-   * the rest of the codegen story (ADR-0006 §7).
+   * the rest of the codegen story.
    */
   protected static boolean isEmittableAsTypedConstant(final TypeMirror type) {
     return switch (type.getKind()) {
@@ -706,11 +706,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       }
     );
 
-    // Finally, emit the sibling <X>Telescope metadata holder (ADR-0006). Pure additive: nothing
-    // consumes the constants yet (Phase B wires the runtime probe in a separate PR). If any
-    // property carries an un-emittable type (wildcards, type-vars, etc.), we report a compile
-    // error and skip the holder emission for that POJO only — the Path navigator above is
-    // unaffected.
+    // Finally, emit the sibling <X>Telescope metadata holder. If any property carries an
+    // un-emittable type (wildcards, type-vars, etc.), we report a compile error and skip the
+    // holder emission for that POJO only — the Path navigator above is unaffected.
     emitBeanMetadataHolder(pojo, pojoName, pkg, props, setters, useBuilder, triggerLabel);
   }
 
@@ -718,8 +716,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   // `public static final Telescope<X, PropertyType>` constant per discovered bean property.
   // Containers are emitted as raw container lenses (Telescope<X, List<E>>, etc.) — the consumer
   // composes via .then(...) to descend. The lens expression reuses the same builder-or-no-arg-ctor
-  // rebuild strategy as the <X>Path navigator above, so write semantics are identical. See
-  // ADR-0006 §2.
+  // rebuild strategy as the <X>Path navigator above, so write semantics are identical.
   private void emitBeanMetadataHolder(
     final TypeElement pojo,
     final String pojoName,
@@ -754,9 +751,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
     final Set<String> extraImports = new LinkedHashSet<>();
     for (final var p : props) collectStdImports(p.type(), extraImports);
-    // Phase D: the holder also exposes a static construct(Function<String, Object>) so the runtime
-    // forward branch in Reflective#structuralIso can skip the BeanWriter reflective path. See
-    // ADR-0006 §3 (Phase D).
+    // The holder also exposes a static construct(Function<String, Object>) so the runtime forward
+    // branch in Reflective#structuralIso can skip the BeanWriter reflective path, and a static
+    // constants() returning the name → lens map so the probe skips the getDeclaredFields() scan.
+    extraImports.add("java.util.Map");
     extraImports.add("java.util.function.Function");
 
     writeMetadataHolderClass(
@@ -766,7 +764,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         triggerLabel +
         " POJO " +
         pojoName +
-        ". Per-property Telescope constants for runtime hybrid dispatch (ADR-0006).",
+        ". Per-property Telescope constants for runtime hybrid dispatch.",
       pojo,
       extraImports,
       out -> {
@@ -788,18 +786,46 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
           out.println();
         }
         emitBeanConstruct(out, pojoName, props, setters, useBuilder);
+        emitBeanConstantsMap(out, props);
       }
     );
   }
 
   /**
-   * Phase D (ADR-0006): emit a {@code public static <Pojo> construct(Function<String, Object>
-   * values)} on the bean holder. The emitted body mirrors the same write strategy {@link
-   * #emitBeanNavigator} already picked for the {@code <X>Path<R>} lens setters — builder chain when
-   * {@code useBuilder} is true, otherwise no-arg ctor plus per-property setters. The runtime hybrid
-   * dispatch in {@link io.github.eschizoid.telescope.internal.MetadataHolderProbe
-   * MetadataHolderProbe} / {@link io.github.eschizoid.telescope.internal.Reflective#structuralIso
-   * Reflective.structuralIso} routes here, bypassing the reflective {@link
+   * Emit a {@code public static Map<String, Telescope<?, ?>> constants()} on the bean holder.
+   * Returns the pre-baked name → lens table directly so the runtime probe in {@link
+   * io.github.eschizoid.telescope.internal.MetadataHolderProbe MetadataHolderProbe} doesn't have to
+   * do a {@code getDeclaredFields()} scan plus N {@code field.get(null)} reads — goes from O(N)
+   * reflective ops per cold probe to O(1). Legacy holders without this method still fall back to
+   * the field-scan path.
+   */
+  private void emitBeanConstantsMap(final PrintWriter out, final List<Prop> props) {
+    out.println("  /** Name -> lens map for the runtime probe to skip the field scan. */");
+    out.println("  public static Map<String, Telescope<?, ?>> constants() {");
+    if (props.isEmpty()) {
+      out.println("    return Map.of();");
+    } else if (props.size() == 1) {
+      out.println("    return Map.of(\"" + props.get(0).name() + "\", " + props.get(0).name() + ");");
+    } else {
+      out.println("    return Map.ofEntries(");
+      for (var i = 0; i < props.size(); i++) {
+        out.print("      Map.entry(\"" + props.get(i).name() + "\", " + props.get(i).name() + ")");
+        out.println(i < props.size() - 1 ? "," : "");
+      }
+      out.println("    );");
+    }
+    out.println("  }");
+    out.println();
+  }
+
+  /**
+   * Emit a {@code public static <Pojo> construct(Function<String, Object> values)} on the bean
+   * holder. The emitted body mirrors the same write strategy {@link #emitBeanNavigator} already
+   * picked for the {@code <X>Path<R>} lens setters — builder chain when {@code useBuilder} is true,
+   * otherwise no-arg ctor plus per-property setters. The runtime hybrid dispatch in {@link
+   * io.github.eschizoid.telescope.internal.MetadataHolderProbe MetadataHolderProbe} / {@link
+   * io.github.eschizoid.telescope.internal.Reflective#structuralIso Reflective.structuralIso}
+   * routes here, bypassing the reflective {@link
    * io.github.eschizoid.telescope.internal.Beans.BeanWriter Beans.BeanWriter} path for annotated
    * beans. The cast types match the constants' fieldType (boxed primitives, shortened std imports).
    */
@@ -810,7 +836,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final String[] setters,
     final boolean useBuilder
   ) {
-    out.println("  /** Phase D (ADR-0006): bean rebuild short-circuit for the runtime forward branch. */");
+    out.println("  /** Bean rebuild short-circuit for the runtime forward branch. */");
     out.println("  @SuppressWarnings(\"unchecked\")");
     out.println("  public static " + pojoName + " construct(final Function<String, Object> values) {");
     if (useBuilder) {

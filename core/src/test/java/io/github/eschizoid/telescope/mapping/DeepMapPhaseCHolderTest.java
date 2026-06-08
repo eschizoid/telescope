@@ -9,10 +9,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Integration test for ADR-0006 Phase C: when both sides of a {@link Telescope#map(Class, Class,
- * MapStep...)} call carry sibling {@code <X>Telescope} metadata holders, the deep-mapping engine's
- * structural-iso instance-to-map decomposition routes through the holders' pre-baked {@code Lens}
- * constants instead of the per-component {@code Records.read} dispatch.
+ * Integration test for the deep-mapping backward branch: when both sides of a {@link
+ * Telescope#map(Class, Class, MapStep...)} call carry sibling {@code <X>Telescope} metadata
+ * holders, the engine's structural-iso instance-to-map decomposition routes through the holders'
+ * pre-baked {@code Lens} constants instead of the per-component {@code Records.read} dispatch.
  *
  * <p>Behavioural parity is the load-bearing assertion — the user sees identical {@code to} / {@code
  * from} results regardless of which dispatch path served the per-component reads. A second case

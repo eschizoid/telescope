@@ -128,22 +128,15 @@ public record Reflective(
    * srcReader.reverse().then(middle).then(tgtBuilder)} — pure lattice {@code .then()}, no manual
    * function-body construction.
    *
-   * <p><b>ADR-0006 Phase C.</b> When {@code cls} carries a sibling {@code <X>Telescope} metadata
-   * holder (codegen by {@link io.github.eschizoid.telescope.annotations.Focus @Focus} / {@link
+   * <p>When {@code cls} carries a sibling {@code <X>Telescope} metadata holder (codegen by {@link
+   * io.github.eschizoid.telescope.annotations.Focus @Focus} / {@link
    * io.github.eschizoid.telescope.annotations.BeanFocus @BeanFocus} / Lombok), the backward
    * direction's per-component reads route through the holder's pre-baked {@link Lens} constants
    * directly — bypassing the per-call {@link Records#read} / {@link Beans#readProperty} dispatch.
-   * When the holder is absent or doesn't cover every component, the prior reflective {@link #read}
-   * path remains the fallback. See ADR-0006 §3.
-   *
-   * <p><b>ADR-0006 Phase D.</b> The forward branch ({@code Map → instance}) now also short-circuits
-   * the reflective {@link #construct} path. When the holder exposes a bound {@code
-   * construct(Function<String, Object>)} method (emitted by Phase D codegen), the {@link
-   * MetadataHolderProbe.HolderRef#constructor() HolderRef.constructor} is non-{@code null} and the
-   * forward branch invokes it directly — calling the record's canonical constructor or the bean's
-   * chosen builder / no-arg-ctor-plus-setters strategy with no per-call reflective dispatch. When
-   * absent (no holder, or older Phase A holder without a {@code construct} method), today's
-   * canonical constructor (records) or {@link Beans.BeanWriter} (beans) path runs unchanged.
+   * The forward branch ({@code Map → instance}) similarly short-circuits the reflective {@link
+   * #construct} path through the holder's bound {@code construct(Function<String, Object>)} method.
+   * When no holder is present (unannotated types), today's reflective {@link #read} / {@link
+   * #construct} paths run unchanged.
    */
   public <T> Iso<Map<String, Object>, T> structuralIso(final Class<T> cls) {
     final var componentNames = names(cls);
@@ -167,13 +160,12 @@ public record Reflective(
   }
 
   /**
-   * If a sibling {@code <X>Telescope} holder is on the classpath AND it exposes a bound static
-   * {@code construct(Function<String, Object>)} method (ADR-0006 Phase D), return that bound
-   * function so the forward branch of {@link #structuralIso} bypasses {@link #construct} entirely.
-   * Returns {@code null} when no holder is present OR when the holder predates Phase D and exposes
-   * only the per-property {@link Lens} constants — the caller falls back to the reflective {@link
-   * #construct} path. Matches the pre-resolution-or-nothing posture of {@link
-   * #resolveHolderReaders}: one branch outside the {@link Iso}'s hot map, not inside.
+   * If a sibling {@code <X>Telescope} holder is on the classpath, return its bound {@code
+   * construct(Function<String, Object>)} function so the forward branch of {@link #structuralIso}
+   * bypasses {@link #construct} entirely. Returns {@code null} when no holder is present — the
+   * caller falls back to the reflective {@link #construct} path. Matches the
+   * pre-resolution-or-nothing posture of {@link #resolveHolderReaders}: one branch outside the
+   * {@link Iso}'s hot map, not inside.
    */
   private static Function<Function<String, Object>, Object> resolveHolderConstructor(final Class<?> cls) {
     final var maybeHolder = MetadataHolderProbe.probeFor(cls);

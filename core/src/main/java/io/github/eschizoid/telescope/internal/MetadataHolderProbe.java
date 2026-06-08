@@ -7,7 +7,6 @@ import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Modifier;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
@@ -16,9 +15,9 @@ import java.util.function.Function;
  * Probes the user's classpath for a sibling {@code <X>Telescope} metadata holder emitted by
  * {@code @Focus} / {@code @BeanFocus} / Lombok codegen ({@link
  * io.github.eschizoid.telescope.annotations.Focus Focus} / {@link
- * io.github.eschizoid.telescope.annotations.BeanFocus BeanFocus}) under ADR-0006. When present, the
- * runtime dispatch sites in {@link io.github.eschizoid.telescope.Telescope Telescope} short-circuit
- * the reflective {@link Reflective#of(Class) Reflective.of(cls)} path: a {@link
+ * io.github.eschizoid.telescope.annotations.BeanFocus BeanFocus}). When present, the runtime
+ * dispatch sites in {@link io.github.eschizoid.telescope.Telescope Telescope} short-circuit the
+ * reflective {@link Reflective#of(Class) Reflective.of(cls)} path: a {@link
  * io.github.eschizoid.telescope.Telescope#field(io.github.eschizoid.telescope.Telescope.Accessor)
  * .field(Accessor)} call routes the {@link java.lang.invoke.SerializedLambda
  * SerializedLambda}-recovered method name to the holder's pre-baked {@code Telescope<X, FieldType>}
@@ -37,17 +36,16 @@ import java.util.function.Function;
  * {@code privateLookupIn} required, and the JPMS {@code opens} directive that the LMF substrate
  * needs for non-annotated types is not required for the probe itself.
  *
- * <p><b>ADR-0006 Phase D.</b> Holders also expose a {@code public static <X>
- * construct(Function<String, Object> values)} method that mirrors the {@code <X>Path<R>}'s write
- * strategy (canonical constructor for records; builder chain or no-arg ctor + setters for beans).
- * Probing binds the static method via {@link LambdaMetafactory} into a cached {@code
- * Function<Function<String, Object>, Object>} on {@link HolderRef}. {@link
- * io.github.eschizoid.telescope.internal.Reflective#structuralIso Reflective.structuralIso}'s
- * forward branch routes through it when present, skipping the reflective {@link
- * io.github.eschizoid.telescope.internal.Records#construct Records.construct} / {@link
- * io.github.eschizoid.telescope.internal.Beans.BeanWriter Beans.BeanWriter} path. Older holders
- * that predate Phase D (no {@code construct} method) degrade gracefully — the constructor field is
- * {@code null} and the reflective path runs.
+ * <p>Holders also expose a {@code public static <X> construct(Function<String, Object> values)}
+ * method that mirrors the {@code <X>Path<R>}'s write strategy (canonical constructor for records;
+ * builder chain or no-arg ctor + setters for beans). Probing binds the static method via {@link
+ * LambdaMetafactory} into a cached {@code Function<Function<String, Object>, Object>} on {@link
+ * HolderRef}. {@link io.github.eschizoid.telescope.internal.Reflective#structuralIso
+ * Reflective.structuralIso}'s forward branch routes through it when present, skipping the
+ * reflective {@link io.github.eschizoid.telescope.internal.Records#construct Records.construct} /
+ * {@link io.github.eschizoid.telescope.internal.Beans.BeanWriter Beans.BeanWriter} path. A holder
+ * that lacks the required {@code construct} method (out-of-date codegen on the classpath) trips a
+ * precise {@link IllegalStateException} at probe time rather than silently falling back.
  */
 public final class MetadataHolderProbe {
 
@@ -55,18 +53,17 @@ public final class MetadataHolderProbe {
 
   /**
    * A discovered sibling {@code <X>Telescope} metadata holder for some class: the holder class
-   * itself (used in diagnostics), the immutable name &rarr; constant lookup table, and — when the
-   * holder was emitted with ADR-0006 Phase D — a cached {@link Function} bound to the holder's
-   * static {@code construct(Function<String, Object>)} method. Each constant is a {@link
-   * io.github.eschizoid.telescope.Telescope Telescope} instance built via {@link
-   * io.github.eschizoid.telescope.Telescope#lens(java.util.function.Function,
+   * itself (used in diagnostics), the immutable name &rarr; constant lookup table, and a cached
+   * {@link Function} bound to the holder's static {@code construct(Function<String, Object>)}
+   * method. Each constant is a {@link io.github.eschizoid.telescope.Telescope Telescope} instance
+   * built via {@link io.github.eschizoid.telescope.Telescope#lens(java.util.function.Function,
    * java.util.function.BiFunction) Telescope.lens(...)} at codegen time. {@link #lensFor} unwraps
    * one to a {@link Lens} for the dispatch site.
    *
-   * <p>The {@code constructor} field is {@code null} when the holder doesn't expose a {@code
-   * construct} method — older Phase A holders, or future processors that opt out. {@link
-   * io.github.eschizoid.telescope.internal.Reflective#structuralIso Reflective.structuralIso}
-   * checks for {@code null} and falls back to the reflective constructor path.
+   * <p>The {@code constructor} field is always non-{@code null} when the holder is present — the
+   * probe throws {@link IllegalStateException} if the holder is missing the required {@code
+   * construct(Function)} method, so codegen drift surfaces as a precise diagnostic rather than a
+   * silent fallback.
    */
   public record HolderRef(
     Class<?> holderClass,
@@ -77,8 +74,8 @@ public final class MetadataHolderProbe {
      * The {@link Lens} backing the holder constant named {@code name}, or {@code null} if the
      * holder doesn't expose that name. Dispatch sites in {@link
      * io.github.eschizoid.telescope.Telescope Telescope} handle the {@code null} case by throwing
-     * {@link IllegalStateException} with the ADR-0006 §9 diagnostic — silent fallback would mask
-     * stale codegen.
+     * {@link IllegalStateException} with a precise diagnostic — silent fallback would mask stale
+     * codegen.
      */
     public Lens<?, ?> lensFor(final String name) {
       final var constant = constantsByName.get(name);
@@ -114,9 +111,9 @@ public final class MetadataHolderProbe {
    * io.github.eschizoid.telescope.Telescope Telescope} to short-circuit the reflective {@code
    * Records.fieldLens} / {@code Beans.lens} path when the holder is present.
    *
-   * <p><b>ADR-0006 §9:</b> when the holder IS present but the requested {@code name} is missing,
-   * this method throws {@link IllegalStateException} with a precise diagnostic — silent fallback
-   * would mask stale codegen or accessor / component-name mismatches.
+   * <p>When the holder IS present but the requested {@code name} is missing, this method throws
+   * {@link IllegalStateException} with a precise diagnostic — silent fallback would mask stale
+   * codegen or accessor / component-name mismatches.
    *
    * @throws IllegalStateException when the holder is present but doesn't expose {@code name}
    */
@@ -144,22 +141,9 @@ public final class MetadataHolderProbe {
     final var holderName = cls.getName() + "Telescope";
     try {
       final var holder = Class.forName(holderName, false, cls.getClassLoader());
-      final Map<String, Telescope<?, ?>> constants = new LinkedHashMap<>();
-      for (final var field : holder.getDeclaredFields()) {
-        final var mods = field.getModifiers();
-        if (
-          !Modifier.isStatic(mods) ||
-          !Modifier.isFinal(mods) ||
-          !Modifier.isPublic(mods) ||
-          !Telescope.class.isAssignableFrom(field.getType())
-        ) {
-          continue;
-        }
-        final var value = field.get(null);
-        if (value instanceof Telescope<?, ?> t) constants.put(field.getName(), t);
-      }
+      final var constants = readConstants(holder);
       final var constructor = bindConstructor(holder, cls);
-      return Optional.of(new HolderRef(holder, Map.copyOf(constants), constructor));
+      return Optional.of(new HolderRef(holder, constants, constructor));
     } catch (final ClassNotFoundException e) {
       return Optional.empty();
     } catch (final ReflectiveOperationException e) {
@@ -168,12 +152,44 @@ public final class MetadataHolderProbe {
   }
 
   /**
+   * Read the holder's {@code public static Map<String, Telescope<?, ?>> constants()} method — one
+   * {@link Class#getDeclaredMethod} + one {@link java.lang.reflect.Method#invoke} regardless of
+   * holder size. The holder is required to expose this method; if it's missing or shaped wrong, the
+   * codegen on the classpath is out of date with this runtime.
+   */
+  @SuppressWarnings("unchecked")
+  private static Map<String, Telescope<?, ?>> readConstants(final Class<?> holder) throws ReflectiveOperationException {
+    final java.lang.reflect.Method method;
+    try {
+      method = holder.getDeclaredMethod("constants");
+    } catch (final NoSuchMethodException e) {
+      throw new IllegalStateException(
+        "Metadata holder " +
+          holder.getName() +
+          " is missing the required `public static Map<String, Telescope<?, ?>> constants()` method. " +
+          "Re-run the @Focus / @BeanFocus processor.",
+        e
+      );
+    }
+    final var mods = method.getModifiers();
+    if (!Modifier.isStatic(mods) || !Modifier.isPublic(mods) || !Map.class.isAssignableFrom(method.getReturnType())) {
+      throw new IllegalStateException(
+        "Metadata holder " +
+          holder.getName() +
+          " has a `constants()` method but its shape is wrong (must be `public static Map<...>`). " +
+          "Re-run the @Focus / @BeanFocus processor."
+      );
+    }
+    final var result = (Map<String, Telescope<?, ?>>) method.invoke(null);
+    return result == null ? Map.of() : Map.copyOf(result);
+  }
+
+  /**
    * Bind the holder's {@code public static <X> construct(Function<String, Object> values)} method
    * to a cached {@link Function} via {@link LambdaMetafactory}, so the runtime forward branch in
-   * {@link Reflective#structuralIso} can invoke it directly without per-call reflection. Returns
-   * {@code null} when the holder doesn't expose a matching {@code construct} method (older Phase A
-   * holders that predate Phase D, or future opt-out paths) — callers fall back to the reflective
-   * {@link Reflective#construct} path.
+   * {@link Reflective#structuralIso} can invoke it directly without per-call reflection. The holder
+   * is required to expose this method; if it's missing or shaped wrong, the codegen on the
+   * classpath is out of date with this runtime.
    *
    * <p>The holder is plain public Java in the user's package, so a default {@link
    * MethodHandles#lookup} suffices; no {@code privateLookupIn} dance, no JPMS {@code opens}
@@ -184,15 +200,33 @@ public final class MetadataHolderProbe {
     final Class<?> holder,
     final Class<?> target
   ) {
+    final java.lang.reflect.Method method;
     try {
-      final var method = holder.getDeclaredMethod("construct", Function.class);
-      if (
-        !Modifier.isPublic(method.getModifiers()) ||
-        !Modifier.isStatic(method.getModifiers()) ||
-        !target.isAssignableFrom(method.getReturnType())
-      ) {
-        return null;
-      }
+      method = holder.getDeclaredMethod("construct", Function.class);
+    } catch (final NoSuchMethodException e) {
+      throw new IllegalStateException(
+        "Metadata holder " +
+          holder.getName() +
+          " is missing the required `public static " +
+          target.getSimpleName() +
+          " construct(Function<String, Object>)` method. Re-run the @Focus / @BeanFocus processor.",
+        e
+      );
+    }
+    if (
+      !Modifier.isPublic(method.getModifiers()) ||
+      !Modifier.isStatic(method.getModifiers()) ||
+      !target.isAssignableFrom(method.getReturnType())
+    ) {
+      throw new IllegalStateException(
+        "Metadata holder " +
+          holder.getName() +
+          " has a `construct(Function)` method but its shape is wrong (must be `public static " +
+          target.getSimpleName() +
+          " construct(Function<String, Object>)`). Re-run the @Focus / @BeanFocus processor."
+      );
+    }
+    try {
       final var lookup = MethodHandles.lookup();
       final var handle = lookup.unreflect(method);
       final var callSite = LambdaMetafactory.metafactory(
@@ -204,8 +238,6 @@ public final class MetadataHolderProbe {
         MethodType.methodType(method.getReturnType(), Function.class)
       );
       return (Function<Function<String, Object>, Object>) callSite.getTarget().invoke();
-    } catch (final NoSuchMethodException e) {
-      return null;
     } catch (final Throwable t) {
       throw new IllegalStateException("Failed to bind construct(Function) on holder " + holder.getName(), t);
     }
