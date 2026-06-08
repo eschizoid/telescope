@@ -35,10 +35,10 @@ story.
   `SerializedLambda` decode on user accessor method references.
 - **Phase E.** `<X>Telescope` holders gain a `public static Map<String, Telescope<?, ?>> constants()` method returning
   the name → lens map directly. `MetadataHolderProbe.probe(...)` calls this method as the only path; a holder that's
-  missing the method (out-of-date codegen on the classpath) trips a precise `IllegalStateException` rather than
-  silently falling back. Same posture for the `construct(Function)` method emitted in Phase D — holder presence is a
-  full contract, not a probe of independent optional methods. Cuts the cold-path probe from `~3 + N` reflective ops
-  (N = holder field count) to `3` ops regardless of N. The probe is already `ClassValue`-cached, so this is a
+  missing the method (out-of-date codegen on the classpath) trips a precise `IllegalStateException` rather than silently
+  falling back. Same posture for the `construct(Function)` method emitted in Phase D — holder presence is a full
+  contract, not a probe of independent optional methods. Cuts the cold-path probe from `~3 + N` reflective ops (N =
+  holder field count) to `3` ops regardless of N. The probe is already `ClassValue`-cached, so this is a
   one-shot-per-class improvement, not a hot-path change — but it consolidates the holder's runtime contract into two
   named methods (`constants()` + `construct(Function)`) instead of a contract that depends on field-shape conventions.
   Pre-1.0 stance: no legacy fallback for older codegen output; users re-run the processor.

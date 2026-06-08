@@ -76,12 +76,12 @@ Phased rollout (each phase is a discrete PR, no public API change):
 - **Phase E — holder constants() eliminates the probe's field scan.** The `<X>Telescope` holder gains a
   `public static Map<String, Telescope<?, ?>> constants()` method that returns the name → lens map directly.
   `MetadataHolderProbe.probe(...)` calls this method as the only path; a holder that's missing the method (out-of-date
-  codegen on the classpath) trips a precise `IllegalStateException` rather than silently falling back. Net effect on
-  the cold-path probe: from `~3 + N` reflective operations per probe (N = number of holder fields) to `3` operations
-  regardless of N. The probe is `ClassValue`-cached, so this is a one-shot-per-class improvement, not a hot-path
-  change — but it consolidates the holder's runtime contract into two named methods (`constants()` +
-  `construct(Function)`) instead of a contract that depends on field-shape conventions. Pre-1.0 stance: no legacy
-  fallback for older codegen output; users re-run the processor.
+  codegen on the classpath) trips a precise `IllegalStateException` rather than silently falling back. Net effect on the
+  cold-path probe: from `~3 + N` reflective operations per probe (N = number of holder fields) to `3` operations
+  regardless of N. The probe is `ClassValue`-cached, so this is a one-shot-per-class improvement, not a hot-path change
+  — but it consolidates the holder's runtime contract into two named methods (`constants()` + `construct(Function)`)
+  instead of a contract that depends on field-shape conventions. Pre-1.0 stance: no legacy fallback for older codegen
+  output; users re-run the processor.
 
 ## Decisions encoded in the design
 
