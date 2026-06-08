@@ -13,9 +13,9 @@ import org.springframework.context.annotation.Configuration;
 
 /**
  * Mapper configuration for the product-starter demo. Two {@code @Bean Mapper<A, B>} definitions —
- * one per target shape — and both are picked up by {@code TelescopeAutoConfiguration} automatically:
- * the starter's {@code TelescopeMapperRegistry} bean asks Spring for every {@code Mapper<?, ?>}
- * bean in the context and indexes them by {@code (sourceClass, targetClass)}.
+ * one per target shape — and both are picked up by {@code TelescopeAutoConfiguration}
+ * automatically: the starter's {@code TelescopeMapperRegistry} bean asks Spring for every {@code
+ * Mapper<?, ?>} bean in the context and indexes them by {@code (sourceClass, targetClass)}.
  *
  * <p>No registration code here. No {@code @TelescopeMapper}-style annotation magic. Just standard
  * Spring {@code @Bean} declarations the same way you'd declare any other bean — and the registry
@@ -32,13 +32,19 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class ProductMappers {
 
-  /** Record ↔ JPA entity. Same-name auto-inference handles every field; only the writer needs hinting. */
+  /**
+   * Record ↔ JPA entity. Same-name auto-inference handles every field; only the writer needs
+   * hinting.
+   */
   @Bean
   public Mapper<Product, ProductEntity> productEntityMapper() {
     return Telescope.mapper(Product.class, ProductEntity.class, writeBeans(SETTERS));
   }
 
-  /** Record ↔ Lombok DTO. Same-name auto-inference handles every field; writer hint targets the Lombok setters. */
+  /**
+   * Record ↔ Lombok DTO. Same-name auto-inference handles every field; writer hint targets the
+   * Lombok setters.
+   */
   @Bean
   public Mapper<Product, ProductDto> productDtoMapper() {
     return Telescope.mapper(Product.class, ProductDto.class, writeBeans(SETTERS));

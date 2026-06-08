@@ -46,7 +46,10 @@ public class ProductController {
 
   @PostMapping
   @Transactional
-  public ResponseEntity<?> create(@RequestBody final Product request, @RequestParam(defaultValue = "dto") final String view) {
+  public ResponseEntity<?> create(
+    @RequestBody final Product request,
+    @RequestParam(defaultValue = "dto") final String view
+  ) {
     final var entity = registry.get(Product.class, ProductEntity.class).forward(request);
     final var saved = productRepository.save(entity);
     final var roundTripped = registry.get(Product.class, ProductEntity.class).backward(saved);

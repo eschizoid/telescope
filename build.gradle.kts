@@ -81,10 +81,9 @@ spotless {
 }
 
 // Java formatting belongs to the modules that actually have Java sources. Skip pure container
-// projects like `:examples` (no sources of its own — see settings.gradle.kts; it just holds the
-// `:examples:library` subproject and the `examples/springboot/` composite build).
+// projects (`:examples`, `:examples:springboot`) — they just hold child subprojects, no own sources.
 subprojects {
-    if (path == ":examples") return@subprojects
+    if (path == ":examples" || path == ":examples:springboot") return@subprojects
     apply(plugin = "com.diffplug.spotless")
     configure<SpotlessExtension> {
         java {

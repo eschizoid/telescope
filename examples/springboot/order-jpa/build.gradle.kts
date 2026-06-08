@@ -2,7 +2,6 @@ plugins {
     java
     id("org.springframework.boot") version "4.0.1"
     id("io.spring.dependency-management") version "1.1.7"
-    id("com.diffplug.spotless") version "7.0.0"
 }
 
 // Spring Boot 4.0.1 — the latest GA at the time of this demo. Brings Spring Framework 7.0,
@@ -19,16 +18,15 @@ java {
 
 repositories {
     mavenCentral()
-    mavenLocal() // For consuming locally-published telescope snapshots during demo development.
 }
 
 dependencies {
     // Depends on the telescope library *directly* — this submodule wires Mapper<A, B> beans by
     // hand in @Configuration classes (see OrderMappers). The sibling product-starter submodule
-    // depends on telescope-spring-boot-starter for the same effect via autoconfig + registry.
-    implementation("io.github.eschizoid:telescope:0.4.1")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:0.4.1")
-    annotationProcessor("io.github.eschizoid:telescope-lombok:0.4.1")
+    // depends on `:spring-boot-starter` for the same effect via autoconfig + registry.
+    implementation(project(":core"))
+    annotationProcessor(project(":codegen"))
+    annotationProcessor(project(":lombok"))
 
     // Lombok itself — compile-time for the @Data / @Builder / @Value AST patching, runtime not
     // needed (Lombok generates source-level code). The :lombok telescope module is a graceful
@@ -61,32 +59,4 @@ tasks.withType<JavaCompile>().configureEach {
 
 tasks.named<Test>("test") {
     useJUnitPlatform()
-}
-
-// Mirrors the :core / :codegen / :lombok spotless config in the parent telescope project:
-// googleJavaFormat for baseline formatting + prettier-plugin-java for final pass at 120 cols.
-spotless {
-    java {
-        target("src/**/*.java")
-        targetExclude("build/generated/**")
-        googleJavaFormat("1.35.0")
-        toggleOffOn()
-        importOrder()
-        removeUnusedImports()
-        trimTrailingWhitespace()
-        endWithNewline()
-        prettier(
-            mapOf(
-                "prettier" to "3.8.1",
-                "prettier-plugin-java" to "2.8.1",
-            ),
-        ).config(
-            mapOf(
-                "plugins" to listOf("prettier-plugin-java"),
-                "parser" to "java",
-                "tabWidth" to 2,
-                "printWidth" to 120,
-            ),
-        )
-    }
 }
