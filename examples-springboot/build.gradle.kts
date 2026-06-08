@@ -39,6 +39,9 @@ dependencies {
     implementation("com.fasterxml.jackson.module:jackson-module-parameter-names")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
+    // Spring Boot 4's test starter dropped the AssertJ transitive that Boot 3 carried. AssertJ
+    // gives us the fluent .assertThat() the integration tests lean on.
+    testImplementation("org.assertj:assertj-core:3.27.6")
 }
 
 tasks.withType<JavaCompile>().configureEach {

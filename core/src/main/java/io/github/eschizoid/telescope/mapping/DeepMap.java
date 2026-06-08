@@ -317,6 +317,20 @@ public final class DeepMap {
     //     elements all dispatch through this same autoIso recursion.
     final var srcShape = ContainerShape.of(srcType);
     final var tgtShape = ContainerShape.of(tgtType);
+
+    // (c.1) Cross-paradigm Optional bridge — one side is Optional<X>, the other is a possibly-null
+    //       scalar/record/bean. Common case: record uses Optional<Address> while the JPA-mapped
+    //       entity uses a nullable AddressEmbeddable. Lift the element conversion through
+    //       Iso.liftOptionalToNullable so Optional.empty() ↔ null and Optional.of(x) ↔ to(x).
+    if (srcShape != null && srcShape.kind == ContainerShape.Kind.OPTIONAL && tgtShape == null) {
+      final var elementIso = autoIso(srcShape.elementType, tgtType, componentName + "[*]", overrides, beanRefl, cache);
+      return Iso.liftOptionalToNullable(eraseIso(elementIso));
+    }
+    if (tgtShape != null && tgtShape.kind == ContainerShape.Kind.OPTIONAL && srcShape == null) {
+      final var elementIso = autoIso(srcType, tgtShape.elementType, componentName + "[*]", overrides, beanRefl, cache);
+      return Iso.liftOptionalToNullable(eraseIso(elementIso)).reverse();
+    }
+
     if (srcShape != null && tgtShape != null && srcShape.kind == tgtShape.kind) {
       // Map<K, X> ↔ Map<K, Y>: keys must match exactly; Iso.liftMapValues preserves source keys.
       if (srcShape.kind == ContainerShape.Kind.MAP_VALUES && !srcShape.keyClass.equals(tgtShape.keyClass)) {

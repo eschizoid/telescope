@@ -4,6 +4,10 @@ import io.github.eschizoid.telescope.Edit;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import List;
+import Map;
+import Optional;
+import Set;
 import java.util.function.Function;
 
 /**
@@ -69,5 +73,54 @@ public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, Typed
    */
   static <A, B, X, Y> Mapping<A, B> via(final Accessor<A, X> src, final Accessor<B, Y> tgt, final Mapper<X, Y> nested) {
     return new Via<>(src, tgt, nested);
+  }
+
+  /**
+   * {@code via(...)} overload for {@code List}-typed accessors that accepts an <em>element-level</em>
+   * mapper and lifts it through the list internally. Without this overload, the user would have to
+   * either hoist every row from the element-pair mapper up to the parent factory or call
+   * {@code elementMapper.liftList()} explicitly.
+   *
+   * <pre>{@code
+   * via(TeamEntity::members, TeamDto::members, userMapper) // userMapper: Mapper<UserEntity, UserDto>
+   * }</pre>
+   */
+  static <A, B, X, Y> Mapping<A, B> via(
+    final Accessor<A, List<X>> src,
+    final Accessor<B, List<Y>> tgt,
+    final Mapper<X, Y> elementMapper
+  ) {
+    return new Via<>(src, tgt, elementMapper.liftList());
+  }
+
+  /** {@code via(...)} overload that lifts an element mapper through a {@code Set}-typed accessor pair. */
+  static <A, B, X, Y> Mapping<A, B> via(
+    final Accessor<A, Set<X>> src,
+    final Accessor<B, Set<Y>> tgt,
+    final Mapper<X, Y> elementMapper
+  ) {
+    return new Via<>(src, tgt, elementMapper.liftSet());
+  }
+
+  /** {@code via(...)} overload that lifts an element mapper through an {@code Optional}-typed accessor pair. */
+  static <A, B, X, Y> Mapping<A, B> via(
+    final Accessor<A, Optional<X>> src,
+    final Accessor<B, Optional<Y>> tgt,
+    final Mapper<X, Y> elementMapper
+  ) {
+    return new Via<>(src, tgt, elementMapper.liftOptional());
+  }
+
+  /**
+   * {@code via(...)} overload that lifts a value-element mapper through a {@code Map<K, X>} ↔
+   * {@code Map<K, Y>} accessor pair (keys must match exactly; only the values flow through the
+   * element mapper).
+   */
+  static <A, B, K, X, Y> Mapping<A, B> via(
+    final Accessor<A, Map<K, X>> src,
+    final Accessor<B, Map<K, Y>> tgt,
+    final Mapper<X, Y> elementMapper
+  ) {
+    return new Via<>(src, tgt, elementMapper.liftMapValues());
   }
 }

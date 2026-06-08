@@ -27,13 +27,9 @@ to records; the same DSL applies.
 import io.github.eschizoid.telescope.Telescope;
 
 record Address(String city, String zip) {}
-
 record User(String name, int age, String email, Address address) {}
-
 record Team(String name, List<User> users) {}
-
 record Department(String name, List<Team> teams) {}
-
 record Company(String name, List<Department> departments) {}
 ```
 

@@ -1,74 +1,70 @@
 package io.github.eschizoid.telescope.demo.spring;
 
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.assertj.core.api.Assertions.assertThat;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
+import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.MediaType;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.context.WebApplicationContext;
+import org.springframework.web.client.RestClient;
 
 /**
- * End-to-end integration test for the codegen-driven path. Reuses {@code OrderFixtures} and
- * asserts the same shape preservation as {@link RuntimeOrderFlowTest} — the two flows must be
- * behaviourally indistinguishable; only the mapper implementation differs.
- *
- * <p>The "normalise emails" endpoint is exclusive to this flow and demonstrates a server-side
- * deep-update through the codegen-emitted holders: re-load an order, mutate one field two levels
- * deep, save the result, return the JSON.
+ * End-to-end integration test for the codegen-driven path. Boots the same embedded Tomcat as the
+ * runtime tests and verifies behavioural equivalence — both controllers must produce identical
+ * persistence results. The "normalise emails" endpoint is exclusive to this flow and demonstrates
+ * a server-side deep update through the codegen-emitted typed navigator on a real round trip.
  */
-@SpringBootTest
+@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 class CodegenOrderFlowTest {
 
-  @Autowired private WebApplicationContext context;
-  @Autowired private ObjectMapper objectMapper;
+  @LocalServerPort private int port;
 
-  private MockMvc mvc;
+  private RestClient client;
 
   @BeforeEach
   void setUp() {
-    this.mvc = MockMvcBuilders.webAppContextSetup(context).build();
+    this.client = RestClient.create("http://localhost:" + port);
   }
 
   @Test
-  void postRoundTripPreservesShape() throws Exception {
-    final var json = objectMapper.writeValueAsString(OrderFixtures.sampleOrder());
+  void postRoundTripPreservesShape() {
+    final var body = client
+      .post()
+      .uri("/orders/codegen")
+      .contentType(MediaType.APPLICATION_JSON)
+      .body(OrderFixtures.sampleOrder())
+      .retrieve()
+      .body(Order.class);
 
-    mvc
-      .perform(post("/orders/codegen").contentType(MediaType.APPLICATION_JSON).content(json))
-      .andExpect(status().isOk())
-      .andExpect(jsonPath("$.id").isNumber())
-      .andExpect(jsonPath("$.orderNumber").value("ORD-2026-0001"))
-      .andExpect(jsonPath("$.customer.email").value("alice@example.com"))
-      .andExpect(jsonPath("$.customer.id").isNumber())
-      .andExpect(jsonPath("$.shippingAddress.zip").value("11201"))
-      .andExpect(jsonPath("$.lineItems[0].unitPrice").value(19.99))
-      .andExpect(jsonPath("$.giftWrap.street").value("300 Gift Rd"));
+    assertThat(body).isNotNull();
+    assertThat(body.id()).isNotNull();
+    assertThat(body.orderNumber()).isEqualTo("ORD-2026-0001");
+    assertThat(body.customer().email()).isEqualTo("alice@example.com");
+    assertThat(body.customer().id()).isNotNull();
+    assertThat(body.shippingAddress().zip()).isEqualTo("11201");
+    assertThat(body.lineItems().getFirst().unitPrice()).isEqualByComparingTo("19.99");
+    assertThat(body.giftWrap()).isPresent();
+    assertThat(body.giftWrap().get().street()).isEqualTo("300 Gift Rd");
   }
 
   @Test
-  void normaliseEmailsAppliesDeepUpdateThroughHolderConstants() throws Exception {
-    // Create.
-    final var createResponse = mvc
-      .perform(post("/orders/codegen").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(OrderFixtures.sampleOrder())))
-      .andExpect(status().isOk())
-      .andReturn()
-      .getResponse()
-      .getContentAsString();
-    final var createdId = objectMapper.readTree(createResponse).get("id").asLong();
+  void normaliseEmailsAppliesDeepUpdateThroughHolderConstants() {
+    final var created = client
+      .post()
+      .uri("/orders/codegen")
+      .contentType(MediaType.APPLICATION_JSON)
+      .body(OrderFixtures.sampleOrder())
+      .retrieve()
+      .body(Order.class);
+    assertThat(created).isNotNull();
+    final var id = created.id();
 
-    // Drive the dedicated normalise endpoint — re-loads, runs the deep-update through the
-    // codegen-emitted holder constants, re-saves, returns JSON. Idempotent (already lowercase
-    // after create).
-    mvc
-      .perform(post("/orders/codegen/normalise-emails/" + createdId).contentType(MediaType.APPLICATION_JSON))
-      .andExpect(status().isOk())
-      .andExpect(jsonPath("$.customer.email").value("alice@example.com"));
+    final var normalised = client.post().uri("/orders/codegen/normalise-emails/" + id).retrieve().body(Order.class);
+
+    assertThat(normalised).isNotNull();
+    assertThat(normalised.customer().email()).isEqualTo("alice@example.com");
   }
 }

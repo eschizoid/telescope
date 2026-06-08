@@ -4,7 +4,10 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.util.HashMap;
-import java.util.Map;
+import List;
+import Map;
+import Optional;
+import Set;
 import java.util.function.Function;
 
 /**
@@ -145,5 +148,47 @@ public final class Mapper<A, B> {
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */
   public A backward(final B b) {
     return iso.from(b);
+  }
+
+  /**
+   * Lift this element-level mapper to a {@code Mapper<List<A>, List<B>>}. Forward maps each
+   * element through {@link #forward}; backward maps each element through {@link #backward}.
+   * {@code null} lists round-trip to {@code null} (mirrors the null-pass-through convention of
+   * {@link io.github.eschizoid.telescope.internal.optics.Iso#liftList}).
+   *
+   * <p>The lifted mapper has an empty patch table — sparse-overlay semantics aren't well-defined
+   * for list-shaped roots. Use it as a building block in {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#via(io.github.eschizoid.telescope.Telescope.Accessor,
+   * io.github.eschizoid.telescope.Telescope.Accessor, Mapper) Mapping.via} or hand-roll the
+   * forward/backward calls at a {@code List} call site.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public Mapper<List<A>, List<B>> liftList() {
+    final var lifted = Iso.liftList(iso);
+    return new Mapper<>(lifted, (Class) List.class, (Class) List.class, Map.of());
+  }
+
+  /** Same as {@link #liftList()} but produces a {@code Mapper<Set<A>, Set<B>>}. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public Mapper<Set<A>, Set<B>> liftSet() {
+    final var lifted = Iso.liftSet(iso);
+    return new Mapper<>(lifted, (Class) Set.class, (Class) Set.class, Map.of());
+  }
+
+  /** Same as {@link #liftList()} but produces a {@code Mapper<Optional<A>, Optional<B>>}. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public Mapper<Optional<A>, Optional<B>> liftOptional() {
+    final var lifted = Iso.liftOptional(iso);
+    return new Mapper<>(lifted, (Class) Optional.class, (Class) Optional.class, Map.of());
+  }
+
+  /**
+   * Same as {@link #liftList()} but produces a {@code Mapper<Map<K, A>, Map<K, B>>}. Keys are
+   * preserved; only the values flow through {@link #forward}/{@link #backward}.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public <K> Mapper<Map<K, A>, Map<K, B>> liftMapValues() {
+    final var lifted = Iso.<K, A, B>liftMapValues(iso);
+    return new Mapper<>(lifted, (Class) Map.class, (Class) Map.class, Map.of());
   }
 }
