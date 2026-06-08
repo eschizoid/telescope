@@ -104,7 +104,7 @@ public final class Beans {
     if (reader == null) throw new IllegalArgumentException(
       "No getter for property '" + name + "' on " + beanClass.getName()
     );
-    return source -> reader.apply(source);
+    return reader::apply;
   }
 
   /**

@@ -346,9 +346,9 @@ Multi-edit packing (static factories — see [Multi-edit](#multi-edit)):
 ```java
 final Telescope<User, String> name = Telescope.of(User.class).field(User::name);
 
-name.read(alice);                            // "alice"
-name.set(alice, "Bob");                      // User with name="Bob"
-name.update(alice, String::toUpperCase);     // User with name="ALICE"
+name.read(alice);                        // "alice"
+name.set(alice, "Bob");                  // User with name="Bob"
+name.update(alice, String::toUpperCase); // User with name="ALICE"
 ```
 
 ### Nested fields
@@ -384,8 +384,8 @@ final Telescope<Event, String> updatedDiff = Telescope.of(Event.class)
         .as(Updated.class)
         .field(Updated::diff);
 
-updatedDiff.update(event, s -> s + "!");      // no-op if not Updated
-updatedDiff.find(event);                      // Optional<String>
+updatedDiff.update(event, s -> s + "!"); // no-op if not Updated
+updatedDiff.find(event);                 // Optional<String>
 ```
 
 ### Optional field
@@ -395,7 +395,7 @@ record Profile(String id, Optional<String> nickname) {}
 
 final Telescope<Profile, String> nick = Telescope.of(Profile.class).whenPresent(Profile::nickname);
 
-nick.update(profile, String::toUpperCase);   // no-op if nickname is empty
+nick.update(profile, String::toUpperCase); // no-op if nickname is empty
 ```
 
 ### Map values
