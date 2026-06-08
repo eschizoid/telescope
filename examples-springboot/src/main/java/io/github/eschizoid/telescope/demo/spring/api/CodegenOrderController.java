@@ -1,8 +1,10 @@
 package io.github.eschizoid.telescope.demo.spring.api;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import io.github.eschizoid.telescope.demo.spring.domain.OrderPath;
+import io.github.eschizoid.telescope.demo.spring.persistence.LineItemEntity;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderEntity;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderRepository;
 import org.springframework.http.ResponseEntity;
@@ -12,6 +14,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -66,10 +69,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class CodegenOrderController {
 
   private final Mapper<Order, OrderEntity> orderMapper;
+  private final Mapper<LineItem, LineItemEntity> lineItemMapper;
   private final OrderRepository orderRepository;
 
-  public CodegenOrderController(final Mapper<Order, OrderEntity> orderMapper, final OrderRepository orderRepository) {
+  public CodegenOrderController(
+    final Mapper<Order, OrderEntity> orderMapper,
+    final Mapper<LineItem, LineItemEntity> lineItemMapper,
+    final OrderRepository orderRepository
+  ) {
     this.orderMapper = orderMapper;
+    this.lineItemMapper = lineItemMapper;
     this.orderRepository = orderRepository;
   }
 

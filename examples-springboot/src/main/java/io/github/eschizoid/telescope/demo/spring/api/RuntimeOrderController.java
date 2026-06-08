@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.demo.spring.domain.Customer;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderEntity;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderRepository;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
@@ -68,6 +69,18 @@ public class RuntimeOrderController {
   @Transactional(readOnly = true)
   public ResponseEntity<Order> get(@PathVariable final Long id) {
     return orderRepository.findById(id).map(orderMapper::backward).map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.notFound().build());
+  }
+
+  @PostMapping("/bulk")
+  @Transactional
+  public ResponseEntity<List<Order>> bulkCreate(@RequestBody final List<Order> requests) {
+    // Demonstrates Mapper.liftList(): one element-level mapper, promoted to a List-level mapper
+    // without going through via(...). Equivalent to writing a for-loop over orderMapper.forward,
+    // but expressed at the lattice level so callers can compose `bulkMapper.asTelescope()` further.
+    final var bulkMapper = orderMapper.liftList();
+    final var entities = bulkMapper.forward(requests);
+    final var saved = entities.stream().map(orderRepository::save).toList();
+    return ResponseEntity.ok(bulkMapper.backward(saved));
   }
 
   @PatchMapping("/{id}")

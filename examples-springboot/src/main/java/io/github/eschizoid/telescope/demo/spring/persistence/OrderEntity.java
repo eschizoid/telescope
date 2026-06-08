@@ -22,7 +22,8 @@ import java.util.List;
  * The top-level Hibernate entity. Exercises the full cross-paradigm mapping surface:
  *
  * <ul>
- *   <li>Scalar fields (id, orderNumber)
+ *   <li>Scalar fields (id, referenceCode — exposed as {@code orderNumber} on the API side via a
+ *       telescope {@code to(src, tgt)} rename row)
  *   <li>{@code @ManyToOne} relation to {@link CustomerEntity}
  *   <li>Two {@code @Embedded} {@link AddressEmbeddable} fields (shipping + billing) with column
  *       prefixes
@@ -43,7 +44,8 @@ public class OrderEntity {
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   private Long id;
 
-  private String orderNumber;
+  @Column(name = "reference_code")
+  private String referenceCode;
 
   @ManyToOne(cascade = CascadeType.PERSIST, fetch = FetchType.EAGER)
   @JoinColumn(name = "customer_id")
@@ -96,12 +98,12 @@ public class OrderEntity {
     this.id = id;
   }
 
-  public String getOrderNumber() {
-    return orderNumber;
+  public String getReferenceCode() {
+    return referenceCode;
   }
 
-  public void setOrderNumber(final String orderNumber) {
-    this.orderNumber = orderNumber;
+  public void setReferenceCode(final String referenceCode) {
+    this.referenceCode = referenceCode;
   }
 
   public CustomerEntity getCustomer() {

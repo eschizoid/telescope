@@ -3,8 +3,10 @@ package io.github.eschizoid.telescope.demo.spring;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -91,6 +93,37 @@ class RuntimeOrderFlowTest {
     assertThat(patched.orderNumber()).isEqualTo("ORD-PATCHED");
     assertThat(patched.customer().email()).isEqualTo("alice@example.com");
     assertThat(patched.shippingAddress().city()).isEqualTo("Brooklyn");
+  }
+
+  @Test
+  void bulkCreateUsesMapperLiftList() {
+    // Demonstrates Mapper.liftList — the controller endpoint promotes the element-level
+    // Mapper<Order, OrderEntity> to a Mapper<List<Order>, List<OrderEntity>> in one call,
+    // then drives a single forward/save/backward through the lifted mapper.
+    final var second = new Order(
+      null,
+      "ORD-2026-0002",
+      OrderFixtures.sampleOrder().customer(),
+      OrderFixtures.sampleOrder().shippingAddress(),
+      OrderFixtures.sampleOrder().billingAddress(),
+      OrderFixtures.sampleOrder().lineItems(),
+      OrderFixtures.sampleOrder().giftWrap()
+    );
+    final var bulk = client
+      .post()
+      .uri("/orders/runtime/bulk")
+      .contentType(MediaType.APPLICATION_JSON)
+      .body(List.of(OrderFixtures.sampleOrder(), second))
+      .retrieve()
+      .body(new ParameterizedTypeReference<List<Order>>() {});
+
+    assertThat(bulk).isNotNull().hasSize(2);
+    assertThat(bulk.get(0).orderNumber()).isEqualTo("ORD-2026-0001");
+    assertThat(bulk.get(1).orderNumber()).isEqualTo("ORD-2026-0002");
+    assertThat(bulk).allSatisfy(o -> {
+      assertThat(o.id()).isNotNull();
+      assertThat(o.lineItems()).hasSize(2);
+    });
   }
 
   @Test
