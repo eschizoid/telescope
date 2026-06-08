@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 /**
  * Tests {@link MetadataHolderProbe} — the {@link ClassValue}-cached runtime probe that
  * short-circuits the reflective dispatch sites in {@link Telescope} when a sibling {@code
- * <X>Telescope} metadata holder is present (ADR-0006 Phase B).
+ * <X>Telescope} metadata holder is present.
  *
  * <p>The top-level fixture {@link ProbedRecord} carries {@code @Focus}, so {@code FocusProcessor}
  * generates a sibling {@code ProbedRecordTelescope} holder during test compilation. The "no holder"
@@ -83,7 +83,7 @@ class MetadataHolderProbeTest {
   }
 
   @Test
-  @DisplayName("ADR-0006 §9: holder present but name missing throws IllegalStateException with a precise diagnostic")
+  @DisplayName("holder present but name missing throws IllegalStateException with a precise diagnostic")
   void holderPresentNameMissingThrows() {
     final var thrown = assertThrows(
       IllegalStateException.class,

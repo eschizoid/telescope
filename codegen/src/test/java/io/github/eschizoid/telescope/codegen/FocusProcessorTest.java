@@ -349,7 +349,7 @@ class FocusProcessorTest {
     }
 
     @Test
-    @DisplayName("emits a sibling <X>Telescope holder with one typed Telescope constant per component (ADR-0006)")
+    @DisplayName("emits a sibling <X>Telescope holder with one typed Telescope constant per component")
     void generatesTelescopeHolder() {
       final var compilation = compile(
         source(
@@ -447,7 +447,7 @@ class FocusProcessorTest {
     }
 
     @Test
-    @DisplayName("a component with wildcard-bound generics is rejected with a precise diagnostic (ADR-0006 §7)")
+    @DisplayName("a component with wildcard-bound generics is rejected with a precise diagnostic")
     void wildcardGenericsRejected() {
       final var compilation = compile(
         source(
@@ -507,7 +507,7 @@ class FocusProcessorTest {
   }
 
   @Nested
-  @DisplayName("Metadata holder construct(...) emission (ADR-0006 Phase D)")
+  @DisplayName("Metadata holder construct(...) emission")
   class MetadataHolderConstruct {
 
     @Test
@@ -529,7 +529,8 @@ class FocusProcessorTest {
       final var holder = compilation.generated().get("demo.PersonTelescope");
       assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
 
-      // Phase D signature: public static Person construct(final Function<String, Object> values)
+      // construct() signature: public static Person construct(final Function<String, Object>
+      // values)
       assertTrue(holder.contains("public static Person construct(final Function<String, Object> values)"), holder);
       // The body must call the canonical constructor with per-component casts pulled from
       // values.apply(...). Primitives surface as their boxed equivalents (the auto-unbox happens
@@ -585,9 +586,69 @@ class FocusProcessorTest {
         )
       );
 
-      // The wildcard rejection already covers this — re-asserted here as a Phase D regression
-      // guard: no holder means no construct.
+      // The wildcard rejection already covers this — re-asserted here as a regression guard:
+      // no holder means no construct method.
       assertFalse(compilation.generated().containsKey("demo.WildTelescope"), "no holder, no construct method");
+    }
+  }
+
+  @Nested
+  @DisplayName("Metadata holder constants() emission")
+  class MetadataHolderConstantsMap {
+
+    @Test
+    @DisplayName("multi-field record: emits Map.ofEntries with one entry per component")
+    void multiFieldConstantsMap() {
+      final var compilation = compile(
+        source(
+          "demo.Person",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Person(String name, int age) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.PersonTelescope");
+      assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
+
+      // constants() signature: public static Map<String, Telescope<?, ?>> constants()
+      assertTrue(holder.contains("public static Map<String, Telescope<?, ?>> constants()"), holder);
+      // For >=2 components, body uses Map.ofEntries with one entry per component, in declaration
+      // order.
+      assertTrue(holder.contains("Map.ofEntries("), holder);
+      assertTrue(holder.contains("Map.entry(\"name\", name)"), holder);
+      assertTrue(holder.contains("Map.entry(\"age\", age)"), holder);
+      // The Map import has to be in the holder's import block.
+      assertTrue(holder.contains("import java.util.Map;"), holder);
+    }
+
+    @Test
+    @DisplayName("single-field record: emits Map.of(...) instead of Map.ofEntries")
+    void singleFieldConstantsMap() {
+      final var compilation = compile(
+        source(
+          "demo.Solo",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Solo(String only) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.SoloTelescope");
+      assertNotNull(holder, () -> "SoloTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains("public static Map<String, Telescope<?, ?>> constants()"), holder);
+      // Single-entry case uses Map.of(...) for cleaner output than Map.ofEntries(Map.entry(...)).
+      assertTrue(holder.contains("return Map.of(\"only\", only);"), holder);
+      assertFalse(holder.contains("Map.ofEntries"), "single-entry holders should use Map.of, not Map.ofEntries");
     }
   }
 }

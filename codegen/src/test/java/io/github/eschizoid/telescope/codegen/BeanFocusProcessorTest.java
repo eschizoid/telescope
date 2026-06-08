@@ -345,7 +345,7 @@ class BeanFocusProcessorTest {
   }
 
   @Nested
-  @DisplayName("Metadata holder emission (ADR-0006) — sibling <X>Telescope")
+  @DisplayName("Metadata holder emission — sibling <X>Telescope")
   class MetadataHolder {
 
     @Test
@@ -515,7 +515,7 @@ class BeanFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("a property with wildcard-bound generics is rejected with a precise diagnostic (ADR-0006 §7)")
+    @DisplayName("a property with wildcard-bound generics is rejected with a precise diagnostic")
     void wildcardBeanGenericsRejected() {
       final var compilation = compile(
         source(
@@ -552,7 +552,7 @@ class BeanFocusProcessorTest {
   }
 
   @Nested
-  @DisplayName("Metadata holder construct(...) emission (ADR-0006 Phase D)")
+  @DisplayName("Metadata holder construct(...) emission")
   class MetadataHolderConstruct {
 
     @Test
@@ -582,7 +582,7 @@ class BeanFocusProcessorTest {
       final var holder = compilation.generated().get("demo.PersonTelescope");
       assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
 
-      // Phase D signature.
+      // construct() signature.
       assertTrue(holder.contains("public static Person construct(final Function<String, Object> values)"), holder);
       // No-arg ctor + setX per property. The setter strategy chosen by emitBeanNavigator is
       // mirrored here verbatim.
@@ -634,6 +634,74 @@ class BeanFocusProcessorTest {
       assertTrue(holder.contains(".id((String) values.apply(\"id\"))"), holder);
       assertTrue(holder.contains(".email((String) values.apply(\"email\"))"), holder);
       assertTrue(holder.contains(".build();"), holder);
+    }
+  }
+
+  @Nested
+  @DisplayName("Metadata holder constants() emission")
+  class MetadataHolderConstantsMap {
+
+    @Test
+    @DisplayName("multi-property bean: emits Map.ofEntries with one entry per property")
+    void multiPropertyConstantsMap() {
+      final var compilation = compile(
+        source(
+          "demo.Person",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Person {
+            private String name;
+            private int age;
+            public Person() {}
+            public String getName() { return name; }
+            public int getAge() { return age; }
+            public void setName(String name) { this.name = name; }
+            public void setAge(int age) { this.age = age; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.PersonTelescope");
+      assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains("public static Map<String, Telescope<?, ?>> constants()"), holder);
+      assertTrue(holder.contains("Map.ofEntries("), holder);
+      assertTrue(holder.contains("Map.entry(\"name\", name)"), holder);
+      assertTrue(holder.contains("Map.entry(\"age\", age)"), holder);
+      assertTrue(holder.contains("import java.util.Map;"), holder);
+    }
+
+    @Test
+    @DisplayName("single-property bean: emits Map.of(...) instead of Map.ofEntries")
+    void singlePropertyConstantsMap() {
+      final var compilation = compile(
+        source(
+          "demo.Solo",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Solo {
+            private String only;
+            public Solo() {}
+            public String getOnly() { return only; }
+            public void setOnly(String only) { this.only = only; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.SoloTelescope");
+      assertNotNull(holder, () -> "SoloTelescope not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains("public static Map<String, Telescope<?, ?>> constants()"), holder);
+      assertTrue(holder.contains("return Map.of(\"only\", only);"), holder);
+      assertFalse(holder.contains("Map.ofEntries"), "single-entry holders should use Map.of, not Map.ofEntries");
     }
   }
 }
