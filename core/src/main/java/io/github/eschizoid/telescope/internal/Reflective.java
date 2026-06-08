@@ -168,9 +168,7 @@ public record Reflective(
    * {@link Iso}'s hot map, not inside.
    */
   private static Function<Function<String, Object>, Object> resolveHolderConstructor(final Class<?> cls) {
-    final var maybeHolder = MetadataHolderProbe.probeFor(cls);
-    if (maybeHolder.isEmpty()) return null;
-    return maybeHolder.get().constructor();
+    return MetadataHolderProbe.probeFor(cls).map(MetadataHolderProbe.HolderRef::constructor).orElse(null);
   }
 
   /**

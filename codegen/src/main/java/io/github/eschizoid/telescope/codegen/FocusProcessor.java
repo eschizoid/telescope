@@ -177,7 +177,7 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
           out.println();
         }
         emitRecordConstruct(out, recordName, components);
-        emitRecordConstantsMap(out, recordName, components);
+        emitRecordConstantsMap(out, components);
       }
     );
   }
@@ -211,19 +211,14 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
   // name → lens table directly, so the runtime probe in MetadataHolderProbe doesn't have to do a
   // `getDeclaredFields()` scan plus N `field.get(null)` reads. Goes from O(N) reflective ops per
   // cold probe to O(1). Legacy holders without this method still fall back to the field-scan path.
-  private void emitRecordConstantsMap(
-    final PrintWriter out,
-    final String recordName,
-    final List<? extends RecordComponentElement> components
-  ) {
+  private void emitRecordConstantsMap(final PrintWriter out, final List<? extends RecordComponentElement> components) {
     out.println("  /** Name -> lens map for the runtime probe to skip the field scan. */");
     out.println("  public static Map<String, Telescope<?, ?>> constants() {");
     if (components.isEmpty()) {
       out.println("    return Map.of();");
     } else if (components.size() == 1) {
-      out.println(
-        "    return Map.of(\"" + components.get(0).getSimpleName() + "\", " + components.get(0).getSimpleName() + ");"
-      );
+      final var onlyName = components.getFirst().getSimpleName();
+      out.println("    return Map.of(\"" + onlyName + "\", " + onlyName + ");");
     } else {
       out.println("    return Map.ofEntries(");
       for (var i = 0; i < components.size(); i++) {

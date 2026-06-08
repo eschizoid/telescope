@@ -125,7 +125,7 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    * Optional reference round-trips to {@code null} (records/beans may legally hold null references
    * and deep mapping treats nulls as pass-through).
    */
-  @SuppressWarnings({ "OptionalAssignedToNull", "OptionalUsedAsFieldOrParameterType" })
+  @SuppressWarnings("OptionalAssignedToNull")
   static <X, Y> Iso<Optional<X>, Optional<Y>> liftOptional(final Iso<X, Y> element) {
     return of(ox -> ox == null ? null : ox.map(element::to), oy -> oy == null ? null : oy.map(element::from));
   }
