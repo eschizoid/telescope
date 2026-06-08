@@ -119,14 +119,72 @@ That's the library. No `Iso`, `Lens`, `Prism`, `Affine`, `Traversal`, `Getter`, 
 
 ## What it is _not_
 
-- Not a MapStruct competitor. MapStruct owns compile-time bean mapping. For flat `Entity → Dto` work, write a static
-  method or use MapStruct.
+- Not a MapStruct replacement. MapStruct is a purpose-built bean-mapping framework with deep ecosystem integration
+  (Spring, Quarkus, MicroProfile) and ten years of edge-case fixes. Telescope is an optics DSL that includes
+  bidirectional mapping as one capability — see [How it compares to MapStruct](#how-it-compares-to-mapstruct) below for
+  the actual side-by-side.
 - Not a fuzzy auto-mapper. `Telescope.map(...)` matches fields by exact name and type, nothing more — no fuzzy name
   heuristics, no flattening, no inferred relationships (that's ModelMapper / Dozer territory, and they lost to MapStruct
   for good reasons). Anything that isn't an exact name match you declare yourself with a `Mapping.to(srcAcc, tgtAcc)` or
   `Mapping.via(srcAcc, tgtAcc, nestedMapper)` row.
 - Not category theory. Internally, it's the same idea as a Monocle "Traversal" (get-many + modify-many), but you never
   have to type those words.
+
+---
+
+## How it compares to MapStruct
+
+MapStruct and telescope solve overlapping but distinct problems. MapStruct is a **mapping framework** — purpose-built
+for flat `Entity → Dto` conversion with hand-tuned `@Mapping` expressions, lifecycle hooks, and component-model
+integration. Telescope is an **optics DSL** where mapping is one capability among navigation, deep updates, effectful
+update, and sealed-type narrowing. They overlap on the deep record↔record / bean↔record / bean↔bean band; the rest of
+each tool's surface doesn't.
+
+| Capability                                           | telescope                                                                                           | MapStruct                                                  |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **Bidirectional out of the box**                     | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)` | One direction per `@Mapper` interface; reverse is separate |
+| **Deep nested navigation + update**                  | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                    | Not in scope                                               |
+| **Effectful update**                                 | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                               | Not in scope                                               |
+| **Compile-time codegen**                             | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                           | `@Mapper` interfaces                                       |
+| **Runtime path (no codegen required)**               | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later             | Compile-time only                                          |
+| **Sealed types / pattern matching**                  | `.as(Subtype.class)` narrows; the path stays type-safe                                              | Not in scope                                               |
+| **Conditional / expression-based mappings**          | `Mapping.via(srcAcc, tgtAcc, customMapper)` only — no embedded expression language                  | `@Mapping(expression = "...")`, `condition = "..."`        |
+| **`@BeforeMapping` / `@AfterMapping` hooks**         | Not supported                                                                                       | Yes                                                        |
+| **Spring / Quarkus / CDI integration**               | None today — bring-your-own wiring                                                                  | Native via `componentModel = "spring"` / `"jsr330"` / etc. |
+| **Maturity**                                         | 1.0 line; 6 ADRs documenting load-bearing decisions; JMH-backed perf claims                         | Ten years; thousands of production deployments             |
+| **Per-field dispatch perf (codegen path, ADR-0006)** | ~25 ns/op (`field_holder`, 3.23× faster than the reflective fallback)                               | Direct bytecode, no dispatch overhead                      |
+
+#### When MapStruct is the right pick
+
+- You need flat `Entity → Dto` conversion with hand-tuned `@Mapping` expressions, `@BeforeMapping` / `@AfterMapping`
+  lifecycle hooks, or `condition = "..."` predicates
+- You need Spring / Quarkus / CDI integration via `componentModel`
+- You don't need bidirectional, deep navigation, or effects — and you'd never reach for optics for anything else
+
+#### When telescope is the right pick
+
+- Your problem includes **deep navigation** alongside mapping —
+  `Telescope.of(Company.class).each(Company::departments).field(Department::address).update(c, fn)` — and you don't want
+  a separate mapper for every level
+- You need **bidirectional** out of one definition — `Mapper.forward(...)` and `.backward(...)` derive from the same row
+  list, no inverse interface to write
+- You need to lift a mapping (or a field update) through an **effect** — `updateValidated`, `updateAsync`,
+  `updateOptional`, `updateEither`
+- You're navigating a mix of **records and POJOs** at any depth and don't want to materialize intermediate DTOs to
+  bridge between them
+- You want the same `Telescope<S, A>` type to do reading, updating, mapping, and conversion — one mental model instead
+  of separate libraries
+
+#### Performance honesty
+
+The 3.23× ratio in the table compares telescope's `@Focus` codegen path against its own reflective fallback — not
+against MapStruct. We haven't run an apples-to-apples vs MapStruct benchmark; MapStruct's generated bytecode and
+telescope's codegen-emitted `<X>Telescope` constants both compile down to roughly direct method calls, and the per-call
+delta on a trivial accessor would be dominated by JIT inlining and cache behaviour rather than by either library's
+dispatch shape. Use the
+[HolderDispatchBenchmark](benchmarks/README.md#holderdispatchbenchmark--sibling-metadata-holder-routing-adr-0006-phases-b--c--d)
+to reproduce telescope's internal numbers. For "is it fast enough?", both tools clear sub-microsecond on deep-record
+conversions — the choice should be on feature fit, not on perf within an order of magnitude.
 
 ---
 
