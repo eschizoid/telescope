@@ -36,6 +36,9 @@ import org.springframework.context.annotation.Bean;
 @EnableConfigurationProperties(TelescopeProperties.class)
 public class TelescopeAutoConfiguration {
 
+  /** Default constructor invoked by Spring's bean factory. */
+  public TelescopeAutoConfiguration() {}
+
   /**
    * Build the {@link TelescopeMapperRegistry} from every {@link Mapper} bean the context can
    * resolve. Spring injects the {@code Collection} parameter with the live list of {@code Mapper}
@@ -43,8 +46,8 @@ public class TelescopeAutoConfiguration {
    * registry (still usable; {@code get()} would throw or return {@code null} per {@code
    * fail-fast}).
    *
-   * <p>The {@link List#copyOf} defensive copy isolates the registry from any later modification of
-   * the collection Spring hands over.
+   * <p>The {@code Map.copyOf} defensive snapshot inside the registry constructor isolates it from
+   * any later modification of the collection Spring hands over.
    */
   @Bean
   @ConditionalOnMissingBean

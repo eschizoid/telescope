@@ -23,6 +23,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "telescope")
 public class TelescopeProperties {
 
+  /** Default constructor invoked by Spring's {@code @ConfigurationProperties} binder. */
+  public TelescopeProperties() {}
+
   /**
    * Default {@link WriteHint.WriteStrategy} applied to mappers built through the starter's
    * declarative shortcuts when the user doesn't pin one explicitly. {@code null} means "use {@code
@@ -48,6 +51,9 @@ public class TelescopeProperties {
 
   /** Configuration knobs for {@link TelescopeMapperRegistry}. */
   public static class Registry {
+
+    /** Default constructor invoked by Spring's {@code @ConfigurationProperties} binder. */
+    public Registry() {}
 
     /**
      * When true (default), the registry throws on {@code get(srcCls, tgtCls)} for a type pair with
