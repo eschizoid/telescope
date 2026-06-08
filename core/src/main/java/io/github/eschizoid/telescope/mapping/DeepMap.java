@@ -18,6 +18,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 
 /**
  * Engine for {@link Telescope#map(Class, Class, MapStep...)} / {@link Telescope#mapper(Class,
@@ -81,10 +82,15 @@ public final class DeepMap {
       else if (step instanceof WriteHint<?> h) hints.add(h);
     }
     final var hintMap = buildHintMap(hints);
+    final var defaultStrategy = extractDefaultStrategy(hints);
+    final var defaultWriterFactory = defaultWriterFactoryFor(defaultStrategy);
     // One bean-side Reflective per resolution call: a singleton Reflective.BEANS when no hints
     // exist, otherwise one hint-aware Reflective threaded through every recursion call so the
     // anonymous instance isn't re-allocated per type pair.
-    final var beanRefl = hintMap.isEmpty() ? Reflective.BEANS : Reflective.beansWithHints(hintMap);
+    final var beanRefl =
+      hintMap.isEmpty() && defaultWriterFactory == null
+        ? Reflective.BEANS
+        : Reflective.beansWithHints(hintMap, defaultWriterFactory);
     final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new));
     final var cache = new HashMap<TypePair, Iso<?, ?>>();
     final var topSteps = new LinkedHashMap<String, FieldStep>();
@@ -110,6 +116,7 @@ public final class DeepMap {
   private static Map<Class<?>, Beans.BeanWriter<?>> buildHintMap(final List<WriteHint<?>> hints) {
     final var map = new HashMap<Class<?>, Beans.BeanWriter<?>>();
     for (final var hint : hints) {
+      if (hint instanceof WriteHint.DefaultWriteHint) continue; // handled by extractDefaultStrategy
       final var cls = hint.targetClass();
       if (cls.isRecord()) throw new IllegalArgumentException(
         "writeBean hint targets a record class (" +
@@ -127,18 +134,54 @@ public final class DeepMap {
     return map;
   }
 
+  /**
+   * Pull out the single optional {@link WriteHint#writeBeans(WriteHint.WriteStrategy)
+   * writeBeans(…)} default strategy. Returns {@code null} when no default is supplied; throws on
+   * duplicates.
+   */
+  private static WriteHint.WriteStrategy extractDefaultStrategy(final List<WriteHint<?>> hints) {
+    WriteHint.WriteStrategy defaultStrategy = null;
+    for (final var hint : hints) {
+      if (!(hint instanceof WriteHint.DefaultWriteHint d)) continue;
+      if (defaultStrategy != null) throw new IllegalArgumentException(
+        "Duplicate writeBeans(...) default — at most one default write strategy per Telescope.map(...) call."
+      );
+      defaultStrategy = d.strategy();
+    }
+    return defaultStrategy;
+  }
+
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Beans.BeanWriter<?> writerFor(final WriteHint<?> hint) {
     // Each *Writer constructor throws IllegalStateException with a writeBean(class, STRATEGY)-
     // shaped message when its prerequisite is missing, so no rewrap is needed — the underlying
     // exception already names the actual API the user called.
     final var cls = (Class) hint.targetClass();
-    return switch (hint.strategy()) {
-      case BUILDER -> Beans.builderWriter(cls);
-      case SETTERS -> Beans.settersWriter(cls);
-      case FIELDS -> Beans.fieldsWriter(cls);
-      case CONSTRUCTOR -> Beans.constructorWriter(cls, Beans.propertyNames(cls).length);
+    return writerFor(cls, hint.strategy());
+  }
+
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Beans.BeanWriter<?> writerFor(final Class<?> cls, final WriteHint.WriteStrategy strategy) {
+    final var raw = (Class) cls;
+    return switch (strategy) {
+      case BUILDER -> Beans.builderWriter(raw);
+      case SETTERS -> Beans.settersWriter(raw);
+      case FIELDS -> Beans.fieldsWriter(raw);
+      case CONSTRUCTOR -> Beans.constructorWriter(raw, Beans.propertyNames(raw).length);
     };
+  }
+
+  /**
+   * Build a per-class writer factory that materializes the {@code writeBeans(strategy)} default
+   * lazily on first encounter with each unhinted target. Results are cached so the lookup is O(1)
+   * after the first resolve. Returns {@code null} when no default was supplied.
+   */
+  private static Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactoryFor(
+    final WriteHint.WriteStrategy defaultStrategy
+  ) {
+    if (defaultStrategy == null) return null;
+    final var cache = new java.util.concurrent.ConcurrentHashMap<Class<?>, Beans.BeanWriter<?>>();
+    return cls -> cache.computeIfAbsent(cls, c -> writerFor(c, defaultStrategy));
   }
 
   /**
@@ -235,7 +278,8 @@ public final class DeepMap {
           srcField +
           "'. Each (source, target) type pair may declare at most one row per source field."
       );
-      final var step = new FieldStep(srcField, tgtField, fieldIsoOf(row));
+      final var rowIso = fieldIsoOf(row, srcRefl.genericType(source, srcField), tgtRefl.genericType(target, tgtField));
+      final var step = new FieldStep(srcField, tgtField, rowIso);
       byTargetName.put(tgtField, step);
       bySourceName.put(srcField, step);
     }
@@ -317,6 +361,20 @@ public final class DeepMap {
     //     elements all dispatch through this same autoIso recursion.
     final var srcShape = ContainerShape.of(srcType);
     final var tgtShape = ContainerShape.of(tgtType);
+
+    // (c.1) Cross-paradigm Optional bridge — one side is Optional<X>, the other is a possibly-null
+    //       scalar/record/bean. Common case: record uses Optional<Address> while the JPA-mapped
+    //       entity uses a nullable AddressEmbeddable. Lift the element conversion through
+    //       Iso.liftOptionalToNullable so Optional.empty() ↔ null and Optional.of(x) ↔ to(x).
+    if (srcShape != null && srcShape.kind == ContainerShape.Kind.OPTIONAL && tgtShape == null) {
+      final var elementIso = autoIso(srcShape.elementType, tgtType, componentName + "[*]", overrides, beanRefl, cache);
+      return Iso.liftOptionalToNullable(eraseIso(elementIso));
+    }
+    if (tgtShape != null && tgtShape.kind == ContainerShape.Kind.OPTIONAL && srcShape == null) {
+      final var elementIso = autoIso(srcType, tgtShape.elementType, componentName + "[*]", overrides, beanRefl, cache);
+      return Iso.liftOptionalToNullable(eraseIso(elementIso)).reverse();
+    }
+
     if (srcShape != null && tgtShape != null && srcShape.kind == tgtShape.kind) {
       // Map<K, X> ↔ Map<K, Y>: keys must match exactly; Iso.liftMapValues preserves source keys.
       if (srcShape.kind == ContainerShape.Kind.MAP_VALUES && !srcShape.keyClass.equals(tgtShape.keyClass)) {
@@ -361,13 +419,64 @@ public final class DeepMap {
    * The leaf-level {@link Iso} contributed by an override row. Pattern-matches on the sealed
    * permitted records so the {@code fieldIso()} accessor stays package-private and never leaks the
    * internal {@link Iso} type out of {@link Mapping}'s public surface.
+   *
+   * <p>For {@link Via} rows, the user-supplied mapper may be at <em>element-level</em> ({@code
+   * Mapper<UserEntity, UserDto>} fed to a {@code List<UserEntity> ↔ List<UserDto>} accessor pair)
+   * or at <em>accessor-level</em> ({@code Mapper<List<UserEntity>, List<UserDto>>} fed to the same
+   * pair). The shape mismatch is detected by comparing the accessor's container shape against the
+   * mapper's source/target classes; when the mapper's classes match the container element type, the
+   * Iso is lifted through the matching container ({@code List} / {@code Set} / {@code Optional} /
+   * {@code Map} values). Otherwise the element Iso is used as-is.
    */
-  private static Iso<?, ?> fieldIsoOf(final Mapping<?, ?> row) {
+  private static Iso<?, ?> fieldIsoOf(final Mapping<?, ?> row, final Type srcType, final Type tgtType) {
     return switch (row) {
       case SameTypedTo<?, ?, ?> r -> r.fieldIso();
       case TypedTransformTo<?, ?, ?, ?> r -> r.fieldIso();
-      case Via<?, ?, ?, ?> r -> r.fieldIso();
+      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType);
     };
+  }
+
+  /**
+   * Decide whether the {@link Via} row's nested mapper should be lifted through a container. When
+   * the accessor's source/target field types are same-kind containers and the mapper's
+   * source/target classes match the element classes, lift via {@link Iso#liftList} / {@link
+   * Iso#liftSet} / {@link Iso#liftOptional} / {@link Iso#liftMapValues}. Otherwise the
+   * element-level Iso flows through unchanged (scalar / record-pair case).
+   */
+  private static Iso<?, ?> liftViaIfNeeded(final Via<?, ?> row, final Type srcType, final Type tgtType) {
+    final var elementIso = row.elementIso();
+    final var mapperSrc = row.mapperSourceClass();
+    final var mapperTgt = row.mapperTargetClass();
+    final var srcShape = ContainerShape.of(srcType);
+    final var tgtShape = ContainerShape.of(tgtType);
+    if (
+      srcShape != null &&
+      tgtShape != null &&
+      srcShape.kind == tgtShape.kind &&
+      elementTypeMatches(srcShape.elementType, mapperSrc) &&
+      elementTypeMatches(tgtShape.elementType, mapperTgt)
+    ) {
+      if (srcShape.kind == ContainerShape.Kind.MAP_VALUES && !srcShape.keyClass.equals(tgtShape.keyClass)) {
+        throw new IllegalStateException(
+          "Deep map via(...): Map key types must match exactly — source " +
+            srcShape.keyClass.getName() +
+            " vs target " +
+            tgtShape.keyClass.getName() +
+            ". Key types must match exactly; auto-lifting preserves the source keys."
+        );
+      }
+      return switch (srcShape.kind) {
+        case LIST -> Iso.liftList(eraseIso(elementIso));
+        case SET -> Iso.liftSet(eraseIso(elementIso));
+        case MAP_VALUES -> Iso.liftMapValues(eraseIso(elementIso));
+        case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
+      };
+    }
+    return elementIso;
+  }
+
+  private static boolean elementTypeMatches(final Type elementType, final Class<?> mapperClass) {
+    return elementType instanceof Class<?> cls && cls.equals(mapperClass);
   }
 
   /**

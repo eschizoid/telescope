@@ -4,7 +4,10 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -35,6 +38,7 @@ public final class Mapper<A, B> {
 
   private final Iso<A, B> iso;
   private final Class<A> sourceClass;
+  private final Class<B> targetClass;
   private final Reflective sourceRefl;
   private final Reflective targetRefl;
   private final Map<String, PatchEntry> patchByTargetField;
@@ -60,6 +64,7 @@ public final class Mapper<A, B> {
   ) {
     this.iso = iso;
     this.sourceClass = sourceClass;
+    this.targetClass = targetClass;
     this.sourceRefl = Reflective.of(sourceClass);
     this.targetRefl = Reflective.of(targetClass);
     // Defensive copy — patch behavior must not mutate after construction.
@@ -96,6 +101,20 @@ public final class Mapper<A, B> {
    */
   public Telescope<A, B> asTelescope() {
     return Telescope.wrap(iso);
+  }
+
+  /**
+   * The mapper's source class — exposed so the deep-mapping engine can decide whether to lift this
+   * mapper through a container shape ({@code List} / {@code Set} / {@code Optional} / {@code Map})
+   * when the user passed it as the {@code via(...)} element mapper.
+   */
+  public Class<A> sourceClass() {
+    return sourceClass;
+  }
+
+  /** The mapper's target class. See {@link #sourceClass()}. */
+  public Class<B> targetClass() {
+    return targetClass;
   }
 
   /**
@@ -145,5 +164,47 @@ public final class Mapper<A, B> {
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */
   public A backward(final B b) {
     return iso.from(b);
+  }
+
+  /**
+   * Lift this element-level mapper to a {@code Mapper<List<A>, List<B>>}. Forward maps each element
+   * through {@link #forward}; backward maps each element through {@link #backward}. {@code null}
+   * lists round-trip to {@code null} (mirrors the null-pass-through convention of {@link
+   * io.github.eschizoid.telescope.internal.optics.Iso#liftList}).
+   *
+   * <p>The lifted mapper has an empty patch table — sparse-overlay semantics aren't well-defined
+   * for list-shaped roots. Use it as a building block in {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#via(io.github.eschizoid.telescope.Telescope.Accessor,
+   * io.github.eschizoid.telescope.Telescope.Accessor, Mapper) Mapping.via} or hand-roll the
+   * forward/backward calls at a {@code List} call site.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public Mapper<List<A>, List<B>> liftList() {
+    final var lifted = Iso.liftList(iso);
+    return new Mapper<>(lifted, (Class) List.class, (Class) List.class, Map.of());
+  }
+
+  /** Same as {@link #liftList()} but produces a {@code Mapper<Set<A>, Set<B>>}. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public Mapper<Set<A>, Set<B>> liftSet() {
+    final var lifted = Iso.liftSet(iso);
+    return new Mapper<>(lifted, (Class) Set.class, (Class) Set.class, Map.of());
+  }
+
+  /** Same as {@link #liftList()} but produces a {@code Mapper<Optional<A>, Optional<B>>}. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public Mapper<Optional<A>, Optional<B>> liftOptional() {
+    final var lifted = Iso.liftOptional(iso);
+    return new Mapper<>(lifted, (Class) Optional.class, (Class) Optional.class, Map.of());
+  }
+
+  /**
+   * Same as {@link #liftList()} but produces a {@code Mapper<Map<K, A>, Map<K, B>>}. Keys are
+   * preserved; only the values flow through {@link #forward}/{@link #backward}.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public <K> Mapper<Map<K, A>, Map<K, B>> liftMapValues() {
+    final var lifted = Iso.<K, A, B>liftMapValues(iso);
+    return new Mapper<>(lifted, (Class) Map.class, (Class) Map.class, Map.of());
   }
 }

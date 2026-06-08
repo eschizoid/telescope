@@ -131,6 +131,30 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
   }
 
   /**
+   * Bridge an element-level {@code Iso<X, Y>} across the asymmetry where one side carries the value
+   * in an {@code Optional<X>} and the other side carries it as a possibly-{@code null} {@code Y}.
+   * Common cross-paradigm case: a record uses {@code Optional<Address>} for "an address that might
+   * not be present"; the corresponding JPA-mapped bean uses a nullable {@code AddressEmbeddable}
+   * field.
+   *
+   * <p>The resulting {@code Iso<Optional<X>, Y>} maps {@code Optional.empty()} ↔ {@code null} and
+   * {@code Optional.of(x)} ↔ {@code element.to(x)}; the backward direction wraps a non-null {@code
+   * y} into {@code Optional.of(element.from(y))} and a {@code null} {@code y} into {@code
+   * Optional.empty()}. A {@code null} {@code Optional} reference on the source side maps to {@code
+   * null} (mirrors the null-pass-through convention of {@link #liftOptional}).
+   *
+   * <p>For the mirror direction ({@code X} nullable ↔ {@code Optional<Y>}), use {@link #reverse()}
+   * on the returned Iso.
+   */
+  @SuppressWarnings("OptionalAssignedToNull")
+  static <X, Y> Iso<Optional<X>, Y> liftOptionalToNullable(final Iso<X, Y> element) {
+    return of(
+      ox -> ox == null ? null : ox.map(element::to).orElse(null),
+      y -> y == null ? Optional.empty() : Optional.of(element.from(y))
+    );
+  }
+
+  /**
    * Lift an element-level {@code Iso<X, Y>} into a {@code Set}-level {@code Iso<Set<X>, Set<Y>>}.
    * Output is a {@link LinkedHashSet} preserving forward-pass iteration order. A {@code null} set
    * round-trips to {@code null}.
