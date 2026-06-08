@@ -292,6 +292,44 @@ class FocusProcessorTest {
     }
 
     @Test
+    @DisplayName("Bridge hop across packages: target's Path is in a different package and still constructible")
+    void bridgeHopCrossPackage() {
+      final var compilation = compile(
+        source(
+          "src.Entity",
+          """
+          package src;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          @Bridge(tgt.Dto.class)
+          public record Entity(String id, String email) {}
+          """
+        ),
+        source(
+          "tgt.Dto",
+          """
+          package tgt;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Dto(String id, String email) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("src.EntityPath");
+      assertNotNull(generated, () -> "EntityPath not generated; saw " + compilation.generated().keySet());
+      // The bridge hop must instantiate a navigator from a different package — DtoPath's ctor
+      // must therefore be visible (public) for this to compile.
+      assertTrue(generated.contains("new tgt.DtoPath<>(path.then(EntityBridge.BRIDGE))"), generated);
+      // Confirm the foreign target's Path emits a public ctor so the cross-package `new` resolves.
+      final var dtoPath = compilation.generated().get("tgt.DtoPath");
+      assertNotNull(dtoPath, () -> "DtoPath not generated; saw " + compilation.generated().keySet());
+      assertTrue(dtoPath.contains("public DtoPath(final Telescope<R, Dto> path)"), dtoPath);
+    }
+
+    @Test
     @DisplayName("Bridge hop: target without @Focus gets terminal Telescope<R, Target>")
     void bridgeHopTerminalWhenTargetIsNotNavigable() {
       final var compilation = compile(

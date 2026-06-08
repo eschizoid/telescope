@@ -42,7 +42,7 @@ import io.github.eschizoid.telescope.Telescope;
  *       hints (typos, refactor stragglers) are reported rather than silently ignored
  * </ul>
  */
-public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWriteHint {
+public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWriteHint, WriteHint.DefaultWriteHint {
   /**
    * The {@code Beans.BeanWriter} strategies available for explicit selection.
    *
@@ -70,7 +70,38 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
     return new BeanWriteHint<>(target, strategy);
   }
 
-  /** The target class this hint applies to — used to key the per-class strategy lookup. */
+  /**
+   * Declare a <em>default</em> write strategy applied to every bean target encountered during deep
+   * mapping that does not have a more specific {@link #writeBean(Class, WriteStrategy)} hint. One
+   * row replaces N per-class enumerations when every target shares the same strategy (e.g., pinning
+   * SETTERS across an entire JPA-entity tree so Hibernate's identity assignment fires on every
+   * level).
+   *
+   * <pre>{@code
+   * Telescope.mapper(
+   *     Order.class, OrderEntity.class,
+   *     writeBeans(SETTERS),                       // default for OrderEntity, CustomerEntity,
+   *                                                // LineItemEntity, AddressEmbeddable, …
+   *     writeBean(CashRegisterEntity.class, FIELDS) // override on one specific target
+   * );
+   * }</pre>
+   *
+   * <p>At most one {@code writeBeans(...)} default may appear per {@code Telescope.map(...)} call.
+   * Per-class {@code writeBean(X.class, …)} rows always win for class {@code X}. The default is
+   * resolved lazily — the writer for a given target is constructed the first time the recursion
+   * reaches that target, so a default strategy incompatible with a particular target (e.g., {@code
+   * BUILDER} on a class with no static {@code builder()}) only throws when that target is actually
+   * visited.
+   */
+  static WriteHint<?> writeBeans(final WriteStrategy strategy) {
+    return new DefaultWriteHint(strategy);
+  }
+
+  /**
+   * The target class this hint applies to — used to key the per-class strategy lookup. {@code null}
+   * for a {@link #writeBeans(WriteStrategy)} default hint, which applies to every encountered bean
+   * target instead of one specific class.
+   */
   Class<B> targetClass();
 
   /** The chosen write strategy for {@link #targetClass()}. */
@@ -78,4 +109,16 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
 
   /** Package-private record impl; users construct via {@link #writeBean}. */
   record BeanWriteHint<B>(Class<B> targetClass, WriteStrategy strategy) implements WriteHint<B> {}
+
+  /**
+   * Package-private record impl for {@link #writeBeans(WriteStrategy)}. Carries no target class
+   * (the strategy applies to every encountered bean target lacking a per-class override); {@link
+   * #targetClass()} returns {@code null} as the sentinel.
+   */
+  record DefaultWriteHint(WriteStrategy strategy) implements WriteHint<Object> {
+    @Override
+    public Class<Object> targetClass() {
+      return null;
+    }
+  }
 }

@@ -198,7 +198,7 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope:0.3.0")
+    implementation("io.github.eschizoid:telescope:0.4.1")
 }
 ```
 
@@ -208,7 +208,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope</artifactId>
-  <version>0.3.0</version>
+  <version>0.4.1</version>
 </dependency>
 ```
 
@@ -220,8 +220,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope:0.3.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:0.3.0")
+    implementation("io.github.eschizoid:telescope:0.4.1")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:0.4.0")
 }
 ```
 
@@ -231,7 +231,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope</artifactId>
-  <version>0.3.0</version>
+  <version>0.4.1</version>
 </dependency>
 
 <build>
@@ -244,7 +244,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>0.3.0</version>
+            <version>0.4.1</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
@@ -651,6 +651,12 @@ to(EventEntity::year, EventDto::year, Object::toString, Integer::parseInt)      
 via(UserEntity::address, UserDto::address, addressMapper)                            // drop in a pre-built nested mapper
 ```
 
+The `via(...)` row works in two flavours: pass an **accessor-typed** mapper (e.g.
+`Mapper<List<UserEntity>, List<UserDto>>`) and telescope uses it as-is, or pass an **element-typed** mapper
+(`Mapper<UserEntity, UserDto>`) and telescope detects the accessor's container shape (`List`, `Set`, `Optional`, `Map`
+values) and auto-lifts the mapper through it via `Iso.liftList` / `liftSet` / `liftOptional` / `liftMapValues`. One row
+either way — no separate `viaList` / `viaSet` factories.
+
 Recursion is auto by default — there's no `auto()` row to declare.
 
 **Result threads through longer paths** like any other telescope:
@@ -763,6 +769,24 @@ final Telescope<OrderRecord, OrderPojo> conv = Telescope.map(
 Validation is eager: a misconfigured hint (`BUILDER` on a no-builder class, hint targeting a record, duplicate hint,
 unused hint) throws at `Telescope.map(...)` time — not on first `iso.to()` deep in production.
 
+**`writeBeans(STRATEGY)` — one default for every bean target.** When every entity in the recursion shares the same
+construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibernate's identity assignment fires), one
+`writeBeans(SETTERS)` row replaces N per-class enumerations. Per-class `writeBean(X.class, ...)` still wins for class
+`X`. At most one `writeBeans(...)` default per call.
+
+```java
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+
+final Mapper<Order, OrderEntity> orderMapper = Telescope.mapper(
+  Order.class,
+  OrderEntity.class,
+  writeBeans(SETTERS), // default for OrderEntity, CustomerEntity, LineItemEntity, AddressEmbeddable, …
+  writeBean(CashRegisterEntity.class, FIELDS) // override on one specific target
+);
+```
+
 **Composing through a bridge.** The mapping result is a `Telescope<A, B>`, so it threads through a longer path the same
 way any other telescope does:
 
@@ -775,14 +799,33 @@ Telescope.of(Page.class)                  // Page is a record holding List<Legac
 ```
 
 **`Telescope.mapper(...)` — the `Mapper<A, B>` sibling.** Same deep recursion, but the return is a `Mapper<A, B>`
-exposing `read`/`forward`/`backward`/`patch`/`asTelescope`. `patch(base, partial)` overlays non-null fields of `partial`
-onto `base` — useful for sparse JSON / form updates.
+exposing `forward` / `backward` / `read` / `patch` / `asTelescope` / `liftList` / `liftSet` / `liftOptional` /
+`liftMapValues`. `patch(base, partial)` overlays non-null fields of `partial` onto `base` — useful for sparse JSON /
+form updates. `asTelescope()` returns the mapper as a `Telescope<A, B>` for `.then(...)` composition into a longer typed
+path (bridging record-side navigation into entity-side leaves, or vice versa). The `lift*` methods promote an
+element-level mapper to a container-level mapper without going through a `via(...)` row — useful when the lifted mapper
+is the call-site root (e.g., a bulk handler that converts a `List<Order>` payload to `List<OrderEntity>`).
 
 ```java
 final Mapper<UserBean, UserView> mapper = Telescope.mapper(UserBean.class, UserView.class);
 
 final UserView withFresh = mapper.patch(view, new UserView(null, "new@x", null));
+
+// Container promotion for a bulk endpoint:
+final Mapper<List<UserBean>, List<UserView>> bulk = mapper.liftList();
+final List<UserView> view = bulk.forward(beans);
+
+// Thread the conversion into a longer Telescope chain via .then():
+Telescope.of(Page.class)
+    .each(Page::items)
+    .then(mapper.asTelescope())
+    .field(UserView::email)
+    .update(page, String::toLowerCase);
 ```
+
+For a worked end-to-end demo using every public Mapping / Mapper / Telescope row through a Spring Boot 4 + Hibernate
+
+- Jackson REST pipeline, see [`examples-springboot/`](examples-springboot/).
 
 **`@Bridge` — reflection-free, compile-checked (any pair).** The codegen counterpart to `Telescope.map(...)`. Annotate
 the source you own with the target type; the processor generates `<Source>Bridge.BRIDGE`, a `Telescope<Source, Target>`

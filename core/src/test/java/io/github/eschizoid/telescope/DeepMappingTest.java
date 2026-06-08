@@ -6,6 +6,7 @@ import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.BUIL
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.FIELDS;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -321,6 +322,53 @@ class DeepMappingTest {
   @DisplayName("via — drop a pre-built nested mapper instead of letting recursion build one")
   class PreBuiltViaMapper {
 
+    // -- RED: via with a List-typed accessor should lift the element-level mapper through the list
+    // --
+    //
+    // Today this throws "incompatible source/target shapes" because Via stores the mapper at
+    // src/tgt accessor type level. When srcAcc returns List<X> and tgtAcc returns List<Y>, the
+    // user expects to pass a Mapper<X, Y> and have it auto-lift via Iso.liftList. Without this,
+    // every nested-collection mapping forces the user to either hoist the element-level rows up
+    // to the parent or hand-roll list lifting.
+
+    record TeamHeadEntity(String name, List<UserEntity> members) {}
+
+    record TeamHeadDto(String name, List<UserDto> members) {}
+
+    @Test
+    @DisplayName("viaList(srcAcc, tgtAcc, mapper<X, Y>) lifts the element mapper through a List-typed accessor pair")
+    void viaAutoLiftsThroughList() {
+      // Build a UserEntity → UserDto element mapper with a rename that should fire on every list
+      // element, not just at the auto-recursive default.
+      final Mapper<UserEntity, UserDto> userMapper = Telescope.mapper(
+        UserEntity.class,
+        UserDto.class,
+        to(UserEntity::name, UserDto::fullName)
+      );
+      // The team mapper hands the element mapper to viaList — telescope lifts it through List.
+      final var teamMapper = Telescope.mapper(
+        TeamHeadEntity.class,
+        TeamHeadDto.class,
+        via(TeamHeadEntity::members, TeamHeadDto::members, userMapper)
+      );
+      final var entity = new TeamHeadEntity(
+        "platform",
+        List.of(
+          new UserEntity("alice", "a@x", new AddressEntity("NYC", "10001")),
+          new UserEntity("bob", "b@x", new AddressEntity("NYC", "10001"))
+        )
+      );
+      final var dto = teamMapper.read(entity);
+      assertEquals("platform", dto.name());
+      assertEquals(2, dto.members().size());
+      // The userMapper's rename row would have fired if telescope lifted it through the list.
+      assertEquals("alice", dto.members().get(0).fullName());
+      assertEquals("bob", dto.members().get(1).fullName());
+      assertEquals(entity, teamMapper.backward(dto));
+    }
+
+    // -- end via auto-lift --
+
     @Test
     @DisplayName("via(...) takes precedence over auto-recursion for its target field")
     void viaWinsOverAuto() {
@@ -616,6 +664,42 @@ class DeepMappingTest {
     }
 
     @Test
+    @DisplayName("writeBeans(STRATEGY) sets a default write strategy applied to every unhinted bean target")
+    void writeBeansDefaultAppliesToAllTargets() {
+      // DualPojo has both a builder() and field-injectable fields — autoWriter would pick BUILDER
+      // (and the builder appends "[built]" to name). With writeBeans(FIELDS) as the default, the
+      // engine must skip the builder and inject directly into fields, yielding the raw "alice".
+      final var mapper = Telescope.mapper(DualRecord.class, DualPojo.class, writeBeans(FIELDS));
+      final var pojo = mapper.read(new DualRecord("alice", 9));
+      assertEquals("alice", pojo.getName()); // not "alice[built]"
+      assertEquals(9, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("per-class writeBean(X.class, …) overrides the writeBeans(…) default for that target")
+    void perClassHintWinsOverDefault() {
+      // Default says FIELDS, but per-class hint says BUILDER — builder wins for DualPojo, so the
+      // built-in "[built]" suffix surfaces.
+      final var mapper = Telescope.mapper(
+        DualRecord.class,
+        DualPojo.class,
+        writeBeans(FIELDS),
+        writeBean(DualPojo.class, BUILDER)
+      );
+      final var pojo = mapper.read(new DualRecord("alice", 9));
+      assertEquals("alice[built]", pojo.getName());
+    }
+
+    @Test
+    @DisplayName("two writeBeans(…) defaults are rejected eagerly (at most one default per call)")
+    void duplicateDefaultRejected() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.map(DualRecord.class, DualPojo.class, writeBeans(FIELDS), writeBeans(BUILDER))
+      );
+      assertTrue(ex.getMessage().contains("writeBeans"), ex.getMessage());
+    }
+
+    @Test
     @DisplayName("autoWriter throws cleanly for ambiguous multi-ctor POJO when no hint is supplied")
     void ambiguousAutoFallbackRefuses() {
       // resolve() returns successfully — the Iso is built lazily. The throw fires when
@@ -676,6 +760,52 @@ class DeepMappingTest {
       assertEquals(Set.of(Optional.of(new TagD("a")), Optional.<TagD>empty(), Optional.of(new TagD("b"))), dto.items());
       assertEquals(src, mapper.backward(dto));
     }
+
+    // -- Optional<X> ↔ nullable X cross-paradigm bridge --
+
+    record HasOptional(String name, Optional<String> nickname) {}
+
+    record HasNullable(String name, String nickname) {}
+
+    @Test
+    @DisplayName("Optional<X> source ↔ nullable X target: Optional.of(x) round-trips to x and back")
+    void optionalToNullablePresent() {
+      final var mapper = Telescope.mapper(HasOptional.class, HasNullable.class);
+      final var src = new HasOptional("alice", Optional.of("ally"));
+      final var dst = mapper.forward(src);
+      assertEquals("alice", dst.name());
+      assertEquals("ally", dst.nickname());
+      assertEquals(src, mapper.backward(dst));
+    }
+
+    @Test
+    @DisplayName("Optional<X> source ↔ nullable X target: Optional.empty() round-trips to null and back")
+    void optionalToNullableEmpty() {
+      final var mapper = Telescope.mapper(HasOptional.class, HasNullable.class);
+      final var src = new HasOptional("alice", Optional.empty());
+      final var dst = mapper.forward(src);
+      assertEquals("alice", dst.name());
+      assertEquals(null, dst.nickname());
+      assertEquals(src, mapper.backward(dst));
+    }
+
+    @Test
+    @DisplayName("nullable X source ↔ Optional<X> target: mirror direction round-trips identically")
+    void nullableToOptionalMirror() {
+      final var mapper = Telescope.mapper(HasNullable.class, HasOptional.class);
+      final var srcPresent = new HasNullable("alice", "ally");
+      final var dstPresent = mapper.forward(srcPresent);
+      assertEquals("alice", dstPresent.name());
+      assertEquals(Optional.of("ally"), dstPresent.nickname());
+      assertEquals(srcPresent, mapper.backward(dstPresent));
+
+      final var srcAbsent = new HasNullable("bob", null);
+      final var dstAbsent = mapper.forward(srcAbsent);
+      assertEquals(Optional.empty(), dstAbsent.nickname());
+      assertEquals(srcAbsent, mapper.backward(dstAbsent));
+    }
+
+    // -- end Optional ↔ nullable --
 
     @Test
     @DisplayName("List<Map<K, Set<Record>>> resolves four nested container levels by construction")

@@ -60,14 +60,25 @@ public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, Typed
 
   /**
    * Nested correspondence: map {@code src}'s leaf through a pre-built {@link Mapper}. The mapper
-   * supplies both directions, and any custom rules it bakes in (typed transforms, nested mappers of
-   * its own) survive — the deep recursion uses it as-is at this slot instead of building its own.
+   * supplies both directions; any custom rules it bakes in (typed transforms, nested mappers of its
+   * own) survive — the deep recursion uses it as-is at this slot instead of building its own.
+   *
+   * <p>The mapper can be at <em>element-level</em> or at <em>accessor-level</em>; telescope detects
+   * which one the user passed and lifts through {@code List} / {@code Set} / {@code Optional} /
+   * {@code Map<K, V>} automatically when the accessor returns a container and the mapper's
+   * source/target classes are the element types.
    *
    * <pre>{@code
-   * via(UserEntity::address, UserDto::address, addressMapper)
+   * via(UserEntity::address,  UserDto::address,  addressMapper)   // scalar pair, no lift
+   * via(TeamEntity::members,  TeamDto::members,  userMapper)      // List pair, auto-lifts
+   * via(OrderEntity::giftWrap, OrderDto::giftWrap, addressMapper) // Optional pair, auto-lifts
    * }</pre>
    */
-  static <A, B, X, Y> Mapping<A, B> via(final Accessor<A, X> src, final Accessor<B, Y> tgt, final Mapper<X, Y> nested) {
-    return new Via<>(src, tgt, nested);
+  static <A, B> Mapping<A, B> via(
+    final Accessor<A, ?> src,
+    final Accessor<B, ?> tgt,
+    final Mapper<?, ?> elementMapper
+  ) {
+    return new Via<>(src, tgt, elementMapper);
   }
 }

@@ -69,18 +69,24 @@ public record Reflective(
   }
 
   /**
-   * Bean reflective that consults {@code hints} before falling back to {@link Beans#autoWriter}.
-   * Used by {@link io.github.eschizoid.telescope.mapping.DeepMap DeepMap} when the user supplies
-   * {@code writeBean(targetClass, strategy)} rows — the hint map is keyed on target class and
-   * provides a pre-instantiated {@link Beans.BeanWriter}, so eager construction has already
-   * validated strategy applicability.
+   * Bean reflective that consults {@code hints} before falling back to {@code defaultWriterFactory}
+   * (when non-null) and ultimately to {@link Beans#autoWriter}. Used by {@link
+   * io.github.eschizoid.telescope.mapping.DeepMap DeepMap} when the user supplies {@code
+   * writeBean(targetClass, strategy)} rows and/or a single {@code writeBeans(strategy)} default —
+   * the per-class hint map is keyed on target class and provides a pre-instantiated {@link
+   * Beans.BeanWriter}; the default factory is consulted lazily on first encounter with each
+   * not-explicitly-hinted target, then cached, so a default-strategy incompatible with a particular
+   * target only throws when that target is actually constructed.
    */
-  public static Reflective beansWithHints(final Map<Class<?>, Beans.BeanWriter<?>> hints) {
+  public static Reflective beansWithHints(
+    final Map<Class<?>, Beans.BeanWriter<?>> hints,
+    final Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactory
+  ) {
     return new Reflective(
       BEANS.names,
       BEANS.genericType,
       BEANS.read,
-      (cls, valueByName) -> constructBeanWithHints(hints, cls, valueByName),
+      (cls, valueByName) -> constructBeanWithHints(hints, defaultWriterFactory, cls, valueByName),
       BEANS.normalize
     );
   }
@@ -213,15 +219,16 @@ public record Reflective(
   @SuppressWarnings({ "rawtypes", "unchecked" })
   private static Object constructBeanWithHints(
     final Map<Class<?>, Beans.BeanWriter<?>> hints,
+    final Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactory,
     final Class<?> cls,
     final Function<String, Object> valueByName
   ) {
-    // Lazy fallback — Beans.autoWriter may throw for classes the auto path refuses (ambiguous
-    // multi-ctor POJOs, classes compiled without -parameters, or ctor/getter name mismatches);
-    // when a hint exists it MUST win, otherwise autoWriter's pre-emptive throw would defeat the
-    // hint mechanism. getOrDefault would eagerly evaluate the default and short-circuit it.
-    final var hinted = (Beans.BeanWriter) hints.get(cls);
-    final var writer = hinted != null ? hinted : Beans.autoWriter((Class) cls);
+    // Resolution order: per-class hint → default-strategy factory → Beans.autoWriter. Each tier is
+    // consulted lazily so a misconfigured fallback (e.g., writeBeans(BUILDER) on a target with no
+    // builder) only throws when that target is actually constructed — never pre-emptively.
+    Beans.BeanWriter writer = (Beans.BeanWriter) hints.get(cls);
+    if (writer == null && defaultWriterFactory != null) writer = (Beans.BeanWriter) defaultWriterFactory.apply(cls);
+    if (writer == null) writer = Beans.autoWriter((Class) cls);
     return writer.construct(Beans.propertyNames(cls), valueByName);
   }
 }

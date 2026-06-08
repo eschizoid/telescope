@@ -10,6 +10,63 @@ story.
 
 ## [Unreleased]
 
+_Nothing yet — see [0.4.1] for the most recent release._
+
+## [0.4.1] — 2026-06-08
+
+The first post-1.0-readiness patch. Surfaces four real-world bugs that the new
+[`examples-springboot`](examples-springboot/) demo project flushed out, plus the demo itself as a permanent feature
+showcase. All changes are additive — no breaking changes vs 0.4.0.
+
+### Added
+
+- **Cross-paradigm `Optional` ↔ nullable bridge in deep mapping.** When one side of a `(sourceClass, targetClass)` pair
+  declares an `Optional<X>` component and the other declares a plain (possibly `null`) `X`, `DeepMap.autoIso` now wires
+  the bridge automatically via the new `Iso.liftOptionalToNullable(...)` lattice helper. Common JPA case: the API record
+  uses `Optional<Address>` while the entity uses a nullable `AddressEmbeddable`. Previously the resolver threw
+  "incompatible source/target shapes". Lattice-pure — the bridge is one new `Iso` factory routed through the existing
+  `.then(...)` composition.
+- **`Mapping.via()` auto-lifts an element-level `Mapper<E, F>` through container shapes.** When the source/target
+  accessors return same-kind containers (`List<E>` ↔ `List<F>` / `Set` / `Optional` / `Map<K, V>` values) and the
+  user-supplied `Mapper`'s source/target classes match the element types, the engine lifts the mapper through the
+  matching container via `Iso.liftList` / `liftSet` / `liftOptional` / `liftMapValues`. One row,
+  `via(Parent::children, Parent::getChildren, childMapper)`, instead of building a separate `Mapper<List<E>, List<F>>`
+  or hoisting every child-level row up to the parent's slot.
+- **`WriteHint.writeBeans(WriteStrategy)` default writer.** Single-row default applied to every bean target the
+  recursion touches that lacks a more specific `writeBean(Class, WriteStrategy)` override. Collapses the common "pin
+  SETTERS across every JPA entity" enumeration from N rows to one. Per-class hints still win.
+- **`Mapper#sourceClass()` / `Mapper#targetClass()` accessors** — expose the keying classes so the deep-mapping engine
+  can detect when a user-supplied `Mapper` is element-level vs accessor-level and auto-lift accordingly.
+- **`Mapper#liftList()` / `liftSet()` / `liftOptional()` / `liftMapValues()`** — promote an element-level `Mapper<A, B>`
+  to a container-level mapper without going through a `via(...)` row. Useful when the lifted mapper is the call-site
+  root (e.g., a bulk `List<Order> → List<OrderEntity>` HTTP handler).
+- **`examples-springboot/`** — Spring Boot 4.0.1 + Spring Framework 7 + Hibernate 7 + Jakarta EE 10 + Jackson + H2 demo
+  project. Two controllers (`RuntimeOrderController`, `CodegenOrderController`) exercise every public Mapping / Mapper /
+  Telescope API surface end-to-end through a real REST + JPA pipeline. Composite-build wired so iteration on the
+  telescope library shows up immediately in the demo. Tests boot embedded Tomcat on a random port and drive HTTP through
+  Spring 7's `RestClient`.
+
+### Fixed
+
+- **`BridgeProcessor` cross-package visibility.** Generated `<X>Path<R>` and `<X><Comp>Step<R>` constructors now emit
+  `public` instead of package-private. Bridge hops (`<Source>Path.as<Target>()` calling `new <Target>Path<>(...)`) and
+  any mid-chain navigator instantiation that crosses packages no longer fail to compile. Also enables a new pattern:
+  wrap a hand-composed `Telescope<R, X>` into the typed `<X>Path<R>` navigator via the public ctor — useful for
+  threading a bridged Telescope (e.g., one that crossed paradigms via `mapper.asTelescope()`) back into a typed path
+  chain. See `CodegenOrderController.applyDiscount` in the demo for the worked example.
+
+### Changed
+
+- **`Mapping#via(Accessor<A, ?>, Accessor<B, ?>, Mapper<?, ?>)`** — relaxed signature replacing the prior
+  `via(Accessor<A, X>, Accessor<B, X>, Mapper<X, X>)` and the proposed per-shape variants (`viaList`, `viaSet`, etc.).
+  The same row carries either an accessor-typed `Mapper<List<E>, List<F>>` or an element-typed `Mapper<E, F>`; `DeepMap`
+  detects which based on the accessor's field type at row resolution and lifts as needed. No call-site changes for
+  existing code (the API is wider, not narrower).
+- **`Reflective.beansWithHints(Map, Function<Class<?>, Beans.BeanWriter<?>>)`** — signature widened to take a
+  default-writer factory function in addition to the per-class hint map. Internal seam consumed only by `DeepMap`.
+
+## [0.4.0] — 2026-06-07
+
 ### Added
 
 - **Hybrid codegen ↔ runtime lookup substrate (ADR-0006), Phase A.** `FocusProcessor` and `BeanFocusProcessor` emit a
@@ -308,7 +365,9 @@ The 0.1.0 release ships with four architecture decision records documenting load
   Runtime path uses `SerializedLambda` to recover field names; codegen path emits direct method references. They produce
   equivalent `Telescope` values but reach them differently. The rebuild path is not unified.
 
-[Unreleased]: https://github.com/eschizoid/telescope/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/eschizoid/telescope/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/eschizoid/telescope/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/eschizoid/telescope/compare/v0.3.0...v0.4.0
 [1.0.0]: https://github.com/eschizoid/telescope/compare/v0.3.0...v1.0.0
 [0.3.0]: https://github.com/eschizoid/telescope/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/eschizoid/telescope/compare/v0.1.0...v0.2.0

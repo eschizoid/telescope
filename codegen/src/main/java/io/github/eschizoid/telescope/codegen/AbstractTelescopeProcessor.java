@@ -423,14 +423,16 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   /**
    * Emit the standard header members of a generated {@code <X>Path<R>} class: the private {@code
-   * path} field, the package-private constructor, a {@code start()} static factory, and a {@code
-   * get()} accessor. Used by every navigator-emitting processor (records via {@link FocusProcessor}
-   * and beans via {@link #emitBeanNavigator}) so the boilerplate lives in one place.
+   * path} field, a public constructor (so navigators in <em>other</em> packages — bridge hops,
+   * sub-navigators on records whose targets live in foreign packages — can still construct one), a
+   * {@code start()} static factory, and a {@code get()} accessor. Used by every navigator-emitting
+   * processor (records via {@link FocusProcessor} and beans via {@link #emitBeanNavigator}) so the
+   * boilerplate lives in one place.
    */
   protected void emitPathClassHeader(final PrintWriter out, final String pathName, final String targetTypeName) {
     out.println("  private final Telescope<R, " + targetTypeName + "> path;");
     out.println();
-    out.println("  " + pathName + "(final Telescope<R, " + targetTypeName + "> path) { this.path = path; }");
+    out.println("  public " + pathName + "(final Telescope<R, " + targetTypeName + "> path) { this.path = path; }");
     out.println();
     out.println(
       "  public static " +
@@ -966,7 +968,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     writeInstanceClass(qualifiedStep, stepName, "<R>", javadoc, origin, out -> {
       out.println("  private final Telescope<R, " + containerType + "> path;");
       out.println();
-      out.println("  " + stepName + "(final Telescope<R, " + containerType + "> path) { this.path = path; }");
+      out.println("  public " + stepName + "(final Telescope<R, " + containerType + "> path) { this.path = path; }");
       out.println();
       out.println("  public Telescope<R, " + containerType + "> get() { return path; }");
       out.println();
