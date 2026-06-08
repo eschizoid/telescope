@@ -198,7 +198,7 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope:0.3.0")
+    implementation("io.github.eschizoid:telescope:0.4.1")
 }
 ```
 
@@ -208,7 +208,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope</artifactId>
-  <version>0.3.0</version>
+  <version>0.4.1</version>
 </dependency>
 ```
 
@@ -220,8 +220,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope:0.3.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:0.3.0")
+    implementation("io.github.eschizoid:telescope:0.4.1")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:0.4.0")
 }
 ```
 
@@ -231,7 +231,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope</artifactId>
-  <version>0.3.0</version>
+  <version>0.4.1</version>
 </dependency>
 
 <build>
@@ -244,7 +244,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>0.3.0</version>
+            <version>0.4.1</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
