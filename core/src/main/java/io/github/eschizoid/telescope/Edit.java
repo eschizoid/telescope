@@ -83,10 +83,15 @@ public interface Edit<S> {
    * delta or an instruction rather than a replacement.
    *
    * <pre>{@code
-   * Edit.overIfPresent(LINE_ITEM_QUANTITIES, req.quantityDelta(), (delta, q) -> q + delta)
+   * Edit.mapIfPresent(LINE_ITEM_QUANTITIES, req.quantityDelta(), (delta, q) -> q + delta)
    * }</pre>
+   *
+   * <p>Distinct name from {@link #overIfPresent(Telescope, Object, Function)} so the lambda's arity
+   * does not need to disambiguate the overload at the call site — pick {@code overIfPresent} when
+   * the value alone yields the new leaf; pick {@code mapIfPresent} when the new leaf depends on
+   * both the value and the current leaf.
    */
-  static <S, X, V> Edit<S> overIfPresent(
+  static <S, X, V> Edit<S> mapIfPresent(
     final Telescope<S, X> path,
     final V value,
     final BiFunction<V, X, X> transform
