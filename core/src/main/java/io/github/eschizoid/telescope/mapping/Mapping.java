@@ -30,11 +30,11 @@ import java.util.function.Function;
  * Telescope#map(Class, Class, MapStep...)} keys overrides by {@code (sourceClass, targetClass)} so
  * a single row applies wherever the recursion lands on that pair — top level or N levels deep.
  *
- * <p><b>Permitted impls.</b> Sealed over three package-private records in sibling files in this
- * package — {@link SameTypedTo}, {@link TypedTransformTo}, {@link Via}. Users construct via the
- * static factories below; the record types are not public API.
+ * <p><b>Permitted impls.</b> Sealed over four package-private records in sibling files in this
+ * package — {@link SameTypedTo}, {@link TypedTransformTo}, {@link Via}, {@link Drop}. Users
+ * construct via the static factories below; the record types are not public API.
  */
-public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, TypedTransformTo, Via {
+public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, TypedTransformTo, Via, Drop {
   /** Same-typed correspondence: {@code src↔tgt}, both with leaf type {@code X}. Identity. */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Accessor<B, X> tgt) {
     return new SameTypedTo<>(src, tgt);
@@ -80,5 +80,28 @@ public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, Typed
     final Mapper<?, ?> elementMapper
   ) {
     return new Via<>(src, tgt, elementMapper);
+  }
+
+  /**
+   * Drop a source field — declare it intentionally NOT mapped to the target so the strict deep-map
+   * factory accepts the pair without requiring a same-name target property. Use this when one side
+   * of a cross-paradigm pair carries fields the other side shouldn't (or doesn't) see — e.g.
+   * internal {@code metadata} that mustn't leak to a partner-facing DTO.
+   *
+   * <pre>{@code
+   * Telescope.mapper(
+   *     Order.class, PartnerShippingLabel.class,
+   *     to(Order::orderNumber, PartnerShippingLabel::getTrackingReference),
+   *     via(Order::lineItems,  PartnerShippingLabel::getItems, partnerItemMapper),
+   *     drop(Order::metadata));   // PartnerShippingLabel has no metadata field; this is OK
+   * }</pre>
+   *
+   * <p>The dropped field is read-side-only: {@code forward(order)} simply does not propagate it to
+   * the target, and {@code backward(label)} reconstructs the record with the field set to whatever
+   * the source-side reflection chooses (typically {@code null} for nullable record components, or
+   * the type's default value otherwise — see the source-class's component-default contract).
+   */
+  static <A, B> Mapping<A, B> drop(final Accessor<A, ?> src) {
+    return new Drop<>(src);
   }
 }

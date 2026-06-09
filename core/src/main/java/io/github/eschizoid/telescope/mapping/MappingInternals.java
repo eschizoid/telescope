@@ -11,7 +11,7 @@ package io.github.eschizoid.telescope.mapping;
  * DeepMap} casts a {@code Mapping<?, ?>} to {@code MappingInternals<?, ?>} when it needs the
  * recovery info.
  */
-sealed interface MappingInternals<A, B> permits SameTypedTo, TypedTransformTo, Via {
+sealed interface MappingInternals<A, B> permits SameTypedTo, TypedTransformTo, Via, Drop {
   /**
    * Source class this row keys against (the declaring class of the source accessor, recovered via
    * {@code SerializedLambda}). Used by {@link DeepMap} to decide which type pairs this override
