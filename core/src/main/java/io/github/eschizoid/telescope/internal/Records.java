@@ -193,7 +193,17 @@ public final class Records {
   }
 
   private static IllegalArgumentException noField(final String fieldName, final Class<?> cls) {
-    return new IllegalArgumentException("No field '" + fieldName + "' on " + cls.getName());
+    // Include the component names so a config-driven fieldByName(...) typo surfaces a usable hint
+    // instead of forcing the user to read the record source. Load-bearing for the runtime-checked
+    // surface — see the "Runtime-checked" bucket of compile-safety scoring in CLAUDE.md.
+    return new IllegalArgumentException(
+      "No field '" +
+        fieldName +
+        "' on " +
+        cls.getName() +
+        " — known fields: " +
+        java.util.Arrays.toString(componentNames(cls))
+    );
   }
 
   /**

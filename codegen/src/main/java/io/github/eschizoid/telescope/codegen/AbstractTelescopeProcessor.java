@@ -608,6 +608,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         out.println("import java.util.List;");
         out.println("import java.util.Map;");
         out.println("import java.util.Optional;");
+        out.println("import java.util.Set;");
         out.println("import java.util.concurrent.CompletableFuture;");
         out.println("import java.util.concurrent.Executor;");
         out.println("import java.util.function.BiFunction;");

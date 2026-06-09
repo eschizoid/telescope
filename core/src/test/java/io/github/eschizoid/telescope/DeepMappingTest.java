@@ -8,6 +8,7 @@ import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.FIEL
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -395,6 +396,84 @@ class DeepMappingTest {
   @Nested
   @DisplayName("Cycle handling — self-referencing structures terminate cleanly")
   class Cycles {
+
+    // Mutable bean pair to construct a literal VALUE cycle (records can't reference each other
+    // bidirectionally after construction). Mirrors a bidirectional JPA association.
+    static final class CycEntity {
+
+      private String name;
+      private CycEntity ref;
+
+      public CycEntity() {}
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      public CycEntity getRef() {
+        return ref;
+      }
+
+      public void setRef(final CycEntity ref) {
+        this.ref = ref;
+      }
+    }
+
+    static final class CycDto {
+
+      private String name;
+      private CycDto ref;
+
+      public CycDto() {}
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      public CycDto getRef() {
+        return ref;
+      }
+
+      public void setRef(final CycDto ref) {
+        this.ref = ref;
+      }
+    }
+
+    @Test
+    @DisplayName("Value-level cycle in a bean graph severs at second encounter — no StackOverflowError")
+    void valueCycleSeversCleanly() {
+      // alice.ref → bob; bob.ref → alice. This is the literal-value cycle shape that bidirectional
+      // Hibernate associations produce (entity.parent + entity.children pointing at the parent).
+      // Before the per-traversal IdentityHashMap guard in DeepMap.lazyCacheIso, mapper.forward
+      // would StackOverflow walking ref → ref → ref → ... indefinitely.
+      final var mapper = Telescope.mapper(CycEntity.class, CycDto.class);
+      final var alice = new CycEntity();
+      alice.setName("alice");
+      final var bob = new CycEntity();
+      bob.setName("bob");
+      alice.setRef(bob);
+      bob.setRef(alice);
+
+      final var dto = mapper.forward(alice);
+      assertEquals("alice", dto.getName());
+      assertEquals("bob", dto.getRef().getName());
+      assertEquals("alice", dto.getRef().getRef().getName());
+      // Cycle severed on revisit — the inner alice→bob→alice→bob link collapses to null instead
+      // of recursing forever. The guard fires inside lazyCacheIso (the per-field recursive Iso);
+      // the top-level mapper.forward call doesn't go through the guard, so the cycle is finite
+      // but not the shortest possible (severing happens at the 4th level, not the 2nd). The graph
+      // is finite by construction; structure is lost on the second occurrence — acknowledged
+      // trade-off documented in the cycle guard's javadoc.
+      assertNull(dto.getRef().getRef().getRef(), "fourth encounter (bob revisited) should be severed");
+    }
 
     @Test
     @DisplayName("Node containing Optional<Node> resolves and round-trips")

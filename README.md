@@ -1,14 +1,17 @@
 <p align="center">
-  <img src="img/logo.png" alt="telescope — deep-copy DSL for Java records and POJOs" width="320" />
+  <img src="img/logo.png" alt="telescope — optics-based DSL for Java records and POJOs" width="320" />
 </p>
 
 # telescope
 
-**Deep-copy DSL for Java records and POJOs.**
+**Optics-based DSL for Java records and POJOs.**
 
-One type. No category-theory jargon. Update fields deep inside immutable records — through lists, sets, maps, optionals,
-and sealed-type variants — without writing copy constructors by hand. Got POJOs? Navigate them natively or bridge them
-to records; the same DSL applies.
+One type drives deep navigation, immutable update, bidirectional mapping, and effectful update across records, plain
+POJOs, and Lombok `@Data` classes — no category-theory jargon, no hand-written copy constructors. Reach fields nested
+through lists, sets, maps, optionals, and sealed-type variants in one chain. Skip codegen for the runtime path, or add
+`@Focus` / `@BeanFocus` / `@Bridge` annotations for compile-time-bound navigators with deep recursion through
+containers. Drop-in `telescope-spring-boot-starter` for autoconfig + a typed `Mapper<A,B>` bean registry — one
+dependency, zero wiring.
 
 [![JVM 25+](https://img.shields.io/badge/JVM-25%2B-brightgreen.svg?&logo=openjdk)](https://openjdk.org/projects/jdk/25/)
 [![Build](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml/badge.svg)](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml)

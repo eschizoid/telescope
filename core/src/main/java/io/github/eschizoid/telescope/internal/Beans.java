@@ -86,6 +86,50 @@ public final class Beans {
   };
 
   /**
+   * The {@code org.hibernate.proxy.HibernateProxy} interface, or {@code null} when Hibernate isn't
+   * on the classpath. Resolved once via reflection so the {@code :core} module stays free of any
+   * Hibernate dependency.
+   */
+  private static final Class<?> HIBERNATE_PROXY = loadOptionalClass("org.hibernate.proxy.HibernateProxy");
+
+  private static Class<?> loadOptionalClass(final String fqn) {
+    try {
+      return Class.forName(fqn, false, Beans.class.getClassLoader());
+    } catch (final ClassNotFoundException e) {
+      return null;
+    }
+  }
+
+  /**
+   * Return the persistent (declared-by-the-user) class of {@code pojo}, unwrapping a {@code
+   * HibernateProxy} when one is present. Used as the cache key for {@link #GETTER_INVOKERS} so a
+   * LAZY-fetched entity routed through telescope's bean reflection doesn't accumulate one cache
+   * entry per Hibernate-generated proxy subclass (and one corresponding {@link
+   * io.github.eschizoid.telescope.internal.MetadataHolderProbe} miss). Falls through to {@code
+   * pojo.getClass()} when Hibernate isn't on the classpath or the reflective unwrap fails.
+   *
+   * <p>The unwrap calls {@code HibernateProxy#getHibernateLazyInitializer().getPersistentClass()},
+   * neither of which initializes the proxy — so this is safe to call before the entity is actually
+   * read, the same shape Hibernate's own {@code
+   * HibernateProxyHelper.getClassWithoutInitializingProxy} follows.
+   */
+  public static Class<?> persistentClassOf(final Object pojo) {
+    if (pojo == null) return null;
+    final var raw = pojo.getClass();
+    if (HIBERNATE_PROXY == null || !HIBERNATE_PROXY.isInstance(pojo)) return raw;
+    try {
+      final var getInitializer = HIBERNATE_PROXY.getMethod("getHibernateLazyInitializer");
+      final var initializer = getInitializer.invoke(pojo);
+      if (initializer == null) return raw;
+      final var getPersistentClass = initializer.getClass().getMethod("getPersistentClass");
+      final var persistentClass = (Class<?>) getPersistentClass.invoke(initializer);
+      return persistentClass != null ? persistentClass : raw;
+    } catch (final ReflectiveOperationException e) {
+      return raw;
+    }
+  }
+
+  /**
    * The lattice-primitive form of "read one bean property" — a {@link Getter Getter&lt;P,
    * Object&gt;} over the {@code getX()} / {@code isX()} accessor. The underlying read is the {@link
    * LambdaMetafactory}-built {@link Function} from the {@link #GETTER_INVOKERS} ClassValue cache
@@ -123,9 +167,12 @@ public final class Beans {
    * }</pre>
    */
   public static Object readProperty(final Object pojo, final String name) {
-    final var reader = GETTER_INVOKERS.get(pojo.getClass()).get(name);
+    // Unwrap HibernateProxy (when present) so a LAZY-fetched entity routes through the
+    // persistent class's cache entry, not a per-proxy-subclass one. See persistentClassOf.
+    final var beanClass = persistentClassOf(pojo);
+    final var reader = GETTER_INVOKERS.get(beanClass).get(name);
     if (reader == null) throw new IllegalArgumentException(
-      "No getter for property '" + name + "' on " + pojo.getClass().getName()
+      "No getter for property '" + name + "' on " + beanClass.getName()
     );
     return reader.apply(pojo);
   }

@@ -257,6 +257,35 @@ class FocusProcessorTest {
     }
 
     @Test
+    @DisplayName("a Set<Scalar> component compiles — Set import is present in the emitted Step preamble")
+    void setOfScalarsCompiles() {
+      // Regression for the codegen "missing java.util.Set import" bug. Before the fix,
+      // any @Focus class with a Set<...> component failed compilation because the eager
+      // import block listed List/Map/Optional but not Set, while shortenStdImports collapsed
+      // `java.util.Set` to bare `Set` in the generated forwarder bodies. Now the import is
+      // emitted alongside the other java.util.* imports.
+      final var compilation = compile(
+        source(
+          "demo.Profile",
+          """
+          package demo;
+          import java.util.Set;
+          import io.github.eschizoid.telescope.annotations.Focus;
+          @Focus
+          public record Profile(String id, Set<String> tags) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var step = compilation.generated().get("demo.ProfileTagsStep");
+      assertNotNull(step, () -> "ProfileTagsStep not generated; saw " + compilation.generated().keySet());
+      assertTrue(step.contains("import java.util.Set;"), () -> "Step missing java.util.Set import:\n" + step);
+      // Bare Set<...> usage is what `shortenStdImports` produces — must have the import.
+      assertTrue(step.contains("Set<String>"), step);
+    }
+
+    @Test
     @DisplayName("Bridge hop: a record with @Focus + @Bridge gets as<Target>() returning the target's Path")
     void bridgeHopReturnsTargetPath() {
       final var compilation = compile(
