@@ -1,7 +1,6 @@
-package io.github.eschizoid.telescope.mapping;
+package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.Telescope.Accessor;
-import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 
@@ -43,7 +42,7 @@ record Via<A, B>(
 
   /**
    * The element-level {@link Iso} the user-supplied mapper produces. {@link
-   * io.github.eschizoid.telescope.mapping.DeepMap DeepMap} consumes this and, when the row's
+   * io.github.eschizoid.telescope.DeepMap DeepMap} consumes this and, when the row's
    * source/target field types are container shapes matching the mapper's element classes, lifts the
    * Iso through the matching container (list / set / optional / map values).
    */

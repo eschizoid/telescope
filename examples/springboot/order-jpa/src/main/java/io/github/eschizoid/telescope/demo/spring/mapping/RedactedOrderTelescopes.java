@@ -34,7 +34,7 @@ public final class RedactedOrderTelescopes {
    */
   public static final Telescope<Order, RedactedOrder> REDACT = Telescope.from(Order.class)
     .to(RedactedOrder.class)
-    .using(RedactedOrderTelescopes::redact, redacted -> {
+    .using(RedactedOrderTelescopes::redact, _ -> {
       throw new UnsupportedOperationException(BACKWARD_MESSAGE);
     });
 
@@ -59,6 +59,6 @@ public final class RedactedOrderTelescopes {
 
   static String redactCity(final String city) {
     if (city == null || city.isEmpty()) return city;
-    return city.substring(0, 1) + "***";
+    return city.charAt(0) + "***";
   }
 }

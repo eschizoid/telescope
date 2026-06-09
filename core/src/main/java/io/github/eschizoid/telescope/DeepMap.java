@@ -1,7 +1,5 @@
-package io.github.eschizoid.telescope.mapping;
+package io.github.eschizoid.telescope;
 
-import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
@@ -57,14 +55,13 @@ public final class DeepMap {
 
   private DeepMap() {}
 
-  // ---------- Public entries (called from Telescope.map / Telescope.mapper) ----------
+  // ---------- Package-private entries (called from Telescope.map / Telescope.mapper) ----------
 
-  @SuppressWarnings("exports") // Intentional: Iso is module-internal; consumed only by Telescope.
-  public static <A, B> Iso<A, B> resolve(final Class<A> source, final Class<B> target, final MapStep[] steps) {
+  static <A, B> Iso<A, B> resolve(final Class<A> source, final Class<B> target, final MapStep[] steps) {
     return resolution(source, target, steps).iso;
   }
 
-  public static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {
+  static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {
     final var r = resolution(source, target, steps);
     return new Mapper<>(r.iso, source, target, r.patchTable);
   }
@@ -144,21 +141,20 @@ public final class DeepMap {
   private static WriteHint.WriteStrategy extractDefaultStrategy(final List<WriteHint<?>> hints) {
     WriteHint.WriteStrategy defaultStrategy = null;
     for (final var hint : hints) {
-      if (!(hint instanceof WriteHint.DefaultWriteHint d)) continue;
+      if (!(hint instanceof WriteHint.DefaultWriteHint(WriteHint.WriteStrategy strat))) continue;
       if (defaultStrategy != null) throw new IllegalArgumentException(
         "Duplicate writeBeans(...) default — at most one default write strategy per Telescope.map(...) call."
       );
-      defaultStrategy = d.strategy();
+      defaultStrategy = strat;
     }
     return defaultStrategy;
   }
 
-  @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Beans.BeanWriter<?> writerFor(final WriteHint<?> hint) {
     // Each *Writer constructor throws IllegalStateException with a writeBean(class, STRATEGY)-
     // shaped message when its prerequisite is missing, so no rewrap is needed — the underlying
     // exception already names the actual API the user called.
-    final var cls = (Class) hint.targetClass();
+    final Class<?> cls = hint.targetClass();
     return writerFor(cls, hint.strategy());
   }
 

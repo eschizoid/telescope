@@ -1,7 +1,5 @@
 package io.github.eschizoid.telescope;
 
-import io.github.eschizoid.telescope.conversion.From;
-import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
@@ -15,8 +13,6 @@ import io.github.eschizoid.telescope.internal.optics.instances.CompletableFuture
 import io.github.eschizoid.telescope.internal.optics.instances.EitherK;
 import io.github.eschizoid.telescope.internal.optics.instances.OptionalK;
 import io.github.eschizoid.telescope.internal.optics.instances.ValidatedK;
-import io.github.eschizoid.telescope.mapping.DeepMap;
-import io.github.eschizoid.telescope.mapping.MapStep;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
@@ -135,19 +131,13 @@ public sealed class Telescope<
   }
 
   /**
-   * <b>Module-internal seam — NOT public API.</b> Wrap an internal optic ({@link Traversal} or any
-   * of its subtypes — {@link Iso}, {@link Lens}, {@link Prism}) as a {@code Telescope<S, A>}.
-   *
-   * <p>This method is declared {@code public} purely so the {@code conversion} and {@code mapping}
-   * sub-packages — and the {@code <X>Path<R>} navigators emitted by the codegen processors — can
-   * construct {@code Telescope} instances from internally-composed optics. The {@link Traversal}
-   * type lives in the unexported {@code internal.optics} package, so module consumers cannot supply
-   * a real argument. Treat this signature as part of the module's internal contract: it may change
-   * or disappear without a deprecation cycle. External code must use the documented entry points
-   * ({@link #of(Class)}, {@link #ofBean(Class)}, {@link #lens}, {@link #from(Class)}, etc.).
+   * Wrap an internal optic ({@link Traversal} or any of its subtypes — {@link Iso}, {@link Lens},
+   * {@link Prism}) as a {@code Telescope<S, A>}. Package-private: same-package callers ({@link
+   * Mapper#asTelescope}, {@link To#using}, {@link DeepMap}) construct telescopes from internally-
+   * composed optics. External code uses the documented entry points ({@link #of(Class)}, {@link
+   * #ofBean(Class)}, {@link #lens}, {@link #from(Class)}).
    */
-  @SuppressWarnings("exports") // Intentional: Traversal is module-internal; users can't construct one.
-  public static <S, A> Telescope<S, A> wrap(final Traversal<S, A> optic) {
+  static <S, A> Telescope<S, A> wrap(final Traversal<S, A> optic) {
     return new Telescope<>(optic);
   }
 
@@ -162,43 +152,36 @@ public sealed class Telescope<
    * final Telescope<Company, Department> elements = Telescope.asList(built).each();
    * }</pre>
    */
-  @SuppressWarnings("exports")
   public static <S, X> ListPath<S, X> asList(final Telescope<S, List<X>> path) {
     return new ListPath<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Set&lt;X&gt;} paths. */
-  @SuppressWarnings("exports")
   public static <S, X> SetPath<S, X> asSet(final Telescope<S, Set<X>> path) {
     return new SetPath<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Map&lt;K, V&gt;} paths. */
-  @SuppressWarnings("exports")
   public static <S, K, V> MapPath<S, K, V> asMap(final Telescope<S, Map<K, V>> path) {
     return new MapPath<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Optional&lt;X&gt;} paths. */
-  @SuppressWarnings("exports")
   public static <S, X> OptionalPath<S, X> asOptional(final Telescope<S, Optional<X>> path) {
     return new OptionalPath<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /**
-   * <b>Module-internal seam — NOT public API.</b> Expose the underlying {@link Traversal} optic so
-   * code inside the module (e.g. the {@code conversion} sub-package) can downcast-check (e.g.
-   * {@code .optic() instanceof Iso<?, ?>}) when unwrapping a bidirectional bridge.
-   *
-   * <p>The returned value's type lives in the unexported {@code internal.optics} package, so module
-   * consumers cannot reference {@link Traversal} at compile time. This method pairs with {@link
-   * #wrap(Traversal)} for code inside the module; it may change or disappear without a deprecation
-   * cycle. External code should use the documented terminal operations ({@link #read}, {@link
-   * #find}, {@link #toList}, {@link #set}, {@link #update}, etc.) instead.
+   * Expose the underlying optic as an opaque {@code Object}. Internal-only seam — {@code
+   * internal.MetadataHolderProbe} casts the result to {@code Lens} when recovering a codegen-
+   * emitted holder constant, and the same-package bridge code casts to {@code Iso} when unwrapping
+   * a bidirectional conversion. The {@code Object} return type keeps the {@code internal.optics}
+   * lattice types out of this class's public signature — external callers get an opaque value with
+   * no usable shape since the cast targets ({@code Lens} / {@code Iso} / {@code Traversal}) are
+   * not exported by the module.
    */
-  @SuppressWarnings("exports") // Intentional: Traversal is module-internal; pairs with wrap().
-  public Traversal<S, A> optic() {
-    return optic;
+  public static Object opticOf(final Telescope<?, ?> t) {
+    return t.optic;
   }
 
   /**
@@ -273,7 +256,7 @@ public sealed class Telescope<
    * that is always safe; with mutable POJOs the new and old object share those sub-objects, so
    * treat the shared parts as effectively immutable (don't mutate them afterward). For
    * POJO&harr;record or POJO&harr;POJO <em>conversion</em>, use {@link #map(Class, Class,
-   * io.github.eschizoid.telescope.mapping.MapStep...)} — the same deep recursive factory handles
+   * io.github.eschizoid.telescope.MapStep...)} — the same deep recursive factory handles
    * both kinds and any cross-paradigm mix.
    */
   public static <P> Telescope<P, P> ofBean(final Class<P> pojoClass) {
@@ -330,10 +313,10 @@ public sealed class Telescope<
    *
    * <p>For a field-by-field declarative mapping between two records or POJOs (no hand-written
    * conversion functions), use {@link #map(Class, Class,
-   * io.github.eschizoid.telescope.mapping.MapStep...)} — it handles both record↔record, POJO↔POJO,
+   * io.github.eschizoid.telescope.MapStep...)} — it handles both record↔record, POJO↔POJO,
    * and any cross-paradigm mix at any depth.
    *
-   * @see #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)
+   * @see #map(Class, Class, io.github.eschizoid.telescope.MapStep...)
    */
   public static <A> From<A> from(final Class<A> source) {
     return new From<>();
@@ -352,7 +335,7 @@ public sealed class Telescope<
    * User↔UserDto encounter in the tree.
    *
    * <pre>{@code
-   * import static io.github.eschizoid.telescope.mapping.Mapping.to;
+   * import static io.github.eschizoid.telescope.Mapping.to;
    *
    * final Telescope<CompanyEntity, CompanyDto> companyMapper = Telescope.map(
    *     CompanyEntity.class, CompanyDto.class,
@@ -374,15 +357,15 @@ public sealed class Telescope<
    * <p><b>Row kinds accepted.</b>
    *
    * <ul>
-   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#to(Accessor, Accessor) to(src, tgt)}
+   *   <li>{@link io.github.eschizoid.telescope.Mapping#to(Accessor, Accessor) to(src, tgt)}
    *       — same-typed rename
-   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#to(Accessor, Accessor,
+   *   <li>{@link io.github.eschizoid.telescope.Mapping#to(Accessor, Accessor,
    *       java.util.function.Function, java.util.function.Function) to(src, tgt, fwd, bwd)} — typed
    *       transform
-   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#via(Accessor, Accessor, Mapper)
+   *   <li>{@link io.github.eschizoid.telescope.Mapping#via(Accessor, Accessor, Mapper)
    *       via(src, tgt, mapper)} — nested mapper
-   *   <li>{@link io.github.eschizoid.telescope.mapping.WriteHint#writeBean(Class,
-   *       io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy) writeBean(target,
+   *   <li>{@link io.github.eschizoid.telescope.WriteHint#writeBean(Class,
+   *       io.github.eschizoid.telescope.WriteHint.WriteStrategy) writeBean(target,
    *       strategy)} — per-target write-strategy override (e.g. force {@code CONSTRUCTOR} for an
    *       immutable all-args-only POJO that {@code Beans.autoWriter} refuses)
    * </ul>
@@ -393,8 +376,8 @@ public sealed class Telescope<
    * @param <A> the source root type
    * @param <B> the target root type
    * @see #mapper(Class, Class, MapStep...)
-   * @see io.github.eschizoid.telescope.mapping.Mapping
-   * @see io.github.eschizoid.telescope.mapping.WriteHint
+   * @see io.github.eschizoid.telescope.Mapping
+   * @see io.github.eschizoid.telescope.WriteHint
    * @see DeepMap
    */
   // No @SafeVarargs needed: MapStep is reifiable (no type parameter), so this varargs method does
@@ -407,7 +390,7 @@ public sealed class Telescope<
    * {@link Mapper} sibling of {@link #map(Class, Class, MapStep...)} — same deep recursion, but
    * returns a {@code Mapper<A, B>} (exposes {@link Mapper#patch} for sparse overlays at the top
    * level and is nestable in another mapping via {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#via(Accessor, Accessor, Mapper)}).
+   * io.github.eschizoid.telescope.Mapping#via(Accessor, Accessor, Mapper)}).
    *
    * @see #map(Class, Class, MapStep...)
    */
@@ -474,7 +457,7 @@ public sealed class Telescope<
    *
    * <p>Named {@code mapField} (rather than {@code map}) to disambiguate from the sibling static
    * deep-conversion factory {@link #map(Class, Class,
-   * io.github.eschizoid.telescope.mapping.MapStep...)} — those do conceptually different things and
+   * io.github.eschizoid.telescope.MapStep...)} — those do conceptually different things and
    * share the same verb otherwise.
    */
   public <K, V> MapPath<S, K, V> mapField(final Accessor<A, Map<K, V>> getter) {
@@ -633,7 +616,7 @@ public sealed class Telescope<
   /**
    * Compose this telescope with another via the lattice's {@code .then}. Lets you build a path in
    * pieces and stitch them together, and is how reusable conversions ({@link #from}, {@link
-   * #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)}) get threaded into a
+   * #map(Class, Class, io.github.eschizoid.telescope.MapStep...)}) get threaded into a
    * longer path.
    *
    * <pre>{@code
@@ -1140,8 +1123,7 @@ public sealed class Telescope<
    * accessor-based navigation method so the dispatch survives paradigm hops via {@link
    * #then(Telescope)} and sealed-type narrowing via {@link #as(Class)}.
    */
-  @SuppressWarnings("unchecked")
-  private <A, B> Lens<A, B> lensForAccessor(final Accessor<A, ?> getter) {
+  private <X, B> Lens<X, B> lensForAccessor(final Accessor<X, ?> getter) {
     final Class<?> declaringClass = LambdaIntrospection.implClassOf(getter);
     final FieldOptics dispatch =
       declaringClass != null && declaringClass.isRecord() ? RecordFieldOptics.INSTANCE : BeanFieldOptics.INSTANCE;

@@ -129,7 +129,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
     // value (and vice versa). Per-field decisions can also enqueue new TypePairs to emit.
-    final var fieldPlans = planFields(source, target, sourceFields, targetFields, pending, seen, userDeclared, pkg);
+    final var fieldPlans = planFields(source, target, sourceFields, targetFields, pending, seen, userDeclared);
     if (fieldPlans == null) return;
 
     final Function<String, String> readForward = name ->
@@ -242,10 +242,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!(el instanceof TypeElement te)) return null;
       final var args = dt.getTypeArguments();
       return switch (te.getQualifiedName().toString()) {
-        case "java.util.List" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.LIST, args.get(0), null) : null;
-        case "java.util.Set" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.SET, args.get(0), null) : null;
+        case "java.util.List" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.LIST, args.getFirst(), null) : null;
+        case "java.util.Set" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.SET, args.getFirst(), null) : null;
         case "java.util.Optional" -> args.size() == 1
-          ? new ContainerShape(FieldPlan.Kind.OPTIONAL, args.get(0), null)
+          ? new ContainerShape(FieldPlan.Kind.OPTIONAL, args.getFirst(), null)
           : null;
         case "java.util.Map" -> args.size() == 2
           ? new ContainerShape(FieldPlan.Kind.MAP_VALUES, args.get(1), args.get(0))
@@ -268,8 +268,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> targetFields,
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
-    final Set<TypePair> userDeclared,
-    final String pkg
+    final Set<TypePair> userDeclared
   ) {
     final var plans = new java.util.LinkedHashMap<String, FieldPlan>();
     for (final var sf : sourceFields) {
@@ -520,11 +519,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (kind != ElementKind.RECORD && kind != ElementKind.CLASS) return false;
     // Filter out boxed scalars / String / common JDK types we don't want to recurse into.
     final var fq = te.getQualifiedName().toString();
-    if (fq.startsWith("java.lang.")) return false;
-    if (fq.startsWith("java.time.")) return false;
-    if (fq.startsWith("java.util.")) return false;
-    if (fq.startsWith("java.math.")) return false;
-    return true;
+    return (
+      !fq.startsWith("java.lang.") &&
+      !fq.startsWith("java.time.") &&
+      !fq.startsWith("java.util.") &&
+      !fq.startsWith("java.math.")
+    );
   }
 
   // Read field `f` from `var`: `var.f()` for a record, `var.getF()` / `var.isF()` for a POJO.

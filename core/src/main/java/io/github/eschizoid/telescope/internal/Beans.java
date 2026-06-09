@@ -189,7 +189,7 @@ public final class Beans {
 
   /**
    * The generic return type of {@code beanClass}'s getter for {@code name} (used by {@link
-   * io.github.eschizoid.telescope.mapping.DeepMap DeepMap} for container shape detection — {@code
+   * io.github.eschizoid.telescope.DeepMap DeepMap} for container shape detection — {@code
    * List<X>}, {@code Map<K, V>}, {@code Optional<X>}).
    *
    * @throws IllegalArgumentException if no getter is found

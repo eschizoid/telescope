@@ -1,13 +1,13 @@
 package io.github.eschizoid.telescope.demo.spring.mapping;
 
-import static io.github.eschizoid.telescope.mapping.Mapping.drop;
-import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.Mapping.via;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.Mapping.drop;
+import static io.github.eschizoid.telescope.Mapping.to;
+import static io.github.eschizoid.telescope.Mapping.via;
+import static io.github.eschizoid.telescope.WriteHint.WriteStrategy.SETTERS;
+import static io.github.eschizoid.telescope.WriteHint.writeBeans;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.Customer;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
@@ -25,7 +25,7 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Wires the top-level {@code Order ↔ OrderEntity} mapper. All four record↔entity type pairs (Order,
  * Customer, LineItem, Address) live under one {@link Telescope#mapper(Class, Class,
- * io.github.eschizoid.telescope.mapping.MapStep...)} call — the deep-mapping engine groups rows by
+ * io.github.eschizoid.telescope.MapStep...)} call — the deep-mapping engine groups rows by
  * {@code (sourceClass, targetClass)} pair, so a row written here applies wherever that pair shows
  * up in the recursive walk (top-level for Order, depth-1 for Customer, depth-1 for the shipping and
  * billing addresses, depth-2 inside the list of line items).
@@ -39,7 +39,7 @@ import org.springframework.context.annotation.Configuration;
  * <h2>Public-row cheat sheet — when to reach for each one</h2>
  *
  * <pre>{@code
- * // ── Mapping rows (io.github.eschizoid.telescope.mapping.Mapping) ────────────────
+ * // ── Mapping rows (io.github.eschizoid.telescope.Mapping) ────────────────
  * //
  * //   (no row)                         same-name + same-type pair → auto-inferred,
  * //                                    every Address/Customer same-name field below.
@@ -59,7 +59,7 @@ import org.springframework.context.annotation.Configuration;
  * //                                      container shape (List / Set / Optional / Map values)
  * //                                      and lifts the element mapper through it.
  * //
- * // ── WriteHint rows (io.github.eschizoid.telescope.mapping.WriteHint) ────────────
+ * // ── WriteHint rows (io.github.eschizoid.telescope.WriteHint) ────────────
  * //
  * //   writeBeans(STRATEGY)             default write strategy applied to every bean target
  * //                                    the recursion touches that lacks a more specific hint.
@@ -95,7 +95,7 @@ public class OrderMappers {
   /**
    * A reusable {@code Customer ↔ CustomerEntity} mapper, broken out so {@link #orderMapper(Mapper,
    * Mapper) orderMapper} can drop it in via {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#via(
+   * io.github.eschizoid.telescope.Mapping#via(
    * io.github.eschizoid.telescope.Telescope.Accessor,
    * io.github.eschizoid.telescope.Telescope.Accessor, Mapper) via} as a <em>scalar</em> nested
    * mapper (one-to-one record-pair slot, no container lift). Same shape as the {@link

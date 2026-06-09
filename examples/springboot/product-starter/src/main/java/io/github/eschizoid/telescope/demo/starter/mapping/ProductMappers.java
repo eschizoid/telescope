@@ -1,12 +1,12 @@
 package io.github.eschizoid.telescope.demo.starter.mapping;
 
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.WriteHint.WriteStrategy.CONSTRUCTOR;
+import static io.github.eschizoid.telescope.WriteHint.WriteStrategy.SETTERS;
+import static io.github.eschizoid.telescope.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.WriteHint.writeBeans;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.Mapper;
 import io.github.eschizoid.telescope.demo.starter.domain.Product;
 import io.github.eschizoid.telescope.demo.starter.partner.ProductDto;
 import io.github.eschizoid.telescope.demo.starter.partner.ProductManifest;

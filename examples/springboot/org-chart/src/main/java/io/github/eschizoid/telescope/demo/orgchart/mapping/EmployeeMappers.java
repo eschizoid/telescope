@@ -1,10 +1,10 @@
 package io.github.eschizoid.telescope.demo.orgchart.mapping;
 
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.WriteHint.WriteStrategy.SETTERS;
+import static io.github.eschizoid.telescope.WriteHint.writeBeans;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.Mapper;
 import io.github.eschizoid.telescope.demo.orgchart.domain.Employee;
 import io.github.eschizoid.telescope.demo.orgchart.persistence.EmployeeEntity;
 import org.springframework.context.annotation.Bean;
@@ -12,9 +12,9 @@ import org.springframework.context.annotation.Configuration;
 
 /**
  * Wires a single {@code Mapper<Employee, EmployeeEntity>} via {@link Telescope#mapper(Class, Class,
- * io.github.eschizoid.telescope.mapping.MapStep...)}. All fields are same-name + same-shape (id,
+ * io.github.eschizoid.telescope.MapStep...)}. All fields are same-name + same-shape (id,
  * name, manager, reports) — so this is a pure auto-inference test of {@link
- * io.github.eschizoid.telescope.mapping.DeepMap}'s TypePair cycle cache against a self-referencing
+ * io.github.eschizoid.telescope.DeepMap}'s TypePair cycle cache against a self-referencing
  * pair {@code (Employee, EmployeeEntity)}.
  */
 @Configuration

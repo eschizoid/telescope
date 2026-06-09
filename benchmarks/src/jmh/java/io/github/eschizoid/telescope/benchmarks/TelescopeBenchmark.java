@@ -255,7 +255,7 @@ public class TelescopeBenchmark {
     userMapper = Telescope.map(
       UserEntity.class,
       UserDto.class,
-      io.github.eschizoid.telescope.mapping.Mapping.to(UserEntity::name, UserDto::fullName)
+      io.github.eschizoid.telescope.Mapping.to(UserEntity::name, UserDto::fullName)
     );
 
     // POJO mirror of the record tree.

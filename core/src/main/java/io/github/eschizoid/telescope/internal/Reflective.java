@@ -9,7 +9,7 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
- * The uniform reflective dispatch that {@link io.github.eschizoid.telescope.mapping.DeepMap
+ * The uniform reflective dispatch that {@link io.github.eschizoid.telescope.DeepMap
  * DeepMap} drives — abstracts over "this side is a record" vs "this side is a bean" so the
  * recursive resolver doesn't have to know. Per-side dispatch via {@link #of(Class)} lets a single
  * deep-mapping call mix and match records and POJOs at any depth: the source side of a given pair
@@ -32,7 +32,7 @@ import java.util.function.Function;
  *       no-arg ctor) are not supported by the auto path — use a record, or add a no-arg ctor.
  * </ul>
  *
- * <p>The lattice-first principle holds: {@link io.github.eschizoid.telescope.mapping.DeepMap
+ * <p>The lattice-first principle holds: {@link io.github.eschizoid.telescope.DeepMap
  * DeepMap} composes {@link io.github.eschizoid.telescope.internal.optics.Iso Iso}s; this record
  * only handles "how do I read one component value" and "how do I rebuild one object from a
  * name-keyed function." No bidirectional plumbing lives here.
@@ -71,7 +71,7 @@ public record Reflective(
   /**
    * Bean reflective that consults {@code hints} before falling back to {@code defaultWriterFactory}
    * (when non-null) and ultimately to {@link Beans#autoWriter}. Used by {@link
-   * io.github.eschizoid.telescope.mapping.DeepMap DeepMap} when the user supplies {@code
+   * io.github.eschizoid.telescope.DeepMap DeepMap} when the user supplies {@code
    * writeBean(targetClass, strategy)} rows and/or a single {@code writeBeans(strategy)} default —
    * the per-class hint map is keyed on target class and provides a pre-instantiated {@link
    * Beans.BeanWriter}; the default factory is consulted lazily on first encounter with each
@@ -128,7 +128,7 @@ public record Reflective(
    *
    * <p>This is the lattice-routed shape of "rebuild an instance from named values" and "decompose
    * an instance into named values" — the two operations {@link
-   * io.github.eschizoid.telescope.mapping.DeepMap DeepMap} previously performed inline in the body
+   * io.github.eschizoid.telescope.DeepMap DeepMap} previously performed inline in the body
    * of {@code assembleIso}. Lifting them to an {@link Iso} lets {@code assembleIso} express the
    * per-pair {@code Iso<S, T>} as the composition {@code
    * srcReader.reverse().then(middle).then(tgtBuilder)} — pure lattice {@code .then()}, no manual
@@ -226,8 +226,8 @@ public record Reflective(
     // Resolution order: per-class hint → default-strategy factory → Beans.autoWriter. Each tier is
     // consulted lazily so a misconfigured fallback (e.g., writeBeans(BUILDER) on a target with no
     // builder) only throws when that target is actually constructed — never pre-emptively.
-    Beans.BeanWriter writer = (Beans.BeanWriter) hints.get(cls);
-    if (writer == null && defaultWriterFactory != null) writer = (Beans.BeanWriter) defaultWriterFactory.apply(cls);
+    Beans.BeanWriter writer = hints.get(cls);
+    if (writer == null && defaultWriterFactory != null) writer = defaultWriterFactory.apply(cls);
     if (writer == null) writer = Beans.autoWriter((Class) cls);
     return writer.construct(Beans.propertyNames(cls), valueByName);
   }

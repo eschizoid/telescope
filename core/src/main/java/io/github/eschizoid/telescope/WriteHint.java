@@ -1,6 +1,5 @@
-package io.github.eschizoid.telescope.mapping;
+package io.github.eschizoid.telescope;
 
-import io.github.eschizoid.telescope.Telescope;
 
 /**
  * Per-target write-strategy override consumed by {@link Telescope#map(Class, Class, MapStep...)}.
@@ -13,9 +12,9 @@ import io.github.eschizoid.telescope.Telescope;
  * a builder).
  *
  * <pre>{@code
- * import static io.github.eschizoid.telescope.mapping.Mapping.to;
- * import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
- * import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
+ * import static io.github.eschizoid.telescope.Mapping.to;
+ * import static io.github.eschizoid.telescope.WriteHint.writeBean;
+ * import static io.github.eschizoid.telescope.WriteHint.WriteStrategy.CONSTRUCTOR;
  *
  * final Telescope<OrderRecord, OrderPojo> conv = Telescope.map(
  *     OrderRecord.class, OrderPojo.class,

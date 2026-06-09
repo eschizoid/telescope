@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.mapping;
+package io.github.eschizoid.telescope;
 
 /**
  * Package-private sibling of {@link Mapping}. Carries the {@code SerializedLambda} recovery

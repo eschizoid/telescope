@@ -20,16 +20,16 @@
  *       classes via the {@code telescope-lombok} module), {@code @Bridge} (compile-checked
  *       cross-paradigm conversion).
  *   <li>{@link io.github.eschizoid.telescope.conversion} — the {@link
- *       io.github.eschizoid.telescope.conversion.Mapper} type: bidirectional graph mapper produced
+ *       io.github.eschizoid.telescope.Mapper} type: bidirectional graph mapper produced
  *       by {@link io.github.eschizoid.telescope.Telescope#mapper(Class, Class,
- *       io.github.eschizoid.telescope.mapping.MapStep...) Telescope.mapper}, with {@code forward} /
+ *       io.github.eschizoid.telescope.MapStep...) Telescope.mapper}, with {@code forward} /
  *       {@code backward} / {@code patch} / {@code asTelescope} / container-lift surface.
  *   <li>{@link io.github.eschizoid.telescope.mapping} — the row-builder DSL the deep-mapping
- *       factory accepts as varargs: {@link io.github.eschizoid.telescope.mapping.Mapping#to to}
- *       (rename / typed transform), {@link io.github.eschizoid.telescope.mapping.Mapping#via via}
+ *       factory accepts as varargs: {@link io.github.eschizoid.telescope.Mapping#to to}
+ *       (rename / typed transform), {@link io.github.eschizoid.telescope.Mapping#via via}
  *       (nested mapper, auto-lifted through containers), {@link
- *       io.github.eschizoid.telescope.mapping.WriteHint#writeBean writeBean} / {@link
- *       io.github.eschizoid.telescope.mapping.WriteHint#writeBeans writeBeans} (per-target /
+ *       io.github.eschizoid.telescope.WriteHint#writeBean writeBean} / {@link
+ *       io.github.eschizoid.telescope.WriteHint#writeBeans writeBeans} (per-target /
  *       default bean write-strategy hints).
  * </ul>
  *
@@ -48,6 +48,4 @@
 module io.github.eschizoid.telescope {
   exports io.github.eschizoid.telescope;
   exports io.github.eschizoid.telescope.annotations;
-  exports io.github.eschizoid.telescope.conversion;
-  exports io.github.eschizoid.telescope.mapping;
 }

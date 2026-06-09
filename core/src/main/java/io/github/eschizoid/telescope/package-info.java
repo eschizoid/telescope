@@ -3,7 +3,7 @@
  * lifting through effects over Java records and POJOs. One {@link
  * io.github.eschizoid.telescope.Telescope Telescope&lt;S, A&gt;} type carries the navigation path
  * and every terminal operation (read / write / single-shot effects / multi-edit / deep mapping);
- * complements {@link io.github.eschizoid.telescope.conversion.Mapper Mapper&lt;A, B&gt;} from
+ * complements {@link io.github.eschizoid.telescope.Mapper Mapper&lt;A, B&gt;} from
  * {@link io.github.eschizoid.telescope.conversion} for the cases that benefit from sparse-overlay
  * patching or explicit container lifting.
  *
@@ -46,7 +46,7 @@
  * <p>{@code .field(...)} navigation rebuilds via a record's canonical constructor or a bean's
  * auto-detected write strategy. The deep recursive mapping factory {@link
  * io.github.eschizoid.telescope.Telescope#map(Class, Class,
- * io.github.eschizoid.telescope.mapping.MapStep...)} handles record↔record, POJO↔POJO, and any
+ * io.github.eschizoid.telescope.MapStep...)} handles record↔record, POJO↔POJO, and any
  * cross-paradigm mix at any depth — the per-side {@code Reflective} is picked independently from
  * each class. The annotation {@link io.github.eschizoid.telescope.annotations.Bridge} is the
  * reflection-free, compile-checked counterpart (annotate the record to have the bridge generated

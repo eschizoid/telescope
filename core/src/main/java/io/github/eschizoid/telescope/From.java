@@ -1,6 +1,5 @@
-package io.github.eschizoid.telescope.conversion;
+package io.github.eschizoid.telescope;
 
-import io.github.eschizoid.telescope.Telescope;
 
 /**
  * Intermediate of {@link Telescope#from(Class)} — call {@link #to(Class)} to bind the target type

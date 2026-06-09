@@ -1,6 +1,6 @@
 package io.github.eschizoid.telescope.spring;
 
-import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.Mapper;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;

@@ -1,6 +1,5 @@
-package io.github.eschizoid.telescope.conversion;
+package io.github.eschizoid.telescope;
 
-import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.util.function.Function;
 

@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.mapping;
+package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
