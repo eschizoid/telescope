@@ -117,7 +117,7 @@ class BulkUpdateFlowTest {
       new Order(
         null,
         "ORIGINAL",
-        new Customer(null, "Bob", "BOB@X"),
+        new Customer(null, "Bob", "BOB@X", OrderFixtures.sampleTags()),
         OrderFixtures.sampleOrder().shippingAddress(),
         OrderFixtures.sampleOrder().billingAddress(),
         OrderFixtures.sampleOrder().lineItems(),

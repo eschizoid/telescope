@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.Customer;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
+import io.github.eschizoid.telescope.demo.spring.partner.PartnerCustomer;
 import io.github.eschizoid.telescope.demo.spring.partner.PartnerLineItem;
 import io.github.eschizoid.telescope.demo.spring.partner.PartnerShippingLabel;
 import io.github.eschizoid.telescope.demo.spring.persistence.CustomerEntity;
@@ -203,6 +204,7 @@ public class OrderMappers {
       to(Order::orderNumber, PartnerShippingLabel::getTrackingReference),
       via(Order::lineItems, PartnerShippingLabel::getItems, partnerItemMapper),
       drop(Order::metadata),
+      drop(Customer::tags, PartnerCustomer.class),
       writeBeans(SETTERS)
     );
   }

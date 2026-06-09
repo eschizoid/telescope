@@ -5,9 +5,11 @@ import io.github.eschizoid.telescope.demo.spring.domain.Customer;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import java.math.BigDecimal;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Shared fixture builder for the two integration tests. Mirrors the JSON shape consumers would POST
@@ -24,7 +26,7 @@ public final class OrderFixtures {
     return new Order(
       null,
       "ORD-2026-0001",
-      new Customer(null, "Alice Example", "ALICE@example.com"), // mixed case — gets lowercased
+      new Customer(null, "Alice Example", "ALICE@example.com", sampleTags()), // mixed case — gets lowercased
       new Address("100 Main St", "Brooklyn", "NY", "11201"),
       new Address("200 Billing Ave", "Brooklyn", "NY", "11201"),
       List.of(
@@ -43,5 +45,13 @@ public final class OrderFixtures {
    */
   public static Order patchOrderNumberOnly(final String newOrderNumber) {
     return new Order(null, newOrderNumber, null, null, null, List.of(), Optional.empty(), Map.of());
+  }
+
+  /**
+   * The Customer tag set fixture — non-empty, insertion-order-preserving so the {@code Iso.liftSet}
+   * order-preservation contract has something concrete to assert against.
+   */
+  public static Set<String> sampleTags() {
+    return new LinkedHashSet<>(List.of("vip", "newsletter", "wholesale"));
   }
 }
