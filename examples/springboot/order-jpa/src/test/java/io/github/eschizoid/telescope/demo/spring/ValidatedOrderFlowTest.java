@@ -10,6 +10,7 @@ import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -74,7 +75,8 @@ class ValidatedOrderFlowTest {
         new LineItem(null, "SKU-NEG-1", -3, new BigDecimal("10.00")),
         new LineItem(null, "SKU-NEG-2", -7, new BigDecimal("12.00"))
       ),
-      Optional.empty()
+      Optional.empty(),
+      Map.of()
     );
 
     final var response = client
@@ -107,7 +109,8 @@ class ValidatedOrderFlowTest {
         new LineItem(null, "SKU-GOOD", 5, new BigDecimal("10.00")),
         new LineItem(null, "SKU-NEG", -1, new BigDecimal("12.00"))
       ),
-      Optional.empty()
+      Optional.empty(),
+      Map.of()
     );
 
     final var response = client

@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.demo.spring.domain;
 
 import io.github.eschizoid.telescope.annotations.Focus;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -17,6 +18,8 @@ import java.util.Optional;
  *   <li>Nested record (×2 with the same type): {@code shippingAddress} / {@code billingAddress}
  *   <li>List of nested records: {@code lineItems} → {@code List<LineItem>}
  *   <li>Optional nested record: {@code giftWrap} → {@code Optional<Address>}
+ *   <li>Map of scalars: {@code metadata} → {@code Map<String, String>} — free-form per-order tags
+ *       (e.g. {@code source=mobile}, {@code campaign=summer-sale}). Auto-lifted by both mappers.
  * </ul>
  *
  * <p>The order id is nullable on the way in (the client doesn't know the database id when POSTing a
@@ -30,5 +33,6 @@ public record Order(
   Address shippingAddress,
   Address billingAddress,
   List<LineItem> lineItems,
-  Optional<Address> giftWrap
+  Optional<Address> giftWrap,
+  Map<String, String> metadata
 ) {}

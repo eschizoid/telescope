@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.demo.spring.mapping;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
@@ -180,6 +181,8 @@ public class OrderMappers {
    *   <li>{@code via(Order::lineItems, PartnerShippingLabel::getItems, partnerItemMapper)} —
    *       different field names + container shape; the element-level mapper auto-lifts through the
    *       {@code List<...>}.
+   *   <li>{@code drop(Order::metadata)} — internal-only field that the partner DTO does not (and
+   *       should not) carry. Without this row the strict deep-mapper rejects the unmapped source.
    *   <li>{@code writeBeans(SETTERS)} — Lombok's {@code @Data}-synthesised setters are the right
    *       construction strategy for every nested bean target ({@code PartnerShippingLabel}, {@code
    *       Customer}, {@code Address}). Telescope-lombok's emitted Path is used implicitly via the
@@ -199,6 +202,7 @@ public class OrderMappers {
       PartnerShippingLabel.class,
       to(Order::orderNumber, PartnerShippingLabel::getTrackingReference),
       via(Order::lineItems, PartnerShippingLabel::getItems, partnerItemMapper),
+      drop(Order::metadata),
       writeBeans(SETTERS)
     );
   }

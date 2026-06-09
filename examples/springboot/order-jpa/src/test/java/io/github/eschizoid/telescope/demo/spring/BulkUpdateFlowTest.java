@@ -121,7 +121,8 @@ class BulkUpdateFlowTest {
         OrderFixtures.sampleOrder().shippingAddress(),
         OrderFixtures.sampleOrder().billingAddress(),
         OrderFixtures.sampleOrder().lineItems(),
-        OrderFixtures.sampleOrder().giftWrap()
+        OrderFixtures.sampleOrder().giftWrap(),
+        OrderFixtures.sampleOrder().metadata()
       )
     );
     assertThat(b.orderNumber()).isEqualTo("ORD-X");

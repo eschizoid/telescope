@@ -80,7 +80,8 @@ class OrderNumberConverterTest {
       source.shippingAddress(),
       source.billingAddress(),
       source.lineItems(),
-      source.giftWrap()
+      source.giftWrap(),
+      source.metadata()
     );
   }
 }

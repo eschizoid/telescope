@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -30,7 +31,8 @@ public final class OrderFixtures {
         new LineItem(null, "SKU-A", 2, new BigDecimal("19.99")),
         new LineItem(null, "SKU-B", 1, new BigDecimal("49.50"))
       ),
-      Optional.of(new Address("300 Gift Rd", "Brooklyn", "NY", "11201"))
+      Optional.of(new Address("300 Gift Rd", "Brooklyn", "NY", "11201")),
+      Map.of("source", "mobile", "campaign", "summer-sale")
     );
   }
 
@@ -40,6 +42,6 @@ public final class OrderFixtures {
    * partial ones on top.
    */
   public static Order patchOrderNumberOnly(final String newOrderNumber) {
-    return new Order(null, newOrderNumber, null, null, null, List.of(), Optional.empty());
+    return new Order(null, newOrderNumber, null, null, null, List.of(), Optional.empty(), Map.of());
   }
 }
