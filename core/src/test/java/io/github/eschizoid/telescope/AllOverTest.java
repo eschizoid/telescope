@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.util.List;
+import java.util.function.Function;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -166,6 +167,76 @@ class AllOverTest {
         .update(DEPT_NAMES, String::trim)
         .apply(company);
       assertEquals(viaChain, viaAll);
+    }
+  }
+
+  @Nested
+  @DisplayName("overIfPresent — sparse-PATCH ergonomics")
+  class OverIfPresent {
+
+    @Test
+    @DisplayName("non-null direct value replaces the focused leaf")
+    void directNonNullReplaces() {
+      final var company = sample();
+      final var out = Telescope.all(Edit.overIfPresent(DEPT_NAMES, "Engineering")).apply(company);
+      assertEquals("Engineering", out.departments().getFirst().name());
+    }
+
+    @Test
+    @DisplayName("null direct value short-circuits to identity — source returned unchanged")
+    void directNullIsIdentity() {
+      final var company = sample();
+      final var out = Telescope.all(Edit.<Company, String>overIfPresent(DEPT_NAMES, null)).apply(company);
+      assertSame(company, out);
+    }
+
+    @Test
+    @DisplayName("non-null with mapper applies the mapper to the carried value before replacing")
+    void mapperFormApplies() {
+      final var company = sample();
+      final var out = Telescope.all(Edit.overIfPresent(DEPT_NAMES, "  trimmed  ", String::trim)).apply(company);
+      assertEquals("trimmed", out.departments().getFirst().name());
+    }
+
+    @Test
+    @DisplayName("null with mapper does not invoke the mapper and returns identity")
+    void mapperNullSkips() {
+      final var company = sample();
+      final var out = Telescope.all(
+        Edit.<Company, String, String>overIfPresent(DEPT_NAMES, null, v -> {
+          throw new IllegalStateException("mapper must not run for null value");
+        })
+      ).apply(company);
+      assertSame(company, out);
+    }
+
+    @Test
+    @DisplayName("BiFunction form lets the carried value steer per-leaf transformation")
+    void biFunctionFormCombinesValueWithLeaf() {
+      final var company = sample();
+      final var out = Telescope.all(
+        Edit.overIfPresent(EMAILS, "@DOMAIN", (suffix, email) -> email + suffix.toLowerCase())
+      ).apply(company);
+      assertEquals("ALICE@ACME.COM@domain", out.departments().getFirst().teams().getFirst().users().getFirst().email());
+    }
+
+    @Test
+    @DisplayName("Mixed PATCH composition — some null, some not — only the non-null slots land")
+    void sparsePatchCompositionLandsOnlyPresentSlots() {
+      final var company = sample();
+      final var out = Telescope.all(
+        Edit.<Company, String>overIfPresent(DEPT_NAMES, null),
+        Edit.overIfPresent(TEAM_NAMES, "Renamed"),
+        Edit.<Company, String, String>overIfPresent(USER_NAMES, null, (Function<String, String>) String::toUpperCase),
+        Edit.overIfPresent(EMAILS, "!", (bang, email) -> email + bang)
+      ).apply(company);
+      assertEquals(company.departments().getFirst().name(), out.departments().getFirst().name());
+      assertEquals("Renamed", out.departments().getFirst().teams().getFirst().name());
+      assertEquals(
+        company.departments().getFirst().teams().getFirst().users().getFirst().name(),
+        out.departments().getFirst().teams().getFirst().users().getFirst().name()
+      );
+      assertEquals("ALICE@ACME.COM!", out.departments().getFirst().teams().getFirst().users().getFirst().email());
     }
   }
 }
