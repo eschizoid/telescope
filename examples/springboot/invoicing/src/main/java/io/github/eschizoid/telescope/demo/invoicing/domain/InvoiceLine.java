@@ -1,7 +1,8 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.bridge;
+package io.github.eschizoid.telescope.demo.invoicing.domain;
 
 import io.github.eschizoid.telescope.annotations.Bridge;
 import io.github.eschizoid.telescope.annotations.Focus;
+import io.github.eschizoid.telescope.demo.invoicing.persistence.InvoiceLineEntity;
 import java.math.BigDecimal;
 
 /**

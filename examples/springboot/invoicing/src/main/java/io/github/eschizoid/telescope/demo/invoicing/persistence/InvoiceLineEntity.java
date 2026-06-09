@@ -1,16 +1,16 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.bridge;
+package io.github.eschizoid.telescope.demo.invoicing.persistence;
 
 import io.github.eschizoid.telescope.annotations.BeanFocus;
 import java.math.BigDecimal;
 
 /**
  * JPA-style mutable bean side of the {@code @Bridge} pair. {@code @BeanFocus} emits {@code
- * InvoiceLineEntityPath<R>} so the bridge hop on {@link InvoiceLine}'s navigator can return a typed
- * Path on the entity side (continued navigation after {@code asInvoiceLineEntity()}).
+ * InvoiceLineEntityPath<R>} so the bridge hop on {@code domain.InvoiceLine}'s navigator can return
+ * a typed Path on the entity side (continued navigation after {@code asInvoiceLineEntity()}).
  *
- * <p>Same field types as {@link InvoiceLine} on purpose — this slice exercises the codegen IDENTITY
- * field branch end-to-end on a real Spring demo. The cents-vs-BigDecimal mismatch already lives on
- * {@code LineItem} / {@code LineItemEntity} and is handled by a runtime typed-transform mapping;
+ * <p>Same field types as {@code domain.InvoiceLine} on purpose — this submodule exercises the
+ * codegen IDENTITY field branch end-to-end on a real Spring app. Typed transforms (e.g.
+ * BigDecimal↔long-cents) live in {@code order-jpa}'s LineItem pair, which uses the runtime factory;
  * {@code @Bridge}'s same-name bijection has no surface for that.
  */
 @BeanFocus

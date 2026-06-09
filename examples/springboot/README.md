@@ -1,16 +1,17 @@
 # telescope-examples-springboot
 
-End-to-end demos: **Spring Boot 4.0.1 + Jackson + Hibernate 7 + H2 + telescope**, running on JDK 25. Two modules, two
-stories — pick whichever matches your situation.
+End-to-end demos: **Spring Boot 4.0.1 + Jackson + Hibernate 7 + H2 + telescope**, running on JDK 25. Three modules,
+three stories — pick whichever matches your situation.
 
 | Module                 | Story                                                                                                   | Pick when                                                                                             |
 | ---------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | **`order-jpa/`**       | telescope as the record↔entity mapping engine across a realistic e-commerce domain with deep nesting    | You want to see telescope handle a wide surface: JPA, deep records, validation, bulk patches, mappers |
 | **`product-starter/`** | `telescope-spring-boot-starter` auto-wires every `Mapper<A, B>` bean into a single dispatching registry | You want zero-config wiring and one `TelescopeMapperRegistry` to dispatch by `(source, target)` pair  |
+| **`invoicing/`**       | `@Bridge`-annotated record↔bean pairs get conversion classes emitted at compile time, with deep recursion into other user-declared bridges | You want zero-reflection compile-time-bound conversion; no `Telescope.mapper(...)` call anywhere |
 
-Both modules are **standalone** — each has its own `settings.gradle.kts` and Gradle wrapper, and depends on
-`io.github.eschizoid:telescope*` from Maven Central. They are intentionally **not** part of the main telescope build, so
-they exercise telescope the way a real downstream consumer would: as versioned artifacts, not sibling subprojects.
+All three modules are standalone — each has its own build, depends on `io.github.eschizoid:telescope*` from
+Maven Central, and is intentionally **not** part of the main telescope build, so they exercise telescope the way a real
+downstream consumer would: as versioned artifacts, not sibling subprojects.
 
 ---
 
@@ -180,13 +181,13 @@ multiple target shapes, picked by a runtime parameter.
 
 ### Endpoints
 
-| Path                            | Target                              | Strategy                                  |
-| ------------------------------- | ----------------------------------- | ----------------------------------------- |
-| `POST /products?view=record`    | `Product` (record canonical)        | No write — record returned as-is          |
-| `POST /products?view=dto`       | `ProductDto` (Lombok `@Data`)       | `writeBeans(SETTERS)` — Lombok setters    |
-| `POST /products?view=manifest`  | `ProductManifest` (immutable POJO)  | `writeBean(ProductManifest.class, CONSTRUCTOR)` |
-| `GET  /products/{id}?view=...`  | Same three shapes                   | Picked by `view` parameter via registry   |
-| `GET  /products/{id}/manifest`  | `ProductManifest` (always)          | Dedicated endpoint for the immutable view |
+| Path                           | Target                             | Strategy                                        |
+| ------------------------------ | ---------------------------------- | ----------------------------------------------- |
+| `POST /products?view=record`   | `Product` (record canonical)       | No write — record returned as-is                |
+| `POST /products?view=dto`      | `ProductDto` (Lombok `@Data`)      | `writeBeans(SETTERS)` — Lombok setters          |
+| `POST /products?view=manifest` | `ProductManifest` (immutable POJO) | `writeBean(ProductManifest.class, CONSTRUCTOR)` |
+| `GET  /products/{id}?view=...` | Same three shapes                  | Picked by `view` parameter via registry         |
+| `GET  /products/{id}/manifest` | `ProductManifest` (always)         | Dedicated endpoint for the immutable view       |
 
 ### Per-class write strategy (the headline capability)
 
@@ -209,12 +210,44 @@ If `writeBean(Class, STRATEGY)` were ignored and the global default applied, the
 
 ### Telescope capabilities demonstrated
 
-- **`telescope-spring-boot-starter` auto-config** — drop `@Bean Mapper<A, B>` declarations in any `@Configuration`,
-  the starter discovers them and populates `TelescopeMapperRegistry`. No `@TelescopeMapper`-style annotation magic.
+- **`telescope-spring-boot-starter` auto-config** — drop `@Bean Mapper<A, B>` declarations in any `@Configuration`, the
+  starter discovers them and populates `TelescopeMapperRegistry`. No `@TelescopeMapper`-style annotation magic.
 - **`registry.get(Source.class, Target.class)`** — runtime lookup by type pair. The controller doesn't inject specific
   mapper beans — it dispatches polymorphically, which is the pattern that scales when the app has dozens of mappers.
 - **`writeBeans(STRATEGY)` global + `writeBean(Class, STRATEGY)` per-target override** — one mapper can mix
   reconstruction strategies when a single target hierarchy has both mutable and immutable shapes.
-- **Lombok + Jackson + telescope coexistence** — `@Data` synthesises setters used by `SETTERS`, `@JsonProperty`
-  renames fields on the wire without affecting the Java identifiers telescope reads. `telescope-lombok` emits
+- **Lombok + Jackson + telescope coexistence** — `@Data` synthesises setters used by `SETTERS`, `@JsonProperty` renames
+  fields on the wire without affecting the Java identifiers telescope reads. `telescope-lombok` emits
   `ProductDtoPath<R>` against the same property surface for compile-time-bound navigation.
+
+---
+
+## `invoicing/` — the `@Bridge` codegen showcase
+
+A pure compile-time-bound demo: zero `Telescope.mapper(...)` calls anywhere. Both endpoint pairs route through
+`BridgeProcessor`-emitted classes that the user never wrote — direct method calls, no `SerializedLambda` decode, no
+runtime field-name probe, no reflective getter/setter dispatch.
+
+### Endpoints
+
+| Path                              | Generated machinery                                                                          |
+| --------------------------------- | -------------------------------------------------------------------------------------------- |
+| `POST /invoices/lines/forward`    | `InvoiceLinePath.start().asInvoiceLineEntity().read(line)` — navigator hop generated by `@Bridge` |
+| `POST /invoices/lines/backward`   | `InvoiceLineBridge.backward(entity)` — generated static method                              |
+| `POST /invoices/headers/forward`  | `InvoiceHeaderBridge.forward(header)` — auto-recurses into `InvoiceLineBridge` for the list |
+| `POST /invoices/headers/backward` | `InvoiceHeaderBridge.backward(entity)` — same in reverse                                    |
+
+### Telescope capabilities demonstrated
+
+- **`@Bridge(Target.class)`** — annotation-driven codegen emits a `<Source>Bridge` class with a `BRIDGE` constant
+  (`Telescope<Source, Target>`) plus static `forward(...)` / `backward(...)` methods. The bijection rule requires the
+  source and target expose the same field-name set; types match exactly or via a generated identity.
+- **Bridge hop on the navigator** — when a `@Focus`-annotated record also carries `@Bridge`, its emitted
+  `<Source>Path<R>` gains an `as<TargetSimpleName>()` method. Because the target is `@BeanFocus`-navigable, the hop
+  returns a typed continuation (`InvoiceLineEntityPath<R>`) instead of a terminal `Telescope<R, Target>`. Navigation
+  keeps reading like a sentence after the paradigm hop.
+- **Deep recursion through user-declared bridges** — `InvoiceHeader` carries `List<InvoiceLine>`. The parent
+  `InvoiceHeaderBridge` auto-emits a list-lift that delegates per element to the user-declared `InvoiceLineBridge`
+  rather than synthesising its own anonymous Iso. The user owns each sub-bridge by name.
+- **Zero `Telescope.mapper(...)` at runtime** — every conversion in this submodule is a direct method call on a
+  generated class. Compile-time bound, IDE-navigable, no reflection in the hot path.

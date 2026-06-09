@@ -1,7 +1,13 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.bridge;
+package io.github.eschizoid.telescope.demo.invoicing;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceHeader;
+import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceHeaderBridge;
+import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLine;
+import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLineBridge;
+import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLinePath;
+import io.github.eschizoid.telescope.demo.invoicing.persistence.InvoiceLineEntity;
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
