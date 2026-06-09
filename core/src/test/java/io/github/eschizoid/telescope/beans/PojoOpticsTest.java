@@ -1,6 +1,6 @@
 package io.github.eschizoid.telescope.beans;
 
-import static io.github.eschizoid.telescope.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 

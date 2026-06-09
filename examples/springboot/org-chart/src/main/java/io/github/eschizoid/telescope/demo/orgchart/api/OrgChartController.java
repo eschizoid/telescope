@@ -1,6 +1,6 @@
 package io.github.eschizoid.telescope.demo.orgchart.api;
 
-import io.github.eschizoid.telescope.Mapper;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.orgchart.domain.Employee;
 import io.github.eschizoid.telescope.demo.orgchart.persistence.EmployeeEntity;
 import io.github.eschizoid.telescope.demo.orgchart.persistence.EmployeeRepository;

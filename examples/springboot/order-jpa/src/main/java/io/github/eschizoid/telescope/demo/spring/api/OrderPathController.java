@@ -1,6 +1,6 @@
 package io.github.eschizoid.telescope.demo.spring.api;
 
-import io.github.eschizoid.telescope.Mapper;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import io.github.eschizoid.telescope.demo.spring.domain.OrderPath;

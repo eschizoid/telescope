@@ -1,11 +1,11 @@
 package io.github.eschizoid.telescope.examples;
 
-import static io.github.eschizoid.telescope.Mapping.to;
-import static io.github.eschizoid.telescope.Mapping.via;
-import static io.github.eschizoid.telescope.WriteHint.WriteStrategy.CONSTRUCTOR;
-import static io.github.eschizoid.telescope.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.via;
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 
-import io.github.eschizoid.telescope.Mapper;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.Telescope;
 import java.util.List;
 import java.util.Map;

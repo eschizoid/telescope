@@ -501,8 +501,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       .replace("java.util.List", "List")
       .replace("java.util.Map", "Map")
       .replace("java.util.Set", "Set")
-      .replace("io.github.eschizoid.telescope.Either", "Either")
-      .replace("io.github.eschizoid.telescope.Validated", "Validated")
+      .replace("io.github.eschizoid.telescope.effects.Either", "Either")
+      .replace("io.github.eschizoid.telescope.effects.Validated", "Validated")
       .replace("io.github.eschizoid.telescope.Indexed", "Indexed")
       .replace("java.lang.String", "String")
       .replace("java.lang.Integer", "Integer")
@@ -613,10 +613,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         out.println("import java.util.concurrent.Executor;");
         out.println("import java.util.function.BiFunction;");
         out.println("import java.util.function.Function;");
-        out.println("import io.github.eschizoid.telescope.Either;");
+        out.println("import io.github.eschizoid.telescope.effects.Either;");
         out.println("import io.github.eschizoid.telescope.Indexed;");
         out.println("import io.github.eschizoid.telescope.Telescope;");
-        out.println("import io.github.eschizoid.telescope.Validated;");
+        out.println("import io.github.eschizoid.telescope.effects.Validated;");
         out.println();
         out.println("/** " + javadoc + " */");
         out.println("public final class " + simpleName + typeParams + " {");

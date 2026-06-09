@@ -1,5 +1,6 @@
 rootProject.name = "telescope"
 
+include("internal")
 include("core")
 include("codegen")
 include("lombok")

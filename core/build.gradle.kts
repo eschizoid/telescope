@@ -5,10 +5,10 @@ plugins {
     jacoco
 }
 
-description = "telescope — deep-copy DSL for Java records and POJOs"
+description = "telescope-api — deep-copy DSL for Java records and POJOs"
 
 base {
-    archivesName = "telescope"
+    archivesName = "telescope-api"
 }
 
 repositories {
@@ -51,6 +51,12 @@ tasks.withType<Javadoc>().configureEach {
 }
 
 dependencies {
+    // telescope-internal carries the optic lattice + HKT emulation + reflection helpers.
+    // `api` so :core's public types (Telescope, Mapper) can reference internal optic types in their
+    // bodies without leaking them at module exports — the qualified-export in :internal's
+    // module-info confines visibility to :core only.
+    api(project(":internal"))
+
     testImplementation(platform(libs.junitBom))
     testImplementation(libs.junitJupiter)
     testRuntimeOnly(libs.junitPlatformLauncher)
@@ -65,12 +71,12 @@ publishing {
     publications {
         create<MavenPublication>("maven") {
             groupId = "io.github.eschizoid"
-            artifactId = "telescope"
+            artifactId = "telescope-api"
             from(components["java"])
 
             pom {
-                name.set("telescope")
-                description.set("Deep-copy DSL for Java records and POJOs.")
+                name.set("telescope-api")
+                description.set("Public DSL surface of telescope — deep-copy DSL for Java records and POJOs.")
                 url.set("https://github.com/eschizoid/telescope")
                 inceptionYear.set("2025")
 

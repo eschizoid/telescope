@@ -1,5 +1,10 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.mapping.MapStep;
+
+import io.github.eschizoid.telescope.effects.Either;
+import io.github.eschizoid.telescope.effects.Validated;
+
 import java.util.function.BiFunction;
 import java.util.function.Function;
 

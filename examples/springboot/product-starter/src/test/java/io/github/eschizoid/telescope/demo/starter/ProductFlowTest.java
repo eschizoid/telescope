@@ -2,7 +2,7 @@ package io.github.eschizoid.telescope.demo.starter;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.github.eschizoid.telescope.Mapper;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.starter.domain.Product;
 import io.github.eschizoid.telescope.demo.starter.partner.ProductDto;
 import io.github.eschizoid.telescope.demo.starter.partner.ProductManifest;

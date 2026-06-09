@@ -1,6 +1,6 @@
 package io.github.eschizoid.telescope.spring;
 
-import io.github.eschizoid.telescope.Mapper;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.Telescope;
 import java.util.Collection;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
