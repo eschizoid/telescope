@@ -91,8 +91,8 @@ LineItem (record)               LineItemEntity (@Entity)
   `Mapper.backward(...)` reads a `HibernateProxy`, it forces a single initialization fetch (counted via Hibernate's
   `Statistics.getEntityFetchCount()`) and resolves the persistent class via `Beans.persistentClassOf(...)`. Pinned by
   `OrderCustomerLazyFetchTest`.
-- **Sealed-narrow after a paradigm hop** — `Order.payment: sealed Payment` (record-side, `CreditCard | PayPal |
-  BankTransfer`) bridges to `legacy.PaymentEntity` (bean-side, mirror sealed hierarchy) via
+- **Sealed-narrow after a paradigm hop** — `Order.payment: sealed Payment` (record-side,
+  `CreditCard | PayPal | BankTransfer`) bridges to `legacy.PaymentEntity` (bean-side, mirror sealed hierarchy) via
   `PaymentMappers.paymentBridge()`. The flagship chain
   `Telescope.of(Order.class).field(Order::payment).then(paymentBridge()).as(CreditCardEntity.class).field(CreditCardEntity::getCardNumber).update(...)`
   crosses records → sealed bridge → prism narrow → bean-getter field in one expression. Each `.field(...)` re-resolves
@@ -168,3 +168,53 @@ in-memory database and assert that the JSON ↔ record ↔ entity round-trip pre
 
 5. **You can pick your trade-off per call site.** The two flows share a domain and an entity graph verbatim; only the
    mapper layer varies. Add or swap call sites without restructuring anything else.
+
+---
+
+## `product-starter/` — the auto-wired-registry showcase
+
+A minimal Spring Boot app demonstrating `telescope-spring-boot-starter`: drop `@Bean Mapper<A, B>` declarations into
+your config, the starter's `TelescopeMapperRegistry` auto-discovers them and indexes by `(sourceClass, targetClass)`.
+The controller looks up mappers at request time via `registry.get(Product.class, Target.class)` — one source class,
+multiple target shapes, picked by a runtime parameter.
+
+### Endpoints
+
+| Path                            | Target                              | Strategy                                  |
+| ------------------------------- | ----------------------------------- | ----------------------------------------- |
+| `POST /products?view=record`    | `Product` (record canonical)        | No write — record returned as-is          |
+| `POST /products?view=dto`       | `ProductDto` (Lombok `@Data`)       | `writeBeans(SETTERS)` — Lombok setters    |
+| `POST /products?view=manifest`  | `ProductManifest` (immutable POJO)  | `writeBean(ProductManifest.class, CONSTRUCTOR)` |
+| `GET  /products/{id}?view=...`  | Same three shapes                   | Picked by `view` parameter via registry   |
+| `GET  /products/{id}/manifest`  | `ProductManifest` (always)          | Dedicated endpoint for the immutable view |
+
+### Per-class write strategy (the headline capability)
+
+The three target shapes need three different reconstruction strategies. Telescope handles this with one global default
+plus per-class overrides:
+
+```java
+// productEntityMapper: Hibernate-managed bean — needs no-arg + setters
+Telescope.mapper(Product.class, ProductEntity.class, writeBeans(SETTERS))
+
+// productDtoMapper: Lombok @Data — same strategy as the JPA entity
+Telescope.mapper(Product.class, ProductDto.class, writeBeans(SETTERS))
+
+// productManifestMapper: immutable POJO — no setters, no no-arg ctor; CONSTRUCTOR is the only option
+Telescope.mapper(Product.class, ProductManifest.class, writeBean(ProductManifest.class, CONSTRUCTOR))
+```
+
+If `writeBean(Class, STRATEGY)` were ignored and the global default applied, the manifest mapper would fail eagerly at
+`Telescope.mapper(...)` construction time because the SETTERS probe can't find the right shape. The per-class hint wins.
+
+### Telescope capabilities demonstrated
+
+- **`telescope-spring-boot-starter` auto-config** — drop `@Bean Mapper<A, B>` declarations in any `@Configuration`,
+  the starter discovers them and populates `TelescopeMapperRegistry`. No `@TelescopeMapper`-style annotation magic.
+- **`registry.get(Source.class, Target.class)`** — runtime lookup by type pair. The controller doesn't inject specific
+  mapper beans — it dispatches polymorphically, which is the pattern that scales when the app has dozens of mappers.
+- **`writeBeans(STRATEGY)` global + `writeBean(Class, STRATEGY)` per-target override** — one mapper can mix
+  reconstruction strategies when a single target hierarchy has both mutable and immutable shapes.
+- **Lombok + Jackson + telescope coexistence** — `@Data` synthesises setters used by `SETTERS`, `@JsonProperty`
+  renames fields on the wire without affecting the Java identifiers telescope reads. `telescope-lombok` emits
+  `ProductDtoPath<R>` against the same property surface for compile-time-bound navigation.

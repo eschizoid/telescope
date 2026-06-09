@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.starter.domain.Product;
 import io.github.eschizoid.telescope.demo.starter.partner.ProductDto;
 import io.github.eschizoid.telescope.demo.starter.partner.ProductDtoPath;
+import io.github.eschizoid.telescope.demo.starter.partner.ProductManifest;
 import io.github.eschizoid.telescope.demo.starter.persistence.ProductEntity;
 import io.github.eschizoid.telescope.spring.TelescopeMapperRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,11 +52,12 @@ class ProductFlowTest {
   }
 
   @Test
-  void registryIsAutoConfiguredWithBothMapperBeans() {
+  void registryIsAutoConfiguredWithThreeMapperBeans() {
     assertThat(registry).isNotNull();
-    assertThat(registry.size()).isEqualTo(2);
+    assertThat(registry.size()).isEqualTo(3);
     assertThat(registry.contains(Product.class, ProductEntity.class)).isTrue();
     assertThat(registry.contains(Product.class, ProductDto.class)).isTrue();
+    assertThat(registry.contains(Product.class, ProductManifest.class)).isTrue();
     final Mapper<Product, ProductDto> dtoMapper = registry.get(Product.class, ProductDto.class);
     assertThat(dtoMapper).isNotNull();
     assertThat(dtoMapper.sourceClass()).isEqualTo(Product.class);
@@ -145,5 +147,47 @@ class ProductFlowTest {
 
     final var fetched = client.get().uri("/products/" + created.id() + "?view=record").retrieve().body(Product.class);
     assertThat(fetched).isEqualTo(created);
+  }
+
+  @Test
+  void manifestEndpointReturnsImmutablePojoBuiltViaPerClassConstructorStrategy() {
+    // The manifest target POJO has no setters, no no-arg constructor, no builder. The mapper for
+    // this target can only succeed if writeBean(ProductManifest.class, CONSTRUCTOR) is honoured
+    // per-target — the global default that satisfies ProductEntity and ProductDto cannot apply.
+    final var created = client
+      .post()
+      .uri("/products?view=record")
+      .contentType(MediaType.APPLICATION_JSON)
+      .body(new Product(null, "SKU-MAN", "Manifested", 1250L))
+      .retrieve()
+      .body(Product.class);
+    assertThat(created).isNotNull();
+
+    final var manifest = client
+      .get()
+      .uri("/products/" + created.id() + "/manifest")
+      .retrieve()
+      .body(ProductManifest.class);
+
+    assertThat(manifest).isNotNull();
+    assertThat(manifest.getId()).isEqualTo(created.id());
+    assertThat(manifest.getSku()).isEqualTo("SKU-MAN");
+    assertThat(manifest.getName()).isEqualTo("Manifested");
+    assertThat(manifest.getPriceCents()).isEqualTo(1250L);
+  }
+
+  @Test
+  void postWithViewManifestRoutesThroughThePerClassConstructorMapper() {
+    final var manifest = client
+      .post()
+      .uri("/products?view=manifest")
+      .contentType(MediaType.APPLICATION_JSON)
+      .body(new Product(null, "SKU-MAN-POST", "PostedManifest", 999L))
+      .retrieve()
+      .body(ProductManifest.class);
+
+    assertThat(manifest).isNotNull();
+    assertThat(manifest.getSku()).isEqualTo("SKU-MAN-POST");
+    assertThat(manifest.getPriceCents()).isEqualTo(999L);
   }
 }

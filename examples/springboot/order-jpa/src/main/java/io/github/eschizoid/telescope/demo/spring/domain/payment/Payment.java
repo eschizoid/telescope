@@ -7,8 +7,8 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  * Record-side sealed payment hierarchy. Three permits: {@link CreditCard}, {@link PayPal}, {@link
  * BankTransfer}. Order carries an instance via {@code Order.payment}.
  *
- * <p>{@code @JsonTypeInfo} + {@code @JsonSubTypes} wire Jackson's polymorphic deserialisation —
- * the API exchanges JSON objects with a {@code "type"} discriminator (e.g. {@code "creditCard"}).
+ * <p>{@code @JsonTypeInfo} + {@code @JsonSubTypes} wire Jackson's polymorphic deserialisation — the
+ * API exchanges JSON objects with a {@code "type"} discriminator (e.g. {@code "creditCard"}).
  * Telescope's sealed-narrow demo ({@code SealedNarrowAfterParadigmHopTest}) drives a chain that
  * crosses from this record-side sealed graph to the bean-side {@code legacy.PaymentEntity} graph
  * via {@code mapping.PaymentMappers#paymentBridge()}.
