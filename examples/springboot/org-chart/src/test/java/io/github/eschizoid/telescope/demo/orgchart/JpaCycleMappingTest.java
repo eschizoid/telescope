@@ -1,9 +1,12 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.jpacycle;
+package io.github.eschizoid.telescope.demo.orgchart;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.demo.orgchart.domain.Employee;
+import io.github.eschizoid.telescope.demo.orgchart.persistence.EmployeeEntity;
+import io.github.eschizoid.telescope.demo.orgchart.persistence.EmployeeRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.util.List;

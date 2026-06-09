@@ -1,10 +1,12 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.jpacycle;
+package io.github.eschizoid.telescope.demo.orgchart.mapping;
 
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.demo.orgchart.domain.Employee;
+import io.github.eschizoid.telescope.demo.orgchart.persistence.EmployeeEntity;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 

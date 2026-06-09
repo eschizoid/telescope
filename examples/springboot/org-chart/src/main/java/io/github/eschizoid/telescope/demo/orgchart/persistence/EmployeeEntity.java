@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.jpacycle;
+package io.github.eschizoid.telescope.demo.orgchart.persistence;
 
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Entity;
@@ -14,13 +14,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Hibernate-managed twin of {@link Employee} with a bidirectional self-reference: {@code manager}
- * is a LAZY {@code @ManyToOne}, {@code reports} is the inverse {@code @OneToMany}. Together they
- * form a literal value-level cycle once Hibernate populates both sides ({@code bob.manager == alice
- * && alice.reports.contains(bob)}).
+ * Hibernate-managed twin of {@code domain.Employee} with a bidirectional self-reference: {@code
+ * manager} is a LAZY {@code @ManyToOne}, {@code reports} is the inverse {@code @OneToMany}.
+ * Together they form a literal value-level cycle once Hibernate populates both sides ({@code
+ * bob.manager == alice && alice.reports.contains(bob)}).
  *
- * <p>Intentionally <b>NOT</b> annotated with {@code @BeanFocus} — same reason as {@link Employee}.
- * The runtime mapper path is the unit under test.
+ * <p>Intentionally <b>NOT</b> annotated with {@code @BeanFocus} — same reason as {@code
+ * domain.Employee}. The runtime mapper path is the unit under test.
  */
 @Entity
 @Table(name = "employee")
