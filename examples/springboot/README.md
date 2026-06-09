@@ -91,6 +91,13 @@ LineItem (record)               LineItemEntity (@Entity)
   `Mapper.backward(...)` reads a `HibernateProxy`, it forces a single initialization fetch (counted via Hibernate's
   `Statistics.getEntityFetchCount()`) and resolves the persistent class via `Beans.persistentClassOf(...)`. Pinned by
   `OrderCustomerLazyFetchTest`.
+- **Sealed-narrow after a paradigm hop** — `Order.payment: sealed Payment` (record-side, `CreditCard | PayPal |
+  BankTransfer`) bridges to `legacy.PaymentEntity` (bean-side, mirror sealed hierarchy) via
+  `PaymentMappers.paymentBridge()`. The flagship chain
+  `Telescope.of(Order.class).field(Order::payment).then(paymentBridge()).as(CreditCardEntity.class).field(CreditCardEntity::getCardNumber).update(...)`
+  crosses records → sealed bridge → prism narrow → bean-getter field in one expression. Each `.field(...)` re-resolves
+  its FieldOptics dispatch per accessor declaring-class — record-side vs bean-side never confused. Pinned by
+  `SealedNarrowAfterParadigmHopTest`.
 
 ## Running
 

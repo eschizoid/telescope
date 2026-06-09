@@ -76,7 +76,8 @@ class ValidatedOrderFlowTest {
         new LineItem(null, "SKU-NEG-2", -7, new BigDecimal("12.00"))
       ),
       Optional.empty(),
-      Map.of()
+      Map.of(),
+      null
     );
 
     final var response = client
@@ -110,7 +111,8 @@ class ValidatedOrderFlowTest {
         new LineItem(null, "SKU-NEG", -1, new BigDecimal("12.00"))
       ),
       Optional.empty(),
-      Map.of()
+      Map.of(),
+      null
     );
 
     final var response = client

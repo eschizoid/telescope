@@ -868,12 +868,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * Emit a {@code public static <Pojo> construct(Function<String, Object> values)} on the bean
    * holder. The emitted body mirrors the same write strategy {@link #emitBeanNavigator} already
    * picked for the {@code <X>Path<R>} lens setters — builder chain when {@code useBuilder} is true,
-   * otherwise no-arg ctor plus per-property setters. The runtime hybrid dispatch in {@link
-   * io.github.eschizoid.telescope.internal.MetadataHolderProbe MetadataHolderProbe} / {@link
-   * io.github.eschizoid.telescope.internal.Reflective#structuralIso Reflective.structuralIso}
-   * routes here, bypassing the reflective {@link
-   * io.github.eschizoid.telescope.internal.Beans.BeanWriter Beans.BeanWriter} path for annotated
-   * beans. The cast types match the constants' fieldType (boxed primitives, shortened std imports).
+   * otherwise no-arg ctor plus per-property setters. The runtime hybrid dispatch in {@code
+   * MetadataHolderProbe} / {@code Reflective.structuralIso} (both internal to {@code :core}) routes
+   * here, bypassing the reflective {@code Beans.BeanWriter} path for annotated beans. The cast
+   * types match the constants' {@code fieldType} (boxed primitives, shortened std imports).
    */
   private void emitBeanConstruct(
     final PrintWriter out,

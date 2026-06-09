@@ -95,7 +95,8 @@ class OrderMetadataMapTest {
       OrderFixtures.sampleOrder().billingAddress(),
       OrderFixtures.sampleOrder().lineItems(),
       OrderFixtures.sampleOrder().giftWrap(),
-      ordered
+      ordered,
+      OrderFixtures.samplePayment()
     );
     final var entity = orderMapper.forward(src);
     final var rebuilt = orderMapper.backward(entity);

@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.sealed;
+package io.github.eschizoid.telescope.demo.spring.legacy;
 
 public final class BankTransferEntity implements PaymentEntity {
 

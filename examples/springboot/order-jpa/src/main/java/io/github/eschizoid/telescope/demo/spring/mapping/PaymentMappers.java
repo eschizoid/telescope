@@ -1,17 +1,25 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.sealed;
+package io.github.eschizoid.telescope.demo.spring.mapping;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.demo.spring.domain.payment.BankTransfer;
+import io.github.eschizoid.telescope.demo.spring.domain.payment.CreditCard;
+import io.github.eschizoid.telescope.demo.spring.domain.payment.PayPal;
+import io.github.eschizoid.telescope.demo.spring.domain.payment.Payment;
+import io.github.eschizoid.telescope.demo.spring.legacy.BankTransferEntity;
+import io.github.eschizoid.telescope.demo.spring.legacy.CreditCardEntity;
+import io.github.eschizoid.telescope.demo.spring.legacy.PayPalEntity;
+import io.github.eschizoid.telescope.demo.spring.legacy.PaymentEntity;
 
 /**
- * Hand-rolled paradigm-bridge for the sealed pair {@link Payment} ↔ {@link PaymentEntity}. Built
- * via {@code Telescope.from(...).to(...).using(...)} so the chain crosses the paradigm hop and the
- * subsequent {@code .as(Subtype.class)} narrow exercises the post-hop dispatch logic.
+ * Hand-rolled paradigm-bridge for the sealed pair {@link Payment} (record-side, in {@code
+ * domain.payment}) ↔ {@link PaymentEntity} (bean-side, in {@code legacy}). Built via {@code
+ * Telescope.from(...).to(...).using(...)} so the chain crosses the paradigm hop and the subsequent
+ * {@code .as(Subtype.class)} narrow exercises the post-hop dispatch logic.
  *
  * <p>Why hand-built rather than the deep-mapping factory: the deep {@code Telescope.mapper(...)}
  * engine walks declared components, but a sealed-interface root has none. Wiring it via the {@code
- * from/to/using} {@link io.github.eschizoid.telescope.internal.optics.Iso} factory is the cheap
- * path and produces a real {@code Telescope<Payment, PaymentEntity>} composable through {@code
- * .then(...)}.
+ * from/to/using} factory is the cheap path and produces a real {@code Telescope<Payment,
+ * PaymentEntity>} composable through {@code .then(...)}.
  */
 public final class PaymentMappers {
 

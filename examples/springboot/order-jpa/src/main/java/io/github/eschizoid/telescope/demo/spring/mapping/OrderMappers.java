@@ -153,7 +153,10 @@ public class OrderMappers {
       //     List<LineItemEntity> slot. Telescope detects the matching container shape and lifts
       //     the element mapper through Iso.liftList — no manual list ceremony at the call site.
       via(Order::lineItems, OrderEntity::getLineItems, lineItemMapper),
-      // (4) Default writer — every bean target the recursion touches (OrderEntity,
+      // (4) Drop — Order.payment is record-side only (sealed Payment lives in domain.payment).
+      //     The persistence layer doesn't store it; a separate payment processor owns that.
+      drop(Order::payment),
+      // (5) Default writer — every bean target the recursion touches (OrderEntity,
       //     AddressEmbeddable) uses SETTERS. customerMapper and lineItemMapper carry their own
       //     writeBeans(SETTERS) so their targets are covered there too.
       writeBeans(SETTERS)
@@ -204,6 +207,7 @@ public class OrderMappers {
       to(Order::orderNumber, PartnerShippingLabel::getTrackingReference),
       via(Order::lineItems, PartnerShippingLabel::getItems, partnerItemMapper),
       drop(Order::metadata),
+      drop(Order::payment),
       drop(Customer::tags, PartnerCustomer.class),
       writeBeans(SETTERS)
     );

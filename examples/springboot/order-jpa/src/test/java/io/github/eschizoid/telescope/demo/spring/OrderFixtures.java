@@ -4,6 +4,8 @@ import io.github.eschizoid.telescope.demo.spring.domain.Address;
 import io.github.eschizoid.telescope.demo.spring.domain.Customer;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
+import io.github.eschizoid.telescope.demo.spring.domain.payment.CreditCard;
+import io.github.eschizoid.telescope.demo.spring.domain.payment.Payment;
 import java.math.BigDecimal;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -34,7 +36,8 @@ public final class OrderFixtures {
         new LineItem(null, "SKU-B", 1, new BigDecimal("49.50"))
       ),
       Optional.of(new Address("300 Gift Rd", "Brooklyn", "NY", "11201")),
-      Map.of("source", "mobile", "campaign", "summer-sale")
+      Map.of("source", "mobile", "campaign", "summer-sale"),
+      samplePayment()
     );
   }
 
@@ -44,7 +47,15 @@ public final class OrderFixtures {
    * partial ones on top.
    */
   public static Order patchOrderNumberOnly(final String newOrderNumber) {
-    return new Order(null, newOrderNumber, null, null, null, List.of(), Optional.empty(), Map.of());
+    return new Order(null, newOrderNumber, null, null, null, List.of(), Optional.empty(), Map.of(), null);
+  }
+
+  /**
+   * The sealed {@link Payment} fixture — a {@link CreditCard} variant. Drives the sealed-narrow
+   * paradigm-hop chain in {@code SealedNarrowAfterParadigmHopTest}.
+   */
+  public static Payment samplePayment() {
+    return new CreditCard("4111111111111111", "Alice Doe", 2030);
   }
 
   /**

@@ -109,7 +109,8 @@ class RuntimeOrderFlowTest {
       OrderFixtures.sampleOrder().billingAddress(),
       OrderFixtures.sampleOrder().lineItems(),
       OrderFixtures.sampleOrder().giftWrap(),
-      OrderFixtures.sampleOrder().metadata()
+      OrderFixtures.sampleOrder().metadata(),
+      OrderFixtures.samplePayment()
     );
     final var bulk = client
       .post()

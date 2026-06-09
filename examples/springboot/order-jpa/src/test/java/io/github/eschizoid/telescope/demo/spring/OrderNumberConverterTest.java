@@ -81,7 +81,8 @@ class OrderNumberConverterTest {
       source.billingAddress(),
       source.lineItems(),
       source.giftWrap(),
-      source.metadata()
+      source.metadata(),
+      source.payment()
     );
   }
 }

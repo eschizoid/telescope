@@ -93,7 +93,8 @@ class CustomerTagsSetFieldTest {
       OrderFixtures.sampleOrder().billingAddress(),
       OrderFixtures.sampleOrder().lineItems(),
       OrderFixtures.sampleOrder().giftWrap(),
-      OrderFixtures.sampleOrder().metadata()
+      OrderFixtures.sampleOrder().metadata(),
+      OrderFixtures.samplePayment()
     );
 
     final var entity = orderMapper.forward(src);
@@ -118,7 +119,8 @@ class CustomerTagsSetFieldTest {
       OrderFixtures.sampleOrder().billingAddress(),
       OrderFixtures.sampleOrder().lineItems(),
       OrderFixtures.sampleOrder().giftWrap(),
-      OrderFixtures.sampleOrder().metadata()
+      OrderFixtures.sampleOrder().metadata(),
+      OrderFixtures.samplePayment()
     );
     final var entity = orderMapper.forward(src);
     final var rebuilt = orderMapper.backward(entity);
