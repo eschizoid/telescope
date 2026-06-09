@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
@@ -168,7 +169,7 @@ public sealed class Telescope<
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Set&lt;X&gt;} paths. */
   @SuppressWarnings("exports")
-  public static <S, X> SetPath<S, X> asSet(final Telescope<S, java.util.Set<X>> path) {
+  public static <S, X> SetPath<S, X> asSet(final Telescope<S, Set<X>> path) {
     return new SetPath<>(path.optic, path.fieldOptics, path.chain);
   }
 
@@ -429,7 +430,7 @@ public sealed class Telescope<
    * {@link #ofBean(Class)} as the root — same {@code .field(...)} navigation, bean semantics.
    */
   public <B> Telescope<S, B> field(final Accessor<A, B> getter) {
-    final Lens<A, B> lens = fieldOptics.lensFor(getter);
+    final Lens<A, B> lens = lensForAccessor(getter);
     return new Telescope<>(optic.then(lens), fieldOptics, chain);
   }
 
@@ -450,7 +451,7 @@ public sealed class Telescope<
    * }</pre>
    */
   public <X> ListPath<S, X> list(final Accessor<A, List<X>> getter) {
-    final Lens<A, List<X>> lens = fieldOptics.lensFor(getter);
+    final Lens<A, List<X>> lens = lensForAccessor(getter);
     return new ListPath<>(optic.then(lens), fieldOptics, chain);
   }
 
@@ -462,8 +463,8 @@ public sealed class Telescope<
    * terminal {@link #set(Object, Object)} — they take different argument types, but the shared verb
    * load is real enough that disambiguation pays off at the call site.
    */
-  public <X> SetPath<S, X> setField(final Accessor<A, java.util.Set<X>> getter) {
-    final Lens<A, java.util.Set<X>> lens = fieldOptics.lensFor(getter);
+  public <X> SetPath<S, X> setField(final Accessor<A, Set<X>> getter) {
+    final Lens<A, Set<X>> lens = lensForAccessor(getter);
     return new SetPath<>(optic.then(lens), fieldOptics, chain);
   }
 
@@ -477,7 +478,7 @@ public sealed class Telescope<
    * share the same verb otherwise.
    */
   public <K, V> MapPath<S, K, V> mapField(final Accessor<A, Map<K, V>> getter) {
-    final Lens<A, Map<K, V>> lens = fieldOptics.lensFor(getter);
+    final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
     return new MapPath<>(optic.then(lens), fieldOptics, chain);
   }
 
@@ -487,7 +488,7 @@ public sealed class Telescope<
    * navigation.
    */
   public <X> OptionalPath<S, X> optional(final Accessor<A, Optional<X>> getter) {
-    final Lens<A, Optional<X>> lens = fieldOptics.lensFor(getter);
+    final Lens<A, Optional<X>> lens = lensForAccessor(getter);
     return new OptionalPath<>(optic.then(lens), fieldOptics, chain);
   }
 
@@ -552,7 +553,7 @@ public sealed class Telescope<
    */
   public <E> Telescope<S, E> each(final Accessor<A, ? extends Iterable<E>> getter) {
     final Traversal<Iterable<E>, E> elements = Traversals.eachIterable();
-    final Lens<A, Iterable<E>> lens = fieldOptics.lensFor(getter);
+    final Lens<A, Iterable<E>> lens = lensForAccessor(getter);
     return new Telescope<>(optic.then(lens).then(elements), fieldOptics, chain);
   }
 
@@ -571,7 +572,7 @@ public sealed class Telescope<
    */
   public <K, V> Telescope<S, V> eachValue(final Accessor<A, ? extends Map<K, V>> getter) {
     final Traversal<Map<K, V>, V> values = Traversals.eachMapValue();
-    final Lens<A, Map<K, V>> lens = fieldOptics.lensFor(getter);
+    final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
     return new Telescope<>(optic.then(lens).then(values), fieldOptics, chain);
   }
 
@@ -589,7 +590,7 @@ public sealed class Telescope<
    */
   public <E> Telescope<S, E> whenPresent(final Accessor<A, ? extends Optional<E>> getter) {
     final Traversal<Optional<E>, E> present = Traversals.eachOptional();
-    final Lens<A, Optional<E>> lens = fieldOptics.lensFor(getter);
+    final Lens<A, Optional<E>> lens = lensForAccessor(getter);
     return new Telescope<>(optic.then(lens).then(present), fieldOptics, chain);
   }
 
@@ -1118,9 +1119,33 @@ public sealed class Telescope<
    * turns a method reference into a field {@link Lens}. {@link #of} installs {@link
    * RecordFieldOptics}; {@link #ofBean} installs {@link BeanFieldOptics}. Both are stateless
    * singletons, so a telescope carries its adapter, not a flag.
+   *
+   * <p><b>Per-accessor dispatch.</b> The {@code fieldOptics} field is the <em>fallback</em> used by
+   * methods that have no accessor (e.g. {@link #fieldByName(String)}). Accessor-based navigation
+   * methods route through {@link #lensForAccessor(Accessor)}, which re-picks the adapter on every
+   * call based on the accessor's declaring class (recovered via {@code SerializedLambda}). This
+   * matters across paradigm hops: a chain like {@code Telescope.of(Record.class).field(...).then(
+   * mapper.asTelescope()).field(BeanType::getX)} crosses from a record root into a bean focus; the
+   * stored {@code fieldOptics} stays {@code RecordFieldOptics} but the trailing {@code .field()}
+   * needs {@code BeanFieldOptics} to resolve the bean accessor. The same applies to {@code .as()}
+   * narrowing into a sealed-type subtype that's a bean.
    */
   private interface FieldOptics {
     <A, B> Lens<A, B> lensFor(Accessor<A, ?> getter);
+  }
+
+  /**
+   * Pick the right {@link FieldOptics} for {@code getter}'s declaring class. Records route through
+   * {@link RecordFieldOptics}; everything else through {@link BeanFieldOptics}. Used by every
+   * accessor-based navigation method so the dispatch survives paradigm hops via {@link
+   * #then(Telescope)} and sealed-type narrowing via {@link #as(Class)}.
+   */
+  @SuppressWarnings("unchecked")
+  private <A, B> Lens<A, B> lensForAccessor(final Accessor<A, ?> getter) {
+    final Class<?> declaringClass = LambdaIntrospection.implClassOf(getter);
+    final FieldOptics dispatch =
+      declaringClass != null && declaringClass.isRecord() ? RecordFieldOptics.INSTANCE : BeanFieldOptics.INSTANCE;
+    return dispatch.lensFor(getter);
   }
 
   /** Records: read + rebuild via the canonical constructor, keyed by component name. */
@@ -1188,9 +1213,9 @@ public sealed class Telescope<
    * #each()} terminal that descends into set elements via {@link Traversals#eachSet()}. Returned by
    * the {@code .field(Accessor<A, Set<X>>)} overload on the parent.
    */
-  public static final class SetPath<S, X> extends Telescope<S, java.util.Set<X>> {
+  public static final class SetPath<S, X> extends Telescope<S, Set<X>> {
 
-    SetPath(final Traversal<S, java.util.Set<X>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
+    SetPath(final Traversal<S, Set<X>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
       super(optic, fieldOptics, chain);
     }
 

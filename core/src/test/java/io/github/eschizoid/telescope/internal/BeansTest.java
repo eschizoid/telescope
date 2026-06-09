@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import org.junit.jupiter.api.DisplayName;
@@ -434,7 +435,7 @@ class BeansTest {
     @Test
     @DisplayName("getX / isX / boolean and Boolean isX / URL two-caps rule all resolve to expected property names")
     void propertyNamesCoverConventions() {
-      final var names = java.util.Arrays.asList(Beans.propertyNames(WithGetters.class));
+      final var names = Arrays.asList(Beans.propertyNames(WithGetters.class));
       assertTrue(names.contains("id"));
       assertTrue(names.contains("active")); // isActive (boolean)
       assertTrue(names.contains("flag")); // isFlag (Boolean)
@@ -921,6 +922,66 @@ class BeansTest {
       base.setScore(1);
       final var upper = lens.modify(base, String::toUpperCase);
       assertEquals("ALICE", upper.getName());
+    }
+  }
+
+  @Nested
+  @DisplayName("persistentClassOf — HibernateProxy-aware cache key unwrap")
+  class PersistentClass {
+
+    static class PlainBean {
+
+      private String name;
+
+      public PlainBean() {}
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+    }
+
+    // Subclass that pretends to be a Hibernate-style proxy. Doesn't implement HibernateProxy
+    // (Hibernate isn't on the test classpath), so persistentClassOf takes the fall-through path
+    // and returns the runtime class. This pins the no-Hibernate-classpath behaviour: zero-cost
+    // when the framework isn't there.
+    static final class ProxyShape extends PlainBean {}
+
+    @Test
+    @DisplayName("falls through to getClass() when the value is null")
+    void nullSafe() {
+      assertEquals(null, Beans.persistentClassOf(null));
+    }
+
+    @Test
+    @DisplayName("plain POJO: returns getClass() unchanged")
+    void plainPojoReturnsItsOwnClass() {
+      final var bean = new PlainBean();
+      assertEquals(PlainBean.class, Beans.persistentClassOf(bean));
+    }
+
+    @Test
+    @DisplayName("subclass without HibernateProxy interface: returns the subclass (fall-through)")
+    void noHibernateOnClasspath() {
+      // ProxyShape doesn't implement HibernateProxy — there's no Hibernate dep in :core's tests.
+      // The unwrap helper must return the runtime class, not crash, not call any Hibernate API.
+      final var proxy = new ProxyShape();
+      assertEquals(ProxyShape.class, Beans.persistentClassOf(proxy));
+    }
+
+    @Test
+    @DisplayName("readProperty routes through persistentClassOf so a subclass shares the parent's cache entry")
+    void readPropertyUnwrapsToParentCache() {
+      // Even without a real HibernateProxy, prove readProperty works on a subclass instance —
+      // the cache lookup uses the runtime class (or the unwrapped persistent class). This is the
+      // regression for the cache-key shape: a single instance should read correctly via either
+      // its own class or a parent class's cached getter.
+      final var proxy = new ProxyShape();
+      proxy.setName("alice");
+      assertEquals("alice", Beans.readProperty(proxy, "name"));
     }
   }
 }

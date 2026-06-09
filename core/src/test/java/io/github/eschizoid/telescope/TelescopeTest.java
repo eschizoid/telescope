@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.function.Function;
@@ -101,7 +102,7 @@ class TelescopeTest {
     @Test
     @DisplayName("eachValue(getter) over a record's Map<K, V> updates every value")
     void eachOverMapValues() {
-      record Index(java.util.Map<String, Integer> byKey) {}
+      record Index(Map<String, Integer> byKey) {}
 
       final var src = new LinkedHashMap<String, Integer>();
       src.put("a", 1);
@@ -323,16 +324,63 @@ class TelescopeTest {
   }
 
   @Nested
+  @DisplayName("Per-accessor FieldOptics dispatch — survives paradigm hops and sealed narrowing")
+  class ParadigmHopDispatch {
+
+    // Record-side root with a bean-shaped sub-leaf reached via a Mapper-as-Telescope hop.
+    record BoxRoot(BoxRec inner) {}
+
+    record BoxRec(String email) {}
+
+    // Plain POJO target — getter/setter shape that BeanFieldOptics can navigate.
+    static final class BoxBean {
+
+      private String email;
+
+      public BoxBean() {}
+
+      public String getEmail() {
+        return email;
+      }
+
+      public void setEmail(final String email) {
+        this.email = email;
+      }
+    }
+
+    @Test
+    @DisplayName(
+      ".field() after .then(mapper.asTelescope()) routes to BeanFieldOptics, not the entry-point's RecordFieldOptics"
+    )
+    void fieldAfterParadigmHop() {
+      // Before the per-accessor dispatch fix this threw "Not a record: BoxBean" because
+      // Telescope.of(record) locked in RecordFieldOptics and the trailing .field(BoxBean::getEmail)
+      // still routed through Records.fieldLens(name).
+      final var recToBean = Telescope.mapper(BoxRec.class, BoxBean.class).asTelescope();
+      final var chain = Telescope.of(BoxRoot.class).field(BoxRoot::inner).then(recToBean).field(BoxBean::getEmail);
+      final var root = new BoxRoot(new BoxRec("Alice@x"));
+      assertEquals("Alice@x", chain.read(root));
+      final var updated = chain.update(root, String::toLowerCase);
+      assertEquals("alice@x", updated.inner().email());
+    }
+  }
+
+  @Nested
   @DisplayName("Errors")
   class Errors {
 
     @Test
-    @DisplayName("missing field name surfaces a clear error")
+    @DisplayName("missing field name surfaces a clear error including the known component names")
     void unknownFieldErrors() {
       final var bad = Telescope.of(User.class).fieldByName("doesNotExist");
       final var alice = new User("alice", 30, null);
       final var ex = assertThrows(IllegalArgumentException.class, () -> bad.read(alice));
       assertTrue(ex.getMessage().contains("doesNotExist"));
+      // The error must list available alternatives so a config-driven fieldByName(...) typo
+      // surfaces a usable hint without forcing the user to read the record source.
+      assertTrue(ex.getMessage().contains("known fields"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("name"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("age"), ex.getMessage());
     }
 
     @Test
