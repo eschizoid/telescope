@@ -102,6 +102,32 @@ public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, Typed
    * the type's default value otherwise — see the source-class's component-default contract).
    */
   static <A, B> Mapping<A, B> drop(final Accessor<A, ?> src) {
-    return new Drop<>(src);
+    return new Drop<>(src, null);
+  }
+
+  /**
+   * Drop a source field scoped to a specific nested {@code (source, target)} pair. Use this when
+   * the field to drop lives on a type the recursion lands on multiple times with different targets
+   * — only the (source, {@code target}) pair gets the field elided; other recursions on the same
+   * source class stay strict.
+   *
+   * <pre>{@code
+   * Telescope.mapper(
+   *     Order.class, PartnerShippingLabel.class,
+   *     to(Order::orderNumber,   PartnerShippingLabel::getTrackingReference),
+   *     via(Order::lineItems,    PartnerShippingLabel::getItems, partnerItemMapper),
+   *     drop(Order::metadata),                       // top-level Order → PartnerShippingLabel
+   *     drop(Customer::tags, PartnerCustomer.class)); // nested Customer → PartnerCustomer
+   * }</pre>
+   *
+   * <p>Symmetrical with {@link #via(Accessor, Accessor, Mapper)} carrying both accessors — the
+   * difference is that there is no target accessor to recover the target class from, so the user
+   * supplies the class directly. Use the single-arg {@link #drop(Accessor)} when the drop scopes to
+   * the top-level mapper.
+   */
+  static <A, B> Mapping<A, B> drop(final Accessor<A, ?> src, final Class<?> target) {
+    @SuppressWarnings("unchecked")
+    final var castTarget = (Class<B>) target;
+    return new Drop<>(src, castTarget);
   }
 }

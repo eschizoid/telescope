@@ -971,5 +971,55 @@ class DeepMappingTest {
       assertTrue(ex.getMessage().contains("metadata"), ex.getMessage());
       assertTrue(ex.getMessage().contains("duplicate"), ex.getMessage());
     }
+
+    // --- two-arg drop(srcAcc, target) — scoped to a nested pair ---
+    record CustomerRich(String name, java.util.Set<String> tags) {}
+
+    record CustomerPartner(String name) {}
+
+    record ShipmentRich(String code, CustomerRich customer) {}
+
+    record ShipmentPartner(String code, CustomerPartner customer) {}
+
+    @Test
+    @DisplayName("two-arg drop scopes the elision to a specific nested (source, target) pair only")
+    void twoArgDropAppliesAtNestedPair() {
+      final var mapper = Telescope.mapper(
+        ShipmentRich.class,
+        ShipmentPartner.class,
+        drop(CustomerRich::tags, CustomerPartner.class)
+      );
+      final var src = new ShipmentRich("S-1", new CustomerRich("alice", Set.of("vip", "newsletter")));
+      final var dst = mapper.forward(src);
+      assertEquals("S-1", dst.code());
+      assertEquals("alice", dst.customer().name());
+    }
+
+    @Test
+    @DisplayName("two-arg drop backward leaves the dropped nested slot null")
+    void twoArgDropBackwardLeavesNull() {
+      final var mapper = Telescope.mapper(
+        ShipmentRich.class,
+        ShipmentPartner.class,
+        drop(CustomerRich::tags, CustomerPartner.class)
+      );
+      final var dst = new ShipmentPartner("S-1", new CustomerPartner("alice"));
+      final var rebuilt = mapper.backward(dst);
+      assertEquals("S-1", rebuilt.code());
+      assertEquals("alice", rebuilt.customer().name());
+      assertNull(rebuilt.customer().tags());
+    }
+
+    @Test
+    @DisplayName("one-arg drop on a nested-source class binds to top target — doesn't reach the nested pair")
+    void oneArgDropOnNestedSourceDoesNotReachNestedPair() {
+      // Without the explicit nested target, the top-level mapper still rejects the unmapped source
+      // because (CustomerRich, CustomerPartner) is the recursion's pair, not (CustomerRich,
+      // top-target).
+      final var ex = assertThrows(IllegalStateException.class, () ->
+        Telescope.mapper(ShipmentRich.class, ShipmentPartner.class, drop(CustomerRich::tags))
+      );
+      assertTrue(ex.getMessage().contains("tags"), ex.getMessage());
+    }
   }
 }
