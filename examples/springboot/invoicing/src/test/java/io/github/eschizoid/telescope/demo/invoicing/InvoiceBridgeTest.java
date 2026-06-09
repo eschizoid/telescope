@@ -62,7 +62,7 @@ class InvoiceBridgeTest {
     final var entity = InvoiceHeaderBridge.forward(header);
     assertThat(entity.getNumber()).isEqualTo("INV-001");
     assertThat(entity.getLines()).hasSize(2);
-    assertThat(entity.getLines().get(0).getSku()).isEqualTo("SKU-A");
+    assertThat(entity.getLines().getFirst().getSku()).isEqualTo("SKU-A");
     assertThat(entity.getLines().get(0).getQty()).isEqualTo(2);
     assertThat(entity.getLines().get(0).getUnitPrice()).isEqualByComparingTo("10.00");
     assertThat(entity.getLines().get(1).getSku()).isEqualTo("SKU-B");

@@ -1,9 +1,6 @@
-package io.github.eschizoid.telescope.mapping;
+package io.github.eschizoid.telescope;
 
-import io.github.eschizoid.telescope.Edit;
-import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
-import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.function.Function;
 
 /**
@@ -13,8 +10,8 @@ import java.util.function.Function;
  * static-imported so the call site reads as a list of rows.
  *
  * <pre>{@code
- * import static io.github.eschizoid.telescope.mapping.Mapping.to;
- * import static io.github.eschizoid.telescope.mapping.Mapping.via;
+ * import static io.github.eschizoid.telescope.Mapping.to;
+ * import static io.github.eschizoid.telescope.Mapping.via;
  *
  * final Telescope<CompanyEntity, CompanyDto> companyMapper = Telescope.map(
  *     CompanyEntity.class, CompanyDto.class,

@@ -2,7 +2,6 @@ package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.optics.Lens;
-import io.github.eschizoid.telescope.internal.optics.Traversal;
 import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -80,12 +79,11 @@ public final class MetadataHolderProbe {
     public Lens<?, ?> lensFor(final String name) {
       final var constant = constantsByName.get(name);
       if (constant == null) return null;
-      final Traversal<?, ?> optic = constant.optic();
-      // The holder constants are emitted via Telescope.lens(getter, setter), which wraps a Lens —
-      // see FocusProcessor#emitMetadataHolder / Telescope.lens. If a future processor emits a
-      // wider optic (Traversal, Affine), this cast would surface as ClassCastException at the
-      // dispatch site; the cast is the load-bearing assumption the design rests on.
-      return (Lens<?, ?>) optic;
+      // Telescope.opticOf returns Object — the keep-lattice-internal seam. The holder constants
+      // are emitted via Telescope.lens(getter, setter), which wraps a Lens (see
+      // FocusProcessor#emitMetadataHolder). If a future processor emits a wider optic (Traversal,
+      // Affine), this cast surfaces as ClassCastException at the dispatch site.
+      return (Lens<?, ?>) Telescope.opticOf(constant);
     }
   }
 

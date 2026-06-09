@@ -87,10 +87,14 @@ class InspectControllerTest {
     } catch (final HttpClientErrorException.BadRequest e) {
       final var error = e.getResponseBodyAs(InspectError.class);
       assertThat(error).isNotNull();
-      // Bug-hunt pin: the IAE message *does* include the bad field name ('nonexistent') and the
-      // declaring class. It does NOT today include the available alternatives — see slice report.
+      // The IAE carries: the bad field name ('nonexistent'), the declaring class (Order), and
+      // the known-fields list — the diagnostic a runtime-checked surface owes its caller in lieu
+      // of a compile-time check. See AdminTouchControllerTest for the write-side companion.
       assertThat(error.message()).contains("nonexistent");
       assertThat(error.message()).contains("Order");
+      assertThat(error.message()).contains("known fields:");
+      assertThat(error.message()).contains("customer");
+      assertThat(error.message()).contains("shippingAddress");
     }
   }
 

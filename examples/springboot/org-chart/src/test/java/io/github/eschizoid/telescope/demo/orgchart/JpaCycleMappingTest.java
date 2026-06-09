@@ -3,7 +3,7 @@ package io.github.eschizoid.telescope.demo.orgchart;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
-import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.Mapper;
 import io.github.eschizoid.telescope.demo.orgchart.domain.Employee;
 import io.github.eschizoid.telescope.demo.orgchart.persistence.EmployeeEntity;
 import io.github.eschizoid.telescope.demo.orgchart.persistence.EmployeeRepository;
@@ -24,7 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <ol>
  *   <li><b>Type-level cycle resolution at {@code Telescope.mapper(...)} construction time.</b>
- *       {@link io.github.eschizoid.telescope.mapping.DeepMap} reserves the TypePair slot before
+ *       {@link io.github.eschizoid.telescope.DeepMap} reserves the TypePair slot before
  *       recursing into auto-derived component Isos, so {@code Employee} containing {@code
  *       Optional<Employee> manager} + {@code List<Employee> reports} resolves without
  *       stack-overflow.

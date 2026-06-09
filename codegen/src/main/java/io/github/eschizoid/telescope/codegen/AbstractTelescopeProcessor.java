@@ -296,7 +296,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var sb = new StringBuilder(element.getSimpleName().toString());
     var enclosing = element.getEnclosingElement();
     while (enclosing != null && enclosing.getKind() != ElementKind.PACKAGE) {
-      sb.insert(0, enclosing.getSimpleName().toString());
+      sb.insert(0, enclosing.getSimpleName());
       enclosing = enclosing.getEnclosingElement();
     }
     return sb.toString();
@@ -312,7 +312,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var sb = new StringBuilder(element.getSimpleName().toString());
     var enclosing = element.getEnclosingElement();
     while (enclosing != null && enclosing.getKind() != ElementKind.PACKAGE) {
-      sb.insert(0, enclosing.getSimpleName().toString() + ".");
+      sb.insert(0, enclosing.getSimpleName() + ".");
       enclosing = enclosing.getEnclosingElement();
     }
     return sb.toString();

@@ -1,6 +1,5 @@
-package io.github.eschizoid.telescope.conversion;
+package io.github.eschizoid.telescope;
 
-import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.util.HashMap;
@@ -12,7 +11,7 @@ import java.util.function.Function;
 
 /**
  * A bidirectional mapper produced by the deep recursive factory {@link Telescope#mapper(Class,
- * Class, io.github.eschizoid.telescope.mapping.MapStep...)}. Wraps an {@link Iso} for the
+ * Class, io.github.eschizoid.telescope.MapStep...)}. Wraps an {@link Iso} for the
  * forward/backward conversion and (optionally) a per-target-component patch table for sparse {@link
  * #patch} overlays.
  *
@@ -29,7 +28,7 @@ public final class Mapper<A, B> {
    * #backward} and written to {@link #sourceField} on the source.
    *
    * <p>Declared {@code public} solely so the cross-package {@link
-   * io.github.eschizoid.telescope.mapping.DeepMap} engine can construct entries when building a
+   * io.github.eschizoid.telescope.DeepMap} engine can construct entries when building a
    * {@link Mapper} via {@link Mapper#Mapper(Iso, Class, Class, Map)}. The raw {@link Function}
    * field is part of that internal contract; external code must not depend on this record's shape.
    * Treat as private to the module — it may change or disappear without a deprecation cycle.
@@ -48,15 +47,11 @@ public final class Mapper<A, B> {
    * the source/target classes, and a (possibly empty) patch table keyed by target component
    * /property name.
    *
-   * <p>Declared {@code public} solely so {@link io.github.eschizoid.telescope.mapping.DeepMap}
-   * (different package) can call it; {@link Iso} lives in the unexported {@code internal.optics}
-   * package, so module consumers cannot supply a real argument. External code must construct
-   * mappers via {@link Telescope#mapper(Class, Class,
-   * io.github.eschizoid.telescope.mapping.MapStep...)}. Treat this signature as part of the
-   * module's internal contract: it may change or disappear without a deprecation cycle.
+   * <p>Package-private: only same-package callers ({@link DeepMap}, {@link Telescope}, and the
+   * {@code lift*} helpers below) construct mappers. External code uses {@link Telescope#mapper(
+   * Class, Class, MapStep...)}.
    */
-  @SuppressWarnings("exports") // Intentional: Iso is module-internal; consumers can't supply one.
-  public Mapper(
+  Mapper(
     final Iso<A, B> iso,
     final Class<A> sourceClass,
     final Class<B> targetClass,
@@ -155,7 +150,7 @@ public final class Mapper<A, B> {
   /**
    * Forward conversion {@code A → B}. Public so the {@code mapping} sub-package can wrap a {@link
    * Mapper} as an {@link Iso} when stitching deep recursive mappings together (the {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#via via(...)} row).
+   * io.github.eschizoid.telescope.Mapping#via via(...)} row).
    */
   public B forward(final A a) {
     return iso.to(a);
@@ -174,7 +169,7 @@ public final class Mapper<A, B> {
    *
    * <p>The lifted mapper has an empty patch table — sparse-overlay semantics aren't well-defined
    * for list-shaped roots. Use it as a building block in {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#via(io.github.eschizoid.telescope.Telescope.Accessor,
+   * io.github.eschizoid.telescope.Mapping#via(io.github.eschizoid.telescope.Telescope.Accessor,
    * io.github.eschizoid.telescope.Telescope.Accessor, Mapper) Mapping.via} or hand-roll the
    * forward/backward calls at a {@code List} call site.
    */

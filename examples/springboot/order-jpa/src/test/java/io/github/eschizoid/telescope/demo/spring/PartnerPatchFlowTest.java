@@ -2,7 +2,7 @@ package io.github.eschizoid.telescope.demo.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import io.github.eschizoid.telescope.demo.spring.partner.PartnerCustomer;
 import io.github.eschizoid.telescope.demo.spring.partner.PartnerShippingLabel;
