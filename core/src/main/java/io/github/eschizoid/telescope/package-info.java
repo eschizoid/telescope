@@ -3,8 +3,9 @@
  * lifting through effects over Java records and POJOs. One {@link
  * io.github.eschizoid.telescope.Telescope Telescope&lt;S, A&gt;} type carries the navigation path
  * and every terminal operation (read / write / single-shot effects / multi-edit / deep mapping);
- * complements {@link io.github.eschizoid.telescope.conversion.Mapper Mapper&lt;A, B&gt;} for the
- * cases that benefit from sparse-overlay patching or explicit container lifting.
+ * complements {@link io.github.eschizoid.telescope.conversion.Mapper Mapper&lt;A, B&gt;} (in the
+ * {@link io.github.eschizoid.telescope.conversion} sub-package) for the cases that benefit from
+ * sparse-overlay patching or explicit container lifting.
  *
  * <h2>Entry points</h2>
  *
@@ -14,18 +15,33 @@
  *       ({@code read}, {@code find}, {@code toList}, {@code count}, {@code exists}) or write it
  *       ({@code set}, {@code update}, {@code updateAsync}, {@code updateOptional}, {@code
  *       updateEither}, {@code updateValidated}). Single type, no category-theory jargon.
- *   <li>{@link io.github.eschizoid.telescope.Either} — sealed sum type ({@code Left} / {@code
- *       Right}) shipped in-house so the effectful-update API has no Vavr or Arrow dependency. Used
- *       by {@link io.github.eschizoid.telescope.Telescope#updateEither}. Short-circuits on the
- *       first {@code Left}.
- *   <li>{@link io.github.eschizoid.telescope.Validated} — sealed sum type ({@code Valid} / {@code
- *       Invalid}) that accumulates errors across every focused element. Used by {@link
+ *   <li>{@link io.github.eschizoid.telescope.effects.Either} — sealed sum type ({@code Left} /
+ *       {@code Right}) shipped in-house so the effectful-update API has no Vavr or Arrow
+ *       dependency. Used by {@link io.github.eschizoid.telescope.Telescope#updateEither}.
+ *       Short-circuits on the first {@code Left}.
+ *   <li>{@link io.github.eschizoid.telescope.effects.Validated} — sealed sum type ({@code Valid} /
+ *       {@code Invalid}) that accumulates errors across every focused element. Used by {@link
  *       io.github.eschizoid.telescope.Telescope#updateValidated}. The counterpoint to {@code
  *       Either}: it gathers all errors rather than stopping at the first.
  *   <li>{@link io.github.eschizoid.telescope.Indexed} — a {@code (index, value)} pair, the 0-based
  *       flat position of a focused element. Produced by {@link
  *       io.github.eschizoid.telescope.Telescope#toListIndexed} and consumed by {@link
  *       io.github.eschizoid.telescope.Telescope#updateIndexed}.
+ * </ul>
+ *
+ * <h2>Public sub-packages</h2>
+ *
+ * <ul>
+ *   <li>{@link io.github.eschizoid.telescope.conversion} — {@code Mapper}, {@code From}, {@code To}
+ *       (bidirectional graph mapping + the {@code from / to / using} fluent factory).
+ *   <li>{@link io.github.eschizoid.telescope.mapping} — the row-builder DSL ({@code Mapping},
+ *       {@code MapStep}, {@code WriteHint}, {@code Via}, {@code Drop}, and friends) consumed by
+ *       {@link io.github.eschizoid.telescope.Telescope#map(Class, Class,
+ *       io.github.eschizoid.telescope.mapping.MapStep...)}.
+ *   <li>{@link io.github.eschizoid.telescope.effects} — the {@code Either} / {@code Validated}
+ *       sealed effect types described above.
+ *   <li>{@link io.github.eschizoid.telescope.annotations} — {@code @Focus} / {@code @BeanFocus} /
+ *       {@code @Bridge} compile-time markers for the codegen processors.
  * </ul>
  *
  * <h2>What's not here</h2>

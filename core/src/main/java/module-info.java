@@ -11,12 +11,12 @@
  * <ul>
  *   <li>{@link io.github.eschizoid.telescope} — the root DSL surface. {@link
  *       io.github.eschizoid.telescope.Telescope} (navigation + read + write + effects + deep
- *       mapping factory), {@link io.github.eschizoid.telescope.Indexed} for indexed traversals,
- *       and the multi-edit primitive {@link io.github.eschizoid.telescope.Edit}.
+ *       mapping factory), {@link io.github.eschizoid.telescope.Indexed} for indexed traversals, and
+ *       the multi-edit primitive {@link io.github.eschizoid.telescope.Edit}.
  *   <li>{@link io.github.eschizoid.telescope.conversion} — {@link
  *       io.github.eschizoid.telescope.conversion.Mapper} (bidirectional graph mapper with {@code
- *       forward} / {@code backward} / {@code patch} / {@code asTelescope} / container-lift
- *       surface) plus the {@link io.github.eschizoid.telescope.conversion.From} / {@link
+ *       forward} / {@code backward} / {@code patch} / {@code asTelescope} / container-lift surface)
+ *       plus the {@link io.github.eschizoid.telescope.conversion.From} / {@link
  *       io.github.eschizoid.telescope.conversion.To} fluent factory used by {@link
  *       io.github.eschizoid.telescope.Telescope#from(Class)}.
  *   <li>{@link io.github.eschizoid.telescope.mapping} — the row-builder DSL that the deep-mapping
@@ -24,12 +24,12 @@
  *       {@link io.github.eschizoid.telescope.mapping.Mapping#via via}, {@link
  *       io.github.eschizoid.telescope.mapping.Mapping#drop drop}, and {@link
  *       io.github.eschizoid.telescope.mapping.WriteHint#writeBean writeBean} / {@link
- *       io.github.eschizoid.telescope.mapping.WriteHint#writeBeans writeBeans} per-target /
- *       default write-strategy hints.
+ *       io.github.eschizoid.telescope.mapping.WriteHint#writeBeans writeBeans} per-target / default
+ *       write-strategy hints.
  *   <li>{@link io.github.eschizoid.telescope.effects} — {@link
  *       io.github.eschizoid.telescope.effects.Either} / {@link
- *       io.github.eschizoid.telescope.effects.Validated} sealed effect types backing
- *       {@code updateEither} and {@code updateValidated}.
+ *       io.github.eschizoid.telescope.effects.Validated} sealed effect types backing {@code
+ *       updateEither} and {@code updateValidated}.
  *   <li>{@link io.github.eschizoid.telescope.annotations} — compile-time markers for the codegen
  *       processors: {@code @Focus} (records), {@code @BeanFocus} (POJOs, also for Lombok-annotated
  *       classes via the {@code telescope-lombok} module), {@code @Bridge} (compile-checked
