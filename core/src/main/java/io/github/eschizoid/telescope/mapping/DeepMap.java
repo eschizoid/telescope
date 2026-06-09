@@ -223,13 +223,14 @@ public final class DeepMap {
     final var grouped = new HashMap<TypePair, List<Mapping<?, ?>>>();
     for (final var row : overrides) {
       final var internals = internalsOf(row);
-      // Drop rows have no target accessor (targetClass() == null). Bind them to the top-level
-      // (source, target) pair the user passed to Telescope.map(...); a Drop row is scoped to the
-      // specific mapper that declares it, not to every pair the recursion lands on.
-      final var key =
-        row instanceof Drop<?, ?, ?>
-          ? new TypePair(internals.sourceClass(), topTarget)
-          : new TypePair(internals.sourceClass(), internals.targetClass());
+      // Drop rows have no target accessor. The single-arg drop(srcAcc) factory binds the row to
+      // the top-level (source, target) pair the user passed to Telescope.map(...); the two-arg
+      // drop(srcAcc, target) factory binds it to whatever nested (source, target) pair the user
+      // names explicitly. Internals.targetClass() returns null for the single-arg form and the
+      // explicit target Class for the two-arg form.
+      final Class<?> effectiveTarget =
+        row instanceof Drop<?, ?, ?> && internals.targetClass() == null ? topTarget : internals.targetClass();
+      final var key = new TypePair(internals.sourceClass(), effectiveTarget);
       grouped.computeIfAbsent(key, _ -> new ArrayList<>()).add(row);
     }
     return grouped;
