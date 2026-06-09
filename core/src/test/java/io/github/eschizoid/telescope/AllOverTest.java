@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.util.List;
-import java.util.function.Function;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -211,13 +210,25 @@ class AllOverTest {
     }
 
     @Test
-    @DisplayName("BiFunction form lets the carried value steer per-leaf transformation")
-    void biFunctionFormCombinesValueWithLeaf() {
+    @DisplayName("mapIfPresent — value steers per-leaf transformation")
+    void mapIfPresentCombinesValueWithLeaf() {
       final var company = sample();
       final var out = Telescope.all(
-        Edit.overIfPresent(EMAILS, "@DOMAIN", (suffix, email) -> email + suffix.toLowerCase())
+        Edit.mapIfPresent(EMAILS, "@DOMAIN", (suffix, email) -> email + suffix.toLowerCase())
       ).apply(company);
       assertEquals("ALICE@ACME.COM@domain", out.departments().getFirst().teams().getFirst().users().getFirst().email());
+    }
+
+    @Test
+    @DisplayName("mapIfPresent — null value short-circuits without invoking the transform")
+    void mapIfPresentNullSkips() {
+      final var company = sample();
+      final var out = Telescope.all(
+        Edit.<Company, String, String>mapIfPresent(EMAILS, null, (suffix, email) -> {
+          throw new IllegalStateException("transform must not run for null value");
+        })
+      ).apply(company);
+      assertSame(company, out);
     }
 
     @Test
@@ -227,8 +238,8 @@ class AllOverTest {
       final var out = Telescope.all(
         Edit.<Company, String>overIfPresent(DEPT_NAMES, null),
         Edit.overIfPresent(TEAM_NAMES, "Renamed"),
-        Edit.<Company, String, String>overIfPresent(USER_NAMES, null, (Function<String, String>) String::toUpperCase),
-        Edit.overIfPresent(EMAILS, "!", (bang, email) -> email + bang)
+        Edit.<Company, String, String>overIfPresent(USER_NAMES, null, String::toUpperCase),
+        Edit.mapIfPresent(EMAILS, "!", (bang, email) -> email + bang)
       ).apply(company);
       assertEquals(company.departments().getFirst().name(), out.departments().getFirst().name());
       assertEquals("Renamed", out.departments().getFirst().teams().getFirst().name());
