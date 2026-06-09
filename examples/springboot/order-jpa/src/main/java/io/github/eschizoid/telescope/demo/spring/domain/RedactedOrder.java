@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.redacted;
+package io.github.eschizoid.telescope.demo.spring.domain;
 
 /**
  * Narrower projection of {@code Order} used by the redacted GET endpoint. Strips line items,

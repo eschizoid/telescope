@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.bulkupdate;
+package io.github.eschizoid.telescope.demo.spring.api;
 
 /**
  * Request body for {@code POST /orders/{id}/bulk-update}. Each field is independently nullable —

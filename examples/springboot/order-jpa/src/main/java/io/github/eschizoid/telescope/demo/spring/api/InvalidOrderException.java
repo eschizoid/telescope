@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.validated;
+package io.github.eschizoid.telescope.demo.spring.api;
 
 import io.github.eschizoid.telescope.Validated;
 import java.util.List;

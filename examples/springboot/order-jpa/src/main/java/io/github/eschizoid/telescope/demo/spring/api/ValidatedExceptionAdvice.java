@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.validated;
+package io.github.eschizoid.telescope.demo.spring.api;
 
 import java.util.List;
 import org.springframework.http.HttpStatus;

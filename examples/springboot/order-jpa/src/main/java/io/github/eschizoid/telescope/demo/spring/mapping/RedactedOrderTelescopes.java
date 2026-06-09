@@ -1,7 +1,8 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.redacted;
+package io.github.eschizoid.telescope.demo.spring.mapping;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
+import io.github.eschizoid.telescope.demo.spring.domain.RedactedOrder;
 
 /**
  * Hand-rolled {@code Telescope<Order, RedactedOrder>} built through {@link

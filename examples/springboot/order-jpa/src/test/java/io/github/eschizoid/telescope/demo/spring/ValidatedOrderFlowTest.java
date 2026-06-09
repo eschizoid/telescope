@@ -1,9 +1,10 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.validated;
+package io.github.eschizoid.telescope.demo.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
-import io.github.eschizoid.telescope.demo.spring.OrderFixtures;
+import io.github.eschizoid.telescope.demo.spring.api.LineItemValidationError;
+import io.github.eschizoid.telescope.demo.spring.api.ValidatedExceptionAdvice;
 import io.github.eschizoid.telescope.demo.spring.domain.Address;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;

@@ -115,17 +115,17 @@ public class CodegenOrderController {
     @RequestParam(defaultValue = "10") final int percent
   ) {
     // Demonstrates Mapper.asTelescope() composing across paradigms in one typed pipeline:
-    //   1. OrderPath.start().lineItems().each().get()  — typed record-side traversal down to a
+    //   1. OrderPath.start().lineItems().each().get() — typed record-side traversal down to a
     //      Telescope<Order, LineItem>. Codegen-emitted, compile-time-bound, multi-focus.
-    //   2. .then(lineItemMapper.asTelescope())          — bridge into the entity side. The mapper
+    //   2. .then(lineItemMapper.asTelescope()) — bridge into the entity side. The mapper
     //      exposes its bidirectional Iso<LineItem, LineItemEntity> as a Telescope so the lattice
     //      `.then(...)` can compose it. Result: Telescope<Order, LineItemEntity>.
-    //   3. new LineItemEntityPath<>(...)                — wrap the bridged Telescope back into a
+    //   3. new LineItemEntityPath<>(...) — wrap the bridged Telescope back into a
     //      typed entity-side navigator. The Path ctor is public (intentional codegen surface, so
     //      cross-package bridge hops and mid-chain entries like this one can construct one).
     //      LineItemEntityPath's `unitPriceCents()` returns Telescope<Order, Long> — fully typed,
     //      no runtime SerializedLambda decode at the leaf.
-    //   4. .update(record, cents -> ...)                — fn runs on every line item's cents.
+    //   4. .update(record, cents -> ...) — fn runs on every line item's cents.
     //      Backward composition routes the new cents value through `lineItemMapper`'s reverse
     //      direction, materialising a LineItem with the new BigDecimal unitPrice. The result is
     //      a fresh Order with discounted prices.

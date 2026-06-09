@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.inspect;
+package io.github.eschizoid.telescope.demo.spring.api;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;

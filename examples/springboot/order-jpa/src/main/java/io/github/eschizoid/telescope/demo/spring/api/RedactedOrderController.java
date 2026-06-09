@@ -1,7 +1,9 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.redacted;
+package io.github.eschizoid.telescope.demo.spring.api;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
+import io.github.eschizoid.telescope.demo.spring.domain.RedactedOrder;
+import io.github.eschizoid.telescope.demo.spring.mapping.RedactedOrderTelescopes;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderEntity;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderRepository;
 import org.springframework.http.ResponseEntity;

@@ -1,10 +1,11 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.redacted;
+package io.github.eschizoid.telescope.demo.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import io.github.eschizoid.telescope.demo.spring.OrderFixtures;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
+import io.github.eschizoid.telescope.demo.spring.domain.RedactedOrder;
+import io.github.eschizoid.telescope.demo.spring.mapping.RedactedOrderTelescopes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

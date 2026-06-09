@@ -1,8 +1,8 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.bulkupdate;
+package io.github.eschizoid.telescope.demo.spring.api;
 
-import static io.github.eschizoid.telescope.Edit.over;
+import static io.github.eschizoid.telescope.Edit.mapIfPresent;
+import static io.github.eschizoid.telescope.Edit.overIfPresent;
 
-import io.github.eschizoid.telescope.Edit;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.Address;
@@ -11,8 +11,6 @@ import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderEntity;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderRepository;
-import java.util.ArrayList;
-import java.util.List;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,11 +19,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Exercises {@link Telescope#all(Edit[])} inside Spring's transactional boundary on a real domain.
- * Each non-null field of {@link BulkUpdateRequest} contributes one {@code over(PATH, fn)} edit; the
- * controller folds the lot into a single reusable {@code Telescope<Order, Order>} and applies it
- * once to the loaded record before persisting. The call shape keeps the count visible at a glance —
- * one {@code over(...)} per line, no chain blur.
+ * Sparse-PATCH endpoint built on {@link Telescope#all(io.github.eschizoid.telescope.Edit[])} with
+ * the {@code overIfPresent(...)} ergonomic shape. Each non-null field of {@link BulkUpdateRequest}
+ * contributes one slot to the bundle; null fields short-circuit to identity. No conditional
+ * builder, no ArrayList — the call site reads as the contract.
  */
 @RestController
 public class BulkUpdateController {
@@ -63,18 +60,14 @@ public class BulkUpdateController {
     if (entity == null) return ResponseEntity.notFound().build();
     final var current = orderMapper.backward(entity);
 
-    final List<Edit<Order>> edits = new ArrayList<>();
-    if (req.orderNumber() != null) edits.add(over(ORDER_NUMBER, prev -> req.orderNumber()));
-    if (req.customerEmail() != null) edits.add(over(CUSTOMER_EMAIL, prev -> req.customerEmail().toLowerCase()));
-    if (req.shippingCity() != null) edits.add(over(SHIPPING_CITY, prev -> req.shippingCity()));
-    if (req.billingCity() != null) edits.add(over(BILLING_CITY, prev -> req.billingCity()));
-    if (req.lineItemQuantityDelta() != null) edits.add(
-      over(LINE_ITEM_QUANTITIES, q -> q + req.lineItemQuantityDelta())
+    final Telescope<Order, Order> patch = Telescope.all(
+      overIfPresent(ORDER_NUMBER, req.orderNumber()),
+      overIfPresent(CUSTOMER_EMAIL, req.customerEmail(), String::toLowerCase),
+      overIfPresent(SHIPPING_CITY, req.shippingCity()),
+      overIfPresent(BILLING_CITY, req.billingCity()),
+      mapIfPresent(LINE_ITEM_QUANTITIES, req.lineItemQuantityDelta(), Integer::sum)
     );
-
-    @SuppressWarnings({ "unchecked", "rawtypes" })
-    final Telescope<Order, Order> bundle = Telescope.all(edits.toArray(new Edit[0]));
-    final var updated = bundle.apply(current);
+    final var updated = patch.apply(current);
 
     final var saved = orderRepository.save(orderMapper.forward(updated));
     return ResponseEntity.ok(orderMapper.backward(saved));

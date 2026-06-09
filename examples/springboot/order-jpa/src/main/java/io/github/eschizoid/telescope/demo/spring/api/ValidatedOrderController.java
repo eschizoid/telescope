@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.validated;
+package io.github.eschizoid.telescope.demo.spring.api;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Validated;
@@ -26,22 +26,12 @@ public class ValidatedOrderController {
     final Validated<LineItemValidationError, Order> result = Telescope.of(Order.class)
       .each(Order::lineItems)
       .field(LineItem::quantity)
-      .updateValidated(
-        request,
-        // The traversal-level validator: feed each focused quantity through a check that
-        // returns a
-        // Valid carrying the quantity unchanged, or an Invalid with a sibling-aware error.
-        // The
-        // outer source captures the original request so the validator can recover the SKU
-        // for
-        // each focused element (since the optic surfaces only the quantity to the
-        // function).
-        quantity ->
-          quantity < 0
-            ? Validated.invalid(
-                new LineItemValidationError(skuFor(request, quantity), quantity, "quantity must be non-negative")
-              )
-            : Validated.valid(quantity)
+      .updateValidated(request, quantity ->
+        quantity < 0
+          ? Validated.invalid(
+              new LineItemValidationError(skuFor(request, quantity), quantity, "quantity must be non-negative")
+            )
+          : Validated.valid(quantity)
       );
 
     return switch (result) {

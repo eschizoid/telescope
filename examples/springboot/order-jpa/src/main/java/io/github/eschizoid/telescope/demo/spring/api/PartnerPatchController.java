@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.partnerpatch;
+package io.github.eschizoid.telescope.demo.spring.api;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;

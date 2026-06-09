@@ -1,11 +1,10 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.inspect;
+package io.github.eschizoid.telescope.demo.spring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.github.eschizoid.telescope.demo.spring.OrderFixtures;
-import io.github.eschizoid.telescope.demo.spring.bughunt.inspect.InspectController.InspectError;
-import io.github.eschizoid.telescope.demo.spring.bughunt.inspect.InspectController.InspectRequest;
-import io.github.eschizoid.telescope.demo.spring.bughunt.inspect.InspectController.InspectResponse;
+import io.github.eschizoid.telescope.demo.spring.api.InspectController.InspectError;
+import io.github.eschizoid.telescope.demo.spring.api.InspectController.InspectRequest;
+import io.github.eschizoid.telescope.demo.spring.api.InspectController.InspectResponse;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

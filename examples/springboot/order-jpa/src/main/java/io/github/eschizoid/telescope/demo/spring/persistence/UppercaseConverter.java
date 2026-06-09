@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.jpaconverter;
+package io.github.eschizoid.telescope.demo.spring.persistence;
 
 import jakarta.persistence.AttributeConverter;
 

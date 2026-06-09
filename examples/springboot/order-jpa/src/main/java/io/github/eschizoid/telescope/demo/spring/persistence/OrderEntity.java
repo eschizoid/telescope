@@ -5,6 +5,7 @@ import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.AttributeOverrides;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Embedded;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -45,6 +46,7 @@ public class OrderEntity {
   private Long id;
 
   @Column(name = "reference_code")
+  @Convert(converter = UppercaseConverter.class)
   private String referenceCode;
 
   @ManyToOne(cascade = CascadeType.PERSIST, fetch = FetchType.EAGER)

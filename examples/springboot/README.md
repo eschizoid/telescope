@@ -1,25 +1,42 @@
 # telescope-examples-springboot
 
-End-to-end demo: **Spring Boot 4.0.1 + Jackson + Hibernate 7 + H2 + telescope**, running on JDK 25. A real enterprise
-stack, with telescope handling the record↔entity conversion between the API layer and the persistence layer. Two
-parallel mapper implementations of the same domain show the trade-off between the runtime DSL and the codegen-emitted
-holders.
+End-to-end demos: **Spring Boot 4.0.1 + Jackson + Hibernate 7 + H2 + telescope**, running on JDK 25. Two modules, two
+stories — pick whichever matches your situation.
 
-This project is **standalone** — its own `settings.gradle.kts`, its own Gradle wrapper, depends on
-`io.github.eschizoid:telescope` from Maven Central. It is intentionally **not** part of the main telescope build, so it
-exercises telescope the way a real downstream consumer would: as a versioned artifact, not a sibling subproject.
+| Module                 | Story                                                                                                   | Pick when                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **`order-jpa/`**       | telescope as the record↔entity mapping engine across a realistic e-commerce domain with deep nesting    | You want to see telescope handle a wide surface: JPA, deep records, validation, bulk patches, mappers |
+| **`product-starter/`** | `telescope-spring-boot-starter` auto-wires every `Mapper<A, B>` bean into a single dispatching registry | You want zero-config wiring and one `TelescopeMapperRegistry` to dispatch by `(source, target)` pair  |
+
+Both modules are **standalone** — each has its own `settings.gradle.kts` and Gradle wrapper, and depends on
+`io.github.eschizoid:telescope*` from Maven Central. They are intentionally **not** part of the main telescope build, so
+they exercise telescope the way a real downstream consumer would: as versioned artifacts, not sibling subprojects.
+
+---
+
+## `order-jpa/` — the e-commerce showcase
+
+A real enterprise stack with telescope handling the record↔entity conversion between the API layer and the persistence
+layer. Multiple controllers on the same `Order` domain demonstrate the runtime DSL, the codegen-emitted holders,
+accumulating validation, and bulk patch application — pick the angle that matches your case.
 
 ## What it shows
 
 The same `Order` domain record graph round-trips through Jackson → telescope → Hibernate → telescope → Jackson, with two
 interchangeable mapper implementations:
 
-| Path                   | Implementation                                                                               | When to pick it                                                   |
-| ---------------------- | -------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `POST /orders/runtime` | `Telescope.mapper(Order.class, OrderEntity.class, Mapping.to(...), Mapping.via(...), ...)`   | Fewer LOC; method-reference accessors; no codegen generation cost |
-| `POST /orders/codegen` | Hand-rolled `forward()` / `backward()` on top of the `@Focus` / `@BeanFocus`-emitted holders | Maximum predictability; zero reflective bookkeeping at runtime    |
+| Path                              | Implementation                                                                                  | When to pick it                                                                    |
+| --------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `POST /orders/runtime`            | `Telescope.mapper(Order.class, OrderEntity.class, Mapping.to(...), Mapping.via(...), ...)`      | Fewer LOC; method-reference accessors; no codegen generation cost                  |
+| `POST /orders/codegen`            | Hand-rolled `forward()` / `backward()` on top of the `@Focus` / `@BeanFocus`-emitted holders    | Maximum predictability; zero reflective bookkeeping at runtime                     |
+| `POST /orders/validated`          | `Telescope.of(Order.class).each(...).field(...).updateValidated(...)` + `@RestControllerAdvice` | Accumulating per-line-item errors into one 400 payload — not first-failure-wins    |
+| `POST /orders/{id}/bulk-update`   | `Telescope.all(over(path1, fn), over(path2, fn), ...)` folded into one reusable normaliser      | Apply N field patches in one structural pass on a loaded order                     |
+| `POST /orders/{id}/inspect`       | `read` / `find` / `count` / `exists` terminals on a path described in the request body          | Debug / admin / GraphQL-style introspection over the live order graph              |
+| `GET  /orders/{id}/redacted`      | `Telescope.from(Order.class).to(RedactedOrder.class).using(forward, backward)` — lossy one-way  | Project a stored order into a narrower public view (mask PII), reject reverse      |
+| `GET  /orders/{id}/partner-label` | `Mapper<Order, PartnerShippingLabel>.forward(...)` — full mapper-driven projection              | Hand a partner system the shape it expects, derived from one mapper definition     |
+| `PATCH /orders/{id}/from-partner` | `Mapper<Order, PartnerShippingLabel>.patch(existing, partial)` — sparse overlay                 | Accept partner-side updates, apply only non-null fields back onto the stored order |
 
-Both flows reuse the same `OrderRepository` (Spring Data JPA) and the same `OrderEntity` graph.
+All four flows reuse the same `OrderRepository` (Spring Data JPA) and the same `OrderEntity` graph.
 
 ### Domain shape — wide enough to exercise the deep-mapping surface
 

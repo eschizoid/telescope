@@ -1,11 +1,11 @@
-package io.github.eschizoid.telescope.demo.spring.bughunt.bulkupdate;
+package io.github.eschizoid.telescope.demo.spring;
 
 import static io.github.eschizoid.telescope.Edit.over;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.github.eschizoid.telescope.Edit;
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.demo.spring.OrderFixtures;
+import io.github.eschizoid.telescope.demo.spring.api.BulkUpdateRequest;
 import io.github.eschizoid.telescope.demo.spring.domain.Address;
 import io.github.eschizoid.telescope.demo.spring.domain.Customer;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
