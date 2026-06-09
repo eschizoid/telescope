@@ -1,7 +1,9 @@
 package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
-
+import io.github.eschizoid.telescope.internal.Beans;
+import io.github.eschizoid.telescope.internal.Reflective;
+import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.Drop;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
@@ -10,11 +12,6 @@ import io.github.eschizoid.telescope.mapping.SameTypedTo;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
-
-
-import io.github.eschizoid.telescope.internal.Beans;
-import io.github.eschizoid.telescope.internal.Reflective;
-import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.time.temporal.Temporal;

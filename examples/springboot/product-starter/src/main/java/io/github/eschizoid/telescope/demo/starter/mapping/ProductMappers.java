@@ -5,8 +5,8 @@ import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETT
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 
-import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.starter.domain.Product;
 import io.github.eschizoid.telescope.demo.starter.partner.ProductDto;
 import io.github.eschizoid.telescope.demo.starter.partner.ProductManifest;

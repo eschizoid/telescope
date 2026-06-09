@@ -3,8 +3,8 @@
  * lifting through effects over Java records and POJOs. One {@link
  * io.github.eschizoid.telescope.Telescope Telescope&lt;S, A&gt;} type carries the navigation path
  * and every terminal operation (read / write / single-shot effects / multi-edit / deep mapping);
- * complements {@link io.github.eschizoid.telescope.conversion.Mapper Mapper&lt;A, B&gt;} for the cases that
- * benefit from sparse-overlay patching or explicit container lifting.
+ * complements {@link io.github.eschizoid.telescope.conversion.Mapper Mapper&lt;A, B&gt;} for the
+ * cases that benefit from sparse-overlay patching or explicit container lifting.
  *
  * <h2>Entry points</h2>
  *

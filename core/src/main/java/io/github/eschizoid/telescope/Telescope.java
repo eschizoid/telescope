@@ -2,12 +2,8 @@ package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
-
-import io.github.eschizoid.telescope.mapping.MapStep;
-
 import io.github.eschizoid.telescope.effects.Either;
 import io.github.eschizoid.telescope.effects.Validated;
-
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
@@ -17,6 +13,7 @@ import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
+import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.runtime.instances.CompletableFutureK;
 import io.github.eschizoid.telescope.runtime.instances.EitherK;
 import io.github.eschizoid.telescope.runtime.instances.OptionalK;
@@ -150,12 +147,12 @@ public sealed class Telescope<
 
   /**
    * Wrap an internal optic ({@link Traversal} or any of its subtypes — {@link Iso}, {@link Lens},
-   * {@link Prism}) as a {@code Telescope<S, A>}. Package-private: only same-package callers in
-   * this file construct telescopes from raw lattice optics. Cross-package callers ({@link
-   * io.github.eschizoid.telescope.conversion.Mapper#asTelescope},
-   * {@link io.github.eschizoid.telescope.conversion.To#using},
-   * {@link DeepMap}) go through {@link #iso(Function, Function)} instead, which takes only public
-   * {@link Function} types so the lattice doesn't appear in any cross-package signature.
+   * {@link Prism}) as a {@code Telescope<S, A>}. Package-private: only same-package callers in this
+   * file construct telescopes from raw lattice optics. Cross-package callers ({@link
+   * io.github.eschizoid.telescope.conversion.Mapper#asTelescope}, {@link
+   * io.github.eschizoid.telescope.conversion.To#using}, {@link DeepMap}) go through {@link
+   * #iso(Function, Function)} instead, which takes only public {@link Function} types so the
+   * lattice doesn't appear in any cross-package signature.
    */
   static <S, A> Telescope<S, A> wrap(final Traversal<S, A> optic) {
     return new Telescope<>(optic);
@@ -283,8 +280,8 @@ public sealed class Telescope<
    * that is always safe; with mutable POJOs the new and old object share those sub-objects, so
    * treat the shared parts as effectively immutable (don't mutate them afterward). For
    * POJO&harr;record or POJO&harr;POJO <em>conversion</em>, use {@link #map(Class, Class,
-   * io.github.eschizoid.telescope.mapping.MapStep...)} — the same deep recursive factory handles both kinds
-   * and any cross-paradigm mix.
+   * io.github.eschizoid.telescope.mapping.MapStep...)} — the same deep recursive factory handles
+   * both kinds and any cross-paradigm mix.
    */
   public static <P> Telescope<P, P> ofBean(final Class<P> pojoClass) {
     return new Telescope<>(Iso.identity(), BeanFieldOptics.INSTANCE);
@@ -339,8 +336,9 @@ public sealed class Telescope<
    * }</pre>
    *
    * <p>For a field-by-field declarative mapping between two records or POJOs (no hand-written
-   * conversion functions), use {@link #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)}
-   * — it handles both record↔record, POJO↔POJO, and any cross-paradigm mix at any depth.
+   * conversion functions), use {@link #map(Class, Class,
+   * io.github.eschizoid.telescope.mapping.MapStep...)} — it handles both record↔record, POJO↔POJO,
+   * and any cross-paradigm mix at any depth.
    *
    * @see #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)
    */
@@ -383,17 +381,17 @@ public sealed class Telescope<
    * <p><b>Row kinds accepted.</b>
    *
    * <ul>
-   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#to(Accessor, Accessor) to(src, tgt)} —
-   *       same-typed rename
+   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#to(Accessor, Accessor) to(src, tgt)}
+   *       — same-typed rename
    *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#to(Accessor, Accessor,
    *       java.util.function.Function, java.util.function.Function) to(src, tgt, fwd, bwd)} — typed
    *       transform
-   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#via(Accessor, Accessor, Mapper) via(src,
-   *       tgt, mapper)} — nested mapper
+   *   <li>{@link io.github.eschizoid.telescope.mapping.Mapping#via(Accessor, Accessor, Mapper)
+   *       via(src, tgt, mapper)} — nested mapper
    *   <li>{@link io.github.eschizoid.telescope.mapping.WriteHint#writeBean(Class,
-   *       io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy) writeBean(target, strategy)} —
-   *       per-target write-strategy override (e.g. force {@code CONSTRUCTOR} for an immutable
-   *       all-args-only POJO that {@code Beans.autoWriter} refuses)
+   *       io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy) writeBean(target,
+   *       strategy)} — per-target write-strategy override (e.g. force {@code CONSTRUCTOR} for an
+   *       immutable all-args-only POJO that {@code Beans.autoWriter} refuses)
    * </ul>
    *
    * @param source the source root class — record or POJO (root of the recursion)
@@ -482,8 +480,9 @@ public sealed class Telescope<
    * {@link MapPath} carrying the map type for later {@link MapPath#values()} navigation.
    *
    * <p>Named {@code mapField} (rather than {@code map}) to disambiguate from the sibling static
-   * deep-conversion factory {@link #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)} —
-   * those do conceptually different things and share the same verb otherwise.
+   * deep-conversion factory {@link #map(Class, Class,
+   * io.github.eschizoid.telescope.mapping.MapStep...)} — those do conceptually different things and
+   * share the same verb otherwise.
    */
   public <K, V> MapPath<S, K, V> mapField(final Accessor<A, Map<K, V>> getter) {
     final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
@@ -641,7 +640,8 @@ public sealed class Telescope<
   /**
    * Compose this telescope with another via the lattice's {@code .then}. Lets you build a path in
    * pieces and stitch them together, and is how reusable conversions ({@link #from}, {@link
-   * #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)}) get threaded into a longer path.
+   * #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)}) get threaded into a
+   * longer path.
    *
    * <pre>{@code
    * final var userEmail = Telescope.of(User.class).field(User::email);   // reusable tail

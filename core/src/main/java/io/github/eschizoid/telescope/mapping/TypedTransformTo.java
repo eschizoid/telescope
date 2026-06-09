@@ -9,8 +9,8 @@ import java.util.function.Function;
  * Function)}. {@code DeepMap} reads {@link #forward()} / {@link #backward()} and assembles the
  * leaf-level Iso itself, so no internal optic type appears on this record's surface.
  *
- * <p>Internal — users construct via {@link Mapping#to(Accessor, Accessor, Function, Function)}
- * and never see this type at the call site.
+ * <p>Internal — users construct via {@link Mapping#to(Accessor, Accessor, Function, Function)} and
+ * never see this type at the call site.
  */
 public record TypedTransformTo<A, B, X, Y>(
   Accessor<A, X> src,

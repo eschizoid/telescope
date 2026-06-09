@@ -6,8 +6,8 @@ import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 
-import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.Customer;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
@@ -25,9 +25,9 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Wires the top-level {@code Order ↔ OrderEntity} mapper. All four record↔entity type pairs (Order,
  * Customer, LineItem, Address) live under one {@link Telescope#mapper(Class, Class,
- * io.github.eschizoid.telescope.mapping.MapStep...)} call — the deep-mapping engine groups rows by {@code
- * (sourceClass, targetClass)} pair, so a row written here applies wherever that pair shows up in
- * the recursive walk (top-level for Order, depth-1 for Customer, depth-1 for the shipping and
+ * io.github.eschizoid.telescope.mapping.MapStep...)} call — the deep-mapping engine groups rows by
+ * {@code (sourceClass, targetClass)} pair, so a row written here applies wherever that pair shows
+ * up in the recursive walk (top-level for Order, depth-1 for Customer, depth-1 for the shipping and
  * billing addresses, depth-2 inside the list of line items).
  *
  * <p>The configuration is consumed by both controllers. Underlying dispatch is transparent: when
@@ -94,7 +94,8 @@ public class OrderMappers {
 
   /**
    * A reusable {@code Customer ↔ CustomerEntity} mapper, broken out so {@link #orderMapper(Mapper,
-   * Mapper) orderMapper} can drop it in via {@link io.github.eschizoid.telescope.mapping.Mapping#via(
+   * Mapper) orderMapper} can drop it in via {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#via(
    * io.github.eschizoid.telescope.Telescope.Accessor,
    * io.github.eschizoid.telescope.Telescope.Accessor, Mapper) via} as a <em>scalar</em> nested
    * mapper (one-to-one record-pair slot, no container lift). Same shape as the {@link

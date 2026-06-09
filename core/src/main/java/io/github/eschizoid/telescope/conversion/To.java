@@ -1,7 +1,6 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
-
 import java.util.function.Function;
 
 /**

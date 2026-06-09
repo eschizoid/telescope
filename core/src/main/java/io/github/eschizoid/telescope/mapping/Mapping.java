@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope.mapping;
 
-import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.Telescope.Accessor;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.function.Function;
 
 /**

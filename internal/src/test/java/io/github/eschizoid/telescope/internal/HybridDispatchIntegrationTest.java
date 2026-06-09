@@ -1,8 +1,5 @@
 package io.github.eschizoid.telescope.internal;
 
-import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
-import io.github.eschizoid.telescope.internal.Reflective;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

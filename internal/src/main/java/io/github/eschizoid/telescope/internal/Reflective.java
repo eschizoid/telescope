@@ -1,7 +1,5 @@
 package io.github.eschizoid.telescope.internal;
 
-import io.github.eschizoid.telescope.internal.Beans;
-import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.reflect.Type;

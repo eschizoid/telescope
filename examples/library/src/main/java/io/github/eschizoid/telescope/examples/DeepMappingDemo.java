@@ -5,8 +5,8 @@ import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 
-import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;

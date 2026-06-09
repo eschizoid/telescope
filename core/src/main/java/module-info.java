@@ -11,14 +11,14 @@
  * <ul>
  *   <li>{@link io.github.eschizoid.telescope} — the DSL surface. {@link
  *       io.github.eschizoid.telescope.Telescope} (navigation + read + write + effects + deep
- *       mapping factory), {@link io.github.eschizoid.telescope.conversion.Mapper} (bidirectional graph mapper
- *       with {@code forward} / {@code backward} / {@code patch} / {@code asTelescope} / container-
- *       lift surface), the {@link io.github.eschizoid.telescope.Either} / {@link
+ *       mapping factory), {@link io.github.eschizoid.telescope.conversion.Mapper} (bidirectional
+ *       graph mapper with {@code forward} / {@code backward} / {@code patch} / {@code asTelescope}
+ *       / container- lift surface), the {@link io.github.eschizoid.telescope.Either} / {@link
  *       io.github.eschizoid.telescope.Validated} sealed effect types, {@link
  *       io.github.eschizoid.telescope.Indexed} for indexed traversals, the multi-edit primitive
  *       {@link io.github.eschizoid.telescope.Edit}, and the row-builder DSL that the deep-mapping
- *       factory accepts as varargs ({@link io.github.eschizoid.telescope.mapping.Mapping#to to}, {@link
- *       io.github.eschizoid.telescope.mapping.Mapping#via via}, {@link
+ *       factory accepts as varargs ({@link io.github.eschizoid.telescope.mapping.Mapping#to to},
+ *       {@link io.github.eschizoid.telescope.mapping.Mapping#via via}, {@link
  *       io.github.eschizoid.telescope.mapping.WriteHint#writeBean writeBean} / {@link
  *       io.github.eschizoid.telescope.mapping.WriteHint#writeBeans writeBeans}).
  *   <li>{@link io.github.eschizoid.telescope.annotations} — compile-time markers for the codegen

@@ -1,13 +1,12 @@
 package io.github.eschizoid.telescope;
 
-import io.github.eschizoid.telescope.effects.Either;
-import io.github.eschizoid.telescope.effects.Validated;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.effects.Either;
+import io.github.eschizoid.telescope.effects.Validated;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;

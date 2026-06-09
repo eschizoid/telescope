@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope.spring;
 
-import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.Collection;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;

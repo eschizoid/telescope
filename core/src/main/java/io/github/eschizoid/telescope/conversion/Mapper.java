@@ -1,12 +1,9 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
-
-import io.github.eschizoid.telescope.mapping.MapStep;
-
-
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.mapping.MapStep;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,9 +13,9 @@ import java.util.function.Function;
 
 /**
  * A bidirectional mapper produced by the deep recursive factory {@link Telescope#mapper(Class,
- * Class, io.github.eschizoid.telescope.mapping.MapStep...)}. Wraps an {@link Iso} for the forward/backward
- * conversion and (optionally) a per-target-component patch table for sparse {@link #patch}
- * overlays.
+ * Class, io.github.eschizoid.telescope.mapping.MapStep...)}. Wraps an {@link Iso} for the
+ * forward/backward conversion and (optionally) a per-target-component patch table for sparse {@link
+ * #patch} overlays.
  *
  * <p>Works for any combination of record and bean classes — the source and target side each pick
  * their own {@link Reflective} dispatch at construction, so {@code patch(...)} reads the partial

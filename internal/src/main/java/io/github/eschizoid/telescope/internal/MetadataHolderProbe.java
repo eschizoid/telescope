@@ -94,10 +94,10 @@ public final class MetadataHolderProbe {
      *
      * <p>The cast routes through {@link #opticExtractor} — the static-init bridge that {@code
      * Telescope} (in {@code :api}) registers at class-load time to expose its underlying optic
-     * field. This indirection keeps {@code :internal} compile-time-independent of {@code :api}
-     * (no {@code Telescope} import here) while still letting holder dispatch recover a {@link
-     * Lens} at runtime. If a future processor emits a wider optic ({@code Traversal}, {@code
-     * Affine}), the cast surfaces as a {@code ClassCastException} at dispatch.
+     * field. This indirection keeps {@code :internal} compile-time-independent of {@code :api} (no
+     * {@code Telescope} import here) while still letting holder dispatch recover a {@link Lens} at
+     * runtime. If a future processor emits a wider optic ({@code Traversal}, {@code Affine}), the
+     * cast surfaces as a {@code ClassCastException} at dispatch.
      */
     public Lens<?, ?> lensFor(final String name) {
       final var constant = constantsByName.get(name);
@@ -169,9 +169,9 @@ public final class MetadataHolderProbe {
   }
 
   /**
-   * Read the holder's {@code public static Map<String, Object> constants()} method — one
-   * {@link Class#getDeclaredMethod} + one {@link java.lang.reflect.Method#invoke} regardless of
-   * holder size. The holder is required to expose this method; if it's missing or shaped wrong, the
+   * Read the holder's {@code public static Map<String, Object> constants()} method — one {@link
+   * Class#getDeclaredMethod} + one {@link java.lang.reflect.Method#invoke} regardless of holder
+   * size. The holder is required to expose this method; if it's missing or shaped wrong, the
    * codegen on the classpath is out of date with this runtime.
    */
   @SuppressWarnings("unchecked")

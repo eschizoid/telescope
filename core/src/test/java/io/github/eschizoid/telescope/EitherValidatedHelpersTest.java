@@ -1,10 +1,9 @@
 package io.github.eschizoid.telescope;
 
-import io.github.eschizoid.telescope.effects.Either;
-import io.github.eschizoid.telescope.effects.Validated;
-
 import static org.junit.jupiter.api.Assertions.*;
 
+import io.github.eschizoid.telescope.effects.Either;
+import io.github.eschizoid.telescope.effects.Validated;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
