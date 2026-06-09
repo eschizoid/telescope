@@ -22,13 +22,13 @@ import org.springframework.web.bind.annotation.RestController;
  * Runtime-resolution flavour of the order CRUD surface.
  *
  * <ul>
- *   <li>{@code POST /orders/runtime} — Jackson hydrates the JSON into the {@link Order} record; the
- *       runtime {@link Mapper} converts it into an {@link OrderEntity}; Hibernate persists it; the
- *       response runs {@code mapper.backward(...)} on the saved entity (which now has generated
- *       ids) and returns the JSON.
- *   <li>{@code GET /orders/runtime/{id}} — repository load, {@code mapper.backward}, return.
- *   <li>{@code PATCH /orders/runtime/{id}} — sparse-update demo. The request body is a partial
- *       {@link Order}; only the non-null fields land on the existing entity via {@code
+ *   <li>{@code POST /orders} — Jackson hydrates the JSON into the {@link Order} record; the runtime
+ *       {@link Mapper} converts it into an {@link OrderEntity}; Hibernate persists it; the response
+ *       runs {@code mapper.backward(...)} on the saved entity (which now has generated ids) and
+ *       returns the JSON.
+ *   <li>{@code GET /orders/{id}} — repository load, {@code mapper.backward}, return.
+ *   <li>{@code PATCH /orders/{id}} — sparse-update demo. The request body is a partial {@link
+ *       Order}; only the non-null fields land on the existing entity via {@code
  *       mapper.patch(existing, partial)}.
  * </ul>
  *
@@ -38,13 +38,13 @@ import org.springframework.web.bind.annotation.RestController;
  * unit of work.
  */
 @RestController
-@RequestMapping("/orders/runtime")
-public class RuntimeOrderController {
+@RequestMapping("/orders")
+public class OrderController {
 
   private final Mapper<Order, OrderEntity> orderMapper;
   private final OrderRepository orderRepository;
 
-  public RuntimeOrderController(final Mapper<Order, OrderEntity> orderMapper, final OrderRepository orderRepository) {
+  public OrderController(final Mapper<Order, OrderEntity> orderMapper, final OrderRepository orderRepository) {
     this.orderMapper = orderMapper;
     this.orderRepository = orderRepository;
   }

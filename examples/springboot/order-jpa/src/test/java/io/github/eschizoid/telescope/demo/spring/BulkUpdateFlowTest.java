@@ -41,7 +41,7 @@ class BulkUpdateFlowTest {
   void allFiveEditsLandAtomicallyAndOffPathFieldsSurvive() {
     final var created = client
       .post()
-      .uri("/orders/runtime")
+      .uri("/orders")
       .contentType(MediaType.APPLICATION_JSON)
       .body(OrderFixtures.sampleOrder())
       .retrieve()

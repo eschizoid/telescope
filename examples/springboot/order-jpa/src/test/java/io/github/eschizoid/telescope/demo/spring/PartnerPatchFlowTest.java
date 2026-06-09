@@ -20,7 +20,7 @@ import org.springframework.web.client.RestClient;
  * Bug-hunt slice: pin {@code Mapper.patch(...)} in the Lombok-bean → record direction.
  *
  * <p>The existing demo only patches in the record → bean direction (see {@code
- * RuntimeOrderController.patch}). Here the source is the {@code Order} record and the target is the
+ * OrderController.patch}). Here the source is the {@code Order} record and the target is the
  * Lombok-{@code @Data} {@code PartnerShippingLabel}. The patch table is built at the top level of
  * the type pair; entries are keyed on bean property names and write through the record-side
  * canonical-constructor reflective. Pre-1.0 risk: dispatch silently drops values, no-ops, or fills
@@ -155,7 +155,7 @@ class PartnerPatchFlowTest {
   void httpPatchFromPartnerLabelChangesOnlyOrderNumber() {
     final var created = client
       .post()
-      .uri("/orders/runtime")
+      .uri("/orders")
       .contentType(MediaType.APPLICATION_JSON)
       .body(OrderFixtures.sampleOrder())
       .retrieve()

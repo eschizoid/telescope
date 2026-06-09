@@ -31,7 +31,7 @@ import org.springframework.web.client.RestClient;
  * </ol>
  */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-class RuntimeOrderFlowTest {
+class OrderFlowTest {
 
   @LocalServerPort
   private int port;
@@ -47,7 +47,7 @@ class RuntimeOrderFlowTest {
   void postRoundTripPreservesShapeAndLowercasesEmail() {
     final var body = client
       .post()
-      .uri("/orders/runtime")
+      .uri("/orders")
       .contentType(MediaType.APPLICATION_JSON)
       .body(OrderFixtures.sampleOrder())
       .retrieve()
@@ -74,7 +74,7 @@ class RuntimeOrderFlowTest {
   void patchOnlyOverlaysProvidedFields() {
     final var created = client
       .post()
-      .uri("/orders/runtime")
+      .uri("/orders")
       .contentType(MediaType.APPLICATION_JSON)
       .body(OrderFixtures.sampleOrder())
       .retrieve()
@@ -84,7 +84,7 @@ class RuntimeOrderFlowTest {
 
     final var patched = client
       .patch()
-      .uri("/orders/runtime/" + id)
+      .uri("/orders/" + id)
       .contentType(MediaType.APPLICATION_JSON)
       .body(OrderFixtures.patchOrderNumberOnly("ORD-PATCHED"))
       .retrieve()
@@ -114,7 +114,7 @@ class RuntimeOrderFlowTest {
     );
     final var bulk = client
       .post()
-      .uri("/orders/runtime/bulk")
+      .uri("/orders/bulk")
       .contentType(MediaType.APPLICATION_JSON)
       .body(List.of(OrderFixtures.sampleOrder(), second))
       .retrieve()
@@ -132,7 +132,7 @@ class RuntimeOrderFlowTest {
   @Test
   void getReturns404ForUnknownId() {
     try {
-      client.get().uri("/orders/runtime/999999").retrieve().body(Order.class);
+      client.get().uri("/orders/999999").retrieve().body(Order.class);
       throw new AssertionError("expected 404");
     } catch (final HttpClientErrorException e) {
       assertThat(e.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);

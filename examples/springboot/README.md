@@ -1,288 +1,242 @@
 # telescope-examples-springboot
 
-End-to-end demos: **Spring Boot 4.0.1 + Jackson + Hibernate 7 + H2 + telescope**, running on JDK 25. Four modules,
-four stories — pick whichever matches your situation.
+End-to-end demos: **Spring Boot 4.0.1 + Jackson + Hibernate 7 + H2 + telescope**, running on JDK 25. Four standalone
+submodules, each one focused on one paradigm or feature. Pick the one that matches what you're evaluating.
 
-| Module                 | Story                                                                                                                                      | Pick when                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
-| **`order-jpa/`**       | telescope as the record↔entity mapping engine across a realistic e-commerce domain with deep nesting                                       | You want to see telescope handle a wide surface: JPA, deep records, validation, bulk patches, mappers |
-| **`product-starter/`** | `telescope-spring-boot-starter` auto-wires every `Mapper<A, B>` bean into a single dispatching registry                                    | You want zero-config wiring and one `TelescopeMapperRegistry` to dispatch by `(source, target)` pair  |
-| **`invoicing/`**       | `@Bridge`-annotated record↔bean pairs get conversion classes emitted at compile time, with deep recursion into other user-declared bridges | You want zero-reflection compile-time-bound conversion; no `Telescope.mapper(...)` call anywhere      |
-| **`org-chart/`**       | Self-referencing record↔entity pair against a Hibernate bidirectional graph — type-level + value-level cycle handling                      | You have a domain with self-references (org charts, threaded comments, graph data) you want to map    |
+## At a glance
 
-All four modules are standalone — each has its own build, depends on `io.github.eschizoid:telescope*` from Maven
-Central, and is intentionally **not** part of the main telescope build, so they exercise telescope the way a real
+| Module                 | Paradigm              | Headline                                                                                  |
+| ---------------------- | --------------------- | ----------------------------------------------------------------------------------------- |
+| **`product-starter/`** | runtime + auto-config | `telescope-spring-boot-starter` discovers every `Mapper<A, B>` bean into a typed registry |
+| **`org-chart/`**       | runtime + JPA cycles  | Self-referencing record↔entity pair with bidirectional Hibernate cycle severance          |
+| **`invoicing/`**       | codegen               | `@Bridge`-emitted conversion classes — zero `Telescope.mapper(...)` calls anywhere        |
+| **`order-jpa/`**       | mixed (kitchen sink)  | Realistic e-commerce stack — eight endpoints, every telescope angle on one `Order` domain |
+
+All four modules are standalone — each has its own build file, depends on `io.github.eschizoid:telescope*` from Maven
+Central, and is intentionally **not** part of the main telescope build. They exercise telescope the way a real
 downstream consumer would: as versioned artifacts, not sibling subprojects.
 
----
-
-## `order-jpa/` — the e-commerce showcase
-
-A real enterprise stack with telescope handling the record↔entity conversion between the API layer and the persistence
-layer. Multiple controllers on the same `Order` domain demonstrate the runtime DSL, the codegen-emitted holders,
-accumulating validation, and bulk patch application — pick the angle that matches your case.
-
-## What it shows
-
-The same `Order` domain record graph round-trips through Jackson → telescope → Hibernate → telescope → Jackson, with two
-interchangeable mapper implementations:
-
-| Path                              | Implementation                                                                                  | When to pick it                                                                    |
-| --------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `POST /orders/runtime`            | `Telescope.mapper(Order.class, OrderEntity.class, Mapping.to(...), Mapping.via(...), ...)`      | Fewer LOC; method-reference accessors; no codegen generation cost                  |
-| `POST /orders/codegen`            | Hand-rolled `forward()` / `backward()` on top of the `@Focus` / `@BeanFocus`-emitted holders    | Maximum predictability; zero reflective bookkeeping at runtime                     |
-| `POST /orders/validated`          | `Telescope.of(Order.class).each(...).field(...).updateValidated(...)` + `@RestControllerAdvice` | Accumulating per-line-item errors into one 400 payload — not first-failure-wins    |
-| `POST /orders/{id}/bulk-update`   | `Telescope.all(over(path1, fn), over(path2, fn), ...)` folded into one reusable normaliser      | Apply N field patches in one structural pass on a loaded order                     |
-| `POST /orders/{id}/inspect`       | `read` / `find` / `count` / `exists` terminals on a path described in the request body          | Debug / admin / GraphQL-style introspection over the live order graph              |
-| `GET  /orders/{id}/redacted`      | `Telescope.from(Order.class).to(RedactedOrder.class).using(forward, backward)` — lossy one-way  | Project a stored order into a narrower public view (mask PII), reject reverse      |
-| `GET  /orders/{id}/partner-label` | `Mapper<Order, PartnerShippingLabel>.forward(...)` — full mapper-driven projection              | Hand a partner system the shape it expects, derived from one mapper definition     |
-| `PATCH /orders/{id}/from-partner` | `Mapper<Order, PartnerShippingLabel>.patch(existing, partial)` — sparse overlay                 | Accept partner-side updates, apply only non-null fields back onto the stored order |
-
-All four flows reuse the same `OrderRepository` (Spring Data JPA) and the same `OrderEntity` graph.
-
-### Domain shape — wide enough to exercise the deep-mapping surface
-
-```
-Order (record)                  OrderEntity (@Entity)
-├── id: Long                    ├── id: @Id @GeneratedValue Long
-├── orderNumber: String         ├── orderNumber: String
-├── customer: Customer  ─────►  ├── customer: @ManyToOne CustomerEntity
-├── shippingAddress: Address    ├── shippingAddress: @Embedded AddressEmbeddable
-├── billingAddress: Address     ├── billingAddress: @Embedded AddressEmbeddable
-├── lineItems: List<LineItem>   ├── lineItems: @OneToMany List<LineItemEntity>
-└── giftWrap: Optional<Address> └── giftWrap: @Embedded AddressEmbeddable (nullable)
-
-Customer (record)               CustomerEntity (@Entity)
-├── id: Long                    ├── id: @Id @GeneratedValue Long
-├── name: String                ├── name: String
-└── email: String               └── email: String
-
-LineItem (record)               LineItemEntity (@Entity)
-├── sku: String                 ├── sku: String
-├── quantity: int               ├── quantity: int
-└── unitPrice: BigDecimal ────► └── unitPriceCents: long
-                                                      (typed transform — 19.99 ↔ 1999)
-```
-
-### Telescope capabilities demonstrated
-
-- **`Telescope.mapper(A, B, Mapping... rows)`** — the runtime factory, used in `RuntimeOrderMappers`.
-- **`Mapping.to(srcAcc, tgtAcc)`** — same-typed correspondence (mostly inferred via auto-mapping).
-- **`Mapping.to(srcAcc, tgtAcc, fwd, bwd)`** — **typed transform** for `BigDecimal ↔ long-cents`.
-- **`Mapping.via(srcAcc, tgtAcc, nestedMapper)`** — compose sub-mappers (Customer, Address, LineItem) into the top-level
-  Order mapper.
-- **`Mapping.drop(srcAcc)` / `Mapping.drop(srcAcc, targetClass)`** — declare a source field intentionally NOT mapped to
-  the target. `partnerLabelMapper` uses both: top-level `drop(Order::metadata)` keeps internal metadata off the partner
-  DTO, and nested `drop(Customer::tags, PartnerCustomer.class)` keeps Customer's internal tag set off the partner-facing
-  customer shape — the recursion hits `(Customer, PartnerCustomer)` and the scoped drop fires there.
-- **`WriteHint.writeBean(Class, SETTERS)`** — pin the bean write strategy to no-arg-ctor + setters (required for
-  Hibernate-managed identity assignment).
-- **`Mapper.forward(...)` / `Mapper.backward(...)`** — both directions from one definition.
-- **`Mapper.patch(existing, partial)`** — sparse overlay; only non-null fields from `partial` land on `existing`. Powers
-  the `PATCH /orders/runtime/{id}` endpoint.
-- **`Telescope.of(Order.class).field(Order::customer).field(Customer::email).update(...)`** — deep update through two
-  levels of nesting; used in both controllers to lowercase the email pre-write.
-- **`Telescope.all(overIfPresent(...), mapIfPresent(...))`** — sparse-PATCH composition with no if-ladder; powers the
-  `POST /orders/{id}/bulk-update` endpoint.
-- **`@Focus` / `@BeanFocus`** — annotation-driven codegen that emits `<X>Path<R>` navigators and `<X>Telescope` metadata
-  holders. Consumed inline in `CodegenOrderMappers`.
-- **`Optional<Address>`, `List<LineItem>`, `Map<String, String>`, `Set<String>` cardinality** — recurse through the
-  runtime factory without special-casing; `Order.metadata` shows the Map auto-lift end-to-end with `@ElementCollection`,
-  `Customer.tags` does the same for Set auto-lift + the typed `SetPath.each()` terminal.
-- **Hibernate LAZY-proxy unwrap** — `OrderEntity.customer` is `@ManyToOne(fetch = LAZY)`. When telescope's
-  `Mapper.backward(...)` reads a `HibernateProxy`, it forces a single initialization fetch (counted via Hibernate's
-  `Statistics.getEntityFetchCount()`) and resolves the persistent class via `Beans.persistentClassOf(...)`. Pinned by
-  `OrderCustomerLazyFetchTest`.
-- **Sealed-narrow after a paradigm hop** — `Order.payment: sealed Payment` (record-side,
-  `CreditCard | PayPal | BankTransfer`) bridges to `legacy.PaymentEntity` (bean-side, mirror sealed hierarchy) via
-  `PaymentMappers.paymentBridge()`. The flagship chain
-  `Telescope.of(Order.class).field(Order::payment).then(paymentBridge()).as(CreditCardEntity.class).field(CreditCardEntity::getCardNumber).update(...)`
-  crosses records → sealed bridge → prism narrow → bean-getter field in one expression. Each `.field(...)` re-resolves
-  its FieldOptics dispatch per accessor declaring-class — record-side vs bean-side never confused. Pinned by
-  `SealedNarrowAfterParadigmHopTest`.
-
-## Running
-
-Prereq: **JDK 25** on `PATH`. The Gradle wrapper handles the Gradle distribution.
-
-```bash
-# from this directory
-./gradlew bootRun
-```
-
-Then in a second terminal:
-
-```bash
-# Create an order through the runtime path
-curl -s -X POST http://localhost:8080/orders/runtime \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "orderNumber": "ORD-2026-0001",
-    "customer": {"name": "Alice Example", "email": "ALICE@example.com"},
-    "shippingAddress": {"street": "100 Main St", "city": "Brooklyn", "state": "NY", "zip": "11201"},
-    "billingAddress":  {"street": "200 Billing Ave", "city": "Brooklyn", "state": "NY", "zip": "11201"},
-    "lineItems": [
-      {"sku": "SKU-A", "quantity": 2, "unitPrice": 19.99},
-      {"sku": "SKU-B", "quantity": 1, "unitPrice": 49.50}
-    ],
-    "giftWrap": {"street": "300 Gift Rd", "city": "Brooklyn", "state": "NY", "zip": "11201"}
-  }' | jq
-
-# Same payload, codegen path
-curl -s -X POST http://localhost:8080/orders/codegen \
-  -H 'Content-Type: application/json' \
-  -d '{...}' | jq
-
-# PATCH only the order number (runtime path)
-curl -s -X PATCH http://localhost:8080/orders/runtime/1 \
-  -H 'Content-Type: application/json' \
-  -d '{"orderNumber": "ORD-PATCHED"}' | jq
-
-# Re-normalise emails on an existing order (codegen path showcases the deep-update fast path)
-curl -s -X POST http://localhost:8080/orders/codegen/normalise-emails/1 | jq
-```
-
-## Running the integration tests
-
-```bash
-./gradlew test
-```
-
-Two test classes, `RuntimeOrderFlowTest` and `CodegenOrderFlowTest`, drive the full Spring Boot context against an H2
-in-memory database and assert that the JSON ↔ record ↔ entity round-trip preserves every nested value.
-
-## What you should learn from this
-
-1. **Records + Jackson + telescope compose cleanly.** Jackson handles JSON ↔ record; telescope handles record ↔ entity.
-   No copy constructors anywhere. No reflection in the hot path on the codegen route.
-
-2. **Bidirectional mapping is genuinely useful in production.** One `Telescope.mapper(...)` definition feeds both the
-   POST (forward to entity, save) and the GET (load entity, backward to record). With MapStruct you'd write two separate
-   `@Mapper` interfaces.
-
-3. **The runtime path is honest about what it costs.** First call to `Telescope.mapper(A, B, ...)` builds the cached
-   pair; subsequent calls are O(1) dispatch through the holder constants. The codegen path makes that cost explicit and
-   visible in source.
-
-4. **Hibernate doesn't fight telescope.** The bean side handles `@Entity` POJOs the same way it handles plain POJOs — no
-   JPA awareness in the library, just standard `getX()`/`setX()` conventions. `@Embeddable` works without ceremony;
-   `@OneToMany` cascades along the natural list-of-children mapping.
-
-5. **You can pick your trade-off per call site.** The two flows share a domain and an entity graph verbatim; only the
-   mapper layer varies. Add or swap call sites without restructuring anything else.
+**Where to start:** if you're new, read `product-starter/` first (smallest, most idiomatic). If you're trying to decide
+between runtime and codegen, read `org-chart/` (pure runtime) and `invoicing/` (pure codegen) back-to-back — the
+contrast is the point. If you want to see telescope across a wide feature surface, `order-jpa/` is the kitchen sink.
 
 ---
 
-## `product-starter/` — the auto-wired-registry showcase
+## Runtime modules
+
+The runtime path uses `Telescope.mapper(...)` and `Telescope.of(Class).field(Lambda)` — the lambda resolves field names
+via `SerializedLambda`, then dispatches through a cached `LambdaMetafactory` substrate. First call builds the type-pair
+Iso; subsequent calls are O(1). No annotation processors required.
+
+### `product-starter/` — the auto-wired registry
 
 A minimal Spring Boot app demonstrating `telescope-spring-boot-starter`: drop `@Bean Mapper<A, B>` declarations into
-your config, the starter's `TelescopeMapperRegistry` auto-discovers them and indexes by `(sourceClass, targetClass)`.
-The controller looks up mappers at request time via `registry.get(Product.class, Target.class)` — one source class,
-multiple target shapes, picked by a runtime parameter.
+your `@Configuration`, and the starter's `TelescopeMapperRegistry` auto-discovers them and indexes by
+`(sourceClass, targetClass)`. The controller looks up mappers at request time via `registry.get(Product.class, T.class)`
+— one source, many target shapes, dispatched polymorphically.
 
-### Endpoints
+**Endpoints**
 
-| Path                           | Target                             | Strategy                                        |
-| ------------------------------ | ---------------------------------- | ----------------------------------------------- |
-| `POST /products?view=record`   | `Product` (record canonical)       | No write — record returned as-is                |
-| `POST /products?view=dto`      | `ProductDto` (Lombok `@Data`)      | `writeBeans(SETTERS)` — Lombok setters          |
-| `POST /products?view=manifest` | `ProductManifest` (immutable POJO) | `writeBean(ProductManifest.class, CONSTRUCTOR)` |
-| `GET  /products/{id}?view=...` | Same three shapes                  | Picked by `view` parameter via registry         |
-| `GET  /products/{id}/manifest` | `ProductManifest` (always)         | Dedicated endpoint for the immutable view       |
+| Path                           | What it shows                                                                |
+| ------------------------------ | ---------------------------------------------------------------------------- |
+| `POST /products?view=record`   | Source returned as-is (no mapping)                                           |
+| `POST /products?view=dto`      | Lombok `@Data` DTO via `writeBeans(SETTERS)`                                 |
+| `POST /products?view=manifest` | Immutable POJO via `writeBean(ProductManifest.class, CONSTRUCTOR)`           |
+| `GET  /products/{id}?view=...` | Same three shapes, picked by query parameter via the registry                |
+| `GET  /products/{id}/manifest` | Dedicated read-only endpoint that always renders the immutable manifest view |
 
-### Per-class write strategy (the headline capability)
+**What lands**
 
-The three target shapes need three different reconstruction strategies. Telescope handles this with one global default
-plus per-class overrides:
+- Spring Boot autoconfig fires, `TelescopeMapperRegistry` indexes all three `@Bean Mapper<Product, ?>` beans
+- `registry.get(Source.class, Target.class)` for runtime polymorphic dispatch
+- `writeBeans(SETTERS)` global default + `writeBean(Class, CONSTRUCTOR)` per-target override — one mapper can mix
+  reconstruction strategies for targets with different shapes (mutable, immutable, builder-driven)
+- Lombok `@Data` + Jackson `@JsonProperty` + telescope coexist on the same DTO
 
-```java
-// productEntityMapper: Hibernate-managed bean — needs no-arg + setters
-Telescope.mapper(Product.class, ProductEntity.class, writeBeans(SETTERS))
+This submodule is **intentionally codegen-free**: no `@Focus`, no `@BeanFocus`, no `telescope-lombok` Path emission.
+Codegen lives in `invoicing/`.
 
-// productDtoMapper: Lombok @Data — same strategy as the JPA entity
-Telescope.mapper(Product.class, ProductDto.class, writeBeans(SETTERS))
+### `org-chart/` — self-referencing JPA cycles
 
-// productManifestMapper: immutable POJO — no setters, no no-arg ctor; CONSTRUCTOR is the only option
-Telescope.mapper(Product.class, ProductManifest.class, writeBean(ProductManifest.class, CONSTRUCTOR))
+A single `Mapper<Employee, EmployeeEntity>` against a Hibernate-managed bidirectional self-reference: every employee has
+a `manager` (`@ManyToOne`) and a list of `reports` (`@OneToMany mappedBy = "manager"`). Together they form a literal
+value-level cycle once Hibernate populates both sides — `bob.manager == alice && alice.reports.contains(bob)`.
+
+**Endpoints**
+
+| Path                   | What it shows                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------------- |
+| `POST /org-chart`      | Forward-map the record to entity, cascade-persist on the manager chain                 |
+| `GET  /org-chart/{id}` | Load, touch both directions inside the transaction, backward-map. Cycle severs cleanly |
+
+**What lands**
+
+- **Type-level cycle resolution at construction** — `DeepMap.populateIso` reserves the `(Employee, EmployeeEntity)`
+  `TypePair` cache slot before recursing into auto-derived component Isos. The inner recursion finds the parent slot
+  already reserved and short-circuits. No stack overflow at `Telescope.mapper(...)` time.
+- **Value-level cycle severance at `mapper.backward(...)`** — Hibernate stitches the bidirectional graph on hydration.
+  DeepMap's per-traversal `IdentityHashMap` seen-set returns `null` on re-entry into the same instance; `null` lifts
+  cleanly to `Optional.empty()` via `Iso.liftOptionalToNullable(...)` using `Optional.ofNullable`. The top-level record
+  materialises with first-level associations intact; deeper back-pointers collapse to empty.
+- `spring.jpa.open-in-view=false` — production hygiene. The transactional boundary is the controller, not the view.
+
+---
+
+## Codegen module
+
+The codegen path emits direct-call `*Path<R>`, `*Bridge`, and `*Telescope` classes at compile time from `@Focus`,
+`@BeanFocus`, and `@Bridge` annotations. Every navigation step is a direct method call on a generated class — no
+`SerializedLambda` decode, no runtime field-name probe, no reflective getter/setter dispatch.
+
+### `invoicing/` — `@Bridge`-driven conversion
+
+A pure compile-time-bound demo: zero `Telescope.mapper(...)` calls anywhere. Two record↔bean pairs (`InvoiceLine` /
+`InvoiceLineEntity` and `InvoiceHeader` / `InvoiceHeaderEntity`) drive the bridges. The parent (`InvoiceHeader` with
+`List<InvoiceLine>`) auto-recurses into the user-declared child bridge — no manual list-lift wiring.
+
+**Endpoints**
+
+| Path                              | Generated machinery                                                                         |
+| --------------------------------- | ------------------------------------------------------------------------------------------- |
+| `POST /invoices/lines/forward`    | `InvoiceLinePath.start().asInvoiceLineEntity().read(line)` — generated navigator hop        |
+| `POST /invoices/lines/backward`   | `InvoiceLineBridge.backward(entity)` — generated static method                              |
+| `POST /invoices/headers/forward`  | `InvoiceHeaderBridge.forward(header)` — auto-recurses into `InvoiceLineBridge` for the list |
+| `POST /invoices/headers/backward` | `InvoiceHeaderBridge.backward(entity)` — same in reverse                                    |
+
+**What lands**
+
+- **`@Bridge(Target.class)`** emits `<Source>Bridge` (`BRIDGE` Telescope constant + static `forward`/`backward`). The
+  bijection rule requires source and target expose the same field-name set.
+- **Bridge hop on the navigator** — when a `@Focus`-annotated record also carries `@Bridge`, its emitted
+  `<Source>Path<R>` gains an `as<TargetSimpleName>()` method that returns a typed continuation (`<Target>EntityPath<R>`
+  when the target is `@BeanFocus`-navigable). Navigation keeps reading like a sentence after the paradigm hop.
+- **Deep recursion through user-declared bridges** — `InvoiceHeader` carries `List<InvoiceLine>`. The parent
+  `InvoiceHeaderBridge` auto-emits a list-lift that delegates per-element to the user-declared `InvoiceLineBridge`
+  rather than synthesising its own anonymous Iso.
+- **Zero `Telescope.mapper(...)` at runtime** — every conversion is a direct method call. Compile-time bound,
+  IDE-navigable, no reflection in the hot path.
+
+---
+
+## Mixed module
+
+### `order-jpa/` — the e-commerce kitchen sink
+
+The widest surface of any submodule. **Headline: "pick your trade-off per call site."** The same `Order` domain backs
+eight endpoints that each demonstrate a different telescope angle. Both the runtime DSL
+(`Telescope.of(Order.class).field(...)`) and the codegen path navigators (`OrderPath.start().x()`) live side by side —
+the choice between them happens at the controller, not at the domain. Adding `@Focus` / `@BeanFocus` is purely opt-in:
+the runtime mapper transparently uses the codegen-emitted holder constants when present (holder-probe fast path,
+post-ADR-0006), but doesn't require them.
+
+**Endpoints**
+
+| Path                              | Telescope angle                                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `POST /orders`                    | Runtime DSL — basic CRUD with deep-update email normalisation pre-save                           |
+| `POST /orders/path`               | Codegen navigator — `OrderPath.start().lineItems().each().unitPrice().update(...)`               |
+| `POST /orders/validated`          | `updateValidated` accumulates per-line-item errors into one 400 payload (not first-failure-wins) |
+| `POST /orders/{id}/bulk-update`   | `Telescope.all(overIfPresent(...), mapIfPresent(...))` — sparse-PATCH composition, no if-ladder  |
+| `POST /orders/{id}/inspect`       | `read` / `find` / `count` / `exists` terminals — describe a path in the request body             |
+| `GET  /orders/{id}/redacted`      | `Telescope.from(...).to(...).using(forward, backward)` — lossy one-way projection                |
+| `GET  /orders/{id}/partner-label` | `Mapper<Order, PartnerShippingLabel>.forward(...)` — full mapper-driven partner DTO              |
+| `PATCH /orders/{id}/from-partner` | `Mapper.patch(existing, partial)` — sparse overlay from partner side                             |
+
+**Domain shape**
+
+```
+Order (record)                       OrderEntity (@Entity)
+├── id: Long                         ├── id: @Id @GeneratedValue Long
+├── orderNumber: String              ├── referenceCode: @Convert(UppercaseConverter)
+│                                    │              (typed rename via Mapping.to)
+├── customer: Customer  ───────────► ├── customer: @ManyToOne(fetch = LAZY) CustomerEntity
+├── shippingAddress: Address         ├── shippingAddress: @Embedded AddressEmbeddable
+├── billingAddress: Address          ├── billingAddress: @Embedded AddressEmbeddable
+├── lineItems: List<LineItem>        ├── lineItems: @OneToMany List<LineItemEntity>
+├── giftWrap: Optional<Address>      ├── giftWrap: @Embedded AddressEmbeddable (nullable)
+├── metadata: Map<String, String>    ├── metadata: @ElementCollection Map<String, String>
+└── payment: sealed Payment              (no payment column — partner processor owns it;
+    (CreditCard | PayPal |             drop(Order::payment) on the runtime mapper)
+     BankTransfer)
+
+Customer (record)                    CustomerEntity (@Entity)
+├── id: Long                         ├── id: @Id @GeneratedValue Long
+├── name: String                     ├── name: String
+├── email: String                    ├── email: String
+└── tags: Set<String>                └── tags: @ElementCollection Set<String>
+
+LineItem (record)                    LineItemEntity (@Entity)
+├── sku: String                      ├── sku: String
+├── quantity: int                    ├── quantity: int
+└── unitPrice: BigDecimal ─────────► └── unitPriceCents: long
+                                                  (typed transform — 19.99 ↔ 1999)
 ```
 
-If `writeBean(Class, STRATEGY)` were ignored and the global default applied, the manifest mapper would fail eagerly at
-`Telescope.mapper(...)` construction time because the SETTERS probe can't find the right shape. The per-class hint wins.
+**Telescope capabilities demonstrated** (full surface — the kitchen sink)
 
-### Telescope capabilities demonstrated
-
-- **`telescope-spring-boot-starter` auto-config** — drop `@Bean Mapper<A, B>` declarations in any `@Configuration`, the
-  starter discovers them and populates `TelescopeMapperRegistry`. No `@TelescopeMapper`-style annotation magic.
-- **`registry.get(Source.class, Target.class)`** — runtime lookup by type pair. The controller doesn't inject specific
-  mapper beans — it dispatches polymorphically, which is the pattern that scales when the app has dozens of mappers.
-- **`writeBeans(STRATEGY)` global + `writeBean(Class, STRATEGY)` per-target override** — one mapper can mix
-  reconstruction strategies when a single target hierarchy has both mutable and immutable shapes.
-- **Lombok + Jackson + telescope coexistence** — `@Data` synthesises setters used by `SETTERS`, `@JsonProperty` renames
-  fields on the wire without affecting the Java identifiers telescope reads. `telescope-lombok` emits
-  `ProductDtoPath<R>` against the same property surface for compile-time-bound navigation.
-
----
-
-## `invoicing/` — the `@Bridge` codegen showcase
-
-A pure compile-time-bound demo: zero `Telescope.mapper(...)` calls anywhere. Both endpoint pairs route through
-`BridgeProcessor`-emitted classes that the user never wrote — direct method calls, no `SerializedLambda` decode, no
-runtime field-name probe, no reflective getter/setter dispatch.
-
-### Endpoints
-
-| Path                              | Generated machinery                                                                               |
-| --------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `POST /invoices/lines/forward`    | `InvoiceLinePath.start().asInvoiceLineEntity().read(line)` — navigator hop generated by `@Bridge` |
-| `POST /invoices/lines/backward`   | `InvoiceLineBridge.backward(entity)` — generated static method                                    |
-| `POST /invoices/headers/forward`  | `InvoiceHeaderBridge.forward(header)` — auto-recurses into `InvoiceLineBridge` for the list       |
-| `POST /invoices/headers/backward` | `InvoiceHeaderBridge.backward(entity)` — same in reverse                                          |
-
-### Telescope capabilities demonstrated
-
-- **`@Bridge(Target.class)`** — annotation-driven codegen emits a `<Source>Bridge` class with a `BRIDGE` constant
-  (`Telescope<Source, Target>`) plus static `forward(...)` / `backward(...)` methods. The bijection rule requires the
-  source and target expose the same field-name set; types match exactly or via a generated identity.
-- **Bridge hop on the navigator** — when a `@Focus`-annotated record also carries `@Bridge`, its emitted
-  `<Source>Path<R>` gains an `as<TargetSimpleName>()` method. Because the target is `@BeanFocus`-navigable, the hop
-  returns a typed continuation (`InvoiceLineEntityPath<R>`) instead of a terminal `Telescope<R, Target>`. Navigation
-  keeps reading like a sentence after the paradigm hop.
-- **Deep recursion through user-declared bridges** — `InvoiceHeader` carries `List<InvoiceLine>`. The parent
-  `InvoiceHeaderBridge` auto-emits a list-lift that delegates per element to the user-declared `InvoiceLineBridge`
-  rather than synthesising its own anonymous Iso. The user owns each sub-bridge by name.
-- **Zero `Telescope.mapper(...)` at runtime** — every conversion in this submodule is a direct method call on a
-  generated class. Compile-time bound, IDE-navigable, no reflection in the hot path.
+- **`Telescope.mapper(A, B, Mapping... rows)`** — the runtime factory.
+- **`Mapping.to(srcAcc, tgtAcc)`** — same-typed correspondence (mostly inferred via auto-mapping).
+- **`Mapping.to(srcAcc, tgtAcc, fwd, bwd)`** — typed transform for `BigDecimal ↔ long-cents`.
+- **`Mapping.via(srcAcc, tgtAcc, nestedMapper)`** — compose sub-mappers (Customer, Address, LineItem) into the top-level
+  Order mapper.
+- **`Mapping.drop(srcAcc)` / `Mapping.drop(srcAcc, targetClass)`** — declare a source field intentionally NOT mapped.
+  `partnerLabelMapper` uses both: top-level `drop(Order::metadata)` keeps internal metadata off the partner DTO, and
+  nested `drop(Customer::tags, PartnerCustomer.class)` keeps Customer's internal tag set off the partner-facing customer
+  shape.
+- **`WriteHint.writeBeans(SETTERS)`** — global default for Hibernate-managed identity assignment.
+- **`Mapper.forward` / `Mapper.backward`** — both directions from one definition.
+- **`Mapper.patch(existing, partial)`** — sparse overlay; partner-PATCH endpoint.
+- **`Mapper.asTelescope()`** — promote a mapper into a `Telescope<A, B>` so it composes via `.then(...)` into a typed
+  chain that bridges record-side and entity-side leaf types.
+- **`Telescope.of(...).field(...).field(...).update(...)`** — deep update through nested field levels.
+- **`Telescope.all(overIfPresent(...), mapIfPresent(...))`** — sparse-PATCH composition with no if-ladder.
+- **`Telescope.from(...).to(...).using(forward, backward)`** — hand-rolled bridge for sealed-type or lossy projection
+  cases.
+- **`@Focus` / `@BeanFocus`** — annotation-driven codegen that emits `<X>Path<R>` navigators and `<X>Telescope` metadata
+  holders. Consumed inline in `OrderPathController`.
+- **`Optional<Address>`, `List<LineItem>`, `Map<String, String>`, `Set<String>` cardinality** — recurse through the
+  runtime factory without special-casing.
+- **Hibernate LAZY-proxy unwrap** — `OrderEntity.customer` is `@ManyToOne(fetch = LAZY)`. `Beans.persistentClassOf`
+  forces a single initialisation fetch (counted via `Statistics.getEntityFetchCount()`).
+- **Sealed-narrow after paradigm hop** —
+  `Telescope.of(Order.class).field(Order::payment).then(paymentBridge()).as(CreditCardEntity.class).field(CreditCardEntity::getCardNumber)`
+  crosses records → sealed bridge → prism narrow → bean-getter field in one expression.
 
 ---
 
-## `org-chart/` — the self-referencing-cycle showcase
+## Running each module
 
-A single `Mapper<Employee, EmployeeEntity>` against a Hibernate-managed bidirectional self-reference: every employee
-has a manager (`@ManyToOne`) and a list of reports (`@OneToMany mappedBy = "manager"`). Together they form a literal
-value-level cycle once Hibernate populates both sides — `bob.manager == alice && alice.reports.contains(bob)`. The
-demo proves telescope's deep mapper handles this at both layers.
+Each module is standalone — `cd` into it and use the Gradle wrapper at the repo root:
 
-### Endpoints
+```bash
+# pick one:
+./gradlew :examples:springboot:product-starter:bootRun
+./gradlew :examples:springboot:org-chart:bootRun
+./gradlew :examples:springboot:invoicing:bootRun
+./gradlew :examples:springboot:order-jpa:bootRun
+```
 
-| Path                     | What it does                                                                                  |
-| ------------------------ | --------------------------------------------------------------------------------------------- |
-| `POST /org-chart`        | Forward-map an `Employee` record to `EmployeeEntity`, save with cascade-persist on the manager chain |
-| `GET  /org-chart/{id}`   | Load, touch both directions inside the transaction, backward-map. Value cycle severs cleanly  |
+Then send requests with `curl` or any HTTP client. Each module's endpoints are listed in its section above.
 
-### Telescope capabilities demonstrated
+**Run the integration tests** for any module:
 
-- **Type-level cycle resolution at `Telescope.mapper(...)` construction time** — the `Employee ↔ EmployeeEntity` pair
-  references itself through `Optional<Employee> manager` + `List<Employee> reports`. `DeepMap.populateIso` reserves
-  the `(Employee, EmployeeEntity)` `TypePair` cache slot before recursing into auto-derived component Isos, so the
-  inner recursion finds the parent slot already reserved and short-circuits. No stack overflow at construction time.
-- **Value-level cycle severance at `mapper.backward(...)` time** — Hibernate stitches the bidirectional graph on
-  hydration; backward-mapping otherwise walks `reports → manager → reports → …` unboundedly. DeepMap's per-traversal
-  `IdentityHashMap` seen-set (`DeepMap.cycleSafe`) returns `null` on re-entry into the same instance — `null` lifts
-  cleanly to `Optional.empty()` for the affected slot via `Iso.liftOptionalToNullable`'s `Optional.ofNullable(...)`
-  wrap. The top-level record materialises with first-level associations intact; deeper back-pointers collapse to
-  empty rather than infinite-loop.
-- **No `@Focus` / `@BeanFocus`** — the runtime mapper path is exactly what's under test. Adding codegen would emit
-  Path navigators + holder constants this demo doesn't need.
-- **`spring.jpa.open-in-view=false`** — same hygiene as production. The transactional boundary is the controller,
-  not the view; lazy loads outside the method's `@Transactional` annotation fail loudly. The graph is materialised
-  inside the boundary by touching `manager.getName()` + `reports.size()` before backward-mapping runs.
+```bash
+./gradlew :examples:springboot:<module>:test
+```
+
+Each module's tests drive the full Spring Boot context against an H2 in-memory DB (where applicable) and assert
+end-to-end behaviour.
+
+## Key takeaways
+
+1. **Runtime and codegen aren't competing paradigms** — codegen _enhances_ the runtime path. `@Focus`-emitted holder
+   constants are picked up transparently by the runtime mapper via the holder-probe fast path (ADR-0006). Adding the
+   annotations is opt-in; removing them doesn't change behaviour, only performance.
+2. **Bidirectional mapping is one definition.** One `Telescope.mapper(A, B, ...)` call feeds both directions —
+   `forward(a) → B`, `backward(b) → A`, `patch(base, partial) → A`. With MapStruct you'd write two `@Mapper` interfaces
+   or use `@InheritInverseConfiguration`.
+3. **You can pick your trade-off per call site.** The kitchen-sink `order-jpa/` module shows this explicitly — eight
+   endpoints, one domain, different telescope angles per controller.
+4. **Hibernate doesn't fight telescope.** The bean side reads `@Entity` POJOs through standard `getX`/`setX`
+   conventions. `@Embeddable`, `@OneToMany`, `@ElementCollection`, `@Convert`, LAZY proxies, and bidirectional
+   self-references all work without library-specific awareness.

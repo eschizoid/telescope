@@ -1,5 +1,5 @@
 # Telescope Spring Boot 4 demo — H2 in-memory DB, Hibernate 7 auto DDL, single config file.
-# Start with `./gradlew bootRun`, then POST a JSON order body to /orders/runtime or /orders/codegen.
+# Start with `./gradlew bootRun`, then POST a JSON order body to /orders or /orders/path.
 
 spring:
   datasource:

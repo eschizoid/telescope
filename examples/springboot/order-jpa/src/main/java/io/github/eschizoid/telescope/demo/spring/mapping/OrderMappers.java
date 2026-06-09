@@ -71,23 +71,22 @@ import org.springframework.context.annotation.Configuration;
  * //                                    all-args-only POJO that needs CONSTRUCTOR).
  * }</pre>
  *
- * <p><b>Mapper API used downstream</b> (see {@code RuntimeOrderController} / {@code
- * CodegenOrderController}):
+ * <p><b>Mapper API used downstream</b> (see {@code OrderController} / {@code OrderPathController}):
  *
  * <ul>
  *   <li>{@code mapper.forward(a)} / {@code mapper.read(a)} — A → B
  *   <li>{@code mapper.backward(b)} — B → A
  *   <li>{@code mapper.patch(base, partial)} — sparse overlay (used by {@code
- *       RuntimeOrderController.patch})
+ *       OrderController.patch})
  *   <li>{@code mapper.asTelescope()} — expose as {@code Telescope<A, B>} so it composes via {@code
  *       .then(...)} into a longer typed path; lets a single fluent chain bridge between record-side
- *       and entity-side leaf types (used by {@code CodegenOrderController.applyDiscount} — typed
+ *       and entity-side leaf types (used by {@code OrderPathController.applyDiscount} — typed
  *       {@code OrderPath} walks down to each {@code LineItem}, then {@code
  *       .then(lineItemMapper.asTelescope())} hops into {@code LineItemEntity} so the leaf operation
  *       runs on entity-side {@code unitPriceCents} (long))
  *   <li>{@code mapper.liftList()} / {@code liftSet} / {@code liftOptional} / {@code liftMapValues}
  *       — promote an element-level mapper to a container-level mapper without going through {@code
- *       via(...)} (used by {@code RuntimeOrderController.bulkCreate})
+ *       via(...)} (used by {@code OrderController.bulkCreate})
  * </ul>
  */
 @Configuration

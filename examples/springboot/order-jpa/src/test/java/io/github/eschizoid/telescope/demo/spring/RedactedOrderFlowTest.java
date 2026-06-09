@@ -23,9 +23,9 @@ import tools.jackson.databind.JsonNode;
  * <p>Three angles:
  *
  * <ol>
- *   <li>HTTP — POST a full order to {@code /orders/runtime}, GET {@code /orders/{id}/redacted}, and
- *       assert Spring serialised the {@link RedactedOrder} record cleanly with the redaction
- *       applied to email + city.
+ *   <li>HTTP — POST a full order to {@code /orders}, GET {@code /orders/{id}/redacted}, and assert
+ *       Spring serialised the {@link RedactedOrder} record cleanly with the redaction applied to
+ *       email + city.
  *   <li>In-process forward — call {@code REDACT.read(order)} directly to assert the redaction logic
  *       without HTTP framing.
  *   <li>Backward refusal — the lossy direction throws {@link UnsupportedOperationException} (we
@@ -51,7 +51,7 @@ class RedactedOrderFlowTest {
   void redactedEndpointReturnsObfuscatedProjection() {
     final var created = client
       .post()
-      .uri("/orders/runtime")
+      .uri("/orders")
       .contentType(MediaType.APPLICATION_JSON)
       .body(OrderFixtures.sampleOrder())
       .retrieve()

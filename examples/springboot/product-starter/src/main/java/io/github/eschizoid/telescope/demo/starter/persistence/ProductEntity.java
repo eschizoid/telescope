@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.demo.starter.persistence;
 
-import io.github.eschizoid.telescope.annotations.BeanFocus;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -8,13 +7,12 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 /**
- * Hibernate-managed twin of {@link io.github.eschizoid.telescope.demo.starter.domain.Product}.
- * Plain bean (not Lombok — JPA + Lombok {@code @Data}'s id-based {@code equals/hashCode} can break
- * transient/managed comparisons, so we keep the entity layer pure-Java).
+ * Hibernate-managed twin of {@code domain.Product}. Plain bean (not Lombok — JPA + Lombok
+ * {@code @Data}'s id-based {@code equals/hashCode} can break transient/managed comparisons, so we
+ * keep the entity layer pure-Java). No {@code @BeanFocus} — this submodule is runtime-only.
  */
 @Entity
 @Table(name = "product")
-@BeanFocus
 public class ProductEntity {
 
   @Id

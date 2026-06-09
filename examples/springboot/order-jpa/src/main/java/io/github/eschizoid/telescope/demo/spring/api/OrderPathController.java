@@ -20,9 +20,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * Codegen-driven flavour of the order CRUD surface. Identical API contract and identical
- * persistence behaviour to {@link RuntimeOrderController}; the {@code Mapper<Order, OrderEntity>}
- * bean is shared. What differs is how this controller does <b>deep navigation</b>: it consumes the
- * typed {@code OrderPath<R>} navigator emitted by the {@code FocusProcessor} from the {@link
+ * persistence behaviour to {@link OrderController}; the {@code Mapper<Order, OrderEntity>} bean is
+ * shared. What differs is how this controller does <b>deep navigation</b>: it consumes the typed
+ * {@code OrderPath<R>} navigator emitted by the {@code FocusProcessor} from the {@link
  * io.github.eschizoid.telescope.annotations.Focus @Focus} annotations on the records.
  *
  * <p>The runtime controller's pre-write email normalisation is:
@@ -58,21 +58,21 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>Endpoints:
  *
  * <ul>
- *   <li>{@code POST /orders/codegen} — create with pre-write deep-update via {@link OrderPath}.
- *   <li>{@code GET /orders/codegen/{id}} — load and return.
- *   <li>{@code POST /orders/codegen/normalise-emails/{id}} — re-normalise an existing order's
- *       customer email through the typed navigator (server-side mutation through codegen).
+ *   <li>{@code POST /orders/path} — create with pre-write deep-update via {@link OrderPath}.
+ *   <li>{@code GET /orders/path/{id}} — load and return.
+ *   <li>{@code POST /orders/path/normalise-emails/{id}} — re-normalise an existing order's customer
+ *       email through the typed navigator (server-side mutation through codegen).
  * </ul>
  */
 @RestController
-@RequestMapping("/orders/codegen")
-public class CodegenOrderController {
+@RequestMapping("/orders/path")
+public class OrderPathController {
 
   private final Mapper<Order, OrderEntity> orderMapper;
   private final Mapper<LineItem, LineItemEntity> lineItemMapper;
   private final OrderRepository orderRepository;
 
-  public CodegenOrderController(
+  public OrderPathController(
     final Mapper<Order, OrderEntity> orderMapper,
     final Mapper<LineItem, LineItemEntity> lineItemMapper,
     final OrderRepository orderRepository
