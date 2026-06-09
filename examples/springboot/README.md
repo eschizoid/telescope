@@ -1,24 +1,26 @@
 # telescope-examples-springboot
 
-End-to-end demos: **Spring Boot 4.0.1 + Jackson + Hibernate 7 + H2 + telescope**, running on JDK 25. Four standalone
-submodules, each one focused on one paradigm or feature. Pick the one that matches what you're evaluating.
+**Telescope handles record↔entity mapping for Spring Boot apps — one mapper definition feeds both directions, deep
+nesting recurses without copy-constructors, runtime and codegen paths compose.** Four standalone submodules pick the
+angle: each one focused on one paradigm or feature against the same stack (Spring Boot 4.0.1, Jackson, Hibernate 7, H2,
+JDK 25).
 
 ## At a glance
 
 | Module                 | Paradigm              | Headline                                                                                  |
 | ---------------------- | --------------------- | ----------------------------------------------------------------------------------------- |
+| **`order-jpa/`**       | mixed (kitchen sink)  | Realistic e-commerce stack — eight endpoints, every telescope angle on one `Order` domain |
 | **`product-starter/`** | runtime + auto-config | `telescope-spring-boot-starter` discovers every `Mapper<A, B>` bean into a typed registry |
 | **`org-chart/`**       | runtime + JPA cycles  | Self-referencing record↔entity pair with bidirectional Hibernate cycle severance          |
-| **`invoicing/`**       | codegen               | `@Bridge`-emitted conversion classes — zero `Telescope.mapper(...)` calls anywhere        |
-| **`order-jpa/`**       | mixed (kitchen sink)  | Realistic e-commerce stack — eight endpoints, every telescope angle on one `Order` domain |
+| **`invoicing/`**       | codegen               | `@Bridge`-emitted conversion classes for hot-path record↔bean conversion                  |
 
-All four modules are standalone — each has its own build file, depends on `io.github.eschizoid:telescope*` from Maven
-Central, and is intentionally **not** part of the main telescope build. They exercise telescope the way a real
-downstream consumer would: as versioned artifacts, not sibling subprojects.
+Each submodule has its own `build.gradle.kts` and tests its own slice — no shared `subprojects { ... }` inheritance, so
+each build is what a downstream consumer would need to copy-paste. They depend on sibling projects (`:core`,
+`:spring-boot-starter`) inside the monorepo so demos catch regressions before release.
 
-**Where to start:** if you're new, read `product-starter/` first (smallest, most idiomatic). If you're trying to decide
-between runtime and codegen, read `org-chart/` (pure runtime) and `invoicing/` (pure codegen) back-to-back — the
-contrast is the point. If you want to see telescope across a wide feature surface, `order-jpa/` is the kitchen sink.
+**Where to start:** if you're evaluating telescope and want to see what it CAN do, lead with `order-jpa/` — the kitchen
+sink. Eight endpoints, one realistic domain, every telescope angle. The other three modules are focused follow-ups for
+specific concerns (auto-wiring, cycles, codegen).
 
 ---
 
@@ -56,6 +58,16 @@ your `@Configuration`, and the starter's `TelescopeMapperRegistry` auto-discover
 This submodule is **intentionally codegen-free**: no `@Focus`, no `@BeanFocus`, no `telescope-lombok` Path emission.
 Codegen lives in `invoicing/`.
 
+**vs MapStruct:** MapStruct gives you compile-time mappers per declared interface. Here, telescope's runtime registry
+discovers `@Bean Mapper<A, B>` declarations and dispatches polymorphically by `(source, target)` pair — closer to a
+service-locator pattern than a per-interface generator. See
+[How it compares to MapStruct → "When telescope is the right pick"](../../README.md#when-telescope-is-the-right-pick) in
+the root README.
+
+**Perf receipts:** runtime mapper dispatch benchmarked via `lensConstantUpdate` (~45 ns/op on JDK 25 / Apple Silicon) in
+`:benchmarks` — see
+[`TelescopeBenchmark.java`](../../benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/TelescopeBenchmark.java).
+
 ### `org-chart/` — self-referencing JPA cycles
 
 A single `Mapper<Employee, EmployeeEntity>` against a Hibernate-managed bidirectional self-reference: every employee has
@@ -80,19 +92,32 @@ value-level cycle once Hibernate populates both sides — `bob.manager == alice 
   materialises with first-level associations intact; deeper back-pointers collapse to empty.
 - `spring.jpa.open-in-view=false` — production hygiene. The transactional boundary is the controller, not the view.
 
+**vs MapStruct:** MapStruct doesn't have first-class cycle handling for self-referencing graphs. Workarounds involve
+`@Context` cycle trackers or splitting into two interfaces. Telescope handles type-level cycles at construction
+(TypePair cache) and value-level cycles at traversal (IdentityHashMap seen-set) without user wiring. See
+[How it compares to MapStruct → "When telescope is the right pick"](../../README.md#when-telescope-is-the-right-pick).
+
+**Perf receipts:** see
+[`TelescopeBenchmark.java`](../../benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/TelescopeBenchmark.java)
+for general runtime-path numbers; the cycle severance itself adds an IdentityHashMap probe per leaf — negligible vs the
+structural-iso decompose/recompose dominant cost.
+
 ---
 
 ## Codegen module
 
-The codegen path emits direct-call `*Path<R>`, `*Bridge`, and `*Telescope` classes at compile time from `@Focus`,
-`@BeanFocus`, and `@Bridge` annotations. Every navigation step is a direct method call on a generated class — no
-`SerializedLambda` decode, no runtime field-name probe, no reflective getter/setter dispatch.
+Codegen complements the runtime path — it doesn't replace it. The runtime mapper transparently uses codegen-emitted
+holder constants when `@Focus`/`@BeanFocus` are present (the holder-probe fast path, per ADR-0006), so a mixed app gets
+reflection-free dispatch wherever it added the annotations and lambda-recovered dispatch wherever it didn't. The
+codegen-driven examples in this section show what direct codegen consumption looks like when you want zero-reflection
+compile-time-bound conversion for specific hot paths.
 
-### `invoicing/` — `@Bridge`-driven conversion
+### `invoicing/` — `@Bridge`-driven hot-path conversion
 
-A pure compile-time-bound demo: zero `Telescope.mapper(...)` calls anywhere. Two record↔bean pairs (`InvoiceLine` /
-`InvoiceLineEntity` and `InvoiceHeader` / `InvoiceHeaderEntity`) drive the bridges. The parent (`InvoiceHeader` with
-`List<InvoiceLine>`) auto-recurses into the user-declared child bridge — no manual list-lift wiring.
+Compile-time-bound bridges for record↔bean pairs you want fully direct-call. Two pairs (`InvoiceLine` /
+`InvoiceLineEntity` and `InvoiceHeader` / `InvoiceHeaderEntity`) drive the generated `*Bridge` classes; the parent
+(`InvoiceHeader` with `List<InvoiceLine>`) auto-recurses into the user-declared child bridge with no manual list-lift
+wiring. Useful when a particular conversion is in your tightest loop and you want the JIT to inline straight through.
 
 **Endpoints**
 
@@ -113,8 +138,20 @@ A pure compile-time-bound demo: zero `Telescope.mapper(...)` calls anywhere. Two
 - **Deep recursion through user-declared bridges** — `InvoiceHeader` carries `List<InvoiceLine>`. The parent
   `InvoiceHeaderBridge` auto-emits a list-lift that delegates per-element to the user-declared `InvoiceLineBridge`
   rather than synthesising its own anonymous Iso.
-- **Zero `Telescope.mapper(...)` at runtime** — every conversion is a direct method call. Compile-time bound,
-  IDE-navigable, no reflection in the hot path.
+- **Direct-call dispatch end-to-end for the bridged pair** — every conversion in the bridged code path is a method call
+  on a generated class. Compile-time bound, IDE-navigable, no reflection in the hot path. Pair this with the runtime API
+  for the rest of the app — the two paradigms compose freely.
+
+**vs MapStruct:** this is the apples-to-apples comparison. Both generate conversion code at compile time. MapStruct
+makes you declare a `@Mapper` interface for each pair and a separate one for the inverse; telescope's `@Bridge`
+generates both directions from a single annotation, and parent bridges auto-recurse through user-declared child bridges.
+See
+[How it compares to MapStruct → "When MapStruct is the right pick"](../../README.md#when-mapstruct-is-the-right-pick)
+for cases where MapStruct's tooling beats this.
+
+**Perf receipts:** `bridgeForwardRead` (~15 ns/op) in `:benchmarks` is the closest match to this code path — direct
+generated method call, no runtime mapper. See
+[`TelescopeBenchmark.java`](../../benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/TelescopeBenchmark.java).
 
 ---
 
@@ -201,6 +238,19 @@ LineItem (record)                    LineItemEntity (@Entity)
 - **Sealed-narrow after paradigm hop** —
   `Telescope.of(Order.class).field(Order::payment).then(paymentBridge()).as(CreditCardEntity.class).field(CreditCardEntity::getCardNumber)`
   crosses records → sealed bridge → prism narrow → bean-getter field in one expression.
+
+**vs MapStruct (kitchen sink scope):** MapStruct handles the basic record↔entity mapping fine. What it doesn't give you
+in one place: validated update with error accumulation, sparse-PATCH composition via `Telescope.all(...)`, introspection
+terminals (`read`/`find`/`count`/`exists`), lossy projections via `from/to/using`, sealed-narrow with paradigm hop, deep
+cycle handling. Each of those would be hand-rolled. See
+[How it compares to MapStruct → "When telescope is the right pick"](../../README.md#when-telescope-is-the-right-pick)
+and [Performance honesty](../../README.md#performance-honesty) in the root README.
+
+**Perf receipts:** see `:benchmarks` —
+[`TelescopeBenchmark.java`](../../benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/TelescopeBenchmark.java).
+The runtime mapper path (`lensConstantUpdate` ~45 ns/op) is what `/orders` uses; the codegen path (`bridgeForwardRead`
+~15 ns/op) is what `/orders/path` taps into via the `@Focus`/`@BeanFocus`-emitted holder constants. Both numbers are
+honest about what they exclude — see ADR-0005 and ADR-0006 in `docs/adr/`.
 
 ---
 

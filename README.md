@@ -120,6 +120,28 @@ That's the library. No `Iso`, `Lens`, `Prism`, `Affine`, `Traversal`, `Getter`, 
 
 ---
 
+## Examples
+
+Five runnable demos cover the surface — pick the one matching what you're evaluating:
+
+| Module                                                                         | Stack                         | Pick when                                                                                                     |
+| ------------------------------------------------------------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| [`examples/library/`](examples/library/)                                       | plain Java, no framework      | You want to see what the DSL does in isolation — 10 atomic capability demos (`*Demo.java` mains)              |
+| [`examples/springboot/order-jpa/`](examples/springboot/order-jpa/)             | Spring Boot + JPA + Hibernate | You want the kitchen sink — eight endpoints, one realistic `Order` domain, every telescope angle on one stack |
+| [`examples/springboot/product-starter/`](examples/springboot/product-starter/) | Spring Boot autoconfig        | You want zero-wiring registry discovery — drop `@Bean Mapper<A, B>` declarations and the starter indexes them |
+| [`examples/springboot/org-chart/`](examples/springboot/org-chart/)             | Spring Boot + JPA cycles      | You have a self-referencing domain (org charts, threads, graphs) and want to see cycle-safe mapping           |
+| [`examples/springboot/invoicing/`](examples/springboot/invoicing/)             | `@Bridge` codegen             | You want zero-reflection compile-time-bound conversion on a hot path                                          |
+
+**Where to start.** If you're evaluating telescope and want the broadest view of what it can do, lead with
+[`order-jpa/`](examples/springboot/order-jpa/) — it's the kitchen sink. If you want to see telescope without any
+framework wrapping it, browse [`examples/library/`](examples/library/) first. The other three Spring Boot demos are
+focused follow-ups for specific concerns.
+
+See [`examples/springboot/README.md`](examples/springboot/README.md) for the full per-module guide with endpoint maps,
+capability lists, vs-MapStruct callouts, and benchmark cross-links.
+
+---
+
 ## What it is _not_
 
 - Not a MapStruct replacement. MapStruct is a purpose-built bean-mapping framework with deep ecosystem integration
