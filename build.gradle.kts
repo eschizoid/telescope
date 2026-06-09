@@ -156,6 +156,18 @@ jreleaser {
                             .get()
                             .asFile.absolutePath,
                     )
+                    stagingRepository(
+                        project(":spring-boot-starter").layout.buildDirectory
+                            .dir("staging-deploy")
+                            .get()
+                            .asFile.absolutePath,
+                    )
+                    stagingRepository(
+                        project(":quarkus").layout.buildDirectory
+                            .dir("staging-deploy")
+                            .get()
+                            .asFile.absolutePath,
+                    )
                     enabled.set(true)
                     sign.set(false)
                     maxRetries.set(60)

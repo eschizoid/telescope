@@ -1,0 +1,13 @@
+name: "Telescope"
+description: "Telescope optics DSL — Mapper<A,B> bean registry + CDI producer for the runtime extension"
+metadata:
+  keywords:
+    - "telescope"
+    - "optics"
+    - "mapping"
+    - "records"
+    - "bidirectional"
+  guide: "https://github.com/eschizoid/telescope"
+  categories:
+    - "data"
+  status: "experimental"

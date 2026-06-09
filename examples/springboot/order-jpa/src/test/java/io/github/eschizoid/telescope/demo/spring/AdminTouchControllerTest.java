@@ -23,9 +23,9 @@ import org.springframework.web.client.RestClient;
  *
  * <ol>
  *   <li>A two-segment write path ({@code shippingAddress.city}) sets the nested leaf and persists
- *       it — a follow-up GET reads the new value back. {@code shippingAddress} is {@code
- *       @Embedded} on {@code OrderEntity}, so the update lands in the same row as the parent and
- *       the cascade config is irrelevant.
+ *       it — a follow-up GET reads the new value back. {@code shippingAddress} is {@code @Embedded}
+ *       on {@code OrderEntity}, so the update lands in the same row as the parent and the cascade
+ *       config is irrelevant.
  *   <li>A wrong leaf segment surfaces a {@code 400} carrying the offending field name, the
  *       declaring class (the nested record, not the top-level one), AND the list of known
  *       components on that class.

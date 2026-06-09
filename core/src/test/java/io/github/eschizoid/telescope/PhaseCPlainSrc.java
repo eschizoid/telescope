@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.mapping;
+package io.github.eschizoid.telescope;
 
 /**
  * Top-level no-annotation fixture for {@link DeepMapPhaseCHolderTest}. Has no sibling {@code

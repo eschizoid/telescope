@@ -242,7 +242,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!(el instanceof TypeElement te)) return null;
       final var args = dt.getTypeArguments();
       return switch (te.getQualifiedName().toString()) {
-        case "java.util.List" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.LIST, args.getFirst(), null) : null;
+        case "java.util.List" -> args.size() == 1
+          ? new ContainerShape(FieldPlan.Kind.LIST, args.getFirst(), null)
+          : null;
         case "java.util.Set" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.SET, args.getFirst(), null) : null;
         case "java.util.Optional" -> args.size() == 1
           ? new ContainerShape(FieldPlan.Kind.OPTIONAL, args.getFirst(), null)

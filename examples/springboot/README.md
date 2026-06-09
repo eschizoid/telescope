@@ -92,13 +92,13 @@ value-level cycle once Hibernate populates both sides — `bob.manager == alice 
   materialises with first-level associations intact; deeper back-pointers collapse to empty.
 - `spring.jpa.open-in-view=false` — production hygiene. The transactional boundary is the controller, not the view.
 - **vs MapStruct:** MapStruct doesn't have first-class cycle handling for self-referencing graphs. Workarounds involve
-`@Context` cycle trackers or splitting into two interfaces. Telescope handles type-level cycles at construction
-(TypePair cache) and value-level cycles at traversal (IdentityHashMap seen-set) without user wiring. See
-[How it compares to MapStruct → "When telescope is the right pick"](../../README.md#when-telescope-is-the-right-pick).
+  `@Context` cycle trackers or splitting into two interfaces. Telescope handles type-level cycles at construction
+  (TypePair cache) and value-level cycles at traversal (IdentityHashMap seen-set) without user wiring. See
+  [How it compares to MapStruct → "When telescope is the right pick"](../../README.md#when-telescope-is-the-right-pick).
 - **Perf receipts:** see
-[`TelescopeBenchmark.java`](../../benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/TelescopeBenchmark.java)
-for general runtime-path numbers; the cycle severance itself adds an IdentityHashMap probe per leaf — negligible vs the
-structural-iso decompose/recompose dominant cost.
+  [`TelescopeBenchmark.java`](../../benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/TelescopeBenchmark.java)
+  for general runtime-path numbers; the cycle severance itself adds an IdentityHashMap probe per leaf — negligible vs
+  the structural-iso decompose/recompose dominant cost.
 
 ---
 
@@ -140,14 +140,14 @@ wiring. Useful when a particular conversion is in your tightest loop and you wan
   on a generated class. Compile-time bound, IDE-navigable, no reflection in the hot path. Pair this with the runtime API
   for the rest of the app — the two paradigms compose freely.
 - **vs MapStruct:** this is the apples-to-apples comparison. Both generate conversion code at compile time. MapStruct
-makes you declare a `@Mapper` interface for each pair and a separate one for the inverse; telescope's `@Bridge`
-generates both directions from a single annotation, and parent bridges auto-recurse through user-declared child bridges.
-See
-[How it compares to MapStruct → "When MapStruct is the right pick"](../../README.md#when-mapstruct-is-the-right-pick)
-for cases where MapStruct's tooling beats this.
+  makes you declare a `@Mapper` interface for each pair and a separate one for the inverse; telescope's `@Bridge`
+  generates both directions from a single annotation, and parent bridges auto-recurse through user-declared child
+  bridges. See
+  [How it compares to MapStruct → "When MapStruct is the right pick"](../../README.md#when-mapstruct-is-the-right-pick)
+  for cases where MapStruct's tooling beats this.
 - **Perf receipts:** `bridgeForwardRead` (~15 ns/op) in `:benchmarks` is the closest match to this code path — direct
-generated method call, no runtime mapper. See
-[`TelescopeBenchmark.java`](../../benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/TelescopeBenchmark.java).
+  generated method call, no runtime mapper. See
+  [`TelescopeBenchmark.java`](../../benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/TelescopeBenchmark.java).
 
 ---
 

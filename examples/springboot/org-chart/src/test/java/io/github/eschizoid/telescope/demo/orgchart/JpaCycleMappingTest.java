@@ -24,10 +24,9 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <ol>
  *   <li><b>Type-level cycle resolution at {@code Telescope.mapper(...)} construction time.</b>
- *       {@link io.github.eschizoid.telescope.DeepMap} reserves the TypePair slot before
- *       recursing into auto-derived component Isos, so {@code Employee} containing {@code
- *       Optional<Employee> manager} + {@code List<Employee> reports} resolves without
- *       stack-overflow.
+ *       {@link io.github.eschizoid.telescope.DeepMap} reserves the TypePair slot before recursing
+ *       into auto-derived component Isos, so {@code Employee} containing {@code Optional<Employee>
+ *       manager} + {@code List<Employee> reports} resolves without stack-overflow.
  *   <li><b>Value-level traversal at {@code mapper.backward(entityFromDb)} time.</b> Hibernate
  *       populates bidirectional associations on hydration: once bob is initialized, {@code
  *       bob.getManager() == alice} and {@code alice.getReports().contains(bob)}, a literal

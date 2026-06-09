@@ -6,31 +6,25 @@
  * {@code @Bridge}) eliminates per-call reflection on hot paths without changing the API users
  * write.
  *
- * <p>Four packages are exported:
+ * <p>Two packages are exported:
  *
  * <ul>
  *   <li>{@link io.github.eschizoid.telescope} — the DSL surface. {@link
  *       io.github.eschizoid.telescope.Telescope} (navigation + read + write + effects + deep
- *       mapping factory), the {@link io.github.eschizoid.telescope.Either} / {@link
+ *       mapping factory), {@link io.github.eschizoid.telescope.Mapper} (bidirectional graph mapper
+ *       with {@code forward} / {@code backward} / {@code patch} / {@code asTelescope} / container-
+ *       lift surface), the {@link io.github.eschizoid.telescope.Either} / {@link
  *       io.github.eschizoid.telescope.Validated} sealed effect types, {@link
- *       io.github.eschizoid.telescope.Indexed} for indexed traversals, and the multi-edit primitive
- *       {@link io.github.eschizoid.telescope.Edit}.
+ *       io.github.eschizoid.telescope.Indexed} for indexed traversals, the multi-edit primitive
+ *       {@link io.github.eschizoid.telescope.Edit}, and the row-builder DSL that the deep-mapping
+ *       factory accepts as varargs ({@link io.github.eschizoid.telescope.Mapping#to to}, {@link
+ *       io.github.eschizoid.telescope.Mapping#via via}, {@link
+ *       io.github.eschizoid.telescope.WriteHint#writeBean writeBean} / {@link
+ *       io.github.eschizoid.telescope.WriteHint#writeBeans writeBeans}).
  *   <li>{@link io.github.eschizoid.telescope.annotations} — compile-time markers for the codegen
  *       processors: {@code @Focus} (records), {@code @BeanFocus} (POJOs, also for Lombok-annotated
  *       classes via the {@code telescope-lombok} module), {@code @Bridge} (compile-checked
  *       cross-paradigm conversion).
- *   <li>{@link io.github.eschizoid.telescope.conversion} — the {@link
- *       io.github.eschizoid.telescope.Mapper} type: bidirectional graph mapper produced
- *       by {@link io.github.eschizoid.telescope.Telescope#mapper(Class, Class,
- *       io.github.eschizoid.telescope.MapStep...) Telescope.mapper}, with {@code forward} /
- *       {@code backward} / {@code patch} / {@code asTelescope} / container-lift surface.
- *   <li>{@link io.github.eschizoid.telescope.mapping} — the row-builder DSL the deep-mapping
- *       factory accepts as varargs: {@link io.github.eschizoid.telescope.Mapping#to to}
- *       (rename / typed transform), {@link io.github.eschizoid.telescope.Mapping#via via}
- *       (nested mapper, auto-lifted through containers), {@link
- *       io.github.eschizoid.telescope.WriteHint#writeBean writeBean} / {@link
- *       io.github.eschizoid.telescope.WriteHint#writeBeans writeBeans} (per-target /
- *       default bean write-strategy hints).
  * </ul>
  *
  * <p>The {@code io.github.eschizoid.telescope.internal} packages are deliberately not exported.

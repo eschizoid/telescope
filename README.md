@@ -10,8 +10,8 @@ One type drives deep navigation, immutable update, bidirectional mapping, and ef
 POJOs, and Lombok `@Data` classes — no category-theory jargon, no hand-written copy constructors. Reach fields nested
 through lists, sets, maps, optionals, and sealed-type variants in one chain. Skip codegen for the runtime path, or add
 `@Focus` / `@BeanFocus` / `@Bridge` annotations for compile-time-bound navigators with deep recursion through
-containers. Drop-in `telescope-spring-boot-starter` for autoconfig + a typed `Mapper<A,B>` bean registry — one
-dependency, zero wiring.
+containers. Drop-in `telescope-spring-boot-starter` (Spring Boot 4) or `telescope-quarkus` (Quarkus 3) for autoconfig +
+a typed `Mapper<A,B>` bean registry — one dependency, zero wiring.
 
 [![JVM 25+](https://img.shields.io/badge/JVM-25%2B-brightgreen.svg?&logo=openjdk)](https://openjdk.org/projects/jdk/25/)
 [![Build](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml/badge.svg)](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml)
@@ -640,8 +640,8 @@ lift the inner-element Iso through the container automatically (to any depth —
 construction). You only spell the _differences_.
 
 ```java
-import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.Mapping.via;
+import static io.github.eschizoid.telescope.Mapping.to;
+import static io.github.eschizoid.telescope.Mapping.via;
 
 // All same-name, no overrides — the pure-copy 1-liner:
 final Telescope<UserEntity, UserDto> userMapper = Telescope.map(UserEntity.class, UserDto.class);
@@ -719,8 +719,8 @@ container automatically (to any depth — `List<Map<K, Set<X>>>` resolves by con
 `Telescope<A, B>` (an `Iso`), so it composes with anything else.
 
 ```java
-import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.Mapping.via;
+import static io.github.eschizoid.telescope.Mapping.to;
+import static io.github.eschizoid.telescope.Mapping.via;
 
 class LegacyUser {
   /* getId(), getEmail(), getName() + a no-arg ctor / all-args ctor / builder() */
@@ -778,8 +778,8 @@ parameter names match the property names). For classes the auto path refuses (im
 of `BUILDER` / `SETTERS` / `FIELDS` / `CONSTRUCTOR`:
 
 ```java
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.WriteHint.WriteStrategy.CONSTRUCTOR;
+import static io.github.eschizoid.telescope.WriteHint.writeBean;
 
 // OrderPojo has a public (String sku, int qty) ctor, no builder, no setters — autoWriter would
 // refuse without -parameters. The hint forces the CONSTRUCTOR strategy explicitly.
@@ -800,9 +800,9 @@ construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibe
 `X`. At most one `writeBeans(...)` default per call.
 
 ```java
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
-import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.WriteHint.WriteStrategy.SETTERS;
+import static io.github.eschizoid.telescope.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.WriteHint.writeBeans;
 
 final Mapper<Order, OrderEntity> orderMapper = Telescope.mapper(
   Order.class,
