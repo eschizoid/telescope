@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUser;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUser;
+import io.github.eschizoid.telescope.codegen.lombok.fixtures.SameRoundConsumer;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.ValueBuilderUser;
 import java.lang.reflect.Method;
 import org.junit.jupiter.api.DisplayName;
@@ -66,6 +67,47 @@ class LombokFocusProcessorTest {
       assertHasStartMethod(pathClass, ValueBuilderUser.class);
       assertReturnsTelescope(pathClass, "id");
       assertReturnsTelescope(pathClass, "email");
+    }
+
+    @Test
+    @DisplayName("Lombok-emitted <X>Path is visible to same-module same-round consumers (no round-deferred limit)")
+    void sameRoundConsumerCanReferenceEmittedPath() {
+      // SameRoundConsumer is in src/test/java alongside DataUser. Both go through the same javac
+      // compilation pass with LombokFocusProcessor on the annotation-processor classpath. The
+      // consumer references DataUserPath directly — if this class were loaded at all (it is, by
+      // this test), the consumer compiled, meaning the Path symbol resolved during the consumer's
+      // own binding phase. That's the regression guard against re-introducing the
+      // processingOver()-only emission pattern.
+      final var result = SameRoundConsumer.shoutEmail(new DataUser("u-1", "alice@example.com"));
+      assertEquals("u-1", result.getId());
+      assertEquals("ALICE@EXAMPLE.COM", result.getEmail());
+    }
+
+    @Test
+    @DisplayName("Nested static @Data class yields a flattened-name Path at package level")
+    void nestedStaticDataClassEmitsFlattenedPath() throws Exception {
+      // OuterWithNested holds a nested static @Data Inner. The processor should emit the Path /
+      // metadata holder at package level with the outer's name folded in to avoid colliding with
+      // a hypothetical top-level Inner. Path identifies the nested Inner via a dotted type
+      // reference inside its own source.
+      final var pathClass = Class.forName(
+        "io.github.eschizoid.telescope.codegen.lombok.fixtures.OuterWithNestedInnerPath"
+      );
+      assertNotNull(pathClass);
+
+      final var holder = Class.forName(
+        "io.github.eschizoid.telescope.codegen.lombok.fixtures.OuterWithNestedInnerTelescope"
+      );
+      assertNotNull(holder);
+
+      // Path's method signatures must reference the nested type, not a hypothetical top-level one.
+      final var nestedType = Class.forName(
+        "io.github.eschizoid.telescope.codegen.lombok.fixtures.OuterWithNested$Inner"
+      );
+      assertHasStartMethod(pathClass, nestedType);
+      assertHasGetMethod(pathClass, nestedType);
+      assertReturnsTelescope(pathClass, "label");
+      assertReturnsTelescope(pathClass, "weight");
     }
 
     @Test

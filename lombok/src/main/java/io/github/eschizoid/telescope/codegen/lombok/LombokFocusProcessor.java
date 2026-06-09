@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.codegen.lombok;
 
 import io.github.eschizoid.telescope.codegen.AbstractTelescopeProcessor;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
@@ -53,19 +54,47 @@ public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
       if (anno == null) continue;
       for (final var element : roundEnv.getElementsAnnotatedWith(anno)) {
         if (element.getKind() != ElementKind.CLASS) continue;
-        if (element.getEnclosingElement().getKind() != ElementKind.PACKAGE) {
-          error(element, "telescope-lombok: only top-level classes are supported");
-          continue;
-        }
+        // Nested static classes are supported: emitBeanNavigator flattens the enclosing hierarchy
+        // into the emitted Path / Step / <X>Telescope holder class names (e.g. an inner
+        // `Outer.Inner` produces `OuterInnerPath`) and uses the dotted form for in-source type
+        // references. Non-static inner classes (those whose enclosing element is a class but not
+        // static) would still trip the no-no-arg-ctor or no-public-builder check in
+        // emitBeanNavigator, so we don't have to reject them up-front.
         pending.add((TypeElement) element);
       }
     }
-    if (roundEnv.processingOver()) {
-      for (final var pojo : pending) {
-        emitBeanNavigator(pojo, "@Data/@Value/@Builder", LOMBOK_BEAN_ANNOTATIONS);
-      }
+    // Emit on EVERY round that has fresh @Data/@Value/@Builder targets. We previously deferred to
+    // `processingOver()` to ensure Lombok's lazy AST visitors had finished patching the host class
+    // — but that delay meant the emitted Path symbol didn't exist when same-module main code was
+    // resolved by the compiler. By emitting eagerly we make Path / Telescope / Step classes
+    // visible in time for main-source binding; Lombok's patches resolve later when the *generated*
+    // sources are themselves compiled, by which point Lombok has long finished. If Lombok hasn't
+    // run yet in a given round we emit nothing useful and let a later round retry — the
+    // `beanProperties()` query on an un-patched @Data returns empty, which `emitBeanNavigator`
+    // already handles as a "no readable properties" no-op.
+    for (final var pojo : List.copyOf(pending)) {
+      if (emitBeanNavigatorIfReady(pojo)) pending.remove(pojo);
+    }
+    if (roundEnv.processingOver() && !pending.isEmpty()) {
+      // Last-resort emit on processingOver(): any target whose host class never became readable
+      // by the time annotation processing ends, still gets a navigator (the existing
+      // "no readable properties" error from emitBeanNavigator surfaces the real problem then).
+      for (final var pojo : pending) emitBeanNavigator(pojo, "@Data/@Value/@Builder", LOMBOK_BEAN_ANNOTATIONS);
       pending.clear();
     }
     return false;
+  }
+
+  /**
+   * Emit the navigator only when {@code pojo}'s bean surface is actually readable in this round —
+   * i.e. {@code beanProperties} returns a non-empty list. Returns {@code true} when emitted; the
+   * caller drops the pojo from the pending set. Returns {@code false} when properties aren't yet
+   * visible (typically: Lombok's AST patches haven't installed yet this round); the pojo stays in
+   * pending for a retry in a later round.
+   */
+  private boolean emitBeanNavigatorIfReady(final TypeElement pojo) {
+    if (beanProperties(pojo).isEmpty()) return false;
+    emitBeanNavigator(pojo, "@Data/@Value/@Builder", LOMBOK_BEAN_ANNOTATIONS);
+    return true;
   }
 }

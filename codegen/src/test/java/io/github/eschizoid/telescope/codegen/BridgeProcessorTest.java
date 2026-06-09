@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.codegen;
 import static io.github.eschizoid.telescope.codegen.ProcessorHarness.source;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
@@ -61,8 +62,12 @@ class BridgeProcessorTest {
 
       assertTrue(generated.contains("public static final Telescope<demo.Rec, demo.Pojo> BRIDGE ="), generated);
       assertTrue(generated.contains("Telescope.from(demo.Rec.class).to(demo.Pojo.class).using("), generated);
-      assertTrue(generated.contains("s -> new demo.Pojo(s.id(), s.email())"), generated);
-      assertTrue(generated.contains("t -> new demo.Rec(t.getId(), t.getEmail())"), generated);
+      assertTrue(generated.contains("RecBridge::forward"), generated);
+      assertTrue(generated.contains("RecBridge::backward"), generated);
+      assertTrue(generated.contains("public static demo.Pojo forward(final demo.Rec s)"), generated);
+      assertTrue(generated.contains("public static demo.Rec backward(final demo.Pojo t)"), generated);
+      assertTrue(generated.contains("new demo.Pojo(s.id(), s.email())"), generated);
+      assertTrue(generated.contains("new demo.Rec(t.getId(), t.getEmail())"), generated);
     }
 
     @Test
@@ -92,8 +97,10 @@ class BridgeProcessorTest {
       assertNotNull(generated, () -> "ABridge not generated; saw " + compilation.generated().keySet());
 
       assertTrue(generated.contains("public static final Telescope<demo.A, demo.B> BRIDGE ="), generated);
-      assertTrue(generated.contains("s -> new demo.B(s.id(), s.score())"), generated);
-      assertTrue(generated.contains("t -> new demo.A(t.id(), t.score())"), generated);
+      assertTrue(generated.contains("ABridge::forward"), generated);
+      assertTrue(generated.contains("ABridge::backward"), generated);
+      assertTrue(generated.contains("new demo.B(s.id(), s.score())"), generated);
+      assertTrue(generated.contains("new demo.A(t.id(), t.score())"), generated);
     }
 
     @Test
@@ -133,10 +140,395 @@ class BridgeProcessorTest {
       assertNotNull(generated, () -> "PABridge not generated; saw " + compilation.generated().keySet());
 
       assertTrue(generated.contains("public static final Telescope<demo.PA, demo.PB> BRIDGE ="), generated);
+      assertTrue(generated.contains("PABridge::forward"), generated);
+      assertTrue(generated.contains("PABridge::backward"), generated);
       assertTrue(generated.contains("new demo.PB()"), generated);
       assertTrue(generated.contains("out.setId(s.getId())"), generated);
       assertTrue(generated.contains("new demo.PA()"), generated);
       assertTrue(generated.contains("out.setId(t.getId())"), generated);
+    }
+  }
+
+  @Nested
+  @DisplayName("Deep recursion — sub-pair bridges auto-generated for nested type mismatches")
+  class DeepRecursion {
+
+    @Test
+    @DisplayName("nested record↔record: parent @Bridge auto-emits a sub-bridge for the nested pair")
+    void nestedRecordPairAutoBridge() {
+      final var compilation = compile(
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.OrderDto.class)
+          public record Order(String id, demo.Customer customer) {}
+          """
+        ),
+        source(
+          "demo.Customer",
+          """
+          package demo;
+          public record Customer(String name, String email) {}
+          """
+        ),
+        source(
+          "demo.OrderDto",
+          """
+          package demo;
+          public record OrderDto(String id, demo.CustomerDto customer) {}
+          """
+        ),
+        source(
+          "demo.CustomerDto",
+          """
+          package demo;
+          public record CustomerDto(String name, String email) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      // The user-declared @Bridge: keeps the simple name.
+      final var orderBridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(orderBridge, () -> "OrderBridge not generated; saw " + compilation.generated().keySet());
+      // The auto-generated sub-bridge for Customer↔CustomerDto: uses the disambiguating naming.
+      final var subBridge = compilation.generated().get("demo.CustomerToCustomerDtoBridge");
+      assertNotNull(
+        subBridge,
+        () -> "CustomerToCustomerDtoBridge not generated; saw " + compilation.generated().keySet()
+      );
+
+      // OrderBridge.forward calls CustomerToCustomerDtoBridge.forward to convert the nested field.
+      assertTrue(orderBridge.contains("CustomerToCustomerDtoBridge.forward(s.customer())"), orderBridge);
+      assertTrue(orderBridge.contains("CustomerToCustomerDtoBridge.backward(t.customer())"), orderBridge);
+      // The sub-bridge itself uses identity links for its same-typed name/email fields.
+      assertTrue(subBridge.contains("new demo.CustomerDto(s.name(), s.email())"), subBridge);
+      assertTrue(subBridge.contains("new demo.Customer(t.name(), t.email())"), subBridge);
+    }
+
+    @Test
+    @DisplayName("List<X> ↔ List<Y> auto-lifts element-wise via stream + sub-bridge")
+    void listContainerAutoLifts() {
+      final var compilation = compile(
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.List;
+          @Bridge(demo.OrderDto.class)
+          public record Order(String id, List<demo.LineItem> items) {}
+          """
+        ),
+        source(
+          "demo.LineItem",
+          """
+          package demo;
+          public record LineItem(String sku, int qty) {}
+          """
+        ),
+        source(
+          "demo.OrderDto",
+          """
+          package demo;
+          import java.util.List;
+          public record OrderDto(String id, List<demo.LineItemDto> items) {}
+          """
+        ),
+        source(
+          "demo.LineItemDto",
+          """
+          package demo;
+          public record LineItemDto(String sku, int qty) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var orderBridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(orderBridge);
+      assertNotNull(compilation.generated().get("demo.LineItemToLineItemDtoBridge"));
+      assertTrue(
+        orderBridge.contains("s.items().stream().map(LineItemToLineItemDtoBridge::forward).toList()"),
+        orderBridge
+      );
+      assertTrue(
+        orderBridge.contains("t.items().stream().map(LineItemToLineItemDtoBridge::backward).toList()"),
+        orderBridge
+      );
+    }
+
+    @Test
+    @DisplayName("Set<X> ↔ Set<Y> auto-lifts via stream + Collectors.toCollection(LinkedHashSet::new)")
+    void setContainerAutoLifts() {
+      final var compilation = compile(
+        source(
+          "demo.Catalog",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.Set;
+          @Bridge(demo.CatalogDto.class)
+          public record Catalog(String name, Set<demo.Tag> tags) {}
+          """
+        ),
+        source(
+          "demo.Tag",
+          """
+          package demo;
+          public record Tag(String label) {}
+          """
+        ),
+        source(
+          "demo.CatalogDto",
+          """
+          package demo;
+          import java.util.Set;
+          public record CatalogDto(String name, Set<demo.TagDto> tags) {}
+          """
+        ),
+        source(
+          "demo.TagDto",
+          """
+          package demo;
+          public record TagDto(String label) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var catalog = compilation.generated().get("demo.CatalogBridge");
+      assertNotNull(catalog);
+      assertTrue(catalog.contains("s.tags().stream().map(TagToTagDtoBridge::forward)"), catalog);
+      assertTrue(catalog.contains("java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new)"), catalog);
+    }
+
+    @Test
+    @DisplayName("Optional<X> ↔ Optional<Y> auto-lifts via .map(SubBridge::forward)")
+    void optionalContainerAutoLifts() {
+      final var compilation = compile(
+        source(
+          "demo.User",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.Optional;
+          @Bridge(demo.UserDto.class)
+          public record User(String id, Optional<demo.Profile> profile) {}
+          """
+        ),
+        source(
+          "demo.Profile",
+          """
+          package demo;
+          public record Profile(String bio) {}
+          """
+        ),
+        source(
+          "demo.UserDto",
+          """
+          package demo;
+          import java.util.Optional;
+          public record UserDto(String id, Optional<demo.ProfileDto> profile) {}
+          """
+        ),
+        source(
+          "demo.ProfileDto",
+          """
+          package demo;
+          public record ProfileDto(String bio) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var user = compilation.generated().get("demo.UserBridge");
+      assertNotNull(user);
+      assertTrue(user.contains("s.profile().map(ProfileToProfileDtoBridge::forward)"), user);
+      assertTrue(user.contains("t.profile().map(ProfileToProfileDtoBridge::backward)"), user);
+    }
+
+    @Test
+    @DisplayName("Map<K, V> ↔ Map<K, V'> auto-lifts values, preserves keys")
+    void mapValuesAutoLift() {
+      final var compilation = compile(
+        source(
+          "demo.Cart",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.Map;
+          @Bridge(demo.CartDto.class)
+          public record Cart(String id, Map<String, demo.LineItem> items) {}
+          """
+        ),
+        source(
+          "demo.LineItem",
+          """
+          package demo;
+          public record LineItem(String sku, int qty) {}
+          """
+        ),
+        source(
+          "demo.CartDto",
+          """
+          package demo;
+          import java.util.Map;
+          public record CartDto(String id, Map<String, demo.LineItemDto> items) {}
+          """
+        ),
+        source(
+          "demo.LineItemDto",
+          """
+          package demo;
+          public record LineItemDto(String sku, int qty) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var cart = compilation.generated().get("demo.CartBridge");
+      assertNotNull(cart);
+      assertTrue(cart.contains("s.items().entrySet().stream().collect("), cart);
+      assertTrue(cart.contains("java.util.Map.Entry::getKey"), cart);
+      assertTrue(cart.contains("LineItemToLineItemDtoBridge.forward(e.getValue())"), cart);
+    }
+
+    @Test
+    @DisplayName("Optional<X> ↔ nullable Y cross-paradigm bridge")
+    void optionalToNullableCrossParadigm() {
+      final var compilation = compile(
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.Optional;
+          @Bridge(demo.OrderEntity.class)
+          public record Order(String id, Optional<demo.Address> giftWrap) {}
+          """
+        ),
+        source(
+          "demo.Address",
+          """
+          package demo;
+          public record Address(String street, String city) {}
+          """
+        ),
+        source(
+          "demo.OrderEntity",
+          """
+          package demo;
+          public record OrderEntity(String id, demo.AddressEntity giftWrap) {}
+          """
+        ),
+        source(
+          "demo.AddressEntity",
+          """
+          package demo;
+          public record AddressEntity(String street, String city) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var order = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(order);
+      // Forward: Optional<Address>.map(AddressBridge::forward).orElse(null)
+      assertTrue(order.contains("s.giftWrap().map(AddressToAddressEntityBridge::forward).orElse(null)"), order);
+      // Backward: Optional.ofNullable(...).map(AddressBridge::backward)
+      assertTrue(
+        order.contains("java.util.Optional.ofNullable(t.giftWrap()).map(AddressToAddressEntityBridge::backward)"),
+        order
+      );
+    }
+
+    @Test
+    @DisplayName("Self-referencing types compile-recurse exactly once via the seen-set; runtime recursion is fine")
+    void cyclicTypeEmitsOnce() {
+      final var compilation = compile(
+        source(
+          "demo.Node",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.Optional;
+          @Bridge(demo.NodeDto.class)
+          public record Node(String label, Optional<demo.Node> child) {}
+          """
+        ),
+        source(
+          "demo.NodeDto",
+          """
+          package demo;
+          import java.util.Optional;
+          public record NodeDto(String label, Optional<demo.NodeDto> child) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      // Only one bridge emits: NodeBridge. The cycle is at runtime, not compile time.
+      final var node = compilation.generated().get("demo.NodeBridge");
+      assertNotNull(node);
+      assertNull(compilation.generated().get("demo.NodeToNodeDtoBridge")); // No auto-named dup.
+      // Path through the Optional<Node> field references the same NodeBridge — runtime recursion
+      // terminates on Optional.empty().
+      assertTrue(node.contains("s.child().map(NodeBridge::forward)"), node);
+      assertTrue(node.contains("t.child().map(NodeBridge::backward)"), node);
+    }
+
+    @Test
+    @DisplayName("a user-declared @Bridge on the sub-pair is honoured — no duplicate emission, simple-name reference")
+    void userDeclaredSubBridgeWins() {
+      final var compilation = compile(
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.OrderDto.class)
+          public record Order(String id, demo.Customer customer) {}
+          """
+        ),
+        source(
+          "demo.Customer",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.CustomerDto.class)
+          public record Customer(String name, String email) {}
+          """
+        ),
+        source(
+          "demo.OrderDto",
+          """
+          package demo;
+          public record OrderDto(String id, demo.CustomerDto customer) {}
+          """
+        ),
+        source(
+          "demo.CustomerDto",
+          """
+          package demo;
+          public record CustomerDto(String name, String email) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var orderBridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(orderBridge);
+      // User-declared sub @Bridge — keep the simple naming convention.
+      final var customerBridge = compilation.generated().get("demo.CustomerBridge");
+      assertNotNull(customerBridge, () -> "CustomerBridge not generated; saw " + compilation.generated().keySet());
+      // No duplicate auto-generated sub-bridge.
+      assertNull(compilation.generated().get("demo.CustomerToCustomerDtoBridge"));
+      // OrderBridge references the user-declared CustomerBridge by simple name.
+      assertTrue(orderBridge.contains("CustomerBridge.forward(s.customer())"), orderBridge);
+      assertTrue(orderBridge.contains("CustomerBridge.backward(t.customer())"), orderBridge);
     }
   }
 

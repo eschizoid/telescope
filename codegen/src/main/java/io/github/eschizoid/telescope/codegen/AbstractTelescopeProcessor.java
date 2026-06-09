@@ -285,6 +285,40 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
+   * Flatten the enclosing-class hierarchy of {@code element} into a single concatenated base name.
+   * For a top-level class {@code Foo} returns {@code "Foo"}; for a nested class {@code Outer.Inner}
+   * returns {@code "OuterInner"}; for double-nested {@code A.B.C} returns {@code "ABC"}. Used to
+   * derive collision-free file-level names for emitted Path / Step / Telescope classes when the
+   * source type is nested — telescope-codegen always emits at the package level, never as a nested
+   * sibling, so we encode the outer hierarchy into the name to keep things unique.
+   */
+  protected static String flattenedNameOf(final Element element) {
+    final var sb = new StringBuilder(element.getSimpleName().toString());
+    var enclosing = element.getEnclosingElement();
+    while (enclosing != null && enclosing.getKind() != ElementKind.PACKAGE) {
+      sb.insert(0, enclosing.getSimpleName().toString());
+      enclosing = enclosing.getEnclosingElement();
+    }
+    return sb.toString();
+  }
+
+  /**
+   * Build a Java type reference for {@code element} as it would appear in source code sitting in
+   * the same package — {@code "Foo"} for top-level, {@code "Outer.Inner"} for nested. Use this
+   * anywhere the emitted Path / Step source needs to spell the source type's class identifier (the
+   * {@code Telescope<R, X>} parameter, method references like {@code X::getY}, etc).
+   */
+  protected static String packageRelativeTypeRefOf(final Element element) {
+    final var sb = new StringBuilder(element.getSimpleName().toString());
+    var enclosing = element.getEnclosingElement();
+    while (enclosing != null && enclosing.getKind() != ElementKind.PACKAGE) {
+      sb.insert(0, enclosing.getSimpleName().toString() + ".");
+      enclosing = enclosing.getEnclosingElement();
+    }
+    return sb.toString();
+  }
+
+  /**
    * Emit a bridge hop method on a Path navigator: {@code as<TargetSimpleName>()} that chains the
    * generated {@code <SourceSimpleName>Bridge.BRIDGE} constant onto the current path. The return
    * type is the target's Path when navigable, else a terminal Telescope. Bridge constant is
@@ -637,8 +671,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   ) {
     final var elements = processingEnv.getElementUtils();
     final var pkg = elements.getPackageOf(pojo).getQualifiedName().toString();
-    final var pojoName = pojo.getSimpleName().toString();
-    final var pathName = pojoName + "Path";
+    // Distinct names:
+    //   pojoName        Java type-reference inside the emitted source ("Foo" / "Outer.Inner").
+    //   pathBaseName    File-level base, with the outer hierarchy flattened ("Foo" / "OuterInner").
+    //   pathName        The Path class's simple name, derived from pathBaseName.
+    final var pojoName = packageRelativeTypeRefOf(pojo);
+    final var pathBaseName = flattenedNameOf(pojo);
+    final var pathName = pathBaseName + "Path";
     final var qualifiedPath = pkg.isEmpty() ? pathName : pkg + "." + pathName;
 
     final var props = beanProperties(pojo);
@@ -688,7 +727,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
     for (final var p : props) {
       final var shape = traversalKind(p.type());
-      if (shape != null) emitBeanStep(pojo, pojoName, pkg, p, shape, navigableAnnotations);
+      // Step's class name is built from the flattened base name (nested-safe); the step source
+      // uses the dotted type-ref for the parent's type identifier when it spells it.
+      if (shape != null) emitBeanStep(pojo, pojoName, pathBaseName, pkg, p, shape, navigableAnnotations);
     }
 
     writeInstanceClass(
@@ -711,7 +752,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // Finally, emit the sibling <X>Telescope metadata holder. If any property carries an
     // un-emittable type (wildcards, type-vars, etc.), we report a compile error and skip the
     // holder emission for that POJO only — the Path navigator above is unaffected.
-    emitBeanMetadataHolder(pojo, pojoName, pkg, props, setters, useBuilder, triggerLabel);
+    emitBeanMetadataHolder(pojo, pojoName, pathBaseName, pkg, props, setters, useBuilder, triggerLabel);
   }
 
   // Emits the sibling <X>Telescope holder for a bean POJO: one
@@ -722,13 +763,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   private void emitBeanMetadataHolder(
     final TypeElement pojo,
     final String pojoName,
+    final String pojoBaseName,
     final String pkg,
     final List<Prop> props,
     final String[] setters,
     final boolean useBuilder,
     final String triggerLabel
   ) {
-    final var holderName = pojoName + "Telescope";
+    final var holderName = pojoBaseName + "Telescope";
     final var qualifiedHolder = pkg.isEmpty() ? holderName : pkg + "." + holderName;
 
     // Reject up-front: any un-emittable property type kills the whole holder for this POJO
@@ -896,6 +938,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   private void emitBeanStep(
     final TypeElement pojo,
     final String pojoName,
+    final String pojoBaseName,
     final String pkg,
     final Prop prop,
     final TraversalShape shape,
@@ -903,7 +946,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   ) {
     emitContainerStep(
       pojo,
-      pojoName,
+      pojoBaseName,
       pkg,
       prop.name(),
       shortenStdImports(prop.type().toString()),
