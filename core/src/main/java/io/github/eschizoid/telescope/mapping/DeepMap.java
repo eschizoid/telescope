@@ -93,7 +93,7 @@ public final class DeepMap {
       hintMap.isEmpty() && defaultWriterFactory == null
         ? Reflective.BEANS
         : Reflective.beansWithHints(hintMap, defaultWriterFactory);
-    final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new));
+    final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new), source, target);
     final var cache = new HashMap<TypePair, Iso<?, ?>>();
     final var topSteps = new LinkedHashMap<String, FieldStep>();
     populateIso(source, target, overrideTable, beanRefl, cache, topSteps);
@@ -215,13 +215,22 @@ public final class DeepMap {
 
   // ---------- Override grouping ----------
 
-  private static Map<TypePair, List<Mapping<?, ?>>> groupOverridesByPair(final Mapping<?, ?>[] overrides) {
+  private static Map<TypePair, List<Mapping<?, ?>>> groupOverridesByPair(
+    final Mapping<?, ?>[] overrides,
+    final Class<?> topSource,
+    final Class<?> topTarget
+  ) {
     final var grouped = new HashMap<TypePair, List<Mapping<?, ?>>>();
     for (final var row : overrides) {
       final var internals = internalsOf(row);
-      grouped
-        .computeIfAbsent(new TypePair(internals.sourceClass(), internals.targetClass()), _ -> new ArrayList<>())
-        .add(row);
+      // Drop rows have no target accessor (targetClass() == null). Bind them to the top-level
+      // (source, target) pair the user passed to Telescope.map(...); a Drop row is scoped to the
+      // specific mapper that declares it, not to every pair the recursion lands on.
+      final var key =
+        row instanceof Drop<?, ?, ?>
+          ? new TypePair(internals.sourceClass(), topTarget)
+          : new TypePair(internals.sourceClass(), internals.targetClass());
+      grouped.computeIfAbsent(key, _ -> new ArrayList<>()).add(row);
     }
     return grouped;
   }
@@ -258,6 +267,25 @@ public final class DeepMap {
       // "name".
       final var internals = internalsOf(row);
       final var srcField = srcRefl.normalize(internals.sourceField());
+      // Drop rows claim a source field with no target counterpart — they exist to satisfy the
+      // strict source-must-be-claimed pass below when one side carries fields the other doesn't.
+      if (row instanceof Drop<?, ?, ?>) {
+        if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
+          "Deep map " +
+            source.getSimpleName() +
+            " → " +
+            target.getSimpleName() +
+            ": duplicate override row for source field '" +
+            srcField +
+            "'. Each (source, target) type pair may declare at most one row per source field."
+        );
+        // Register a backward-only step under the source name so the source-reconstructor
+        // (assembleIso's bySourceName loop) produces a placeholder value (null) for the dropped
+        // field. The step is NOT registered under byTargetName, so the forward direction omits
+        // the source field from the target map entirely.
+        bySourceName.put(srcField, new FieldStep(srcField, null, NULLING_ISO));
+        continue;
+      }
       final var tgtField = tgtRefl.normalize(internals.targetField());
       // Fail fast on duplicates within this type-pair — two rows that target the same source or
       // target field would silently overwrite each other in byTargetName/bySourceName and could
@@ -435,6 +463,10 @@ public final class DeepMap {
       case SameTypedTo<?, ?, ?> r -> r.fieldIso();
       case TypedTransformTo<?, ?, ?, ?> r -> r.fieldIso();
       case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType);
+      // Drop rows never reach this method — populateIso short-circuits on `instanceof Drop` before
+      // calling fieldIsoOf. The case is here only to make the switch exhaustive for the sealed
+      // hierarchy; reaching it indicates a routing bug above.
+      case Drop<?, ?, ?> _ -> throw new IllegalStateException("Drop row should not reach fieldIsoOf");
     };
   }
 
@@ -677,6 +709,13 @@ public final class DeepMap {
    * One per-component step: source/target field names + the {@link Iso} between their leaf types.
    */
   private record FieldStep(String sourceName, String targetName, Iso<?, ?> iso) {}
+
+  /**
+   * Placeholder Iso used by {@code Mapping.drop(srcAccessor)}'s backward pass — both directions
+   * return {@code null}. Only ever invoked in the {@link #remapIso} backward loop for source-only
+   * fields that have no target counterpart; the forward direction skips the field entirely.
+   */
+  private static final Iso<Object, Object> NULLING_ISO = Iso.of(_ -> null, _ -> null);
 
   /**
    * Bundled return from {@link #resolution(Class, Class, MapStep...)} — the Iso and the patch
