@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.BUILDER;
@@ -904,6 +905,71 @@ class DeepMappingTest {
       assertEquals(Set.of(new TagD("x"), new TagD("y")), dto.data().get(0).get("alpha"));
       assertEquals(Set.of(new TagD("z")), dto.data().get(0).get("beta"));
       assertEquals(src, mapper.backward(dto));
+    }
+  }
+
+  @Nested
+  @DisplayName("drop(srcAccessor) — intentionally exclude a source field from the strict mapper")
+  class DropRow {
+
+    record OrderRich(String orderNumber, String customer, String metadata) {}
+
+    record OrderPartner(String orderNumber, String customer) {}
+
+    @Test
+    @DisplayName("without drop — strict mapper rejects the unmapped source field with a usable hint")
+    void strictModeRejectsUnmappedSource() {
+      final var ex = assertThrows(IllegalStateException.class, () ->
+        Telescope.mapper(OrderRich.class, OrderPartner.class)
+      );
+      assertTrue(ex.getMessage().contains("metadata"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("no same-name target"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("with drop(OrderRich::metadata) — mapper builds; forward omits the field")
+    void dropMakesForwardOmitTheField() {
+      final var mapper = Telescope.mapper(OrderRich.class, OrderPartner.class, drop(OrderRich::metadata));
+      final var src = new OrderRich("ORD-1", "alice", "secret-internal");
+      final var dst = mapper.forward(src);
+      assertEquals("ORD-1", dst.orderNumber());
+      assertEquals("alice", dst.customer());
+    }
+
+    @Test
+    @DisplayName("with drop — backward reconstructs the source with a null in the dropped slot")
+    void dropMakesBackwardLeaveDroppedFieldNull() {
+      final var mapper = Telescope.mapper(OrderRich.class, OrderPartner.class, drop(OrderRich::metadata));
+      final var dst = new OrderPartner("ORD-1", "alice");
+      final var rebuilt = mapper.backward(dst);
+      assertEquals("ORD-1", rebuilt.orderNumber());
+      assertEquals("alice", rebuilt.customer());
+      assertNull(rebuilt.metadata());
+    }
+
+    @Test
+    @DisplayName("drop composes with to(...) renames in the same mapper")
+    void dropComposesWithRename() {
+      final var mapper = Telescope.mapper(
+        OrderRich.class,
+        OrderPartner.class,
+        to(OrderRich::customer, OrderPartner::customer),
+        drop(OrderRich::metadata)
+      );
+      final var src = new OrderRich("ORD-1", "alice", "metadata-value");
+      final var dst = mapper.forward(src);
+      assertEquals("alice", dst.customer());
+      assertEquals("ORD-1", dst.orderNumber());
+    }
+
+    @Test
+    @DisplayName("duplicate drop on the same source field — same fail-fast guard as a duplicate to(...) row")
+    void duplicateDropRejected() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.mapper(OrderRich.class, OrderPartner.class, drop(OrderRich::metadata), drop(OrderRich::metadata))
+      );
+      assertTrue(ex.getMessage().contains("metadata"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("duplicate"), ex.getMessage());
     }
   }
 }
