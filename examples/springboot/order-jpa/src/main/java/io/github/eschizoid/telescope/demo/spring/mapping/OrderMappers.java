@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.demo.spring.mapping;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
@@ -10,6 +11,7 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.Customer;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
+import io.github.eschizoid.telescope.demo.spring.partner.PartnerCustomer;
 import io.github.eschizoid.telescope.demo.spring.partner.PartnerLineItem;
 import io.github.eschizoid.telescope.demo.spring.partner.PartnerShippingLabel;
 import io.github.eschizoid.telescope.demo.spring.persistence.CustomerEntity;
@@ -69,23 +71,22 @@ import org.springframework.context.annotation.Configuration;
  * //                                    all-args-only POJO that needs CONSTRUCTOR).
  * }</pre>
  *
- * <p><b>Mapper API used downstream</b> (see {@code RuntimeOrderController} / {@code
- * CodegenOrderController}):
+ * <p><b>Mapper API used downstream</b> (see {@code OrderController} / {@code OrderPathController}):
  *
  * <ul>
  *   <li>{@code mapper.forward(a)} / {@code mapper.read(a)} — A → B
  *   <li>{@code mapper.backward(b)} — B → A
  *   <li>{@code mapper.patch(base, partial)} — sparse overlay (used by {@code
- *       RuntimeOrderController.patch})
+ *       OrderController.patch})
  *   <li>{@code mapper.asTelescope()} — expose as {@code Telescope<A, B>} so it composes via {@code
  *       .then(...)} into a longer typed path; lets a single fluent chain bridge between record-side
- *       and entity-side leaf types (used by {@code CodegenOrderController.applyDiscount} — typed
+ *       and entity-side leaf types (used by {@code OrderPathController.applyDiscount} — typed
  *       {@code OrderPath} walks down to each {@code LineItem}, then {@code
  *       .then(lineItemMapper.asTelescope())} hops into {@code LineItemEntity} so the leaf operation
  *       runs on entity-side {@code unitPriceCents} (long))
  *   <li>{@code mapper.liftList()} / {@code liftSet} / {@code liftOptional} / {@code liftMapValues}
  *       — promote an element-level mapper to a container-level mapper without going through {@code
- *       via(...)} (used by {@code RuntimeOrderController.bulkCreate})
+ *       via(...)} (used by {@code OrderController.bulkCreate})
  * </ul>
  */
 @Configuration
@@ -151,7 +152,10 @@ public class OrderMappers {
       //     List<LineItemEntity> slot. Telescope detects the matching container shape and lifts
       //     the element mapper through Iso.liftList — no manual list ceremony at the call site.
       via(Order::lineItems, OrderEntity::getLineItems, lineItemMapper),
-      // (4) Default writer — every bean target the recursion touches (OrderEntity,
+      // (4) Drop — Order.payment is record-side only (sealed Payment lives in domain.payment).
+      //     The persistence layer doesn't store it; a separate payment processor owns that.
+      drop(Order::payment),
+      // (5) Default writer — every bean target the recursion touches (OrderEntity,
       //     AddressEmbeddable) uses SETTERS. customerMapper and lineItemMapper carry their own
       //     writeBeans(SETTERS) so their targets are covered there too.
       writeBeans(SETTERS)
@@ -180,6 +184,8 @@ public class OrderMappers {
    *   <li>{@code via(Order::lineItems, PartnerShippingLabel::getItems, partnerItemMapper)} —
    *       different field names + container shape; the element-level mapper auto-lifts through the
    *       {@code List<...>}.
+   *   <li>{@code drop(Order::metadata)} — internal-only field that the partner DTO does not (and
+   *       should not) carry. Without this row the strict deep-mapper rejects the unmapped source.
    *   <li>{@code writeBeans(SETTERS)} — Lombok's {@code @Data}-synthesised setters are the right
    *       construction strategy for every nested bean target ({@code PartnerShippingLabel}, {@code
    *       Customer}, {@code Address}). Telescope-lombok's emitted Path is used implicitly via the
@@ -199,6 +205,9 @@ public class OrderMappers {
       PartnerShippingLabel.class,
       to(Order::orderNumber, PartnerShippingLabel::getTrackingReference),
       via(Order::lineItems, PartnerShippingLabel::getItems, partnerItemMapper),
+      drop(Order::metadata),
+      drop(Order::payment),
+      drop(Customer::tags, PartnerCustomer.class),
       writeBeans(SETTERS)
     );
   }

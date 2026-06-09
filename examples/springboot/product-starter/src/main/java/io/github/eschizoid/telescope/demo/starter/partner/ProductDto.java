@@ -8,15 +8,14 @@ import lombok.NoArgsConstructor;
 
 /**
  * Outbound product DTO — the wire-format view returned by the API. {@code @Data} synthesises
- * getters/setters/equals/hashCode (which is also what the {@code SETTERS} write strategy uses to
- * rebuild instances). {@code @Builder} synthesises a fluent builder. {@code @JsonProperty}
- * annotations rename the fields to snake_case in the JSON output without affecting the Java
- * identifiers telescope reads.
+ * getters/setters/equals/hashCode (which is also what telescope's {@code SETTERS} write strategy
+ * consumes to rebuild instances). {@code @Builder} synthesises a fluent builder.
+ * {@code @JsonProperty} annotations rename the fields to snake_case in the JSON output without
+ * affecting the Java identifiers telescope reads.
  *
- * <p>The {@code telescope-lombok} processor emits {@code ProductDtoPath<R>} and {@code
- * ProductDtoTelescope} navigators against the synthesised property surface — same shape as a
- * {@code @BeanFocus}-driven Path, just discovered through the round-deferred processor pass that
- * lets Lombok's AST patches install first.
+ * <p>This submodule is runtime-only — Lombok itself is on the annotation-processor list, but {@code
+ * telescope-lombok}'s codegen processor is not. The runtime mapper reads the Lombok-synthesised
+ * getters / setters via the standard bean-property convention.
  */
 @Data
 @Builder

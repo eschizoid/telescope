@@ -56,7 +56,7 @@ class PartnerLabelFlowTest {
     // Persist an order via the runtime controller so the partner endpoint has something to load.
     final var created = client
       .post()
-      .uri("/orders/runtime")
+      .uri("/orders")
       .contentType(MediaType.APPLICATION_JSON)
       .body(OrderFixtures.sampleOrder())
       .retrieve()

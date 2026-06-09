@@ -25,12 +25,13 @@ repositories {
 dependencies {
     // ONE telescope dependency — the Spring Boot starter pulls in telescope core transitively AND
     // contributes TelescopeAutoConfiguration on startup (which registers a TelescopeMapperRegistry
-    // bean that indexes every Mapper<A, B> @Bean by (sourceClass, targetClass)). The codegen
-    // processors are still separate (compile-time-only, not transitive).
+    // bean that indexes every Mapper<A, B> @Bean by (sourceClass, targetClass)). This submodule
+    // is intentionally runtime-only: no @Focus / @BeanFocus / @Bridge annotation processors. The
+    // sibling `invoicing/` submodule covers the codegen story.
     implementation(project(":spring-boot-starter"))
-    annotationProcessor(project(":codegen"))
-    annotationProcessor(project(":lombok"))
 
+    // Lombok itself — only for @Data on the outbound DTO. Telescope-lombok's `:lombok` codegen
+    // module is deliberately NOT on the annotation-processor list here.
     compileOnly("org.projectlombok:lombok:1.18.42")
     annotationProcessor("org.projectlombok:lombok:1.18.42")
 

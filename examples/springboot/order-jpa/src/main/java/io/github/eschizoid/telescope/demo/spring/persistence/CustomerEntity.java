@@ -1,11 +1,18 @@
 package io.github.eschizoid.telescope.demo.spring.persistence;
 
 import io.github.eschizoid.telescope.annotations.BeanFocus;
+import jakarta.persistence.CollectionTable;
+import jakarta.persistence.Column;
+import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
+import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
 import jakarta.persistence.Table;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * The Hibernate-managed twin of {@code domain.Customer}. Identical shape, but a mutable bean with
@@ -26,6 +33,11 @@ public class CustomerEntity {
 
   private String name;
   private String email;
+
+  @ElementCollection(fetch = FetchType.EAGER)
+  @CollectionTable(name = "customer_tags", joinColumns = @JoinColumn(name = "customer_id"))
+  @Column(name = "tag")
+  private Set<String> tags = new LinkedHashSet<>();
 
   public CustomerEntity() {}
 
@@ -51,5 +63,13 @@ public class CustomerEntity {
 
   public void setEmail(final String email) {
     this.email = email;
+  }
+
+  public Set<String> getTags() {
+    return tags;
+  }
+
+  public void setTags(final Set<String> tags) {
+    this.tags = tags;
   }
 }

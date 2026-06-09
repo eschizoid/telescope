@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.demo.starter.api;
 
 import io.github.eschizoid.telescope.demo.starter.domain.Product;
 import io.github.eschizoid.telescope.demo.starter.partner.ProductDto;
+import io.github.eschizoid.telescope.demo.starter.partner.ProductManifest;
 import io.github.eschizoid.telescope.demo.starter.persistence.ProductEntity;
 import io.github.eschizoid.telescope.demo.starter.persistence.ProductRepository;
 import io.github.eschizoid.telescope.spring.TelescopeMapperRegistry;
@@ -24,12 +25,14 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>Endpoints:
  *
  * <ul>
- *   <li>{@code POST /products?view=dto|record} — accepts a {@link Product} JSON body, saves it via
- *       JPA, then returns either a snake_case {@link ProductDto} (default) or the canonical {@link
- *       Product} based on the {@code view} query parameter. The registry resolves both target
- *       shapes from one source class.
- *   <li>{@code GET /products/{id}?view=dto|record} — load by id and return in the requested
- *       view-shape via the registry.
+ *   <li>{@code POST /products?view=dto|record|manifest} — accepts a {@link Product} JSON body,
+ *       saves it via JPA, then returns one of three shapes based on the {@code view} parameter. The
+ *       registry resolves all three target shapes from one source class.
+ *   <li>{@code GET /products/{id}?view=dto|record|manifest} — load by id and return in the
+ *       requested view-shape via the registry.
+ *   <li>{@code GET /products/{id}/manifest} — convenience read-only endpoint that always renders
+ *       the immutable {@link ProductManifest} shape; demonstrates the per-class {@code
+ *       writeBean(ProductManifest.class, CONSTRUCTOR)} override in action.
  * </ul>
  */
 @RestController
@@ -67,15 +70,30 @@ public class ProductController {
       .orElseGet(() -> ResponseEntity.notFound().build());
   }
 
+  @GetMapping("/{id}/manifest")
+  @Transactional(readOnly = true)
+  public ResponseEntity<ProductManifest> manifest(@PathVariable final Long id) {
+    return productRepository
+      .findById(id)
+      .map(entity -> registry.get(Product.class, ProductEntity.class).backward(entity))
+      .map(record -> registry.get(Product.class, ProductManifest.class).forward(record))
+      .map(ResponseEntity::ok)
+      .orElseGet(() -> ResponseEntity.notFound().build());
+  }
+
   /**
    * Dispatch the requested wire-format. Demonstrates the registry's polymorphic lookup — one source
-   * class, multiple target shapes, picked by a runtime parameter.
+   * class, multiple target shapes, picked by a runtime parameter. {@code manifest} routes through
+   * the per-class-CONSTRUCTOR mapper, the others through the per-class-SETTERS default.
    */
   private Object renderView(final Product record, final String view) {
     return switch (view) {
       case "record" -> record;
       case "dto" -> registry.get(Product.class, ProductDto.class).forward(record);
-      default -> throw new IllegalArgumentException("Unknown view: " + view + " (expected one of: dto, record)");
+      case "manifest" -> registry.get(Product.class, ProductManifest.class).forward(record);
+      default -> throw new IllegalArgumentException(
+        "Unknown view: " + view + " (expected one of: dto, record, manifest)"
+      );
     };
   }
 }
