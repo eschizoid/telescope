@@ -11,6 +11,7 @@ import java.time.temporal.Temporal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +19,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 /**
@@ -180,7 +182,7 @@ public final class DeepMap {
     final WriteHint.WriteStrategy defaultStrategy
   ) {
     if (defaultStrategy == null) return null;
-    final var cache = new java.util.concurrent.ConcurrentHashMap<Class<?>, Beans.BeanWriter<?>>();
+    final var cache = new ConcurrentHashMap<Class<?>, Beans.BeanWriter<?>>();
     return cls -> cache.computeIfAbsent(cls, c -> writerFor(c, defaultStrategy));
   }
 
@@ -625,12 +627,12 @@ public final class DeepMap {
    * guard belongs to whichever {@code lazyCacheIso} is reached first — re-entry into the same
    * lazyCacheIso while still inside an outer call is what we're guarding against.
    */
-  private static final ThreadLocal<java.util.IdentityHashMap<Object, Boolean>> FORWARD_SEEN = ThreadLocal.withInitial(
-    java.util.IdentityHashMap::new
+  private static final ThreadLocal<IdentityHashMap<Object, Boolean>> FORWARD_SEEN = ThreadLocal.withInitial(
+    IdentityHashMap::new
   );
 
-  private static final ThreadLocal<java.util.IdentityHashMap<Object, Boolean>> BACKWARD_SEEN = ThreadLocal.withInitial(
-    java.util.IdentityHashMap::new
+  private static final ThreadLocal<IdentityHashMap<Object, Boolean>> BACKWARD_SEEN = ThreadLocal.withInitial(
+    IdentityHashMap::new
   );
 
   @SuppressWarnings("unchecked")
@@ -647,9 +649,9 @@ public final class DeepMap {
    * the seen set when the outermost call unwinds so subsequent independent traversals start fresh.
    */
   private static <X, Y> Y cycleSafe(
-    final ThreadLocal<java.util.IdentityHashMap<Object, Boolean>> seenRef,
+    final ThreadLocal<IdentityHashMap<Object, Boolean>> seenRef,
     final X value,
-    final java.util.function.Function<X, Y> body
+    final Function<X, Y> body
   ) {
     if (value == null) return null;
     final var seen = seenRef.get();

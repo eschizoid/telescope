@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import org.junit.jupiter.api.DisplayName;
@@ -434,7 +435,7 @@ class BeansTest {
     @Test
     @DisplayName("getX / isX / boolean and Boolean isX / URL two-caps rule all resolve to expected property names")
     void propertyNamesCoverConventions() {
-      final var names = java.util.Arrays.asList(Beans.propertyNames(WithGetters.class));
+      final var names = Arrays.asList(Beans.propertyNames(WithGetters.class));
       assertTrue(names.contains("id"));
       assertTrue(names.contains("active")); // isActive (boolean)
       assertTrue(names.contains("flag")); // isFlag (Boolean)

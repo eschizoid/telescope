@@ -12,6 +12,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -489,7 +491,7 @@ public final class Beans {
   }
 
   private static boolean allParameterNamesMatchProperties(final Constructor<?> ctor, final String[] propertyNames) {
-    final var props = new java.util.HashSet<>(java.util.Arrays.asList(propertyNames));
+    final var props = new HashSet<>(Arrays.asList(propertyNames));
     for (final var p : ctor.getParameters()) {
       if (!p.isNamePresent()) return false;
       if (!props.contains(p.getName())) return false;

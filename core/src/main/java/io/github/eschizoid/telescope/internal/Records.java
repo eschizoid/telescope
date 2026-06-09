@@ -197,12 +197,7 @@ public final class Records {
     // instead of forcing the user to read the record source. Load-bearing for the runtime-checked
     // surface — see the "Runtime-checked" bucket of compile-safety scoring in CLAUDE.md.
     return new IllegalArgumentException(
-      "No field '" +
-        fieldName +
-        "' on " +
-        cls.getName() +
-        " — known fields: " +
-        java.util.Arrays.toString(componentNames(cls))
+      "No field '" + fieldName + "' on " + cls.getName() + " — known fields: " + Arrays.toString(componentNames(cls))
     );
   }
 

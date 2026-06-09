@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.function.Function;
@@ -101,7 +102,7 @@ class TelescopeTest {
     @Test
     @DisplayName("eachValue(getter) over a record's Map<K, V> updates every value")
     void eachOverMapValues() {
-      record Index(java.util.Map<String, Integer> byKey) {}
+      record Index(Map<String, Integer> byKey) {}
 
       final var src = new LinkedHashMap<String, Integer>();
       src.put("a", 1);
