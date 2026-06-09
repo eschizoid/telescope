@@ -97,8 +97,8 @@ public final class Records {
 
   /**
    * The generic type of a record component by name (used by {@link
-   * io.github.eschizoid.telescope.DeepMap DeepMap} for container shape detection — {@code
-   * List<X>}, {@code Map<K, V>}, {@code Optional<X>}).
+   * io.github.eschizoid.telescope.DeepMap DeepMap} for container shape detection — {@code List<X>},
+   * {@code Map<K, V>}, {@code Optional<X>}).
    *
    * @throws IllegalArgumentException if the name doesn't match a component on {@code recordClass}
    */

@@ -4,6 +4,7 @@ include("core")
 include("codegen")
 include("lombok")
 include("spring-boot-starter")
+include("quarkus")
 include("benchmarks")
 
 include("examples:library")

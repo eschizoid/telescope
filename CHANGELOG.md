@@ -10,7 +10,23 @@ story.
 
 ## [Unreleased]
 
-_Nothing yet — see [0.4.1] for the most recent release._
+### Added
+
+- **`telescope-quarkus`** — Quarkus 3 CDI extension. Mirrors the Spring Boot starter's surface: drop-in `Mapper<A,B>`
+  bean registry indexed by `(sourceClass, targetClass)`, `@ConfigMapping`-driven `telescope.registry.fail-fast` toggle,
+  no extra wiring. Uses ArC's `@All List<Mapper<?, ?>>` collector pattern to inject every mapper bean. Ships a pre-built
+  `META-INF/jandex.idx` (via the Kordamp Jandex Gradle plugin) so Quarkus apps consuming the extension skip the startup
+  bytecode scan and avoid the "Application archive ... is being scanned without a Jandex index" warning. Published as
+  `io.github.eschizoid:telescope-quarkus`.
+- `telescope-spring-boot-starter` and `telescope-quarkus` now staged for JReleaser publishing alongside `telescope`,
+  `telescope-codegen`, and `telescope-lombok` — the starter modules were previously built locally but not staged for
+  Sonatype.
+
+### Changed
+
+- README: `Drop-in telescope-spring-boot-starter for autoconfig` now reads
+  `Drop-in telescope-spring-boot-starter (Spring Boot 4) or telescope-quarkus (Quarkus 3) for autoconfig`, reflecting
+  both framework integrations.
 
 ## [0.4.1] — 2026-06-08
 

@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope;
 
-
 /**
  * Intermediate of {@link Telescope#from(Class)} — call {@link #to(Class)} to bind the target type
  * and continue into {@link To#using(java.util.function.Function, java.util.function.Function)}.

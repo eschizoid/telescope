@@ -4,8 +4,8 @@
  * io.github.eschizoid.telescope.spring.TelescopeAutoConfiguration} activates automatically and
  * contributes one bean by default — {@link
  * io.github.eschizoid.telescope.spring.TelescopeMapperRegistry} — a typed registry indexing every
- * {@link io.github.eschizoid.telescope.Mapper} bean in the {@code ApplicationContext} by
- * {@code (sourceClass, targetClass)} pair.
+ * {@link io.github.eschizoid.telescope.Mapper} bean in the {@code ApplicationContext} by {@code
+ * (sourceClass, targetClass)} pair.
  *
  * <p>Configuration properties live under the {@code telescope.*} namespace; see {@link
  * io.github.eschizoid.telescope.spring.TelescopeProperties}.

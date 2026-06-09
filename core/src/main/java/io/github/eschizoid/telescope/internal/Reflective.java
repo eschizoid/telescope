@@ -9,12 +9,11 @@ import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
- * The uniform reflective dispatch that {@link io.github.eschizoid.telescope.DeepMap
- * DeepMap} drives — abstracts over "this side is a record" vs "this side is a bean" so the
- * recursive resolver doesn't have to know. Per-side dispatch via {@link #of(Class)} lets a single
- * deep-mapping call mix and match records and POJOs at any depth: the source side of a given pair
- * uses one {@code Reflective}, the target side another, chosen independently from the pair's
- * classes.
+ * The uniform reflective dispatch that {@link io.github.eschizoid.telescope.DeepMap DeepMap} drives
+ * — abstracts over "this side is a record" vs "this side is a bean" so the recursive resolver
+ * doesn't have to know. Per-side dispatch via {@link #of(Class)} lets a single deep-mapping call
+ * mix and match records and POJOs at any depth: the source side of a given pair uses one {@code
+ * Reflective}, the target side another, chosen independently from the pair's classes.
  *
  * <p>The record's fields are the five per-side function references; the forwarding instance methods
  * ({@link #names(Class)}, {@link #genericType(Class, String)}, {@link #read(Object, String)},
@@ -32,10 +31,10 @@ import java.util.function.Function;
  *       no-arg ctor) are not supported by the auto path — use a record, or add a no-arg ctor.
  * </ul>
  *
- * <p>The lattice-first principle holds: {@link io.github.eschizoid.telescope.DeepMap
- * DeepMap} composes {@link io.github.eschizoid.telescope.internal.optics.Iso Iso}s; this record
- * only handles "how do I read one component value" and "how do I rebuild one object from a
- * name-keyed function." No bidirectional plumbing lives here.
+ * <p>The lattice-first principle holds: {@link io.github.eschizoid.telescope.DeepMap DeepMap}
+ * composes {@link io.github.eschizoid.telescope.internal.optics.Iso Iso}s; this record only handles
+ * "how do I read one component value" and "how do I rebuild one object from a name-keyed function."
+ * No bidirectional plumbing lives here.
  */
 public record Reflective(
   Function<Class<?>, String[]> names,
@@ -128,8 +127,8 @@ public record Reflective(
    *
    * <p>This is the lattice-routed shape of "rebuild an instance from named values" and "decompose
    * an instance into named values" — the two operations {@link
-   * io.github.eschizoid.telescope.DeepMap DeepMap} previously performed inline in the body
-   * of {@code assembleIso}. Lifting them to an {@link Iso} lets {@code assembleIso} express the
+   * io.github.eschizoid.telescope.DeepMap DeepMap} previously performed inline in the body of
+   * {@code assembleIso}. Lifting them to an {@link Iso} lets {@code assembleIso} express the
    * per-pair {@code Iso<S, T>} as the composition {@code
    * srcReader.reverse().then(middle).then(tgtBuilder)} — pure lattice {@code .then()}, no manual
    * function-body construction.

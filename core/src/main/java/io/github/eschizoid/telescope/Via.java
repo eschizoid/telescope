@@ -42,9 +42,9 @@ record Via<A, B>(
 
   /**
    * The element-level {@link Iso} the user-supplied mapper produces. {@link
-   * io.github.eschizoid.telescope.DeepMap DeepMap} consumes this and, when the row's
-   * source/target field types are container shapes matching the mapper's element classes, lifts the
-   * Iso through the matching container (list / set / optional / map values).
+   * io.github.eschizoid.telescope.DeepMap DeepMap} consumes this and, when the row's source/target
+   * field types are container shapes matching the mapper's element classes, lifts the Iso through
+   * the matching container (list / set / optional / map values).
    */
   @SuppressWarnings("unchecked")
   Iso<?, ?> elementIso() {

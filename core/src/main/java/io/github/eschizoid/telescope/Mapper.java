@@ -11,9 +11,9 @@ import java.util.function.Function;
 
 /**
  * A bidirectional mapper produced by the deep recursive factory {@link Telescope#mapper(Class,
- * Class, io.github.eschizoid.telescope.MapStep...)}. Wraps an {@link Iso} for the
- * forward/backward conversion and (optionally) a per-target-component patch table for sparse {@link
- * #patch} overlays.
+ * Class, io.github.eschizoid.telescope.MapStep...)}. Wraps an {@link Iso} for the forward/backward
+ * conversion and (optionally) a per-target-component patch table for sparse {@link #patch}
+ * overlays.
  *
  * <p>Works for any combination of record and bean classes — the source and target side each pick
  * their own {@link Reflective} dispatch at construction, so {@code patch(...)} reads the partial
@@ -28,10 +28,10 @@ public final class Mapper<A, B> {
    * #backward} and written to {@link #sourceField} on the source.
    *
    * <p>Declared {@code public} solely so the cross-package {@link
-   * io.github.eschizoid.telescope.DeepMap} engine can construct entries when building a
-   * {@link Mapper} via {@link Mapper#Mapper(Iso, Class, Class, Map)}. The raw {@link Function}
-   * field is part of that internal contract; external code must not depend on this record's shape.
-   * Treat as private to the module — it may change or disappear without a deprecation cycle.
+   * io.github.eschizoid.telescope.DeepMap} engine can construct entries when building a {@link
+   * Mapper} via {@link Mapper#Mapper(Iso, Class, Class, Map)}. The raw {@link Function} field is
+   * part of that internal contract; external code must not depend on this record's shape. Treat as
+   * private to the module — it may change or disappear without a deprecation cycle.
    */
   public record PatchEntry(String sourceField, Function<Object, Object> backward) {}
 

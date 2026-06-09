@@ -1,10 +1,9 @@
-package io.github.eschizoid.telescope.mapping;
+package io.github.eschizoid.telescope;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
