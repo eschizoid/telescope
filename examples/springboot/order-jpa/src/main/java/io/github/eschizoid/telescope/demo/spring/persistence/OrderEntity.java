@@ -54,7 +54,14 @@ public class OrderEntity {
   @Convert(converter = UppercaseConverter.class)
   private String referenceCode;
 
-  @ManyToOne(cascade = CascadeType.PERSIST, fetch = FetchType.EAGER)
+  /**
+   * LAZY by design — exercises telescope's Hibernate-proxy unwrap path. When an {@code OrderEntity}
+   * is loaded outside a transaction-spanning fetch graph, {@code getCustomer()} returns a {@link
+   * org.hibernate.proxy.HibernateProxy} rather than a real {@code CustomerEntity}. Telescope walks
+   * the proxy via {@code Beans.persistentClassOf(...)} during backward-mapping, forcing a single
+   * initialization fetch. See {@code OrderCustomerLazyFetchTest}.
+   */
+  @ManyToOne(cascade = CascadeType.PERSIST, fetch = FetchType.LAZY)
   @JoinColumn(name = "customer_id")
   private CustomerEntity customer;
 

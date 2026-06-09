@@ -69,10 +69,10 @@ LineItem (record)               LineItemEntity (@Entity)
 - **`Mapping.to(srcAcc, tgtAcc, fwd, bwd)`** — **typed transform** for `BigDecimal ↔ long-cents`.
 - **`Mapping.via(srcAcc, tgtAcc, nestedMapper)`** — compose sub-mappers (Customer, Address, LineItem) into the top-level
   Order mapper.
-- **`Mapping.drop(srcAcc)` / `Mapping.drop(srcAcc, targetClass)`** — declare a source field intentionally NOT mapped
-  to the target. `partnerLabelMapper` uses both: top-level `drop(Order::metadata)` keeps internal metadata off the
-  partner DTO, and nested `drop(Customer::tags, PartnerCustomer.class)` keeps Customer's internal tag set off the
-  partner-facing customer shape — the recursion hits `(Customer, PartnerCustomer)` and the scoped drop fires there.
+- **`Mapping.drop(srcAcc)` / `Mapping.drop(srcAcc, targetClass)`** — declare a source field intentionally NOT mapped to
+  the target. `partnerLabelMapper` uses both: top-level `drop(Order::metadata)` keeps internal metadata off the partner
+  DTO, and nested `drop(Customer::tags, PartnerCustomer.class)` keeps Customer's internal tag set off the partner-facing
+  customer shape — the recursion hits `(Customer, PartnerCustomer)` and the scoped drop fires there.
 - **`WriteHint.writeBean(Class, SETTERS)`** — pin the bean write strategy to no-arg-ctor + setters (required for
   Hibernate-managed identity assignment).
 - **`Mapper.forward(...)` / `Mapper.backward(...)`** — both directions from one definition.
@@ -85,8 +85,12 @@ LineItem (record)               LineItemEntity (@Entity)
 - **`@Focus` / `@BeanFocus`** — annotation-driven codegen that emits `<X>Path<R>` navigators and `<X>Telescope` metadata
   holders. Consumed inline in `CodegenOrderMappers`.
 - **`Optional<Address>`, `List<LineItem>`, `Map<String, String>`, `Set<String>` cardinality** — recurse through the
-  runtime factory without special-casing; `Order.metadata` shows the Map auto-lift end-to-end with
-  `@ElementCollection`, `Customer.tags` does the same for Set auto-lift + the typed `SetPath.each()` terminal.
+  runtime factory without special-casing; `Order.metadata` shows the Map auto-lift end-to-end with `@ElementCollection`,
+  `Customer.tags` does the same for Set auto-lift + the typed `SetPath.each()` terminal.
+- **Hibernate LAZY-proxy unwrap** — `OrderEntity.customer` is `@ManyToOne(fetch = LAZY)`. When telescope's
+  `Mapper.backward(...)` reads a `HibernateProxy`, it forces a single initialization fetch (counted via Hibernate's
+  `Statistics.getEntityFetchCount()`) and resolves the persistent class via `Beans.persistentClassOf(...)`. Pinned by
+  `OrderCustomerLazyFetchTest`.
 
 ## Running
 
