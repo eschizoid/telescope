@@ -4,29 +4,31 @@ import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 
 /**
- * Drop-source-field row from {@link Mapping#drop(Accessor)}. Marks a single source field as
- * intentionally NOT mapped to the target so the strict deep-mapping factory accepts the pair
- * without requiring a same-name target property. Used when one side of a record↔bean pair carries
- * fields the other shouldn't see (e.g. internal metadata that mustn't leak across a partner-facing
- * boundary).
+ * Drop-source-field row from {@link Mapping#drop(Accessor)} / {@link Mapping#drop(Accessor,
+ * Class)}. Marks a single source field as intentionally NOT mapped to the target so the strict
+ * deep-mapping factory accepts the pair without requiring a same-name target property.
  *
- * <p>Package-private — users construct via {@link Mapping#drop(Accessor)} and never see this type
- * at the call site.
+ * <p>Used when one side of a record↔bean pair carries fields the other shouldn't see (e.g. internal
+ * metadata that mustn't leak across a partner-facing boundary). The single-arg variant scopes the
+ * drop to the top-level mapper; the two-arg variant scopes it to a specific nested pair anywhere in
+ * the recursion (analogous to {@link Via} carrying both accessors).
+ *
+ * <p>Package-private — users construct via the {@link Mapping#drop(Accessor)} / {@link
+ * Mapping#drop(Accessor, Class)} factories and never see this type at the call site.
  */
-record Drop<A, B, X>(Accessor<A, X> src) implements Mapping<A, B>, MappingInternals<A, B> {
+record Drop<A, B, X>(Accessor<A, X> src, Class<B> explicitTarget) implements Mapping<A, B>, MappingInternals<A, B> {
   @Override
   public Class<A> sourceClass() {
     return LambdaIntrospection.implClassOf(src);
   }
 
   /**
-   * No target accessor — a drop row by definition doesn't claim a target field. Returning {@code
-   * null} lets {@link DeepMap} short-circuit the (source, target) type-pair indexing path for this
-   * row.
+   * Explicit target class if the user supplied one (two-arg factory), otherwise {@code null} so
+   * {@link DeepMap} binds the drop to the top-level mapper's target.
    */
   @Override
   public Class<B> targetClass() {
-    return null;
+    return explicitTarget;
   }
 
   @Override
