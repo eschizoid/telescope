@@ -209,7 +209,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("List<X> ↔ List<Y> auto-lifts element-wise via stream + sub-bridge")
+    @DisplayName("List<X> ↔ List<Y> auto-lifts element-wise via a for-loop helper")
     void listContainerAutoLifts() {
       final var compilation = compile(
         source(
@@ -250,18 +250,21 @@ class BridgeProcessorTest {
       final var orderBridge = compilation.generated().get("demo.OrderBridge");
       assertNotNull(orderBridge);
       assertNotNull(compilation.generated().get("demo.LineItemToLineItemDtoBridge"));
+      assertTrue(orderBridge.contains("__fwd_items(s.items())"), orderBridge);
+      assertTrue(orderBridge.contains("__bwd_items(t.items())"), orderBridge);
       assertTrue(
-        orderBridge.contains("s.items().stream().map(LineItemToLineItemDtoBridge::forward).toList()"),
+        orderBridge.contains(
+          "private static java.util.List<demo.LineItemDto> __fwd_items(final java.util.List<demo.LineItem> src)"
+        ),
         orderBridge
       );
-      assertTrue(
-        orderBridge.contains("t.items().stream().map(LineItemToLineItemDtoBridge::backward).toList()"),
-        orderBridge
-      );
+      assertTrue(orderBridge.contains("new java.util.ArrayList<demo.LineItemDto>(src.size())"), orderBridge);
+      assertTrue(orderBridge.contains("LineItemToLineItemDtoBridge.forward(x)"), orderBridge);
+      assertTrue(orderBridge.contains("LineItemToLineItemDtoBridge.backward(x)"), orderBridge);
     }
 
     @Test
-    @DisplayName("Set<X> ↔ Set<Y> auto-lifts via stream + Collectors.toCollection(LinkedHashSet::new)")
+    @DisplayName("Set<X> ↔ Set<Y> auto-lifts via a for-loop helper into a pre-sized LinkedHashSet")
     void setContainerAutoLifts() {
       final var compilation = compile(
         source(
@@ -301,8 +304,11 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var catalog = compilation.generated().get("demo.CatalogBridge");
       assertNotNull(catalog);
-      assertTrue(catalog.contains("s.tags().stream().map(TagToTagDtoBridge::forward)"), catalog);
-      assertTrue(catalog.contains("java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new)"), catalog);
+      assertTrue(catalog.contains("__fwd_tags(s.tags())"), catalog);
+      assertTrue(catalog.contains("__bwd_tags(t.tags())"), catalog);
+      assertTrue(catalog.contains("new java.util.LinkedHashSet<demo.TagDto>(src.size())"), catalog);
+      assertTrue(catalog.contains("TagToTagDtoBridge.forward(x)"), catalog);
+      assertTrue(catalog.contains("TagToTagDtoBridge.backward(x)"), catalog);
     }
 
     @Test
@@ -391,9 +397,11 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var cart = compilation.generated().get("demo.CartBridge");
       assertNotNull(cart);
-      assertTrue(cart.contains("s.items().entrySet().stream().collect("), cart);
-      assertTrue(cart.contains("java.util.Map.Entry::getKey"), cart);
+      assertTrue(cart.contains("__fwd_items(s.items())"), cart);
+      assertTrue(cart.contains("__bwd_items(t.items())"), cart);
+      assertTrue(cart.contains("new java.util.LinkedHashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.forward(e.getValue())"), cart);
+      assertTrue(cart.contains("LineItemToLineItemDtoBridge.backward(e.getValue())"), cart);
     }
 
     @Test

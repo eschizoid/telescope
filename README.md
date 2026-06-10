@@ -179,6 +179,56 @@ each tool's surface doesn't.
 | **Maturity**                                         | 1.0 line; 6 ADRs documenting load-bearing decisions; JMH-backed perf claims                         | Ten years; thousands of production deployments             |
 | **Per-field dispatch perf (codegen path, ADR-0006)** | ~25 ns/op (`field_holder`, 3.23× faster than the reflective fallback)                               | Direct bytecode, no dispatch overhead                      |
 
+#### Per-field source/target mapping — side by side
+
+The bread-and-butter MapStruct call — `@Mapping(source="x", target="y")` — has a direct telescope equivalent. The two
+look alike on purpose; the differences are where the safety lives.
+
+```java
+// MapStruct
+@Mapper
+public interface OrderMapper {
+  @Mapping(source = "customerName", target = "fullName")
+  @Mapping(source = "createdAt", target = "createdDate")
+  OrderDto toDto(Order order);
+}
+```
+
+```java
+// telescope — varargs factory
+final var mapper = Telescope.mapper(
+  Mapping.to(Order::getCustomerName, OrderDto::getFullName),
+  Mapping.to(Order::getCreatedAt, OrderDto::getCreatedDate),
+  Mapping.auto() // same-named fields backfill automatically
+);
+
+final OrderDto dto = mapper.forward(order);
+
+final Order back = mapper.backward(dto);
+```
+
+```java
+// telescope — fluent chain (equivalent shape)
+Telescope.map(Order.class).to(OrderDto.class)
+  .field(Order::getCustomerName, OrderDto::getFullName)
+  .field(Order::getCreatedAt,    OrderDto::getCreatedDate)
+  .build();
+```
+
+| Aspect                               | MapStruct                                               | telescope                                                                  |
+| ------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **Source / target syntax**           | Strings: `"customerName"`                               | Typed method references: `Order::getCustomerName`                          |
+| **Typo / type-mismatch caught at**   | Annotation-processor run                                | **`javac` compile time** — the wrong-type accessor doesn't compile         |
+| **Survives a rename (IDE refactor)** | String breaks; processor re-runs and surfaces the error | IDE refactor follows the accessor everywhere                               |
+| **Reverse direction**                | A second method with `@InheritInverseConfiguration`     | Same `Mapping.to(...)` row works both ways                                 |
+| **Nested path** (`source = "a.b.c"`) | Expression-string                                       | `Mapping.via(srcAcc, tgtAcc, nestedMapper)` — typed at every hop           |
+| **Custom expression**                | `@Mapping(expression = "java(...)")`                    | `Mapping.via(srcAcc, tgtAcc, customMapper)` — plain Java mapper, type-safe |
+| **`condition = "..."` predicate**    | Annotation attribute                                    | `Edit.overIfPresent(...)` for updates; `Mapping.drop(...)` for mappings    |
+
+The intent is identical; the calculus is different. MapStruct trades the typed-ref ergonomics for the ability to express
+things like `source = "user.address.street"` as a single string. Telescope trades the string-path brevity for the
+guarantee that everything you wrote against the source/target types compiles iff it still makes sense.
+
 #### When MapStruct is the right pick
 
 - You need flat `Entity → Dto` conversion with hand-tuned `@Mapping` expressions, `@BeforeMapping` / `@AfterMapping`

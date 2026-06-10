@@ -133,9 +133,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (fieldPlans == null) return;
 
     final Function<String, String> readForward = name ->
-      applyForward(fieldPlans.get(name), readExpr(source, "s", fieldByName(sourceFields, name)));
+      applyForward(name, fieldPlans.get(name), readExpr(source, "s", fieldByName(sourceFields, name)));
     final Function<String, String> readBackward = name ->
-      applyBackward(fieldPlans.get(name), readExpr(target, "t", fieldByName(targetFields, name)));
+      applyBackward(name, fieldPlans.get(name), readExpr(target, "t", fieldByName(targetFields, name)));
 
     final var forwardBody = buildExpr(target, readForward, targetFields);
     if (forwardBody == null) return;
@@ -167,6 +167,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("    Telescope.from(" + sourceFq + ".class).to(" + targetFq + ".class).using(");
         out.println("      " + bridgeName + "::forward,");
         out.println("      " + bridgeName + "::backward);");
+        emitContainerHelpers(out, fieldPlans, sourceFields, targetFields);
       }
     );
   }
@@ -447,49 +448,170 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** Sentinel sub-bridge name meaning "the element passes through unchanged". */
   private static final String IDENTITY_ELEMENT_SENTINEL = "__IDENTITY__";
 
-  private String applyForward(final FieldPlan plan, final String readExpr) {
+  private String applyForward(final String fieldName, final FieldPlan plan, final String readExpr) {
     final var sub = plan.subBridgeName();
     final boolean elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(sub);
     final var fwdElement = elementIdentity ? "e -> e" : sub + "::forward";
     return switch (plan.kind()) {
       case IDENTITY -> readExpr;
       case RECURSE -> sub + ".forward(" + readExpr + ")";
-      case LIST -> readExpr + ".stream().map(" + fwdElement + ").toList()";
-      case SET -> readExpr +
-      ".stream().map(" +
-      fwdElement +
-      ").collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new))";
+      // LIST/SET/MAP_VALUES: when the element type needs a sub-bridge, delegate to a private static
+      // helper emitted alongside this method (see emitContainerHelpers below). The helper inlines a
+      // size-presized for-loop, eliminating the Stream + Spliterator + collector overhead at the
+      // dispatch site. When the element type is identity (same on both sides), a defensive copy is
+      // sufficient and we emit it inline.
+      case LIST -> elementIdentity
+        ? "(" + readExpr + " == null ? null : new java.util.ArrayList<>(" + readExpr + "))"
+        : "__fwd_" + fieldName + "(" + readExpr + ")";
+      case SET -> elementIdentity
+        ? "(" + readExpr + " == null ? null : new java.util.LinkedHashSet<>(" + readExpr + "))"
+        : "__fwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL -> readExpr + ".map(" + fwdElement + ")";
-      case MAP_VALUES -> readExpr +
-      ".entrySet().stream().collect(java.util.stream.Collectors.toMap(java.util.Map.Entry::getKey, e -> " +
-      (elementIdentity ? "e.getValue()" : sub + ".forward(e.getValue())") +
-      ", (a, b) -> a, java.util.LinkedHashMap::new))";
+      case MAP_VALUES -> elementIdentity
+        ? "(" + readExpr + " == null ? null : new java.util.LinkedHashMap<>(" + readExpr + "))"
+        : "__fwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL_TO_NULLABLE -> readExpr + ".map(" + fwdElement + ").orElse(null)";
       case NULLABLE_TO_OPTIONAL -> "java.util.Optional.ofNullable(" + readExpr + ").map(" + fwdElement + ")";
     };
   }
 
-  private String applyBackward(final FieldPlan plan, final String readExpr) {
+  private String applyBackward(final String fieldName, final FieldPlan plan, final String readExpr) {
     final var sub = plan.subBridgeName();
     final boolean elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(sub);
     final var bwdElement = elementIdentity ? "e -> e" : sub + "::backward";
     return switch (plan.kind()) {
       case IDENTITY -> readExpr;
       case RECURSE -> sub + ".backward(" + readExpr + ")";
-      case LIST -> readExpr + ".stream().map(" + bwdElement + ").toList()";
-      case SET -> readExpr +
-      ".stream().map(" +
-      bwdElement +
-      ").collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new))";
+      case LIST -> elementIdentity
+        ? "(" + readExpr + " == null ? null : new java.util.ArrayList<>(" + readExpr + "))"
+        : "__bwd_" + fieldName + "(" + readExpr + ")";
+      case SET -> elementIdentity
+        ? "(" + readExpr + " == null ? null : new java.util.LinkedHashSet<>(" + readExpr + "))"
+        : "__bwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL -> readExpr + ".map(" + bwdElement + ")";
-      case MAP_VALUES -> readExpr +
-      ".entrySet().stream().collect(java.util.stream.Collectors.toMap(java.util.Map.Entry::getKey, e -> " +
-      (elementIdentity ? "e.getValue()" : sub + ".backward(e.getValue())") +
-      ", (a, b) -> a, java.util.LinkedHashMap::new))";
+      case MAP_VALUES -> elementIdentity
+        ? "(" + readExpr + " == null ? null : new java.util.LinkedHashMap<>(" + readExpr + "))"
+        : "__bwd_" + fieldName + "(" + readExpr + ")";
       // For the cross-paradigm bridges, forward and backward are mirror images.
       case OPTIONAL_TO_NULLABLE -> "java.util.Optional.ofNullable(" + readExpr + ").map(" + bwdElement + ")";
       case NULLABLE_TO_OPTIONAL -> readExpr + ".map(" + bwdElement + ").orElse(null)";
     };
+  }
+
+  /**
+   * Emit one private static helper per LIST/SET/MAP_VALUES field whose element type carries a
+   * sub-bridge. Each helper inlines a size-presized for-loop with a direct static call to the
+   * sub-bridge's forward/backward — no {@code Stream} pipeline allocation, no {@code
+   * Function::apply} hop. Mirrors what MapStruct emits for the same shape; closes the deep-tier
+   * dispatch gap.
+   */
+  private void emitContainerHelpers(
+    final java.io.PrintWriter out,
+    final java.util.Map<String, FieldPlan> fieldPlans,
+    final List<Field> sourceFields,
+    final List<Field> targetFields
+  ) {
+    for (final var entry : fieldPlans.entrySet()) {
+      final var fieldName = entry.getKey();
+      final var plan = entry.getValue();
+      if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) continue;
+      final var srcType = fieldByName(sourceFields, fieldName).type();
+      final var tgtType = fieldByName(targetFields, fieldName).type();
+      switch (plan.kind()) {
+        case LIST -> {
+          emitListHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward");
+          emitListHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan.subBridgeName(), "backward");
+        }
+        case SET -> {
+          emitSetHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward");
+          emitSetHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan.subBridgeName(), "backward");
+        }
+        case MAP_VALUES -> {
+          emitMapHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward");
+          emitMapHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan.subBridgeName(), "backward");
+        }
+        default -> {
+        }
+      }
+    }
+  }
+
+  private void emitListHelper(
+    final java.io.PrintWriter out,
+    final String name,
+    final TypeMirror srcContainer,
+    final TypeMirror tgtContainer,
+    final String subBridge,
+    final String direction
+  ) {
+    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().getFirst();
+    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
+    out.println();
+    out.println(
+      "  private static java.util.List<" + tgtElement + "> " + name + "(final java.util.List<" + srcElement + "> src) {"
+    );
+    out.println("    if (src == null) return null;");
+    out.println("    final var out = new java.util.ArrayList<" + tgtElement + ">(src.size());");
+    out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
+    out.println("    return out;");
+    out.println("  }");
+  }
+
+  private void emitSetHelper(
+    final java.io.PrintWriter out,
+    final String name,
+    final TypeMirror srcContainer,
+    final TypeMirror tgtContainer,
+    final String subBridge,
+    final String direction
+  ) {
+    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().getFirst();
+    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
+    out.println();
+    out.println(
+      "  private static java.util.Set<" + tgtElement + "> " + name + "(final java.util.Set<" + srcElement + "> src) {"
+    );
+    out.println("    if (src == null) return null;");
+    out.println("    final var out = new java.util.LinkedHashSet<" + tgtElement + ">(src.size());");
+    out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
+    out.println("    return out;");
+    out.println("  }");
+  }
+
+  private void emitMapHelper(
+    final java.io.PrintWriter out,
+    final String name,
+    final TypeMirror srcContainer,
+    final TypeMirror tgtContainer,
+    final String subBridge,
+    final String direction
+  ) {
+    final var srcArgs = ((DeclaredType) srcContainer).getTypeArguments();
+    final var tgtArgs = ((DeclaredType) tgtContainer).getTypeArguments();
+    final var keyType = srcArgs.get(0);
+    final var srcValue = srcArgs.get(1);
+    final var tgtValue = tgtArgs.get(1);
+    out.println();
+    out.println(
+      "  private static java.util.Map<" +
+        keyType +
+        ", " +
+        tgtValue +
+        "> " +
+        name +
+        "(final java.util.Map<" +
+        keyType +
+        ", " +
+        srcValue +
+        "> src) {"
+    );
+    out.println("    if (src == null) return null;");
+    out.println("    final var out = new java.util.LinkedHashMap<" + keyType + ", " + tgtValue + ">(src.size());");
+    out.println(
+      "    for (final var e : src.entrySet()) out.put(e.getKey(), " + subBridge + "." + direction + "(e.getValue()));"
+    );
+    out.println("    return out;");
+    out.println("  }");
   }
 
   /**
