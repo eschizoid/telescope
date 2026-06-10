@@ -198,26 +198,66 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
   /** Swap directions — {@code to} and {@code from} trade places. */
   default Iso<B, A> reverse() {
     final var self = this;
-    return Iso.of(self::from, self::to);
+    return new Iso<>() {
+      @Override
+      public A to(final B source) {
+        return self.from(source);
+      }
+
+      @Override
+      public B from(final A value) {
+        return self.to(value);
+      }
+    };
   }
 
   /** {@code Iso . Iso = Iso} */
   default <C> Iso<A, C> then(final Iso<B, C> next) {
     final var self = this;
-    return Iso.of(a -> next.to(self.to(a)), c -> self.from(next.from(c)));
+    return new Iso<>() {
+      @Override
+      public C to(final A source) {
+        return next.to(self.to(source));
+      }
+
+      @Override
+      public A from(final C value) {
+        return self.from(next.from(value));
+      }
+    };
   }
 
   /** {@code Iso . Lens = Lens} — diamond resolution */
   @Override
   default <C> Lens<A, C> then(final Lens<B, C> next) {
     final var self = this;
-    return Lens.of(a -> next.get(self.to(a)), (a, c) -> self.from(next.set(self.to(a), c)));
+    return new Lens<>() {
+      @Override
+      public C get(final A source) {
+        return next.get(self.to(source));
+      }
+
+      @Override
+      public A set(final A source, final C value) {
+        return self.from(next.set(self.to(source), value));
+      }
+    };
   }
 
   /** {@code Iso . Prism = Prism} — diamond resolution */
   @Override
   default <C> Prism<A, C> then(final Prism<B, C> next) {
     final var self = this;
-    return Prism.of(a -> next.getOption(self.to(a)), c -> self.from(next.reverseGet(c)));
+    return new Prism<>() {
+      @Override
+      public Optional<C> getOption(final A source) {
+        return next.getOption(self.to(source));
+      }
+
+      @Override
+      public A reverseGet(final C value) {
+        return self.from(next.reverseGet(value));
+      }
+    };
   }
 }
