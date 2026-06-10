@@ -3,8 +3,8 @@ package io.github.eschizoid.telescope.quarkus;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import io.github.eschizoid.telescope.Mapper;
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 

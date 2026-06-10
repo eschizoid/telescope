@@ -1,6 +1,6 @@
 package io.github.eschizoid.telescope.demo.spring.api;
 
-import io.github.eschizoid.telescope.Validated;
+import io.github.eschizoid.telescope.effects.Validated;
 import java.util.List;
 
 /**

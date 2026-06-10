@@ -29,7 +29,7 @@ import java.lang.annotation.Target;
  *
  * <p>This is the reflection-free, compile-checked counterpart to the runtime {@link
  * io.github.eschizoid.telescope.Telescope#map(Class, Class,
- * io.github.eschizoid.telescope.MapStep...)} — that single factory handles record↔record,
+ * io.github.eschizoid.telescope.mapping.MapStep...)} — that single factory handles record↔record,
  * POJO↔POJO, and POJO↔record at any depth. For renames or per-field transforms (which can't be
  * expressed in an annotation), use the runtime form instead.
  *
@@ -50,7 +50,7 @@ import java.lang.annotation.Target;
  * }</pre>
  *
  * @see io.github.eschizoid.telescope.Telescope#map(Class, Class,
- *     io.github.eschizoid.telescope.MapStep...)
+ *     io.github.eschizoid.telescope.mapping.MapStep...)
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)

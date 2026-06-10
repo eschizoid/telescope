@@ -1,9 +1,9 @@
 package io.github.eschizoid.telescope.demo.spring.api;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.Validated;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
+import io.github.eschizoid.telescope.effects.Validated;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;

@@ -3,8 +3,8 @@ package io.github.eschizoid.telescope.demo.spring.api;
 import static io.github.eschizoid.telescope.Edit.mapIfPresent;
 import static io.github.eschizoid.telescope.Edit.overIfPresent;
 
-import io.github.eschizoid.telescope.Mapper;
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.Address;
 import io.github.eschizoid.telescope.demo.spring.domain.Customer;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;

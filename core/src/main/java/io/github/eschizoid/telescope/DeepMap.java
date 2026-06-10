@@ -1,8 +1,17 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.mapping.Drop;
+import io.github.eschizoid.telescope.mapping.MapStep;
+import io.github.eschizoid.telescope.mapping.Mapping;
+import io.github.eschizoid.telescope.mapping.MappingInternals;
+import io.github.eschizoid.telescope.mapping.SameTypedTo;
+import io.github.eschizoid.telescope.mapping.TypedTransformTo;
+import io.github.eschizoid.telescope.mapping.Via;
+import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.time.temporal.Temporal;
@@ -63,7 +72,9 @@ public final class DeepMap {
 
   static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {
     final var r = resolution(source, target, steps);
-    return new Mapper<>(r.iso, source, target, r.patchTable);
+    // Go through Mapper.create (public, Function-typed) — same call works regardless of whether
+    // Mapper sits in this package or moves to conversion/.
+    return Mapper.create(r.iso::to, r.iso::from, source, target, r.patchTable);
   }
 
   // ---------- Resolution (shared by both public entries) ----------
@@ -455,10 +466,14 @@ public final class DeepMap {
    * Iso is lifted through the matching container ({@code List} / {@code Set} / {@code Optional} /
    * {@code Map} values). Otherwise the element Iso is used as-is.
    */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Iso<?, ?> fieldIsoOf(final Mapping<?, ?> row, final Type srcType, final Type tgtType) {
     return switch (row) {
-      case SameTypedTo<?, ?, ?> r -> r.fieldIso();
-      case TypedTransformTo<?, ?, ?, ?> r -> r.fieldIso();
+      // Inline the contributed leaf-level Iso for each row variant. Reading the public components
+      // directly keeps Iso (internal) out of the mapping types' public signatures — so the mapping
+      // types stay portable across packages without needing @SuppressWarnings("exports").
+      case SameTypedTo<?, ?, ?> _ -> Iso.identity();
+      case TypedTransformTo<?, ?, ?, ?> r -> Iso.of((Function) r.forward(), (Function) r.backward());
       case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType);
       // Drop rows never reach this method — populateIso short-circuits on `instanceof Drop` before
       // calling fieldIsoOf. The case is here only to make the switch exhaustive for the sealed
@@ -474,10 +489,15 @@ public final class DeepMap {
    * Iso#liftSet} / {@link Iso#liftOptional} / {@link Iso#liftMapValues}. Otherwise the
    * element-level Iso flows through unchanged (scalar / record-pair case).
    */
+  @SuppressWarnings("unchecked")
   private static Iso<?, ?> liftViaIfNeeded(final Via<?, ?> row, final Type srcType, final Type tgtType) {
-    final var elementIso = row.elementIso();
-    final var mapperSrc = row.mapperSourceClass();
-    final var mapperTgt = row.mapperTargetClass();
+    // Inline: build the element-level Iso from the nested Mapper's public forward/backward, and
+    // pull the source/target classes from the same Mapper. Reading the public components inline
+    // keeps Iso / Class accessors off Via's public surface.
+    final var raw = (Mapper<Object, Object>) row.nested();
+    final var elementIso = Iso.of(raw::forward, raw::backward);
+    final var mapperSrc = raw.sourceClass();
+    final var mapperTgt = raw.targetClass();
     final var srcShape = ContainerShape.of(srcType);
     final var tgtShape = ContainerShape.of(tgtType);
     if (

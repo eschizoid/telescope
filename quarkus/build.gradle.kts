@@ -41,6 +41,10 @@ tasks.withType<Test>().configureEach {
 }
 
 tasks.jacocoTestReport {
+    // The :jandex task writes META-INF/jandex.idx into build/resources/main, which is also a
+    // jacocoTestReport classpath input. Gradle's strict task validation refuses to assume the
+    // order — declare it explicitly.
+    mustRunAfter("jandex")
     reports {
         csv.required.set(true)
         xml.required.set(true)

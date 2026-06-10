@@ -2,7 +2,7 @@ package io.github.eschizoid.telescope.focus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import io.github.eschizoid.telescope.Either;
+import io.github.eschizoid.telescope.effects.Either;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;

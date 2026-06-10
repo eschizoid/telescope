@@ -8,9 +8,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /**
  * Maps {@link InvalidOrderException} (carrying a {@link
- * io.github.eschizoid.telescope.Validated.Invalid}) to a 400 response with the accumulated error
- * list as JSON. The advice never touches Validated directly — the controller throws an exception
- * wrapper, the advice downcasts via the carried payload to surface the typed errors.
+ * io.github.eschizoid.telescope.effects.Validated.Invalid}) to a 400 response with the accumulated
+ * error list as JSON. The advice never touches Validated directly — the controller throws an
+ * exception wrapper, the advice downcasts via the carried payload to surface the typed errors.
  */
 @RestControllerAdvice
 public class ValidatedExceptionAdvice {
