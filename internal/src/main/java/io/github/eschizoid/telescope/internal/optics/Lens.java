@@ -115,6 +115,20 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
   /** {@code Lens . Prism = Affine} */
   default <B> Affine<S, B> then(final Prism<A, B> next) {
     final var self = this;
-    return Affine.of(source -> next.getOption(self.get(source)), (source, b) -> self.set(source, next.reverseGet(b)));
+    return new Affine<>() {
+      @Override
+      public Optional<B> getOption(final S source) {
+        return next.getOption(self.get(source));
+      }
+
+      @Override
+      public S modify(final S source, final Function<? super B, ? extends B> f) {
+        final var a = self.get(source);
+        return next
+          .getOption(a)
+          .map(b -> self.set(source, next.reverseGet(f.apply(b))))
+          .orElse(source);
+      }
+    };
   }
 }

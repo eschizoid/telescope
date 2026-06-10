@@ -136,13 +136,19 @@ public interface Prism<S, A> extends Affine<S, A> {
   /** {@code Prism . Lens = Affine} */
   default <B> Affine<S, B> then(final Lens<A, B> next) {
     final var self = this;
-    return Affine.of(
-      source -> self.getOption(source).map(next::get),
-      (source, b) ->
-        self
+    return new Affine<>() {
+      @Override
+      public Optional<B> getOption(final S source) {
+        return self.getOption(source).map(next::get);
+      }
+
+      @Override
+      public S modify(final S source, final Function<? super B, ? extends B> f) {
+        return self
           .getOption(source)
-          .map(a -> self.reverseGet(next.set(a, b)))
-          .orElse(source)
-    );
+          .map(a -> self.reverseGet(next.set(a, f.apply(next.get(a)))))
+          .orElse(source);
+      }
+    };
   }
 }
