@@ -8,7 +8,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -114,8 +113,18 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    */
   static <X, Y> Iso<List<X>, List<Y>> liftList(final Iso<X, Y> element) {
     return of(
-      xs -> xs == null ? null : xs.stream().map(element::to).collect(Collectors.toCollection(ArrayList::new)),
-      ys -> ys == null ? null : ys.stream().map(element::from).collect(Collectors.toCollection(ArrayList::new))
+      xs -> {
+        if (xs == null) return null;
+        final var out = new ArrayList<Y>(xs.size());
+        for (final var x : xs) out.add(element.to(x));
+        return out;
+      },
+      ys -> {
+        if (ys == null) return null;
+        final var out = new ArrayList<X>(ys.size());
+        for (final var y : ys) out.add(element.from(y));
+        return out;
+      }
     );
   }
 
@@ -168,8 +177,18 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    */
   static <X, Y> Iso<Set<X>, Set<Y>> liftSet(final Iso<X, Y> element) {
     return of(
-      xs -> xs == null ? null : xs.stream().map(element::to).collect(Collectors.toCollection(LinkedHashSet::new)),
-      ys -> ys == null ? null : ys.stream().map(element::from).collect(Collectors.toCollection(LinkedHashSet::new))
+      xs -> {
+        if (xs == null) return null;
+        final var out = new LinkedHashSet<Y>(xs.size());
+        for (final var x : xs) out.add(element.to(x));
+        return out;
+      },
+      ys -> {
+        if (ys == null) return null;
+        final var out = new LinkedHashSet<X>(ys.size());
+        for (final var y : ys) out.add(element.from(y));
+        return out;
+      }
     );
   }
 
@@ -182,14 +201,14 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
     return of(
       mx -> {
         if (mx == null) return null;
-        final var out = new LinkedHashMap<K, Y>();
-        mx.forEach((k, x) -> out.put(k, value.to(x)));
+        final var out = new LinkedHashMap<K, Y>(mx.size());
+        for (final var entry : mx.entrySet()) out.put(entry.getKey(), value.to(entry.getValue()));
         return out;
       },
       my -> {
         if (my == null) return null;
-        final var out = new LinkedHashMap<K, X>();
-        my.forEach((k, y) -> out.put(k, value.from(y)));
+        final var out = new LinkedHashMap<K, X>(my.size());
+        for (final var entry : my.entrySet()) out.put(entry.getKey(), value.from(entry.getValue()));
         return out;
       }
     );
