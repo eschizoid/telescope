@@ -252,13 +252,13 @@ class BridgeProcessorTest {
       assertNotNull(compilation.generated().get("demo.LineItemToLineItemDtoBridge"));
       assertTrue(orderBridge.contains("__fwd_items(s.items())"), orderBridge);
       assertTrue(orderBridge.contains("__bwd_items(t.items())"), orderBridge);
+      assertTrue(orderBridge.contains("import java.util.ArrayList;"), orderBridge);
+      assertTrue(orderBridge.contains("import java.util.List;"), orderBridge);
       assertTrue(
-        orderBridge.contains(
-          "private static java.util.List<demo.LineItemDto> __fwd_items(final java.util.List<demo.LineItem> src)"
-        ),
+        orderBridge.contains("private static List<demo.LineItemDto> __fwd_items(final List<demo.LineItem> src)"),
         orderBridge
       );
-      assertTrue(orderBridge.contains("new java.util.ArrayList<demo.LineItemDto>(src.size())"), orderBridge);
+      assertTrue(orderBridge.contains("new ArrayList<demo.LineItemDto>(src.size())"), orderBridge);
       assertTrue(orderBridge.contains("LineItemToLineItemDtoBridge.forward(x)"), orderBridge);
       assertTrue(orderBridge.contains("LineItemToLineItemDtoBridge.backward(x)"), orderBridge);
     }
@@ -306,7 +306,9 @@ class BridgeProcessorTest {
       assertNotNull(catalog);
       assertTrue(catalog.contains("__fwd_tags(s.tags())"), catalog);
       assertTrue(catalog.contains("__bwd_tags(t.tags())"), catalog);
-      assertTrue(catalog.contains("new java.util.LinkedHashSet<demo.TagDto>(src.size())"), catalog);
+      assertTrue(catalog.contains("import java.util.LinkedHashSet;"), catalog);
+      assertTrue(catalog.contains("import java.util.Set;"), catalog);
+      assertTrue(catalog.contains("new LinkedHashSet<demo.TagDto>(src.size())"), catalog);
       assertTrue(catalog.contains("TagToTagDtoBridge.forward(x)"), catalog);
       assertTrue(catalog.contains("TagToTagDtoBridge.backward(x)"), catalog);
     }
@@ -399,7 +401,9 @@ class BridgeProcessorTest {
       assertNotNull(cart);
       assertTrue(cart.contains("__fwd_items(s.items())"), cart);
       assertTrue(cart.contains("__bwd_items(t.items())"), cart);
-      assertTrue(cart.contains("new java.util.LinkedHashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
+      assertTrue(cart.contains("import java.util.LinkedHashMap;"), cart);
+      assertTrue(cart.contains("import java.util.Map;"), cart);
+      assertTrue(cart.contains("new LinkedHashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.forward(e.getValue())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.backward(e.getValue())"), cart);
     }
@@ -447,8 +451,9 @@ class BridgeProcessorTest {
       // Forward: Optional<Address>.map(AddressBridge::forward).orElse(null)
       assertTrue(order.contains("s.giftWrap().map(AddressToAddressEntityBridge::forward).orElse(null)"), order);
       // Backward: Optional.ofNullable(...).map(AddressBridge::backward)
+      assertTrue(order.contains("import java.util.Optional;"), order);
       assertTrue(
-        order.contains("java.util.Optional.ofNullable(t.giftWrap()).map(AddressToAddressEntityBridge::backward)"),
+        order.contains("Optional.ofNullable(t.giftWrap()).map(AddressToAddressEntityBridge::backward)"),
         order
       );
     }

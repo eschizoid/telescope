@@ -8,6 +8,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Consumer;
 import javax.annotation.processing.AbstractProcessor;
 import javax.lang.model.element.Element;
@@ -61,6 +62,23 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final Element origin,
     final Consumer<PrintWriter> body
   ) {
+    writeClass(qualifiedName, simpleName, Set.of(), javadoc, origin, body);
+  }
+
+  /**
+   * Same as {@link #writeClass(String, String, String, Element, Consumer)} but emits {@code
+   * extraImports} alongside the default {@code Telescope} import. Use this from a processor that
+   * needs additional {@code java.util.*} types in the body (e.g. {@code List}, {@code ArrayList})
+   * and would rather write simple names than FQNs.
+   */
+  protected void writeClass(
+    final String qualifiedName,
+    final String simpleName,
+    final Set<String> extraImports,
+    final String javadoc,
+    final Element origin,
+    final Consumer<PrintWriter> body
+  ) {
     final var dot = qualifiedName.lastIndexOf('.');
     final var pkg = dot < 0 ? "" : qualifiedName.substring(0, dot);
     try {
@@ -71,6 +89,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
           out.println();
         }
         out.println("import io.github.eschizoid.telescope.Telescope;");
+        final var sorted = new TreeSet<>(extraImports);
+        for (final var imp : sorted) out.println("import " + imp + ";");
         out.println();
         out.println("/** " + javadoc + " */");
         out.println("public final class " + simpleName + " {");
