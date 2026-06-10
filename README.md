@@ -215,15 +215,22 @@ conversions — the choice should be on feature fit, not on perf within an order
 
 ## Installation
 
-Published to Maven Central under `io.github.eschizoid`. Two artifacts: `telescope` (the DSL, required) and
-`telescope-codegen` (the optional `@Focus` annotation processor — see
-[Compile-time field navigation](#compile-time-field-navigation-focus-codegen)).
+Published to Maven Central under `io.github.eschizoid`. Six artifacts in the family:
+
+| Artifact                        | Role                                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `telescope-api`                 | The DSL — `Telescope`, `Mapper`, `Mapping`, `Either` / `Validated`, annotations. The one you add.                                                                   |
+| `telescope-internal`            | Optic lattice + reflection helpers. Transitive only — pulled in automatically; users cannot reference it (JPMS qualified exports block visibility at compile time). |
+| `telescope-codegen`             | Optional `@Focus` / `@BeanFocus` / `@Bridge` annotation processor — see [Compile-time field navigation](#compile-time-reflection-free-navigation-focus--beanfocus). |
+| `telescope-lombok`              | Lombok-aware variant of the processor for `@Data` / `@Value` / `@Builder` POJOs.                                                                                    |
+| `telescope-spring-boot-starter` | Spring Boot 4 autoconfig + `Mapper<A, B>` bean registry.                                                                                                            |
+| `telescope-quarkus`             | Quarkus 3 CDI extension with the same registry shape.                                                                                                               |
 
 Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope:0.4.1")
+    implementation("io.github.eschizoid:telescope-api:0.4.1")
 }
 ```
 
@@ -232,7 +239,7 @@ Maven:
 ```xml
 <dependency>
   <groupId>io.github.eschizoid</groupId>
-  <artifactId>telescope</artifactId>
+  <artifactId>telescope-api</artifactId>
   <version>0.4.1</version>
 </dependency>
 ```
@@ -245,8 +252,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope:0.4.1")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:0.4.0")
+    implementation("io.github.eschizoid:telescope-api:0.4.1")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:0.4.1")
 }
 ```
 
@@ -255,7 +262,7 @@ Maven:
 ```xml
 <dependency>
   <groupId>io.github.eschizoid</groupId>
-  <artifactId>telescope</artifactId>
+  <artifactId>telescope-api</artifactId>
   <version>0.4.1</version>
 </dependency>
 
@@ -280,11 +287,16 @@ Maven:
 
 ### JPMS / modular consumers
 
-`core` is a named module, `io.github.eschizoid.telescope`. If your project has a `module-info.java`, add:
+`telescope-api` declares the named module `io.github.eschizoid.telescope`. If your project has a `module-info.java`,
+add:
 
 ```java
 requires io.github.eschizoid.telescope;
 ```
+
+That single `requires` is enough — `io.github.eschizoid.telescope.internal` comes in via `requires transitive` from the
+`telescope-api` module declaration, but its packages are qualified-exported to `telescope-api` only, so you cannot
+accidentally reference internal lattice types from your own code.
 
 `telescope-codegen` is a compile-time-only processor and isn't required on the module path.
 
@@ -640,8 +652,8 @@ lift the inner-element Iso through the container automatically (to any depth —
 construction). You only spell the _differences_.
 
 ```java
-import static io.github.eschizoid.telescope.Mapping.to;
-import static io.github.eschizoid.telescope.Mapping.via;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.via;
 
 // All same-name, no overrides — the pure-copy 1-liner:
 final Telescope<UserEntity, UserDto> userMapper = Telescope.map(UserEntity.class, UserDto.class);
@@ -719,8 +731,8 @@ container automatically (to any depth — `List<Map<K, Set<X>>>` resolves by con
 `Telescope<A, B>` (an `Iso`), so it composes with anything else.
 
 ```java
-import static io.github.eschizoid.telescope.Mapping.to;
-import static io.github.eschizoid.telescope.Mapping.via;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.via;
 
 class LegacyUser {
   /* getId(), getEmail(), getName() + a no-arg ctor / all-args ctor / builder() */
@@ -778,8 +790,8 @@ parameter names match the property names). For classes the auto path refuses (im
 of `BUILDER` / `SETTERS` / `FIELDS` / `CONSTRUCTOR`:
 
 ```java
-import static io.github.eschizoid.telescope.WriteHint.WriteStrategy.CONSTRUCTOR;
-import static io.github.eschizoid.telescope.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 
 // OrderPojo has a public (String sku, int qty) ctor, no builder, no setters — autoWriter would
 // refuse without -parameters. The hint forces the CONSTRUCTOR strategy explicitly.
@@ -800,9 +812,9 @@ construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibe
 `X`. At most one `writeBeans(...)` default per call.
 
 ```java
-import static io.github.eschizoid.telescope.WriteHint.WriteStrategy.SETTERS;
-import static io.github.eschizoid.telescope.WriteHint.writeBean;
-import static io.github.eschizoid.telescope.WriteHint.writeBeans;
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 
 final Mapper<Order, OrderEntity> orderMapper = Telescope.mapper(
   Order.class,
@@ -848,9 +860,8 @@ Telescope.of(Page.class)
     .update(page, String::toLowerCase);
 ```
 
-For a worked end-to-end demo using every public Mapping / Mapper / Telescope row through a Spring Boot 4 + Hibernate
-
-- Jackson REST pipeline, see [`examples-springboot/`](examples-springboot/).
+For a worked end-to-end demo using every public Mapping / Mapper / Telescope row through a Spring Boot 4 + Hibernate +
+Jackson REST pipeline, see [`examples/springboot/`](examples/springboot/).
 
 **`@Bridge` — reflection-free, compile-checked (any pair).** The codegen counterpart to `Telescope.map(...)`. Annotate
 the source you own with the target type; the processor generates `<Source>Bridge.BRIDGE`, a `Telescope<Source, Target>`
@@ -1063,8 +1074,8 @@ The return type degrades to a terminal `Telescope<R, Target>` when the target is
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope:0.3.0")
-annotationProcessor("io.github.eschizoid:telescope-codegen:0.3.0")
+implementation("io.github.eschizoid:telescope-api:0.4.1")
+annotationProcessor("io.github.eschizoid:telescope-codegen:0.4.1")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
@@ -1322,12 +1333,19 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
 
 ## Architecture
 
-Two layers, one library:
+Three modules, hard line between public and internal:
 
-- **`io.github.eschizoid.telescope.Telescope<S, A>`**: the DSL. The only thing users import. Wraps a `Traversal<S, A>`
-  from the internal optics package.
-- **`io.github.eschizoid.telescope.internal.optics.*`**: the optic lattice (`Fold`, `Getter`, `Setter`, `Traversal`,
-  `Affine`, `Lens`, `Prism`, `Iso`) plus `Focus` factories and collection traversals. Package-private to the library.
+- **`telescope-api`** (module `io.github.eschizoid.telescope`) — the public DSL. Five exported packages: `telescope`
+  (root: `Telescope`, `Indexed`, `Edit`), `telescope.conversion` (`Mapper`, `From`, `To`), `telescope.mapping`
+  (`Mapping` / `MapStep` / `WriteHint` row types), `telescope.effects` (`Either`, `Validated`), and
+  `telescope.annotations` (`@Focus` / `@BeanFocus` / `@Bridge`). The only artifact users import directly.
+- **`telescope-internal`** (module `io.github.eschizoid.telescope.internal`) — the optic lattice (`Fold`, `Getter`,
+  `Setter`, `Traversal`, `Affine`, `Lens`, `Prism`, `Iso`), `Kind` / `Applicative` HKT-emulation, collection traversals,
+  and reflection helpers (`Records`, `Beans`, `Reflective`, `LambdaIntrospection`, `MetadataHolderProbe`). Every package
+  is qualified-exported `to io.github.eschizoid.telescope` only — JPMS makes lattice types invisible to user code at
+  compile time, regardless of classpath. The artifact ships as a transitive dependency of `telescope-api`.
+- **`telescope-codegen`** (module `io.github.eschizoid.telescope.codegen`) — compile-time-only annotation processor. Not
+  required on the runtime module path.
 
 Each DSL method builds the appropriate optic and composes it via the lattice:
 
@@ -1344,8 +1362,9 @@ Operations (`read`, `set`, `update`, `toList`, `count`, `exists`) delegate to th
 lattice handles all composition rules (`Lens.then(Prism) = Affine`, `Iso.then(Iso) = Iso`, etc.) and laws (get-set,
 set-get, set-set, iso round-trip, prism round-trip).
 
-If you ever want the optic types as public API (Monocle interop, or extending the library), they're already there in
-`internal.optics`. Just promote the package or expose a typed factory.
+If you ever want the optic types as public API (Monocle interop, or extending the library), flip the
+`exports … to io.github.eschizoid.telescope` lines in `telescope-internal`'s `module-info.java` to unqualified exports.
+The types are already there; the JPMS export list is the gate.
 
 ---
 
