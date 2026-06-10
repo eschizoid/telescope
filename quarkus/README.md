@@ -107,9 +107,10 @@ qualify them with `@Named` / `@Qualifier` and `@Inject` the specific bean instea
 ## What's NOT here
 
 This is a runtime-only extension — no separate `deployment` module, no `@BuildStep` recorders. Beans are discovered via
-Jandex + `beans.xml` at startup; the registry's index is built once at application bootstrap and then immutable. For
-most cases this is fine; if you need build-time optimization for an enormous mapper graph, a follow-up split into
-`deployment` + `runtime` would be the path.
+the pre-built `META-INF/jandex.idx` shipped in the jar (no `beans.xml` needed in modern Quarkus when an index is
+present); the registry's index is built once at application bootstrap and then immutable. For most cases this is fine;
+if you need build-time optimization for an enormous mapper graph, a follow-up split into `deployment` + `runtime` would
+be the path.
 
 `@QuarkusTest` integration tests aren't shipped — the registry is pure Java with no CDI dependency, so the existing unit
 tests cover the behaviour. Add a `@QuarkusTest` in your own application if you want to validate the producer wiring
