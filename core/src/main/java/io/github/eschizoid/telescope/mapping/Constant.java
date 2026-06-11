@@ -1,48 +1,54 @@
 package io.github.eschizoid.telescope.mapping;
 
 import io.github.eschizoid.telescope.DeepMap;
-import io.github.eschizoid.telescope.Telescope.Accessor;
-import io.github.eschizoid.telescope.internal.LambdaIntrospection;
+import io.github.eschizoid.telescope.Telescope;
 
 /**
- * Eager-literal correspondence row from {@link Mapping#constant(Accessor, Object)}. Stamps a fixed
- * value onto a target field at forward-apply time; the source-side has no slot for this value, so
- * {@link DeepMap}'s backward direction silently drops it (the rebuilt source carries the type
- * default at the dual slot — same retraction semantics as {@link Drop} but on the target side).
+ * Forward-only literal correspondence from {@link Mapping#constant(io.github.eschizoid.telescope
+ * .Telescope.Accessor, Object) Mapping.constant(Accessor, X)} and {@link
+ * Mapping#constant(Telescope, Object) Mapping.constant(Telescope, X)}. Stamps the captured value at
+ * the target location each forward call.
  *
- * <p>Use for tenant tags, schema versions, environment markers, and other values that should be the
- * same on every forward call. For values that need to be re-evaluated per call (timestamps, fresh
- * collections, IDs), use {@link Compute} instead — a literal {@code constant(Tgt::metadata, new
- * HashMap<>())} would share one map reference across every forward call.
+ * <p>The target is always a {@link Telescope} — the flat factory {@code constant(Accessor, X)}
+ * wraps the bare accessor in a single-hop telescope at construction time so the engine has one
+ * uniform handler. Users see two overloads in the public API; internally there's one shape, one
+ * fixup path, one set of laws.
  *
- * <p>Forward-only by design. Mirrors MapStruct's {@code @Mapping(constant = "...")}; the difference
- * is that the row lives next to the other field correspondences in the same {@code
- * Telescope.mapper(...)} call instead of being split across a second {@code @InheritInverse
- * Configuration} interface — declared once, semantically explicit.
+ * <p>Backward direction is a no-op (the rebuilt source carries the type default at the dual slot —
+ * same retraction semantics as {@link Drop} on the source side). Intermediate hops without a
+ * same-name source counterpart are allocated as a recursive default-tree (records only); see {@link
+ * Mapping#to(io.github.eschizoid.telescope.Telescope.Accessor, Telescope) Mapping.to(Accessor,
+ * Telescope)} for the same allocation behavior.
  *
- * <p>Package-private — users construct via {@link Mapping#constant(Accessor, Object)} and never see
- * this type at the call site.
+ * <p>Package-private — users construct via {@link Mapping#constant Mapping.constant} and never see
+ * this type at the call site. The engine in {@link DeepMap} routes this row through the
+ * telescope-fixup machinery.
  */
-public record Constant<A, B, X>(Accessor<B, X> tgtAccessor, X value) implements Mapping<A, B>, MappingInternals<A, B> {
-  /** Returns {@code null} — no source-side accessor; the row is forward-only. */
+public record Constant<A, B, X>(
+  Telescope<B, X> targetTelescope,
+  X value
+) implements Mapping<A, B>, MappingInternals<A, B> {
+  /** Returns {@code null} — no source-side accessor; outer-pair pinning. */
   @Override
   public Class<A> sourceClass() {
     return null;
   }
 
+  /** Returns {@code null} — {@code Telescope<B, X>} doesn't carry its root class at runtime. */
   @Override
   public Class<B> targetClass() {
-    return LambdaIntrospection.implClassOf(tgtAccessor);
+    return null;
   }
 
-  /** Returns {@code null} — no source field to claim. */
+  /** Returns {@code null} — no source-side field. */
   @Override
   public String sourceField() {
     return null;
   }
 
+  /** Returns {@code null} — top-level target field is recovered via the telescope's first hop. */
   @Override
   public String targetField() {
-    return LambdaIntrospection.methodNameOf(tgtAccessor);
+    return null;
   }
 }

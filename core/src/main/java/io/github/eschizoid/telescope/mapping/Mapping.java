@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.Edit;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -274,7 +275,8 @@ public sealed interface Mapping<A, B>
    * is almost never what you want.
    */
   static <A, B, X> Mapping<A, B> constant(final Accessor<B, X> tgt, final X value) {
-    return new Constant<>(tgt, value);
+    final Class<B> tgtClass = LambdaIntrospection.implClassOf(tgt);
+    return new Constant<>(Telescope.of(tgtClass).field(tgt), value);
   }
 
   /**
@@ -301,6 +303,51 @@ public sealed interface Mapping<A, B>
    * {@link #constant(Accessor, Object)} when the value is genuinely a shared literal.
    */
   static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final Supplier<? extends X> supplier) {
-    return new Compute<>(tgt, supplier);
+    final Class<B> tgtClass = LambdaIntrospection.implClassOf(tgt);
+    return new Compute<>(Telescope.of(tgtClass).field(tgt), supplier);
+  }
+
+  /**
+   * Nested-target variant of {@link #constant(Accessor, Object)} — stamp a fixed value at a
+   * multi-hop target location via a {@link Telescope}. Closes MapStruct's {@code @Mapping(target =
+   * "a.b.c", constant = "...")} for nested targets.
+   *
+   * <pre>{@code
+   * // Runtime form
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     constant(
+   *         Telescope.of(OrderDto.class).field(OrderDto::shipping).field(Shipping::country),
+   *         "US"));
+   *
+   * // Codegen form — same value-level Telescope, fully typed each hop
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     constant(OrderDtoTelescope.of().shipping().country(), "US"));
+   * }</pre>
+   *
+   * <p>Forward-only. Intermediate hops without a same-name source counterpart are allocated as a
+   * recursive default-tree (records only); see {@link #to(Accessor, Telescope)} for the same
+   * allocation behavior on the {@code to(srcAcc, tgtTelescope)} family.
+   */
+  static <A, B, X> Mapping<A, B> constant(final Telescope<B, X> targetTelescope, final X value) {
+    return new Constant<>(targetTelescope, value);
+  }
+
+  /**
+   * Nested-target variant of {@link #compute(Accessor, Supplier)} — invoke the supplier per forward
+   * call and stamp the result at a multi-hop target location via a {@link Telescope}. Closes
+   * MapStruct's {@code @Mapping(target = "a.b.c", expression = "java(...)")} for nested targets.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     compute(OrderDtoTelescope.of().audit().createdAt(), Instant::now));
+   * }</pre>
+   *
+   * <p>Forward-only; same intermediate-allocation behavior as {@link #constant(Telescope, Object)}.
+   */
+  static <A, B, X> Mapping<A, B> compute(final Telescope<B, X> targetTelescope, final Supplier<? extends X> supplier) {
+    return new Compute<>(targetTelescope, supplier);
   }
 }
