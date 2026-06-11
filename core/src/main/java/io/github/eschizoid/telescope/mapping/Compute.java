@@ -1,54 +1,50 @@
 package io.github.eschizoid.telescope.mapping;
 
-import io.github.eschizoid.telescope.DeepMap;
-import io.github.eschizoid.telescope.Telescope.Accessor;
-import io.github.eschizoid.telescope.internal.LambdaIntrospection;
+import io.github.eschizoid.telescope.Telescope;
 import java.util.function.Supplier;
 
 /**
- * Lazy-supplier correspondence row from {@link Mapping#compute(Accessor, Supplier)}. Calls the
- * supplier at every forward-apply, stamping the result onto a target field; the source side has no
- * slot, so {@link DeepMap}'s backward direction silently drops it (the rebuilt source carries the
- * type default at the dual slot — same retraction semantics as {@link Drop} but on the target
- * side).
+ * Forward-only lazy-supplier correspondence from {@link Mapping#compute(io.github.eschizoid
+ * .telescope.Telescope.Accessor, Supplier) Mapping.compute(Accessor, Supplier)} and {@link
+ * Mapping#compute(Telescope, Supplier) Mapping.compute(Telescope, Supplier)}. Invokes the supplier
+ * once per forward call and stamps the result at the target location.
  *
- * <p>Use for values that must be freshly evaluated each forward call: timestamps ({@code
- * Instant::now}), per-call generated IDs ({@code UUID::randomUUID}), and fresh mutable containers
- * ({@code HashMap::new} / {@code ArrayList::new}) where a literal would share one reference across
- * every call (a Java mutable-default-argument trap). For fixed values that ARE safe to share, use
- * {@link Constant}.
+ * <p>The target is always a {@link Telescope} — the flat factory {@code compute(Accessor,
+ * Supplier)} wraps the bare accessor in a single-hop telescope at construction time so the engine
+ * has one uniform handler. One shape, one fixup path, one set of laws.
  *
- * <p>Forward-only by design. Mirrors MapStruct's {@code @Mapping(expression = "java(...)")} but
- * stays in plain Java — the supplier is a typed {@link Supplier} that {@code javac} type-checks
- * against the target leaf, no string-templated body to parse. Declared once in the same {@code
- * Telescope.mapper(...)} call as the other rows.
+ * <p>Backward direction is a no-op. Same intermediate-allocation behavior as {@link Constant}:
+ * record-typed hops without a same-name source counterpart are allocated as a recursive
+ * default-tree so the supplier-stamped value can land at any depth.
  *
- * <p>Package-private — users construct via {@link Mapping#compute(Accessor, Supplier)} and never
- * see this type at the call site.
+ * <p>Package-private — users construct via {@link Mapping#compute Mapping.compute} and never see
+ * this type at the call site.
  */
 public record Compute<A, B, X>(
-  Accessor<B, X> tgtAccessor,
+  Telescope<B, X> targetTelescope,
   Supplier<? extends X> supplier
 ) implements Mapping<A, B>, MappingInternals<A, B> {
-  /** Returns {@code null} — no source-side accessor; the row is forward-only. */
+  /** Returns {@code null} — no source-side accessor; outer-pair pinning. */
   @Override
   public Class<A> sourceClass() {
     return null;
   }
 
+  /** Returns {@code null} — {@code Telescope<B, X>} doesn't carry its root class at runtime. */
   @Override
   public Class<B> targetClass() {
-    return LambdaIntrospection.implClassOf(tgtAccessor);
+    return null;
   }
 
-  /** Returns {@code null} — no source field to claim. */
+  /** Returns {@code null} — no source-side field. */
   @Override
   public String sourceField() {
     return null;
   }
 
+  /** Returns {@code null} — top-level target field is recovered via the telescope's first hop. */
   @Override
   public String targetField() {
-    return LambdaIntrospection.methodNameOf(tgtAccessor);
+    return null;
   }
 }

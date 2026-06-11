@@ -325,39 +325,24 @@ public final class DeepMap {
         telescopeFixups.add(ttRow);
         continue;
       }
-      // Constant / Compute rows are the target-side mirror of Drop: they claim a target field
-      // with no source counterpart, stamping a fixed (Constant) or freshly-supplied (Compute)
-      // value into the rebuilt target at forward time. Backward direction silently drops the
-      // slot — the rebuilt source carries the type default at the dual position (same retraction
-      // semantics as Drop, in the inverse direction). Register only under byTargetName so the
-      // forward pass picks them up; absence from bySourceName means the source rebuilder ignores
-      // the slot entirely on backward.
+      // Constant / Compute rows are target-injection telescope fixups: claim the target
+      // telescope's first hop as written, register the row in telescopeFixups, and let the
+      // applyForward pass stamp value (Constant) or supplier.get() (Compute) at the location the
+      // telescope navigates to. The flat factories (constant(Accessor, X) / compute(Accessor,
+      // Supplier)) wrap the accessor in a single-hop telescope at construction time so this loop
+      // sees only one shape per kind — no separate flat handler. Backward direction is a no-op:
+      // these rows don't contribute to bySourceName, so the source rebuilder ignores the slot
+      // entirely on backward (same retraction semantics as Drop on the source side).
       if (row instanceof Constant<?, ?, ?> cRow) {
-        final var tgtFieldName = tgtRefl.normalize(internals.targetField());
-        if (!claimedTgt.add(tgtFieldName)) throw new IllegalArgumentException(
-          "Deep map " +
-            source.getSimpleName() +
-            " → " +
-            target.getSimpleName() +
-            ": duplicate override row for target field '" +
-            tgtFieldName +
-            "'. Each (source, target) type pair may declare at most one row per target field."
-        );
-        byTargetName.put(tgtFieldName, new FieldStep(null, tgtFieldName, constantIso(cRow.value())));
+        final var firstTgtHop = cRow.targetTelescope().firstHopName();
+        if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+        telescopeFixups.add(cRow);
         continue;
       }
       if (row instanceof Compute<?, ?, ?> cpRow) {
-        final var tgtFieldName = tgtRefl.normalize(internals.targetField());
-        if (!claimedTgt.add(tgtFieldName)) throw new IllegalArgumentException(
-          "Deep map " +
-            source.getSimpleName() +
-            " → " +
-            target.getSimpleName() +
-            ": duplicate override row for target field '" +
-            tgtFieldName +
-            "'. Each (source, target) type pair may declare at most one row per target field."
-        );
-        byTargetName.put(tgtFieldName, new FieldStep(null, tgtFieldName, computeIso(cpRow.supplier())));
+        final var firstTgtHop = cpRow.targetTelescope().firstHopName();
+        if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+        telescopeFixups.add(cpRow);
         continue;
       }
       // Drop rows claim a source field with no target counterpart — they exist to satisfy the
@@ -576,6 +561,14 @@ public final class DeepMap {
             t = tgtT.set(t, srcT.read(s));
           }
         }
+        case Constant<?, ?, ?> r -> {
+          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+          t = tgtT.set(t, r.value());
+        }
+        case Compute<?, ?, ?> r -> {
+          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+          t = tgtT.set(t, r.supplier().get());
+        }
         default -> {
           /* non-telescope mappings are not routed through this wrapper */
         }
@@ -777,9 +770,9 @@ public final class DeepMap {
       case TelescopeToTelescope<?, ?, ?> _ -> throw new IllegalStateException(
         "TelescopeToTelescope row should not reach fieldIsoOf"
       );
-      // Constant / Compute rows build their iso inline (constantIso / computeIso) at registration
-      // time in populateIso, since fieldIsoOf doesn't have the captured value / supplier in scope.
-      // These cases exist only to keep the sealed switch exhaustive.
+      // Constant / Compute rows apply as telescope post-fixups, same pattern as TelescopeTo and
+      // friends — they don't contribute a per-field leaf Iso. The cases exist only to keep the
+      // sealed switch exhaustive; reaching them indicates a routing bug above.
       case Constant<?, ?, ?> _ -> throw new IllegalStateException("Constant row should not reach fieldIsoOf");
       case Compute<?, ?, ?> _ -> throw new IllegalStateException("Compute row should not reach fieldIsoOf");
     };
@@ -1036,23 +1029,6 @@ public final class DeepMap {
    * fields that have no target counterpart; the forward direction skips the field entirely.
    */
   private static final Iso<Object, Object> NULLING_ISO = Iso.of(_ -> null, _ -> null);
-
-  /**
-   * Forward-only iso for {@link Constant} rows: {@code to(_)} ignores its argument and returns the
-   * captured literal; {@code from(_)} returns {@code null} (the backward direction discards the
-   * slot, mirroring {@link #NULLING_ISO} on the source side).
-   */
-  private static <X> Iso<Object, Object> constantIso(final X value) {
-    return Iso.of(_ -> value, _ -> null);
-  }
-
-  /**
-   * Forward-only iso for {@link Compute} rows: {@code to(_)} invokes the supplier on every call
-   * (fresh value each forward); {@code from(_)} returns {@code null}.
-   */
-  private static <X> Iso<Object, Object> computeIso(final java.util.function.Supplier<? extends X> supplier) {
-    return Iso.of(_ -> supplier.get(), _ -> null);
-  }
 
   /**
    * Forward-only iso that materialises a fresh default-tree instance of {@code recordType} on every
