@@ -4,6 +4,8 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.mapping.Compute;
+import io.github.eschizoid.telescope.mapping.Constant;
 import io.github.eschizoid.telescope.mapping.Drop;
 import io.github.eschizoid.telescope.mapping.FromTelescopeTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
@@ -323,6 +325,41 @@ public final class DeepMap {
         telescopeFixups.add(ttRow);
         continue;
       }
+      // Constant / Compute rows are the target-side mirror of Drop: they claim a target field
+      // with no source counterpart, stamping a fixed (Constant) or freshly-supplied (Compute)
+      // value into the rebuilt target at forward time. Backward direction silently drops the
+      // slot — the rebuilt source carries the type default at the dual position (same retraction
+      // semantics as Drop, in the inverse direction). Register only under byTargetName so the
+      // forward pass picks them up; absence from bySourceName means the source rebuilder ignores
+      // the slot entirely on backward.
+      if (row instanceof Constant<?, ?, ?> cRow) {
+        final var tgtFieldName = tgtRefl.normalize(internals.targetField());
+        if (!claimedTgt.add(tgtFieldName)) throw new IllegalArgumentException(
+          "Deep map " +
+            source.getSimpleName() +
+            " → " +
+            target.getSimpleName() +
+            ": duplicate override row for target field '" +
+            tgtFieldName +
+            "'. Each (source, target) type pair may declare at most one row per target field."
+        );
+        byTargetName.put(tgtFieldName, new FieldStep(null, tgtFieldName, constantIso(cRow.value())));
+        continue;
+      }
+      if (row instanceof Compute<?, ?, ?> cpRow) {
+        final var tgtFieldName = tgtRefl.normalize(internals.targetField());
+        if (!claimedTgt.add(tgtFieldName)) throw new IllegalArgumentException(
+          "Deep map " +
+            source.getSimpleName() +
+            " → " +
+            target.getSimpleName() +
+            ": duplicate override row for target field '" +
+            tgtFieldName +
+            "'. Each (source, target) type pair may declare at most one row per target field."
+        );
+        byTargetName.put(tgtFieldName, new FieldStep(null, tgtFieldName, computeIso(cpRow.supplier())));
+        continue;
+      }
       // Drop rows claim a source field with no target counterpart — they exist to satisfy the
       // strict source-must-be-claimed pass below when one side carries fields the other doesn't.
       if (row instanceof Drop<?, ?, ?>) {
@@ -382,7 +419,21 @@ public final class DeepMap {
       // every nested write. Without any telescope row, the strict same-name check still fires.
       if (!srcNameSet.contains(name)) {
         if (!telescopeFixups.isEmpty()) {
-          byTargetName.putIfAbsent(name, new FieldStep(null, name, NULLING_ISO));
+          // Telescope-row placeholder for a target field with no same-name source. Three cases,
+          // type-driven:
+          //   - field type is a record AND a telescope row claims it as a first hop: allocate a
+          //     recursive default-tree instance so the post-fixup overlay
+          //     (`tgtTelescope.set(t, value)`) can descend into a non-null intermediate. Records
+          //     only for v1.0; beans need a no-arg ctor or builder which isn't always present —
+          //     deferred to v1.1.
+          //   - field type is a primitive: return the JLS default (0 / false / etc.) so canonical-
+          //     ctor reflection doesn't NPE unboxing a null Object.
+          //   - everything else: NULLING_ISO (null reference, unchanged behavior).
+          final var fieldType = rawClassOf(tgtRefl.genericType(target, name));
+          byTargetName.putIfAbsent(
+            name,
+            new FieldStep(null, name, placeholderIsoFor(fieldType, telescopeWritesTgt.contains(name)))
+          );
           continue;
         }
         throw new IllegalStateException(
@@ -726,6 +777,11 @@ public final class DeepMap {
       case TelescopeToTelescope<?, ?, ?> _ -> throw new IllegalStateException(
         "TelescopeToTelescope row should not reach fieldIsoOf"
       );
+      // Constant / Compute rows build their iso inline (constantIso / computeIso) at registration
+      // time in populateIso, since fieldIsoOf doesn't have the captured value / supplier in scope.
+      // These cases exist only to keep the sealed switch exhaustive.
+      case Constant<?, ?, ?> _ -> throw new IllegalStateException("Constant row should not reach fieldIsoOf");
+      case Compute<?, ?, ?> _ -> throw new IllegalStateException("Compute row should not reach fieldIsoOf");
     };
   }
 
@@ -980,6 +1036,99 @@ public final class DeepMap {
    * fields that have no target counterpart; the forward direction skips the field entirely.
    */
   private static final Iso<Object, Object> NULLING_ISO = Iso.of(_ -> null, _ -> null);
+
+  /**
+   * Forward-only iso for {@link Constant} rows: {@code to(_)} ignores its argument and returns the
+   * captured literal; {@code from(_)} returns {@code null} (the backward direction discards the
+   * slot, mirroring {@link #NULLING_ISO} on the source side).
+   */
+  private static <X> Iso<Object, Object> constantIso(final X value) {
+    return Iso.of(_ -> value, _ -> null);
+  }
+
+  /**
+   * Forward-only iso for {@link Compute} rows: {@code to(_)} invokes the supplier on every call
+   * (fresh value each forward); {@code from(_)} returns {@code null}.
+   */
+  private static <X> Iso<Object, Object> computeIso(final java.util.function.Supplier<? extends X> supplier) {
+    return Iso.of(_ -> supplier.get(), _ -> null);
+  }
+
+  /**
+   * Forward-only iso that materialises a fresh default-tree instance of {@code recordType} on every
+   * forward call. Used as the placeholder for telescope-row-claimed target fields that have no
+   * same-name source counterpart — the post-fixup overlay descends into the allocated instance and
+   * writes the leaf, so a fully-flat source can be lifted into a deeply-nested target without
+   * per-hop allocation glue.
+   *
+   * <p>Records only. Bean intermediates still get {@link #NULLING_ISO}; bean allocation needs a
+   * no-arg constructor or builder shape that isn't always present and would muddy the v1.0
+   * cut-line.
+   */
+  private static Iso<Object, Object> defaultAllocatorIso(final Class<?> recordType) {
+    return Iso.of(_ -> recursiveDefault(recordType), _ -> null);
+  }
+
+  /**
+   * Construct a default-tree instance of {@code type} — primitives get their JLS default (0, false,
+   * etc.), records recurse via their canonical constructor with the same scheme, all other
+   * reference types get {@code null}.
+   *
+   * <p>Cycles between record types can't arise in practice: each canonical ctor needs every other
+   * type already constructible, so a record cycle would fail at compile time. No cycle-detection
+   * needed.
+   */
+  @SuppressWarnings({ "rawtypes", "unchecked" })
+  private static Object recursiveDefault(final Class<?> type) {
+    if (type.isPrimitive()) return primitiveDefault(type);
+    if (type.isRecord()) {
+      final var comps = type.getRecordComponents();
+      final var byName = new HashMap<String, Object>(comps.length);
+      for (final var comp : comps) byName.put(comp.getName(), recursiveDefault(comp.getType()));
+      return io.github.eschizoid.telescope.internal.Records.construct((Class) type, byName::get);
+    }
+    return null;
+  }
+
+  private static Object primitiveDefault(final Class<?> p) {
+    if (p == int.class) return 0;
+    if (p == long.class) return 0L;
+    if (p == boolean.class) return false;
+    if (p == double.class) return 0.0;
+    if (p == float.class) return 0.0f;
+    if (p == byte.class) return (byte) 0;
+    if (p == short.class) return (short) 0;
+    if (p == char.class) return (char) 0;
+    return null;
+  }
+
+  /**
+   * Type-aware placeholder Iso for the permissive-mode block in {@link #populateIso}. Picks the
+   * right "missing source field" filler based on the target field's type and whether a telescope
+   * row claims the field as its first hop.
+   */
+  private static Iso<Object, Object> placeholderIsoFor(
+    final Class<?> fieldType,
+    final boolean claimedByTelescopeWrite
+  ) {
+    if (fieldType == null) return NULLING_ISO;
+    if (claimedByTelescopeWrite && fieldType.isRecord()) return defaultAllocatorIso(fieldType);
+    if (fieldType.isPrimitive()) {
+      final var value = primitiveDefault(fieldType);
+      return Iso.of(_ -> value, _ -> value);
+    }
+    return NULLING_ISO;
+  }
+
+  /**
+   * Strip generics from a {@link Type} to the raw {@link Class}, returning {@code null} for
+   * anything that isn't a class or a parameterized type (wildcards, type variables, etc.).
+   */
+  private static Class<?> rawClassOf(final Type t) {
+    if (t instanceof Class<?> c) return c;
+    if (t instanceof ParameterizedType pt && pt.getRawType() instanceof Class<?> c) return c;
+    return null;
+  }
 
   /**
    * Bundled return from {@link #resolution(Class, Class, MapStep...)} — the Iso and the patch

@@ -5,6 +5,7 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * One field correspondence in a {@link Telescope#map(Class, Class, MapStep...)} call — supplies an
@@ -36,7 +37,16 @@ import java.util.function.Function;
  */
 public sealed interface Mapping<A, B>
   extends MapStep
-  permits SameTypedTo, TypedTransformTo, Via, Drop, TelescopeTo, FromTelescopeTo, TelescopeToTelescope
+  permits
+    SameTypedTo,
+    TypedTransformTo,
+    Via,
+    Drop,
+    TelescopeTo,
+    FromTelescopeTo,
+    TelescopeToTelescope,
+    Constant,
+    Compute
 {
   /** Same-typed correspondence: {@code src↔tgt}, both with leaf type {@code X}. Identity. */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Accessor<B, X> tgt) {
@@ -90,17 +100,13 @@ public sealed interface Mapping<A, B>
    * srcAcc.apply(a))} overlays the leaf. Backward direction is the mirror: read at the target
    * telescope, write to the source via the accessor's lens.
    *
-   * <p><b>Intermediate allocation limitation (v1.0).</b> The overlay requires the target's
-   * intermediate structure (the hops between the root and the leaf — e.g. the {@code shipping} and
-   * {@code recipient} sub-objects above) to be reachable via the base auto-recursion. That happens
-   * when the source has a same-name field for each top-level hop of the telescope (here, an {@code
-   * Order::getShipping}-shaped field on the source) — auto-recursion uses it to allocate the
-   * intermediate, and the overlay then writes the leaf. When the source is genuinely flat (no
-   * same-name field driving an intermediate), the auto-recursion leaves the target field {@code
-   * null} and the overlay NPEs descending into it. For that case, fall back to {@link
-   * #via(Accessor, Accessor, Mapper)} with a small mapper that allocates the intermediate
-   * explicitly. v1.1 will close this gap by synthesizing the intermediate from the telescope's hop
-   * chain (see PLAN.md "Tier 3 — Intermediate allocation").
+   * <p><b>Intermediate allocation.</b> When the source is genuinely flat (no same-name field on the
+   * source matching the telescope's top-level target hop), the engine synthesizes a recursive
+   * default-tree instance of the intermediate's type so the overlay can descend without NPEing on a
+   * null hop. Works for record intermediates at arbitrary depth (the type system drives the
+   * recursion); bean intermediates without a no-arg ctor or builder still need a {@link
+   * #via(Accessor, Accessor, Mapper)} workaround. Primitive defaults follow JLS rules ({@code 0} /
+   * {@code false} / {@code 0.0}).
    */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Telescope<B, X> targetTelescope) {
     return new TelescopeTo<>(src, targetTelescope);
@@ -243,5 +249,58 @@ public sealed interface Mapping<A, B>
     @SuppressWarnings("unchecked")
     final var castTarget = (Class<B>) target;
     return new Drop<>(src, castTarget);
+  }
+
+  /**
+   * Stamp a fixed value onto a target field at forward time. Closes MapStruct's
+   * {@code @Mapping(target = "tenant", constant = "production")} — the literal lives at the call
+   * site, statically typed against the target leaf, no string parser.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     constant(OrderDto::tenant,    "production"),
+   *     constant(OrderDto::apiVersion, 7));
+   * }</pre>
+   *
+   * <p><b>Forward-only.</b> The source side has no slot for this value, so {@code
+   * mapper.backward(dto)} silently drops it — the rebuilt source carries the type default at the
+   * dual slot. Same retraction semantics as {@link #drop(Accessor)} on the source side.
+   *
+   * <p><b>Eager.</b> The literal is captured once at row construction; every forward call stamps
+   * the same reference. For values that should be re-evaluated per call (timestamps, fresh
+   * containers, IDs) use {@link #compute(Accessor, Supplier)} instead — a literal {@code
+   * constant(Tgt::metadata, new HashMap<>())} would share one map across every forward call, which
+   * is almost never what you want.
+   */
+  static <A, B, X> Mapping<A, B> constant(final Accessor<B, X> tgt, final X value) {
+    return new Constant<>(tgt, value);
+  }
+
+  /**
+   * Stamp a freshly-evaluated value onto a target field at every forward call. Closes MapStruct's
+   * {@code @Mapping(target = "createdAt", expression = "java(Instant.now())")} but in plain typed
+   * Java — the {@link Supplier} is type-checked against the target leaf by {@code javac}, no
+   * string-templated expression body.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id,       OrderDto::id),
+   *     compute(OrderDto::createdAt, Instant::now),     // fresh timestamp per call
+   *     compute(OrderDto::traceId,   UUID::randomUUID), // fresh ID per call
+   *     compute(OrderDto::metadata,  HashMap::new));    // fresh container per call
+   * }</pre>
+   *
+   * <p><b>Forward-only.</b> Same backward-drop semantics as {@link #constant(Accessor, Object)}.
+   * Note that this means {@code mapper.forward(mapper.backward(dto))} does NOT round-trip a {@code
+   * compute} row's value — by design: a supplier like {@code Instant::now} cannot be inverted.
+   * Document any roundtrip assumption explicitly.
+   *
+   * <p><b>Lazy.</b> The supplier fires on every forward call, not once at row construction. Use
+   * this whenever the value involves mutable state, time, randomness, or a fresh allocation; use
+   * {@link #constant(Accessor, Object)} when the value is genuinely a shared literal.
+   */
+  static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final Supplier<? extends X> supplier) {
+    return new Compute<>(tgt, supplier);
   }
 }
