@@ -17,10 +17,10 @@ import lombok.NoArgsConstructor;
  *       equals}/{@code hashCode}, {@code @Builder} for the fluent builder,
  *       {@code @NoArgsConstructor} so the {@code SETTERS} write strategy works,
  *       {@code @AllArgsConstructor} so {@code @Builder} compiles. The {@code telescope-lombok}
- *       processor emits {@code PartnerShippingLabelPath<R>} + {@code PartnerShippingLabelTelescope}
- *       navigators against the synthesised property surface — same shape as a
- *       {@code @BeanFocus}-driven Path, just discovered through the round-deferred processor pass
- *       that lets Lombok's AST patches install first.
+ *       processor emits {@code PartnerShippingLabelTelescope<R>} + {@code
+ *       PartnerShippingLabelTelescope} navigators against the synthesised property surface — same
+ *       shape as a {@code @BeanFocus}-driven Path, just discovered through the round-deferred
+ *       processor pass that lets Lombok's AST patches install first.
  *   <li><b>Jackson-renamed fields.</b> Java property names use {@code camelCase}; the wire format
  *       uses {@code snake_case} (partner SDK convention). {@code @JsonProperty} bridges the two at
  *       marshal time without touching the Java identifiers — telescope reads {@code customer} (the

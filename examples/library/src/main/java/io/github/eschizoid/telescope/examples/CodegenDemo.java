@@ -1,14 +1,14 @@
 package io.github.eschizoid.telescope.examples;
 
 import io.github.eschizoid.telescope.examples.codegen.BeanFocusUser;
-import io.github.eschizoid.telescope.examples.codegen.BeanFocusUserPath;
+import io.github.eschizoid.telescope.examples.codegen.BeanFocusUserTelescope;
 import io.github.eschizoid.telescope.examples.codegen.BridgeDto;
 import io.github.eschizoid.telescope.examples.codegen.BridgeEntity;
-import io.github.eschizoid.telescope.examples.codegen.BridgeEntityPath;
+import io.github.eschizoid.telescope.examples.codegen.BridgeEntityTelescope;
 import io.github.eschizoid.telescope.examples.codegen.FocusAddress;
-import io.github.eschizoid.telescope.examples.codegen.FocusAddressPath;
+import io.github.eschizoid.telescope.examples.codegen.FocusAddressTelescope;
 import io.github.eschizoid.telescope.examples.codegen.FocusUser;
-import io.github.eschizoid.telescope.examples.codegen.FocusUserPath;
+import io.github.eschizoid.telescope.examples.codegen.FocusUserTelescope;
 
 /**
  * Exercises the codegen-generated navigators. Every class referenced here below the {@code Path} /
@@ -34,15 +34,16 @@ final class CodegenDemo {
     bridgeNavigatorHop();
   }
 
-  // @Focus emits a FocusUserPath<R> with one method per component and the full Telescope op surface
-  // forwarded. .start() returns FocusUserPath<FocusUser>.
+  // @Focus emits a FocusUserTelescope<R> with one method per component and the full Telescope op
+  // surface
+  // forwarded. .focus() returns FocusUserTelescope<FocusUser>.
   private static void focusRecordNavigator() {
     final var alice = new FocusUser("alice", "ALICE@ACME.COM");
-    final var loweredEmail = FocusUserPath.start().email().update(alice, String::toLowerCase);
+    final var loweredEmail = FocusUserTelescope.focus().email().update(alice, String::toLowerCase);
     System.out.println("[@Focus] email update         : " + loweredEmail);
 
     // Forwarders: read / find / toList / set / etc. are all on the Path itself.
-    System.out.println("[@Focus] forwarder name()     : " + FocusUserPath.start().name().read(alice));
+    System.out.println("[@Focus] forwarder name()     : " + FocusUserTelescope.focus().name().read(alice));
   }
 
   // Two @Focus records compose via .then(...) — the runtime DSL still works on generated paths,
@@ -51,24 +52,28 @@ final class CodegenDemo {
     // The example is a degenerate one (we don't have nested @Focus structure here) — but it proves
     // a Path-typed value composes with another Telescope via .then(...) without unwrapping.
     final var addr = new FocusAddress("nyc", "10001");
-    final var loud = FocusAddressPath.start().city().update(addr, String::toUpperCase);
+    final var loud = FocusAddressTelescope.focus().city().update(addr, String::toUpperCase);
     System.out.println("[@Focus] composition fixture  : " + loud);
   }
 
-  // @BeanFocus emits BeanFocusUserPath<R> with no-arg + setter rebuild.
+  // @BeanFocus emits BeanFocusUserTelescope<R> with no-arg + setter rebuild.
   private static void beanFocusNavigator() {
     final var bean = new BeanFocusUser("u1", "FOO@BAR.COM");
-    final var lowered = BeanFocusUserPath.start().email().update(bean, String::toLowerCase);
+    final var lowered = BeanFocusUserTelescope.focus().email().update(bean, String::toLowerCase);
     System.out.println("[@BeanFocus] email update     : " + lowered);
   }
 
   // @Bridge emits BridgeEntityBridge.BRIDGE plus an as<Target>() hop on the source Path. Because
-  // BridgeDto is also @Focus, the hop returns BridgeDtoPath<R> so navigation continues fluently.
+  // BridgeDto is also @Focus, the hop returns BridgeDtoTelescope<R> so navigation continues
+  // fluently.
   private static void bridgeNavigatorHop() {
     final var entity = new BridgeEntity("u1", "ALICE@ACME.COM");
 
     // Use the as<Target>() hop, then continue with the target Path's email() method, then update.
-    final BridgeEntity lowered = BridgeEntityPath.start().asBridgeDto().email().update(entity, String::toLowerCase);
+    final BridgeEntity lowered = BridgeEntityTelescope.focus()
+      .asBridgeDto()
+      .email()
+      .update(entity, String::toLowerCase);
     System.out.println("[@Bridge] entity via DTO hop  : " + lowered);
 
     // The bridge itself is also reachable as the BRIDGE constant for direct conversion.

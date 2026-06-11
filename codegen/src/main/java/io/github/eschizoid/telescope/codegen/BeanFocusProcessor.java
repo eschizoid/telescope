@@ -15,7 +15,7 @@ import javax.lang.model.element.TypeElement;
  * pipeline (used both here and from the {@code telescope-lombok} module's {@code
  * LombokFocusProcessor}).
  *
- * <p>For the generated shape — {@code <Pojo>Path<R>} plus one container step per collection
+ * <p>For the generated shape — {@code <Pojo>Telescope<R>} plus one container step per collection
  * property, with reflection-free rebuild via static {@code builder()} or no-arg constructor +
  * setters — see {@link AbstractTelescopeProcessor#emitBeanNavigator}.
  */

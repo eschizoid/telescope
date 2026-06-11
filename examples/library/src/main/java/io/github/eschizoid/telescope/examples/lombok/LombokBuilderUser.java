@@ -5,7 +5,7 @@ import lombok.Getter;
 
 /**
  * {@code @Builder} + {@code @Getter} POJO. The Lombok processor picks the builder rebuild path: the
- * generated {@code LombokBuilderUserPath<R>} reconstructs via {@code
+ * generated {@code LombokBuilderUserTelescope<R>} reconstructs via {@code
  * builder().id(...).email(...).build()}.
  */
 @Builder

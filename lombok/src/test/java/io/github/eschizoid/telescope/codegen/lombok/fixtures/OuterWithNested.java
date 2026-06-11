@@ -12,7 +12,8 @@ import lombok.NoArgsConstructor;
  * <p>Expected emissions:
  *
  * <ul>
- *   <li>{@code OuterWithNestedInnerPath} — at package level (not nested inside OuterWithNested).
+ *   <li>{@code OuterWithNestedInnerTelescope} — at package level (not nested inside
+ *       OuterWithNested).
  *   <li>{@code OuterWithNestedInnerTelescope} — the metadata holder, also flattened.
  * </ul>
  *

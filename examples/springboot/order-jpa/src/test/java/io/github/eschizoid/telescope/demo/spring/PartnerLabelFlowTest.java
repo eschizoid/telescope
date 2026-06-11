@@ -6,7 +6,7 @@ import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import io.github.eschizoid.telescope.demo.spring.partner.PartnerAddress;
 import io.github.eschizoid.telescope.demo.spring.partner.PartnerCustomer;
 import io.github.eschizoid.telescope.demo.spring.partner.PartnerShippingLabel;
-import io.github.eschizoid.telescope.demo.spring.partner.PartnerShippingLabelPath;
+import io.github.eschizoid.telescope.demo.spring.partner.PartnerShippingLabelTelescope;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -127,7 +127,7 @@ class PartnerLabelFlowTest {
       .items(List.of())
       .build();
 
-    final var lowered = PartnerShippingLabelPath.start().customer().email().update(original, String::toLowerCase);
+    final var lowered = PartnerShippingLabelTelescope.focus().customer().email().update(original, String::toLowerCase);
 
     assertThat(lowered.getCustomer().getEmail()).isEqualTo("alice@example.com");
     // Everything else flows through unchanged — the lens setter rebuilds only the customer's email

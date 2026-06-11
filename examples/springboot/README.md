@@ -121,7 +121,7 @@ wiring. Useful when a particular conversion is in your tightest loop and you wan
 
 | Path                              | Generated machinery                                                                         |
 | --------------------------------- | ------------------------------------------------------------------------------------------- |
-| `POST /invoices/lines/forward`    | `InvoiceLinePath.start().asInvoiceLineEntity().read(line)` — generated navigator hop        |
+| `POST /invoices/lines/forward`    | `InvoiceLineTelescope.focus().asInvoiceLineEntity().read(line)` — generated navigator hop   |
 | `POST /invoices/lines/backward`   | `InvoiceLineBridge.backward(entity)` — generated static method                              |
 | `POST /invoices/headers/forward`  | `InvoiceHeaderBridge.forward(header)` — auto-recurses into `InvoiceLineBridge` for the list |
 | `POST /invoices/headers/backward` | `InvoiceHeaderBridge.backward(entity)` — same in reverse                                    |
@@ -131,8 +131,9 @@ wiring. Useful when a particular conversion is in your tightest loop and you wan
 - **`@Bridge(Target.class)`** emits `<Source>Bridge` (`BRIDGE` Telescope constant + static `forward`/`backward`). The
   bijection rule requires source and target expose the same field-name set.
 - **Bridge hop on the navigator** — when a `@Focus`-annotated record also carries `@Bridge`, its emitted
-  `<Source>Path<R>` gains an `as<TargetSimpleName>()` method that returns a typed continuation (`<Target>EntityPath<R>`
-  when the target is `@BeanFocus`-navigable). Navigation keeps reading like a sentence after the paradigm hop.
+  `<Source>Path<R>` gains an `as<TargetSimpleName>()` method that returns a typed continuation
+  (`<Target>EntityTelescope<R>` when the target is `@BeanFocus`-navigable). Navigation keeps reading like a sentence
+  after the paradigm hop.
 - **Deep recursion through user-declared bridges** — `InvoiceHeader` carries `List<InvoiceLine>`. The parent
   `InvoiceHeaderBridge` auto-emits a list-lift that delegates per-element to the user-declared `InvoiceLineBridge`
   rather than synthesising its own anonymous Iso.
@@ -157,9 +158,9 @@ wiring. Useful when a particular conversion is in your tightest loop and you wan
 
 The widest surface of any submodule. **Headline: "pick your trade-off per call site."** The same `Order` domain backs
 eight endpoints that each demonstrate a different telescope angle. Both the runtime DSL
-(`Telescope.of(Order.class).field(...)`) and the codegen path navigators (`OrderPath.start().x()`) live side by side —
-the choice between them happens at the controller, not at the domain. Adding `@Focus` / `@BeanFocus` is purely opt-in:
-the runtime mapper transparently uses the codegen-emitted holder constants when present (holder-probe fast path,
+(`Telescope.of(Order.class).field(...)`) and the codegen path navigators (`OrderTelescope.focus().x()`) live side by
+side — the choice between them happens at the controller, not at the domain. Adding `@Focus` / `@BeanFocus` is purely
+opt-in: the runtime mapper transparently uses the codegen-emitted holder constants when present (holder-probe fast path,
 post-ADR-0006), but doesn't require them.
 
 **Endpoints**
@@ -167,7 +168,7 @@ post-ADR-0006), but doesn't require them.
 | Path                              | Telescope angle                                                                                  |
 | --------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `POST /orders`                    | Runtime DSL — basic CRUD with deep-update email normalisation pre-save                           |
-| `POST /orders/path`               | Codegen navigator — `OrderPath.start().lineItems().each().unitPrice().update(...)`               |
+| `POST /orders/path`               | Codegen navigator — `OrderTelescope.focus().lineItems().each().unitPrice().update(...)`          |
 | `POST /orders/validated`          | `updateValidated` accumulates per-line-item errors into one 400 payload (not first-failure-wins) |
 | `POST /orders/{id}/bulk-update`   | `Telescope.all(overIfPresent(...), mapIfPresent(...))` — sparse-PATCH composition, no if-ladder  |
 | `POST /orders/{id}/inspect`       | `read` / `find` / `count` / `exists` terminals — describe a path in the request body             |

@@ -6,7 +6,8 @@ import lombok.NoArgsConstructor;
 
 /**
  * {@code @Data} POJO that the {@code LombokFocusProcessor} (from {@code :lombok}) picks up and
- * emits a {@code LombokDataUserPath<R>} navigator for, using the no-arg + setter rebuild strategy.
+ * emits a {@code LombokDataUserTelescope<R>} navigator for, using the no-arg + setter rebuild
+ * strategy.
  */
 @Data
 @NoArgsConstructor

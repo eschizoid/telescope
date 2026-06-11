@@ -3,10 +3,10 @@ package io.github.eschizoid.telescope;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.github.eschizoid.telescope.Telescope.ListPath;
-import io.github.eschizoid.telescope.Telescope.MapPath;
-import io.github.eschizoid.telescope.Telescope.OptionalPath;
-import io.github.eschizoid.telescope.Telescope.SetPath;
+import io.github.eschizoid.telescope.Telescope.ListTelescope;
+import io.github.eschizoid.telescope.Telescope.MapTelescope;
+import io.github.eschizoid.telescope.Telescope.OptionalTelescope;
+import io.github.eschizoid.telescope.Telescope.SetTelescope;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -17,11 +17,11 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * Tests for the typed container subclasses ({@link ListPath} / {@link SetPath} / {@link MapPath} /
- * {@link OptionalPath}) introduced when the runtime-dispatched {@code each()} no-arg form was
- * deleted. Each subclass's typed terminal ({@code each() / values() / present()}) descends into
- * elements via pure lattice composition — no runtime container dispatch, no reflection beyond the
- * normal record/bean introspection used for the lens.
+ * Tests for the typed container subclasses ({@link ListTelescope} / {@link SetTelescope} / {@link
+ * MapTelescope} / {@link OptionalTelescope}) introduced when the runtime-dispatched {@code each()}
+ * no-arg form was deleted. Each subclass's typed terminal ({@code each() / values() / present()})
+ * descends into elements via pure lattice composition — no runtime container dispatch, no
+ * reflection beyond the normal record/bean introspection used for the lens.
  */
 class TypedContainerPathTest {
 
@@ -36,13 +36,13 @@ class TypedContainerPathTest {
   record TagMap(String owner, Map<String, Tag> tagsByKey) {}
 
   @Nested
-  @DisplayName("Typed `.list(getter)` returns ListPath with compile-checked .each()")
+  @DisplayName("Typed `.list(getter)` returns ListTelescope with compile-checked .each()")
   class ListContainer {
 
     @Test
-    @DisplayName("List leaf type is preserved as ListPath; .each() steps into elements via lattice")
-    void typedListPath() {
-      final ListPath<TagList, Tag> tags = Telescope.of(TagList.class).list(TagList::tags);
+    @DisplayName("List leaf type is preserved as ListTelescope; .each() steps into elements via lattice")
+    void typedListTelescope() {
+      final ListTelescope<TagList, Tag> tags = Telescope.of(TagList.class).list(TagList::tags);
       final var src = new TagList("alice", List.of(new Tag("a"), new Tag("b"), new Tag("c")));
 
       assertEquals(List.of(new Tag("a"), new Tag("b"), new Tag("c")), tags.read(src));
@@ -54,10 +54,10 @@ class TypedContainerPathTest {
     }
 
     @Test
-    @DisplayName("static Telescope.asList promotes a pre-built Telescope<S, List<X>> to ListPath")
+    @DisplayName("static Telescope.asList promotes a pre-built Telescope<S, List<X>> to ListTelescope")
     void asListPromotion() {
       final Telescope<TagList, List<Tag>> raw = Telescope.of(TagList.class).field(TagList::tags);
-      final ListPath<TagList, Tag> promoted = Telescope.asList(raw);
+      final ListTelescope<TagList, Tag> promoted = Telescope.asList(raw);
       final var elements = promoted.each();
 
       final var src = new TagList("alice", List.of(new Tag("a")));
@@ -65,25 +65,29 @@ class TypedContainerPathTest {
     }
 
     @Test
-    @DisplayName("asList on an already-ListPath rewraps to an equivalent ListPath (behavior-preserving)")
+    @DisplayName("asList on an already-ListTelescope rewraps to an equivalent ListTelescope (behavior-preserving)")
     void asListBehaviorPreserving() {
-      final ListPath<TagList, Tag> tags = Telescope.of(TagList.class).list(TagList::tags);
-      final ListPath<TagList, Tag> promoted = Telescope.asList(tags);
+      final ListTelescope<TagList, Tag> tags = Telescope.of(TagList.class).list(TagList::tags);
+      final ListTelescope<TagList, Tag> promoted = Telescope.asList(tags);
       final var src = new TagList("alice", List.of(new Tag("a"), new Tag("b")));
-      assertEquals(tags.read(src), promoted.read(src), "rewrapped ListPath must read identical values");
+      assertEquals(tags.read(src), promoted.read(src), "rewrapped ListTelescope must read identical values");
       final var updated = promoted.each().update(src, t -> new Tag(t.name().toUpperCase()));
-      assertEquals(List.of(new Tag("A"), new Tag("B")), updated.tags(), "rewrapped ListPath must update identically");
+      assertEquals(
+        List.of(new Tag("A"), new Tag("B")),
+        updated.tags(),
+        "rewrapped ListTelescope must update identically"
+      );
     }
   }
 
   @Nested
-  @DisplayName("Typed `.setField(getter)` returns SetPath with compile-checked .each()")
+  @DisplayName("Typed `.setField(getter)` returns SetTelescope with compile-checked .each()")
   class SetContainer {
 
     @Test
-    @DisplayName("Set leaf type is preserved as SetPath; .each() steps into elements via lattice")
-    void typedSetPath() {
-      final SetPath<TagSet, Tag> tags = Telescope.of(TagSet.class).setField(TagSet::tags);
+    @DisplayName("Set leaf type is preserved as SetTelescope; .each() steps into elements via lattice")
+    void typedSetTelescope() {
+      final SetTelescope<TagSet, Tag> tags = Telescope.of(TagSet.class).setField(TagSet::tags);
       final var src = new TagSet("alice", new LinkedHashSet<>(List.of(new Tag("a"), new Tag("b"))));
 
       final var upper = tags.each().update(src, t -> new Tag(t.name().toUpperCase()));
@@ -91,10 +95,10 @@ class TypedContainerPathTest {
     }
 
     @Test
-    @DisplayName("static Telescope.asSet promotes a pre-built Telescope<S, Set<X>> to SetPath")
+    @DisplayName("static Telescope.asSet promotes a pre-built Telescope<S, Set<X>> to SetTelescope")
     void asSetPromotion() {
       final Telescope<TagSet, Set<Tag>> raw = Telescope.of(TagSet.class).field(TagSet::tags);
-      final SetPath<TagSet, Tag> promoted = Telescope.asSet(raw);
+      final SetTelescope<TagSet, Tag> promoted = Telescope.asSet(raw);
       final var src = new TagSet("alice", new LinkedHashSet<>(List.of(new Tag("a"))));
       assertEquals(
         Set.of(new Tag("a")),
@@ -104,13 +108,13 @@ class TypedContainerPathTest {
   }
 
   @Nested
-  @DisplayName("Typed `.mapField(getter)` returns MapPath with compile-checked .values()")
+  @DisplayName("Typed `.mapField(getter)` returns MapTelescope with compile-checked .values()")
   class MapContainer {
 
     @Test
-    @DisplayName("Map leaf is preserved as MapPath; .values() steps into values, keys retained")
-    void typedMapPath() {
-      final MapPath<TagMap, String, Tag> tagsByKey = Telescope.of(TagMap.class).mapField(TagMap::tagsByKey);
+    @DisplayName("Map leaf is preserved as MapTelescope; .values() steps into values, keys retained")
+    void typedMapTelescope() {
+      final MapTelescope<TagMap, String, Tag> tagsByKey = Telescope.of(TagMap.class).mapField(TagMap::tagsByKey);
       final var src = new TagMap("alice", Map.of("a", new Tag("x"), "b", new Tag("y")));
 
       final var upper = tagsByKey.values().update(src, t -> new Tag(t.name().toUpperCase()));
@@ -119,23 +123,25 @@ class TypedContainerPathTest {
     }
 
     @Test
-    @DisplayName("static Telescope.asMap promotes a pre-built Telescope<S, Map<K,V>> to MapPath")
+    @DisplayName("static Telescope.asMap promotes a pre-built Telescope<S, Map<K,V>> to MapTelescope")
     void asMapPromotion() {
       final Telescope<TagMap, Map<String, Tag>> raw = Telescope.of(TagMap.class).field(TagMap::tagsByKey);
-      final MapPath<TagMap, String, Tag> promoted = Telescope.asMap(raw);
+      final MapTelescope<TagMap, String, Tag> promoted = Telescope.asMap(raw);
       final var src = new TagMap("alice", Map.of("a", new Tag("x")));
       assertEquals(List.of(new Tag("x")), promoted.values().toList(src));
     }
   }
 
   @Nested
-  @DisplayName("Typed `.optional(getter)` returns OptionalPath with compile-checked .present()")
+  @DisplayName("Typed `.optional(getter)` returns OptionalTelescope with compile-checked .present()")
   class OptionalContainer {
 
     @Test
-    @DisplayName("Optional leaf preserved as OptionalPath; .present() Affine-updates when present, no-op when empty")
-    void typedOptionalPath() {
-      final OptionalPath<TagOptional, Tag> tag = Telescope.of(TagOptional.class).optional(TagOptional::tag);
+    @DisplayName(
+      "Optional leaf preserved as OptionalTelescope; .present() Affine-updates when present, no-op when empty"
+    )
+    void typedOptionalTelescope() {
+      final OptionalTelescope<TagOptional, Tag> tag = Telescope.of(TagOptional.class).optional(TagOptional::tag);
 
       // Present: update flows through.
       final var with = new TagOptional("alice", Optional.of(new Tag("a")));
@@ -152,7 +158,7 @@ class TypedContainerPathTest {
     @DisplayName("static Telescope.asOptional promotes a pre-built Telescope<S, Optional<X>>")
     void asOptionalPromotion() {
       final Telescope<TagOptional, Optional<Tag>> raw = Telescope.of(TagOptional.class).field(TagOptional::tag);
-      final OptionalPath<TagOptional, Tag> promoted = Telescope.asOptional(raw);
+      final OptionalTelescope<TagOptional, Tag> promoted = Telescope.asOptional(raw);
       final var src = new TagOptional("alice", Optional.of(new Tag("x")));
       assertEquals(List.of(new Tag("x")), promoted.present().toList(src));
     }

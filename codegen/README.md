@@ -12,7 +12,7 @@ Telescope.of(Company.class)             // runtime path (~262 ns/op for a 3-leve
     .field(User::email)
     .update(company, String::toLowerCase);
 
-CompanyPath.start()                      // codegen path (~45 ns/op — 5.8× faster)
+CompanyPath.focus()                      // codegen path (~45 ns/op — 5.8× faster)
     .departments().each()
     .teams().each()
     .users().each()
@@ -23,10 +23,10 @@ CompanyPath.start()                      // codegen path (~45 ns/op — 5.8× fa
 
 - **Hot paths.** The codegen navigator emits direct method-reference + canonical-constructor bytecode at every hop. Zero
   `SerializedLambda` decode, zero `Records.fieldLens(String)` lookup, zero `Beans.lens(...)` reflection.
-- **Compile-time path validation.** A typo on `CompanyPath.start().teams()` is a `javac` error. The reflective
+- **Compile-time path validation.** A typo on `CompanyPath.focus().teams()` is a `javac` error. The reflective
   `.field(Company::teamz)` blows up at construction time.
 - **Cross-paradigm bridges.** `@Bridge(UserDto.class)` on a `UserEntity` POJO generates
-  `UserEntityPath.start().asUserDto().email()` — one fluent chain hops from bean to record.
+  `UserEntityPath.focus().asUserDto().email()` — one fluent chain hops from bean to record.
 
 Skip codegen for prototype / glue code that doesn't sit in a tight loop. The reflective path is sub-microsecond and
 still build-time-validated for method references.

@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope.codegen.lombok.fixtures;
 
 /**
- * Fixture: a same-package, same-compilation-pass consumer of a Lombok-emitted {@code <X>Path}
+ * Fixture: a same-package, same-compilation-pass consumer of a Lombok-emitted {@code <X>Telescope}
  * navigator. Pins that the Path is visible to user code in the SAME module's source compilation —
  * the failure mode this guards against is the round-deferred emission that used to land the Path
  * only on {@code processingOver()}, after the compiler had already finished symbol resolution for
@@ -15,9 +15,9 @@ public final class SameRoundConsumer {
 
   private SameRoundConsumer() {}
 
-  /** Shouts the email through the typed DataUserPath navigator. */
+  /** Shouts the email through the typed DataUserTelescope navigator. */
   public static DataUser shoutEmail(final DataUser user) {
-    return DataUserPath.start()
+    return DataUserTelescope.focus()
       .email()
       .update(user, s -> s == null ? null : s.toUpperCase());
   }

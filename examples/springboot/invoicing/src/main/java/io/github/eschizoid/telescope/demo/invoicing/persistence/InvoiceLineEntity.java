@@ -5,8 +5,9 @@ import java.math.BigDecimal;
 
 /**
  * JPA-style mutable bean side of the {@code @Bridge} pair. {@code @BeanFocus} emits {@code
- * InvoiceLineEntityPath<R>} so the bridge hop on {@code domain.InvoiceLine}'s navigator can return
- * a typed Path on the entity side (continued navigation after {@code asInvoiceLineEntity()}).
+ * InvoiceLineEntityTelescope<R>} so the bridge hop on {@code domain.InvoiceLine}'s navigator can
+ * return a typed Path on the entity side (continued navigation after {@code
+ * asInvoiceLineEntity()}).
  *
  * <p>Same field types as {@code domain.InvoiceLine} on purpose — this submodule exercises the
  * codegen IDENTITY field branch end-to-end on a real Spring app. Typed transforms (e.g.

@@ -5,7 +5,7 @@ import lombok.Getter;
 
 /**
  * Fixture: {@code @Builder} + {@code @Getter} POJO. LombokFocusProcessor should pick this up and
- * emit {@code BuilderUserPath} with builder() rebuild.
+ * emit {@code BuilderUserTelescope} with builder() rebuild.
  */
 @Builder
 @Getter

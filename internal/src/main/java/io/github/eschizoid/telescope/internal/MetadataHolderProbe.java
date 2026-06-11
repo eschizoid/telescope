@@ -155,7 +155,7 @@ public final class MetadataHolderProbe {
   }
 
   private static Optional<HolderRef> probe(final Class<?> cls) {
-    final var holderName = cls.getName() + "Telescope";
+    final var holderName = cls.getName() + "FieldOptics";
     try {
       final var holder = Class.forName(holderName, false, cls.getClassLoader());
       final var constants = readConstants(holder);

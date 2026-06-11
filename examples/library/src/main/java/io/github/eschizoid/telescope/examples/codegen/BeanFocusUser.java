@@ -4,7 +4,7 @@ import io.github.eschizoid.telescope.annotations.BeanFocus;
 
 /**
  * A {@code @BeanFocus}-annotated POJO. The codegen processor emits a sibling {@code
- * BeanFocusUserPath<R>} navigator using the no-arg + setters rebuild strategy.
+ * BeanFocusUserTelescope<R>} navigator using the no-arg + setters rebuild strategy.
  */
 @BeanFocus
 public final class BeanFocusUser {

@@ -10,7 +10,7 @@ import java.math.BigDecimal;
  * canonical-constructor rebuild) and triggers two pieces of generated code at compile time:
  *
  * <ul>
- *   <li>{@code InvoiceLinePath<R>} — the typed navigator, courtesy of {@code @Focus}.
+ *   <li>{@code InvoiceLineTelescope<R>} — the typed navigator, courtesy of {@code @Focus}.
  *   <li>{@code InvoiceLineBridge.BRIDGE} — the {@code Telescope<InvoiceLine, InvoiceLineEntity>}
  *       iso, courtesy of {@code @Bridge}.
  * </ul>

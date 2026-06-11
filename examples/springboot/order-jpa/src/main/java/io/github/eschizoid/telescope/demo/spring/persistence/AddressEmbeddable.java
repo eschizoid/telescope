@@ -9,7 +9,7 @@ import jakarta.persistence.Embeddable;
  * same way it handles a plain POJO — no JPA awareness required.
  *
  * <p>Has both a no-arg constructor (required by JPA) and per-property setters. {@link BeanFocus}
- * triggers the codegen processor to emit {@code AddressEmbeddablePath<R>} navigator + {@code
+ * triggers the codegen processor to emit {@code AddressEmbeddableTelescope<R>} navigator + {@code
  * AddressEmbeddableTelescope} metadata holder, matching the record-side {@code AddressPath} /
  * {@code AddressTelescope} pair.
  */

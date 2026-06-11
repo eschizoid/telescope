@@ -9,6 +9,7 @@ import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.MappingInternals;
 import io.github.eschizoid.telescope.mapping.SameTypedTo;
+import io.github.eschizoid.telescope.mapping.TelescopeTo;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
@@ -269,12 +270,31 @@ public final class DeepMap {
     final var bySourceName = new LinkedHashMap<String, FieldStep>();
     final var claimedTgt = new HashSet<String>();
     final var claimedSrc = new HashSet<String>();
+    final var telescopeFixups = new ArrayList<TelescopeTo<?, ?, ?>>();
 
     for (final var row : overrides.getOrDefault(key, List.of())) {
       // Normalize raw method names per side — record::name stays "name", bean::getName becomes
       // "name".
       final var internals = internalsOf(row);
       final var srcField = srcRefl.normalize(internals.sourceField());
+      // TelescopeTo rows claim a source field and register a backward-side placeholder that the
+      // outer post-fixup (see wrapWithTelescopeFixups below) overwrites with the actual leaf value
+      // read from the target telescope. The forward direction is also handled by the outer wrap,
+      // which calls targetTelescope.set after the base assembleIso produces a base target.
+      if (row instanceof TelescopeTo<?, ?, ?> tRow) {
+        if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
+          "Deep map " +
+            source.getSimpleName() +
+            " → " +
+            target.getSimpleName() +
+            ": duplicate override row for source field '" +
+            srcField +
+            "'. Each (source, target) type pair may declare at most one row per source field."
+        );
+        bySourceName.put(srcField, new FieldStep(srcField, null, NULLING_ISO));
+        telescopeFixups.add(tRow);
+        continue;
+      }
       // Drop rows claim a source field with no target counterpart — they exist to satisfy the
       // strict source-must-be-claimed pass below when one side carries fields the other doesn't.
       if (row instanceof Drop<?, ?, ?>) {
@@ -369,8 +389,54 @@ public final class DeepMap {
       );
     }
 
-    cache.put(key, assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName));
+    final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
+    cache.put(
+      key,
+      telescopeFixups.isEmpty() ? baseIso : wrapWithTelescopeFixups(baseIso, telescopeFixups, srcRefl, source)
+    );
     if (topStepsOut != null) topStepsOut.putAll(byTargetName);
+  }
+
+  /**
+   * Compose the {@link TelescopeTo} post-fixups on top of the base {@link Iso} produced by {@link
+   * #assembleIso}. Forward: after the base produces a target {@code T}, each fixup's {@code
+   * targetTelescope.set(t, srcAccessor.apply(s))} overlays the leaf at the telescope's terminal
+   * focus. Backward: after the base produces a source {@code S}, each fixup reads the value at the
+   * target telescope and overwrites the source field via the source-side reflective rebuild.
+   *
+   * <p>Uses {@code Telescope.set} and {@code Telescope.read} from the optics lattice's public
+   * surface for the actual leaf reads/writes — no new lattice machinery introduced.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static <S, T> Iso<S, T> wrapWithTelescopeFixups(
+    final Iso<S, T> base,
+    final List<TelescopeTo<?, ?, ?>> fixups,
+    final Reflective srcRefl,
+    final Class<S> source
+  ) {
+    return Iso.of(
+      s -> {
+        T t = base.to(s);
+        for (final var fx : fixups) {
+          final var srcAcc = (io.github.eschizoid.telescope.Telescope.Accessor<S, Object>) fx.srcAccessor();
+          final var tgtT = (io.github.eschizoid.telescope.Telescope<T, Object>) fx.targetTelescope();
+          t = tgtT.set(t, srcAcc.apply(s));
+        }
+        return t;
+      },
+      t -> {
+        final S baseS = base.from(t);
+        return (S) srcRefl.construct(source, name -> {
+          for (final var fx : fixups) {
+            if (srcRefl.normalize(fx.sourceField()).equals(name)) {
+              final var tgtT = (io.github.eschizoid.telescope.Telescope<T, Object>) fx.targetTelescope();
+              return tgtT.read(t);
+            }
+          }
+          return srcRefl.read(baseS, name);
+        });
+      }
+    );
   }
 
   // ---------- Per-component auto resolution ----------
@@ -479,6 +545,10 @@ public final class DeepMap {
       // calling fieldIsoOf. The case is here only to make the switch exhaustive for the sealed
       // hierarchy; reaching it indicates a routing bug above.
       case Drop<?, ?, ?> _ -> throw new IllegalStateException("Drop row should not reach fieldIsoOf");
+      // TelescopeTo rows never reach this method either — populateIso short-circuits on
+      // `instanceof TelescopeTo` before calling fieldIsoOf; the row applies as a post-fixup at the
+      // outer pair, not as a per-field leaf Iso.
+      case TelescopeTo<?, ?, ?> _ -> throw new IllegalStateException("TelescopeTo row should not reach fieldIsoOf");
     };
   }
 
