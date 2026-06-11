@@ -86,8 +86,8 @@ class ProductFlowTest {
     assertThat(raw.has("price_cents")).isTrue();
     assertThat(raw.has("id")).as("camelCase should not leak").isFalse();
     assertThat(raw.has("sku")).isFalse();
-    assertThat(raw.get("stock_keeping_unit").asText()).isEqualTo("SKU-001");
-    assertThat(raw.get("display_name").asText()).isEqualTo("Widget");
+    assertThat(raw.get("stock_keeping_unit").asString()).isEqualTo("SKU-001");
+    assertThat(raw.get("display_name").asString()).isEqualTo("Widget");
     assertThat(raw.get("price_cents").asLong()).isEqualTo(1999L);
     assertThat(raw.get("product_id").asLong()).isPositive();
   }
