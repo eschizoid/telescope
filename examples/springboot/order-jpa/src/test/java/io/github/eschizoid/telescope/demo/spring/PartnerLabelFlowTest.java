@@ -127,7 +127,7 @@ class PartnerLabelFlowTest {
       .items(List.of())
       .build();
 
-    final var lowered = PartnerShippingLabelTelescope.focus().customer().email().update(original, String::toLowerCase);
+    final var lowered = PartnerShippingLabelTelescope.of().customer().email().update(original, String::toLowerCase);
 
     assertThat(lowered.getCustomer().getEmail()).isEqualTo("alice@example.com");
     // Everything else flows through unchanged — the lens setter rebuilds only the customer's email

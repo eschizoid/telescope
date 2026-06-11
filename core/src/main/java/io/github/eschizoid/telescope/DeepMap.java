@@ -5,11 +5,13 @@ import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.Drop;
+import io.github.eschizoid.telescope.mapping.FromTelescopeTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.MappingInternals;
 import io.github.eschizoid.telescope.mapping.SameTypedTo;
 import io.github.eschizoid.telescope.mapping.TelescopeTo;
+import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
@@ -231,14 +233,17 @@ public final class DeepMap {
     final var grouped = new HashMap<TypePair, List<Mapping<?, ?>>>();
     for (final var row : overrides) {
       final var internals = internalsOf(row);
-      // Drop rows have no target accessor. The single-arg drop(srcAcc) factory binds the row to
-      // the top-level (source, target) pair the user passed to Telescope.map(...); the two-arg
-      // drop(srcAcc, target) factory binds it to whatever nested (source, target) pair the user
-      // names explicitly. Internals.targetClass() returns null for the single-arg form and the
-      // explicit target Class for the two-arg form.
-      final Class<?> effectiveTarget =
-        row instanceof Drop<?, ?, ?> && internals.targetClass() == null ? topTarget : internals.targetClass();
-      final var key = new TypePair(internals.sourceClass(), effectiveTarget);
+      // Rows with null sourceClass / targetClass pin to the top-level pair the user passed to
+      // Telescope.mapper(...). Two reasons a class field comes back null:
+      //   - Drop(srcAcc) — single-arg form, no explicit target.
+      //   - TelescopeTo / FromTelescopeTo / TelescopeToTelescope / TelescopeZip — the side that's a
+      //     Telescope<X, ?> can't expose its root class via SerializedLambda (the lattice is built
+      //     from method-ref accessors but the root Class<S> isn't carried at runtime).
+      // In both cases the substitution lands the row on the outer (topSource, topTarget) bucket so
+      // populateIso picks it up at the outermost (source, target) recursion frame only.
+      final Class<?> effectiveSource = internals.sourceClass() == null ? topSource : internals.sourceClass();
+      final Class<?> effectiveTarget = internals.targetClass() == null ? topTarget : internals.targetClass();
+      final var key = new TypePair(effectiveSource, effectiveTarget);
       grouped.computeIfAbsent(key, _ -> new ArrayList<>()).add(row);
     }
     return grouped;
@@ -268,31 +273,54 @@ public final class DeepMap {
 
     final var byTargetName = new LinkedHashMap<String, FieldStep>();
     final var bySourceName = new LinkedHashMap<String, FieldStep>();
+    // Strict claims: at most one SameTypedTo / TypedTransformTo / Via / Drop row per (src, tgt)
+    // field.
+    // Duplicates among these would be genuinely ambiguous, so they fail fast.
     final var claimedTgt = new HashSet<String>();
     final var claimedSrc = new HashSet<String>();
-    final var telescopeFixups = new ArrayList<TelescopeTo<?, ?, ?>>();
+    // Soft claims: telescope-based rows are post-fixups, not exclusive overrides — they mark a
+    // field as "consumed by a telescope read/write" so the strict source/target must-be-claimed
+    // pass below accepts it, but don't conflict with strict rows or with each other on the same
+    // field. Multiple Mapping.to(srcAcc, tgtTelescope) rows reading the same source field, or
+    // Mapping.to(srcAcc, tgtTelescope) co-existing with a Mapping.to(srcAcc, tgtAcc), are both OK.
+    final var telescopeReadsSrc = new HashSet<String>();
+    final var telescopeWritesTgt = new HashSet<String>();
+    final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
 
     for (final var row : overrides.getOrDefault(key, List.of())) {
       // Normalize raw method names per side — record::name stays "name", bean::getName becomes
       // "name".
       final var internals = internalsOf(row);
       final var srcField = srcRefl.normalize(internals.sourceField());
-      // TelescopeTo rows claim a source field and register a backward-side placeholder that the
-      // outer post-fixup (see wrapWithTelescopeFixups below) overwrites with the actual leaf value
-      // read from the target telescope. The forward direction is also handled by the outer wrap,
-      // which calls targetTelescope.set after the base assembleIso produces a base target.
+      // TelescopeTo: flat source accessor → nested target telescope.
+      // Soft claim on the source field (from srcAcc) AND the target telescope's first hop name.
+      // Multiple rows sharing the same source field or top-level target field all compose.
       if (row instanceof TelescopeTo<?, ?, ?> tRow) {
-        if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
-          "Deep map " +
-            source.getSimpleName() +
-            " → " +
-            target.getSimpleName() +
-            ": duplicate override row for source field '" +
-            srcField +
-            "'. Each (source, target) type pair may declare at most one row per source field."
-        );
-        bySourceName.put(srcField, new FieldStep(srcField, null, NULLING_ISO));
+        telescopeReadsSrc.add(srcField);
+        final var firstTgtHop = tRow.targetTelescope().firstHopName();
+        if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
         telescopeFixups.add(tRow);
+        continue;
+      }
+      // FromTelescopeTo: nested source telescope → flat target accessor — soft claim mirror.
+      // Soft claim on the target field (from tgtAcc) AND the source telescope's first hop name.
+      if (row instanceof FromTelescopeTo<?, ?, ?> fRow) {
+        telescopeWritesTgt.add(tgtRefl.normalize(internals.targetField()));
+        final var firstSrcHop = fRow.sourceTelescope().firstHopName();
+        if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
+        telescopeFixups.add(fRow);
+        continue;
+      }
+      // TelescopeToTelescope (covers both Kind.BROADCAST from Mapping.to and Kind.ZIP from
+      // Mapping.zip): both sides are nested telescopes. Recover the top-level src/tgt field names
+      // from each telescope's first hop so auto-recursion can build the top-level structure; the
+      // post-fixup then overlays the deep leaf (broadcast or positional, depending on kind).
+      if (row instanceof TelescopeToTelescope<?, ?, ?> ttRow) {
+        final var firstSrcHop = ttRow.sourceTelescope().firstHopName();
+        final var firstTgtHop = ttRow.targetTelescope().firstHopName();
+        if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
+        if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+        telescopeFixups.add(ttRow);
         continue;
       }
       // Drop rows claim a source field with no target counterpart — they exist to satisfy the
@@ -346,21 +374,33 @@ public final class DeepMap {
     final var srcNameSet = new HashSet<>(List.of(srcNames));
     for (final var name : tgtRefl.names(target)) {
       if (claimedTgt.contains(name)) continue;
-      if (!srcNameSet.contains(name)) throw new IllegalStateException(
-        "Deep map " +
-          source.getSimpleName() +
-          " → " +
-          target.getSimpleName() +
-          ": target " +
-          slot(tgtRefl) +
-          " '" +
-          name +
-          "' has no same-name source " +
-          slot(srcRefl) +
-          ". Add a rename row to(sourceAccessor, targetAccessor) that maps to '" +
-          name +
-          "'."
-      );
+      // Telescope-row permissive mode: when ANY telescope row is registered for this pair, target
+      // fields with no same-name source get a NULLING_ISO placeholder. The post-fixup overlays it
+      // if a TelescopeToTelescope / FromTelescopeTo writes through that field; otherwise the field
+      // stays null. Telescope rows can't recover their top-level target field name from a
+      // Telescope<B, X> at runtime (generics erased), so we permit the gap instead of failing on
+      // every nested write. Without any telescope row, the strict same-name check still fires.
+      if (!srcNameSet.contains(name)) {
+        if (!telescopeFixups.isEmpty()) {
+          byTargetName.putIfAbsent(name, new FieldStep(null, name, NULLING_ISO));
+          continue;
+        }
+        throw new IllegalStateException(
+          "Deep map " +
+            source.getSimpleName() +
+            " → " +
+            target.getSimpleName() +
+            ": target " +
+            slot(tgtRefl) +
+            " '" +
+            name +
+            "' has no same-name source " +
+            slot(srcRefl) +
+            ". Add a rename row to(sourceAccessor, targetAccessor) that maps to '" +
+            name +
+            "'."
+        );
+      }
       final var step = new FieldStep(
         name,
         name,
@@ -372,7 +412,21 @@ public final class DeepMap {
     }
 
     for (final var name : srcNames) {
-      if (!claimedSrc.contains(name)) throw new IllegalStateException(
+      if (claimedSrc.contains(name)) continue;
+      // Telescope-read source without a same-name target consumer: register a NULLING_ISO
+      // backward-only placeholder so the source rebuilder produces null for this field; the
+      // backward post-fixup will fill the real value from the target telescope.
+      if (telescopeReadsSrc.contains(name)) {
+        bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
+        continue;
+      }
+      // Same permissive mode as the target side: when telescope rows are present, source fields
+      // with no consumer fall back to a NULLING placeholder rather than failing.
+      if (!telescopeFixups.isEmpty()) {
+        bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
+        continue;
+      }
+      throw new IllegalStateException(
         "Deep map " +
           source.getSimpleName() +
           " → " +
@@ -398,45 +452,161 @@ public final class DeepMap {
   }
 
   /**
-   * Compose the {@link TelescopeTo} post-fixups on top of the base {@link Iso} produced by {@link
-   * #assembleIso}. Forward: after the base produces a target {@code T}, each fixup's {@code
-   * targetTelescope.set(t, srcAccessor.apply(s))} overlays the leaf at the telescope's terminal
-   * focus. Backward: after the base produces a source {@code S}, each fixup reads the value at the
-   * target telescope and overwrites the source field via the source-side reflective rebuild.
+   * Compose post-fixups on top of the base {@link Iso} produced by {@link #assembleIso}. Four
+   * telescope-based row shapes route through this single wrapper; each contributes a forward
+   * overlay and a backward overlay built from the lattice's public {@code Telescope.set} / {@code
+   * Telescope.read} (and {@code toList} / {@code updateIndexed} for the {@link
+   * TelescopeToTelescope.Kind#ZIP} case).
    *
-   * <p>Uses {@code Telescope.set} and {@code Telescope.read} from the optics lattice's public
-   * surface for the actual leaf reads/writes — no new lattice machinery introduced.
+   * <ul>
+   *   <li>{@link TelescopeTo} (flat src → nested tgt): forward {@code tgtT.set(t,
+   *       srcAcc.apply(s))}; backward rebuilds {@code s} with {@code sourceField} = {@code
+   *       tgtT.read(t)}.
+   *   <li>{@link FromTelescopeTo} (nested src → flat tgt): forward rebuilds {@code t} with {@code
+   *       targetField} = {@code srcT.read(s)}; backward rebuilds {@code s} via {@code srcT.set(s,
+   *       tgtAcc.apply(t))}.
+   *   <li>{@link TelescopeToTelescope} with {@link TelescopeToTelescope.Kind#BROADCAST} (nested ↔
+   *       nested, broadcast): forward {@code tgtT.set(t, srcT.read(s))}; backward {@code
+   *       srcT.set(s, tgtT.read(t))}. When either side is many-focus the lattice's intrinsic
+   *       broadcast / first-focus semantics apply — no extra machinery here.
+   *   <li>{@link TelescopeToTelescope} with {@link TelescopeToTelescope.Kind#ZIP} (nested ↔ nested,
+   *       positional N:N): forward reads {@code srcT.toList(s)} and writes positionally via {@code
+   *       tgtT.updateIndexed(t, ...)} with cardinality enforcement; backward mirrors.
+   * </ul>
+   *
+   * <p>All reads / writes go through the lattice's public {@link io.github.eschizoid.telescope
+   * .Telescope} surface — no new optic primitives, no Iso composition beyond the base.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static <S, T> Iso<S, T> wrapWithTelescopeFixups(
     final Iso<S, T> base,
-    final List<TelescopeTo<?, ?, ?>> fixups,
+    final List<Mapping<?, ?>> fixups,
     final Reflective srcRefl,
     final Class<S> source
   ) {
     return Iso.of(
-      s -> {
-        T t = base.to(s);
-        for (final var fx : fixups) {
-          final var srcAcc = (io.github.eschizoid.telescope.Telescope.Accessor<S, Object>) fx.srcAccessor();
-          final var tgtT = (io.github.eschizoid.telescope.Telescope<T, Object>) fx.targetTelescope();
+      s -> applyForward(base.to(s), s, fixups),
+      t -> applyBackward(base.from(t), t, fixups, srcRefl, source)
+    );
+  }
+
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static <S, T> T applyForward(final T initial, final S s, final List<Mapping<?, ?>> fixups) {
+    T t = initial;
+    for (final var fx : fixups) {
+      switch (fx) {
+        case TelescopeTo<?, ?, ?> r -> {
+          final var srcAcc = (Telescope.Accessor<S, Object>) r.srcAccessor();
+          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
           t = tgtT.set(t, srcAcc.apply(s));
         }
-        return t;
-      },
-      t -> {
-        final S baseS = base.from(t);
-        return (S) srcRefl.construct(source, name -> {
-          for (final var fx : fixups) {
-            if (srcRefl.normalize(fx.sourceField()).equals(name)) {
-              final var tgtT = (io.github.eschizoid.telescope.Telescope<T, Object>) fx.targetTelescope();
-              return tgtT.read(t);
-            }
+        case FromTelescopeTo<?, ?, ?> r -> {
+          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
+          // The target side is a flat accessor; we need to rebuild t with the named target field
+          // overridden by srcT.read(s). Delegate to overrideTargetField, which uses the target
+          // Reflective.construct the same way the source-side path does in applyBackward.
+          t = overrideTargetField(t, r, srcT, s);
+        }
+        case TelescopeToTelescope<?, ?, ?> r -> {
+          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
+          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+          if (r.kind() == TelescopeToTelescope.Kind.ZIP) {
+            final var values = srcT.toList(s);
+            final var targetCount = tgtT.count(t);
+            if (values.size() != targetCount) throw new IllegalStateException(
+              "Mapping.zip: source has " +
+                values.size() +
+                " focus(es), target has " +
+                targetCount +
+                " — cardinality must match for positional zip."
+            );
+            t = tgtT.updateIndexed(t, (i, _ignored) -> values.get(i));
+          } else {
+            t = tgtT.set(t, srcT.read(s));
           }
-          return srcRefl.read(baseS, name);
-        });
+        }
+        default -> {
+          /* non-telescope mappings are not routed through this wrapper */
+        }
       }
+    }
+    return t;
+  }
+
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static <S, T> S applyBackward(
+    final S baseS,
+    final T t,
+    final List<Mapping<?, ?>> fixups,
+    final Reflective srcRefl,
+    final Class<S> source
+  ) {
+    // Collect per-field override values keyed by normalized source field name; the rebuild reads
+    // through srcRefl.construct and substitutes our overrides per name. Telescope-source fixups
+    // (FromTelescopeTo, TelescopeToTelescope, TelescopeZip) don't have a top-level source field —
+    // they apply via srcT.set on the rebuilt baseS, after the name-keyed rebuild finishes.
+    final var fieldOverrides = new HashMap<String, Object>();
+    for (final var fx : fixups) {
+      if (fx instanceof TelescopeTo<?, ?, ?> r) {
+        final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+        fieldOverrides.put(srcRefl.normalize(r.sourceField()), tgtT.read(t));
+      }
+    }
+    S s = (S) srcRefl.construct(source, name ->
+      fieldOverrides.containsKey(name) ? fieldOverrides.get(name) : srcRefl.read(baseS, name)
     );
+    // Telescope-source fixups overlay AFTER the name-keyed rebuild, via srcT.set on s.
+    for (final var fx : fixups) {
+      switch (fx) {
+        case FromTelescopeTo<?, ?, ?> r -> {
+          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
+          final var tgtAcc = (Telescope.Accessor<T, Object>) r.tgtAccessor();
+          s = srcT.set(s, tgtAcc.apply(t));
+        }
+        case TelescopeToTelescope<?, ?, ?> r -> {
+          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
+          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+          if (r.kind() == TelescopeToTelescope.Kind.ZIP) {
+            final var values = tgtT.toList(t);
+            final var sourceCount = srcT.count(s);
+            if (values.size() != sourceCount) throw new IllegalStateException(
+              "Mapping.zip: target has " +
+                values.size() +
+                " focus(es), source has " +
+                sourceCount +
+                " — cardinality must match for positional zip."
+            );
+            s = srcT.updateIndexed(s, (i, _ignored) -> values.get(i));
+          } else {
+            s = srcT.set(s, tgtT.read(t));
+          }
+        }
+        default -> {
+          /* TelescopeTo already handled above via fieldOverrides */
+        }
+      }
+    }
+    return s;
+  }
+
+  /**
+   * Forward overlay for {@link FromTelescopeTo} — rebuild the target with the named target field
+   * overridden by {@code srcTelescope.read(s)}. We can't construct a typed one-hop Telescope on the
+   * target side without knowing T's runtime class up-front (generics erased), so we use the target
+   * Reflective via the cached structural iso the same way the source-side path does.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static <S, T> T overrideTargetField(
+    final T t,
+    final FromTelescopeTo<?, ?, ?> r,
+    final Telescope<S, Object> srcT,
+    final S s
+  ) {
+    final var tgtClass = (Class<T>) t.getClass();
+    final var tgtRefl = Reflective.of(tgtClass);
+    final var tgtField = tgtRefl.normalize(r.targetField());
+    final var newValue = srcT.read(s);
+    return (T) tgtRefl.construct(tgtClass, name -> name.equals(tgtField) ? newValue : tgtRefl.read(t, name));
   }
 
   // ---------- Per-component auto resolution ----------
@@ -545,10 +715,17 @@ public final class DeepMap {
       // calling fieldIsoOf. The case is here only to make the switch exhaustive for the sealed
       // hierarchy; reaching it indicates a routing bug above.
       case Drop<?, ?, ?> _ -> throw new IllegalStateException("Drop row should not reach fieldIsoOf");
-      // TelescopeTo rows never reach this method either — populateIso short-circuits on
-      // `instanceof TelescopeTo` before calling fieldIsoOf; the row applies as a post-fixup at the
-      // outer pair, not as a per-field leaf Iso.
+      // Telescope-based rows never reach this method — populateIso short-circuits on each of them
+      // before calling fieldIsoOf. They apply as post-fixups at the outer pair, not as per-field
+      // leaf Isos. The cases are here only to make the switch exhaustive for the sealed hierarchy;
+      // reaching any of them indicates a routing bug above.
       case TelescopeTo<?, ?, ?> _ -> throw new IllegalStateException("TelescopeTo row should not reach fieldIsoOf");
+      case FromTelescopeTo<?, ?, ?> _ -> throw new IllegalStateException(
+        "FromTelescopeTo row should not reach fieldIsoOf"
+      );
+      case TelescopeToTelescope<?, ?, ?> _ -> throw new IllegalStateException(
+        "TelescopeToTelescope row should not reach fieldIsoOf"
+      );
     };
   }
 

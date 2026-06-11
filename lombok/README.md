@@ -25,7 +25,7 @@ public class User {
 You want the same compile-checked navigator as `@Focus`/`@BeanFocus`:
 
 ```java
-UserPath.focus()
+UserPath.of()
     .address().city()
     .update(user, city -> city.toLowerCase());
 ```

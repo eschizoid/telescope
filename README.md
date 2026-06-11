@@ -1101,7 +1101,7 @@ Telescope.of(Company.class)
   .update(company, String::toLowerCase);
 
 // Compile-time, reflection-free — same Telescope, generator-built
-CompanyPath.focus()
+CompanyPath.of()
   .departments().each().teams().each()
   .users().each().email()
   .update(company, String::toLowerCase);
@@ -1118,7 +1118,7 @@ import io.github.eschizoid.telescope.annotations.Focus;
 // Generated: <X>Path<R> per annotated type plus a step class per collection-shaped component.
 // Usage reads like the reflective DSL — but every hop is type-checked by javac and every read /
 // rebuild is a direct method-ref + constructor call (no reflection):
-final Telescope<Company, String> userNames = CompanyPath.focus()
+final Telescope<Company, String> userNames = CompanyPath.of()
   .teams().each()        // step over List<Team> → TeamPath<Company>
   .users().each()        // step over List<User> → UserPath<Company>
   .name();               // terminal Telescope<Company, String>
@@ -1126,7 +1126,7 @@ final Telescope<Company, String> userNames = CompanyPath.focus()
 final Company shouted = userNames.update(company, String::toUpperCase);
 
 // Single fields are just as direct:
-UserPath.focus().address().city().update(alice, String::toUpperCase);
+UserPath.of().address().city().update(alice, String::toUpperCase);
 ```
 
 Each scalar component yields a terminal `Telescope<R, T>`; each sub-record component (also `@Focus`-annotated) yields a
@@ -1140,7 +1140,7 @@ gives you.
 surface — `read` / `find` / `toList` / `count` / `exists` / `set` / `update` / `updateIndexed` / `toListIndexed` /
 `then` plus the four effect methods `updateAsync` (with or without `Executor`) / `updateOptional` / `updateEither` /
 `updateValidated`. You don't need to terminate with `.get()` first; the navigator stands in for the wrapped Telescope at
-any intermediate hop. So `CompanyPath.focus().teams().each().users().each().updateAsync(company, svc::lookup, pool)`
+any intermediate hop. So `CompanyPath.of().teams().each().users().each().updateAsync(company, svc::lookup, pool)`
 returns a `CompletableFuture<Company>` directly, with the effect threaded through the generated chain.
 
 **Bridge hops — conversion as a navigator step.** If a type carries both `@Focus`/`@BeanFocus` (so it has a `*Path`) and
@@ -1158,7 +1158,7 @@ record UserDto(String id, String email) {}
 
 // Navigate through the bridge into a target field, then update. The Iso round-trips, so the
 // result is a new UserEntity:
-final UserEntity lowered = UserEntityPath.focus()
+final UserEntity lowered = UserEntityPath.of()
   .asUserDto() // → UserDtoPath<UserEntity>
   .email() // → Telescope<UserEntity, String>
   .update(entity, String::toLowerCase);
@@ -1191,7 +1191,7 @@ import io.github.eschizoid.telescope.annotations.BeanFocus;
 @BeanFocus public class UserBean { /* getId/getEmail + setters, or a static builder() */ }
 
 // Generated alongside: UserBeanPath<R> with the same fluent surface as a record navigator.
-UserBeanPath.focus().email().update(user, String::toLowerCase);   // no reflection
+UserBeanPath.of().email().update(user, String::toLowerCase);   // no reflection
 ```
 
 ---

@@ -17,7 +17,7 @@ public final class SameRoundConsumer {
 
   /** Shouts the email through the typed DataUserTelescope navigator. */
   public static DataUser shoutEmail(final DataUser user) {
-    return DataUserTelescope.focus()
+    return DataUserTelescope.of()
       .email()
       .update(user, s -> s == null ? null : s.toUpperCase());
   }

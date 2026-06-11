@@ -60,8 +60,8 @@ class FocusProcessorTest {
       assertTrue(generated.contains("public final class PersonTelescope<R>"), generated);
       assertTrue(generated.contains("import io.github.eschizoid.telescope.Telescope;"), generated);
 
-      // start() returns PersonTelescope<Person> rooted at Telescope.of(Person.class).
-      assertTrue(generated.contains("public static PersonTelescope<Person> focus()"), generated);
+      // of() returns PersonTelescope<Person> rooted at Telescope.of(Person.class).
+      assertTrue(generated.contains("public static PersonTelescope<Person> of()"), generated);
       assertTrue(generated.contains("Telescope.of(Person.class)"), generated);
 
       // get() exposes the current path as a Telescope.

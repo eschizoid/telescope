@@ -38,13 +38,13 @@ class InvoiceBridgeTest {
   }
 
   @Test
-  @DisplayName("InvoiceLineTelescope.focus().asInvoiceLineEntity() reads through the BRIDGE Iso")
+  @DisplayName("InvoiceLineTelescope.of().asInvoiceLineEntity() reads through the BRIDGE Iso")
   void bridgeHopFromPathNavigator() {
     final var line = new InvoiceLine("SKU-B", 1, new BigDecimal("49.50"));
 
     // Compile-time-bound hop: BridgeProcessor wired the navigator's asInvoiceLineEntity() method
     // to return a typed continuation (InvoiceLineEntityPath because the target is @BeanFocus).
-    final InvoiceLineEntity entity = InvoiceLineTelescope.focus().asInvoiceLineEntity().read(line);
+    final InvoiceLineEntity entity = InvoiceLineTelescope.of().asInvoiceLineEntity().read(line);
 
     assertThat(entity.getSku()).isEqualTo("SKU-B");
     assertThat(entity.getQty()).isEqualTo(1);

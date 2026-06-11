@@ -479,7 +479,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * Emit the standard header members of a generated {@code <X>Telescope<R>} class: the private
    * {@code path} field, a public constructor (so navigators in <em>other</em> packages — bridge
    * hops, sub-navigators on records whose targets live in foreign packages — can still construct
-   * one), a {@code focus()} static factory, and a {@code get()} accessor. Used by every
+   * one), an {@code of()} static factory (symmetric with runtime {@link
+   * io.github.eschizoid.telescope.Telescope#of(Class)} — the navigator's name already names the
+   * type, so no class argument is needed), and a {@code get()} accessor. Used by every
    * navigator-emitting processor (records via {@link FocusProcessor} and beans via {@link
    * #emitBeanNavigator}) so the boilerplate lives in one place.
    */
@@ -493,7 +495,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         pathName +
         "<" +
         targetTypeName +
-        "> focus() { return new " +
+        "> of() { return new " +
         pathName +
         "<>(Telescope.of(" +
         targetTypeName +
