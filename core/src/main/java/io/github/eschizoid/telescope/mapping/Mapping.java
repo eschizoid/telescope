@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.mapping;
 
+import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.function.Function;
@@ -32,7 +33,7 @@ import java.util.function.Function;
  * package — {@link SameTypedTo}, {@link TypedTransformTo}, {@link Via}, {@link Drop}. Users
  * construct via the static factories below; the record types are not public API.
  */
-public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, TypedTransformTo, Via, Drop {
+public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, TypedTransformTo, Via, Drop, TelescopeTo {
   /** Same-typed correspondence: {@code src↔tgt}, both with leaf type {@code X}. Identity. */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Accessor<B, X> tgt) {
     return new SameTypedTo<>(src, tgt);
@@ -54,6 +55,32 @@ public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, Typed
     final Function<? super Y, ? extends X> backward
   ) {
     return new TypedTransformTo<>(src, tgt, forward, backward);
+  }
+
+  /**
+   * Nested-target correspondence: stamp a flat source field through a multi-hop {@link Telescope}
+   * on the target side. Closes the gap with MapStruct's {@code @Mapping(source = "flat", target =
+   * "a.b.c")} by letting the second argument be a real {@code Telescope<B, X>} built with the same
+   * {@code .field(...)} navigation users already know for read/update — the IDE refactor follows
+   * each hop and {@code javac} catches a missing accessor everywhere.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::getName,         OrderDto::getFullName),
+   *     to(Order::getCustomerName,
+   *        Telescope.of(OrderDto.class)
+   *            .field(OrderDto::getShipping)
+   *            .field(Shipping::getRecipient)
+   *            .field(Recipient::getFullName)));
+   * }</pre>
+   *
+   * <p>The engine applies this row at the <em>outer</em> {@code (source, target)} pair only — after
+   * the base auto-recursion produces a target value, {@code targetTelescope.set(b,
+   * srcAcc.apply(a))} overlays the leaf. Backward direction is the mirror: read at the target
+   * telescope, write to the source via the accessor's lens.
+   */
+  static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Telescope<B, X> targetTelescope) {
+    return new TelescopeTo<>(src, targetTelescope);
   }
 
   /**

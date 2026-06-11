@@ -14,10 +14,10 @@ import org.junit.jupiter.api.Test;
 /**
  * End-to-end probe of the {@code @Focus} fluent path navigator. The processor runs against this
  * test source set (see {@code testAnnotationProcessor(project(":telescope-codegen"))} in the build)
- * and generates a sibling {@code <X>Path<R>} class for each annotated top-level record ({@link
- * FocusPerson} &rarr; {@code FocusPersonPath}, {@link FocusAddress} &rarr; {@code
- * FocusAddressPath}, …). The tests here use those navigators, proving both that the processor ran
- * and that the emitted code is correct.
+ * and generates a sibling {@code <X>Telescope<R>} class for each annotated top-level record ({@link
+ * FocusPerson} &rarr; {@code FocusPersonTelescope}, {@link FocusAddress} &rarr; {@code
+ * FocusAddressTelescope}, …). The tests here use those navigators, proving both that the processor
+ * ran and that the emitted code is correct.
  */
 class FocusCodegenTest {
 
@@ -26,10 +26,10 @@ class FocusCodegenTest {
   class Generated {
 
     @Test
-    @DisplayName("FocusPersonPath.start().name() reads and updates the name field")
+    @DisplayName("FocusPersonTelescope.focus().name() reads and updates the name field")
     void nameNavigation() {
       final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
-      final var name = FocusPersonPath.start().name();
+      final var name = FocusPersonTelescope.focus().name();
 
       assertEquals("alice", name.read(alice));
 
@@ -40,10 +40,10 @@ class FocusCodegenTest {
     }
 
     @Test
-    @DisplayName("FocusPersonPath.start().age() boxes int → Integer; round-trips correctly")
+    @DisplayName("FocusPersonTelescope.focus().age() boxes int → Integer; round-trips correctly")
     void primitiveBoxing() {
       final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
-      final var age = FocusPersonPath.start().age();
+      final var age = FocusPersonTelescope.focus().age();
 
       assertEquals(30, age.read(alice));
 
@@ -56,9 +56,9 @@ class FocusCodegenTest {
     void deepFieldPath() {
       final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
 
-      // address() returns FocusAddressPath<FocusPerson>; city() returns Telescope<FocusPerson,
+      // address() returns FocusAddressTelescope<FocusPerson>; city() returns Telescope<FocusPerson,
       // String>
-      final var city = FocusPersonPath.start().address().city();
+      final var city = FocusPersonTelescope.focus().address().city();
 
       assertEquals("nyc", city.read(alice));
 
@@ -79,10 +79,10 @@ class FocusCodegenTest {
       );
 
       // members() returns FocusTeamMembersStep<FocusTeam>; .each() returns
-      // FocusPersonPath<FocusTeam>;
+      // FocusPersonTelescope<FocusTeam>;
       // .name() returns Telescope<FocusTeam, String>. Whole path is compile-checked,
       // reflection-free.
-      final var memberNames = FocusTeamPath.start().members().each().name();
+      final var memberNames = FocusTeamTelescope.focus().members().each().name();
 
       assertEquals(List.of("alice", "bob"), memberNames.toList(team));
 
@@ -100,17 +100,17 @@ class FocusCodegenTest {
       final var bag = new FocusBag(Map.of("a", "x", "b", "y"), Optional.of("hi"), List.of("p", "q"));
 
       // Map<String, String> values: eachValue() returns terminal Telescope<FocusBag, String>.
-      final var labelValues = FocusBagPath.start().labels().eachValue();
+      final var labelValues = FocusBagTelescope.focus().labels().eachValue();
       final var upperValues = labelValues.update(bag, String::toUpperCase);
       assertEquals(Map.of("a", "X", "b", "Y"), upperValues.labels());
 
       // Optional<String>: whenPresent() returns terminal Telescope<FocusBag, String>.
-      final var noteValue = FocusBagPath.start().note().whenPresent();
+      final var noteValue = FocusBagTelescope.focus().note().whenPresent();
       final var upperNote = noteValue.update(bag, String::toUpperCase);
       assertEquals(Optional.of("HI"), upperNote.note());
 
       // List<String>: each() returns terminal Telescope<FocusBag, String>.
-      assertEquals(List.of("p", "q"), FocusBagPath.start().tags().each().toList(bag));
+      assertEquals(List.of("p", "q"), FocusBagTelescope.focus().tags().each().toList(bag));
     }
 
     @Test
@@ -119,7 +119,7 @@ class FocusCodegenTest {
       final var team = new FocusTeam("eng", List.of(new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"))));
 
       // The members() step exposes the whole List as a Telescope<FocusTeam, List<FocusPerson>>.
-      final var membersList = FocusTeamPath.start().members().get();
+      final var membersList = FocusTeamTelescope.focus().members().get();
       assertEquals(1, membersList.read(team).size());
     }
 
@@ -129,13 +129,13 @@ class FocusCodegenTest {
       final var entity = new FocusEntity("u1", "Alice@Example.com");
 
       // Direct read across the bridge: FocusEntity -> FocusDto.
-      final FocusDto dto = FocusEntityPath.start().asFocusDto().read(entity);
+      final FocusDto dto = FocusEntityTelescope.focus().asFocusDto().read(entity);
       assertEquals("u1", dto.id());
       assertEquals("Alice@Example.com", dto.email());
 
       // Compose through the bridge into a target field and update — the Iso round-trips back to
       // FocusEntity, so we get an updated entity back.
-      final var lowered = FocusEntityPath.start().asFocusDto().email().update(entity, String::toLowerCase);
+      final var lowered = FocusEntityTelescope.focus().asFocusDto().email().update(entity, String::toLowerCase);
       assertEquals("alice@example.com", lowered.email());
       assertEquals("u1", lowered.id());
     }
@@ -146,13 +146,15 @@ class FocusCodegenTest {
       final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
 
       // Sync ops directly on the root Path — no .get() unwrap.
-      final var renamed = FocusPersonPath.start().update(alice, p -> new FocusPerson("ALICE", p.age(), p.address()));
+      final var renamed = FocusPersonTelescope.focus().update(alice, p ->
+        new FocusPerson("ALICE", p.age(), p.address())
+      );
       assertEquals("ALICE", renamed.name());
-      assertEquals("alice", FocusPersonPath.start().read(alice).name());
+      assertEquals("alice", FocusPersonTelescope.focus().read(alice).name());
 
       // Effect at an intermediate sub-record Path hop: updateAsync on
-      // FocusAddressPath<FocusPerson>.
-      final var movedFuture = FocusPersonPath.start()
+      // FocusAddressTelescope<FocusPerson>.
+      final var movedFuture = FocusPersonTelescope.focus()
         .address()
         .updateAsync(alice, addr ->
           CompletableFuture.completedFuture(new FocusAddress(addr.city().toUpperCase(), addr.zip()))
@@ -167,7 +169,7 @@ class FocusCodegenTest {
           new FocusPerson("bob", 25, new FocusAddress("sf", "94016"))
         )
       );
-      final Either<String, FocusTeam> ok = FocusTeamPath.start()
+      final Either<String, FocusTeam> ok = FocusTeamTelescope.focus()
         .members()
         .each()
         .updateEither(team, p -> Either.right(new FocusPerson(p.name().toUpperCase(), p.age(), p.address())));
@@ -182,7 +184,7 @@ class FocusCodegenTest {
       );
 
       // updateIndexed forwarded from a Step → Path chain.
-      final var bumped = FocusTeamPath.start()
+      final var bumped = FocusTeamTelescope.focus()
         .members()
         .each()
         .updateIndexed(team, (i, p) -> new FocusPerson(p.name() + ":" + i, p.age(), p.address()));

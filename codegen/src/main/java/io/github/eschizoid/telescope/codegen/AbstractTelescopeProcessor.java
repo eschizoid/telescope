@@ -254,10 +254,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   /**
    * Whether the type named by {@code qualifiedName} is itself navigable — i.e. has a generated
-   * {@code <X>Path<R>} via {@code @Focus} (on records), {@code @BeanFocus} (on classes), or one of
-   * the Lombok bean annotations ({@code @lombok.Data} / {@code @lombok.Value} /
+   * {@code <X>Telescope<R>} via {@code @Focus} (on records), {@code @BeanFocus} (on classes), or
+   * one of the Lombok bean annotations ({@code @lombok.Data} / {@code @lombok.Value} /
    * {@code @lombok.Builder}) when the {@code telescope-lombok} module is on the processor path.
-   * Drives the bridge hop's return type: navigable target → {@code <Target>Path<R>}; otherwise
+   * Drives the bridge hop's return type: navigable target → {@code <Target>Telescope<R>}; otherwise
    * terminal {@code Telescope<R, Target>}. Lombok annotations are looked up by string FQN so this
    * module incurs no compile-time Lombok dependency.
    */
@@ -350,8 +350,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var bridgeName = sourceSimpleName + "Bridge";
     final var methodName = "as" + targetSimple;
     if (isNavigablePath(targetFqn)) {
-      out.println("  public " + targetFqn + "Path<R> " + methodName + "() {");
-      out.println("    return new " + targetFqn + "Path<>(path.then(" + bridgeName + ".BRIDGE));");
+      out.println("  public " + targetFqn + "Telescope<R> " + methodName + "() {");
+      out.println("    return new " + targetFqn + "Telescope<>(path.then(" + bridgeName + ".BRIDGE));");
       out.println("  }");
     } else {
       out.println("  public Telescope<R, " + targetFqn + "> " + methodName + "() {");
@@ -366,7 +366,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * annotation named by {@code annotationFqn} and of the given {@code requiredKind} (typically
    * {@link ElementKind#RECORD} for {@code @Focus} or {@link ElementKind#CLASS} for
    * {@code @BeanFocus}); otherwise {@code null}. Drives the navigator's "descend into a sub-Path"
-   * emission: only types that have their own generated {@code <Sub>Path<R>} are routed there;
+   * emission: only types that have their own generated {@code <Sub>Telescope<R>} are routed there;
    * everything else becomes a terminal {@code Telescope<R, T>}.
    */
   protected String navigableType(final TypeMirror type, final ElementKind requiredKind, final String annotationFqn) {
@@ -386,7 +386,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   /**
    * Emit forwarding methods for every public {@link io.github.eschizoid.telescope.Telescope}
    * operation on the wrapped {@code path} field whose focus type is {@code focusType}. Lets a
-   * generated {@code <X>Path<R>} or {@code <X><Cap>Step<R>} stand in for the wrapped {@code
+   * generated {@code <X>Telescope<R>} or {@code <X><Cap>Step<R>} stand in for the wrapped {@code
    * Telescope<R, focusType>}: callers can do {@code update} / {@code updateAsync} / {@code read} /
    * {@code toList} / etc. (including the four effect methods and {@code then}) at any hop without
    * first unwrapping with {@code get()}. The wrapped field is always named {@code path} by
@@ -476,12 +476,12 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * Emit the standard header members of a generated {@code <X>Path<R>} class: the private {@code
-   * path} field, a public constructor (so navigators in <em>other</em> packages — bridge hops,
-   * sub-navigators on records whose targets live in foreign packages — can still construct one), a
-   * {@code start()} static factory, and a {@code get()} accessor. Used by every navigator-emitting
-   * processor (records via {@link FocusProcessor} and beans via {@link #emitBeanNavigator}) so the
-   * boilerplate lives in one place.
+   * Emit the standard header members of a generated {@code <X>Telescope<R>} class: the private
+   * {@code path} field, a public constructor (so navigators in <em>other</em> packages — bridge
+   * hops, sub-navigators on records whose targets live in foreign packages — can still construct
+   * one), a {@code focus()} static factory, and a {@code get()} accessor. Used by every
+   * navigator-emitting processor (records via {@link FocusProcessor} and beans via {@link
+   * #emitBeanNavigator}) so the boilerplate lives in one place.
    */
   protected void emitPathClassHeader(final PrintWriter out, final String pathName, final String targetTypeName) {
     out.println("  private final Telescope<R, " + targetTypeName + "> path;");
@@ -493,7 +493,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         pathName +
         "<" +
         targetTypeName +
-        "> start() { return new " +
+        "> focus() { return new " +
         pathName +
         "<>(Telescope.of(" +
         targetTypeName +
@@ -673,7 +673,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * Emit the full bean-style {@code <X>Path<R>} navigator plus one container step class per
+   * Emit the full bean-style {@code <X>Telescope<R>} navigator plus one container step class per
    * collection-shaped property. Shared between {@link BeanFocusProcessor} (driven by
    * {@code @BeanFocus}) and the out-of-tree {@code LombokFocusProcessor} (driven by
    * {@code @lombok.Data} / {@code @lombok.Value} / {@code @lombok.Builder}).
@@ -682,8 +682,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * @param triggerLabel display name of the triggering annotation, used in error messages (e.g.
    *     {@code "@BeanFocus"} or {@code "@Data/@Value/@Builder"})
    * @param navigableAnnotations annotation FQNs that mark a class as having its own generated Path,
-   *     so that sub-component navigation descends into {@code <Sub>Path<R>} rather than terminating
-   *     in {@code Telescope<R, Sub>}
+   *     so that sub-component navigation descends into {@code <Sub>Telescope<R>} rather than
+   *     terminating in {@code Telescope<R, Sub>}
    */
   protected void emitBeanNavigator(
     final TypeElement pojo,
@@ -698,7 +698,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     //   pathName        The Path class's simple name, derived from pathBaseName.
     final var pojoName = packageRelativeTypeRefOf(pojo);
     final var pathBaseName = flattenedNameOf(pojo);
-    final var pathName = pathBaseName + "Path";
+    final var pathName = pathBaseName + "Telescope";
     final var qualifiedPath = pkg.isEmpty() ? pathName : pkg + "." + pathName;
 
     final var props = beanProperties(pojo);
@@ -780,7 +780,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   // `public static final Telescope<X, PropertyType>` constant per discovered bean property.
   // Containers are emitted as raw container lenses (Telescope<X, List<E>>, etc.) — the consumer
   // composes via .then(...) to descend. The lens expression reuses the same builder-or-no-arg-ctor
-  // rebuild strategy as the <X>Path navigator above, so write semantics are identical.
+  // rebuild strategy as the <X>Telescope navigator above, so write semantics are identical.
   private void emitBeanMetadataHolder(
     final TypeElement pojo,
     final String pojoName,
@@ -791,7 +791,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final boolean useBuilder,
     final String triggerLabel
   ) {
-    final var holderName = pojoBaseName + "Telescope";
+    final var holderName = pojoBaseName + "FieldOptics";
     final var qualifiedHolder = pkg.isEmpty() ? holderName : pkg + "." + holderName;
 
     // Reject up-front: any un-emittable property type kills the whole holder for this POJO
@@ -887,8 +887,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   /**
    * Emit a {@code public static <Pojo> construct(Function<String, Object> values)} on the bean
    * holder. The emitted body mirrors the same write strategy {@link #emitBeanNavigator} already
-   * picked for the {@code <X>Path<R>} lens setters — builder chain when {@code useBuilder} is true,
-   * otherwise no-arg ctor plus per-property setters. The runtime hybrid dispatch in {@code
+   * picked for the {@code <X>Telescope<R>} lens setters — builder chain when {@code useBuilder} is
+   * true, otherwise no-arg ctor plus per-property setters. The runtime hybrid dispatch in {@code
    * MetadataHolderProbe} / {@code Reflective.structuralIso} (both internal to {@code :core}) routes
    * here, bypassing the reflective {@code Beans.BeanWriter} path for annotated beans. The cast
    * types match the constants' {@code fieldType} (boxed primitives, shortened std imports).
@@ -1003,7 +1003,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var elementType = shortenStdImports(rawElementType);
     final var stepMethod = shape.stepMethod();
     final var elementIsNavigable = isAnnotatedClass(rawElementType, navigableAnnotations);
-    final var elementResultType = elementIsNavigable ? elementType + "Path<R>" : "Telescope<R, " + elementType + ">";
+    final var elementResultType = elementIsNavigable
+      ? elementType + "Telescope<R>"
+      : "Telescope<R, " + elementType + ">";
     final var stepCore = switch (shape.containerKind()) {
       case "list" -> "Telescope.<R, " + elementType + ">asList(path).each()";
       case "set" -> "Telescope.<R, " + elementType + ">asSet(path).each()";
@@ -1025,7 +1027,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       elementType +
       ">wrap(io.github.eschizoid.telescope.internal.optics.collections.Traversals.eachIterable()))";
     };
-    final var elementBody = elementIsNavigable ? "new " + elementType + "Path<>(" + stepCore + ")" : stepCore;
+    final var elementBody = elementIsNavigable ? "new " + elementType + "Telescope<>(" + stepCore + ")" : stepCore;
 
     writeInstanceClass(qualifiedStep, stepName, "<R>", javadoc, origin, out -> {
       out.println("  private final Telescope<R, " + containerType + "> path;");
@@ -1043,7 +1045,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * Emit one per-component navigator method on a {@code <X>Path<R>} class. Dispatches on the
+   * Emit one per-component navigator method on a {@code <X>Telescope<R>} class. Dispatches on the
    * component's shape: container → step-class returning method; sub-navigable type → sub-path
    * returning method; scalar → terminal {@code Telescope<R, T>} method.
    *
@@ -1071,8 +1073,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     }
     final var subFq = navigableType(componentType, navigableAnnotations);
     if (subFq != null) {
-      out.println("  public " + subFq + "Path<R> " + componentName + "() {");
-      out.println("    return new " + subFq + "Path<>(path.then(Telescope.lens(" + lensArgs + ")));");
+      out.println("  public " + subFq + "Telescope<R> " + componentName + "() {");
+      out.println("    return new " + subFq + "Telescope<>(path.then(Telescope.lens(" + lensArgs + ")));");
       out.println("  }");
       out.println();
       return;
@@ -1152,7 +1154,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * Whether the class named by {@code qualifiedName} is annotated with any of {@code
    * annotationFqns}. Used to decide a container step's element-result shape: a List/Set/Map element
    * type whose class carries a navigable annotation gets routed into its own {@code
-   * <Element>Path<R>} rather than terminating in {@code Telescope<R, Element>}.
+   * <Element>Telescope<R>} rather than terminating in {@code Telescope<R, Element>}.
    */
   protected boolean isAnnotatedClass(final String qualifiedName, final Set<String> annotationFqns) {
     final var elements = processingEnv.getElementUtils();

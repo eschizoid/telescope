@@ -18,7 +18,7 @@ import java.util.Set;
  * The Hibernate-managed twin of {@code domain.Customer}. Identical shape, but a mutable bean with
  * setters (Hibernate uses them on hydration) and a JPA-managed auto-generated id.
  *
- * <p>{@link BeanFocus} triggers the codegen processor to emit {@code CustomerEntityPath<R>} +
+ * <p>{@link BeanFocus} triggers the codegen processor to emit {@code CustomerEntityTelescope<R>} +
  * {@code CustomerEntityTelescope}. The codegen mapper composes those with the record-side
  * navigators; the runtime mapper ignores both and resolves via reflective method-reference decode.
  */

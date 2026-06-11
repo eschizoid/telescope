@@ -1,10 +1,10 @@
 package io.github.eschizoid.telescope.examples;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.Telescope.ListPath;
-import io.github.eschizoid.telescope.Telescope.MapPath;
-import io.github.eschizoid.telescope.Telescope.OptionalPath;
-import io.github.eschizoid.telescope.Telescope.SetPath;
+import io.github.eschizoid.telescope.Telescope.ListTelescope;
+import io.github.eschizoid.telescope.Telescope.MapTelescope;
+import io.github.eschizoid.telescope.Telescope.OptionalTelescope;
+import io.github.eschizoid.telescope.Telescope.SetTelescope;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -41,9 +41,9 @@ final class ContainerNavigationDemo {
     optionalPathDemo();
   }
 
-  // .list(Accessor) returns ListPath; .each() steps into the elements.
+  // .list(Accessor) returns ListTelescope; .each() steps into the elements.
   private static void listPathDemo() {
-    final ListPath<TagList, Tag> tags = Telescope.of(TagList.class).list(TagList::tags);
+    final ListTelescope<TagList, Tag> tags = Telescope.of(TagList.class).list(TagList::tags);
     final var src = new TagList("alice", List.of(new Tag("a"), new Tag("b"), new Tag("c")));
     final var upper = tags.each().update(src, t -> new Tag(t.name().toUpperCase()));
     System.out.println("[list/each]    before    : " + src);
@@ -51,27 +51,28 @@ final class ContainerNavigationDemo {
     System.out.println("[list/each]    toList    : " + tags.each().toList(src));
   }
 
-  // .setField(Accessor) returns SetPath; renamed from .set in 1.0 to disambiguate from set(S, A).
+  // .setField(Accessor) returns SetTelescope; renamed from .set in 1.0 to disambiguate from set(S,
+  // A).
   private static void setPathDemo() {
-    final SetPath<TagSet, Tag> tags = Telescope.of(TagSet.class).setField(TagSet::tags);
+    final SetTelescope<TagSet, Tag> tags = Telescope.of(TagSet.class).setField(TagSet::tags);
     final var src = new TagSet("alice", new LinkedHashSet<>(List.of(new Tag("a"), new Tag("b"))));
     final var upper = tags.each().update(src, t -> new Tag(t.name().toUpperCase()));
     System.out.println("[setField/each] before   : " + src);
     System.out.println("[setField/each] after    : " + upper);
   }
 
-  // .mapField(Accessor) returns MapPath; .values() updates values, keys preserved.
+  // .mapField(Accessor) returns MapTelescope; .values() updates values, keys preserved.
   private static void mapPathDemo() {
-    final MapPath<TagMap, String, Tag> tagsByKey = Telescope.of(TagMap.class).mapField(TagMap::tagsByKey);
+    final MapTelescope<TagMap, String, Tag> tagsByKey = Telescope.of(TagMap.class).mapField(TagMap::tagsByKey);
     final var src = new TagMap("alice", Map.of("a", new Tag("x"), "b", new Tag("y")));
     final var upper = tagsByKey.values().update(src, t -> new Tag(t.name().toUpperCase()));
     System.out.println("[mapField/values] before : " + src);
     System.out.println("[mapField/values] after  : " + upper);
   }
 
-  // .optional(Accessor) returns OptionalPath; .present() is Affine — empty is a no-op.
+  // .optional(Accessor) returns OptionalTelescope; .present() is Affine — empty is a no-op.
   private static void optionalPathDemo() {
-    final OptionalPath<TagOptional, Tag> tag = Telescope.of(TagOptional.class).optional(TagOptional::tag);
+    final OptionalTelescope<TagOptional, Tag> tag = Telescope.of(TagOptional.class).optional(TagOptional::tag);
 
     final var withTag = new TagOptional("alice", Optional.of(new Tag("a")));
     final var withoutTag = new TagOptional("bob", Optional.empty());

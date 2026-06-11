@@ -6,10 +6,11 @@ import io.github.eschizoid.telescope.annotations.Focus;
  * A postal address. Embedded inside an {@link Order} as both shipping and billing addresses, and
  * persisted as a JPA {@code @Embeddable} on the entity side.
  *
- * <p>{@link Focus @Focus} triggers {@code FocusProcessor} to emit {@code AddressPath<R>} + {@code
- * AddressTelescope}. The shared {@code OrderMappers} config handles the cross-paradigm conversion
- * between {@code Address} and {@code AddressEmbeddable} via {@code Telescope.mapper(...)}; the
- * generated path navigator powers compile-time-typed deep updates in the codegen controller.
+ * <p>{@link Focus @Focus} triggers {@code FocusProcessor} to emit {@code AddressTelescope<R>} +
+ * {@code AddressTelescope}. The shared {@code OrderMappers} config handles the cross-paradigm
+ * conversion between {@code Address} and {@code AddressEmbeddable} via {@code
+ * Telescope.mapper(...)}; the generated path navigator powers compile-time-typed deep updates in
+ * the codegen controller.
  *
  * <p><b>Note on {@code @Bridge}.</b> {@code @Bridge(AddressEmbeddable.class)} would be the natural
  * fit for this scalar same-name pair, but {@code BridgeProcessor} currently generates a path-hop

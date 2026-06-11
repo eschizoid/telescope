@@ -133,13 +133,14 @@ showcase. All changes are additive — no breaking changes vs 0.4.0.
 
 - Internal: holder-aware dispatch sites prepared in `Records` / `Beans` ahead of Phase B wiring.
 - **`Telescope.asList` / `.asSet` / `.asMap` / `.asOptional` no longer short-circuit on `instanceof`.** The four typed-
-  container promotion methods previously had `if (path instanceof ListPath<?, ?> lp) return (ListPath<S, X>) lp;`
-  branches that saved an allocation when the caller already held a typed subclass. The branches required
+  container promotion methods previously had
+  `if (path instanceof ListTelescope<?, ?> lp) return (ListTelescope<S, X>) lp;` branches that saved an allocation when
+  the caller already held a typed subclass. The branches required
   `@SuppressWarnings({"unchecked", "exports", "CastConflictsWithInstanceof"})` because of the wildcard projection; in
-  practice they almost never fired (`.list(getter)` returns `ListPath` directly; `asList(...)` callers are promoting
-  fresh `Telescope<S, List<X>>` builds that need the allocation regardless). Dropped — each method now shrinks to a
-  single `@SuppressWarnings("exports")`. Behaviour-equivalent; observable difference is only instance identity on the
-  rare already-typed-subclass case.
+  practice they almost never fired (`.list(getter)` returns `ListTelescope` directly; `asList(...)` callers are
+  promoting fresh `Telescope<S, List<X>>` builds that need the allocation regardless). Dropped — each method now shrinks
+  to a single `@SuppressWarnings("exports")`. Behaviour-equivalent; observable difference is only instance identity on
+  the rare already-typed-subclass case.
 - **Examples module reshaped from a single `Main.java` orchestrator to per-demo Gradle tasks.** Each demo class
   (`CodegenDemo`, `DeepMappingDemo`, etc.) carries its own `static void main()`; `examples/build.gradle.kts` registers
   one `JavaExec` task per demo plus an aggregator `runAllDemos`. `:examples:runAllDemos` replaces `:examples:run` as the
@@ -167,8 +168,8 @@ Two instance methods that collided with sibling APIs were renamed.
 - **`Beans.autoWriter` 4th rung** — when no builder, no no-arg constructor, and no setters exist, fall back to a single
   public all-args constructor when there's exactly one matching arity AND the class was compiled with `-parameters`.
   Refuses positional fallback to avoid silent-data-shuffle. PR #7.
-- **Typed container subclasses on `Telescope<S, A>`** — sealed permits `ListPath<S, X>`, `SetPath<S, X>`,
-  `MapPath<S, K, V>`, `OptionalPath<S, X>`. Instance navigation now lands on the typed subclass:
+- **Typed container subclasses on `Telescope<S, A>`** — sealed permits `ListTelescope<S, X>`, `SetTelescope<S, X>`,
+  `MapTelescope<S, K, V>`, `OptionalTelescope<S, X>`. Instance navigation now lands on the typed subclass:
   `.list(Accessor<A, List<X>>)`, `.setField(Accessor<A, Set<X>>)`, `.mapField(Accessor<A, Map<K, V>>)`,
   `.optional(Accessor<A, Optional<X>>)`. Each subclass exposes a compile-checked typed terminal (`.each()`, `.values()`,
   `.present()`) that descends via pure lattice composition — no runtime container dispatch. Static factories
@@ -274,9 +275,9 @@ The fluent map-builder chains from earlier 0.x releases are gone. The unified
 - `BeanTo.rename(...)` / `via(...)` / `viaEach(...)` — the field-rename/nested-mapper hooks on the fluent chain. Use
   `Mapping.to(srcAcc, tgtAcc)` and `Mapping.via(srcAcc, tgtAcc, mapper)` rows on the unified factory.
 - `Telescope.each()` no-arg — the runtime-dispatched escape hatch over `List` / `Set` / `Map` / `Optional` / array on
-  any current focus shape. Removed when the typed container subclasses (`ListPath` / `SetPath` / `MapPath` /
-  `OptionalPath`) landed. Use the typed terminal on the subclass instead (`.each()` / `.values()` / `.present()`). PR
-  #8.
+  any current focus shape. Removed when the typed container subclasses (`ListTelescope` / `SetTelescope` /
+  `MapTelescope` / `OptionalTelescope`) landed. Use the typed terminal on the subclass instead (`.each()` / `.values()`
+  / `.present()`). PR #8.
 - **Array containers (`X[]`).** `Traversals.arrayStream` / `arrayUpdate` and the only `java.lang.reflect.Array.get` /
   `set` / `newInstance` calls in the codebase. Arrays no longer participate in traversal. Migration: wrap as `List<X>`
   or `Set<X>`. PR #8.

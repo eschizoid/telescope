@@ -59,7 +59,7 @@ import java.util.function.Predicate;
 public sealed class Telescope<
   S,
   A
-> permits Telescope.ListPath, Telescope.SetPath, Telescope.MapPath, Telescope.OptionalPath {
+> permits Telescope.ListTelescope, Telescope.SetTelescope, Telescope.MapTelescope, Telescope.OptionalTelescope {
 
   /**
    * Serializable functional interface for the method references that drive field navigation ({@code
@@ -91,7 +91,8 @@ public sealed class Telescope<
   // How accessor-based navigation (field/each/eachValue/whenPresent) turns a method reference into
   // a field Lens: records read/rebuild via the canonical constructor, beans via getters +
   // rebuild-via-strategy (see ofBean). Propagated to derived telescopes. Package-private (not
-  // private) because the typed container subclasses (ListPath, SetPath, MapPath, OptionalPath)
+  // private) because the typed container subclasses (ListTelescope, SetTelescope, MapTelescope,
+  // OptionalTelescope)
   // at the bottom of this file access this as an INHERITED field via `this.fieldOptics` — Java's
   // nested-class private-access rule lets a nested class read a private field through an
   // enclosing instance reference, but NOT through inheritance, so private here would break the
@@ -179,8 +180,8 @@ public sealed class Telescope<
   }
 
   /**
-   * Promote a pre-built {@code Telescope<S, List<X>>} to a typed {@link ListPath} so the
-   * compile-checked {@link ListPath#each()} terminal becomes available. Used by codegen's
+   * Promote a pre-built {@code Telescope<S, List<X>>} to a typed {@link ListTelescope} so the
+   * compile-checked {@link ListTelescope#each()} terminal becomes available. Used by codegen's
    * container-step classes and by power users who hold a list-typed telescope built from
    * composition. Pure lattice — no reflection, no runtime check.
    *
@@ -189,23 +190,23 @@ public sealed class Telescope<
    * final Telescope<Company, Department> elements = Telescope.asList(built).each();
    * }</pre>
    */
-  public static <S, X> ListPath<S, X> asList(final Telescope<S, List<X>> path) {
-    return new ListPath<>(path.optic, path.fieldOptics, path.chain);
+  public static <S, X> ListTelescope<S, X> asList(final Telescope<S, List<X>> path) {
+    return new ListTelescope<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Set&lt;X&gt;} paths. */
-  public static <S, X> SetPath<S, X> asSet(final Telescope<S, Set<X>> path) {
-    return new SetPath<>(path.optic, path.fieldOptics, path.chain);
+  public static <S, X> SetTelescope<S, X> asSet(final Telescope<S, Set<X>> path) {
+    return new SetTelescope<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Map&lt;K, V&gt;} paths. */
-  public static <S, K, V> MapPath<S, K, V> asMap(final Telescope<S, Map<K, V>> path) {
-    return new MapPath<>(path.optic, path.fieldOptics, path.chain);
+  public static <S, K, V> MapTelescope<S, K, V> asMap(final Telescope<S, Map<K, V>> path) {
+    return new MapTelescope<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Optional&lt;X&gt;} paths. */
-  public static <S, X> OptionalPath<S, X> asOptional(final Telescope<S, Optional<X>> path) {
-    return new OptionalPath<>(path.optic, path.fieldOptics, path.chain);
+  public static <S, X> OptionalTelescope<S, X> asOptional(final Telescope<S, Optional<X>> path) {
+    return new OptionalTelescope<>(path.optic, path.fieldOptics, path.chain);
   }
 
   /**
@@ -444,59 +445,59 @@ public sealed class Telescope<
   /**
    * Typed-container variant of {@link #field(Accessor)} for {@code List<X>} components. Picked by
    * the user when they want the resulting telescope to carry the list type for later {@link
-   * ListPath#each()} navigation. Returns a {@link ListPath} whose {@code each()} terminal descends
-   * into list elements via pure lattice composition (no runtime container dispatch).
+   * ListTelescope#each()} navigation. Returns a {@link ListTelescope} whose {@code each()} terminal
+   * descends into list elements via pure lattice composition (no runtime container dispatch).
    *
    * <p>Java's type erasure prevents an overload on {@code field(...)} that returns a narrower
    * subclass when the accessor's return type is {@code List<X>} — both overloads erase to {@code
    * field(Accessor)}. This distinct name is the workaround.
    *
    * <pre>{@code
-   * final ListPath<Company, Department> deps =
+   * final ListTelescope<Company, Department> deps =
    *     Telescope.of(Company.class).list(Company::departments);
    * deps.each().field(Department::name).update(co, fn);
    * }</pre>
    */
-  public <X> ListPath<S, X> list(final Accessor<A, List<X>> getter) {
+  public <X> ListTelescope<S, X> list(final Accessor<A, List<X>> getter) {
     final Lens<A, List<X>> lens = lensForAccessor(getter);
-    return new ListPath<>(optic.then(lens), fieldOptics, chain);
+    return new ListTelescope<>(optic.then(lens), fieldOptics, chain);
   }
 
   /**
    * Typed-container variant of {@link #field(Accessor)} for {@code Set<X>} components. Returns a
-   * {@link SetPath} carrying the set type for later {@link SetPath#each()} navigation.
+   * {@link SetTelescope} carrying the set type for later {@link SetTelescope#each()} navigation.
    *
    * <p>Named {@code setField} (rather than {@code set}) to avoid cognitive collision with the write
    * terminal {@link #set(Object, Object)} — they take different argument types, but the shared verb
    * load is real enough that disambiguation pays off at the call site.
    */
-  public <X> SetPath<S, X> setField(final Accessor<A, Set<X>> getter) {
+  public <X> SetTelescope<S, X> setField(final Accessor<A, Set<X>> getter) {
     final Lens<A, Set<X>> lens = lensForAccessor(getter);
-    return new SetPath<>(optic.then(lens), fieldOptics, chain);
+    return new SetTelescope<>(optic.then(lens), fieldOptics, chain);
   }
 
   /**
    * Typed-container variant of {@link #field(Accessor)} for {@code Map<K, V>} components. Returns a
-   * {@link MapPath} carrying the map type for later {@link MapPath#values()} navigation.
+   * {@link MapTelescope} carrying the map type for later {@link MapTelescope#values()} navigation.
    *
    * <p>Named {@code mapField} (rather than {@code map}) to disambiguate from the sibling static
    * deep-conversion factory {@link #map(Class, Class,
    * io.github.eschizoid.telescope.mapping.MapStep...)} — those do conceptually different things and
    * share the same verb otherwise.
    */
-  public <K, V> MapPath<S, K, V> mapField(final Accessor<A, Map<K, V>> getter) {
+  public <K, V> MapTelescope<S, K, V> mapField(final Accessor<A, Map<K, V>> getter) {
     final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
-    return new MapPath<>(optic.then(lens), fieldOptics, chain);
+    return new MapTelescope<>(optic.then(lens), fieldOptics, chain);
   }
 
   /**
    * Typed-container variant of {@link #field(Accessor)} for {@code Optional<X>} components. Returns
-   * an {@link OptionalPath} carrying the optional type for later {@link OptionalPath#present()}
-   * navigation.
+   * an {@link OptionalTelescope} carrying the optional type for later {@link
+   * OptionalTelescope#present()} navigation.
    */
-  public <X> OptionalPath<S, X> optional(final Accessor<A, Optional<X>> getter) {
+  public <X> OptionalTelescope<S, X> optional(final Accessor<A, Optional<X>> getter) {
     final Lens<A, Optional<X>> lens = lensForAccessor(getter);
-    return new OptionalPath<>(optic.then(lens), fieldOptics, chain);
+    return new OptionalTelescope<>(optic.then(lens), fieldOptics, chain);
   }
 
   /**
@@ -517,7 +518,7 @@ public sealed class Telescope<
    * }</pre>
    *
    * <p>The compile-time-safe alternative for paths-as-data is the {@code @Focus} annotation
-   * processor — it generates a typed {@code <X>Path<R>} navigator at build time.
+   * processor — it generates a typed {@code <X>Telescope<R>} navigator at build time.
    */
   public <B> Telescope<S, B> fieldByName(final String fieldName) {
     final Lens<A, B> fieldLens = Records.fieldLens(fieldName);
@@ -1178,7 +1179,7 @@ public sealed class Telescope<
       final var rawName = methodNameOf(getter);
       // The holder names its constants by the property name (lowerCamel, no getX/isX prefix), to
       // match how @BeanFocus codegen emits them — Beans.propertyOf strips the same prefixes the
-      // codegen would have stripped when naming the per-property method on <X>Path.
+      // codegen would have stripped when naming the per-property method on <X>Telescope.
       final var property = Beans.propertyOf(rawName);
       final var holderLens = MetadataHolderProbe.<A, B>lensFromHolder(implClass, property);
       if (holderLens != null) return holderLens;
@@ -1202,9 +1203,9 @@ public sealed class Telescope<
    * .each(Accessor)} chains land here transparently — the typed terminal is available whenever a
    * path ends at a list-typed focus.
    */
-  public static final class ListPath<S, X> extends Telescope<S, List<X>> {
+  public static final class ListTelescope<S, X> extends Telescope<S, List<X>> {
 
-    ListPath(final Traversal<S, List<X>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
+    ListTelescope(final Traversal<S, List<X>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
       super(optic, fieldOptics, chain);
     }
 
@@ -1219,9 +1220,9 @@ public sealed class Telescope<
    * #each()} terminal that descends into set elements via {@link Traversals#eachSet()}. Returned by
    * the {@code .field(Accessor<A, Set<X>>)} overload on the parent.
    */
-  public static final class SetPath<S, X> extends Telescope<S, Set<X>> {
+  public static final class SetTelescope<S, X> extends Telescope<S, Set<X>> {
 
-    SetPath(final Traversal<S, Set<X>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
+    SetTelescope(final Traversal<S, Set<X>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
       super(optic, fieldOptics, chain);
     }
 
@@ -1236,9 +1237,9 @@ public sealed class Telescope<
    * #values()} terminal that descends into the map's values via {@link Traversals#eachMapValue()},
    * preserving keys. Returned by the {@code .field(Accessor<A, Map<K, V>>)} overload.
    */
-  public static final class MapPath<S, K, V> extends Telescope<S, Map<K, V>> {
+  public static final class MapTelescope<S, K, V> extends Telescope<S, Map<K, V>> {
 
-    MapPath(final Traversal<S, Map<K, V>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
+    MapTelescope(final Traversal<S, Map<K, V>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
       super(optic, fieldOptics, chain);
     }
 
@@ -1253,9 +1254,13 @@ public sealed class Telescope<
    * #present()} terminal that descends into the payload when present (no-op when empty) via {@link
    * Traversals#eachOptional()}. Returned by the {@code .field(Accessor<A, Optional<X>>)} overload.
    */
-  public static final class OptionalPath<S, X> extends Telescope<S, Optional<X>> {
+  public static final class OptionalTelescope<S, X> extends Telescope<S, Optional<X>> {
 
-    OptionalPath(final Traversal<S, Optional<X>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
+    OptionalTelescope(
+      final Traversal<S, Optional<X>> optic,
+      final FieldOptics fieldOptics,
+      final Function<S, S> chain
+    ) {
       super(optic, fieldOptics, chain);
     }
 

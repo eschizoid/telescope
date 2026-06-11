@@ -18,7 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Verifies that {@code Customer.tags: Set<String>} round-trips end-to-end and that the typed {@code
- * SetPath.each()} navigation works on the live domain.
+ * SetTelescope.each()} navigation works on the live domain.
  *
  * <p>Four angles:
  *

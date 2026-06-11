@@ -4,7 +4,7 @@ import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceHeader;
 import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceHeaderBridge;
 import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLine;
 import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLineBridge;
-import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLinePath;
+import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLineTelescope;
 import io.github.eschizoid.telescope.demo.invoicing.persistence.InvoiceHeaderEntity;
 import io.github.eschizoid.telescope.demo.invoicing.persistence.InvoiceLineEntity;
 import org.springframework.http.ResponseEntity;
@@ -34,15 +34,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class InvoiceBridgeController {
 
   /**
-   * Demonstrates the {@code InvoiceLinePath.start().asInvoiceLineEntity()} navigator hop. {@code
-   * BridgeProcessor} generated the {@code asInvoiceLineEntity()} method on the source Path; because
-   * {@code InvoiceLineEntity} is {@code @BeanFocus}-navigable, the hop returns {@code
+   * Demonstrates the {@code InvoiceLineTelescope.focus().asInvoiceLineEntity()} navigator hop.
+   * {@code BridgeProcessor} generated the {@code asInvoiceLineEntity()} method on the source Path;
+   * because {@code InvoiceLineEntity} is {@code @BeanFocus}-navigable, the hop returns {@code
    * InvoiceLineEntityPath<InvoiceLine>} and {@code .read(line)} runs the underlying Telescope
    * through the {@code BRIDGE} Iso to materialise the entity.
    */
   @PostMapping("/lines/forward")
   public ResponseEntity<InvoiceLineEntity> lineForward(@RequestBody final InvoiceLine line) {
-    final var entity = InvoiceLinePath.start().asInvoiceLineEntity().read(line);
+    final var entity = InvoiceLineTelescope.focus().asInvoiceLineEntity().read(line);
     return ResponseEntity.ok(entity);
   }
 

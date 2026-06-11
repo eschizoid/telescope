@@ -15,12 +15,13 @@ import javax.lang.model.element.TypeElement;
 
 /**
  * Annotation processor for {@link io.github.eschizoid.telescope.annotations.Focus}. For each
- * annotated record, emits a fluent typed path navigator: a sibling class {@code <Record>Path<R>}
- * whose methods descend into the record's components, plus one container-step class per
- * collection-shaped component. The navigator gives the reading flow of the reflective DSL —
+ * annotated record, emits a fluent typed path navigator: a sibling class {@code
+ * <Record>Telescope<R>} whose methods descend into the record's components, plus one container-step
+ * class per collection-shaped component. The navigator gives the reading flow of the reflective DSL
+ * —
  *
  * <pre>{@code
- * CompanyPath.start().departments().each().teams().each().users().each().email()
+ * CompanyPath.focus().departments().each().teams().each().users().each().email()
  * }</pre>
  *
  * with end-to-end compile-time type checking, and the method bodies use {@link
@@ -28,10 +29,11 @@ import javax.lang.model.element.TypeElement;
  * java.util.function.BiFunction)} plus the no-arg {@code .each()} only — fully reflection-free.
  *
  * <p>Each scalar component emits a terminal {@code Telescope<R, T>} method; each sub-record
- * component emits a {@code <Sub>Path<R>}-returning method (the sub-record must also be annotated
- * with {@code @Focus}); each container component (List/Set/Iterable, Map values, Optional) emits a
- * container step whose {@code each} / {@code eachValue} / {@code whenPresent} method returns the
- * element's {@code Path} (if it's a record) or a terminal {@code Telescope<R, E>}.
+ * component emits a {@code <Sub>Telescope<R>}-returning method (the sub-record must also be
+ * annotated with {@code @Focus}); each container component (List/Set/Iterable, Map values,
+ * Optional) emits a container step whose {@code each} / {@code eachValue} / {@code whenPresent}
+ * method returns the element's {@code Path} (if it's a record) or a terminal {@code Telescope<R,
+ * E>}.
  *
  * <p>Guards (each reported as a compile error on the offending element):
  *
@@ -77,7 +79,7 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
   private void generate(final TypeElement recordType) {
     final var pkg = processingEnv.getElementUtils().getPackageOf(recordType).getQualifiedName().toString();
     final var recordName = recordType.getSimpleName().toString();
-    final var pathName = recordName + "Path";
+    final var pathName = recordName + "Telescope";
     final var qualifiedPath = pkg.isEmpty() ? pathName : pkg + "." + pathName;
     final List<? extends RecordComponentElement> components = recordType.getRecordComponents();
 
@@ -120,7 +122,7 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
     final String pkg,
     final List<? extends RecordComponentElement> components
   ) {
-    final var holderName = recordName + "Telescope";
+    final var holderName = recordName + "FieldOptics";
     final var qualifiedHolder = pkg.isEmpty() ? holderName : pkg + "." + holderName;
 
     // Reject up-front: any un-emittable component type kills the whole holder for this record
@@ -234,7 +236,7 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
 
   // Emits one navigator method for the given record component, dispatching on its shape:
   // container (List/Set/Iterable, Map, Optional) -> per-component step class; sub-record ->
-  // <Sub>Path<R>; scalar -> terminal Telescope<R, T>.
+  // <Sub>Telescope<R>; scalar -> terminal Telescope<R, T>.
   private void emitComponentMethod(
     final PrintWriter out,
     final String recordName,
@@ -271,7 +273,7 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
   }
 
   // The annotation set used by emitNavigatorMethod / emitContainerStep to decide whether a
-  // sub-component's element type has its own generated <X>Path<R>.
+  // sub-component's element type has its own generated <X>Telescope<R>.
   private static final Set<String> FOCUS_ONLY = Set.of("io.github.eschizoid.telescope.annotations.Focus");
 
   // The canonical-constructor setter expression for a target component: (s, v) -> new Record(args)

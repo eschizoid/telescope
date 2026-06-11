@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 /**
  * Tests {@link MetadataHolderProbe} — the {@link ClassValue}-cached runtime probe that
  * short-circuits the reflective dispatch sites in {@link Telescope} when a sibling {@code
- * <X>Telescope} metadata holder is present.
+ * <X>FieldOptics} metadata holder is present.
  *
  * <p>The top-level fixture {@link ProbedRecord} carries {@code @Focus}, so {@code FocusProcessor}
  * generates a sibling {@code ProbedRecordTelescope} holder during test compilation. The "no holder"
@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 class MetadataHolderProbeTest {
 
   @Test
-  @DisplayName("probeFor returns a HolderRef when <X>Telescope sits next to X on the classpath")
+  @DisplayName("probeFor returns a HolderRef when <X>FieldOptics sits next to X on the classpath")
   void probeFindsHolder() {
     final var maybeHolder = MetadataHolderProbe.probeFor(ProbedRecord.class);
     assertTrue(
@@ -33,9 +33,9 @@ class MetadataHolderProbeTest {
     );
     final var holder = maybeHolder.get();
     assertEquals(
-      ProbedRecord.class.getName() + "Telescope",
+      ProbedRecord.class.getName() + "FieldOptics",
       holder.holderClass().getName(),
-      "holder class name should be <X>Telescope in the same package as X"
+      "holder class name should be <X>FieldOptics in the same package as X"
     );
     // FocusProcessor emits one Telescope<ProbedRecord, FieldType> constant per record component.
     assertEquals(2, holder.constantsByName().size(), "expected one constant per record component");
@@ -44,7 +44,7 @@ class MetadataHolderProbeTest {
   }
 
   @Test
-  @DisplayName("probeFor returns Optional.empty for a class with no sibling <X>Telescope holder")
+  @DisplayName("probeFor returns Optional.empty for a class with no sibling <X>FieldOptics holder")
   void probeReturnsEmptyForUnannotatedClass() {
     final var maybeHolder = MetadataHolderProbe.probeFor(UnannotatedRecord.class);
     assertTrue(maybeHolder.isEmpty(), "expected no holder for an unannotated record; got " + maybeHolder);
@@ -64,7 +64,7 @@ class MetadataHolderProbeTest {
   }
 
   @Test
-  @DisplayName("lensFromHolder returns null when no <X>Telescope sibling is on the classpath")
+  @DisplayName("lensFromHolder returns null when no <X>FieldOptics sibling is on the classpath")
   void lensFromHolderReturnsNullWhenAbsent() {
     final var result = MetadataHolderProbe.lensFromHolder(UnannotatedRecord.class, "name");
     assertNull(result, "absent holder should produce a null Lens so dispatch can fall through");

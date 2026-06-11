@@ -6,7 +6,7 @@ import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceHeader;
 import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceHeaderBridge;
 import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLine;
 import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLineBridge;
-import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLinePath;
+import io.github.eschizoid.telescope.demo.invoicing.domain.InvoiceLineTelescope;
 import io.github.eschizoid.telescope.demo.invoicing.persistence.InvoiceLineEntity;
 import java.math.BigDecimal;
 import java.util.List;
@@ -38,13 +38,13 @@ class InvoiceBridgeTest {
   }
 
   @Test
-  @DisplayName("InvoiceLinePath.start().asInvoiceLineEntity() reads through the BRIDGE Iso")
+  @DisplayName("InvoiceLineTelescope.focus().asInvoiceLineEntity() reads through the BRIDGE Iso")
   void bridgeHopFromPathNavigator() {
     final var line = new InvoiceLine("SKU-B", 1, new BigDecimal("49.50"));
 
     // Compile-time-bound hop: BridgeProcessor wired the navigator's asInvoiceLineEntity() method
     // to return a typed continuation (InvoiceLineEntityPath because the target is @BeanFocus).
-    final InvoiceLineEntity entity = InvoiceLinePath.start().asInvoiceLineEntity().read(line);
+    final InvoiceLineEntity entity = InvoiceLineTelescope.focus().asInvoiceLineEntity().read(line);
 
     assertThat(entity.getSku()).isEqualTo("SKU-B");
     assertThat(entity.getQty()).isEqualTo(1);

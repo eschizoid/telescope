@@ -18,7 +18,7 @@ import org.springframework.web.client.RestClient;
  * server-side deep update through the codegen-emitted typed navigator on a real round trip.
  */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
-class OrderPathFlowTest {
+class OrderTelescopeFlowTest {
 
   @LocalServerPort
   private int port;
@@ -34,7 +34,7 @@ class OrderPathFlowTest {
   void postRoundTripPreservesShape() {
     final var body = client
       .post()
-      .uri("/orders/path")
+      .uri("/orders/telescope")
       .contentType(MediaType.APPLICATION_JSON)
       .body(OrderFixtures.sampleOrder())
       .retrieve()
@@ -60,7 +60,7 @@ class OrderPathFlowTest {
     // round-trip lands a real Order with discounted prices.
     final var created = client
       .post()
-      .uri("/orders/path")
+      .uri("/orders/telescope")
       .contentType(MediaType.APPLICATION_JSON)
       .body(OrderFixtures.sampleOrder())
       .retrieve()
@@ -72,7 +72,7 @@ class OrderPathFlowTest {
     //   4950 * 90 / 100 = 4455 → 44.55
     final var discounted = client
       .post()
-      .uri("/orders/path/" + id + "/discount?percent=10")
+      .uri("/orders/telescope/" + id + "/discount?percent=10")
       .retrieve()
       .body(Order.class);
 
@@ -89,7 +89,7 @@ class OrderPathFlowTest {
   void normaliseEmailsAppliesDeepUpdateThroughHolderConstants() {
     final var created = client
       .post()
-      .uri("/orders/path")
+      .uri("/orders/telescope")
       .contentType(MediaType.APPLICATION_JSON)
       .body(OrderFixtures.sampleOrder())
       .retrieve()
@@ -97,7 +97,7 @@ class OrderPathFlowTest {
     assertThat(created).isNotNull();
     final var id = created.id();
 
-    final var normalised = client.post().uri("/orders/path/normalise-emails/" + id).retrieve().body(Order.class);
+    final var normalised = client.post().uri("/orders/telescope/normalise-emails/" + id).retrieve().body(Order.class);
 
     assertThat(normalised).isNotNull();
     assertThat(normalised.customer().email()).isEqualTo("alice@example.com");

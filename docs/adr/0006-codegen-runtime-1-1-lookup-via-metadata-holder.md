@@ -21,7 +21,7 @@ and getter/setter resolution. Those probes:
   architecture diagram.
 
 [ADR-0004](0004-runtime-and-codegen-strategy-separate.md) deliberately kept runtime and codegen as **separate
-strategies**. Users who annotate switch their call sites to `UserPath.start().name()` — different API entry. Users who
+strategies**. Users who annotate switch their call sites to `UserPath.focus().name()` — different API entry. Users who
 don't, stay on `Telescope.of(User.class).field(User::name)` with the reflective metadata probe.
 
 The drawback of that split: a user who **wants** codegen ergonomics (no reflection) **and** the runtime entry point

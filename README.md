@@ -452,24 +452,24 @@ call; classes the auto-detect can't handle get a `WriteHint.writeBean(target, st
 
 ### Build
 
-| Method                                                             | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Telescope.of(Class<S>)`                                           | Start at the root type.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `Telescope.lens(getter, setter)`                                   | Build a single-focus telescope directly, no reflection. Used by `@Focus` codegen; handy for hot paths.                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `Telescope.from(A).to(B).using(fwd, back)`                         | Build a `Telescope<A, B>` backed by an `Iso` — bidirectional type conversion that composes into longer paths.                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `Telescope.map(A.class, B.class, MapStep...)`                      | **Recommended.** Deep recursive mapping for any combination of records and POJOs (record↔record, POJO↔POJO, cross-paradigm at any depth). Same-name components identity-map, nested records/beans recurse, `List`/`Set`/`Map`/`Optional` lift the inner Iso through the container automatically. Override rows (`Mapping.to`, `Mapping.via`) and write-strategy hints (`WriteHint.writeBean(target, strategy)`) apply at any depth where their type pair appears. Sibling `Telescope.mapper(...)` returns `Mapper<A, B>`.     |
-| `Telescope.ofBean(Class<P>)`                                       | Start a native POJO telescope — `.field`/`.each` navigate the bean directly, rebuilding via strategy (see [Working with POJOs](#working-with-pojos)).                                                                                                                                                                                                                                                                                                                                                                         |
-| `.field(Class::accessor)`                                          | Descend into a record field via method reference. **Compile-checked.**                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `.fieldByName(String)`                                             | Descend by field name — the runtime escape hatch for late-binding (config-driven paths). **Runtime-checked:** wrong name → runtime error.                                                                                                                                                                                                                                                                                                                                                                                     |
-| `.fieldByName(String, Class<B>)`                                   | Same as above with an inline type witness for cleaner `var` inference. The `Class<B>` is inference sugar, **not validated** against the actual field.                                                                                                                                                                                                                                                                                                                                                                         |
-| `.each(Class::collectionAccessor)`                                 | Descend into a `List`/`Set`/`Iterable` field and broadcast over elements. Element type inferred from the method ref. **Compile-checked.**                                                                                                                                                                                                                                                                                                                                                                                     |
-| `.list(Class::accessor)` / `.setField` / `.mapField` / `.optional` | Typed-container variants: keep the container type for later traversal. Return `ListPath<S, X>` / `SetPath<S, X>` / `MapPath<S, K, V>` / `OptionalPath<S, X>` — sealed subclasses of `Telescope` whose typed terminal (`.each()` / `.values()` / `.present()`) descends into elements via pure lattice composition. **Compile-checked, no runtime dispatch.** `setField` / `mapField` (1.0 rename) disambiguate from the write terminal `set(S, A)` and the static deep-conversion factory `Telescope.map(Class, Class, ...)`. |
-| `Telescope.asList(path)` / `asSet` / `asMap` / `asOptional`        | Promote a pre-built `Telescope<S, List<X>>` (or `Set`/`Map`/`Optional`) into the typed subclass so the compile-checked terminal becomes available. Useful when composing path fragments.                                                                                                                                                                                                                                                                                                                                      |
-| `.eachValue(Class::mapAccessor)`                                   | Like `each`, but for `Map` values (keys preserved).                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `.whenPresent(Class::optionalAccessor)`                            | Like `each`, but for `Optional` — no-op if empty.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `.as(Class)`                                                       | Narrow to a sealed-type case. Non-matching values pass through.                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `.filter(Predicate)`                                               | Restrict to elements matching the predicate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `.then(otherTelescope)`                                            | Compose two telescopes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Method                                                             | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Telescope.of(Class<S>)`                                           | Start at the root type.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `Telescope.lens(getter, setter)`                                   | Build a single-focus telescope directly, no reflection. Used by `@Focus` codegen; handy for hot paths.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `Telescope.from(A).to(B).using(fwd, back)`                         | Build a `Telescope<A, B>` backed by an `Iso` — bidirectional type conversion that composes into longer paths.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `Telescope.map(A.class, B.class, MapStep...)`                      | **Recommended.** Deep recursive mapping for any combination of records and POJOs (record↔record, POJO↔POJO, cross-paradigm at any depth). Same-name components identity-map, nested records/beans recurse, `List`/`Set`/`Map`/`Optional` lift the inner Iso through the container automatically. Override rows (`Mapping.to`, `Mapping.via`) and write-strategy hints (`WriteHint.writeBean(target, strategy)`) apply at any depth where their type pair appears. Sibling `Telescope.mapper(...)` returns `Mapper<A, B>`.                         |
+| `Telescope.ofBean(Class<P>)`                                       | Start a native POJO telescope — `.field`/`.each` navigate the bean directly, rebuilding via strategy (see [Working with POJOs](#working-with-pojos)).                                                                                                                                                                                                                                                                                                                                                                                             |
+| `.field(Class::accessor)`                                          | Descend into a record field via method reference. **Compile-checked.**                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `.fieldByName(String)`                                             | Descend by field name — the runtime escape hatch for late-binding (config-driven paths). **Runtime-checked:** wrong name → runtime error.                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `.fieldByName(String, Class<B>)`                                   | Same as above with an inline type witness for cleaner `var` inference. The `Class<B>` is inference sugar, **not validated** against the actual field.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `.each(Class::collectionAccessor)`                                 | Descend into a `List`/`Set`/`Iterable` field and broadcast over elements. Element type inferred from the method ref. **Compile-checked.**                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `.list(Class::accessor)` / `.setField` / `.mapField` / `.optional` | Typed-container variants: keep the container type for later traversal. Return `ListTelescope<S, X>` / `SetTelescope<S, X>` / `MapTelescope<S, K, V>` / `OptionalTelescope<S, X>` — sealed subclasses of `Telescope` whose typed terminal (`.each()` / `.values()` / `.present()`) descends into elements via pure lattice composition. **Compile-checked, no runtime dispatch.** `setField` / `mapField` (1.0 rename) disambiguate from the write terminal `set(S, A)` and the static deep-conversion factory `Telescope.map(Class, Class, ...)`. |
+| `Telescope.asList(path)` / `asSet` / `asMap` / `asOptional`        | Promote a pre-built `Telescope<S, List<X>>` (or `Set`/`Map`/`Optional`) into the typed subclass so the compile-checked terminal becomes available. Useful when composing path fragments.                                                                                                                                                                                                                                                                                                                                                          |
+| `.eachValue(Class::mapAccessor)`                                   | Like `each`, but for `Map` values (keys preserved).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `.whenPresent(Class::optionalAccessor)`                            | Like `each`, but for `Optional` — no-op if empty.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `.as(Class)`                                                       | Narrow to a sealed-type case. Non-matching values pass through.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `.filter(Predicate)`                                               | Restrict to elements matching the predicate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `.then(otherTelescope)`                                            | Compose two telescopes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ### Read
 
@@ -576,15 +576,16 @@ values.update(index, v -> v * 10);
 ### Typed container leaves (pre-built fragments)
 
 When you want a path that ends _at_ the container (not at its elements), use the typed `.list(Class::accessor)` /
-`.setField(...)` / `.mapField(...)` / `.optional(...)` instance methods. They return narrower subclasses (`ListPath`,
-`SetPath`, `MapPath`, `OptionalPath`) whose typed terminal step (`.each()` / `.values()` / `.present()`) descends into
-elements with zero runtime container dispatch — pure lattice composition, fully compile-checked.
+`.setField(...)` / `.mapField(...)` / `.optional(...)` instance methods. They return narrower subclasses
+(`ListTelescope`, `SetTelescope`, `MapTelescope`, `OptionalTelescope`) whose typed terminal step (`.each()` /
+`.values()` / `.present()`) descends into elements with zero runtime container dispatch — pure lattice composition,
+fully compile-checked.
 
 ```java
 record Box(List<String> tags) {}
 
 // Build the list-typed path once; descend on demand.
-final ListPath<Box, String> tags = Telescope.of(Box.class).list(Box::tags);
+final ListTelescope<Box, String> tags = Telescope.of(Box.class).list(Box::tags);
 final Telescope<Box, String> elements = tags.each(); // typed .each() — compile-checked
 
 elements.update(box, String::toUpperCase);
@@ -592,7 +593,7 @@ elements.update(box, String::toUpperCase);
 // Set / Map / Optional follow the same shape.
 record Cart(Set<Item> items) {}
 
-final SetPath<Cart, Item> items = Telescope.of(Cart.class).setField(Cart::items);
+final SetTelescope<Cart, Item> items = Telescope.of(Cart.class).setField(Cart::items);
 items.each().field(Item::sku).update(cart, String::toUpperCase);
 ```
 
@@ -1132,7 +1133,7 @@ Telescope.of(Company.class)
   .update(company, String::toLowerCase);
 
 // Compile-time, reflection-free — same Telescope, generator-built
-CompanyPath.start()
+CompanyPath.focus()
   .departments().each().teams().each()
   .users().each().email()
   .update(company, String::toLowerCase);
@@ -1149,7 +1150,7 @@ import io.github.eschizoid.telescope.annotations.Focus;
 // Generated: <X>Path<R> per annotated type plus a step class per collection-shaped component.
 // Usage reads like the reflective DSL — but every hop is type-checked by javac and every read /
 // rebuild is a direct method-ref + constructor call (no reflection):
-final Telescope<Company, String> userNames = CompanyPath.start()
+final Telescope<Company, String> userNames = CompanyPath.focus()
   .teams().each()        // step over List<Team> → TeamPath<Company>
   .users().each()        // step over List<User> → UserPath<Company>
   .name();               // terminal Telescope<Company, String>
@@ -1157,7 +1158,7 @@ final Telescope<Company, String> userNames = CompanyPath.start()
 final Company shouted = userNames.update(company, String::toUpperCase);
 
 // Single fields are just as direct:
-UserPath.start().address().city().update(alice, String::toUpperCase);
+UserPath.focus().address().city().update(alice, String::toUpperCase);
 ```
 
 Each scalar component yields a terminal `Telescope<R, T>`; each sub-record component (also `@Focus`-annotated) yields a
@@ -1171,7 +1172,7 @@ gives you.
 surface — `read` / `find` / `toList` / `count` / `exists` / `set` / `update` / `updateIndexed` / `toListIndexed` /
 `then` plus the four effect methods `updateAsync` (with or without `Executor`) / `updateOptional` / `updateEither` /
 `updateValidated`. You don't need to terminate with `.get()` first; the navigator stands in for the wrapped Telescope at
-any intermediate hop. So `CompanyPath.start().teams().each().users().each().updateAsync(company, svc::lookup, pool)`
+any intermediate hop. So `CompanyPath.focus().teams().each().users().each().updateAsync(company, svc::lookup, pool)`
 returns a `CompletableFuture<Company>` directly, with the effect threaded through the generated chain.
 
 **Bridge hops — conversion as a navigator step.** If a type carries both `@Focus`/`@BeanFocus` (so it has a `*Path`) and
@@ -1189,7 +1190,7 @@ record UserDto(String id, String email) {}
 
 // Navigate through the bridge into a target field, then update. The Iso round-trips, so the
 // result is a new UserEntity:
-final UserEntity lowered = UserEntityPath.start()
+final UserEntity lowered = UserEntityPath.focus()
   .asUserDto() // → UserDtoPath<UserEntity>
   .email() // → Telescope<UserEntity, String>
   .update(entity, String::toLowerCase);
@@ -1222,7 +1223,7 @@ import io.github.eschizoid.telescope.annotations.BeanFocus;
 @BeanFocus public class UserBean { /* getId/getEmail + setters, or a static builder() */ }
 
 // Generated alongside: UserBeanPath<R> with the same fluent surface as a record navigator.
-UserBeanPath.start().email().update(user, String::toLowerCase);   // no reflection
+UserBeanPath.focus().email().update(user, String::toLowerCase);   // no reflection
 ```
 
 ---
@@ -1448,8 +1449,8 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
      `WriteHint.writeBean(target, strategy)` row instead of `.viaFields()` / `.viaConstructor()` / `.viaBuilder()`.
    - **`Telescope.each()` no-arg (runtime-dispatched escape hatch) was deleted**; arrays are no longer first-class
      containers (wrap as `List`). Replacement: the typed `.list/.set/.map/.optional(accessor)` instance methods return
-     narrower subclasses (`ListPath` / `SetPath` / `MapPath` / `OptionalPath`) whose `.each()` / `.values()` /
-     `.present()` terminals are compile-checked; pre-built `Telescope<S, List<X>>` paths use
+     narrower subclasses (`ListTelescope` / `SetTelescope` / `MapTelescope` / `OptionalTelescope`) whose `.each()` /
+     `.values()` / `.present()` terminals are compile-checked; pre-built `Telescope<S, List<X>>` paths use
      `Telescope.asList(path).each()` (and friends).
    - **`.field(String)` / `.field(String, Class<B>)` renamed to `.fieldByName(...)`** so the runtime-check nature is
      loud at the call site (see constraint #6). Source-incompatible. No `@Deprecated` shim — clean break.

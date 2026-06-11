@@ -3,9 +3,9 @@ package io.github.eschizoid.telescope.demo.spring.api;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.demo.spring.domain.LineItem;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
-import io.github.eschizoid.telescope.demo.spring.domain.OrderPath;
+import io.github.eschizoid.telescope.demo.spring.domain.OrderTelescope;
 import io.github.eschizoid.telescope.demo.spring.persistence.LineItemEntity;
-import io.github.eschizoid.telescope.demo.spring.persistence.LineItemEntityPath;
+import io.github.eschizoid.telescope.demo.spring.persistence.LineItemEntityTelescope;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderEntity;
 import io.github.eschizoid.telescope.demo.spring.persistence.OrderRepository;
 import org.springframework.http.ResponseEntity;
@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
  * Codegen-driven flavour of the order CRUD surface. Identical API contract and identical
  * persistence behaviour to {@link OrderController}; the {@code Mapper<Order, OrderEntity>} bean is
  * shared. What differs is how this controller does <b>deep navigation</b>: it consumes the typed
- * {@code OrderPath<R>} navigator emitted by the {@code FocusProcessor} from the {@link
+ * {@code OrderTelescope<R>} navigator emitted by the {@code FocusProcessor} from the {@link
  * io.github.eschizoid.telescope.annotations.Focus @Focus} annotations on the records.
  *
  * <p>The runtime controller's pre-write email normalisation is:
@@ -37,7 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>This controller's equivalent:
  *
  * <pre>{@code
- * OrderPath.start()
+ * OrderTelescope.focus()
  *     .customer()
  *     .email()
  *     .update(request, normalise);
@@ -65,14 +65,14 @@ import org.springframework.web.bind.annotation.RestController;
  * </ul>
  */
 @RestController
-@RequestMapping("/orders/path")
-public class OrderPathController {
+@RequestMapping("/orders/telescope")
+public class OrderTelescopeController {
 
   private final Mapper<Order, OrderEntity> orderMapper;
   private final Mapper<LineItem, LineItemEntity> lineItemMapper;
   private final OrderRepository orderRepository;
 
-  public OrderPathController(
+  public OrderTelescopeController(
     final Mapper<Order, OrderEntity> orderMapper,
     final Mapper<LineItem, LineItemEntity> lineItemMapper,
     final OrderRepository orderRepository
@@ -86,10 +86,10 @@ public class OrderPathController {
   @Transactional
   public ResponseEntity<Order> create(@RequestBody final Order request) {
     // Codegen path: the typed OrderPath navigator descends customer.email at compile time.
-    // The processor generated `OrderPath#customer()` returning a CustomerPath<Order>, whose
+    // The processor generated `OrderPath#customer()` returning a CustomerTelescope<Order>, whose
     // `email()` method returns a Telescope<Order, String> — fully compile-checked, no runtime
     // decode, no SerializedLambda crackopen, no probe miss.
-    final var normalised = OrderPath.start()
+    final var normalised = OrderTelescope.focus()
       .customer()
       .email()
       .update(request, email -> email == null ? null : email.toLowerCase());
@@ -115,15 +115,16 @@ public class OrderPathController {
     @RequestParam(defaultValue = "10") final int percent
   ) {
     // Demonstrates Mapper.asTelescope() composing across paradigms in one typed pipeline:
-    //   1. OrderPath.start().lineItems().each().get() — typed record-side traversal down to a
+    //   1. OrderTelescope.focus().lineItems().each().get() — typed record-side traversal down to a
     //      Telescope<Order, LineItem>. Codegen-emitted, compile-time-bound, multi-focus.
     //   2. .then(lineItemMapper.asTelescope()) — bridge into the entity side. The mapper
     //      exposes its bidirectional Iso<LineItem, LineItemEntity> as a Telescope so the lattice
     //      `.then(...)` can compose it. Result: Telescope<Order, LineItemEntity>.
-    //   3. new LineItemEntityPath<>(...) — wrap the bridged Telescope back into a
+    //   3. new LineItemEntityTelescope<>(...) — wrap the bridged Telescope back into a
     //      typed entity-side navigator. The Path ctor is public (intentional codegen surface, so
     //      cross-package bridge hops and mid-chain entries like this one can construct one).
-    //      LineItemEntityPath's `unitPriceCents()` returns Telescope<Order, Long> — fully typed,
+    //      LineItemEntityTelescope's `unitPriceCents()` returns Telescope<Order, Long> — fully
+    // typed,
     //      no runtime SerializedLambda decode at the leaf.
     //   4. .update(record, cents -> ...) — fn runs on every line item's cents.
     //      Backward composition routes the new cents value through `lineItemMapper`'s reverse
@@ -133,7 +134,9 @@ public class OrderPathController {
       .findById(id)
       .map(orderMapper::backward)
       .map(record ->
-        new LineItemEntityPath<>(OrderPath.start().lineItems().each().get().then(lineItemMapper.asTelescope()))
+        new LineItemEntityTelescope<>(
+          OrderTelescope.focus().lineItems().each().get().then(lineItemMapper.asTelescope())
+        )
           .unitPriceCents()
           .update(record, cents -> (cents * (100L - percent)) / 100L)
       )
@@ -150,7 +153,7 @@ public class OrderPathController {
       .findById(id)
       .map(orderMapper::backward)
       .map(record ->
-        OrderPath.start()
+        OrderTelescope.focus()
           .customer()
           .email()
           .update(record, email -> email == null ? null : email.toLowerCase())

@@ -10,8 +10,8 @@ import java.util.Set;
  *
  * <p>{@code id} is nullable on the way in (the API client doesn't know the database id when
  * creating a new customer) and populated on the way out after Hibernate assigns one. {@code tags}
- * is the {@code Set<String>}-shaped surface for the {@code SetPath.each()} navigation demo (e.g.
- * {@code "vip"}, {@code "newsletter"}, {@code "wholesale"}). {@code @Focus} triggers the path
+ * is the {@code Set<String>}-shaped surface for the {@code SetTelescope.each()} navigation demo
+ * (e.g. {@code "vip"}, {@code "newsletter"}, {@code "wholesale"}). {@code @Focus} triggers the path
  * navigator + holder metadata; {@code @Bridge} would be ideal here too but is blocked by the same
  * cross-package path-hop visibility bug noted on {@code Address}.
  */

@@ -6,7 +6,7 @@ import lombok.NoArgsConstructor;
 
 /**
  * Fixture: plain {@code @Data} POJO with no-arg constructor. LombokFocusProcessor should pick this
- * up and emit {@code DataUserPath} with no-arg-ctor + setX rebuild.
+ * up and emit {@code DataUserTelescope} with no-arg-ctor + setX rebuild.
  */
 @Data
 @NoArgsConstructor

@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Drives {@link BeanFocusProcessor} through the shared {@link ProcessorHarness}. Asserts on the
- * shape of the generated fluent navigator: {@code <Pojo>Path<R>} with {@code start()}, {@code
+ * shape of the generated fluent navigator: {@code <Pojo>Telescope<R>} with {@code start()}, {@code
  * get()}, and per-property methods (scalar terminal / sub-bean-Path / container step), for both
  * rebuild strategies (static {@code builder()} and no-arg constructor + setters), plus the guards.
  */
@@ -57,11 +57,11 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.BuilderPojoPath");
+      final var generated = compilation.generated().get("demo.BuilderPojoTelescope");
       assertNotNull(generated, () -> "BuilderPojoPath not generated; saw " + compilation.generated().keySet());
 
-      assertTrue(generated.contains("public final class BuilderPojoPath<R>"), generated);
-      assertTrue(generated.contains("public static BuilderPojoPath<BuilderPojo> start()"), generated);
+      assertTrue(generated.contains("public final class BuilderPojoTelescope<R>"), generated);
+      assertTrue(generated.contains("public static BuilderPojoTelescope<BuilderPojo> focus()"), generated);
       assertTrue(generated.contains("public Telescope<R, String> id()"), generated);
       assertTrue(generated.contains("Telescope.lens(BuilderPojo::getId,"), generated);
       assertTrue(generated.contains("BuilderPojo.builder()"), generated);
@@ -96,10 +96,10 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.SetterPojoPath");
+      final var generated = compilation.generated().get("demo.SetterPojoTelescope");
       assertNotNull(generated, () -> "SetterPojoPath not generated; saw " + compilation.generated().keySet());
 
-      assertTrue(generated.contains("public final class SetterPojoPath<R>"), generated);
+      assertTrue(generated.contains("public final class SetterPojoTelescope<R>"), generated);
       assertTrue(generated.contains("new SetterPojo()"), generated);
       assertTrue(generated.contains("c.setId(v)"), generated);
       assertTrue(generated.contains("c.setEmail(v)"), generated);
@@ -127,7 +127,7 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.CounterPath");
+      final var generated = compilation.generated().get("demo.CounterTelescope");
       assertNotNull(generated, () -> "CounterPath not generated; saw " + compilation.generated().keySet());
 
       assertTrue(generated.contains("public Telescope<R, Integer> count()"), generated);
@@ -160,7 +160,7 @@ class BeanFocusProcessorTest {
       assertTrue(step.contains("public final class RosterNamesStep<R>"), step);
       assertTrue(step.contains("public Telescope<R, String> each()"), step);
 
-      final var path = compilation.generated().get("demo.RosterPath");
+      final var path = compilation.generated().get("demo.RosterTelescope");
       assertNotNull(path);
       assertTrue(path.contains("public RosterNamesStep<R> names()"), path);
     }
@@ -195,7 +195,7 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.UserBeanPath");
+      final var generated = compilation.generated().get("demo.UserBeanTelescope");
       assertNotNull(generated, () -> "UserBeanPath not generated; saw " + compilation.generated().keySet());
 
       // Target is not @Focus'd (just a record) → terminal Telescope.
@@ -372,12 +372,12 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var holder = compilation.generated().get("demo.PersonTelescope");
+      final var holder = compilation.generated().get("demo.PersonFieldOptics");
       assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
 
       // Holder is a top-level public final class in the user's package, no instances permitted.
-      assertTrue(holder.contains("public final class PersonTelescope"), holder);
-      assertTrue(holder.contains("private PersonTelescope() {}"), holder);
+      assertTrue(holder.contains("public final class PersonFieldOptics"), holder);
+      assertTrue(holder.contains("private PersonFieldOptics() {}"), holder);
 
       // One static-final constant per property, with the property type as the Telescope's second
       // type parameter (primitive `int` is boxed to Integer).
@@ -427,7 +427,7 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var holder = compilation.generated().get("demo.BuilderPojoTelescope");
+      final var holder = compilation.generated().get("demo.BuilderPojoFieldOptics");
       assertNotNull(holder, () -> "BuilderPojoTelescope not generated; saw " + compilation.generated().keySet());
 
       assertTrue(holder.contains("public static final Telescope<BuilderPojo, String> id"), holder);
@@ -458,7 +458,7 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var holder = compilation.generated().get("demo.BagTelescope");
+      final var holder = compilation.generated().get("demo.BagFieldOptics");
       assertNotNull(holder, () -> "BagTelescope not generated; saw " + compilation.generated().keySet());
 
       // Raw container lens on the holder — the Path's container step lifts; the holder does not.
@@ -505,7 +505,7 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var holder = compilation.generated().get("demo.UserATelescope");
+      final var holder = compilation.generated().get("demo.UserAFieldOptics");
       assertNotNull(holder, () -> "UserATelescope not generated; saw " + compilation.generated().keySet());
 
       // Sub-bean property is just a typed lens to the sub-value; no composition with the
@@ -545,7 +545,7 @@ class BeanFocusProcessorTest {
         () -> "expected wildcard diagnostic; saw " + compilation.errorMessages()
       );
       assertFalse(
-        compilation.generated().containsKey("demo.WildTelescope"),
+        compilation.generated().containsKey("demo.WildFieldOptics"),
         "no Telescope holder should be generated for a rejected type"
       );
     }
@@ -579,7 +579,7 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var holder = compilation.generated().get("demo.PersonTelescope");
+      final var holder = compilation.generated().get("demo.PersonFieldOptics");
       assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
 
       // construct() signature.
@@ -625,7 +625,7 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var holder = compilation.generated().get("demo.BuilderPojoTelescope");
+      final var holder = compilation.generated().get("demo.BuilderPojoFieldOptics");
       assertNotNull(holder, () -> "BuilderPojoTelescope not generated; saw " + compilation.generated().keySet());
 
       // Builder chain mirrors the per-property lens setter strategy.
@@ -665,7 +665,7 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var holder = compilation.generated().get("demo.PersonTelescope");
+      final var holder = compilation.generated().get("demo.PersonFieldOptics");
       assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
 
       assertTrue(holder.contains("public static Map<String, Telescope<?, ?>> constants()"), holder);
@@ -696,7 +696,7 @@ class BeanFocusProcessorTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var holder = compilation.generated().get("demo.SoloTelescope");
+      final var holder = compilation.generated().get("demo.SoloFieldOptics");
       assertNotNull(holder, () -> "SoloTelescope not generated; saw " + compilation.generated().keySet());
 
       assertTrue(holder.contains("public static Map<String, Telescope<?, ?>> constants()"), holder);

@@ -7,8 +7,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Verifies the {@code @BeanFocus} processor generates a working fluent navigator for POJOs. The
- * {@code <Pojo>Path<R>} classes are generated at test-compile time; if generation failed this would
- * not compile.
+ * {@code <Pojo>Telescope<R>} classes are generated at test-compile time; if generation failed this
+ * would not compile.
  */
 class BeanFocusCodegenTest {
 
@@ -19,7 +19,7 @@ class BeanFocusCodegenTest {
     bean.setId("u1");
     bean.setEmail("A@X");
 
-    final var email = FocusSetterBeanPath.start().email();
+    final var email = FocusSetterBeanTelescope.focus().email();
     final var updated = email.update(bean, String::toLowerCase);
     assertEquals("a@x", updated.getEmail());
     assertEquals("u1", updated.getId());
@@ -31,7 +31,7 @@ class BeanFocusCodegenTest {
   void builder() {
     final var bean = FocusBuilderBean.builder().id("u1").email("A@X").build();
 
-    final var updated = FocusBuilderBeanPath.start().email().update(bean, String::toLowerCase);
+    final var updated = FocusBuilderBeanTelescope.focus().email().update(bean, String::toLowerCase);
     assertEquals("a@x", updated.getEmail());
     assertEquals("u1", updated.getId());
   }

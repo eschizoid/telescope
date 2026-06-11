@@ -18,9 +18,9 @@ import org.junit.jupiter.api.Test;
  * Integration test: drives {@link LombokFocusProcessor} through Gradle's standard {@code
  * compileTestJava} pipeline against the real Lombok-annotated fixtures in {@code fixtures/} — the
  * same way an end user's build would consume {@code telescope-lombok}. Verifies the generated
- * {@code <Pojo>Path} classes by loading them via reflection and asserting on their shape; if they
- * are missing or malformed, this test class itself wouldn't compile (it references the generated
- * types' method signatures indirectly), so test failure already means a real regression.
+ * {@code <Pojo>Telescope} classes by loading them via reflection and asserting on their shape; if
+ * they are missing or malformed, this test class itself wouldn't compile (it references the
+ * generated types' method signatures indirectly), so test failure already means a real regression.
  *
  * <p>The in-memory {@code ProcessorHarness} used by {@code :codegen} tests doesn't work for Lombok
  * because Lombok's javac AST hook installs in a different round than the one in which {@code
@@ -31,50 +31,53 @@ import org.junit.jupiter.api.Test;
 class LombokFocusProcessorTest {
 
   @Nested
-  @DisplayName("Generated <X>Path classes exist for every Lombok bean trigger")
+  @DisplayName("Generated <X>Telescope classes exist for every Lombok bean trigger")
   class Generated {
 
     @Test
-    @DisplayName("@Data POJO yields a DataUserPath with start(), get(), and per-property methods")
+    @DisplayName("@Data POJO yields a DataUserTelescope with start(), get(), and per-property methods")
     void dataPath() throws Exception {
-      final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserPath");
+      final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
       assertNotNull(pathClass);
 
-      assertHasStartMethod(pathClass, DataUser.class);
+      assertHasFocusMethod(pathClass, DataUser.class);
       assertHasGetMethod(pathClass, DataUser.class);
       assertReturnsTelescope(pathClass, "id");
       assertReturnsTelescope(pathClass, "email");
     }
 
     @Test
-    @DisplayName("@Builder POJO yields a BuilderUserPath with start(), get(), and per-property methods")
+    @DisplayName("@Builder POJO yields a BuilderUserTelescope with start(), get(), and per-property methods")
     void builderPath() throws Exception {
-      final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserPath");
+      final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserTelescope");
       assertNotNull(pathClass);
 
-      assertHasStartMethod(pathClass, BuilderUser.class);
+      assertHasFocusMethod(pathClass, BuilderUser.class);
       assertHasGetMethod(pathClass, BuilderUser.class);
       assertReturnsTelescope(pathClass, "id");
       assertReturnsTelescope(pathClass, "email");
     }
 
     @Test
-    @DisplayName("@Value + @Builder POJO yields a ValueBuilderUserPath via the synthesised builder()")
+    @DisplayName("@Value + @Builder POJO yields a ValueBuilderUserTelescope via the synthesised builder()")
     void valueBuilderPath() throws Exception {
-      final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.ValueBuilderUserPath");
+      final var pathClass = Class.forName(
+        "io.github.eschizoid.telescope.codegen.lombok.fixtures.ValueBuilderUserTelescope"
+      );
       assertNotNull(pathClass);
 
-      assertHasStartMethod(pathClass, ValueBuilderUser.class);
+      assertHasFocusMethod(pathClass, ValueBuilderUser.class);
       assertReturnsTelescope(pathClass, "id");
       assertReturnsTelescope(pathClass, "email");
     }
 
     @Test
-    @DisplayName("Lombok-emitted <X>Path is visible to same-module same-round consumers (no round-deferred limit)")
+    @DisplayName("Lombok-emitted <X>Telescope is visible to same-module same-round consumers (no round-deferred limit)")
     void sameRoundConsumerCanReferenceEmittedPath() {
       // SameRoundConsumer is in src/test/java alongside DataUser. Both go through the same javac
       // compilation pass with LombokFocusProcessor on the annotation-processor classpath. The
-      // consumer references DataUserPath directly — if this class were loaded at all (it is, by
+      // consumer references DataUserTelescope directly — if this class were loaded at all (it is,
+      // by
       // this test), the consumer compiled, meaning the Path symbol resolved during the consumer's
       // own binding phase. That's the regression guard against re-introducing the
       // processingOver()-only emission pattern.
@@ -91,7 +94,7 @@ class LombokFocusProcessorTest {
       // a hypothetical top-level Inner. Path identifies the nested Inner via a dotted type
       // reference inside its own source.
       final var pathClass = Class.forName(
-        "io.github.eschizoid.telescope.codegen.lombok.fixtures.OuterWithNestedInnerPath"
+        "io.github.eschizoid.telescope.codegen.lombok.fixtures.OuterWithNestedInnerTelescope"
       );
       assertNotNull(pathClass);
 
@@ -104,7 +107,7 @@ class LombokFocusProcessorTest {
       final var nestedType = Class.forName(
         "io.github.eschizoid.telescope.codegen.lombok.fixtures.OuterWithNested$Inner"
       );
-      assertHasStartMethod(pathClass, nestedType);
+      assertHasFocusMethod(pathClass, nestedType);
       assertHasGetMethod(pathClass, nestedType);
       assertReturnsTelescope(pathClass, "label");
       assertReturnsTelescope(pathClass, "weight");
@@ -113,7 +116,7 @@ class LombokFocusProcessorTest {
     @Test
     @DisplayName("@Data POJO with List<@Data> emits a container step whose each() returns the element's Path")
     void containerStepDescendsIntoSubPath() throws Exception {
-      final var teamPath = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataTeamPath");
+      final var teamPath = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataTeamTelescope");
       assertNotNull(teamPath);
 
       final var membersStep = Class.forName(
@@ -122,12 +125,12 @@ class LombokFocusProcessorTest {
       assertNotNull(membersStep);
 
       final var eachMethod = membersStep.getDeclaredMethod("each");
-      // Element type DataUser is @Data-annotated, so each() returns DataUserPath<R>, not
+      // Element type DataUser is @Data-annotated, so each() returns DataUserTelescope<R>, not
       // Telescope<R, DataUser>.
       assertEquals(
-        "io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserPath",
+        "io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope",
         eachMethod.getReturnType().getName(),
-        () -> "each() should return DataUserPath; was " + eachMethod.getReturnType()
+        () -> "each() should return DataUserTelescope; was " + eachMethod.getReturnType()
       );
     }
   }
@@ -141,7 +144,7 @@ class LombokFocusProcessorTest {
       "@Data POJO yields a DataUserTelescope holder with public static final Telescope constants per property"
     )
     void dataHolder() throws Exception {
-      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
+      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserFieldOptics");
       assertNotNull(holder);
 
       // Utility holder — final class, private no-arg ctor only.
@@ -159,7 +162,7 @@ class LombokFocusProcessorTest {
     @Test
     @DisplayName("@Builder POJO yields a BuilderUserTelescope holder")
     void builderHolder() throws Exception {
-      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserTelescope");
+      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserFieldOptics");
       assertNotNull(holder);
       assertHolderField(holder, "id");
       assertHolderField(holder, "email");
@@ -169,7 +172,7 @@ class LombokFocusProcessorTest {
     @DisplayName("@Value + @Builder POJO yields a ValueBuilderUserTelescope holder")
     void valueBuilderHolder() throws Exception {
       final var holder = Class.forName(
-        "io.github.eschizoid.telescope.codegen.lombok.fixtures.ValueBuilderUserTelescope"
+        "io.github.eschizoid.telescope.codegen.lombok.fixtures.ValueBuilderUserFieldOptics"
       );
       assertNotNull(holder);
       assertHolderField(holder, "id");
@@ -179,7 +182,7 @@ class LombokFocusProcessorTest {
     @Test
     @DisplayName("constants are functional Telescope<X, FieldType> values usable end-to-end")
     void holderConstantsAreUsable() throws Exception {
-      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
+      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserFieldOptics");
       final var emailField = holder.getDeclaredField("email");
       @SuppressWarnings("unchecked")
       final Telescope<DataUser, String> emailLens = (Telescope<DataUser, String>) emailField.get(null);
@@ -194,7 +197,7 @@ class LombokFocusProcessorTest {
     @Test
     @DisplayName("Phase D: @Data holder exposes a public static construct(Function) that rebuilds via setters")
     void dataHolderConstruct() throws Exception {
-      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
+      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserFieldOptics");
       final var constructMethod = holder.getDeclaredMethod("construct", java.util.function.Function.class);
       final var mods = constructMethod.getModifiers();
       assertTrue(java.lang.reflect.Modifier.isPublic(mods), "construct must be public");
@@ -216,7 +219,7 @@ class LombokFocusProcessorTest {
     @Test
     @DisplayName("Phase D: @Builder holder exposes a public static construct(Function) that chains the builder")
     void builderHolderConstruct() throws Exception {
-      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserTelescope");
+      final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserFieldOptics");
       final var constructMethod = holder.getDeclaredMethod("construct", java.util.function.Function.class);
       assertEquals(BuilderUser.class, constructMethod.getReturnType());
 
@@ -246,10 +249,10 @@ class LombokFocusProcessorTest {
   class Runtime {
 
     @Test
-    @DisplayName("DataUserPath.start().email().update lower-cases the email via Lombok's setter rebuild")
+    @DisplayName("DataUserTelescope.focus().email().update lower-cases the email via Lombok's setter rebuild")
     void dataUserPathRoundTrip() throws Exception {
-      final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserPath");
-      final var start = pathClass.getDeclaredMethod("start").invoke(null);
+      final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
+      final var start = pathClass.getDeclaredMethod("focus").invoke(null);
       @SuppressWarnings("unchecked")
       final Telescope<DataUser, String> emailPath = (Telescope<DataUser, String>) pathClass
         .getDeclaredMethod("email")
@@ -262,10 +265,10 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("BuilderUserPath.start().email().update rebuilds via the synthesised builder()")
+    @DisplayName("BuilderUserTelescope.focus().email().update rebuilds via the synthesised builder()")
     void builderUserPathRoundTrip() throws Exception {
-      final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserPath");
-      final var start = pathClass.getDeclaredMethod("start").invoke(null);
+      final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserTelescope");
+      final var start = pathClass.getDeclaredMethod("focus").invoke(null);
       @SuppressWarnings("unchecked")
       final Telescope<BuilderUser, String> emailPath = (Telescope<BuilderUser, String>) pathClass
         .getDeclaredMethod("email")
@@ -278,8 +281,8 @@ class LombokFocusProcessorTest {
     }
   }
 
-  private static void assertHasStartMethod(final Class<?> pathClass, final Class<?> rootType) throws Exception {
-    final var start = pathClass.getDeclaredMethod("start");
+  private static void assertHasFocusMethod(final Class<?> pathClass, final Class<?> rootType) throws Exception {
+    final var start = pathClass.getDeclaredMethod("focus");
     assertTrue(java.lang.reflect.Modifier.isStatic(start.getModifiers()), "start() must be static");
     assertEquals(pathClass, start.getReturnType(), () -> "start() should return " + pathClass.getSimpleName());
   }
