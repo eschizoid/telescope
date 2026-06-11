@@ -11,27 +11,36 @@ package io.github.eschizoid.telescope.mapping;
  * DeepMap} casts a {@code Mapping<?, ?>} to {@code MappingInternals<?, ?>} when it needs the
  * recovery info.
  */
-public sealed interface MappingInternals<A, B> permits SameTypedTo, TypedTransformTo, Via, Drop, TelescopeTo {
+public sealed interface MappingInternals<
+  A,
+  B
+> permits SameTypedTo, TypedTransformTo, Via, Drop, TelescopeTo, FromTelescopeTo, TelescopeToTelescope {
   /**
    * Source class this row keys against (the declaring class of the source accessor, recovered via
-   * {@code SerializedLambda}). Used by {@link DeepMap} to decide which type pairs this override
-   * applies to.
+   * {@code SerializedLambda}). May be {@code null} for permits whose source side is a {@code
+   * Telescope<A, ?>} (root class isn't recoverable at runtime — generics erased); the engine pins
+   * the row to the outer mapper pair instead.
    */
   Class<A> sourceClass();
 
   /**
    * Target class this row keys against — declaring class of the target accessor. May be {@code
-   * null} for {@link ScalarPathTo}, where the target side is a {@code Telescope<B, X>} path whose
-   * root class isn't recoverable; the engine pins the row to the outer mapper pair instead.
+   * null} for permits whose target side is a {@code Telescope<B, ?>}; same outer-pair pinning as
+   * for {@link #sourceClass}.
    */
   Class<B> targetClass();
 
-  /** Source record component name this row claims (the source accessor's method name). */
+  /**
+   * Source record component name this row claims (the source accessor's method name). May be {@code
+   * null} for permits whose source side is a {@code Telescope<A, ?>} — the path's leaf isn't a
+   * top-level source field.
+   */
   String sourceField();
 
   /**
    * Target record component name this row claims (the target accessor's method name). May be {@code
-   * null} for {@link ScalarPathTo}, where the path's leaf isn't a top-level target field.
+   * null} for permits whose target side is a {@code Telescope<B, ?>} — the path's leaf isn't a
+   * top-level target field.
    */
   String targetField();
 }

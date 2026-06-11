@@ -33,7 +33,10 @@ import java.util.function.Function;
  * package — {@link SameTypedTo}, {@link TypedTransformTo}, {@link Via}, {@link Drop}. Users
  * construct via the static factories below; the record types are not public API.
  */
-public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, TypedTransformTo, Via, Drop, TelescopeTo {
+public sealed interface Mapping<A, B>
+  extends MapStep
+  permits SameTypedTo, TypedTransformTo, Via, Drop, TelescopeTo, FromTelescopeTo, TelescopeToTelescope
+{
   /** Same-typed correspondence: {@code src↔tgt}, both with leaf type {@code X}. Identity. */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Accessor<B, X> tgt) {
     return new SameTypedTo<>(src, tgt);
@@ -65,6 +68,7 @@ public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, Typed
    * each hop and {@code javac} catches a missing accessor everywhere.
    *
    * <pre>{@code
+   * // Runtime form — Telescope.of(...).field(...).field(...)
    * Telescope.mapper(Order.class, OrderDto.class,
    *     to(Order::getName,         OrderDto::getFullName),
    *     to(Order::getCustomerName,
@@ -72,6 +76,12 @@ public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, Typed
    *            .field(OrderDto::getShipping)
    *            .field(Shipping::getRecipient)
    *            .field(Recipient::getFullName)));
+   *
+   * // Codegen form — @Focus-generated navigator, same Telescope value, fully typed each hop.
+   * // Mapping.to accepts both interchangeably; pick whichever the call site is closest to.
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::getCustomerName,
+   *        OrderDtoTelescope.of().shipping().recipient().fullName()));
    * }</pre>
    *
    * <p>The engine applies this row at the <em>outer</em> {@code (source, target)} pair only — after
@@ -81,6 +91,72 @@ public sealed interface Mapping<A, B> extends MapStep permits SameTypedTo, Typed
    */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Telescope<B, X> targetTelescope) {
     return new TelescopeTo<>(src, targetTelescope);
+  }
+
+  /**
+   * Nested-source correspondence: source is a multi-hop {@link Telescope}, target is a flat
+   * accessor. Mirror of {@link #to(Accessor, Telescope)} — same fluent navigation on the source
+   * side, single accessor on the target. Closes MapStruct's {@code @Mapping(source = "a.b.c",
+   * target = "flat")} for that direction.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Telescope.of(Order.class).field(Order::getCustomer).field(Customer::getEmail),
+   *        OrderDto::getRecipientEmail));
+   * }</pre>
+   *
+   * <p>Engine: applied at the outer {@code (source, target)} pair only. Forward: reads at {@code
+   * srcTelescope}, writes to {@code tgt} accessor on a rebuilt {@code b}. Backward: reads {@code
+   * tgt} on {@code b}, writes through {@code srcTelescope.set(a, value)} on a rebuilt {@code a}.
+   */
+  static <A, B, X> Mapping<A, B> to(final Telescope<A, X> srcTelescope, final Accessor<B, X> tgt) {
+    return new FromTelescopeTo<>(srcTelescope, tgt);
+  }
+
+  /**
+   * Both-nested correspondence: source and target sides are multi-hop {@link Telescope}s. Closes
+   * MapStruct's {@code @Mapping(source = "a.b.c", target = "x.y.z")} for the both-nested case.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Telescope.of(Order.class).field(Order::getCustomer).field(Customer::getEmail),
+   *        Telescope.of(OrderDto.class).field(OrderDto::getShipping).field(Shipping::getEmail)));
+   * }</pre>
+   *
+   * <p>Engine: applied at the outer pair only. Forward overlay: {@code tgt.set(b, src.read(a))}.
+   * Backward overlay: {@code src.set(a, tgt.read(b))}.
+   *
+   * <p><b>Broadcast on many-focus telescopes.</b> When either side carries a many-focus telescope
+   * (built with {@code .each(...)} / {@code .eachValue(...)} / {@code .whenPresent(...)}), the
+   * lattice's intrinsic {@link Telescope#set} broadcasts the value to every focus on the target
+   * side, and {@link Telescope#read} returns the first focus on the source side. For positional N:N
+   * — Nth source value at Nth target focus — use {@link #zip(Telescope, Telescope)} instead.
+   */
+  static <A, B, X> Mapping<A, B> to(final Telescope<A, X> srcTelescope, final Telescope<B, X> targetTelescope) {
+    return new TelescopeToTelescope<>(srcTelescope, targetTelescope, TelescopeToTelescope.Kind.BROADCAST);
+  }
+
+  /**
+   * Positional N:N correspondence between two many-focus telescopes. The Nth source value lands at
+   * the Nth target focus; cardinality is enforced at apply time — a mismatch throws rather than
+   * silently truncating.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Cart.class, CartDto.class,
+   *     zip(Telescope.of(Cart.class).each(Cart::items).field(Item::name),
+   *         Telescope.of(CartDto.class).each(CartDto::lines).field(Line::label)));
+   * }</pre>
+   *
+   * <p>Distinct from {@link #to(Telescope, Telescope)}, which broadcasts on the many side. {@code
+   * zip} is the explicit positional semantic — the call-site reader knows which write semantic
+   * they're getting from the method name.
+   *
+   * <p>Engine: applied at the outer pair only. Forward fixup uses {@link Telescope#toList} on the
+   * source and {@link Telescope#updateIndexed} on the target with a cardinality check; backward
+   * fixup is the mirror.
+   */
+  static <A, B, X> Mapping<A, B> zip(final Telescope<A, X> srcTelescope, final Telescope<B, X> targetTelescope) {
+    return new TelescopeToTelescope<>(srcTelescope, targetTelescope, TelescopeToTelescope.Kind.ZIP);
   }
 
   /**

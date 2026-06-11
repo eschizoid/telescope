@@ -249,10 +249,10 @@ class LombokFocusProcessorTest {
   class Runtime {
 
     @Test
-    @DisplayName("DataUserTelescope.focus().email().update lower-cases the email via Lombok's setter rebuild")
+    @DisplayName("DataUserTelescope.of().email().update lower-cases the email via Lombok's setter rebuild")
     void dataUserPathRoundTrip() throws Exception {
       final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
-      final var start = pathClass.getDeclaredMethod("focus").invoke(null);
+      final var start = pathClass.getDeclaredMethod("of").invoke(null);
       @SuppressWarnings("unchecked")
       final Telescope<DataUser, String> emailPath = (Telescope<DataUser, String>) pathClass
         .getDeclaredMethod("email")
@@ -265,10 +265,10 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("BuilderUserTelescope.focus().email().update rebuilds via the synthesised builder()")
+    @DisplayName("BuilderUserTelescope.of().email().update rebuilds via the synthesised builder()")
     void builderUserPathRoundTrip() throws Exception {
       final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserTelescope");
-      final var start = pathClass.getDeclaredMethod("focus").invoke(null);
+      final var start = pathClass.getDeclaredMethod("of").invoke(null);
       @SuppressWarnings("unchecked")
       final Telescope<BuilderUser, String> emailPath = (Telescope<BuilderUser, String>) pathClass
         .getDeclaredMethod("email")
@@ -282,7 +282,7 @@ class LombokFocusProcessorTest {
   }
 
   private static void assertHasFocusMethod(final Class<?> pathClass, final Class<?> rootType) throws Exception {
-    final var start = pathClass.getDeclaredMethod("focus");
+    final var start = pathClass.getDeclaredMethod("of");
     assertTrue(java.lang.reflect.Modifier.isStatic(start.getModifiers()), "start() must be static");
     assertEquals(pathClass, start.getReturnType(), () -> "start() should return " + pathClass.getSimpleName());
   }

@@ -61,7 +61,7 @@ class BeanFocusProcessorTest {
       assertNotNull(generated, () -> "BuilderPojoPath not generated; saw " + compilation.generated().keySet());
 
       assertTrue(generated.contains("public final class BuilderPojoTelescope<R>"), generated);
-      assertTrue(generated.contains("public static BuilderPojoTelescope<BuilderPojo> focus()"), generated);
+      assertTrue(generated.contains("public static BuilderPojoTelescope<BuilderPojo> of()"), generated);
       assertTrue(generated.contains("public Telescope<R, String> id()"), generated);
       assertTrue(generated.contains("Telescope.lens(BuilderPojo::getId,"), generated);
       assertTrue(generated.contains("BuilderPojo.builder()"), generated);

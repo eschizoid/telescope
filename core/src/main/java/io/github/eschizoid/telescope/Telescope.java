@@ -106,22 +106,50 @@ public sealed class Telescope<
   // accumulates both edits and runs them in order against {@code s}. Package-private for the same
   // reason as `fieldOptics`.
   final Function<S, S> chain;
+  // The method name of the FIRST hop accessor used to build this Telescope (e.g. "customer" for
+  // Telescope.of(A.class).field(A::getCustomer)…). Stays null for telescopes built without a path
+  // (e.g. Iso.identity() from Telescope.of). Used by DeepMap to route Mapping.to(Telescope, ...)
+  // rows back to the top-level source/target field — without it, deeply-nested telescope rows
+  // can't tell the engine which top-level field they traverse. Package-private; recovered via
+  // LambdaIntrospection.methodNameOf(accessor) on the first .field(…) / .each(…) / .eachValue(…)
+  // / .whenPresent(…) call that takes an Accessor.
+  final String firstHopName;
 
   // Package-private so that the conversion-builder classes (From, To, BeanTo, MapBuilder, Mapper,
   // …) — extracted to sibling files in this same package to keep Telescope.java navigable — can
   // construct Telescope instances without needing us to expose internals through the JPMS export.
   Telescope(final Traversal<S, A> optic) {
-    this(optic, RecordFieldOptics.INSTANCE, Function.identity());
+    this(optic, RecordFieldOptics.INSTANCE, Function.identity(), null);
   }
 
   private Telescope(final Traversal<S, A> optic, final FieldOptics fieldOptics) {
-    this(optic, fieldOptics, Function.identity());
+    this(optic, fieldOptics, Function.identity(), null);
   }
 
-  private Telescope(final Traversal<S, A> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
+  Telescope(final Traversal<S, A> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
+    this(optic, fieldOptics, chain, null);
+  }
+
+  Telescope(
+    final Traversal<S, A> optic,
+    final FieldOptics fieldOptics,
+    final Function<S, S> chain,
+    final String firstHopName
+  ) {
     this.optic = optic;
     this.fieldOptics = fieldOptics;
     this.chain = chain;
+    this.firstHopName = firstHopName;
+  }
+
+  /**
+   * Package-private — exposes the method name of the FIRST navigation hop used to build this
+   * Telescope, or {@code null} if the Telescope wasn't built via accessor-based navigation. {@link
+   * DeepMap} uses this to recover the top-level source/target field a {@code Mapping.to(Telescope,
+   * …)} row traverses so it can register a corresponding top-level mapping step.
+   */
+  String firstHopName() {
+    return firstHopName;
   }
 
   /**
@@ -349,6 +377,29 @@ public sealed class Telescope<
   }
 
   /**
+   * Same as {@link #lens(Function, BiFunction)} but with a Serializable {@link Accessor} for the
+   * getter — the method name is recovered via {@code SerializedLambda} and stored as the
+   * Telescope's first-hop name. Used by codegen-generated {@code <X>Telescope} navigators so the
+   * {@code Mapping.to(srcAcc, navigatorMethod())} factory routes through the engine the same way a
+   * runtime {@code Telescope.of(B.class).field(B::recipient)…} chain does.
+   *
+   * <p>Java's overload resolution prefers this overload over {@link #lens(Function, BiFunction)}
+   * when the getter is a method reference (method refs implicitly bind to {@link Accessor}'s
+   * Serializable contract), so codegen-emitted call sites pick it up automatically.
+   */
+  public static <S, A> Telescope<S, A> lens(
+    final Accessor<S, A> getter,
+    final BiFunction<? super S, ? super A, ? extends S> setter
+  ) {
+    return new Telescope<>(
+      Lens.of(getter, setter),
+      RecordFieldOptics.INSTANCE,
+      Function.identity(),
+      LambdaIntrospection.methodNameOf(getter)
+    );
+  }
+
+  /**
    * Begin a bidirectional type conversion. The fluent shape {@code from(A.class).to(B.class).using(
    * forward, backward)} produces a {@code Telescope<A, B>} backed by an {@link Iso} from the
    * internal lattice. The {@code Class} arguments exist purely for type inference; they're not
@@ -474,7 +525,15 @@ public sealed class Telescope<
    */
   public <B> Telescope<S, B> field(final Accessor<A, B> getter) {
     final Lens<A, B> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens), fieldOptics, chain);
+    return new Telescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
+  }
+
+  /**
+   * First-hop name capture: only the first .field/.each/.eachValue/.whenPresent on a path is
+   * tracked.
+   */
+  private String hopName(final Accessor<?, ?> getter) {
+    return firstHopName != null ? firstHopName : LambdaIntrospection.methodNameOf(getter);
   }
 
   /**
@@ -495,7 +554,7 @@ public sealed class Telescope<
    */
   public <X> ListTelescope<S, X> list(final Accessor<A, List<X>> getter) {
     final Lens<A, List<X>> lens = lensForAccessor(getter);
-    return new ListTelescope<>(optic.then(lens), fieldOptics, chain);
+    return new ListTelescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
   }
 
   /**
@@ -508,7 +567,7 @@ public sealed class Telescope<
    */
   public <X> SetTelescope<S, X> setField(final Accessor<A, Set<X>> getter) {
     final Lens<A, Set<X>> lens = lensForAccessor(getter);
-    return new SetTelescope<>(optic.then(lens), fieldOptics, chain);
+    return new SetTelescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
   }
 
   /**
@@ -522,7 +581,7 @@ public sealed class Telescope<
    */
   public <K, V> MapTelescope<S, K, V> mapField(final Accessor<A, Map<K, V>> getter) {
     final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
-    return new MapTelescope<>(optic.then(lens), fieldOptics, chain);
+    return new MapTelescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
   }
 
   /**
@@ -532,7 +591,7 @@ public sealed class Telescope<
    */
   public <X> OptionalTelescope<S, X> optional(final Accessor<A, Optional<X>> getter) {
     final Lens<A, Optional<X>> lens = lensForAccessor(getter);
-    return new OptionalTelescope<>(optic.then(lens), fieldOptics, chain);
+    return new OptionalTelescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
   }
 
   /**
@@ -597,7 +656,7 @@ public sealed class Telescope<
   public <E> Telescope<S, E> each(final Accessor<A, ? extends Iterable<E>> getter) {
     final Traversal<Iterable<E>, E> elements = Traversals.eachIterable();
     final Lens<A, Iterable<E>> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens).then(elements), fieldOptics, chain);
+    return new Telescope<>(optic.then(lens).then(elements), fieldOptics, chain, hopName(getter));
   }
 
   /**
@@ -616,7 +675,7 @@ public sealed class Telescope<
   public <K, V> Telescope<S, V> eachValue(final Accessor<A, ? extends Map<K, V>> getter) {
     final Traversal<Map<K, V>, V> values = Traversals.eachMapValue();
     final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens).then(values), fieldOptics, chain);
+    return new Telescope<>(optic.then(lens).then(values), fieldOptics, chain, hopName(getter));
   }
 
   /**
@@ -634,7 +693,7 @@ public sealed class Telescope<
   public <E> Telescope<S, E> whenPresent(final Accessor<A, ? extends Optional<E>> getter) {
     final Traversal<Optional<E>, E> present = Traversals.eachOptional();
     final Lens<A, Optional<E>> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens).then(present), fieldOptics, chain);
+    return new Telescope<>(optic.then(lens).then(present), fieldOptics, chain, hopName(getter));
   }
 
   /**
@@ -686,7 +745,14 @@ public sealed class Telescope<
    * }</pre>
    */
   public <B> Telescope<S, B> then(final Telescope<A, B> next) {
-    return new Telescope<>(optic.then(next.optic), fieldOptics, chain);
+    // Prefer this side's firstHopName — only the FIRST hop on a chain is tracked. If this side has
+    // none (e.g. composing a root Telescope.of(...) with a sub-path), inherit from next.
+    return new Telescope<>(
+      optic.then(next.optic),
+      fieldOptics,
+      chain,
+      firstHopName != null ? firstHopName : next.firstHopName
+    );
   }
 
   /**
@@ -1279,9 +1345,18 @@ public sealed class Telescope<
       super(optic, fieldOptics, chain);
     }
 
+    ListTelescope(
+      final Traversal<S, List<X>> optic,
+      final FieldOptics fieldOptics,
+      final Function<S, S> chain,
+      final String firstHopName
+    ) {
+      super(optic, fieldOptics, chain, firstHopName);
+    }
+
     /** Step into list elements. Pure lattice composition; no reflection. */
     public Telescope<S, X> each() {
-      return new Telescope<>(this.optic.then(Traversals.eachList()), this.fieldOptics, this.chain);
+      return new Telescope<>(this.optic.then(Traversals.eachList()), this.fieldOptics, this.chain, this.firstHopName);
     }
   }
 
@@ -1296,9 +1371,18 @@ public sealed class Telescope<
       super(optic, fieldOptics, chain);
     }
 
+    SetTelescope(
+      final Traversal<S, Set<X>> optic,
+      final FieldOptics fieldOptics,
+      final Function<S, S> chain,
+      final String firstHopName
+    ) {
+      super(optic, fieldOptics, chain, firstHopName);
+    }
+
     /** Step into set elements. Output is iteration-order-preserving (LinkedHashSet). */
     public Telescope<S, X> each() {
-      return new Telescope<>(this.optic.then(Traversals.eachSet()), this.fieldOptics, this.chain);
+      return new Telescope<>(this.optic.then(Traversals.eachSet()), this.fieldOptics, this.chain, this.firstHopName);
     }
   }
 
@@ -1313,9 +1397,23 @@ public sealed class Telescope<
       super(optic, fieldOptics, chain);
     }
 
+    MapTelescope(
+      final Traversal<S, Map<K, V>> optic,
+      final FieldOptics fieldOptics,
+      final Function<S, S> chain,
+      final String firstHopName
+    ) {
+      super(optic, fieldOptics, chain, firstHopName);
+    }
+
     /** Step into map values; keys remain on the map. Pure lattice composition. */
     public Telescope<S, V> values() {
-      return new Telescope<>(this.optic.then(Traversals.eachMapValue()), this.fieldOptics, this.chain);
+      return new Telescope<>(
+        this.optic.then(Traversals.eachMapValue()),
+        this.fieldOptics,
+        this.chain,
+        this.firstHopName
+      );
     }
   }
 
@@ -1334,9 +1432,23 @@ public sealed class Telescope<
       super(optic, fieldOptics, chain);
     }
 
+    OptionalTelescope(
+      final Traversal<S, Optional<X>> optic,
+      final FieldOptics fieldOptics,
+      final Function<S, S> chain,
+      final String firstHopName
+    ) {
+      super(optic, fieldOptics, chain, firstHopName);
+    }
+
     /** Step into the Optional's payload. Empty Optional is a write no-op (Affine semantics). */
     public Telescope<S, X> present() {
-      return new Telescope<>(this.optic.then(Traversals.eachOptional()), this.fieldOptics, this.chain);
+      return new Telescope<>(
+        this.optic.then(Traversals.eachOptional()),
+        this.fieldOptics,
+        this.chain,
+        this.firstHopName
+      );
     }
   }
 }

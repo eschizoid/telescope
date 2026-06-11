@@ -37,7 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
  * <p>This controller's equivalent:
  *
  * <pre>{@code
- * OrderTelescope.focus()
+ * OrderTelescope.of()
  *     .customer()
  *     .email()
  *     .update(request, normalise);
@@ -89,7 +89,7 @@ public class OrderTelescopeController {
     // The processor generated `OrderPath#customer()` returning a CustomerTelescope<Order>, whose
     // `email()` method returns a Telescope<Order, String> — fully compile-checked, no runtime
     // decode, no SerializedLambda crackopen, no probe miss.
-    final var normalised = OrderTelescope.focus()
+    final var normalised = OrderTelescope.of()
       .customer()
       .email()
       .update(request, email -> email == null ? null : email.toLowerCase());
@@ -115,7 +115,7 @@ public class OrderTelescopeController {
     @RequestParam(defaultValue = "10") final int percent
   ) {
     // Demonstrates Mapper.asTelescope() composing across paradigms in one typed pipeline:
-    //   1. OrderTelescope.focus().lineItems().each().get() — typed record-side traversal down to a
+    //   1. OrderTelescope.of().lineItems().each().get() — typed record-side traversal down to a
     //      Telescope<Order, LineItem>. Codegen-emitted, compile-time-bound, multi-focus.
     //   2. .then(lineItemMapper.asTelescope()) — bridge into the entity side. The mapper
     //      exposes its bidirectional Iso<LineItem, LineItemEntity> as a Telescope so the lattice
@@ -134,9 +134,7 @@ public class OrderTelescopeController {
       .findById(id)
       .map(orderMapper::backward)
       .map(record ->
-        new LineItemEntityTelescope<>(
-          OrderTelescope.focus().lineItems().each().get().then(lineItemMapper.asTelescope())
-        )
+        new LineItemEntityTelescope<>(OrderTelescope.of().lineItems().each().get().then(lineItemMapper.asTelescope()))
           .unitPriceCents()
           .update(record, cents -> (cents * (100L - percent)) / 100L)
       )
@@ -153,7 +151,7 @@ public class OrderTelescopeController {
       .findById(id)
       .map(orderMapper::backward)
       .map(record ->
-        OrderTelescope.focus()
+        OrderTelescope.of()
           .customer()
           .email()
           .update(record, email -> email == null ? null : email.toLowerCase())

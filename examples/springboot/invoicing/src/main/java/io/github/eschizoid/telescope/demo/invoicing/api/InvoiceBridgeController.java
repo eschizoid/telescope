@@ -34,15 +34,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class InvoiceBridgeController {
 
   /**
-   * Demonstrates the {@code InvoiceLineTelescope.focus().asInvoiceLineEntity()} navigator hop.
-   * {@code BridgeProcessor} generated the {@code asInvoiceLineEntity()} method on the source Path;
-   * because {@code InvoiceLineEntity} is {@code @BeanFocus}-navigable, the hop returns {@code
+   * Demonstrates the {@code InvoiceLineTelescope.of().asInvoiceLineEntity()} navigator hop. {@code
+   * BridgeProcessor} generated the {@code asInvoiceLineEntity()} method on the source Path; because
+   * {@code InvoiceLineEntity} is {@code @BeanFocus}-navigable, the hop returns {@code
    * InvoiceLineEntityPath<InvoiceLine>} and {@code .read(line)} runs the underlying Telescope
    * through the {@code BRIDGE} Iso to materialise the entity.
    */
   @PostMapping("/lines/forward")
   public ResponseEntity<InvoiceLineEntity> lineForward(@RequestBody final InvoiceLine line) {
-    final var entity = InvoiceLineTelescope.focus().asInvoiceLineEntity().read(line);
+    final var entity = InvoiceLineTelescope.of().asInvoiceLineEntity().read(line);
     return ResponseEntity.ok(entity);
   }
 

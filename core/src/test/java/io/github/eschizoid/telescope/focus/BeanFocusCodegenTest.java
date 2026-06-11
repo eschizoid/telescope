@@ -19,7 +19,7 @@ class BeanFocusCodegenTest {
     bean.setId("u1");
     bean.setEmail("A@X");
 
-    final var email = FocusSetterBeanTelescope.focus().email();
+    final var email = FocusSetterBeanTelescope.of().email();
     final var updated = email.update(bean, String::toLowerCase);
     assertEquals("a@x", updated.getEmail());
     assertEquals("u1", updated.getId());
@@ -31,7 +31,7 @@ class BeanFocusCodegenTest {
   void builder() {
     final var bean = FocusBuilderBean.builder().id("u1").email("A@X").build();
 
-    final var updated = FocusBuilderBeanTelescope.focus().email().update(bean, String::toLowerCase);
+    final var updated = FocusBuilderBeanTelescope.of().email().update(bean, String::toLowerCase);
     assertEquals("a@x", updated.getEmail());
     assertEquals("u1", updated.getId());
   }

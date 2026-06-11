@@ -21,7 +21,7 @@ import javax.lang.model.element.TypeElement;
  * —
  *
  * <pre>{@code
- * CompanyPath.focus().departments().each().teams().each().users().each().email()
+ * CompanyPath.of().departments().each().teams().each().users().each().email()
  * }</pre>
  *
  * with end-to-end compile-time type checking, and the method bodies use {@link

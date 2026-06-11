@@ -121,7 +121,7 @@ wiring. Useful when a particular conversion is in your tightest loop and you wan
 
 | Path                              | Generated machinery                                                                         |
 | --------------------------------- | ------------------------------------------------------------------------------------------- |
-| `POST /invoices/lines/forward`    | `InvoiceLineTelescope.focus().asInvoiceLineEntity().read(line)` — generated navigator hop   |
+| `POST /invoices/lines/forward`    | `InvoiceLineTelescope.of().asInvoiceLineEntity().read(line)` — generated navigator hop      |
 | `POST /invoices/lines/backward`   | `InvoiceLineBridge.backward(entity)` — generated static method                              |
 | `POST /invoices/headers/forward`  | `InvoiceHeaderBridge.forward(header)` — auto-recurses into `InvoiceLineBridge` for the list |
 | `POST /invoices/headers/backward` | `InvoiceHeaderBridge.backward(entity)` — same in reverse                                    |
@@ -158,9 +158,9 @@ wiring. Useful when a particular conversion is in your tightest loop and you wan
 
 The widest surface of any submodule. **Headline: "pick your trade-off per call site."** The same `Order` domain backs
 eight endpoints that each demonstrate a different telescope angle. Both the runtime DSL
-(`Telescope.of(Order.class).field(...)`) and the codegen path navigators (`OrderTelescope.focus().x()`) live side by
-side — the choice between them happens at the controller, not at the domain. Adding `@Focus` / `@BeanFocus` is purely
-opt-in: the runtime mapper transparently uses the codegen-emitted holder constants when present (holder-probe fast path,
+(`Telescope.of(Order.class).field(...)`) and the codegen path navigators (`OrderTelescope.of().x()`) live side by side —
+the choice between them happens at the controller, not at the domain. Adding `@Focus` / `@BeanFocus` is purely opt-in:
+the runtime mapper transparently uses the codegen-emitted holder constants when present (holder-probe fast path,
 post-ADR-0006), but doesn't require them.
 
 **Endpoints**
@@ -168,7 +168,7 @@ post-ADR-0006), but doesn't require them.
 | Path                              | Telescope angle                                                                                  |
 | --------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `POST /orders`                    | Runtime DSL — basic CRUD with deep-update email normalisation pre-save                           |
-| `POST /orders/path`               | Codegen navigator — `OrderTelescope.focus().lineItems().each().unitPrice().update(...)`          |
+| `POST /orders/path`               | Codegen navigator — `OrderTelescope.of().lineItems().each().unitPrice().update(...)`             |
 | `POST /orders/validated`          | `updateValidated` accumulates per-line-item errors into one 400 payload (not first-failure-wins) |
 | `POST /orders/{id}/bulk-update`   | `Telescope.all(overIfPresent(...), mapIfPresent(...))` — sparse-PATCH composition, no if-ladder  |
 | `POST /orders/{id}/inspect`       | `read` / `find` / `count` / `exists` terminals — describe a path in the request body             |
