@@ -923,6 +923,36 @@ class BeansTest {
       final var upper = lens.modify(base, String::toUpperCase);
       assertEquals("ALICE", upper.getName());
     }
+
+    @Test
+    @DisplayName("unknown property fails at construction time, not at first read")
+    void lensRejectsUnknownPropertyEagerly() {
+      // The reader is resolved at construction time; an unknown property must surface immediately
+      // (rather than on the first get/set), so a misconfigured lens fails at build time.
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Beans.lens(NoArgSetters.class, "doesNotExist", Beans.autoWriter(NoArgSetters.class))
+      );
+      assertTrue(ex.getMessage().contains("doesNotExist"), ex.getMessage());
+      assertTrue(ex.getMessage().contains(NoArgSetters.class.getName()), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("subclass polymorphism: lens applied to a subclass instance reads via the slow path")
+    void lensWorksOnSubclassInstance() {
+      // The fast path is the monomorphic case (source.getClass() == pojoClass). A Lens<Parent, ?>
+      // applied to a ChildBean instance must fall through to readProperty so subclass polymorphism
+      // is preserved — the captured reader was built for ParentBean but ChildBean inherits the
+      // getter and readProperty resolves the GETTER_INVOKERS entry for the runtime class.
+      final io.github.eschizoid.telescope.internal.optics.Lens<ParentBean, String> lens = Beans.lens(
+        ParentBean.class,
+        "id",
+        Beans.autoWriter(ParentBean.class)
+      );
+      final var child = new ChildBean();
+      child.setId("p1");
+      child.setName("alice");
+      assertEquals("p1", lens.get(child));
+    }
   }
 
   @Nested
