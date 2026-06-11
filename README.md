@@ -237,56 +237,6 @@ The intent is identical; the calculus is different. MapStruct trades the typed-r
 things like `source = "user.address.street"` as a single string. Telescope trades the string-path brevity for the
 guarantee that everything you wrote against the source/target types compiles iff it still makes sense.
 
-#### Per-field source/target mapping — side by side
-
-The bread-and-butter MapStruct call — `@Mapping(source="x", target="y")` — has a direct telescope equivalent. The two
-look alike on purpose; the differences are where the safety lives.
-
-```java
-// MapStruct
-@Mapper
-public interface OrderMapper {
-  @Mapping(source = "customerName", target = "fullName")
-  @Mapping(source = "createdAt", target = "createdDate")
-  OrderDto toDto(Order order);
-}
-```
-
-```java
-// telescope — varargs factory
-final var mapper = Telescope.mapper(
-  Mapping.to(Order::getCustomerName, OrderDto::getFullName),
-  Mapping.to(Order::getCreatedAt, OrderDto::getCreatedDate),
-  Mapping.auto() // same-named fields backfill automatically
-);
-
-final OrderDto dto = mapper.forward(order);
-
-final Order back = mapper.backward(dto);
-```
-
-```java
-// telescope — fluent chain (equivalent shape)
-Telescope.map(Order.class).to(OrderDto.class)
-  .field(Order::getCustomerName, OrderDto::getFullName)
-  .field(Order::getCreatedAt,    OrderDto::getCreatedDate)
-  .build();
-```
-
-| Aspect                               | MapStruct                                               | telescope                                                                  |
-| ------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------- |
-| **Source / target syntax**           | Strings: `"customerName"`                               | Typed method references: `Order::getCustomerName`                          |
-| **Typo / type-mismatch caught at**   | Annotation-processor run                                | **`javac` compile time** — the wrong-type accessor doesn't compile         |
-| **Survives a rename (IDE refactor)** | String breaks; processor re-runs and surfaces the error | IDE refactor follows the accessor everywhere                               |
-| **Reverse direction**                | A second method with `@InheritInverseConfiguration`     | Same `Mapping.to(...)` row works both ways                                 |
-| **Nested path** (`source = "a.b.c"`) | Expression-string                                       | `Mapping.via(srcAcc, tgtAcc, nestedMapper)` — typed at every hop           |
-| **Custom expression**                | `@Mapping(expression = "java(...)")`                    | `Mapping.via(srcAcc, tgtAcc, customMapper)` — plain Java mapper, type-safe |
-| **`condition = "..."` predicate**    | Annotation attribute                                    | `Edit.overIfPresent(...)` for updates; `Mapping.drop(...)` for mappings    |
-
-The intent is identical; the calculus is different. MapStruct trades the typed-ref ergonomics for the ability to express
-things like `source = "user.address.street"` as a single string. Telescope trades the string-path brevity for the
-guarantee that everything you wrote against the source/target types compiles iff it still makes sense.
-
 #### When MapStruct is the right pick
 
 - You need flat `Entity → Dto` conversion with hand-tuned `@Mapping` expressions, `@BeforeMapping` / `@AfterMapping`
@@ -310,11 +260,9 @@ guarantee that everything you wrote against the source/target types compiles iff
 
 #### Performance honesty
 
-We have the apples-to-apples numbers
-([`MapStructComparisonBenchmark`](benchmarks/README.md#mapstruct-comparison-apples-to-apples), JDK 25, Apple Silicon, 3
-warmup + 5 measurement × 1 fork) on identical fixture shapes across three depth tiers and both directions. The numbers
-below are the **post-compression** measurement — three perf PRs (#67/#68/#69) targeting `Records.fieldLens` caching,
-`Beans.lens` caching, and per-bridge concrete dispatch landed since the original baseline:
+Apples-to-apples ([`MapStructComparisonBenchmark`](benchmarks/README.md#mapstruct-comparison-apples-to-apples), JDK 25,
+Apple Silicon, 3 warmup + 5 measurement × 1 fork) on identical fixture shapes across three depth tiers and both
+directions:
 
 | Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope runtime (ns/op) |
 | ------ | ------------- | ----------------: | ------------------------: | ------------------------: |
@@ -325,42 +273,37 @@ below are the **post-compression** measurement — three perf PRs (#67/#68/#69) 
 | deep   | bean → record |    73.221 ± 26.95 |            70.358 ± 7.192 |          1967.67 ± 209.23 |
 | deep   | record → bean |  115.222 ± 140.14 |          112.457 ± 175.52 |          2565.21 ± 122.47 |
 
-**Codegen forward direction — before vs after the compression round:**
+**Codegen path vs MapStruct, forward direction:**
 
-| Tier   | Before (baseline) | After (post #67/#68/#69) |  Speedup |                  vs MapStruct now |
-| ------ | ----------------: | -----------------------: | -------: | --------------------------------: |
-| flat   |      15.37 ± 3.27 |            5.649 ± 0.292 | **2.7×** |                      1.46× behind |
-| nested |      17.86 ± 1.45 |           11.065 ± 0.291 | **1.6×** |                      1.99× behind |
-| deep   |     189.43 ± 4.62 |           70.358 ± 7.192 | **2.7×** | **0.96× — tied / slightly ahead** |
+- **Flat tier:** MapStruct 3.86 ns, telescope 5.65 ns — **1.46× behind** (~1.8 ns absolute).
+- **Nested tier:** MapStruct 5.57 ns, telescope 11.07 ns — **1.99× behind** (~5.5 ns absolute).
+- **Deep tier:** MapStruct 73.22 ns, telescope 70.36 ns — **tied within noise** (error bars overlap completely).
 
-**Headline:** the codegen `@Bridge` forward dispatch dropped from 2-4× behind MapStruct to **1.5-2× behind on
-flat/nested** and **tied with MapStruct on the deep tier** (within noise — both ~70 ns, error bars overlap completely).
-On the realistic workload (nested records with element-by-element list conversion), telescope codegen now matches
-hand-templated MapStruct bytecode.
+On the realistic deep workload (nested records with element-by-element list conversion) telescope's `@Bridge` codegen
+matches hand-templated MapStruct bytecode. On flat scalar-pair dispatch, MapStruct is still ~1.8 ns faster per call —
+the constant overhead of routing through `Telescope` + the composed `Iso` is visible on tiny workloads where the actual
+work is itself only a few nanoseconds. On the deep tier (70+ ns of actual work), that constant is in the noise.
 
-**The remaining flat/nested gap** (~1.8 ns absolute on flat, ~5.5 ns on nested) is the constant overhead of routing
-through `Telescope` + the composed `Iso` vs MapStruct's flat-bytecode dispatch. The lattice composition has to land
-somewhere; on small-workload rows it's visible as a fixed cost. On the deep tier (70+ ns of actual work
-element-by-element), the constant overhead is in the noise.
+**Runtime path** (no codegen): `Telescope.from/to/using` reflective bridge. **30–80× slower** than MapStruct's generated
+bytecode — same order-of-magnitude band as `Reflection.invoke`-based mappers. Sub-microsecond on flat/nested,
+single-microsecond on deep. Use codegen for hot paths; the runtime path is fine for one-shot conversions in test code or
+non-hot service layers.
 
 **What this means for picking a tool:**
 
-- **Flat scalar-to-scalar dispatch speed at microsecond budgets: MapStruct.** If your problem is one bean and one DTO
-  with five scalar fields, both directions known at build time, no nested-list iteration, MapStruct's bytecode is still
-  ~1.8 ns faster per call.
-- **Realistic deep workloads: tie.** Nested records with list-of-records inside: telescope codegen now ties MapStruct
-  within noise. The deep tier went from 189 ns → 70 ns.
+- **Microsecond-budget flat scalar dispatch: MapStruct.** Tiny flat conversions in a tight inner loop where 1.8 ns
+  matters: MapStruct's bytecode is the right answer.
+- **Realistic deep workloads: tie.** Nested records with list-of-records inside: telescope codegen ties MapStruct within
+  noise.
 - **Asymmetric capabilities: telescope.** Sealed-narrow paradigm hop, effectful update (`updateAsync` /
   `updateValidated`), JPA cycles, Hibernate `LAZY` proxy unwrap, deep navigation as a primitive — all out of scope for
-  MapStruct's mapping-only model, demoed end-to-end in `examples/springboot/`. Capability wins, not perf wins.
-- **Sub-microsecond context.** Even the slowest telescope row (deep runtime backward, ~2.6 μs) is fine for typical
-  request-handling code — one or a few conversions per request, not millions per second.
+  MapStruct's mapping-only model, demoed end-to-end in `examples/springboot/`.
 
 **Caveats:**
 
 - 5 measurement × 1 fork is the project's standard JMH config; not publication-grade. The `deep_*_backward` rows came
-  back with error bars wider than the scores (`±140` and `±175` ns) — those rows were noisy this run on both sides; the
-  forward column is the reliable head-to-head read.
+  back with error bars wider than the scores (`±140` and `±175` ns) on both sides this run — the forward column is the
+  reliable head-to-head read.
 - Machine load was ~12 (12-core box, ~100% utilization but no oversubscription). A quiet-machine 3-fork run would
   tighten the wide error bars on the deep backward rows.
 

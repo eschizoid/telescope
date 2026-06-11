@@ -243,68 +243,37 @@ iteration). Three depth tiers, both directions, three engines per cell. All 18 r
 | deep   | bean → record |    73.221 ± 26.95 |            70.358 ± 7.192 |          1967.67 ± 209.23 |
 | deep   | record → bean |  115.222 ± 140.14 |          112.457 ± 175.52 |          2565.21 ± 122.47 |
 
-#### Before / after compression — the dispatch round (#67/#68/#69 landed)
+#### Honest read
 
-The original (PR #60) baseline had codegen sitting 2-4× behind MapStruct on every row. Four perf PRs targeted the
-dispatch path:
+**Codegen path, forward direction:**
 
-- **#61** `Telescope.read/find/count/exists/toList` fast-path for single-focus optics (skip the Stream pipeline for Lens
-  / Affine telescopes).
-- **#62** `BridgeProcessor` emits a size-presized `for` loop + direct sub-bridge call for `LIST` / `SET` / `MAP_VALUES`
-  recursion instead of `stream().map(::forward).toList()`.
-- **#63** Optic lattice `.then(...)` composition uses concrete inner classes instead of `Iso.of(lambda, lambda)`, so
-  composed-Iso reads don't pay an extra `Function::apply` hop per composition step.
-- **#67** `Records.fieldLens` captures the LMF-built reader at lens construction — no per-call `(class, name) → idx`
-  scan, no per-call `ClassValue` lookup.
-- **#68** `Beans.lens` captures the LMF-built reader at lens construction — monomorphic fast-path direct dispatch with a
-  subclass-polymorphism fallback that preserves `HibernateProxy` unwrap.
-- **#69** `@Bridge` codegen emits a per-bridge `BridgeFn` concrete class instead of
-  `Telescope.from(...).using(::fwd, ::bwd)`. Each `BRIDGE` constant has its own monomorphic-by-construction dispatch
-  type; the shared `Iso.of` `Function::apply` megamorphism is gone.
+- **Flat tier:** MapStruct 3.86 ns, telescope 5.65 ns — **1.46× behind** (~1.8 ns absolute).
+- **Nested tier:** MapStruct 5.57 ns, telescope 11.07 ns — **1.99× behind** (~5.5 ns absolute).
+- **Deep tier:** MapStruct 73.22 ns, telescope 70.36 ns — **tied within noise**; the difference sits inside both error
+  bars.
 
-Codegen forward direction, before vs after:
-
-| Tier   | Before (PR #60 baseline) | After (post #67/#68/#69) |  Speedup |           vs MapStruct now |
-| ------ | -----------------------: | -----------------------: | -------: | -------------------------: |
-| flat   |             15.37 ± 3.27 |            5.649 ± 0.292 | **2.7×** |               1.46× behind |
-| nested |             17.86 ± 1.45 |           11.065 ± 0.291 | **1.6×** |               1.99× behind |
-| deep   |            189.43 ± 4.62 |            70.358 ± 7.19 | **2.7×** | **0.96× — slightly ahead** |
-
-**Deep tier codegen now ties MapStruct on forward.** 70.36 ns vs 73.22 ns — telescope's score is marginally lower; the
-difference sits inside both error bars, so call it a tie. On flat the residual gap is ~1.8 ns absolute (5.65 vs 3.86),
-on nested ~5.5 ns (11.07 vs 5.57). The remaining gap is the constant overhead of going through `Telescope` + `Iso` vs
-MapStruct's flat-bytecode dispatch — the lattice composition has to land somewhere.
-
-Backward direction was already fast pre-compression (the codegen `_backward` path delegates to `iso.from` directly via
-`Telescope.set` without a Stream pipeline) and stayed roughly the same: flat 7.7 ns, nested 12.3 ns. The deep_backward
-row on both sides came back noisy this run (`±140` and `±175` ns) — the score-vs-error ratio makes the deep_backward
-comparison untrustworthy as a head-to-head; the forward column is the reliable read.
-
-#### Honest read (post-compression)
-
-**MapStruct still wins on the flat and nested forward rows.** No spin. The compression closed the gap from 2-4× to
-1.5-2× behind, and on the deep tier (the most realistic workload — nested records with element-by-element list
-conversion) telescope codegen now matches MapStruct within noise.
-
-**Why MapStruct is still ahead on flat/nested:**
+**Why MapStruct is ahead on flat/nested:**
 
 - MapStruct emits one hand-templated method body per pair, fully monomorphic. The JIT inlines the whole conversion into
   a single basic block.
-- Telescope's `@Bridge` codegen, even after #69's per-bridge `BridgeFn` concrete class (kills the `Function::apply`
-  megamorphism), still goes through a `Telescope.bridge(fn)` → wrapping `Iso` indirection. The `Iso.to` body calls
-  `fn.forward(s)` directly (monomorphic, fully inlinable), but the lattice's `Telescope` field hand-off still costs ~2
-  ns of constant overhead.
-- On flat/nested the workload is tiny (3 ns of actual work), so 1.8 ns of dispatch overhead is the visible delta. On the
-  deep tier (70+ ns of actual work — element-by-element list conversion dominates), the 1-2 ns of dispatch overhead is
-  in the noise.
+- Telescope's `@Bridge` codegen goes through `Telescope.bridge(fn)` → wrapping `Iso` indirection. The `Iso.to` body
+  calls `fn.forward(s)` directly (monomorphic, fully inlinable), but the lattice's `Telescope` field hand-off still
+  costs ~2 ns of constant overhead.
+- On flat/nested the workload is tiny (3-6 ns of actual work), so ~2 ns of dispatch overhead is the visible delta. On
+  the deep tier (70+ ns of actual work — element-by-element list conversion dominates), the constant overhead is in the
+  noise.
+
+**Runtime path** (`Telescope.from/to/using`): **30–80× slower** than MapStruct's generated bytecode — reflective lens
+chain walks the record / bean spine at every level even with the LMF substrate. Sub-microsecond on flat/nested,
+single-microsecond on deep. Reach for codegen on hot paths; the runtime path is fine for one-shot conversions.
 
 **What this means for picking a tool:**
 
 - **Pure flat-pair dispatch speed: MapStruct.** If your problem is "convert this entity to this DTO and back, both
-  directions are known at build time, no nested-list iteration, just scalars" then MapStruct's bytecode is still 1.5-2×
+  directions are known at build time, no nested-list iteration, just scalars" then MapStruct's bytecode is still 1.5×
   faster on the row (3.86 vs 5.65 ns) — absolute delta ~1.8 ns.
-- **Realistic deep workloads: tie.** Nested records with list-of-records inside: telescope codegen now ties MapStruct
-  within noise on forward. The 2.7× compression on the deep tier brought us from 189 ns to 70 ns.
+- **Realistic deep workloads: tie.** Nested records with list-of-records inside: telescope codegen ties MapStruct within
+  noise on forward.
 - **Asymmetric capabilities: telescope.** Sealed-narrow paradigm hop, effectful update (`updateAsync` /
   `updateValidated`), JPA cycle handling, Hibernate `LAZY` proxy unwrap, deep navigation as a primitive — all out of
   scope for MapStruct's mapping-only model, demoed end-to-end in the `examples/springboot/` modules. These are
@@ -318,8 +287,7 @@ conversion) telescope codegen now matches MapStruct within noise.
   ns and `deep_telescope_codegen_backward` ±175 ns error bars are wider than the scores themselves — the deep backward
   rows were noisy this run on both sides. A 10 measurement × 3 fork run would tighten them; the forward column is the
   reliable read.
-- Machine load was ~12 (12-core box, ~100% utilization but no oversubscription). Earlier runs at load 60+ produced
-  unusable noise — the current numbers are the cleanest measurement we have, but a quiet-machine 3-fork run would still
-  be tighter.
+- Machine load was ~12 (12-core box, ~100% utilization but no oversubscription). A quiet-machine 3-fork run would
+  tighten the wide error bars on the deep backward rows.
 - The Telescope `_codegen_backward` rows use `BRIDGE.set(placeholderBean, rec)` which discards the placeholder and
   invokes the underlying `iso.from(rec)`. The `set` adds a small constant overhead vs a direct `iso.from` call.
