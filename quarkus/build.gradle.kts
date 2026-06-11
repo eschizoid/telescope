@@ -3,9 +3,6 @@ plugins {
     `maven-publish`
     signing
     jacoco
-    // Quarkus discovers CDI beans via a pre-built Jandex index instead of scanning bytecode at
-    // startup. Without this plugin the produced jar has no META-INF/jandex.idx and users see a
-    // "Application archive ... is being scanned without a Jandex index" warning + a slower boot.
     id("org.kordamp.gradle.jandex") version "2.1.0"
 }
 

@@ -187,16 +187,23 @@ capability lists, vs-MapStruct callouts, and benchmark cross-links.
 ## What it is _not_
 
 - **Not a MapStruct replacement — and not trying to be.** MapStruct emits one hand-tuned method body per type pair and
-  is still ~1.5–2× faster on flat-pair dispatch (measured — ~1.8 ns absolute on a 5-field conversion). On realistic deep
-  workloads (nested records with list-of-records inside) telescope codegen now ties MapStruct within noise — see
-  [Performance honesty](#performance-honesty). Telescope's case is still the capabilities MapStruct doesn't compose to:
-  deep navigation, effectful update (`updateAsync` / `updateValidated` / `updateEither` / `updateOptional`),
-  sealed-narrow paradigm hop, JPA cycle handling, Hibernate `LAZY` proxy unwrap, bidirectional from one declaration.
-  Spring / Quarkus integration: `telescope-quarkus` ships as an Arc extension (Jandex-discovered, native-image safe);
-  Spring wiring is bring-your-own, demonstrated end-to-end across four Boot apps in
-  [`examples/springboot/`](examples/springboot). If your problem is one of those, see
+  is still ~1.5–2× faster on flat-pair dispatch (measured — ~1.8 ns absolute on a 5-field conversion). On deeper
+  workloads (nested records with list-of-records inside) telescope codegen ties MapStruct within noise. See
+  [Performance honesty](#performance-honesty).
+
+  The case for telescope is the shapes MapStruct doesn't compose to:
+  - deep navigation as a primitive
+  - effectful update (`updateAsync` / `updateValidated` / `updateEither` / `updateOptional`)
+  - sealed-narrow paradigm hop
+  - JPA cycle handling + Hibernate `LAZY` proxy unwrap
+  - bidirectional from one declaration
+
+  `telescope-quarkus` ships as an Arc extension (Jandex-discovered, native-image safe); Spring autoconfig is trivial
+  enough that wiring stays bring-your-own, demonstrated end-to-end across four Boot apps in
+  [`examples/springboot/`](examples/springboot). If your problem is one of the shapes above, see
   [When telescope is the right pick](#when-telescope-is-the-right-pick). If it isn't, MapStruct is the right pick — pick
   it.
+
 - **Not a fuzzy auto-mapper.** `Telescope.map(...)` matches fields by exact name and type, nothing more — no fuzzy name
   heuristics, no flattening, no inferred relationships (that's ModelMapper / Dozer territory, and they lost to MapStruct
   for good reasons). Anything that isn't an exact name match you declare yourself with a `Mapping.to(srcAcc, tgtAcc)` or

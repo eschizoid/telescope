@@ -50,7 +50,7 @@ tasks.withType<Javadoc>().configureEach {
     }
 }
 
-val springBootVersion = "4.0.1"
+val springBootVersion = "4.1.0"
 
 dependencies {
     // Telescope core is the whole point — consumers of the starter expect the library to come along

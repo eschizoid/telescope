@@ -54,6 +54,16 @@ allprojects {
     version = rootProject.scmVersion.version
 }
 
+// Single source of truth for which subprojects ship to Maven Central. Used below to drive both
+// JReleaser staging-repository discovery AND surfaced in the release workflow's diagnostic.
+// When you add a new published module:
+//   1) apply `maven-publish` + configure its `publishing { publications { ... } }` block, and
+//   2) add its project path to this list.
+// The release workflow runs `./gradlew clean build publish -x test` which fans out to every
+// subproject's `publish` task via maven-publish, so step (1) wires up the workflow side for
+// free — the only manual touch left is this list.
+val mavenCentralProjects = listOf(":internal", ":core", ":codegen", ":lombok", ":spring-boot-starter", ":quarkus")
+
 // Root owns markdown + the Gradle Kotlin DSL formatting (no Java source here).
 spotless {
     kotlinGradle {
@@ -138,36 +148,16 @@ jreleaser {
                 create("sonatype") {
                     active.set(ALWAYS)
                     url.set("https://central.sonatype.com/api/v1/publisher")
-                    stagingRepository(
-                        project(":core").layout.buildDirectory
-                            .dir("staging-deploy")
-                            .get()
-                            .asFile.absolutePath,
-                    )
-                    stagingRepository(
-                        project(":codegen").layout.buildDirectory
-                            .dir("staging-deploy")
-                            .get()
-                            .asFile.absolutePath,
-                    )
-                    stagingRepository(
-                        project(":lombok").layout.buildDirectory
-                            .dir("staging-deploy")
-                            .get()
-                            .asFile.absolutePath,
-                    )
-                    stagingRepository(
-                        project(":spring-boot-starter").layout.buildDirectory
-                            .dir("staging-deploy")
-                            .get()
-                            .asFile.absolutePath,
-                    )
-                    stagingRepository(
-                        project(":quarkus").layout.buildDirectory
-                            .dir("staging-deploy")
-                            .get()
-                            .asFile.absolutePath,
-                    )
+                    // Driven by the single `mavenCentralProjects` list above so we don't
+                    // hardcode the same module set twice.
+                    mavenCentralProjects.forEach { path ->
+                        stagingRepository(
+                            project(path).layout.buildDirectory
+                                .dir("staging-deploy")
+                                .get()
+                                .asFile.absolutePath,
+                        )
+                    }
                     enabled.set(true)
                     sign.set(false)
                     maxRetries.set(60)
