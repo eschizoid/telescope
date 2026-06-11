@@ -17,10 +17,10 @@ import java.util.function.Function;
  * pure} is a {@code Valid}.
  *
  * <p>This accumulating {@code map2} is the whole reason {@code Validated} exists separately from
- * {@link io.github.eschizoid.telescope.Either} — when one branch fails, we still want to evaluate
- * the other and report every problem, not stop at the first. Accordingly there is no {@code
- * isFailed} override (it stays {@code false}), so {@code modifyF} processes every focused element
- * rather than short-circuiting.
+ * {@link io.github.eschizoid.telescope.effects.Either} — when one branch fails, we still want to
+ * evaluate the other and report every problem, not stop at the first. Accordingly there is no
+ * {@code isFailed} override (it stays {@code false}), so {@code modifyF} processes every focused
+ * element rather than short-circuiting.
  *
  * <p>Used by {@link io.github.eschizoid.telescope.Telescope#updateValidated}.
  */

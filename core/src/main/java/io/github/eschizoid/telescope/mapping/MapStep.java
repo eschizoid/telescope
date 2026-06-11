@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.mapping;
 
+import io.github.eschizoid.telescope.Telescope;
+
 /**
  * Marker for any row supplied to {@link Telescope#map(Class, Class, MapStep...)} / {@link
  * Telescope#mapper(Class, Class, MapStep...)} — either a {@link Mapping} (field correspondence) or

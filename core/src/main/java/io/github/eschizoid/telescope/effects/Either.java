@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.effects;
 
+import io.github.eschizoid.telescope.Telescope;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;

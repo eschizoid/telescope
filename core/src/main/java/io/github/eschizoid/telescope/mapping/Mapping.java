@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.mapping;
 
+import io.github.eschizoid.telescope.Edit;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;

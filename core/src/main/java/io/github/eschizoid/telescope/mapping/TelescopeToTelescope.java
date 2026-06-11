@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.mapping;
 
+import io.github.eschizoid.telescope.DeepMap;
 import io.github.eschizoid.telescope.Telescope;
 
 /**
