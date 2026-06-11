@@ -50,7 +50,12 @@ public final class Records {
    * A {@link Lens} over a record component, identified by name. The {@code get} reads the
    * component; {@code set}/{@code modify} return a copy of the record with that one component
    * replaced. Backs {@link io.github.eschizoid.telescope.Telescope}'s {@code .fieldByName(String)}
-   * overload.
+   * overload — the late-bound case where the runtime class isn't known until the source flows in.
+   *
+   * <p>This overload pays a per-call {@code (class, name) → idx} lookup. When the declaring class
+   * is known at construction time (every method-reference-based {@code .field(...)} call site),
+   * prefer {@link #fieldLens(Class, String)} which resolves the reader once and bakes the index
+   * into the returned lens.
    *
    * <pre>{@code
    * record User(String name, int age) {}
@@ -75,6 +80,49 @@ public final class Records {
       @SuppressWarnings("unchecked")
       public S modify(final S source, final Function<? super A, ? extends A> f) {
         return updateField(source, fieldName, current -> ((Function<Object, Object>) f).apply(current));
+      }
+    };
+  }
+
+  /**
+   * Class-aware variant of {@link #fieldLens(String)}. Resolves the per-class {@link RecordInfo},
+   * the component index, and the LMF-built reader once at construction; the returned lens's {@code
+   * get} / {@code set} / {@code modify} dispatch directly through the captured handles with no
+   * per-call name lookup.
+   *
+   * <p>Used by the method-reference {@code .field(...)} path on {@link
+   * io.github.eschizoid.telescope.Telescope}, which already knows the declaring class via the
+   * captured method reference. The runtime escape hatch {@code fieldByName(String)} still uses
+   * {@link #fieldLens(String)} because the source class isn't known until call time.
+   *
+   * <pre>{@code
+   * record User(String name, int age) {}
+   * final Lens<User, String> name = Records.fieldLens(User.class, "name");
+   * final var renamed = name.set(new User("ann", 30), "bob"); // User[name=bob, age=30]
+   * }</pre>
+   */
+  public static <S, A> Lens<S, A> fieldLens(final Class<S> cls, final String fieldName) {
+    final var info = info(cls);
+    final var idx = info.indexOf(fieldName);
+    if (idx < 0) throw noField(fieldName, cls);
+    final var reader = info.readers()[idx];
+    return new Lens<>() {
+      @SuppressWarnings("unchecked")
+      @Override
+      public A get(final S source) {
+        if (source == null) return null;
+        return (A) reader.apply(source);
+      }
+
+      @Override
+      public S set(final S source, final A value) {
+        return rebuildWith(info, idx, source, ignored -> value);
+      }
+
+      @Override
+      @SuppressWarnings("unchecked")
+      public S modify(final S source, final Function<? super A, ? extends A> f) {
+        return rebuildWith(info, idx, source, current -> ((Function<Object, Object>) f).apply(current));
       }
     };
   }
@@ -171,6 +219,24 @@ public final class Records {
     final var info = info(cls);
     final var idx = info.indexOf(fieldName);
     if (idx < 0) throw noField(fieldName, cls);
+    return rebuildWith(info, idx, source, fn);
+  }
+
+  /**
+   * Rebuild {@code source} with the component at {@code idx} replaced by {@code fn} applied to its
+   * current value. Captures-friendly: the caller supplies the pre-resolved {@link RecordInfo} and
+   * {@code idx}, so there's no per-call {@code (class, name) → idx} lookup. The class-aware {@link
+   * #fieldLens(Class, String)} overload uses this directly; the late-bound {@link
+   * #updateField(Object, String, Function)} resolves info+idx then delegates here.
+   */
+  @SuppressWarnings("unchecked")
+  private static <S> S rebuildWith(
+    final RecordInfo info,
+    final int idx,
+    final S source,
+    final Function<Object, Object> fn
+  ) {
+    if (source == null) return null;
     final var readers = info.readers();
     final var args = new Object[readers.length];
     for (var i = 0; i < args.length; i++) {
@@ -184,7 +250,7 @@ public final class Records {
     try {
       return (S) info.ctorFn().apply(args);
     } catch (final RuntimeException re) {
-      throw new RuntimeException("Failed to rebuild " + cls.getSimpleName(), re);
+      throw new RuntimeException("Failed to rebuild " + source.getClass().getSimpleName(), re);
     }
   }
 
