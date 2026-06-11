@@ -100,17 +100,13 @@ public sealed interface Mapping<A, B>
    * srcAcc.apply(a))} overlays the leaf. Backward direction is the mirror: read at the target
    * telescope, write to the source via the accessor's lens.
    *
-   * <p><b>Intermediate allocation limitation (v1.0).</b> The overlay requires the target's
-   * intermediate structure (the hops between the root and the leaf — e.g. the {@code shipping} and
-   * {@code recipient} sub-objects above) to be reachable via the base auto-recursion. That happens
-   * when the source has a same-name field for each top-level hop of the telescope (here, an {@code
-   * Order::getShipping}-shaped field on the source) — auto-recursion uses it to allocate the
-   * intermediate, and the overlay then writes the leaf. When the source is genuinely flat (no
-   * same-name field driving an intermediate), the auto-recursion leaves the target field {@code
-   * null} and the overlay NPEs descending into it. For that case, fall back to {@link
-   * #via(Accessor, Accessor, Mapper)} with a small mapper that allocates the intermediate
-   * explicitly. v1.1 will close this gap by synthesizing the intermediate from the telescope's hop
-   * chain (see PLAN.md "Tier 3 — Intermediate allocation").
+   * <p><b>Intermediate allocation.</b> When the source is genuinely flat (no same-name field on the
+   * source matching the telescope's top-level target hop), the engine synthesizes a recursive
+   * default-tree instance of the intermediate's type so the overlay can descend without NPEing on a
+   * null hop. Works for record intermediates at arbitrary depth (the type system drives the
+   * recursion); bean intermediates without a no-arg ctor or builder still need a {@link
+   * #via(Accessor, Accessor, Mapper)} workaround. Primitive defaults follow JLS rules ({@code 0} /
+   * {@code false} / {@code 0.0}).
    */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Telescope<B, X> targetTelescope) {
     return new TelescopeTo<>(src, targetTelescope);

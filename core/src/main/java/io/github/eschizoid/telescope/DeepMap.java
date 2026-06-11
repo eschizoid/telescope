@@ -419,7 +419,21 @@ public final class DeepMap {
       // every nested write. Without any telescope row, the strict same-name check still fires.
       if (!srcNameSet.contains(name)) {
         if (!telescopeFixups.isEmpty()) {
-          byTargetName.putIfAbsent(name, new FieldStep(null, name, NULLING_ISO));
+          // Telescope-row placeholder for a target field with no same-name source. Three cases,
+          // type-driven:
+          //   - field type is a record AND a telescope row claims it as a first hop: allocate a
+          //     recursive default-tree instance so the post-fixup overlay
+          //     (`tgtTelescope.set(t, value)`) can descend into a non-null intermediate. Records
+          //     only for v1.0; beans need a no-arg ctor or builder which isn't always present —
+          //     deferred to v1.1.
+          //   - field type is a primitive: return the JLS default (0 / false / etc.) so canonical-
+          //     ctor reflection doesn't NPE unboxing a null Object.
+          //   - everything else: NULLING_ISO (null reference, unchanged behavior).
+          final var fieldType = rawClassOf(tgtRefl.genericType(target, name));
+          byTargetName.putIfAbsent(
+            name,
+            new FieldStep(null, name, placeholderIsoFor(fieldType, telescopeWritesTgt.contains(name)))
+          );
           continue;
         }
         throw new IllegalStateException(
@@ -1038,6 +1052,82 @@ public final class DeepMap {
    */
   private static <X> Iso<Object, Object> computeIso(final java.util.function.Supplier<? extends X> supplier) {
     return Iso.of(_ -> supplier.get(), _ -> null);
+  }
+
+  /**
+   * Forward-only iso that materialises a fresh default-tree instance of {@code recordType} on every
+   * forward call. Used as the placeholder for telescope-row-claimed target fields that have no
+   * same-name source counterpart — the post-fixup overlay descends into the allocated instance and
+   * writes the leaf, so a fully-flat source can be lifted into a deeply-nested target without
+   * per-hop allocation glue.
+   *
+   * <p>Records only. Bean intermediates still get {@link #NULLING_ISO}; bean allocation needs a
+   * no-arg constructor or builder shape that isn't always present and would muddy the v1.0
+   * cut-line.
+   */
+  private static Iso<Object, Object> defaultAllocatorIso(final Class<?> recordType) {
+    return Iso.of(_ -> recursiveDefault(recordType), _ -> null);
+  }
+
+  /**
+   * Construct a default-tree instance of {@code type} — primitives get their JLS default (0, false,
+   * etc.), records recurse via their canonical constructor with the same scheme, all other
+   * reference types get {@code null}.
+   *
+   * <p>Cycles between record types can't arise in practice: each canonical ctor needs every other
+   * type already constructible, so a record cycle would fail at compile time. No cycle-detection
+   * needed.
+   */
+  @SuppressWarnings({ "rawtypes", "unchecked" })
+  private static Object recursiveDefault(final Class<?> type) {
+    if (type.isPrimitive()) return primitiveDefault(type);
+    if (type.isRecord()) {
+      final var comps = type.getRecordComponents();
+      final var byName = new HashMap<String, Object>(comps.length);
+      for (final var comp : comps) byName.put(comp.getName(), recursiveDefault(comp.getType()));
+      return io.github.eschizoid.telescope.internal.Records.construct((Class) type, byName::get);
+    }
+    return null;
+  }
+
+  private static Object primitiveDefault(final Class<?> p) {
+    if (p == int.class) return 0;
+    if (p == long.class) return 0L;
+    if (p == boolean.class) return false;
+    if (p == double.class) return 0.0;
+    if (p == float.class) return 0.0f;
+    if (p == byte.class) return (byte) 0;
+    if (p == short.class) return (short) 0;
+    if (p == char.class) return (char) 0;
+    return null;
+  }
+
+  /**
+   * Type-aware placeholder Iso for the permissive-mode block in {@link #populateIso}. Picks the
+   * right "missing source field" filler based on the target field's type and whether a telescope
+   * row claims the field as its first hop.
+   */
+  private static Iso<Object, Object> placeholderIsoFor(
+    final Class<?> fieldType,
+    final boolean claimedByTelescopeWrite
+  ) {
+    if (fieldType == null) return NULLING_ISO;
+    if (claimedByTelescopeWrite && fieldType.isRecord()) return defaultAllocatorIso(fieldType);
+    if (fieldType.isPrimitive()) {
+      final var value = primitiveDefault(fieldType);
+      return Iso.of(_ -> value, _ -> value);
+    }
+    return NULLING_ISO;
+  }
+
+  /**
+   * Strip generics from a {@link Type} to the raw {@link Class}, returning {@code null} for
+   * anything that isn't a class or a parameterized type (wildcards, type variables, etc.).
+   */
+  private static Class<?> rawClassOf(final Type t) {
+    if (t instanceof Class<?> c) return c;
+    if (t instanceof ParameterizedType pt && pt.getRawType() instanceof Class<?> c) return c;
+    return null;
   }
 
   /**
