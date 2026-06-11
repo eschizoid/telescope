@@ -307,6 +307,46 @@ class TelescopeTest {
     }
 
     @Test
+    @DisplayName("Telescope.bridge(BridgeFn) — concrete-type dispatch path mirrors using(...) semantics")
+    void bridgeFnFactory() {
+      final var bridge = Telescope.bridge(
+        new io.github.eschizoid.telescope.conversion.BridgeFn<UserEntity, UserDto>() {
+          @Override
+          public UserDto forward(final UserEntity e) {
+            return new UserDto(e.id(), e.email(), e.name());
+          }
+
+          @Override
+          public UserEntity backward(final UserDto d) {
+            return new UserEntity(d.id(), d.email(), d.name());
+          }
+        }
+      );
+
+      final var entity = new UserEntity("u1", "Alice@Example.COM", "Alice");
+
+      // forward read
+      assertEquals(new UserDto("u1", "Alice@Example.COM", "Alice"), bridge.read(entity));
+
+      // round-trip modify: convert via Fn, mutate, rebuild entity
+      final var lowered = bridge.update(entity, dto -> new UserDto(dto.id(), dto.email().toLowerCase(), dto.name()));
+      assertEquals(new UserEntity("u1", "alice@example.com", "Alice"), lowered);
+
+      // composes into a longer path same as from/to/using does
+      final var page = new EntityPage(
+        List.of(new UserEntity("u1", "Alice@Example.COM", "Alice"), new UserEntity("u2", "BOB@example.com", "Bob")),
+        2
+      );
+      final var emailsViaDto = Telescope.of(EntityPage.class)
+        .each(EntityPage::items)
+        .then(bridge)
+        .field(UserDto::email);
+      final var normalized = emailsViaDto.update(page, String::toLowerCase);
+      assertEquals("alice@example.com", normalized.items().get(0).email());
+      assertEquals("bob@example.com", normalized.items().get(1).email());
+    }
+
+    @Test
     @DisplayName("reverse direction available by swapping arguments to using(...)")
     void reverseViaSwappedArgs() {
       final Function<UserEntity, UserDto> toDto = e -> new UserDto(e.id(), e.email(), e.name());

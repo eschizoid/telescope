@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.conversion.BridgeFn;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.effects.Either;
@@ -177,6 +178,39 @@ public sealed class Telescope<
     final Function<? super B, ? extends A> backward
   ) {
     return wrap(Iso.of(forward, backward));
+  }
+
+  /**
+   * Build a {@code Telescope<A, B>} backed by an {@link Iso} from a {@link BridgeFn} pair. Same
+   * semantics as {@link #iso(Function, Function)}, but the dispatch site sees one concrete {@code
+   * BridgeFn} type per bridge instead of two raw {@link Function} captures — codegen emits one
+   * implementing class per {@code @Bridge}-annotated type, so the {@code forward(s)} / {@code
+   * backward(t)} call inside the wrapped {@code Iso} stays monomorphic at the bridge constant's
+   * read site, where {@code iso(Function, Function)}'s {@code Function::apply} hop would go
+   * megamorphic across many bridges sharing the same anonymous {@code Iso} class body.
+   *
+   * <p>The wrapped {@code Iso} calls {@code fn.forward(...)} / {@code fn.backward(...)} directly —
+   * no method-reference lambda, no {@code Function::apply} bridge.
+   *
+   * @param fn the bidirectional conversion pair
+   * @param <A> source type
+   * @param <B> target type
+   * @see BridgeFn
+   */
+  public static <A, B> Telescope<A, B> bridge(final BridgeFn<A, B> fn) {
+    return wrap(
+      new Iso<A, B>() {
+        @Override
+        public B to(final A source) {
+          return fn.forward(source);
+        }
+
+        @Override
+        public A from(final B value) {
+          return fn.backward(value);
+        }
+      }
+    );
   }
 
   /**
