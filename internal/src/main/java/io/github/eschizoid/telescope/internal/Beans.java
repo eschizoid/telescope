@@ -505,6 +505,23 @@ public final class Beans {
    * properties carried over) via {@code writer}. Immutable — it never mutates {@code source}.
    * Powers {@code Telescope.ofBean(...).field(...)}.
    *
+   * <p>The {@code (pojoClass, property)} pair is constant at construction, so the LMF-built {@link
+   * Function Function&lt;Object, Object&gt;} reader is resolved <em>once</em> via {@link
+   * #GETTER_INVOKERS} and captured by the returned {@code Lens}. Per-call {@code get(source)}
+   * dispatches directly through the captured reader — no per-call ClassValue probe, no per-call
+   * HashMap lookup. The lens fails fast at build time (rather than at first read) if {@code
+   * property} has no getter on {@code pojoClass}.
+   *
+   * <p>Subclass / proxy polymorphism is preserved through a single-instanceof fast-path: when
+   * {@code source.getClass() == pojoClass} the captured reader runs directly; otherwise the call
+   * falls through to {@link #readProperty(Object, String)}, which handles both Hibernate-proxy
+   * unwrap (via {@link #persistentClassOf}) and ordinary subclass instances by looking up the
+   * reader for the runtime class. The common monomorphic case (the lens is applied to instances of
+   * exactly {@code pojoClass}) avoids both the ClassValue probe and the HashMap lookup the slow
+   * path pays. The reads-via-getter terminal in {@code set}/{@code modify} routes through the same
+   * fast-path: each off-path carry-over read picks the cached reader straight from the captured
+   * map.
+   *
    * <pre>{@code
    * final Lens<UserPojo, String> email =
    *     Beans.lens(UserPojo.class, "email", Beans.autoWriter(UserPojo.class));
@@ -513,21 +530,53 @@ public final class Beans {
    */
   public static <P, A> Lens<P, A> lens(final Class<P> pojoClass, final String property, final BeanWriter<P> writer) {
     final var names = propertyNames(pojoClass);
+    // Capture the full reader map for pojoClass once at construction. The per-property reader is
+    // pulled from the same map for both the focused `get` and the off-path carry-over reads in
+    // `set`/`modify`, so all dispatch on the fast path is a direct map.apply call — no per-call
+    // ClassValue probe, no per-call HashMap lookup against the JDK's per-Class table.
+    final var capturedReaders = GETTER_INVOKERS.get(pojoClass);
+    final var capturedReader = capturedReaders.get(property);
+    if (capturedReader == null) throw new IllegalArgumentException(
+      "No getter for property '" + property + "' on " + pojoClass.getName()
+    );
     return new Lens<>() {
       @Override
       @SuppressWarnings("unchecked")
       public A get(final P source) {
+        // Fast path: the lens is applied to an instance of exactly pojoClass — dispatch directly
+        // through the captured reader. Covers the common monomorphic case (the typical
+        // Telescope.ofBean(X.class).field(X::getY) usage) and skips the ClassValue + HashMap probe
+        // readProperty would have done.
+        if (source != null && source.getClass() == pojoClass) return (A) capturedReader.apply(source);
+        // Slow path: subclass instance, or a HibernateProxy whose persistent class differs from
+        // the runtime class. readProperty handles both correctly via persistentClassOf + the
+        // per-class GETTER_INVOKERS cache, so a Lens<User, X> applied to a SuperUser instance still
+        // reads the right value (the SuperUser entry is computed once and cached on first miss).
         return (A) readProperty(source, property);
       }
 
       @Override
       public P set(final P source, final A value) {
-        return writer.construct(names, n -> n.equals(property) ? value : readProperty(source, n));
+        return writer.construct(names, n -> n.equals(property) ? value : readForRebuild(source, n));
       }
 
       @Override
       public P modify(final P source, final Function<? super A, ? extends A> f) {
         return set(source, f.apply(get(source)));
+      }
+
+      // Mirrors the get() fast-path for the off-path values the writer needs to copy over.
+      // Off-path reads are called once per non-focused property per set/modify, so they benefit
+      // from the same capture as the focused read.
+      private Object readForRebuild(final P source, final String name) {
+        if (source != null && source.getClass() == pojoClass) {
+          final var reader = capturedReaders.get(name);
+          if (reader == null) throw new IllegalArgumentException(
+            "No getter for property '" + name + "' on " + pojoClass.getName()
+          );
+          return reader.apply(source);
+        }
+        return readProperty(source, name);
       }
     };
   }
