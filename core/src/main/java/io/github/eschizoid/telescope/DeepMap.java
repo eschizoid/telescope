@@ -897,8 +897,26 @@ public final class DeepMap {
     final Map<String, FieldStep> byTargetName,
     final Map<String, FieldStep> bySourceName
   ) {
-    final Iso<S, Map<String, Object>> srcReader = srcRefl.structuralIso(source).reverse();
-    final Iso<Map<String, Object>, T> tgtBuilder = tgtRefl.structuralIso(target);
+    // Pre-resolve the holder data on the :core side (Telescope is visible here) and pass into
+    // Reflective.structuralIso so :internal stays compile-time-oblivious to :core — no callback,
+    // no global state, no static-init bridge. holderReadersFor returns null when the holder is
+    // missing OR doesn't cover every component; the Iso then falls back to the reflective read
+    // path (matches the prior dispatch-shape invariant: one branch outside the Iso, not N
+    // branches inside).
+    final var srcNames = srcRefl.names(source);
+    final var srcHolderReaders = Telescope.holderReadersFor(source, srcNames);
+    final var srcHolderConstructor = Telescope.holderConstructorFor(source);
+    final var tgtNames = tgtRefl.names(target);
+    final var tgtHolderReaders = Telescope.holderReadersFor(target, tgtNames);
+    final var tgtHolderConstructor = Telescope.holderConstructorFor(target);
+    final Iso<S, Map<String, Object>> srcReader = srcRefl
+      .structuralIso(source, srcHolderReaders, srcHolderConstructor)
+      .reverse();
+    final Iso<Map<String, Object>, T> tgtBuilder = tgtRefl.structuralIso(
+      target,
+      tgtHolderReaders,
+      tgtHolderConstructor
+    );
     final Iso<Map<String, Object>, Map<String, Object>> remap = remapIso(byTargetName, bySourceName);
     return nullable(srcReader.then(remap).then(tgtBuilder));
   }

@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.internal;
 
-import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -46,29 +45,16 @@ public final class MetadataHolderProbe {
   private MetadataHolderProbe() {}
 
   /**
-   * Static-init bridge to break the otherwise-circular dependency between this {@code :internal}
-   * module and {@code :api}. {@code Telescope} (in {@code :api}) registers a function that pulls
-   * its package-private {@code optic} field out of a {@code Telescope} instance — invoked here in
-   * {@link HolderRef#lensFor} to recover a {@link Lens} from a codegen-emitted holder constant
-   * without importing {@code Telescope} at compile time.
-   *
-   * <p>Order is safe: every dispatch site that calls {@link #probeFor} lives inside {@code
-   * Telescope}, so {@code Telescope}'s static initializer (which registers the extractor) has
-   * already fired before any probe runs.
-   */
-  private static volatile Function<Object, Object> opticExtractor;
-
-  /** Called once by {@code Telescope}'s static initializer to wire the bridge. */
-  public static void setOpticExtractor(final Function<Object, Object> extractor) {
-    opticExtractor = extractor;
-  }
-
-  /**
    * A discovered sibling {@code <X>Telescope} metadata holder for some class: the holder class
    * itself (used in diagnostics), the immutable name &rarr; constant lookup table, and a cached
    * {@link Function} bound to the holder's static {@code construct(Function<String, Object>)}
-   * method. Each constant is a {@code Telescope} instance built via {@code Telescope.lens} at
-   * codegen time. {@link #lensFor} unwraps one to a {@link Lens} for the dispatch site.
+   * method.
+   *
+   * <p>Each value in {@code constantsByName} is a {@code Telescope} instance built via {@code
+   * Telescope.lens} at codegen time, typed as {@link Object} here because {@code :internal} does
+   * not see {@code Telescope}. The caller in {@code :core} casts to {@code Telescope} and reads its
+   * underlying optic — keeping the cast on the side of the module that owns the type. No callback,
+   * no global state, no static-init bridge.
    *
    * <p>The {@code constructor} field is always non-{@code null} when the holder is present — the
    * probe throws {@link IllegalStateException} if the holder is missing the required {@code
@@ -79,26 +65,7 @@ public final class MetadataHolderProbe {
     Class<?> holderClass,
     Map<String, Object> constantsByName,
     Function<Function<String, Object>, Object> constructor
-  ) {
-    /**
-     * The {@link Lens} backing the holder constant named {@code name}, or {@code null} if the
-     * holder doesn't expose that name. Dispatch sites in {@code Telescope} handle the {@code null}
-     * case by throwing {@link IllegalStateException} with a precise diagnostic — silent fallback
-     * would mask stale codegen.
-     *
-     * <p>The cast routes through {@link #opticExtractor} — the static-init bridge that {@code
-     * Telescope} (in {@code :api}) registers at class-load time to expose its underlying optic
-     * field. This indirection keeps {@code :internal} compile-time-independent of {@code :api} (no
-     * {@code Telescope} import here) while still letting holder dispatch recover a {@link Lens} at
-     * runtime. If a future processor emits a wider optic ({@code Traversal}, {@code Affine}), the
-     * cast surfaces as a {@code ClassCastException} at dispatch.
-     */
-    public Lens<?, ?> lensFor(final String name) {
-      final var constant = constantsByName.get(name);
-      if (constant == null) return null;
-      return (Lens<?, ?>) opticExtractor.apply(constant);
-    }
-  }
+  ) {}
 
   private static final ClassValue<Optional<HolderRef>> CACHE = new ClassValue<>() {
     @Override
@@ -114,38 +81,6 @@ public final class MetadataHolderProbe {
    */
   public static Optional<HolderRef> probeFor(final Class<?> beanOrRecord) {
     return CACHE.get(beanOrRecord);
-  }
-
-  /**
-   * The pre-baked {@link Lens} for property {@code name} on {@code beanOrRecord}, or {@code null}
-   * if the class has no sibling {@code <X>Telescope} holder. Used by the dispatch sites on {@code
-   * Telescope} to short-circuit the reflective {@code Records.fieldLens} / {@code Beans.lens} path
-   * when the holder is present.
-   *
-   * <p>When the holder IS present but the requested {@code name} is missing, this method throws
-   * {@link IllegalStateException} with a precise diagnostic — silent fallback would mask stale
-   * codegen or accessor / component-name mismatches.
-   *
-   * @throws IllegalStateException when the holder is present but doesn't expose {@code name}
-   */
-  @SuppressWarnings("unchecked")
-  public static <S, A> Lens<S, A> lensFromHolder(final Class<S> beanOrRecord, final String name) {
-    final var maybeHolder = probeFor(beanOrRecord);
-    if (maybeHolder.isEmpty()) return null;
-    final var holder = maybeHolder.get();
-    final var lens = holder.lensFor(name);
-    if (lens == null) {
-      throw new IllegalStateException(
-        "Component '" +
-          name +
-          "' not found in " +
-          beanOrRecord.getName() +
-          "'s metadata holder (" +
-          holder.holderClass().getName() +
-          "). Re-run the @Focus / @BeanFocus processor."
-      );
-    }
-    return (Lens<S, A>) lens;
   }
 
   private static Optional<HolderRef> probe(final Class<?> cls) {

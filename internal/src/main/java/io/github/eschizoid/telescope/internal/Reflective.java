@@ -140,9 +140,27 @@ public record Reflective(
    * (unannotated types), today's reflective {@link #read} / {@link #construct} paths run unchanged.
    */
   public <T> Iso<Map<String, Object>, T> structuralIso(final Class<T> cls) {
+    return structuralIso(cls, null, null);
+  }
+
+  /**
+   * Holder-aware overload of {@link #structuralIso(Class)}: when {@code holderReaders} / {@code
+   * holderConstructor} are non-{@code null}, the returned Iso short-circuits the reflective read /
+   * construct paths through the pre-resolved holder data. Both inputs are resolved by the caller in
+   * {@code :core} (where {@code Telescope} is visible to unwrap holder constants); passing them
+   * here keeps {@code :internal} compile-time-oblivious to {@code :core} — no callback, no global
+   * state, no static-init bridge.
+   *
+   * <p>{@code holderConstructor} is the bound {@code construct(Function<String, Object>)} function
+   * the holder emits; {@code holderReaders} is the {@code name -> Lens} table that bypasses {@link
+   * #read} on the backward branch. Both null when the class carries no sibling holder.
+   */
+  public <T> Iso<Map<String, Object>, T> structuralIso(
+    final Class<T> cls,
+    final Map<String, Lens<Object, Object>> holderReaders,
+    final Function<Function<String, Object>, Object> holderConstructor
+  ) {
     final var componentNames = names(cls);
-    final var holderReaders = resolveHolderReaders(cls, componentNames);
-    final var holderConstructor = resolveHolderConstructor(cls);
     return Iso.of(
       map -> {
         if (holderConstructor != null) return cls.cast(holderConstructor.apply(map::get));
@@ -158,44 +176,6 @@ public record Reflective(
         return out;
       }
     );
-  }
-
-  /**
-   * If a sibling {@code <X>Telescope} holder is on the classpath, return its bound {@code
-   * construct(Function<String, Object>)} function so the forward branch of {@link #structuralIso}
-   * bypasses {@link #construct} entirely. Returns {@code null} when no holder is present — the
-   * caller falls back to the reflective {@link #construct} path. Matches the
-   * pre-resolution-or-nothing posture of {@link #resolveHolderReaders}: one branch outside the
-   * {@link Iso}'s hot map, not inside.
-   */
-  private static Function<Function<String, Object>, Object> resolveHolderConstructor(final Class<?> cls) {
-    return MetadataHolderProbe.probeFor(cls).map(MetadataHolderProbe.HolderRef::constructor).orElse(null);
-  }
-
-  /**
-   * If a sibling {@code <X>Telescope} holder is on the classpath AND it exposes a lens constant for
-   * every component in {@code componentNames}, return the {@code name -> Lens} table the backward
-   * branch of {@link #structuralIso} uses to bypass {@link #read} entirely. Otherwise return {@code
-   * null} — the caller falls back to the reflective {@link #read} path. The
-   * pre-resolution-or-nothing posture avoids per-component branching inside the {@link Iso}'s hot
-   * loop (one branch outside vs. {@code N} branches inside) and matches the Phase B dispatch shape
-   * in {@code Telescope.field}.
-   */
-  @SuppressWarnings("unchecked")
-  private static Map<String, Lens<Object, Object>> resolveHolderReaders(
-    final Class<?> cls,
-    final String[] componentNames
-  ) {
-    final var maybeHolder = MetadataHolderProbe.probeFor(cls);
-    if (maybeHolder.isEmpty()) return null;
-    final var holder = maybeHolder.get();
-    final var readers = new LinkedHashMap<String, Lens<Object, Object>>();
-    for (final var name : componentNames) {
-      final var lens = holder.lensFor(name);
-      if (lens == null) return null;
-      readers.put(name, (Lens<Object, Object>) lens);
-    }
-    return readers;
   }
 
   @SuppressWarnings({ "rawtypes", "unchecked" })
