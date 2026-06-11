@@ -16,7 +16,16 @@ import io.github.eschizoid.telescope.DeepMap;
 public sealed interface MappingInternals<
   A,
   B
-> permits SameTypedTo, TypedTransformTo, Via, Drop, TelescopeTo, FromTelescopeTo, TelescopeToTelescope {
+> permits
+  SameTypedTo,
+  TypedTransformTo,
+  Via,
+  Drop,
+  TelescopeTo,
+  FromTelescopeTo,
+  TelescopeToTelescope,
+  Constant,
+  Compute {
   /**
    * Source class this row keys against (the declaring class of the source accessor, recovered via
    * {@code SerializedLambda}). May be {@code null} for permits whose source side is a {@code

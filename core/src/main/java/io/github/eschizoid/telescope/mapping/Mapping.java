@@ -5,6 +5,7 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * One field correspondence in a {@link Telescope#map(Class, Class, MapStep...)} call — supplies an
@@ -36,7 +37,16 @@ import java.util.function.Function;
  */
 public sealed interface Mapping<A, B>
   extends MapStep
-  permits SameTypedTo, TypedTransformTo, Via, Drop, TelescopeTo, FromTelescopeTo, TelescopeToTelescope
+  permits
+    SameTypedTo,
+    TypedTransformTo,
+    Via,
+    Drop,
+    TelescopeTo,
+    FromTelescopeTo,
+    TelescopeToTelescope,
+    Constant,
+    Compute
 {
   /** Same-typed correspondence: {@code src↔tgt}, both with leaf type {@code X}. Identity. */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Accessor<B, X> tgt) {
@@ -243,5 +253,58 @@ public sealed interface Mapping<A, B>
     @SuppressWarnings("unchecked")
     final var castTarget = (Class<B>) target;
     return new Drop<>(src, castTarget);
+  }
+
+  /**
+   * Stamp a fixed value onto a target field at forward time. Closes MapStruct's
+   * {@code @Mapping(target = "tenant", constant = "production")} — the literal lives at the call
+   * site, statically typed against the target leaf, no string parser.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     constant(OrderDto::tenant,    "production"),
+   *     constant(OrderDto::apiVersion, 7));
+   * }</pre>
+   *
+   * <p><b>Forward-only.</b> The source side has no slot for this value, so {@code
+   * mapper.backward(dto)} silently drops it — the rebuilt source carries the type default at the
+   * dual slot. Same retraction semantics as {@link #drop(Accessor)} on the source side.
+   *
+   * <p><b>Eager.</b> The literal is captured once at row construction; every forward call stamps
+   * the same reference. For values that should be re-evaluated per call (timestamps, fresh
+   * containers, IDs) use {@link #compute(Accessor, Supplier)} instead — a literal {@code
+   * constant(Tgt::metadata, new HashMap<>())} would share one map across every forward call, which
+   * is almost never what you want.
+   */
+  static <A, B, X> Mapping<A, B> constant(final Accessor<B, X> tgt, final X value) {
+    return new Constant<>(tgt, value);
+  }
+
+  /**
+   * Stamp a freshly-evaluated value onto a target field at every forward call. Closes MapStruct's
+   * {@code @Mapping(target = "createdAt", expression = "java(Instant.now())")} but in plain typed
+   * Java — the {@link Supplier} is type-checked against the target leaf by {@code javac}, no
+   * string-templated expression body.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id,       OrderDto::id),
+   *     compute(OrderDto::createdAt, Instant::now),     // fresh timestamp per call
+   *     compute(OrderDto::traceId,   UUID::randomUUID), // fresh ID per call
+   *     compute(OrderDto::metadata,  HashMap::new));    // fresh container per call
+   * }</pre>
+   *
+   * <p><b>Forward-only.</b> Same backward-drop semantics as {@link #constant(Accessor, Object)}.
+   * Note that this means {@code mapper.forward(mapper.backward(dto))} does NOT round-trip a {@code
+   * compute} row's value — by design: a supplier like {@code Instant::now} cannot be inverted.
+   * Document any roundtrip assumption explicitly.
+   *
+   * <p><b>Lazy.</b> The supplier fires on every forward call, not once at row construction. Use
+   * this whenever the value involves mutable state, time, randomness, or a fresh allocation; use
+   * {@link #constant(Accessor, Object)} when the value is genuinely a shared literal.
+   */
+  static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final Supplier<? extends X> supplier) {
+    return new Compute<>(tgt, supplier);
   }
 }

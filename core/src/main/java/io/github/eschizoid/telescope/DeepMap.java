@@ -4,6 +4,8 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.mapping.Compute;
+import io.github.eschizoid.telescope.mapping.Constant;
 import io.github.eschizoid.telescope.mapping.Drop;
 import io.github.eschizoid.telescope.mapping.FromTelescopeTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
@@ -321,6 +323,41 @@ public final class DeepMap {
         if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
         if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
         telescopeFixups.add(ttRow);
+        continue;
+      }
+      // Constant / Compute rows are the target-side mirror of Drop: they claim a target field
+      // with no source counterpart, stamping a fixed (Constant) or freshly-supplied (Compute)
+      // value into the rebuilt target at forward time. Backward direction silently drops the
+      // slot — the rebuilt source carries the type default at the dual position (same retraction
+      // semantics as Drop, in the inverse direction). Register only under byTargetName so the
+      // forward pass picks them up; absence from bySourceName means the source rebuilder ignores
+      // the slot entirely on backward.
+      if (row instanceof Constant<?, ?, ?> cRow) {
+        final var tgtFieldName = tgtRefl.normalize(internals.targetField());
+        if (!claimedTgt.add(tgtFieldName)) throw new IllegalArgumentException(
+          "Deep map " +
+            source.getSimpleName() +
+            " → " +
+            target.getSimpleName() +
+            ": duplicate override row for target field '" +
+            tgtFieldName +
+            "'. Each (source, target) type pair may declare at most one row per target field."
+        );
+        byTargetName.put(tgtFieldName, new FieldStep(null, tgtFieldName, constantIso(cRow.value())));
+        continue;
+      }
+      if (row instanceof Compute<?, ?, ?> cpRow) {
+        final var tgtFieldName = tgtRefl.normalize(internals.targetField());
+        if (!claimedTgt.add(tgtFieldName)) throw new IllegalArgumentException(
+          "Deep map " +
+            source.getSimpleName() +
+            " → " +
+            target.getSimpleName() +
+            ": duplicate override row for target field '" +
+            tgtFieldName +
+            "'. Each (source, target) type pair may declare at most one row per target field."
+        );
+        byTargetName.put(tgtFieldName, new FieldStep(null, tgtFieldName, computeIso(cpRow.supplier())));
         continue;
       }
       // Drop rows claim a source field with no target counterpart — they exist to satisfy the
@@ -726,6 +763,11 @@ public final class DeepMap {
       case TelescopeToTelescope<?, ?, ?> _ -> throw new IllegalStateException(
         "TelescopeToTelescope row should not reach fieldIsoOf"
       );
+      // Constant / Compute rows build their iso inline (constantIso / computeIso) at registration
+      // time in populateIso, since fieldIsoOf doesn't have the captured value / supplier in scope.
+      // These cases exist only to keep the sealed switch exhaustive.
+      case Constant<?, ?, ?> _ -> throw new IllegalStateException("Constant row should not reach fieldIsoOf");
+      case Compute<?, ?, ?> _ -> throw new IllegalStateException("Compute row should not reach fieldIsoOf");
     };
   }
 
@@ -980,6 +1022,23 @@ public final class DeepMap {
    * fields that have no target counterpart; the forward direction skips the field entirely.
    */
   private static final Iso<Object, Object> NULLING_ISO = Iso.of(_ -> null, _ -> null);
+
+  /**
+   * Forward-only iso for {@link Constant} rows: {@code to(_)} ignores its argument and returns the
+   * captured literal; {@code from(_)} returns {@code null} (the backward direction discards the
+   * slot, mirroring {@link #NULLING_ISO} on the source side).
+   */
+  private static <X> Iso<Object, Object> constantIso(final X value) {
+    return Iso.of(_ -> value, _ -> null);
+  }
+
+  /**
+   * Forward-only iso for {@link Compute} rows: {@code to(_)} invokes the supplier on every call
+   * (fresh value each forward); {@code from(_)} returns {@code null}.
+   */
+  private static <X> Iso<Object, Object> computeIso(final java.util.function.Supplier<? extends X> supplier) {
+    return Iso.of(_ -> supplier.get(), _ -> null);
+  }
 
   /**
    * Bundled return from {@link #resolution(Class, Class, MapStep...)} — the Iso and the patch
