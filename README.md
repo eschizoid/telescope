@@ -93,6 +93,48 @@ emails.toList(company);   // List<String> of every email
 emails.count(company);    // how many
 ```
 
+### Mapping
+
+Same tree, now translate `Company` to a partner-facing `CompanyDto` with a few renamed fields — **one definition, both
+directions**:
+
+```java
+record AddressDto(String town, String postalCode) {}
+
+record UserDto(String fullName, int age, String email, AddressDto address) {}
+
+record TeamDto(String name, List<UserDto> users) {}
+
+record DepartmentDto(String name, List<TeamDto> teams) {}
+
+record CompanyDto(String name, List<DepartmentDto> departments) {}
+
+final Mapper<Company, CompanyDto> dtoMapper = Telescope.mapper(
+  Company.class,
+  CompanyDto.class,
+  to(User::name, UserDto::fullName), // rename, applies everywhere User↔UserDto recurses
+  to(Address::city, AddressDto::town),
+  to(Address::zip, AddressDto::postalCode)
+);
+
+final CompanyDto dto = dtoMapper.forward(company);
+
+final Company restored = dtoMapper.backward(dto); // ← bidirectional from one definition
+```
+
+Same-name fields auto-recurse (`User::email`, `User::age`, all the list/tree wiring). You only name what changes.
+MapStruct needs a second `@Mapper` interface for the inverse direction; telescope does not.
+
+Need a flat field to land at a nested target leaf — MapStruct's `@Mapping(source = "flat", target = "a.b.c")`? The
+codegen-emitted navigator is a first-class argument to `Mapping.to(...)`:
+
+```java
+Telescope.mapper(Cart.class, CartDto.class,
+  to(Cart::customerName, CartDtoTelescope.of().shipping().recipient().fullName()));
+```
+
+Every hop is typed; `javac` and the IDE refactor follow each step.
+
 ### Beans
 
 POJOs don't need a mirror record. Navigate the bean directly with `ofBean`; `set`/`update` rebuild it immutably, so the
