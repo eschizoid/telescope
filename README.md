@@ -227,7 +227,7 @@ Telescope.map(Order.class).to(OrderDto.class)
 | **Typo / type-mismatch caught at**   | Annotation-processor run                                | **`javac` compile time** — the wrong-type accessor doesn't compile         |
 | **Survives a rename (IDE refactor)** | String breaks; processor re-runs and surfaces the error | IDE refactor follows the accessor everywhere                               |
 | **Reverse direction**                | A second method with `@InheritInverseConfiguration`     | Same `Mapping.to(...)` row works both ways                                 |
-| **Nested path** (`source = "a.b.c"`) | Expression-string                                       | `Mapping.via(srcAcc, tgtAcc, nestedMapper)` — typed at every hop           |
+| **Nested path** (`source = "a.b.c"`) | Expression-string                                       | `mapper.withPath(srcPath, tgtPath)` — fully typed path on either side      |
 | **Custom expression**                | `@Mapping(expression = "java(...)")`                    | `Mapping.via(srcAcc, tgtAcc, customMapper)` — plain Java mapper, type-safe |
 | **`condition = "..."` predicate**    | Annotation attribute                                    | `Edit.overIfPresent(...)` for updates; `Mapping.drop(...)` for mappings    |
 
@@ -235,55 +235,51 @@ The intent is identical; the calculus is different. MapStruct trades the typed-r
 things like `source = "user.address.street"` as a single string. Telescope trades the string-path brevity for the
 guarantee that everything you wrote against the source/target types compiles iff it still makes sense.
 
-#### Per-field source/target mapping — side by side
+#### Nested-path mapping — `@Mapping(source="a.b.c", target="x.y.z")` in telescope
 
-The bread-and-butter MapStruct call — `@Mapping(source="x", target="y")` — has a direct telescope equivalent. The two
-look alike on purpose; the differences are where the safety lives.
+MapStruct's nested-path syntax has a typed equivalent in telescope via `Mapper.withPath(srcPath, tgtPath)`. The path on
+either side is a real `Telescope<S, A>` — composed with the same `.field(...)` / `.each(...)` navigation you already use
+for read / update — so the IDE refactor follows each hop and `javac` catches a missing accessor everywhere.
 
 ```java
 // MapStruct
 @Mapper
 public interface OrderMapper {
-  @Mapping(source = "customerName", target = "fullName")
-  @Mapping(source = "createdAt", target = "createdDate")
+  @Mapping(source = "customerName", target = "shipping.recipient.fullName")
+  @Mapping(source = "createdAt", target = "audit.createdDate")
   OrderDto toDto(Order order);
 }
 ```
 
 ```java
-// telescope — varargs factory
-final var mapper = Telescope.mapper(
-  Mapping.to(Order::getCustomerName, OrderDto::getFullName),
-  Mapping.to(Order::getCreatedAt, OrderDto::getCreatedDate),
-  Mapping.auto() // same-named fields backfill automatically
-);
+// telescope — chain `withPath` calls on the base Mapper
+final var mapper = Telescope.mapper(Order.class, OrderDto.class)
+  .withPath(
+    Order::getCustomerName,
+    Telescope.of(OrderDto.class)
+      .field(OrderDto::getShipping)
+      .field(Shipping::getRecipient)
+      .field(Recipient::getFullName)
+  )
+  .withPath(Order::getCreatedAt, Telescope.of(OrderDto.class).field(OrderDto::getAudit).field(Audit::getCreatedDate));
 
 final OrderDto dto = mapper.forward(order);
 
-final Order back = mapper.backward(dto);
+final Order back = mapper.backward(dto); // path-rules round-trip both ways
 ```
 
-```java
-// telescope — fluent chain (equivalent shape)
-Telescope.map(Order.class).to(OrderDto.class)
-  .field(Order::getCustomerName, OrderDto::getFullName)
-  .field(Order::getCreatedAt,    OrderDto::getCreatedDate)
-  .build();
-```
+For path **on the source side**, pass a `Telescope` instead of an accessor — both sides accept either shape.
 
-| Aspect                               | MapStruct                                               | telescope                                                                  |
-| ------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------- |
-| **Source / target syntax**           | Strings: `"customerName"`                               | Typed method references: `Order::getCustomerName`                          |
-| **Typo / type-mismatch caught at**   | Annotation-processor run                                | **`javac` compile time** — the wrong-type accessor doesn't compile         |
-| **Survives a rename (IDE refactor)** | String breaks; processor re-runs and surfaces the error | IDE refactor follows the accessor everywhere                               |
-| **Reverse direction**                | A second method with `@InheritInverseConfiguration`     | Same `Mapping.to(...)` row works both ways                                 |
-| **Nested path** (`source = "a.b.c"`) | Expression-string                                       | `Mapping.via(srcAcc, tgtAcc, nestedMapper)` — typed at every hop           |
-| **Custom expression**                | `@Mapping(expression = "java(...)")`                    | `Mapping.via(srcAcc, tgtAcc, customMapper)` — plain Java mapper, type-safe |
-| **`condition = "..."` predicate**    | Annotation attribute                                    | `Edit.overIfPresent(...)` for updates; `Mapping.drop(...)` for mappings    |
+**Collections** (Phase 2):
 
-The intent is identical; the calculus is different. MapStruct trades the typed-ref ergonomics for the ability to express
-things like `source = "user.address.street"` as a single string. Telescope trades the string-path brevity for the
-guarantee that everything you wrote against the source/target types compiles iff it still makes sense.
+- `mapper.withBroadcastPath(srcPath, tgtPath)` — single source value stamped into every focus of a many-focus target
+  (`Telescope.of(B.class).each(B::items).field(Item::tenantId)`). Forward is straightforward; backward assumes the foci
+  agree (round-trip law caveat).
+- `mapper.withZipPath(srcPath, tgtPath)` — positional N:N between two many-focus paths. Cardinality mismatch throws —
+  silent truncation would be a footgun.
+
+The single-focus `withPath`, broadcast `withBroadcastPath`, and zip `withZipPath` are three distinct method names so the
+call site signals the cardinality choice to a reader.
 
 #### When MapStruct is the right pick
 

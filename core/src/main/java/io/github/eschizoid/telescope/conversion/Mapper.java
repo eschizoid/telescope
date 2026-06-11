@@ -184,6 +184,129 @@ public final class Mapper<A, B> {
   }
 
   /**
+   * Add a nested-path correspondence on top of this mapper. After {@link #forward}/{@link
+   * #backward} produces the base value, the path-pair is applied: forward reads the source value
+   * from {@code srcPath} and writes it through {@code tgtPath}; backward does the mirror. Closes
+   * the gap with MapStruct's {@code @Mapping(source = "a.b.c", target = "x.y.z")} for nested
+   * fields.
+   *
+   * <pre>{@code
+   * record A(String code, Inner inner) {}
+   * record Inner(String name) {}
+   * record B(String code, BInner inner) {}
+   * record BInner(String code) {}
+   *
+   * final var mapper = Telescope.mapper(A.class, B.class, Mapping.auto())
+   *     .withPath(
+   *         Telescope.of(A.class).field(A::code),                              // src path
+   *         Telescope.of(B.class).field(B::inner).field(BInner::code));        // tgt path
+   *
+   * mapper.forward(new A("X", new Inner("n"))).inner().code();  // "X"
+   * }</pre>
+   *
+   * <p><b>Phase 1 — single-focus paths.</b> Both paths must terminate at a single value (built from
+   * {@code .field(...)} navigation only; no {@code .each()} / {@code .eachValue()} / {@code
+   * .whenPresent()} in the chain). Many-focus paths fall through to broadcast/zip semantics with
+   * caveats documented at {@link #withBroadcastPath} (Phase 2).
+   *
+   * <p><b>Composition.</b> Returns a fresh mapper; the receiver is unchanged. Chain multiple {@code
+   * withPath} calls to layer N nested-path rules.
+   *
+   * <p><b>Patch table.</b> Carried through unchanged. Path-based rules don't participate in the
+   * sparse-overlay patch protocol — they fire on every forward/backward, not on {@link #patch}.
+   */
+  public <X> Mapper<A, B> withPath(final Telescope<A, X> srcPath, final Telescope<B, X> tgtPath) {
+    final Mapper<A, B> self = this;
+    return new Mapper<>(
+      Iso.of(a -> tgtPath.set(self.forward(a), srcPath.read(a)), b -> srcPath.set(self.backward(b), tgtPath.read(b))),
+      sourceClass,
+      targetClass,
+      patchByTargetField
+    );
+  }
+
+  /**
+   * Convenience: like {@link #withPath(Telescope, Telescope)} but with a flat source accessor —
+   * mirrors the common shape "pull a top-level field from {@code A} and stamp it into a nested
+   * location on {@code B}." Equivalent to {@code withPath(Telescope.of(A.class).field(srcAcc),
+   * tgtPath)} — the explicit form lets you compose multi-hop source paths when the source side is
+   * also nested.
+   */
+  public <X> Mapper<A, B> withPath(final Telescope.Accessor<A, X> srcAcc, final Telescope<B, X> tgtPath) {
+    return withPath(Telescope.of(sourceClass).field(srcAcc), tgtPath);
+  }
+
+  /** Mirror of {@link #withPath(Telescope.Accessor, Telescope)} — nested source, flat target. */
+  public <X> Mapper<A, B> withPath(final Telescope<A, X> srcPath, final Telescope.Accessor<B, X> tgtAcc) {
+    return withPath(srcPath, Telescope.of(targetClass).field(tgtAcc));
+  }
+
+  /**
+   * Phase-2 sibling of {@link #withPath(Telescope, Telescope)} — when the target path is many-focus
+   * (uses {@code .each()} / {@code .eachValue()} / {@code .whenPresent()}), forward broadcasts the
+   * single source value to every target focus, and backward reverse-maps the (assumed-uniform)
+   * value at the first focus back to the source. The "all foci hold the same value" precondition is
+   * the caveat to the iso laws — see the README for the round-trip semantics.
+   *
+   * <p>Implementation is identical to the scalar form because {@link Telescope#set} on a {@code
+   * Traversal} already broadcasts and {@link Telescope#read} returns the first focus. This method
+   * exists as a named documentation seam — call it when you intentionally want broadcast semantics
+   * so the call site signals the choice to a reader.
+   */
+  public <X> Mapper<A, B> withBroadcastPath(final Telescope<A, X> srcPath, final Telescope<B, X> tgtPath) {
+    return withPath(srcPath, tgtPath);
+  }
+
+  /**
+   * Phase-2 sibling of {@link #withPath(Telescope, Telescope)} for the symmetric many-focus case —
+   * both paths traverse collections of matching cardinality. Forward writes positionally: source's
+   * Nth value lands at target's Nth focus. A cardinality mismatch throws at apply time (silent
+   * truncation would be a footgun). Backward is the mirror.
+   *
+   * <p><b>Caveat.</b> {@link Telescope#set} on a {@code Traversal} broadcasts a single value to
+   * every focus — it does not natively support positional zip. This method enforces positional
+   * semantics by reading the source values as a list via {@link Telescope#toList} and using {@link
+   * Telescope#updateIndexed} on the target to write per position. See {@link #withPath} for the
+   * single-focus scalar case.
+   */
+  public <X> Mapper<A, B> withZipPath(final Telescope<A, X> srcPath, final Telescope<B, X> tgtPath) {
+    final Mapper<A, B> self = this;
+    return new Mapper<>(
+      Iso.of(
+        a -> {
+          final var baseB = self.forward(a);
+          final var srcValues = srcPath.toList(a);
+          final var targetCount = tgtPath.count(baseB);
+          if (srcValues.size() != targetCount) throw new IllegalStateException(
+            "withZipPath: source has " +
+              srcValues.size() +
+              " value(s), target has " +
+              targetCount +
+              " focus(es) — cardinality must match for positional zip."
+          );
+          return tgtPath.updateIndexed(baseB, (i, _ignored) -> srcValues.get(i));
+        },
+        b -> {
+          final var baseA = self.backward(b);
+          final var tgtValues = tgtPath.toList(b);
+          final var sourceCount = srcPath.count(baseA);
+          if (tgtValues.size() != sourceCount) throw new IllegalStateException(
+            "withZipPath: target has " +
+              tgtValues.size() +
+              " value(s), source has " +
+              sourceCount +
+              " focus(es) — cardinality must match for positional zip."
+          );
+          return srcPath.updateIndexed(baseA, (i, _ignored) -> tgtValues.get(i));
+        }
+      ),
+      sourceClass,
+      targetClass,
+      patchByTargetField
+    );
+  }
+
+  /**
    * Lift this element-level mapper to a {@code Mapper<List<A>, List<B>>}. Forward maps each element
    * through {@link #forward}; backward maps each element through {@link #backward}. {@code null}
    * lists round-trip to {@code null} (mirrors the null-pass-through convention of {@link
