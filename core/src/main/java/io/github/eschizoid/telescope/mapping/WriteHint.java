@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.mapping;
 
+import io.github.eschizoid.telescope.Telescope;
+
 /**
  * Per-target write-strategy override consumed by {@link Telescope#map(Class, Class, MapStep...)}.
  * Tells the deep-mapping engine which {@code Beans.BeanWriter} strategy to use when constructing an

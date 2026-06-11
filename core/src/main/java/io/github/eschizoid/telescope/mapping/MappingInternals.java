@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.mapping;
 
+import io.github.eschizoid.telescope.DeepMap;
+
 /**
  * Package-private sibling of {@link Mapping}. Carries the {@code SerializedLambda} recovery
  * machinery — declaring classes and method names of the row's accessors — that {@link DeepMap}

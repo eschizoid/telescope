@@ -236,7 +236,7 @@ public final class DeepMap {
       // Rows with null sourceClass / targetClass pin to the top-level pair the user passed to
       // Telescope.mapper(...). Two reasons a class field comes back null:
       //   - Drop(srcAcc) — single-arg form, no explicit target.
-      //   - TelescopeTo / FromTelescopeTo / TelescopeToTelescope / TelescopeZip — the side that's a
+      //   - TelescopeTo / FromTelescopeTo / TelescopeToTelescope — the side that's a
       //     Telescope<X, ?> can't expose its root class via SerializedLambda (the lattice is built
       //     from method-ref accessors but the root Class<S> isn't carried at runtime).
       // In both cases the substitution lands the row on the outer (topSource, topTarget) bucket so
@@ -543,7 +543,7 @@ public final class DeepMap {
   ) {
     // Collect per-field override values keyed by normalized source field name; the rebuild reads
     // through srcRefl.construct and substitutes our overrides per name. Telescope-source fixups
-    // (FromTelescopeTo, TelescopeToTelescope, TelescopeZip) don't have a top-level source field —
+    // (FromTelescopeTo, TelescopeToTelescope) don't have a top-level source field —
     // they apply via srcT.set on the rebuilt baseS, after the name-keyed rebuild finishes.
     final var fieldOverrides = new HashMap<String, Object>();
     for (final var fx : fixups) {

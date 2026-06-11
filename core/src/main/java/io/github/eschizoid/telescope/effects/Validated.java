@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.effects;
 
+import io.github.eschizoid.telescope.Telescope;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;

@@ -146,7 +146,6 @@ class TelescopeMappingTest {
       final var mapper = Telescope.mapper(
         Src.class,
         Person.class,
-        Mapping.drop(Src::displayCity),
         to(Src::displayCity, PersonTelescope.of().address().city())
       );
 
