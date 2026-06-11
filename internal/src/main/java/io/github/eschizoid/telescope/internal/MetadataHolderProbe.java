@@ -11,19 +11,15 @@ import java.util.function.Function;
 
 /**
  * Probes the user's classpath for a sibling {@code <X>Telescope} metadata holder emitted by
- * {@code @Focus} / {@code @BeanFocus} / Lombok codegen ({@link
- * io.github.eschizoid.telescope.annotations.Focus Focus} / {@link
- * io.github.eschizoid.telescope.annotations.BeanFocus BeanFocus}). When present, the runtime
- * dispatch sites in {@link io.github.eschizoid.telescope.Telescope Telescope} short-circuit the
- * reflective {@link Reflective#of(Class) Reflective.of(cls)} path: a {@link
- * io.github.eschizoid.telescope.Telescope#field(io.github.eschizoid.telescope.Telescope.Accessor)
- * .field(Accessor)} call routes the {@link java.lang.invoke.SerializedLambda
- * SerializedLambda}-recovered method name to the holder's pre-baked {@code Telescope<X, FieldType>}
- * constant and pulls its {@link Lens} out directly. When absent, returns {@link Optional#empty()}
- * and today's {@link io.github.eschizoid.telescope.internal.Records#fieldLens(String)
- * Records.fieldLens(name)} / {@link io.github.eschizoid.telescope.internal.Beans#lens(Class,
- * String, io.github.eschizoid.telescope.internal.Beans.BeanWriter) Beans.lens(...)} path runs
- * unchanged.
+ * {@code @Focus} / {@code @BeanFocus} / Lombok codegen ({@code @Focus} / {@code @BeanFocus}). When
+ * present, the runtime dispatch sites in {@code Telescope} short-circuit the reflective {@link
+ * Reflective#of(Class) Reflective.of(cls)} path: a {@code Telescope.field} call routes the {@link
+ * java.lang.invoke.SerializedLambda SerializedLambda}-recovered method name to the holder's
+ * pre-baked {@code Telescope<X, FieldType>} constant and pulls its {@link Lens} out directly. When
+ * absent, returns {@link Optional#empty()} and today's {@link
+ * io.github.eschizoid.telescope.internal.Records#fieldLens(String) Records.fieldLens(name)} /
+ * {@link io.github.eschizoid.telescope.internal.Beans#lens(Class, String,
+ * io.github.eschizoid.telescope.internal.Beans.BeanWriter) Beans.lens(...)} path runs unchanged.
  *
  * <p>Cached behind {@link ClassValue} — one probe per class for the classloader's lifetime. The
  * absent case is cached too, so a non-annotated class doesn't repeat the {@link Class#forName}
@@ -71,10 +67,8 @@ public final class MetadataHolderProbe {
    * A discovered sibling {@code <X>Telescope} metadata holder for some class: the holder class
    * itself (used in diagnostics), the immutable name &rarr; constant lookup table, and a cached
    * {@link Function} bound to the holder's static {@code construct(Function<String, Object>)}
-   * method. Each constant is a {@link io.github.eschizoid.telescope.Telescope Telescope} instance
-   * built via {@link io.github.eschizoid.telescope.Telescope#lens(java.util.function.Function,
-   * java.util.function.BiFunction) Telescope.lens(...)} at codegen time. {@link #lensFor} unwraps
-   * one to a {@link Lens} for the dispatch site.
+   * method. Each constant is a {@code Telescope} instance built via {@code Telescope.lens} at
+   * codegen time. {@link #lensFor} unwraps one to a {@link Lens} for the dispatch site.
    *
    * <p>The {@code constructor} field is always non-{@code null} when the holder is present — the
    * probe throws {@link IllegalStateException} if the holder is missing the required {@code
@@ -124,9 +118,9 @@ public final class MetadataHolderProbe {
 
   /**
    * The pre-baked {@link Lens} for property {@code name} on {@code beanOrRecord}, or {@code null}
-   * if the class has no sibling {@code <X>Telescope} holder. Used by the dispatch sites on {@link
-   * io.github.eschizoid.telescope.Telescope Telescope} to short-circuit the reflective {@code
-   * Records.fieldLens} / {@code Beans.lens} path when the holder is present.
+   * if the class has no sibling {@code <X>Telescope} holder. Used by the dispatch sites on {@code
+   * Telescope} to short-circuit the reflective {@code Records.fieldLens} / {@code Beans.lens} path
+   * when the holder is present.
    *
    * <p>When the holder IS present but the requested {@code name} is missing, this method throws
    * {@link IllegalStateException} with a precise diagnostic — silent fallback would mask stale

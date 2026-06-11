@@ -53,17 +53,8 @@ tasks.withType<Javadoc>().configureEach {
 val springBootVersion = "4.1.0"
 
 dependencies {
-    // Telescope core is the whole point — consumers of the starter expect the library to come along
-    // with no extra dependency declarations. `api` puts it in the published POM.
     api(project(":core"))
-
-    // Spring Boot autoconfigure for the @AutoConfiguration + @ConfigurationProperties machinery.
-    // `api` so users can write @Autowired against types referenced in our autoconfig (the
-    // registry's bean type, the properties class).
     api("org.springframework.boot:spring-boot-autoconfigure:$springBootVersion")
-
-    // Optional configuration-processor for generating spring-configuration-metadata.json so IDE
-    // hints work on telescope.* property keys.
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor:$springBootVersion")
 
     testImplementation(platform(libs.junitBom))

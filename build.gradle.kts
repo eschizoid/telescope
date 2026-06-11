@@ -90,8 +90,6 @@ spotless {
     }
 }
 
-// Java formatting belongs to the modules that actually have Java sources. Skip pure container
-// projects (`:examples`, `:examples:springboot`) — they just hold child subprojects, no own sources.
 subprojects {
     if (path == ":examples" || path == ":examples:springboot") return@subprojects
     apply(plugin = "com.diffplug.spotless")

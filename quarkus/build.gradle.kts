@@ -50,6 +50,10 @@ tasks.jacocoTestReport {
 }
 
 tasks.withType<Javadoc>().configureEach {
+    // Same implicit-input reason as jacocoTestReport above: the Jandex index lives in
+    // build/resources/main, which javadoc treats as an input via the consumed classpath.
+    // Without this Gradle's strict task validation refuses to run javadoc after jandex.
+    mustRunAfter("jandex")
     (options as StandardJavadocDocletOptions).apply {
         addStringOption("Xdoclint:all,-missing", "-quiet")
     }
@@ -58,13 +62,7 @@ tasks.withType<Javadoc>().configureEach {
 val quarkusVersion = "3.20.0"
 
 dependencies {
-    // Telescope core travels with the extension — consumers of the artifact expect the library to
-    // come along with no extra dependency declarations. `api` puts it in the published POM.
     api(project(":core"))
-
-    // Quarkus ArC is the CDI runtime — provides @ApplicationScoped, @Produces, @Inject, and the
-    // @All collector annotation used to inject every Mapper<?, ?> bean as a List. `api` so users
-    // can write their own @Inject TelescopeMapperRegistry without an extra dep declaration.
     api(platform("io.quarkus.platform:quarkus-bom:$quarkusVersion"))
     api("io.quarkus:quarkus-arc")
 

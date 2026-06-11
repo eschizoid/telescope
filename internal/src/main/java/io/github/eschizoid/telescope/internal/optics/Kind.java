@@ -6,11 +6,10 @@ package io.github.eschizoid.telescope.internal.optics;
  * so {@link Kind} stands in: {@code Kind<F, A>} represents "some type constructor {@code F} applied
  * to {@code A}," with {@code F} a phantom witness type.
  *
- * <p>Internal to the library. Users of {@link io.github.eschizoid.telescope.Telescope} never see
- * {@code Kind}: the four {@code update*} methods box and unbox at the boundary, so the user-facing
- * types are JDK standards ({@link java.util.concurrent.CompletableFuture}, {@link
- * java.util.Optional}) and the library's own {@link io.github.eschizoid.telescope.Either} / {@link
- * io.github.eschizoid.telescope.Validated}.
+ * <p>Internal to the library. Users of {@code Telescope} never see {@code Kind}: the four {@code
+ * update*} methods box and unbox at the boundary, so the user-facing types are JDK standards
+ * ({@link java.util.concurrent.CompletableFuture}, {@link java.util.Optional}) and the library's
+ * own {@code Either} / {@code Validated}.
  *
  * <p>Each effect has a corresponding witness implementing {@link Witness} (e.g. {@code OptionalK}),
  * a carrier that implements {@code Kind<ThatWitness, A>}, and an {@link Applicative} instance

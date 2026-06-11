@@ -1,6 +1,5 @@
 /**
- * The optic lattice that powers {@link io.github.eschizoid.telescope.Telescope}. Package-private to
- * the library.
+ * The optic lattice that powers {@code Telescope}. Package-private to the library.
  *
  * <h2>The lattice</h2>
  *

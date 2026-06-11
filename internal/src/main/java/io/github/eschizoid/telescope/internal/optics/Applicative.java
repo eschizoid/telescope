@@ -15,8 +15,7 @@ import java.util.function.Function;
  * baked in.
  *
  * <p>Internal. Each supported effect ships exactly one {@code Applicative} instance, hidden behind
- * a typed {@link io.github.eschizoid.telescope.Telescope#updateAsync}-style method on {@link
- * io.github.eschizoid.telescope.Telescope}.
+ * a typed {@code Telescope.updateAsync}-style method on {@code Telescope}.
  */
 public interface Applicative<F extends Kind.Witness> {
   /** Lift a pure value into the effect. */

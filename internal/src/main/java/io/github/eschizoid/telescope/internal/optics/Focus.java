@@ -15,10 +15,9 @@ import java.util.function.Function;
  * class of factory methods. It is unrelated to the planned public {@code @Focus} codegen annotation
  * (v0.3); the name collision is incidental.
  *
- * <p>If you're using the DSL via {@link io.github.eschizoid.telescope.Telescope} you almost never
- * need this class; the navigation methods build the right optics internally. It's here for
- * extension points (custom collection traversals, hand-tuned lenses for hot paths, codegen output
- * in v0.3).
+ * <p>If you're using the DSL via {@code Telescope} you almost never need this class; the navigation
+ * methods build the right optics internally. It's here for extension points (custom collection
+ * traversals, hand-tuned lenses for hot paths, codegen output in v0.3).
  */
 public final class Focus {
 

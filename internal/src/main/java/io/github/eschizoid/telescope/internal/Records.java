@@ -12,7 +12,7 @@ import java.util.function.Function;
 
 /**
  * Lattice-routed machinery for building {@link Lens}es over record components by name. Backs the
- * field navigation of {@link io.github.eschizoid.telescope.Telescope}.
+ * field navigation of {@code Telescope}.
  *
  * <p>State is a single per-record-class {@code RecordInfo}, held in a {@link ClassValue} so a
  * stored entry doesn't pin its key's classloader. The cache carries (a) the {@link RecordComponent}
@@ -49,8 +49,8 @@ public final class Records {
   /**
    * A {@link Lens} over a record component, identified by name. The {@code get} reads the
    * component; {@code set}/{@code modify} return a copy of the record with that one component
-   * replaced. Backs {@link io.github.eschizoid.telescope.Telescope}'s {@code .fieldByName(String)}
-   * overload — the late-bound case where the runtime class isn't known until the source flows in.
+   * replaced. Backs {@code Telescope}'s {@code .fieldByName(String)} overload — the late-bound case
+   * where the runtime class isn't known until the source flows in.
    *
    * <p>This overload pays a per-call {@code (class, name) → idx} lookup. When the declaring class
    * is known at construction time (every method-reference-based {@code .field(...)} call site),
@@ -90,10 +90,10 @@ public final class Records {
    * get} / {@code set} / {@code modify} dispatch directly through the captured handles with no
    * per-call name lookup.
    *
-   * <p>Used by the method-reference {@code .field(...)} path on {@link
-   * io.github.eschizoid.telescope.Telescope}, which already knows the declaring class via the
-   * captured method reference. The runtime escape hatch {@code fieldByName(String)} still uses
-   * {@link #fieldLens(String)} because the source class isn't known until call time.
+   * <p>Used by the method-reference {@code .field(...)} path on {@code Telescope}, which already
+   * knows the declaring class via the captured method reference. The runtime escape hatch {@code
+   * fieldByName(String)} still uses {@link #fieldLens(String)} because the source class isn't known
+   * until call time.
    *
    * <pre>{@code
    * record User(String name, int age) {}
@@ -144,9 +144,8 @@ public final class Records {
   }
 
   /**
-   * The generic type of a record component by name (used by {@link
-   * io.github.eschizoid.telescope.DeepMap DeepMap} for container shape detection — {@code List<X>},
-   * {@code Map<K, V>}, {@code Optional<X>}).
+   * The generic type of a record component by name (used by {@code DeepMap} for container shape
+   * detection — {@code List<X>}, {@code Map<K, V>}, {@code Optional<X>}).
    *
    * @throws IllegalArgumentException if the name doesn't match a component on {@code recordClass}
    */

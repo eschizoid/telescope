@@ -15,9 +15,9 @@ import java.util.stream.Stream;
  *
  * <p>Used internally for collection broadcast ({@link
  * io.github.eschizoid.telescope.internal.optics.collections.Traversals#eachList} and friends), and
- * as the storage type inside {@link io.github.eschizoid.telescope.Telescope} — the DSL accepts
- * whatever optic each navigation step produces and immediately collapses it through {@code
- * .then(...)}, so the wrapper only ever holds a Traversal.
+ * as the storage type inside {@code Telescope} — the DSL accepts whatever optic each navigation
+ * step produces and immediately collapses it through {@code .then(...)}, so the wrapper only ever
+ * holds a Traversal.
  *
  * <pre>{@code
  * final Traversal<List<Integer>, Integer> each =

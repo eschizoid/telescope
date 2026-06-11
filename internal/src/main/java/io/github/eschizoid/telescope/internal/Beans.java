@@ -188,9 +188,8 @@ public final class Beans {
   }
 
   /**
-   * The generic return type of {@code beanClass}'s getter for {@code name} (used by {@link
-   * io.github.eschizoid.telescope.DeepMap DeepMap} for container shape detection — {@code List<X>},
-   * {@code Map<K, V>}, {@code Optional<X>}).
+   * The generic return type of {@code beanClass}'s getter for {@code name} (used by {@code DeepMap}
+   * for container shape detection — {@code List<X>}, {@code Map<K, V>}, {@code Optional<X>}).
    *
    * @throws IllegalArgumentException if no getter is found
    */
@@ -429,11 +428,10 @@ public final class Beans {
    * with {@code -parameters} so its arguments can be matched by name without positional ambiguity).
    * The result is cached per class.
    *
-   * <p>Used by both the record-less POJO APIs ({@link
-   * io.github.eschizoid.telescope.Telescope#ofBean(Class) Telescope.ofBean}) and by the deep
-   * mapping path when no explicit {@code writeBean} hint applies. Throws if none of the strategies
-   * applies (e.g., an immutable all-args-only POJO compiled without {@code -parameters}); the
-   * recommended escape is to declare a {@code writeBean(target, CONSTRUCTOR)} hint at the {@code
+   * <p>Used by both the record-less POJO APIs ({@code Telescope.ofBean}) and by the deep mapping
+   * path when no explicit {@code writeBean} hint applies. Throws if none of the strategies applies
+   * (e.g., an immutable all-args-only POJO compiled without {@code -parameters}); the recommended
+   * escape is to declare a {@code writeBean(target, CONSTRUCTOR)} hint at the {@code
    * Telescope.map(...)} call site.
    */
   @SuppressWarnings("unchecked")

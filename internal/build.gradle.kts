@@ -55,14 +55,7 @@ tasks.withType<Javadoc>().configureEach {
 }
 
 dependencies {
-    // Test-only dependency on :core lets the full original internal test suite live here.
-    // Some tests reference :core public types (Either / Validated / Telescope) and the
-    // :core/runtime/* helpers (MetadataHolderProbe, Reflective). This is a TEST-classpath
-    // dependency only — :internal's main code is independent of :core, so no real cycle exists.
     testImplementation(project(":core"))
-    // The witnesses (EitherK / ValidatedK / OptionalK / CompletableFutureK) live in :core under
-    // the runtime.instances namespace but are compile-time inputs to ApplicativeLawsTest; they
-    // come transitively through the :core testImplementation above.
     testAnnotationProcessor(project(":codegen"))
 
     testImplementation(platform(libs.junitBom))
