@@ -1164,7 +1164,11 @@ public sealed class Telescope<
       final Class<A> implClass = Telescope.implClassOf(getter);
       final var holderLens = MetadataHolderProbe.<A, B>lensFromHolder(implClass, name);
       if (holderLens != null) return holderLens;
-      return Records.fieldLens(name);
+      // Pass the declaring class so the lens captures (info, idx, reader) at construction —
+      // eliminates the per-call (class, name) → idx scan that the string-only fieldLens(name)
+      // overload pays. The string-only overload remains the fallback for fieldByName(String),
+      // where the source class isn't known until call time.
+      return implClass != null ? Records.fieldLens(implClass, name) : Records.fieldLens(name);
     }
   }
 
