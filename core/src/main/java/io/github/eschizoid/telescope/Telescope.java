@@ -9,6 +9,7 @@ import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import io.github.eschizoid.telescope.internal.Records;
+import io.github.eschizoid.telescope.internal.optics.Affine;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
@@ -701,10 +702,17 @@ public sealed class Telescope<
    * #toList} for every focused value, or {@link #exists} / {@link #count} to test presence.
    */
   public A read(final S source) {
-    return optic
-      .getAll(source)
-      .findFirst()
-      .orElseThrow(() -> new NoSuchElementException("Telescope has no value in this source"));
+    if (optic instanceof final Lens<S, A> lens) {
+      return lens.get(source);
+    }
+    if (optic instanceof final Affine<S, A> affine) {
+      return affine.getOption(source).orElseThrow(Telescope::noValue);
+    }
+    return optic.getAll(source).findFirst().orElseThrow(Telescope::noValue);
+  }
+
+  private static NoSuchElementException noValue() {
+    return new NoSuchElementException("Telescope has no value in this source");
   }
 
   /**
@@ -712,6 +720,12 @@ public sealed class Telescope<
    * non-throwing sibling of {@link #read}.
    */
   public Optional<A> find(final S source) {
+    if (optic instanceof final Lens<S, A> lens) {
+      return Optional.ofNullable(lens.get(source));
+    }
+    if (optic instanceof final Affine<S, A> affine) {
+      return affine.getOption(source);
+    }
     return optic.getAll(source).findFirst();
   }
 
@@ -728,6 +742,12 @@ public sealed class Telescope<
    * <p>See {@link #toListIndexed} to pair each value with its position.
    */
   public List<A> toList(final S source) {
+    if (optic instanceof final Lens<S, A> lens) {
+      return List.of(lens.get(source));
+    }
+    if (optic instanceof final Affine<S, A> affine) {
+      return affine.getOption(source).map(List::of).orElseGet(List::of);
+    }
     return optic.getAll(source).toList();
   }
 
@@ -761,6 +781,12 @@ public sealed class Telescope<
    * nonzero (it stops at the first match).
    */
   public long count(final S source) {
+    if (optic instanceof Lens<S, A>) {
+      return 1L;
+    }
+    if (optic instanceof final Affine<S, A> affine) {
+      return affine.getOption(source).isPresent() ? 1L : 0L;
+    }
     return optic.getAll(source).count();
   }
 
@@ -769,6 +795,12 @@ public sealed class Telescope<
    * #count}.
    */
   public boolean exists(final S source) {
+    if (optic instanceof Lens<S, A>) {
+      return true;
+    }
+    if (optic instanceof final Affine<S, A> affine) {
+      return affine.getOption(source).isPresent();
+    }
     return optic.getAll(source).findAny().isPresent();
   }
 
