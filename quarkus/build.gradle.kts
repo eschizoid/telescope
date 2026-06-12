@@ -50,9 +50,6 @@ tasks.jacocoTestReport {
 }
 
 tasks.withType<Javadoc>().configureEach {
-    // Same implicit-input reason as jacocoTestReport above: the Jandex index lives in
-    // build/resources/main, which javadoc treats as an input via the consumed classpath.
-    // Without this Gradle's strict task validation refuses to run javadoc after jandex.
     mustRunAfter("jandex")
     (options as StandardJavadocDocletOptions).apply {
         addStringOption("Xdoclint:all,-missing", "-quiet")

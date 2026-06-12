@@ -52,9 +52,6 @@ tasks.withType<Javadoc>().configureEach {
 }
 
 dependencies {
-    // The processor extends AbstractTelescopeProcessor from :codegen and emits Telescope-typed
-    // navigators that live in :core. Both are runtime requirements for consumers, so `api` puts
-    // them in the published POM.
     api(project(":codegen"))
     api(project(":core"))
 
@@ -63,18 +60,7 @@ dependencies {
     testImplementation(platform(libs.junitBom))
     testImplementation(libs.junitJupiter)
     testRuntimeOnly(libs.junitPlatformLauncher)
-    // Lombok annotations on the test compile classpath so the fixtures (DataUser, BuilderUser,
-    // ...) compile. Not on runtime — the synthesised members are baked into the .class files.
     testCompileOnly(libs.lombok)
-
-    // The integration tests are file-based: Gradle's standard compileTestJava runs Lombok AND
-    // our LombokFocusProcessor on the fixtures under src/test/java, and we verify the generated
-    // <X>Telescope navigator classes by reflection at test runtime. Both processors must be on the test
-    // annotation-processor classpath. testAnnotationProcessor is an isolated configuration —
-    // deps don't flow in from main implementation — so the transitive trail (:core for Telescope
-    // referenced by emitted code; :codegen for AbstractTelescopeProcessor extended by ours; the
-    // built classes + META-INF/services of this module for the SPI registration) is wired
-    // explicitly here.
     testAnnotationProcessor(libs.lombok)
     testAnnotationProcessor(project(":core"))
     testAnnotationProcessor(project(":codegen"))
