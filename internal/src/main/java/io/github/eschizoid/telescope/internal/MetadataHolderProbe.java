@@ -14,8 +14,9 @@ import java.util.function.Function;
  * present, the runtime dispatch sites in {@code Telescope} short-circuit the reflective {@link
  * Reflective#of(Class) Reflective.of(cls)} path: a {@code Telescope.field} call routes the {@link
  * java.lang.invoke.SerializedLambda SerializedLambda}-recovered method name to the holder's
- * pre-baked {@code Telescope<X, FieldType>} constant and pulls its {@link Lens} out directly. When
- * absent, returns {@link Optional#empty()} and today's {@link
+ * pre-baked {@code Telescope<X, FieldType>} constant and pulls its {@link
+ * io.github.eschizoid.telescope.internal.optics.Lens Lens} out directly. When absent, returns
+ * {@link Optional#empty()} and today's {@link
  * io.github.eschizoid.telescope.internal.Records#fieldLens(String) Records.fieldLens(name)} /
  * {@link io.github.eschizoid.telescope.internal.Beans#lens(Class, String,
  * io.github.eschizoid.telescope.internal.Beans.BeanWriter) Beans.lens(...)} path runs unchanged.

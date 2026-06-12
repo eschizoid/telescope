@@ -370,7 +370,7 @@ Published to Maven Central under `io.github.eschizoid`. Six artifacts in the fam
 
 | Artifact                        | Role                                                                                                                                                                |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `telescope-api`                 | The DSL — `Telescope`, `Mapper`, `Mapping`, `Either` / `Validated`, annotations. The one you add.                                                                   |
+| `telescope-core`                | The DSL — `Telescope`, `Mapper`, `Mapping`, `Either` / `Validated`, annotations. The one you add.                                                                   |
 | `telescope-internal`            | Optic lattice + reflection helpers. Transitive only — pulled in automatically; users cannot reference it (JPMS qualified exports block visibility at compile time). |
 | `telescope-codegen`             | Optional `@Focus` / `@BeanFocus` / `@Bridge` annotation processor — see [Compile-time field navigation](#compile-time-reflection-free-navigation-focus--beanfocus). |
 | `telescope-lombok`              | Lombok-aware variant of the processor for `@Data` / `@Value` / `@Builder` POJOs.                                                                                    |
@@ -381,7 +381,7 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-api:0.4.1")
+    implementation("io.github.eschizoid:telescope-core:0.4.1")
 }
 ```
 
@@ -390,7 +390,7 @@ Maven:
 ```xml
 <dependency>
   <groupId>io.github.eschizoid</groupId>
-  <artifactId>telescope-api</artifactId>
+  <artifactId>telescope-core</artifactId>
   <version>0.4.1</version>
 </dependency>
 ```
@@ -403,7 +403,7 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-api:0.4.1")
+    implementation("io.github.eschizoid:telescope-core:0.4.1")
     annotationProcessor("io.github.eschizoid:telescope-codegen:0.4.1")
 }
 ```
@@ -413,7 +413,7 @@ Maven:
 ```xml
 <dependency>
   <groupId>io.github.eschizoid</groupId>
-  <artifactId>telescope-api</artifactId>
+  <artifactId>telescope-core</artifactId>
   <version>0.4.1</version>
 </dependency>
 
@@ -438,7 +438,7 @@ Maven:
 
 ### JPMS / modular consumers
 
-`telescope-api` declares the named module `io.github.eschizoid.telescope`. If your project has a `module-info.java`,
+`telescope-core` declares the named module `io.github.eschizoid.telescope`. If your project has a `module-info.java`,
 add:
 
 ```java
@@ -446,7 +446,7 @@ requires io.github.eschizoid.telescope;
 ```
 
 That single `requires` is enough — `io.github.eschizoid.telescope.internal` comes in via `requires transitive` from the
-`telescope-api` module declaration, but its packages are qualified-exported to `telescope-api` only, so you cannot
+`telescope-core` module declaration, but its packages are qualified-exported to `telescope-core` only, so you cannot
 accidentally reference internal lattice types from your own code.
 
 `telescope-codegen` is a compile-time-only processor and isn't required on the module path.
@@ -1226,7 +1226,7 @@ The return type degrades to a terminal `Telescope<R, Target>` when the target is
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope-api:0.4.1")
+implementation("io.github.eschizoid:telescope-core:0.4.1")
 annotationProcessor("io.github.eschizoid:telescope-codegen:0.4.1")
 ```
 
@@ -1471,7 +1471,7 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
 
 Three modules, hard line between public and internal:
 
-- **`telescope-api`** (module `io.github.eschizoid.telescope`) — the public DSL. Five exported packages: `telescope`
+- **`telescope-core`** (module `io.github.eschizoid.telescope`) — the public DSL. Five exported packages: `telescope`
   (root: `Telescope`, `Indexed`, `Edit`), `telescope.conversion` (`Mapper`, `From`, `To`), `telescope.mapping`
   (`Mapping` / `MapStep` / `WriteHint` row types), `telescope.effects` (`Either`, `Validated`), and
   `telescope.annotations` (`@Focus` / `@BeanFocus` / `@Bridge`). The only artifact users import directly.
@@ -1479,7 +1479,7 @@ Three modules, hard line between public and internal:
   `Setter`, `Traversal`, `Affine`, `Lens`, `Prism`, `Iso`), `Kind` / `Applicative` HKT-emulation, collection traversals,
   and reflection helpers (`Records`, `Beans`, `Reflective`, `LambdaIntrospection`, `MetadataHolderProbe`). Every package
   is qualified-exported `to io.github.eschizoid.telescope` only — JPMS makes lattice types invisible to user code at
-  compile time, regardless of classpath. The artifact ships as a transitive dependency of `telescope-api`.
+  compile time, regardless of classpath. The artifact ships as a transitive dependency of `telescope-core`.
 - **`telescope-codegen`** (module `io.github.eschizoid.telescope.codegen`) — compile-time-only annotation processor. Not
   required on the runtime module path.
 

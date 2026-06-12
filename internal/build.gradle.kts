@@ -5,7 +5,7 @@ plugins {
     jacoco
 }
 
-description = "telescope-internal — optic lattice, HKT emulation, and reflection helpers (internal to telescope-api)"
+description = "telescope-internal — optic lattice, HKT emulation, and reflection helpers (internal to telescope-core)"
 
 base {
     archivesName = "telescope-internal"
@@ -75,7 +75,7 @@ publishing {
                 description.set(
                     "Internal substrate of the telescope optics DSL: optic lattice (Iso/Lens/Prism/Affine/Traversal), " +
                         "HKT-emulation (Kind/Applicative), per-effect witnesses, and reflection helpers. " +
-                        "Qualified-exported to telescope-api only — do NOT depend on this artifact directly."
+                        "Qualified-exported to telescope-core only — do NOT depend on this artifact directly."
                 )
                 url.set("https://github.com/eschizoid/telescope")
                 inceptionYear.set("2026")

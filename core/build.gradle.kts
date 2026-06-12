@@ -5,10 +5,10 @@ plugins {
     jacoco
 }
 
-description = "telescope-api — deep-copy DSL for Java records and POJOs"
+description = "telescope-core — deep-copy DSL for Java records and POJOs"
 
 base {
-    archivesName = "telescope-api"
+    archivesName = "telescope-core"
 }
 
 repositories {
@@ -71,11 +71,11 @@ publishing {
     publications {
         create<MavenPublication>("maven") {
             groupId = "io.github.eschizoid"
-            artifactId = "telescope-api"
+            artifactId = "telescope-core"
             from(components["java"])
 
             pom {
-                name.set("telescope-api")
+                name.set("telescope-core")
                 description.set("Telescope — a deep-copy DSL for Java records and POJOs.")
                 url.set("https://github.com/eschizoid/telescope")
                 inceptionYear.set("2025")
