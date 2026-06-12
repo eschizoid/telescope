@@ -92,11 +92,15 @@ public sealed interface Either<L, R> {
    *     company -> "saved " + company.name());
    * }</pre>
    */
+  @SuppressWarnings("unchecked")
   default <T> T fold(final Function<? super L, ? extends T> onLeft, final Function<? super R, ? extends T> onRight) {
-    return switch (this) {
-      case Left<L, R> l -> onLeft.apply(l.value());
-      case Right<L, R> r -> onRight.apply(r.value());
-    };
+    // Sealed-aware dispatch: a single instanceof + a guaranteed-safe cast on the other branch.
+    // Avoids the dead "second instanceof always true" branch the explicit double-instanceof pattern
+    // produces (which JaCoCo flags as a partial and a defensive throw line as unreachable). Every
+    // other default method on Either delegates here so the sealed-dispatch logic lives in one
+    // place.
+    if (this instanceof Left<L, R> l) return onLeft.apply(l.value());
+    return onRight.apply(((Right<L, R>) this).value());
   }
 
   /**
@@ -109,10 +113,7 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default <T> Either<L, T> map(final Function<? super R, ? extends T> f) {
-    return switch (this) {
-      case Left<L, R> l -> new Left<>(l.value());
-      case Right<L, R> r -> new Right<>(f.apply(r.value()));
-    };
+    return fold(Either::left, r -> Either.right(f.apply(r)));
   }
 
   /**
@@ -124,11 +125,9 @@ public sealed interface Either<L, R> {
    * Either<String, Integer> parsed = Either.right("42").flatMap(s -> parseInt(s));  // parseInt returns Either
    * }</pre>
    */
+  @SuppressWarnings("unchecked")
   default <T> Either<L, T> flatMap(final Function<? super R, ? extends Either<L, T>> f) {
-    return switch (this) {
-      case Left<L, R> l -> new Left<>(l.value());
-      case Right<L, R> r -> f.apply(r.value());
-    };
+    return fold(Either::left, r -> (Either<L, T>) f.apply(r));
   }
 
   /**
@@ -141,10 +140,7 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default <T> Either<T, R> mapLeft(final Function<? super L, ? extends T> f) {
-    return switch (this) {
-      case Left<L, R> l -> new Left<>(f.apply(l.value()));
-      case Right<L, R> r -> new Right<>(r.value());
-    };
+    return fold(l -> Either.left(f.apply(l)), Either::right);
   }
 
   /**
@@ -156,10 +152,7 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default Either<R, L> swap() {
-    return switch (this) {
-      case Left<L, R> l -> new Right<>(l.value());
-      case Right<L, R> r -> new Left<>(r.value());
-    };
+    return fold(Either::right, Either::left);
   }
 
   /**
@@ -172,10 +165,7 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default Validated<L, R> toValidated() {
-    return switch (this) {
-      case Left<L, R> l -> Validated.invalid(l.value());
-      case Right<L, R> r -> Validated.valid(r.value());
-    };
+    return fold(Validated::invalid, Validated::valid);
   }
 
   /**
@@ -187,10 +177,7 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default R getOrElse(final R defaultValue) {
-    return switch (this) {
-      case Left<L, R> ignored -> defaultValue;
-      case Right<L, R> r -> r.value();
-    };
+    return fold(l -> defaultValue, r -> r);
   }
 
   /**
@@ -202,10 +189,7 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default R getOrElseGet(final Supplier<? extends R> supplier) {
-    return switch (this) {
-      case Left<L, R> ignored -> supplier.get();
-      case Right<L, R> r -> r.value();
-    };
+    return fold(l -> supplier.get(), r -> r);
   }
 
   /**
@@ -218,10 +202,7 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default Optional<R> toOptional() {
-    return switch (this) {
-      case Left<L, R> ignored -> Optional.empty();
-      case Right<L, R> r -> Optional.ofNullable(r.value());
-    };
+    return fold(l -> Optional.empty(), Optional::ofNullable);
   }
 
   /**
@@ -238,9 +219,6 @@ public sealed interface Either<L, R> {
   default <T> CompletableFuture<Either<L, T>> flatMapAsync(
     final Function<? super R, ? extends CompletableFuture<? extends T>> f
   ) {
-    return switch (this) {
-      case Left<L, R> l -> CompletableFuture.completedFuture(Either.left(l.value()));
-      case Right<L, R> r -> f.apply(r.value()).thenApply(Either::<L, T>right);
-    };
+    return fold(l -> CompletableFuture.completedFuture(Either.left(l)), r -> f.apply(r).thenApply(Either::<L, T>right));
   }
 }

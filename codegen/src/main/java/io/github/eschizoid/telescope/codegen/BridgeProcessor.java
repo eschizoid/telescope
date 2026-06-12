@@ -49,7 +49,7 @@ import javax.lang.model.util.ElementFilter;
 @SupportedAnnotationTypes(
   { "io.github.eschizoid.telescope.annotations.Bridge", "io.github.eschizoid.telescope.annotations.Bridges" }
 )
-@SupportedSourceVersion(SourceVersion.RELEASE_25)
+@SupportedSourceVersion(SourceVersion.RELEASE_17)
 public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
@@ -967,33 +967,39 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       source,
       out -> {
         out.println("  public static " + targetFq + " forward(final " + sourceFq + " s) {");
-        out.println("    return switch (s) {");
         for (final var e : entries) {
           final var v = camelLower(e.sourceCase().getSimpleName().toString());
           out.println(
-            "      case " + e.sourceCase().getQualifiedName() + " " + v + " -> " + e.bridgeFq() + ".forward(" + v + ");"
+            "    if (s instanceof " +
+              e.sourceCase().getQualifiedName() +
+              " " +
+              v +
+              ") return " +
+              e.bridgeFq() +
+              ".forward(" +
+              v +
+              ");"
           );
         }
-        out.println("    };");
+        out.println("    throw new IllegalStateException(\"unreachable: sealed type\");");
         out.println("  }");
         out.println();
         out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
-        out.println("    return switch (t) {");
         for (final var e : entries) {
           final var v = camelLower(e.targetCase().getSimpleName().toString());
           out.println(
-            "      case " +
+            "    if (t instanceof " +
               e.targetCase().getQualifiedName() +
               " " +
               v +
-              " -> " +
+              ") return " +
               e.bridgeFq() +
               ".backward(" +
               v +
               ");"
           );
         }
-        out.println("    };");
+        out.println("    throw new IllegalStateException(\"unreachable: sealed type\");");
         out.println("  }");
         out.println();
         out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
@@ -1093,12 +1099,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (!(el instanceof TypeElement te)) return null;
       final var args = dt.getTypeArguments();
       return switch (te.getQualifiedName().toString()) {
-        case "java.util.List" -> args.size() == 1
-          ? new ContainerShape(FieldPlan.Kind.LIST, args.getFirst(), null)
-          : null;
-        case "java.util.Set" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.SET, args.getFirst(), null) : null;
+        case "java.util.List" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.LIST, args.get(0), null) : null;
+        case "java.util.Set" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.SET, args.get(0), null) : null;
         case "java.util.Optional" -> args.size() == 1
-          ? new ContainerShape(FieldPlan.Kind.OPTIONAL, args.getFirst(), null)
+          ? new ContainerShape(FieldPlan.Kind.OPTIONAL, args.get(0), null)
           : null;
         case "java.util.Map" -> args.size() == 2
           ? new ContainerShape(FieldPlan.Kind.MAP_VALUES, args.get(1), args.get(0))
@@ -1434,8 +1438,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String subBridge,
     final String direction
   ) {
-    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().getFirst();
-    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
+    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().get(0);
+    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().get(0);
     out.println();
     out.println("  private static List<" + tgtElement + "> " + name + "(final List<" + srcElement + "> src) {");
     out.println("    if (src == null) return null;");
@@ -1453,8 +1457,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String subBridge,
     final String direction
   ) {
-    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().getFirst();
-    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
+    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().get(0);
+    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().get(0);
     out.println();
     out.println("  private static Set<" + tgtElement + "> " + name + "(final Set<" + srcElement + "> src) {");
     out.println("    if (src == null) return null;");

@@ -56,13 +56,10 @@ public final class EitherK<L> implements Kind.Witness {
         final Kind<EitherK<L>, B> fb,
         final BiFunction<? super A, ? super B, ? extends C> f
       ) {
-        return switch (unbox(fa)) {
-          case Either.Left<L, A> la -> box(Either.left(la.value()));
-          case Either.Right<L, A> ra -> switch (unbox(fb)) {
-            case Either.Left<L, B> lb -> box(Either.left(lb.value()));
-            case Either.Right<L, B> rb -> box(Either.right(f.apply(ra.value(), rb.value())));
-          };
-        };
+        // Sealed-aware nested dispatch through `fold` — short-circuits on the first Left and
+        // collapses the explicit double-instanceof chain (which left dead branches that JaCoCo
+        // flagged as partials / defensive throw lines).
+        return box(unbox(fa).flatMap(a -> unbox(fb).map(b -> f.apply(a, b))));
       }
 
       @Override

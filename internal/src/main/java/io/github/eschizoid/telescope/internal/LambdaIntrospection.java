@@ -36,7 +36,7 @@ public final class LambdaIntrospection {
    *     starts with {@code "lambda$"})
    */
   public static String methodNameOf(final Serializable lambda) {
-    return METHOD_NAME_CACHE.computeIfAbsent(lambda.getClass(), _ -> resolveMethodName(lambda));
+    return METHOD_NAME_CACHE.computeIfAbsent(lambda.getClass(), __ -> resolveMethodName(lambda));
   }
 
   private static String resolveMethodName(final Serializable lambda) {
@@ -67,7 +67,7 @@ public final class LambdaIntrospection {
    */
   @SuppressWarnings("unchecked")
   public static <A> Class<A> implClassOf(final Serializable lambda) {
-    return (Class<A>) IMPL_CLASS_CACHE.computeIfAbsent(lambda.getClass(), _ -> resolveImplClass(lambda));
+    return (Class<A>) IMPL_CLASS_CACHE.computeIfAbsent(lambda.getClass(), __ -> resolveImplClass(lambda));
   }
 
   private static Class<?> resolveImplClass(final Serializable lambda) {

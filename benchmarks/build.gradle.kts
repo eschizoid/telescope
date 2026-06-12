@@ -23,7 +23,7 @@ dependencies {
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release = 25
+    options.release = 17
     options.encoding = "UTF-8"
     modularity.inferModulePath = true
 }

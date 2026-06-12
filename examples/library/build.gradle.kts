@@ -15,7 +15,7 @@ java {
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release = 25
+    options.release = 17
     options.encoding = "UTF-8"
     // -parameters lets WriteHint.CONSTRUCTOR match args by parameter name on the immutable POJO demo.
     options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-parameters"))

@@ -50,7 +50,7 @@ dependencies {
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release = 25
+    options.release = 17
     options.encoding = "UTF-8"
     // -parameters lets Spring's @PathVariable / @RequestParam resolve by name without
     // explicit annotation values, and helps Jackson's record-creator detection.
