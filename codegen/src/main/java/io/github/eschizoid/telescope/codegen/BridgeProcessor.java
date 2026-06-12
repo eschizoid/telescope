@@ -94,6 +94,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // the same-type bijection check. Populated in process(), read in generate().
   private final Map<TypePair, Map<String, String>> transformsByPair = new HashMap<>();
 
+  // Per-pair constants: target field name -> the already-emitted Java literal expression
+  // ("\"API\"", "true", "0L", "null", etc.). Forward-only — injected into the target ctor arg;
+  // backward silently drops the slot. Populated in process(), validated + emitted in generate().
+  private final Map<TypePair, Map<String, String>> constantsByPair = new HashMap<>();
+
+  // Per-pair computes: target field name -> Supplier class FQN. The bridge emits one static
+  // instance per computed field and calls .get() in the forward direction. Forward-only.
+  private final Map<TypePair, Map<String, String>> computesByPair = new HashMap<>();
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var anno = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
@@ -104,6 +113,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     dropsByPair.clear();
     renamesByPair.clear();
     transformsByPair.clear();
+    constantsByPair.clear();
+    computesByPair.clear();
 
     final Deque<TypePair> pending = new ArrayDeque<>();
     final Set<TypePair> seen = new HashSet<>();
@@ -152,6 +163,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var transforms = transformsFromMirror(element, bridgeAm);
         if (transforms == null) continue; // invalid transform — already reported, skip this pair
         if (!transforms.isEmpty()) transformsByPair.put(pair, transforms);
+        final var constants = constantsFromMirror(element, bridgeAm);
+        if (constants == null) continue; // invalid constant — already reported, skip this pair
+        if (!constants.isEmpty()) constantsByPair.put(pair, constants);
+        final var computes = computesFromMirror(element, bridgeAm);
+        if (computes == null) continue; // invalid compute — already reported, skip this pair
+        if (!computes.isEmpty()) computesByPair.put(pair, computes);
         if (seen.add(pair)) pending.add(pair);
       }
     }
@@ -289,6 +306,239 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return Map.of();
   }
 
+  // Read constants from a @Bridge mirror. Returns the raw target-field-name -> raw-string-value
+  // map. Per-pair validation (field exists on target, value parses against the field type) happens
+  // in generate() where the target TypeElement is available. Returns null on a structural error
+  // (already reported).
+  private Map<String, String> constantsFromMirror(final Element element, final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (!entry.getKey().getSimpleName().contentEquals("constants")) continue;
+      @SuppressWarnings("unchecked")
+      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
+      final var result = new LinkedHashMap<String, String>();
+      for (final var av : list) {
+        final var constAm = (AnnotationMirror) av.getValue();
+        String field = null;
+        String value = null;
+        for (final var ce : constAm.getElementValues().entrySet()) {
+          final var k = ce.getKey().getSimpleName().toString();
+          if (k.equals("field")) field = (String) ce.getValue().getValue();
+          else if (k.equals("value")) value = (String) ce.getValue().getValue();
+        }
+        if (field == null || field.isEmpty()) {
+          error(element, "@Constant requires a non-empty `field` name");
+          return null;
+        }
+        if (value == null) {
+          error(element, "@Constant requires a `value`");
+          return null;
+        }
+        if (result.containsKey(field)) {
+          error(element, "@Constant field=\"" + field + "\" is declared more than once");
+          return null;
+        }
+        result.put(field, value);
+      }
+      return result;
+    }
+    return Map.of();
+  }
+
+  // Read computes from a @Bridge mirror. Target field name -> Supplier class FQN.
+  private Map<String, String> computesFromMirror(final Element element, final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (!entry.getKey().getSimpleName().contentEquals("computes")) continue;
+      @SuppressWarnings("unchecked")
+      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
+      final var result = new LinkedHashMap<String, String>();
+      for (final var av : list) {
+        final var compAm = (AnnotationMirror) av.getValue();
+        String field = null;
+        TypeMirror using = null;
+        for (final var ce : compAm.getElementValues().entrySet()) {
+          final var k = ce.getKey().getSimpleName().toString();
+          if (k.equals("field")) field = (String) ce.getValue().getValue();
+          else if (k.equals("using")) using = (TypeMirror) ce.getValue().getValue();
+        }
+        if (field == null || field.isEmpty()) {
+          error(element, "@Compute requires a non-empty `field` name");
+          return null;
+        }
+        if (using == null || using.getKind() != TypeKind.DECLARED) {
+          error(element, "@Compute `using` must be a class implementing Supplier");
+          return null;
+        }
+        final var usingEl = (TypeElement) ((DeclaredType) using).asElement();
+        if (usingEl.getNestingKind() != NestingKind.TOP_LEVEL) {
+          error(element, "@Compute `using` must be a top-level class");
+          return null;
+        }
+        if (result.containsKey(field)) {
+          error(element, "@Compute field=\"" + field + "\" is declared more than once");
+          return null;
+        }
+        result.put(field, usingEl.getQualifiedName().toString());
+      }
+      return result;
+    }
+    return Map.of();
+  }
+
+  // Parse a @Constant string value against the target field's declared type. Returns the
+  // Java-source literal expression to emit at the field's ctor-arg position, or null when the
+  // value can't be represented at that type (the caller already reported via error()).
+  private String parseConstantLiteral(
+    final Element origin,
+    final String fieldName,
+    final String value,
+    final TypeMirror type
+  ) {
+    final var kind = type.getKind();
+    if (kind == TypeKind.DECLARED) {
+      final var fqn = ((TypeElement) ((DeclaredType) type).asElement()).getQualifiedName().toString();
+      if ("null".equals(value)) return "null";
+      if (fqn.equals("java.lang.String")) return "\"" + escapeJavaString(value) + "\"";
+      if (fqn.equals("java.lang.Boolean")) return parseBooleanOrError(origin, fieldName, value, "Boolean");
+      if (fqn.equals("java.lang.Integer")) return parseIntegralOrError(origin, fieldName, value, "Integer", "");
+      if (fqn.equals("java.lang.Long")) return parseIntegralOrError(origin, fieldName, value, "Long", "L");
+      if (fqn.equals("java.lang.Short")) return castIntegralOrError(origin, fieldName, value, "Short", "short");
+      if (fqn.equals("java.lang.Byte")) return castIntegralOrError(origin, fieldName, value, "Byte", "byte");
+      if (fqn.equals("java.lang.Double")) return parseFloatingOrError(origin, fieldName, value, "Double", "");
+      if (fqn.equals("java.lang.Float")) return parseFloatingOrError(origin, fieldName, value, "Float", "f");
+      if (fqn.equals("java.lang.Character")) return parseCharOrError(origin, fieldName, value);
+    }
+    if (kind.isPrimitive()) {
+      return switch (kind) {
+        case BOOLEAN -> parseBooleanOrError(origin, fieldName, value, "boolean");
+        case INT -> parseIntegralOrError(origin, fieldName, value, "int", "");
+        case LONG -> parseIntegralOrError(origin, fieldName, value, "long", "L");
+        case SHORT -> castIntegralOrError(origin, fieldName, value, "short", "short");
+        case BYTE -> castIntegralOrError(origin, fieldName, value, "byte", "byte");
+        case DOUBLE -> parseFloatingOrError(origin, fieldName, value, "double", "");
+        case FLOAT -> parseFloatingOrError(origin, fieldName, value, "float", "f");
+        case CHAR -> parseCharOrError(origin, fieldName, value);
+        default -> null;
+      };
+    }
+    error(
+      origin,
+      "@Constant value cannot be parsed at the target field \"" +
+        fieldName +
+        "\" of type " +
+        type +
+        " — supported types are String, primitives and their boxed equivalents, and the literal \"null\" for reference types"
+    );
+    return null;
+  }
+
+  private String parseBooleanOrError(
+    final Element origin,
+    final String fieldName,
+    final String value,
+    final String displayType
+  ) {
+    if ("true".equals(value)) return "true";
+    if ("false".equals(value)) return "false";
+    error(
+      origin,
+      "@Constant value=\"" + value + "\" is not a valid " + displayType + " literal at field \"" + fieldName + "\""
+    );
+    return null;
+  }
+
+  private String parseIntegralOrError(
+    final Element origin,
+    final String fieldName,
+    final String value,
+    final String displayType,
+    final String suffix
+  ) {
+    try {
+      if ("int".equals(displayType) || "Integer".equals(displayType)) Integer.parseInt(value);
+      else Long.parseLong(value);
+    } catch (final NumberFormatException e) {
+      error(
+        origin,
+        "@Constant value=\"" + value + "\" is not a valid " + displayType + " literal at field \"" + fieldName + "\""
+      );
+      return null;
+    }
+    return value + suffix;
+  }
+
+  private String castIntegralOrError(
+    final Element origin,
+    final String fieldName,
+    final String value,
+    final String displayType,
+    final String cast
+  ) {
+    try {
+      if ("short".equals(cast)) Short.parseShort(value);
+      else Byte.parseByte(value);
+    } catch (final NumberFormatException e) {
+      error(
+        origin,
+        "@Constant value=\"" + value + "\" is not a valid " + displayType + " literal at field \"" + fieldName + "\""
+      );
+      return null;
+    }
+    return "(" + cast + ") " + value;
+  }
+
+  private String parseFloatingOrError(
+    final Element origin,
+    final String fieldName,
+    final String value,
+    final String displayType,
+    final String suffix
+  ) {
+    try {
+      if ("float".equals(displayType) || "Float".equals(displayType)) Float.parseFloat(value);
+      else Double.parseDouble(value);
+    } catch (final NumberFormatException e) {
+      error(
+        origin,
+        "@Constant value=\"" + value + "\" is not a valid " + displayType + " literal at field \"" + fieldName + "\""
+      );
+      return null;
+    }
+    return value + suffix;
+  }
+
+  private String parseCharOrError(final Element origin, final String fieldName, final String value) {
+    if (value.length() != 1) {
+      error(origin, "@Constant value=\"" + value + "\" must be a single character at field \"" + fieldName + "\"");
+      return null;
+    }
+    final var c = value.charAt(0);
+    final var escaped = switch (c) {
+      case '\\' -> "\\\\";
+      case '\'' -> "\\'";
+      case '\n' -> "\\n";
+      case '\t' -> "\\t";
+      case '\r' -> "\\r";
+      default -> String.valueOf(c);
+    };
+    return "'" + escaped + "'";
+  }
+
+  private static String escapeJavaString(final String s) {
+    final var b = new StringBuilder(s.length() + 8);
+    for (int i = 0; i < s.length(); i++) {
+      final var c = s.charAt(i);
+      switch (c) {
+        case '\\' -> b.append("\\\\");
+        case '"' -> b.append("\\\"");
+        case '\n' -> b.append("\\n");
+        case '\t' -> b.append("\\t");
+        case '\r' -> b.append("\\r");
+        default -> b.append(c);
+      }
+    }
+    return b.toString();
+  }
+
   private static String defaultLiteralFor(final TypeMirror type) {
     return switch (type.getKind()) {
       case BOOLEAN -> "false";
@@ -324,6 +574,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var drops = dropsByPair.getOrDefault(thisPair, Set.of());
     final var renames = renamesByPair.getOrDefault(thisPair, Map.of());
     final var transforms = transformsByPair.getOrDefault(thisPair, Map.of());
+    final var rawConstants = constantsByPair.getOrDefault(thisPair, Map.of());
+    final var computes = computesByPair.getOrDefault(thisPair, Map.of());
 
     // Validate every transform field is a real source field (drops would mask the validation).
     for (final var t : transforms.keySet()) {
@@ -397,7 +649,71 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var reverseRenames = new LinkedHashMap<String, String>();
     for (final var e : renames.entrySet()) reverseRenames.put(e.getValue(), e.getKey());
 
-    // Bijection check: apply forward renames on the source side, then compare to target names.
+    // Validate constants + computes (forward-only target-side injections). Each named field must
+    // exist on the target; a target field may not be injected by more than one mechanism, nor by a
+    // mechanism that also reaches that target name through a rename. Parse constant values here so
+    // type errors fire alongside the rest of the per-pair validation.
+    final var renameTargetNames = renames.values().stream().collect(Collectors.toSet());
+    final var injectedTargetFields = new LinkedHashSet<String>();
+    final var parsedConstants = new LinkedHashMap<String, String>();
+    for (final var e : rawConstants.entrySet()) {
+      final var fieldName = e.getKey();
+      final var tf = targetFields
+        .stream()
+        .filter(f -> f.name().equals(fieldName))
+        .findFirst()
+        .orElse(null);
+      if (tf == null) {
+        error(
+          source,
+          "@Bridge constants field=\"" +
+            fieldName +
+            "\" is not a field of " +
+            target.getSimpleName() +
+            " — known fields: " +
+            targetNames
+        );
+        return;
+      }
+      if (renameTargetNames.contains(fieldName)) {
+        error(
+          source,
+          "@Bridge target \"" + fieldName + "\" is already targeted by a rename; cannot also be a constant"
+        );
+        return;
+      }
+      final var lit = parseConstantLiteral(source, fieldName, e.getValue(), tf.type());
+      if (lit == null) return;
+      parsedConstants.put(fieldName, lit);
+      injectedTargetFields.add(fieldName);
+    }
+    for (final var e : computes.entrySet()) {
+      final var fieldName = e.getKey();
+      if (!targetNames.contains(fieldName)) {
+        error(
+          source,
+          "@Bridge computes field=\"" +
+            fieldName +
+            "\" is not a field of " +
+            target.getSimpleName() +
+            " — known fields: " +
+            targetNames
+        );
+        return;
+      }
+      if (parsedConstants.containsKey(fieldName)) {
+        error(source, "@Bridge target \"" + fieldName + "\" appears in both constants and computes");
+        return;
+      }
+      if (renameTargetNames.contains(fieldName)) {
+        error(source, "@Bridge target \"" + fieldName + "\" is already targeted by a rename; cannot also be a compute");
+        return;
+      }
+      injectedTargetFields.add(fieldName);
+    }
+
+    // Bijection check: apply forward renames on the source side, then compare to target names —
+    // skipping target names covered by constants/computes (injected; no source counterpart needed).
     // Dropped sources are excluded from the check entirely.
     final var nonDroppedSourceFields = drops.isEmpty()
       ? sourceFields
@@ -405,7 +721,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           .stream()
           .filter(f -> !drops.contains(f.name()))
           .toList();
-    if (!sameNames(source, nonDroppedSourceFields, target, targetFields, renames)) return;
+    if (!sameNames(source, nonDroppedSourceFields, target, targetFields, renames, injectedTargetFields)) return;
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
@@ -424,9 +740,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
     if (fieldPlans == null) return;
 
-    // readForward is called with TARGET field names (we walk targetFields). Reverse-rename to find
-    // the matching source field, then use the source name to look up the plan and read the source.
+    // readForward is called with TARGET field names (we walk targetFields). Injected targets
+    // (constants, computes) take priority — they're forward-only literal/Supplier expressions with
+    // no source counterpart. Otherwise reverse-rename to find the matching source field, then use
+    // the source name to look up the plan and read the source.
     final Function<String, String> readForward = targetName -> {
+      if (parsedConstants.containsKey(targetName)) return parsedConstants.get(targetName);
+      if (computes.containsKey(targetName)) return "__cp_" + targetName + ".get()";
       final var srcName = reverseRenames.getOrDefault(targetName, targetName);
       return applyForward(
         srcName,
@@ -471,6 +791,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           for (final var e : transforms.entrySet()) {
             out.println(
               "  private static final " + e.getValue() + " __tx_" + e.getKey() + " = new " + e.getValue() + "();"
+            );
+          }
+          out.println();
+        }
+        // Per-field @Compute: one static instance of each user-declared Supplier implementation,
+        // named `__cp_<targetField>`. readForward emits `__cp_<field>.get()` for the forward
+        // slot.
+        if (!computes.isEmpty()) {
+          for (final var e : computes.entrySet()) {
+            out.println(
+              "  private static final " + e.getValue() + " __cp_" + e.getKey() + " = new " + e.getValue() + "();"
             );
           }
           out.println();
@@ -1318,13 +1649,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> sourceFields,
     final TypeElement target,
     final List<Field> targetFields,
-    final Map<String, String> renames
+    final Map<String, String> renames,
+    final Set<String> injectedTargetFields
   ) {
     final var sn = sourceFields
       .stream()
       .map(f -> renames.getOrDefault(f.name(), f.name()))
       .collect(Collectors.toCollection(TreeSet::new));
-    final var tn = targetFields.stream().map(Field::name).collect(Collectors.toCollection(TreeSet::new));
+    final var tn = targetFields
+      .stream()
+      .map(Field::name)
+      .filter(n -> !injectedTargetFields.contains(n))
+      .collect(Collectors.toCollection(TreeSet::new));
     if (sn.equals(tn)) return true;
     error(
       source,

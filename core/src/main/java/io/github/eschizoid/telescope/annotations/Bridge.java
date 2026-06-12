@@ -110,4 +110,40 @@ public @interface Bridge {
    * input/output types are the bridge contract for that slot.
    */
   Transform[] transforms() default {};
+
+  /**
+   * Forward-only target-field literal injections. Each {@link Constant} names a target field that
+   * doesn't exist on the source and a string literal value the emitted forward direction will set
+   * on that field. The backward direction silently drops the slot — the source has no field to
+   * reconstruct from.
+   *
+   * <pre>{@code
+   * @Bridge(value = LineItemEntity.class, constants = {
+   *   @Constant(field = "source", value = "API")
+   * })
+   * }</pre>
+   *
+   * <p>The named target field is exempt from the strict-bijection check. A target field listed in
+   * {@code constants} may not also appear in {@link #computes()}, {@link #renames()}, or {@link
+   * #drops()} for the same pair.
+   */
+  Constant[] constants() default {};
+
+  /**
+   * Forward-only target-field computed injections. Each {@link Compute} names a target field that
+   * doesn't exist on the source and a {@link java.util.function.Supplier} class whose {@code get()}
+   * the emitted forward direction will call to produce the value. The backward direction silently
+   * drops the slot.
+   *
+   * <pre>{@code
+   * @Bridge(value = LineItemEntity.class, computes = {
+   *   @Compute(field = "createdAt", using = NowSupplier.class)
+   * })
+   * }</pre>
+   *
+   * <p>The named target field is exempt from the strict-bijection check. A target field listed in
+   * {@code computes} may not also appear in {@link #constants()}, {@link #renames()}, or {@link
+   * #drops()} for the same pair.
+   */
+  Compute[] computes() default {};
 }

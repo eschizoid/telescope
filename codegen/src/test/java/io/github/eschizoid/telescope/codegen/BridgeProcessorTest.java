@@ -1339,6 +1339,204 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("@Constant injects a String literal at a target-only field on forward")
+    void constantStringInjectsForwardOnly() {
+      final var compilation = compile(
+        source(
+          "demo.LineItem",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Constant;
+          @Bridge(value = demo.LineItemEntity.class, constants = {
+            @Constant(field = "source", value = "API")
+          })
+          public record LineItem(String id) {}
+          """
+        ),
+        source(
+          "demo.LineItemEntity",
+          """
+          package demo;
+          public record LineItemEntity(String id, String source) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.LineItemBridge");
+      assertNotNull(bridge, () -> "LineItemBridge missing; saw " + compilation.generated().keySet());
+
+      // Forward fills the target's `source` slot with the literal.
+      assertTrue(bridge.contains("new demo.LineItemEntity(s.id(), \"API\")"), bridge);
+      // Backward rebuilds LineItem from t.id() only — source is target-only, dropped on backward.
+      assertTrue(bridge.contains("new demo.LineItem(t.id())"), bridge);
+    }
+
+    @Test
+    @DisplayName("@Constant supports primitive types — int parses and emits as a literal")
+    void constantIntPrimitiveEmitsAsLiteral() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Constant;
+          @Bridge(value = demo.B.class, constants = {@Constant(field = "version", value = "1")})
+          public record A(String id) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String id, int version) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.ABridge");
+      assertTrue(bridge.contains("new demo.B(s.id(), 1)"), bridge);
+    }
+
+    @Test
+    @DisplayName("@Constant value=\"null\" is accepted for reference-typed target fields")
+    void constantNullForReferenceType() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Constant;
+          @Bridge(value = demo.B.class, constants = {@Constant(field = "note", value = "null")})
+          public record A(String id) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String id, String note) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.ABridge");
+      assertTrue(bridge.contains("new demo.B(s.id(), null)"), bridge);
+    }
+
+    @Test
+    @DisplayName("@Constant value that does not parse against the target type is a compile error")
+    void constantValueMismatchIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Constant;
+          @Bridge(value = demo.B.class, constants = {@Constant(field = "version", value = "v2")})
+          public record A(String id) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String id, int version) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "non-parseable constant value should fail");
+      assertTrue(
+        compilation.hasError("is not a valid int literal"),
+        () -> "expected parse-fail diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Constant for a non-existent target field is a compile error")
+    void constantWithMissingTargetFieldIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Constant;
+          @Bridge(value = demo.B.class, constants = {@Constant(field = "ghost", value = "x")})
+          public record A(String id) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String id) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "constant against a missing target field should fail");
+      assertTrue(
+        compilation.hasError("constants field=\"ghost\" is not a field of B"),
+        () -> "expected missing-field diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Compute calls Supplier.get() at the forward target slot")
+    void computeCallsSupplierGet() {
+      final var compilation = compile(
+        source(
+          "demo.NowSupplier",
+          """
+          package demo;
+          import java.util.function.Supplier;
+          public final class NowSupplier implements Supplier<String> {
+            public NowSupplier() {}
+            @Override public String get() { return "now"; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Compute;
+          @Bridge(value = demo.B.class, computes = {@Compute(field = "createdAt", using = demo.NowSupplier.class)})
+          public record A(String id) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String id, String createdAt) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.ABridge");
+      assertNotNull(bridge, () -> "ABridge missing; saw " + compilation.generated().keySet());
+
+      assertTrue(
+        bridge.contains("private static final demo.NowSupplier __cp_createdAt = new demo.NowSupplier();"),
+        bridge
+      );
+      assertTrue(bridge.contains("new demo.B(s.id(), __cp_createdAt.get())"), bridge);
+      // Backward — A has no createdAt to recover, so the source rebuild only reads t.id().
+      assertTrue(bridge.contains("new demo.A(t.id())"), bridge);
+    }
+
+    @Test
     @DisplayName("two renames cannot share the same source or the same target")
     void duplicateRenameSourceIsRejected() {
       final var compilation = compile(
