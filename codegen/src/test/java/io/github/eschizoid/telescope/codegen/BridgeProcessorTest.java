@@ -917,4 +917,193 @@ class BridgeProcessorTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("Repeatable — multiple @Bridge on one source")
+  class Repeatable {
+
+    @Test
+    @DisplayName("two @Bridge targets on one record emit two bridges with the long-form naming")
+    void twoBridgesOnOneRecord() {
+      final var compilation = compile(
+        source(
+          "demo.Product",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.ProductEntity.class)
+          @Bridge(demo.ProductDto.class)
+          public record Product(String id, String name) {}
+          """
+        ),
+        source(
+          "demo.ProductEntity",
+          """
+          package demo;
+          public class ProductEntity {
+            private String id; private String name;
+            public ProductEntity() {}
+            public String getId() { return id; }
+            public void setId(String id) { this.id = id; }
+            public String getName() { return name; }
+            public void setName(String name) { this.name = name; }
+          }
+          """
+        ),
+        source(
+          "demo.ProductDto",
+          """
+          package demo;
+          public record ProductDto(String id, String name) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+
+      // Multi-target → long-form naming for BOTH bridges, no short-form ProductBridge.
+      assertNull(compilation.generated().get("demo.ProductBridge"), "no short-form ProductBridge when multi-target");
+      final var entityBridge = compilation.generated().get("demo.ProductToProductEntityBridge");
+      final var dtoBridge = compilation.generated().get("demo.ProductToProductDtoBridge");
+      assertNotNull(
+        entityBridge,
+        () -> "ProductToProductEntityBridge missing; saw " + compilation.generated().keySet()
+      );
+      assertNotNull(dtoBridge, () -> "ProductToProductDtoBridge missing; saw " + compilation.generated().keySet());
+
+      assertTrue(
+        entityBridge.contains(
+          "public static final Telescope<demo.Product, demo.ProductEntity> BRIDGE = Telescope.bridge(new Fn());"
+        ),
+        entityBridge
+      );
+      assertTrue(
+        dtoBridge.contains(
+          "public static final Telescope<demo.Product, demo.ProductDto> BRIDGE = Telescope.bridge(new Fn());"
+        ),
+        dtoBridge
+      );
+    }
+
+    @Test
+    @DisplayName("single @Bridge still uses the short-form <Source>Bridge naming (backwards-compatible)")
+    void singleBridgeUsesShortName() {
+      final var compilation = compile(
+        source(
+          "demo.Plain",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.Other.class)
+          public record Plain(String id) {}
+          """
+        ),
+        source(
+          "demo.Other",
+          """
+          package demo;
+          public record Other(String id) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      assertNotNull(compilation.generated().get("demo.PlainBridge"), "short-form PlainBridge expected");
+    }
+  }
+
+  @Nested
+  @DisplayName("Drops — source field excluded from a bridge")
+  class Drops {
+
+    @Test
+    @DisplayName("drop on a source-only field: forward skips, backward fills null")
+    void dropFillsNullOnBackward() {
+      final var compilation = compile(
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.OrderEntity.class, drops = {"payment"})
+          public record Order(String id, String customer, String payment) {}
+          """
+        ),
+        source(
+          "demo.OrderEntity",
+          """
+          package demo;
+          public record OrderEntity(String id, String customer) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
+
+      // Forward: build OrderEntity from non-dropped source fields only — `payment` never appears.
+      assertTrue(bridge.contains("new demo.OrderEntity(s.id(), s.customer())"), bridge);
+      // Backward: build Order with `null` for the dropped `payment` slot.
+      assertTrue(bridge.contains("new demo.Order(t.id(), t.customer(), null)"), bridge);
+    }
+
+    @Test
+    @DisplayName("drop on a primitive field fills the type's zero on backward")
+    void dropPrimitiveFillsZero() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.B.class, drops = {"age", "active"})
+          public record A(String id, int age, boolean active) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String id) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.ABridge");
+      assertNotNull(bridge, () -> "ABridge missing; saw " + compilation.generated().keySet());
+      // age (int) → 0, active (boolean) → false in the backward rebuild.
+      assertTrue(bridge.contains("new demo.A(t.id(), 0, false)"), bridge);
+    }
+
+    @Test
+    @DisplayName("misspelled drop name is a compile error pointing at the source")
+    void misspelledDropIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.B.class, drops = {"payement"})
+          public record A(String id, String payment) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String id) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "misspelled drop name should fail");
+      assertTrue(
+        compilation.hasError("not a field of A"),
+        () -> "expected misspelled-drop diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+  }
 }

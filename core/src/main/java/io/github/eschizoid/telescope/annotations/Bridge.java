@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.annotations;
 
 import java.lang.annotation.ElementType;
+import java.lang.annotation.Repeatable;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
@@ -54,10 +55,24 @@ import java.lang.annotation.Target;
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)
+@Repeatable(Bridges.class)
 public @interface Bridge {
   /**
    * The target type to bridge to and from. Must be a top-level record or class exposing the same
    * field names as the annotated source, with a usable construction strategy.
    */
   Class<?> value();
+
+  /**
+   * Source field names that exist on the annotated source but not on the target. Forward conversion
+   * skips them; backward conversion fills the dropped slot with {@code null} for reference types,
+   * {@code 0} for numeric primitives, {@code false} for {@code boolean}, and the NUL character
+   * ({@code '\u0000'}) for {@code char}. Use this when the source carries fields the target shape
+   * legitimately doesn't (e.g. an internal-only field that the partner DTO does not carry).
+   *
+   * <p>Drops do not need a counterpart on the other side — they relax the strict-bijection check by
+   * exactly the names listed. A drop name that is not actually present on the source is a compile
+   * error.
+   */
+  String[] drops() default {};
 }

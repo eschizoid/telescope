@@ -4,8 +4,10 @@ import java.io.PrintWriter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -17,6 +19,8 @@ import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
@@ -42,7 +46,9 @@ import javax.lang.model.util.ElementFilter;
  * <p>Guards (each a compile error): the source must be a top-level record/class; the target must be
  * a top-level record/class; and the two must expose the same field names with a usable strategy.
  */
-@SupportedAnnotationTypes("io.github.eschizoid.telescope.annotations.Bridge")
+@SupportedAnnotationTypes(
+  { "io.github.eschizoid.telescope.annotations.Bridge", "io.github.eschizoid.telescope.annotations.Bridges" }
+)
 @SupportedSourceVersion(SourceVersion.RELEASE_25)
 public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
@@ -54,6 +60,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.Bridge";
+  private static final String BRIDGES_ANNOTATION = "io.github.eschizoid.telescope.annotations.Bridges";
 
   // A named field on either side: a record component or a POJO getter-property, with its type.
   private record Field(String name, TypeMirror type) {}
@@ -65,14 +72,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private record TypePair(String sourceFq, String targetFq) {}
 
+  // Source FQNs whose @Bridge appears more than once (via @Repeatable). The naming switches to the
+  // long form `<Source>To<Target>Bridge` for ALL of their bridges to keep emitted class names
+  // unambiguous. Populated in process(), read in generate() / generateSealed().
+  private final Set<String> multiTargetSources = new HashSet<>();
+
+  // Per-pair drops: source field names that are absent on the target by user declaration. Forward
+  // skips them; backward fills the dropped slot with the type's zero value. Populated in process(),
+  // read in generate().
+  private final Map<TypePair, Set<String>> dropsByPair = new HashMap<>();
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var anno = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
     if (anno == null) return false;
+    final var bridgesAnno = processingEnv.getElementUtils().getTypeElement(BRIDGES_ANNOTATION);
+    // Reset per-run bookkeeping so a second processing round starts from a clean slate.
+    multiTargetSources.clear();
+    dropsByPair.clear();
+
     final Deque<TypePair> pending = new ArrayDeque<>();
     final Set<TypePair> seen = new HashSet<>();
     final Set<TypePair> userDeclared = new HashSet<>();
-    for (final var element : roundEnv.getElementsAnnotatedWith(anno)) {
+
+    // Collect annotated elements from both @Bridge (single use) and @Bridges (the container that
+    // javac wraps multiple @Bridge into when the user declares more than one on the same type).
+    final var elements = new LinkedHashSet<Element>();
+    elements.addAll(roundEnv.getElementsAnnotatedWith(anno));
+    if (bridgesAnno != null) elements.addAll(roundEnv.getElementsAnnotatedWith(bridgesAnno));
+
+    for (final var element : elements) {
       final var kind = element.getKind();
       final var isSealedInterface = kind == ElementKind.INTERFACE && element.getModifiers().contains(Modifier.SEALED);
       if (kind != ElementKind.RECORD && kind != ElementKind.CLASS && !isSealedInterface) {
@@ -83,22 +112,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         error(element, "@Bridge is only supported on top-level types");
         continue;
       }
-      final var target = targetType(element);
-      if (target == null || target.getKind() != TypeKind.DECLARED) {
-        error(element, "@Bridge value must be a class, record, or sealed-interface type");
-        continue;
+      final var sourceFq = ((TypeElement) element).getQualifiedName().toString();
+      final var bridges = collectBridgeAnnotations(element);
+      if (bridges.isEmpty()) continue;
+      if (bridges.size() > 1) multiTargetSources.add(sourceFq);
+
+      for (final var bridgeAm : bridges) {
+        final var target = targetTypeFromMirror(bridgeAm);
+        if (target == null || target.getKind() != TypeKind.DECLARED) {
+          error(element, "@Bridge value must be a class, record, or sealed-interface type");
+          continue;
+        }
+        final var targetEl = (TypeElement) ((DeclaredType) target).asElement();
+        if (targetEl.getNestingKind() != NestingKind.TOP_LEVEL) {
+          error(element, "@Bridge target must be a top-level type");
+          continue;
+        }
+        final var pair = new TypePair(sourceFq, targetEl.getQualifiedName().toString());
+        userDeclared.add(pair);
+        final var drops = dropsFromMirror(bridgeAm);
+        if (!drops.isEmpty()) dropsByPair.put(pair, drops);
+        if (seen.add(pair)) pending.add(pair);
       }
-      final var targetEl = (TypeElement) ((DeclaredType) target).asElement();
-      if (targetEl.getNestingKind() != NestingKind.TOP_LEVEL) {
-        error(element, "@Bridge target must be a top-level type");
-        continue;
-      }
-      final var pair = new TypePair(
-        ((TypeElement) element).getQualifiedName().toString(),
-        targetEl.getQualifiedName().toString()
-      );
-      userDeclared.add(pair);
-      if (seen.add(pair)) pending.add(pair);
     }
     // Drain the queue, generating bridges. Each generate(...) call may discover sub-pairs and add
     // them to `pending` for recursive emission. The `seen` set guards against re-emission (cycle
@@ -111,6 +146,58 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       generate(sourceEl, targetEl, pending, seen, userDeclared);
     }
     return true;
+  }
+
+  // Collect all @Bridge annotation mirrors on an element, transparently unwrapping the @Bridges
+  // container that javac synthesises when the user declares @Bridge more than once.
+  private List<AnnotationMirror> collectBridgeAnnotations(final Element element) {
+    final var bridges = new ArrayList<AnnotationMirror>();
+    for (final var am : element.getAnnotationMirrors()) {
+      final var name = ((TypeElement) am.getAnnotationType().asElement()).getQualifiedName().toString();
+      if (name.equals(ANNOTATION)) {
+        bridges.add(am);
+      } else if (name.equals(BRIDGES_ANNOTATION)) {
+        for (final var entry : am.getElementValues().entrySet()) {
+          if (entry.getKey().getSimpleName().contentEquals("value")) {
+            @SuppressWarnings("unchecked")
+            final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
+            for (final var av : list) bridges.add((AnnotationMirror) av.getValue());
+          }
+        }
+      }
+    }
+    return bridges;
+  }
+
+  private TypeMirror targetTypeFromMirror(final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (entry.getKey().getSimpleName().contentEquals("value")) return (TypeMirror) entry.getValue().getValue();
+    }
+    return null;
+  }
+
+  private Set<String> dropsFromMirror(final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (entry.getKey().getSimpleName().contentEquals("drops")) {
+        @SuppressWarnings("unchecked")
+        final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
+        final var result = new LinkedHashSet<String>();
+        for (final var av : list) result.add((String) av.getValue());
+        return result;
+      }
+    }
+    return Set.of();
+  }
+
+  private static String defaultLiteralFor(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case BOOLEAN -> "false";
+      case CHAR -> "'\\0'";
+      case BYTE, SHORT, INT, LONG -> "0";
+      case FLOAT -> "0.0f";
+      case DOUBLE -> "0.0";
+      default -> "null";
+    };
   }
 
   private void generate(
@@ -128,23 +215,60 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var sourceFq = source.getQualifiedName().toString();
     final var targetFq = target.getQualifiedName().toString();
     final var thisPair = new TypePair(sourceFq, targetFq);
-    final var bridgeName = bridgeClassName(source, target, userDeclared.contains(thisPair));
+    final var useShortName = userDeclared.contains(thisPair) && !multiTargetSources.contains(sourceFq);
+    final var bridgeName = bridgeClassName(source, target, useShortName);
     final var qualifiedBridge = pkg.isEmpty() ? bridgeName : pkg + "." + bridgeName;
 
     final var sourceFields = fieldsOf(source);
     final var targetFields = fieldsOf(target);
-    if (!sameNames(source, sourceFields, target, targetFields)) return;
+    final var drops = dropsByPair.getOrDefault(thisPair, Set.of());
+
+    // Validate every drop name actually names a source field. A misspelled or non-existent drop
+    // is a precise compile error rather than a silent no-op.
+    final var sourceNames = sourceFields.stream().map(Field::name).collect(Collectors.toSet());
+    for (final var d : drops) {
+      if (!sourceNames.contains(d)) {
+        error(
+          source,
+          "@Bridge drops=\"" + d + "\" is not a field of " + source.getSimpleName() + " — known fields: " + sourceNames
+        );
+        return;
+      }
+    }
+
+    // Bijection check sees only the non-dropped source fields. Drops relax the strictness by
+    // exactly
+    // the names listed; everything else must still match name-for-name.
+    final var nonDroppedSourceFields = drops.isEmpty()
+      ? sourceFields
+      : sourceFields
+          .stream()
+          .filter(f -> !drops.contains(f.name()))
+          .toList();
+    if (!sameNames(source, nonDroppedSourceFields, target, targetFields)) return;
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
     // value (and vice versa). Per-field decisions can also enqueue new TypePairs to emit.
-    final var fieldPlans = planFields(source, target, sourceFields, targetFields, pending, seen, userDeclared);
+    final var fieldPlans = planFields(
+      source,
+      target,
+      nonDroppedSourceFields,
+      targetFields,
+      pending,
+      seen,
+      userDeclared
+    );
     if (fieldPlans == null) return;
 
     final Function<String, String> readForward = name ->
-      applyForward(name, fieldPlans.get(name), readExpr(source, "s", fieldByName(sourceFields, name)));
-    final Function<String, String> readBackward = name ->
-      applyBackward(name, fieldPlans.get(name), readExpr(target, "t", fieldByName(targetFields, name)));
+      applyForward(name, fieldPlans.get(name), readExpr(source, "s", fieldByName(nonDroppedSourceFields, name)));
+    // Backward walks ALL source fields, including dropped ones. For drops, the target has no
+    // counterpart — emit the type's zero value (null for refs, 0/false/'\0' for primitives).
+    final Function<String, String> readBackward = name -> {
+      if (drops.contains(name)) return defaultLiteralFor(fieldByName(sourceFields, name).type());
+      return applyBackward(name, fieldPlans.get(name), readExpr(target, "t", fieldByName(targetFields, name)));
+    };
 
     final var forwardBody = buildExpr(target, readForward, targetFields);
     if (forwardBody == null) return;
@@ -195,7 +319,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println(
           "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(new Fn());"
         );
-        emitContainerHelpers(out, fieldPlans, sourceFields, targetFields);
+        emitContainerHelpers(out, fieldPlans, nonDroppedSourceFields, targetFields);
       }
     );
   }
@@ -238,34 +362,62 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var sp : sourcePermits) {
       if (sp.getKind() != TypeKind.DECLARED) continue;
       final var sourceCaseEl = (TypeElement) ((DeclaredType) sp).asElement();
-      final var caseTarget = targetType(sourceCaseEl);
-      if (caseTarget == null || caseTarget.getKind() != TypeKind.DECLARED) {
-        error(
-          source,
-          "Subtype " +
-            sourceCaseEl.getSimpleName() +
-            " of @Bridge sealed " +
-            source.getSimpleName() +
-            " must itself be @Bridge-annotated."
-        );
+      // Find the @Bridge on this permit case whose target lives in the sealed-target's permits.
+      // A case may have multiple @Bridge annotations (one for the sealed-target side, others for
+      // unrelated targets); only the one matching the sealed target wires the dispatch switch.
+      final var caseBridges = collectBridgeAnnotations(sourceCaseEl);
+      TypeMirror caseTarget = null;
+      for (final var bridgeAm : caseBridges) {
+        final var tm = targetTypeFromMirror(bridgeAm);
+        if (tm == null || tm.getKind() != TypeKind.DECLARED) continue;
+        final var tEl = (TypeElement) ((DeclaredType) tm).asElement();
+        if (targetPermitsFq.contains(tEl.getQualifiedName().toString())) {
+          caseTarget = tm;
+          break;
+        }
+      }
+      if (caseTarget == null) {
+        if (caseBridges.isEmpty()) {
+          error(
+            source,
+            "Subtype " +
+              sourceCaseEl.getSimpleName() +
+              " of @Bridge sealed " +
+              source.getSimpleName() +
+              " must itself be @Bridge-annotated."
+          );
+        } else if (caseBridges.size() == 1) {
+          // Single @Bridge whose target isn't in the sealed-target permits — name it explicitly.
+          final var only = targetTypeFromMirror(caseBridges.get(0));
+          final var onlyEl = (TypeElement) ((DeclaredType) only).asElement();
+          error(
+            source,
+            "Subtype " +
+              sourceCaseEl.getSimpleName() +
+              "'s @Bridge target " +
+              onlyEl.getQualifiedName() +
+              " is not a permits of sealed target " +
+              target.getQualifiedName() +
+              "."
+          );
+        } else {
+          // Multi-target — none of the @Bridge targets matched the sealed-target permits.
+          error(
+            source,
+            "Subtype " +
+              sourceCaseEl.getSimpleName() +
+              " has multiple @Bridge targets, none of which is a permits of sealed target " +
+              target.getQualifiedName() +
+              "."
+          );
+        }
         return;
       }
       final var targetCaseEl = (TypeElement) ((DeclaredType) caseTarget).asElement();
       final var targetCaseFq = targetCaseEl.getQualifiedName().toString();
-      if (!targetPermitsFq.contains(targetCaseFq)) {
-        error(
-          source,
-          "Subtype " +
-            sourceCaseEl.getSimpleName() +
-            "'s @Bridge target " +
-            targetCaseFq +
-            " is not a permits of sealed target " +
-            target.getQualifiedName() +
-            "."
-        );
-        return;
-      }
-      final var caseBridgeSimple = bridgeClassName(sourceCaseEl, targetCaseEl, true);
+      final var caseSourceFq = sourceCaseEl.getQualifiedName().toString();
+      final var caseUseShortName = !multiTargetSources.contains(caseSourceFq);
+      final var caseBridgeSimple = bridgeClassName(sourceCaseEl, targetCaseEl, caseUseShortName);
       final var caseSourcePkg = processingEnv
         .getElementUtils()
         .getPackageOf(sourceCaseEl)
@@ -283,7 +435,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var sourceFq = source.getQualifiedName().toString();
     final var targetFq = target.getQualifiedName().toString();
     final var thisPair = new TypePair(sourceFq, targetFq);
-    final var bridgeName = bridgeClassName(source, target, userDeclared.contains(thisPair));
+    final var useShortName = userDeclared.contains(thisPair) && !multiTargetSources.contains(sourceFq);
+    final var bridgeName = bridgeClassName(source, target, useShortName);
     final var qualifiedBridge = pkg.isEmpty() ? bridgeName : pkg + "." + bridgeName;
 
     writeClass(
@@ -995,17 +1148,5 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private static boolean hasField(final List<Field> fields, final String name) {
     for (final var f : fields) if (f.name().equals(name)) return true;
     return false;
-  }
-
-  private TypeMirror targetType(final Element element) {
-    for (final var am : element.getAnnotationMirrors()) {
-      if (!ANNOTATION.contentEquals(((TypeElement) am.getAnnotationType().asElement()).getQualifiedName())) continue;
-      for (final var entry : am.getElementValues().entrySet()) {
-        if (entry.getKey().getSimpleName().contentEquals("value")) {
-          return (TypeMirror) entry.getValue().getValue();
-        }
-      }
-    }
-    return null;
   }
 }
