@@ -18,12 +18,13 @@ import org.junit.jupiter.api.Test;
  * overlay then descends into the allocated structure and writes the leaf — no per-hop allocation
  * glue from the user, no fall-back to {@code Mapping.via(...)}.
  *
- * <p>Both records and beans are supported. Records recurse through their canonical constructors with
- * default component values at every hop. Beans are allocated from their public no-arg constructor —
- * the resulting instance has default-initialised fields that the subsequent telescope-row write
- * overwrites via the bean's setters. A bean without a public no-arg ctor falls back to {@code null}
- * (same behaviour as before bean-intermediate support landed), so the records path is unchanged
- * and bean users who need a builder shape still reach for {@code Mapping.via(...)}.
+ * <p>Both records and beans are supported. Records recurse through their canonical constructors
+ * with default component values at every hop. Beans are allocated from their public no-arg
+ * constructor — the resulting instance has default-initialised fields that the subsequent
+ * telescope-row write overwrites via the bean's setters. A bean without a public no-arg ctor falls
+ * back to {@code null} (same behaviour as before bean-intermediate support landed), so the records
+ * path is unchanged and bean users who need a builder shape still reach for {@code
+ * Mapping.via(...)}.
  */
 class MappingIntermediateAllocationTest {
 
