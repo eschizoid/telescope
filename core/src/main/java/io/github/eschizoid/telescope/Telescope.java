@@ -227,18 +227,21 @@ public sealed class Telescope<
    * @see BridgeFn
    */
   public static <A, B> Telescope<A, B> bridge(final BridgeFn<A, B> fn) {
-    final Iso<A, B> iso = new Iso<A, B>() {
+    // Anonymous BridgeTelescope subclass that overrides read/set so the runtime path still
+    // bypasses the optic walk and calls fn.forward / fn.backward directly. Composition (.then,
+    // .field, etc.) uses the underlying Iso the parent constructor built from fn::forward /
+    // fn::backward — same shape as codegen-emitted subclasses, no behaviour change for callers.
+    return new BridgeTelescope<A, B>(fn::forward, fn::backward) {
       @Override
-      public B to(final A source) {
+      public B read(final A source) {
         return fn.forward(source);
       }
 
       @Override
-      public A from(final B value) {
+      public A set(final A source, final B value) {
         return fn.backward(value);
       }
     };
-    return new BridgeTelescope<>(iso, fn);
   }
 
   /**
@@ -1519,29 +1522,32 @@ public sealed class Telescope<
     }
   }
 
-  // Specialised Telescope for @Bridge-emitted constants. The parent's read/set terminals walk
-  // optic instanceof Lens → Iso.get default → anonymous Iso.to → BridgeFn.forward — three virtual
-  // hops to reach a static call. Holding the BridgeFn directly lets read/set fire fn.forward /
-  // fn.backward in one virtual hop. The Iso is still the underlying optic — composition (.then,
-  // .field, .each, .as, etc.) returns a regular Telescope and keeps lattice semantics intact; the
-  // fast path applies only when a terminal is invoked directly on the bridge constant.
-  private static final class BridgeTelescope<S, T> extends Telescope<S, T> {
+  /**
+   * Base for the specialised {@link Telescope} subclasses {@code telescope-codegen} emits for
+   * {@code @Bridge}-annotated types. Each emitted subclass overrides {@link #read} and {@link #set}
+   * with direct calls to the generated {@code <X>Bridge.forward} / {@code .backward} static methods
+   * — no intermediate {@code BridgeFn} allocation, no virtual dispatch through a SAM.
+   *
+   * <p>Composition (.then, .field, .each, .as, etc.) still uses the underlying {@link Iso} the
+   * constructor builds from the forward/backward function pair, so lattice semantics for chained
+   * paths remain identical to the generic {@code Telescope.bridge(BridgeFn)} factory.
+   *
+   * <p>The runtime {@link Telescope#bridge(BridgeFn)} factory wraps a {@link BridgeFn} into an
+   * anonymous subclass that overrides {@link #read} / {@link #set} via the {@code BridgeFn} field —
+   * same shape, no change in the runtime path. The codegen path produces named, JIT-friendly
+   * subclasses that the inliner sees as monomorphic at each {@code BRIDGE} call site.
+   *
+   * <p>Marked {@code non-sealed} so codegen-emitted subclasses in user packages compile against the
+   * sealed {@link Telescope} hierarchy without each user type needing to be added to the {@code
+   * permits} clause.
+   */
+  public static non-sealed class BridgeTelescope<S, T> extends Telescope<S, T> {
 
-    private final BridgeFn<S, T> fn;
-
-    BridgeTelescope(final Iso<S, T> iso, final BridgeFn<S, T> fn) {
-      super(iso);
-      this.fn = fn;
-    }
-
-    @Override
-    public T read(final S source) {
-      return fn.forward(source);
-    }
-
-    @Override
-    public S set(final S source, final T value) {
-      return fn.backward(value);
+    protected BridgeTelescope(
+      final Function<? super S, ? extends T> forward,
+      final Function<? super T, ? extends S> backward
+    ) {
+      super(Iso.of(forward, backward));
     }
   }
 }

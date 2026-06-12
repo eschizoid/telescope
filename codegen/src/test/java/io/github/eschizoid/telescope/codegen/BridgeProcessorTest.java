@@ -61,16 +61,17 @@ class BridgeProcessorTest {
       assertNotNull(generated, () -> "RecBridge not generated; saw " + compilation.generated().keySet());
 
       assertTrue(
-        generated.contains("public static final Telescope<demo.Rec, demo.Pojo> BRIDGE = Telescope.bridge(new Fn());"),
+        generated.contains("public static final Telescope<demo.Rec, demo.Pojo> BRIDGE = new BridgeTelescopeImpl();"),
         generated
       );
-      assertTrue(generated.contains("import io.github.eschizoid.telescope.conversion.BridgeFn;"), generated);
       assertTrue(
-        generated.contains("private static final class Fn implements BridgeFn<demo.Rec, demo.Pojo>"),
+        generated.contains(
+          "private static final class BridgeTelescopeImpl extends io.github.eschizoid.telescope.Telescope.BridgeTelescope<demo.Rec, demo.Pojo>"
+        ),
         generated
       );
-      assertTrue(generated.contains("return RecBridge.forward(s);"), generated);
-      assertTrue(generated.contains("return RecBridge.backward(t);"), generated);
+      assertTrue(generated.contains("return RecBridge.forward(source);"), generated);
+      assertTrue(generated.contains("return RecBridge.backward(value);"), generated);
       assertTrue(generated.contains("public static demo.Pojo forward(final demo.Rec s)"), generated);
       assertTrue(generated.contains("public static demo.Rec backward(final demo.Pojo t)"), generated);
       assertTrue(generated.contains("new demo.Pojo(s.id(), s.email())"), generated);
@@ -104,12 +105,17 @@ class BridgeProcessorTest {
       assertNotNull(generated, () -> "ABridge not generated; saw " + compilation.generated().keySet());
 
       assertTrue(
-        generated.contains("public static final Telescope<demo.A, demo.B> BRIDGE = Telescope.bridge(new Fn());"),
+        generated.contains("public static final Telescope<demo.A, demo.B> BRIDGE = new BridgeTelescopeImpl();"),
         generated
       );
-      assertTrue(generated.contains("private static final class Fn implements BridgeFn<demo.A, demo.B>"), generated);
-      assertTrue(generated.contains("return ABridge.forward(s);"), generated);
-      assertTrue(generated.contains("return ABridge.backward(t);"), generated);
+      assertTrue(
+        generated.contains(
+          "private static final class BridgeTelescopeImpl extends io.github.eschizoid.telescope.Telescope.BridgeTelescope<demo.A, demo.B>"
+        ),
+        generated
+      );
+      assertTrue(generated.contains("return ABridge.forward(source);"), generated);
+      assertTrue(generated.contains("return ABridge.backward(value);"), generated);
       assertTrue(generated.contains("new demo.B(s.id(), s.score())"), generated);
       assertTrue(generated.contains("new demo.A(t.id(), t.score())"), generated);
     }
@@ -151,12 +157,17 @@ class BridgeProcessorTest {
       assertNotNull(generated, () -> "PABridge not generated; saw " + compilation.generated().keySet());
 
       assertTrue(
-        generated.contains("public static final Telescope<demo.PA, demo.PB> BRIDGE = Telescope.bridge(new Fn());"),
+        generated.contains("public static final Telescope<demo.PA, demo.PB> BRIDGE = new BridgeTelescopeImpl();"),
         generated
       );
-      assertTrue(generated.contains("private static final class Fn implements BridgeFn<demo.PA, demo.PB>"), generated);
-      assertTrue(generated.contains("return PABridge.forward(s);"), generated);
-      assertTrue(generated.contains("return PABridge.backward(t);"), generated);
+      assertTrue(
+        generated.contains(
+          "private static final class BridgeTelescopeImpl extends io.github.eschizoid.telescope.Telescope.BridgeTelescope<demo.PA, demo.PB>"
+        ),
+        generated
+      );
+      assertTrue(generated.contains("return PABridge.forward(source);"), generated);
+      assertTrue(generated.contains("return PABridge.backward(value);"), generated);
       assertTrue(generated.contains("new demo.PB()"), generated);
       assertTrue(generated.contains("out.setId(s.getId())"), generated);
       assertTrue(generated.contains("new demo.PA()"), generated);
@@ -776,7 +787,7 @@ class BridgeProcessorTest {
       // The umbrella BRIDGE constant exposes the composed Telescope at the sealed-root level.
       assertTrue(
         sealedBridge.contains(
-          "public static final Telescope<demo.payment.Payment, demo.bean.PaymentEntity> BRIDGE = Telescope.bridge(new Fn());"
+          "public static final Telescope<demo.payment.Payment, demo.bean.PaymentEntity> BRIDGE = new BridgeTelescopeImpl();"
         ),
         sealedBridge
       );
@@ -973,13 +984,13 @@ class BridgeProcessorTest {
 
       assertTrue(
         entityBridge.contains(
-          "public static final Telescope<demo.Product, demo.ProductEntity> BRIDGE = Telescope.bridge(new Fn());"
+          "public static final Telescope<demo.Product, demo.ProductEntity> BRIDGE = new BridgeTelescopeImpl();"
         ),
         entityBridge
       );
       assertTrue(
         dtoBridge.contains(
-          "public static final Telescope<demo.Product, demo.ProductDto> BRIDGE = Telescope.bridge(new Fn());"
+          "public static final Telescope<demo.Product, demo.ProductDto> BRIDGE = new BridgeTelescopeImpl();"
         ),
         dtoBridge
       );
