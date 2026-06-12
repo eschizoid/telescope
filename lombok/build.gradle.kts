@@ -5,7 +5,7 @@ plugins {
     jacoco
 }
 
-description = "telescope-lombok — annotation processor that emits *Path<R> navigators for Lombok @Data/@Value/@Builder classes"
+description = "telescope-lombok — annotation processor that emits <X>Telescope<R> navigators for Lombok @Data/@Value/@Builder classes"
 
 base {
     archivesName = "telescope-lombok"
@@ -69,7 +69,7 @@ dependencies {
 
     // The integration tests are file-based: Gradle's standard compileTestJava runs Lombok AND
     // our LombokFocusProcessor on the fixtures under src/test/java, and we verify the generated
-    // <X>Path classes by reflection at test runtime. Both processors must be on the test
+    // <X>Telescope navigator classes by reflection at test runtime. Both processors must be on the test
     // annotation-processor classpath. testAnnotationProcessor is an isolated configuration —
     // deps don't flow in from main implementation — so the transitive trail (:core for Telescope
     // referenced by emitted code; :codegen for AbstractTelescopeProcessor extended by ours; the
@@ -90,7 +90,7 @@ publishing {
 
             pom {
                 name.set("telescope-lombok")
-                description.set("Lombok integration for telescope — emits *Path<R> navigators for @Data/@Value/@Builder classes.")
+                description.set("Lombok integration for telescope — emits <X>Telescope<R> navigators for @Data/@Value/@Builder classes.")
                 url.set("https://github.com/eschizoid/telescope")
                 inceptionYear.set("2026")
 

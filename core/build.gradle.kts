@@ -76,7 +76,7 @@ publishing {
 
             pom {
                 name.set("telescope-api")
-                description.set("Public DSL surface of telescope — deep-copy DSL for Java records and POJOs.")
+                description.set("Telescope — a deep-copy DSL for Java records and POJOs.")
                 url.set("https://github.com/eschizoid/telescope")
                 inceptionYear.set("2025")
 

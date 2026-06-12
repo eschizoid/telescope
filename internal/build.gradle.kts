@@ -5,7 +5,7 @@ plugins {
     jacoco
 }
 
-description = "telescope-internal — proven optic lattice + HKT emulation + reflection helpers (internal to telescope-api)"
+description = "telescope-internal — optic lattice, HKT emulation, and reflection helpers (internal to telescope-api)"
 
 base {
     archivesName = "telescope-internal"
