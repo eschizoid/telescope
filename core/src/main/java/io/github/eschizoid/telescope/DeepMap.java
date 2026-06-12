@@ -1086,12 +1086,12 @@ public final class DeepMap {
       for (final var comp : comps) byName.put(comp.getName(), recursiveDefault(comp.getType()));
       return io.github.eschizoid.telescope.internal.Records.construct((Class) type, byName::get);
     }
-    // Bean intermediate: instantiate via public no-arg ctor only when the type is plausibly a
-    // user-domain bean (excludes String/Number/Boolean/etc. that have public no-arg ctors we don't
-    // want to materialise as defaults). Telescope-row writes go through the bean's setters at each
+    // Bean intermediate: try the public no-arg ctor first, falling back to the static builder()
+    // pattern (Lombok @Builder, Immutables-style). Skip JDK scalars / containers entirely so the
+    // records path stays unchanged. Telescope-row writes go through the bean's setters at each
     // hop, so each intermediate just needs to be non-null; the setters overwrite the
-    // default-initialised fields. If the type is not bean-allocatable, return null — same
-    // behaviour as before bean-intermediate support, so the records path is unchanged.
+    // default-initialised fields. If neither strategy works, return null — same behaviour as
+    // before bean-intermediate support.
     if (beanIntermediateAllocatable(type)) {
       try {
         return type.getDeclaredConstructor().newInstance();
@@ -1101,6 +1101,18 @@ public final class DeepMap {
         | IllegalAccessException
         | InvocationTargetException ignored
       ) {
+        // no public no-arg ctor — try the builder pattern
+      }
+      try {
+        final var builderMethod = type.getMethod("builder");
+        if (Modifier.isStatic(builderMethod.getModifiers()) && Modifier.isPublic(builderMethod.getModifiers())) {
+          final var builder = builderMethod.invoke(null);
+          if (builder != null) {
+            final var buildMethod = builder.getClass().getMethod("build");
+            return buildMethod.invoke(builder);
+          }
+        }
+      } catch (final NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
         // fall through to null
       }
     }
@@ -1139,15 +1151,23 @@ public final class DeepMap {
     return NULLING_ISO;
   }
 
-  // True when the bean has a usable public no-arg constructor — the strategy {@link
-  // #recursiveDefault} uses for bean intermediates. Anything else stays on the legacy nulling path.
+  // True when the bean is plausibly an intermediate-allocatable user-domain type — has either a
+  // public no-arg constructor or a static no-arg builder() method (Lombok @Builder / Immutables).
+  // Excludes JDK scalars / containers that happen to have public no-arg ctors we don't want to
+  // materialise as defaults.
   private static boolean beanIntermediateAllocatable(final Class<?> type) {
     if (type.isPrimitive() || type.isInterface() || type.isArray()) return false;
     if (type == String.class || Number.class.isAssignableFrom(type) || type == Boolean.class) return false;
     try {
       final var ctor = type.getDeclaredConstructor();
-      return Modifier.isPublic(ctor.getModifiers());
-    } catch (final NoSuchMethodException e) {
+      if (Modifier.isPublic(ctor.getModifiers())) return true;
+    } catch (final NoSuchMethodException ignored) {
+      // try the builder path next
+    }
+    try {
+      final var builderMethod = type.getMethod("builder");
+      return Modifier.isStatic(builderMethod.getModifiers()) && Modifier.isPublic(builderMethod.getModifiers());
+    } catch (final NoSuchMethodException ignored) {
       return false;
     }
   }

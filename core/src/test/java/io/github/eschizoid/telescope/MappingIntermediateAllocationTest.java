@@ -19,12 +19,12 @@ import org.junit.jupiter.api.Test;
  * glue from the user, no fall-back to {@code Mapping.via(...)}.
  *
  * <p>Both records and beans are supported. Records recurse through their canonical constructors
- * with default component values at every hop. Beans are allocated from their public no-arg
- * constructor — the resulting instance has default-initialised fields that the subsequent
- * telescope-row write overwrites via the bean's setters. A bean without a public no-arg ctor falls
- * back to {@code null} (same behaviour as before bean-intermediate support landed), so the records
- * path is unchanged and bean users who need a builder shape still reach for {@code
- * Mapping.via(...)}.
+ * with default component values at every hop. Beans are allocated from either their public no-arg
+ * constructor or, when no no-arg ctor is available, a static {@code builder()} method whose
+ * resulting builder exposes a no-arg {@code build()} — the Lombok {@code @Builder} / Immutables
+ * shape. The resulting instance has default-initialised fields that the subsequent telescope-row
+ * write overwrites via the bean's setters. Beans without either construction path fall back to
+ * {@code null}.
  */
 class MappingIntermediateAllocationTest {
 
@@ -174,6 +174,80 @@ class MappingIntermediateAllocationTest {
       public void setAddress(final AddressBean address) {
         this.address = address;
       }
+    }
+
+    // A bean whose only construction path is a static builder() — the no-arg ctor is
+    // private. Mirrors the Lombok @Builder / Immutables shape: callers go through
+    // Type.builder().build() to get a default-initialised instance.
+    static final class BuilderOnlyAddress {
+
+      private String city;
+
+      private BuilderOnlyAddress() {}
+
+      public static Builder builder() {
+        return new Builder();
+      }
+
+      public String getCity() {
+        return city;
+      }
+
+      public void setCity(final String city) {
+        this.city = city;
+      }
+
+      public static final class Builder {
+
+        private String city;
+
+        public Builder city(final String city) {
+          this.city = city;
+          return this;
+        }
+
+        public BuilderOnlyAddress build() {
+          final var out = new BuilderOnlyAddress();
+          out.city = city;
+          return out;
+        }
+      }
+    }
+
+    static class BuilderHolder {
+
+      private BuilderOnlyAddress address;
+
+      public BuilderHolder() {}
+
+      public BuilderOnlyAddress getAddress() {
+        return address;
+      }
+
+      public void setAddress(final BuilderOnlyAddress address) {
+        this.address = address;
+      }
+    }
+
+    @Test
+    @DisplayName(
+      "builder-only bean intermediate — allocator falls back to type.builder().build() when no public no-arg ctor"
+    )
+    void builderOnlyBeanIntermediate() {
+      record Slim(String displayCity) {}
+
+      final var mapper = Telescope.mapper(
+        Slim.class,
+        BuilderHolder.class,
+        to(
+          Slim::displayCity,
+          Telescope.ofBean(BuilderHolder.class).field(BuilderHolder::getAddress).field(BuilderOnlyAddress::getCity)
+        )
+      );
+
+      final var out = mapper.forward(new Slim("Brooklyn"));
+      assertNotNull(out.getAddress(), "builder-only BuilderOnlyAddress should be allocated via builder().build()");
+      assertEquals("Brooklyn", out.getAddress().getCity());
     }
 
     @Test
