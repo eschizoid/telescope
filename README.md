@@ -243,19 +243,19 @@ integration. Telescope is an **optics DSL** where mapping is one capability amon
 update, and sealed-type narrowing. They overlap on the deep record↔record / bean↔record / bean↔bean band; the rest of
 each tool's surface doesn't.
 
-| Capability                                   | telescope                                                                                                                   | MapStruct                                                  |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| **Bidirectional out of the box**             | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)`                         | One direction per `@Mapper` interface; reverse is separate |
-| **Deep nested navigation + update**          | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                                            | Not in scope                                               |
-| **Effectful update**                         | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                                                       | Not in scope                                               |
-| **Compile-time codegen**                     | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                                                   | `@Mapper` interfaces                                       |
-| **Runtime path (no codegen required)**       | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later                                     | Compile-time only                                          |
-| **Sealed types / pattern matching**          | `.as(Subtype.class)` narrows; the path stays type-safe                                                                      | Not in scope                                               |
-| **Conditional / expression-based mappings**  | `Mapping.via(srcAcc, tgtAcc, customMapper)` only — no embedded expression language                                          | `@Mapping(expression = "...")`, `condition = "..."`        |
-| **`@BeforeMapping` / `@AfterMapping` hooks** | Not supported                                                                                                               | Yes                                                        |
-| **Spring / Quarkus / CDI integration**       | None today — bring-your-own wiring                                                                                          | Native via `componentModel = "spring"` / `"jsr330"` / etc. |
-| **Maturity**                                 | 1.0 line; JMH-backed perf claims                                                                                            | Ten years; thousands of production deployments             |
-| **Dispatch perf — codegen vs codegen**       | 1.5–2× behind on flat/nested forward; **matches on the deep tier** — see Performance honesty below for the measured numbers | Direct bytecode, monomorphic call site                     |
+| Capability                                   | telescope                                                                                                                     | MapStruct                                                  |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **Bidirectional out of the box**             | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)`                           | One direction per `@Mapper` interface; reverse is separate |
+| **Deep nested navigation + update**          | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                                              | Not in scope                                               |
+| **Effectful update**                         | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                                                         | Not in scope                                               |
+| **Compile-time codegen**                     | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                                                     | `@Mapper` interfaces                                       |
+| **Runtime path (no codegen required)**       | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later                                       | Compile-time only                                          |
+| **Sealed types / pattern matching**          | `.as(Subtype.class)` narrows; the path stays type-safe                                                                        | Not in scope                                               |
+| **Conditional / expression-based mappings**  | `Mapping.via(srcAcc, tgtAcc, customMapper)` only — no embedded expression language                                            | `@Mapping(expression = "...")`, `condition = "..."`        |
+| **`@BeforeMapping` / `@AfterMapping` hooks** | Not supported                                                                                                                 | Yes                                                        |
+| **Spring / Quarkus / CDI integration**       | None today — bring-your-own wiring                                                                                            | Native via `componentModel = "spring"` / `"jsr330"` / etc. |
+| **Maturity**                                 | 1.0 line; JMH-backed perf claims                                                                                              | Ten years; thousands of production deployments             |
+| **Dispatch perf — codegen vs codegen**       | 1.2–1.9× behind on flat/nested forward; **matches on the deep tier** — see Performance honesty below for the measured numbers | Direct bytecode, monomorphic call site                     |
 
 #### Per-field source/target mapping — side by side
 
@@ -336,27 +336,28 @@ directions:
 
 | Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope runtime (ns/op) |
 | ------ | ------------- | ----------------: | ------------------------: | ------------------------: |
-| flat   | bean → record |     3.486 ± 0.018 |             5.300 ± 1.328 |            340.13 ± 7.892 |
-| flat   | record → bean |     3.520 ± 0.304 |             7.230 ± 0.146 |           464.27 ± 23.501 |
-| nested | bean → record |     5.361 ± 1.309 |            10.156 ± 0.151 |           501.43 ± 15.365 |
-| nested | record → bean |     5.363 ± 0.126 |            10.469 ± 0.250 |           709.86 ± 12.432 |
-| deep   | bean → record |    50.292 ± 2.534 |            58.048 ± 0.816 |          2024.06 ± 380.21 |
-| deep   | record → bean |   61.424 ± 23.792 |           63.456 ± 12.446 |          2292.43 ± 28.228 |
+| flat   | bean → record |     4.399 ± 2.025 |             5.437 ± 0.803 |            340.13 ± 7.892 |
+| flat   | record → bean |     4.091 ± 1.461 |             5.791 ± 2.786 |           464.27 ± 23.501 |
+| nested | bean → record |     5.638 ± 0.721 |            10.445 ± 0.531 |           501.43 ± 15.365 |
+| nested | record → bean |     5.735 ± 0.689 |            11.648 ± 3.848 |           709.86 ± 12.432 |
+| deep   | bean → record |    50.509 ± 3.640 |            59.482 ± 2.021 |          2024.06 ± 380.21 |
+| deep   | record → bean |   63.082 ± 24.164 |           64.168 ± 18.275 |          2292.43 ± 28.228 |
 
-Three tiers, codegen path, forward direction. On flat, MapStruct hits 3.49 ns and telescope 5.30 ns — a 1.52× gap, but
-in absolute terms it's 1.8 ns. On nested, 5.36 vs 10.16 ns: 1.90× behind, 4.8 ns absolute. On deep, 50.29 vs 58.05 ns:
-the two match, and backward is the same head-to-head at 61.42 vs 63.46.
+Three tiers, codegen path, forward direction. On flat, MapStruct hits 4.40 ns and telescope 5.44 ns — a 1.24× gap, 1.0
+ns absolute. On nested, 5.64 vs 10.45 ns: 1.85× behind, 4.8 ns absolute. On deep, 50.51 vs 59.48 ns: 1.18× behind on
+forward, parity on backward at 63.08 vs 64.17.
 
-The flat-tier gap comes from telescope routing through a `Telescope` wrapper and a composed `Iso` — about 2 ns of
-constant overhead. On a 3 ns workload that's a 50% surcharge. On a 50 ns workload it vanishes into the actual work,
-which is what we see on the deep tier where element-by-element list conversion dominates.
+The flat-tier gap is the `Telescope` wrapper's single virtual hop into `BridgeFn.forward` — about 1 ns of constant
+overhead vs MapStruct's directly-inlined constructor call. On a 4 ns workload that's a noticeable surcharge. On a 50 ns
+workload it vanishes into the actual work, which is what we see on the deep tier where element-by-element list
+conversion dominates.
 
 The runtime path is a different story. `Telescope.from/to/using` walks the record/bean spine reflectively at every level
 even with the LMF substrate, so it runs 30–80× slower than MapStruct's generated bytecode. Same band as
 `Reflection.invoke`-based mappers. Sub-microsecond on flat and nested, single-microsecond on deep. Codegen on hot paths;
 the runtime path is fine for one-shot conversions in tests or non-hot service code.
 
-If you're in a tight inner loop where 1.8 ns matters, pick MapStruct. For realistic deep workloads — nested records with
+If you're in a tight inner loop where 1 ns matters, pick MapStruct. For realistic deep workloads — nested records with
 list-of-records inside — the codegen rows are a tie and you're picking on capability. Sealed-narrow paradigm hop,
 effectful update (`updateAsync`, `updateValidated`), JPA cycles, Hibernate `LAZY` proxy unwrap, deep navigation as a
 primitive: MapStruct can't compile any of it, so the question doesn't really come up. The
