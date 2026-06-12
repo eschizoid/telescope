@@ -61,7 +61,7 @@ public interface Edit<S> {
    * Telescope#all(Edit[])} composition still runs, but this slot contributes no change.
    */
   static <S, X> Edit<S> overIfPresent(final Telescope<S, X> path, final X value) {
-    return value == null ? identity() : new EditImpl<>(path, _ -> value);
+    return value == null ? identity() : new EditImpl<>(path, __ -> value);
   }
 
   /**
@@ -74,7 +74,7 @@ public interface Edit<S> {
    * }</pre>
    */
   static <S, X, V> Edit<S> overIfPresent(final Telescope<S, X> path, final V value, final Function<V, X> mapper) {
-    return value == null ? identity() : new EditImpl<>(path, _ -> mapper.apply(value));
+    return value == null ? identity() : new EditImpl<>(path, __ -> mapper.apply(value));
   }
 
   /**

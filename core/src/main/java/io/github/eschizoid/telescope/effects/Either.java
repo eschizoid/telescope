@@ -93,10 +93,9 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default <T> T fold(final Function<? super L, ? extends T> onLeft, final Function<? super R, ? extends T> onRight) {
-    return switch (this) {
-      case Left<L, R> l -> onLeft.apply(l.value());
-      case Right<L, R> r -> onRight.apply(r.value());
-    };
+    if (this instanceof Left<L, R> l) return onLeft.apply(l.value());
+    if (this instanceof Right<L, R> r) return onRight.apply(r.value());
+    throw new IllegalStateException("unreachable: Either is sealed");
   }
 
   /**
@@ -109,10 +108,9 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default <T> Either<L, T> map(final Function<? super R, ? extends T> f) {
-    return switch (this) {
-      case Left<L, R> l -> new Left<>(l.value());
-      case Right<L, R> r -> new Right<>(f.apply(r.value()));
-    };
+    if (this instanceof Left<L, R> l) return new Left<>(l.value());
+    if (this instanceof Right<L, R> r) return new Right<>(f.apply(r.value()));
+    throw new IllegalStateException("unreachable: Either is sealed");
   }
 
   /**
@@ -125,10 +123,9 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default <T> Either<L, T> flatMap(final Function<? super R, ? extends Either<L, T>> f) {
-    return switch (this) {
-      case Left<L, R> l -> new Left<>(l.value());
-      case Right<L, R> r -> f.apply(r.value());
-    };
+    if (this instanceof Left<L, R> l) return new Left<>(l.value());
+    if (this instanceof Right<L, R> r) return f.apply(r.value());
+    throw new IllegalStateException("unreachable: Either is sealed");
   }
 
   /**
@@ -141,10 +138,9 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default <T> Either<T, R> mapLeft(final Function<? super L, ? extends T> f) {
-    return switch (this) {
-      case Left<L, R> l -> new Left<>(f.apply(l.value()));
-      case Right<L, R> r -> new Right<>(r.value());
-    };
+    if (this instanceof Left<L, R> l) return new Left<>(f.apply(l.value()));
+    if (this instanceof Right<L, R> r) return new Right<>(r.value());
+    throw new IllegalStateException("unreachable: Either is sealed");
   }
 
   /**
@@ -156,10 +152,9 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default Either<R, L> swap() {
-    return switch (this) {
-      case Left<L, R> l -> new Right<>(l.value());
-      case Right<L, R> r -> new Left<>(r.value());
-    };
+    if (this instanceof Left<L, R> l) return new Right<>(l.value());
+    if (this instanceof Right<L, R> r) return new Left<>(r.value());
+    throw new IllegalStateException("unreachable: Either is sealed");
   }
 
   /**
@@ -172,10 +167,9 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default Validated<L, R> toValidated() {
-    return switch (this) {
-      case Left<L, R> l -> Validated.invalid(l.value());
-      case Right<L, R> r -> Validated.valid(r.value());
-    };
+    if (this instanceof Left<L, R> l) return Validated.invalid(l.value());
+    if (this instanceof Right<L, R> r) return Validated.valid(r.value());
+    throw new IllegalStateException("unreachable: Either is sealed");
   }
 
   /**
@@ -187,10 +181,9 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default R getOrElse(final R defaultValue) {
-    return switch (this) {
-      case Left<L, R> ignored -> defaultValue;
-      case Right<L, R> r -> r.value();
-    };
+    if (this instanceof Left<L, R>) return defaultValue;
+    if (this instanceof Right<L, R> r) return r.value();
+    throw new IllegalStateException("unreachable: Either is sealed");
   }
 
   /**
@@ -202,10 +195,9 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default R getOrElseGet(final Supplier<? extends R> supplier) {
-    return switch (this) {
-      case Left<L, R> ignored -> supplier.get();
-      case Right<L, R> r -> r.value();
-    };
+    if (this instanceof Left<L, R>) return supplier.get();
+    if (this instanceof Right<L, R> r) return r.value();
+    throw new IllegalStateException("unreachable: Either is sealed");
   }
 
   /**
@@ -218,10 +210,9 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default Optional<R> toOptional() {
-    return switch (this) {
-      case Left<L, R> ignored -> Optional.empty();
-      case Right<L, R> r -> Optional.ofNullable(r.value());
-    };
+    if (this instanceof Left<L, R>) return Optional.empty();
+    if (this instanceof Right<L, R> r) return Optional.ofNullable(r.value());
+    throw new IllegalStateException("unreachable: Either is sealed");
   }
 
   /**
@@ -238,9 +229,8 @@ public sealed interface Either<L, R> {
   default <T> CompletableFuture<Either<L, T>> flatMapAsync(
     final Function<? super R, ? extends CompletableFuture<? extends T>> f
   ) {
-    return switch (this) {
-      case Left<L, R> l -> CompletableFuture.completedFuture(Either.left(l.value()));
-      case Right<L, R> r -> f.apply(r.value()).thenApply(Either::<L, T>right);
-    };
+    if (this instanceof Left<L, R> l) return CompletableFuture.completedFuture(Either.left(l.value()));
+    if (this instanceof Right<L, R> r) return f.apply(r.value()).thenApply(Either::<L, T>right);
+    throw new IllegalStateException("unreachable: Either is sealed");
   }
 }

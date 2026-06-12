@@ -91,7 +91,7 @@ class FocusCodegenTest {
       assertEquals("BOB", shouted.members().get(1).name());
       assertEquals("eng", shouted.name());
       // original untouched (immutable rebuild)
-      assertEquals("alice", team.members().getFirst().name());
+      assertEquals("alice", team.members().get(0).name());
     }
 
     @Test
@@ -177,7 +177,7 @@ class FocusCodegenTest {
           err -> {
             throw new AssertionError(err);
           },
-          t -> t.members().getFirst().name()
+          t -> t.members().get(0).name()
         )
       );
 

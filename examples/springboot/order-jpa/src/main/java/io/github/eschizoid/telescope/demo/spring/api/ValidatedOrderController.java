@@ -34,10 +34,13 @@ public class ValidatedOrderController {
           : Validated.valid(quantity)
       );
 
-    return switch (result) {
-      case Validated.Valid<LineItemValidationError, Order>(Order accepted) -> ResponseEntity.ok(accepted);
-      case Validated.Invalid<LineItemValidationError, Order> bad -> throw new InvalidOrderException(bad);
-    };
+    if (result instanceof Validated.Valid<LineItemValidationError, Order> accepted) {
+      return ResponseEntity.ok(accepted.value());
+    }
+    if (result instanceof Validated.Invalid<LineItemValidationError, Order> bad) {
+      throw new InvalidOrderException(bad);
+    }
+    throw new IllegalStateException("unreachable: Validated is sealed");
   }
 
   // Recover the SKU of the first line item with this quantity for error context. The validator

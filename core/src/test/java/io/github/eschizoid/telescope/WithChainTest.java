@@ -90,7 +90,7 @@ class WithChainTest {
         .apply(company);
       assertEquals("Engineering", out.departments().get(0).name());
       assertEquals("Sales", out.departments().get(1).name());
-      assertEquals("alice@acme.com", out.departments().get(0).teams().getFirst().users().getFirst().email());
+      assertEquals("alice@acme.com", out.departments().get(0).teams().get(0).users().get(0).email());
     }
 
     @Test
@@ -103,10 +103,10 @@ class WithChainTest {
         .update(TEAM_NAMES, String::trim)
         .update(USER_NAMES, String::toUpperCase)
         .apply(company);
-      assertEquals("Engineering", out.departments().getFirst().name());
-      assertEquals("Platform", out.departments().getFirst().teams().getFirst().name());
-      assertEquals("ALICE", out.departments().getFirst().teams().getFirst().users().getFirst().name());
-      assertEquals("alice@acme.com", out.departments().getFirst().teams().getFirst().users().getFirst().email());
+      assertEquals("Engineering", out.departments().get(0).name());
+      assertEquals("Platform", out.departments().get(0).teams().get(0).name());
+      assertEquals("ALICE", out.departments().get(0).teams().get(0).users().get(0).name());
+      assertEquals("alice@acme.com", out.departments().get(0).teams().get(0).users().get(0).email());
     }
 
     @Test
@@ -117,7 +117,7 @@ class WithChainTest {
         .update(EMAILS, String::toLowerCase)
         .update(EMAILS, e -> e + "!")
         .apply(company);
-      assertEquals("alice@acme.com!", out.departments().getFirst().teams().getFirst().users().getFirst().email());
+      assertEquals("alice@acme.com!", out.departments().get(0).teams().get(0).users().get(0).email());
     }
   }
 
@@ -154,8 +154,8 @@ class WithChainTest {
         .field(Department::name)
         .with(String::trim)
         .apply(company);
-      assertEquals("Engineering", out.departments().getFirst().name());
-      assertEquals("alice@acme.com", out.departments().getFirst().teams().getFirst().users().getFirst().email());
+      assertEquals("Engineering", out.departments().get(0).name());
+      assertEquals("alice@acme.com", out.departments().get(0).teams().get(0).users().get(0).email());
     }
 
     @Test
@@ -188,9 +188,9 @@ class WithChainTest {
       final var out1 = normalize.apply(company1);
       final var out2 = normalize.apply(company2);
 
-      assertEquals("Engineering", out1.departments().getFirst().name());
-      assertEquals("Ops", out2.departments().getFirst().name());
-      assertEquals("z@bingo.com", out2.departments().getFirst().teams().getFirst().users().getFirst().email());
+      assertEquals("Engineering", out1.departments().get(0).name());
+      assertEquals("Ops", out2.departments().get(0).name());
+      assertEquals("z@bingo.com", out2.departments().get(0).teams().get(0).users().get(0).email());
     }
   }
 }

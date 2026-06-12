@@ -46,7 +46,7 @@ class OrderTelescopeFlowTest {
     assertThat(body.customer().email()).isEqualTo("alice@example.com");
     assertThat(body.customer().id()).isNotNull();
     assertThat(body.shippingAddress().zip()).isEqualTo("11201");
-    assertThat(body.lineItems().getFirst().unitPrice()).isEqualByComparingTo("19.99");
+    assertThat(body.lineItems().get(0).unitPrice()).isEqualByComparingTo("19.99");
     assertThat(body.giftWrap()).isPresent();
     assertThat(body.giftWrap().get().street()).isEqualTo("300 Gift Rd");
   }

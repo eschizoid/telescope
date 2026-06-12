@@ -34,7 +34,7 @@ public final class RedactedOrderTelescopes {
    */
   public static final Telescope<Order, RedactedOrder> REDACT = Telescope.from(Order.class)
     .to(RedactedOrder.class)
-    .using(RedactedOrderTelescopes::redact, _ -> {
+    .using(RedactedOrderTelescopes::redact, __ -> {
       throw new UnsupportedOperationException(BACKWARD_MESSAGE);
     });
 

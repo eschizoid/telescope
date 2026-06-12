@@ -753,24 +753,28 @@ class BridgeProcessorTest {
 
       final var sealedBridge = compilation.generated().get("demo.payment.PaymentBridge");
       assertNotNull(sealedBridge, () -> "PaymentBridge not generated; saw " + compilation.generated().keySet());
-      // Forward switch fans out to per-case bridges.
-      assertTrue(
-        sealedBridge.contains("case demo.payment.CreditCard creditCard -> demo.payment.CreditCardBridge.forward("),
-        sealedBridge
-      );
-      assertTrue(
-        sealedBridge.contains("case demo.payment.PayPal payPal -> demo.payment.PayPalBridge.forward("),
-        sealedBridge
-      );
-      // Backward switch dispatches on the bean side's permits.
+      // Forward fans out to per-case bridges via instanceof chain (Java 17 source level).
       assertTrue(
         sealedBridge.contains(
-          "case demo.bean.CreditCardEntity creditCardEntity -> demo.payment.CreditCardBridge.backward("
+          "if (s instanceof demo.payment.CreditCard creditCard) return demo.payment.CreditCardBridge.forward("
         ),
         sealedBridge
       );
       assertTrue(
-        sealedBridge.contains("case demo.bean.PayPalEntity payPalEntity -> demo.payment.PayPalBridge.backward("),
+        sealedBridge.contains("if (s instanceof demo.payment.PayPal payPal) return demo.payment.PayPalBridge.forward("),
+        sealedBridge
+      );
+      // Backward dispatches on the bean side's permits.
+      assertTrue(
+        sealedBridge.contains(
+          "if (t instanceof demo.bean.CreditCardEntity creditCardEntity) return demo.payment.CreditCardBridge.backward("
+        ),
+        sealedBridge
+      );
+      assertTrue(
+        sealedBridge.contains(
+          "if (t instanceof demo.bean.PayPalEntity payPalEntity) return demo.payment.PayPalBridge.backward("
+        ),
         sealedBridge
       );
       // The umbrella BRIDGE constant exposes the composed Telescope at the sealed-root level.

@@ -56,13 +56,15 @@ public final class EitherK<L> implements Kind.Witness {
         final Kind<EitherK<L>, B> fb,
         final BiFunction<? super A, ? super B, ? extends C> f
       ) {
-        return switch (unbox(fa)) {
-          case Either.Left<L, A> la -> box(Either.left(la.value()));
-          case Either.Right<L, A> ra -> switch (unbox(fb)) {
-            case Either.Left<L, B> lb -> box(Either.left(lb.value()));
-            case Either.Right<L, B> rb -> box(Either.right(f.apply(ra.value(), rb.value())));
-          };
-        };
+        final Either<L, A> ea = unbox(fa);
+        if (ea instanceof Either.Left<L, A> la) return box(Either.left(la.value()));
+        if (ea instanceof Either.Right<L, A> ra) {
+          final Either<L, B> eb = unbox(fb);
+          if (eb instanceof Either.Left<L, B> lb) return box(Either.left(lb.value()));
+          if (eb instanceof Either.Right<L, B> rb) return box(Either.right(f.apply(ra.value(), rb.value())));
+          throw new IllegalStateException("unreachable: Either is sealed");
+        }
+        throw new IllegalStateException("unreachable: Either is sealed");
       }
 
       @Override

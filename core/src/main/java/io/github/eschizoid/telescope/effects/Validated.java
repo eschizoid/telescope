@@ -119,10 +119,9 @@ public sealed interface Validated<E, A> {
     final Function<? super List<E>, ? extends T> onInvalid,
     final Function<? super A, ? extends T> onValid
   ) {
-    return switch (this) {
-      case Invalid<E, A> inv -> onInvalid.apply(inv.errors());
-      case Valid<E, A> v -> onValid.apply(v.value());
-    };
+    if (this instanceof Invalid<E, A> inv) return onInvalid.apply(inv.errors());
+    if (this instanceof Valid<E, A> v) return onValid.apply(v.value());
+    throw new IllegalStateException("unreachable: Validated is sealed");
   }
 
   /**
@@ -134,10 +133,9 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default <T> Validated<E, T> map(final Function<? super A, ? extends T> f) {
-    return switch (this) {
-      case Invalid<E, A> inv -> new Invalid<>(inv.errors());
-      case Valid<E, A> v -> new Valid<>(f.apply(v.value()));
-    };
+    if (this instanceof Invalid<E, A> inv) return new Invalid<>(inv.errors());
+    if (this instanceof Valid<E, A> v) return new Valid<>(f.apply(v.value()));
+    throw new IllegalStateException("unreachable: Validated is sealed");
   }
 
   /**
@@ -150,10 +148,9 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default <T> Validated<T, A> mapErrors(final Function<? super E, ? extends T> f) {
-    return switch (this) {
-      case Invalid<E, A> inv -> new Invalid<>(inv.errors().stream().<T>map(f).toList());
-      case Valid<E, A> v -> new Valid<>(v.value());
-    };
+    if (this instanceof Invalid<E, A> inv) return new Invalid<>(inv.errors().stream().<T>map(f).toList());
+    if (this instanceof Valid<E, A> v) return new Valid<>(v.value());
+    throw new IllegalStateException("unreachable: Validated is sealed");
   }
 
   /**
@@ -169,10 +166,9 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default <B> Validated<E, B> andThen(final Function<? super A, ? extends Validated<E, B>> f) {
-    return switch (this) {
-      case Invalid<E, A> inv -> new Invalid<>(inv.errors());
-      case Valid<E, A> v -> f.apply(v.value());
-    };
+    if (this instanceof Invalid<E, A> inv) return new Invalid<>(inv.errors());
+    if (this instanceof Valid<E, A> v) return f.apply(v.value());
+    throw new IllegalStateException("unreachable: Validated is sealed");
   }
 
   /**
@@ -186,10 +182,9 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default Either<List<E>, A> toEither() {
-    return switch (this) {
-      case Invalid<E, A> inv -> Either.left(inv.errors());
-      case Valid<E, A> v -> Either.right(v.value());
-    };
+    if (this instanceof Invalid<E, A> inv) return Either.left(inv.errors());
+    if (this instanceof Valid<E, A> v) return Either.right(v.value());
+    throw new IllegalStateException("unreachable: Validated is sealed");
   }
 
   /**
@@ -201,10 +196,9 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default A getOrElse(final A defaultValue) {
-    return switch (this) {
-      case Invalid<E, A> ignored -> defaultValue;
-      case Valid<E, A> v -> v.value();
-    };
+    if (this instanceof Invalid<E, A>) return defaultValue;
+    if (this instanceof Valid<E, A> v) return v.value();
+    throw new IllegalStateException("unreachable: Validated is sealed");
   }
 
   /**
@@ -216,10 +210,9 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default A getOrElseGet(final Supplier<? extends A> supplier) {
-    return switch (this) {
-      case Invalid<E, A> ignored -> supplier.get();
-      case Valid<E, A> v -> v.value();
-    };
+    if (this instanceof Invalid<E, A>) return supplier.get();
+    if (this instanceof Valid<E, A> v) return v.value();
+    throw new IllegalStateException("unreachable: Validated is sealed");
   }
 
   /**
@@ -232,10 +225,9 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default Optional<A> toOptional() {
-    return switch (this) {
-      case Invalid<E, A> ignored -> Optional.empty();
-      case Valid<E, A> v -> Optional.ofNullable(v.value());
-    };
+    if (this instanceof Invalid<E, A>) return Optional.empty();
+    if (this instanceof Valid<E, A> v) return Optional.ofNullable(v.value());
+    throw new IllegalStateException("unreachable: Validated is sealed");
   }
 
   /**
@@ -255,10 +247,9 @@ public sealed interface Validated<E, A> {
   default <B> CompletableFuture<Validated<E, B>> flatMapAsync(
     final Function<? super A, ? extends CompletableFuture<? extends B>> f
   ) {
-    return switch (this) {
-      case Invalid<E, A> inv -> CompletableFuture.completedFuture(Validated.invalid(inv.errors()));
-      case Valid<E, A> v -> f.apply(v.value()).thenApply(Validated::<E, B>valid);
-    };
+    if (this instanceof Invalid<E, A> inv) return CompletableFuture.completedFuture(Validated.invalid(inv.errors()));
+    if (this instanceof Valid<E, A> v) return f.apply(v.value()).thenApply(Validated::<E, B>valid);
+    throw new IllegalStateException("unreachable: Validated is sealed");
   }
 
   /**
@@ -280,9 +271,10 @@ public sealed interface Validated<E, A> {
     final var values = new ArrayList<A>(inputs.size());
     final var errors = new ArrayList<E>();
     for (final var v : inputs) {
-      switch (v) {
-        case Valid<E, A> ok -> values.add(ok.value());
-        case Invalid<E, A> bad -> errors.addAll(bad.errors());
+      if (v instanceof Valid<E, A> ok) {
+        values.add(ok.value());
+      } else if (v instanceof Invalid<E, A> bad) {
+        errors.addAll(bad.errors());
       }
     }
     if (!errors.isEmpty()) return new Invalid<>(errors);
@@ -306,14 +298,16 @@ public sealed interface Validated<E, A> {
     final Validated<E, B> right,
     final BiFunction<? super A, ? super B, ? extends C> f
   ) {
-    if (left instanceof Invalid<E, A>(List<E> errors) && right instanceof Invalid<E, B>(List<E> errors1)) {
-      final var combined = new ArrayList<E>(errors.size() + errors1.size());
-      combined.addAll(errors);
-      combined.addAll(errors1);
+    if (left instanceof Invalid<E, A> leftInvalid && right instanceof Invalid<E, B> rightInvalid) {
+      final var leftErrors = leftInvalid.errors();
+      final var rightErrors = rightInvalid.errors();
+      final var combined = new ArrayList<E>(leftErrors.size() + rightErrors.size());
+      combined.addAll(leftErrors);
+      combined.addAll(rightErrors);
       return new Invalid<>(combined);
     }
-    if (left instanceof Invalid<E, A>(List<E> errors)) return new Invalid<>(errors);
-    if (right instanceof Invalid<E, B>(List<E> errors)) return new Invalid<>(errors);
+    if (left instanceof Invalid<E, A> leftInvalid) return new Invalid<>(leftInvalid.errors());
+    if (right instanceof Invalid<E, B> rightInvalid) return new Invalid<>(rightInvalid.errors());
     final var l = ((Valid<E, A>) left).value();
     final var r = ((Valid<E, B>) right).value();
     return new Valid<>(f.apply(l, r));

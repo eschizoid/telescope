@@ -159,11 +159,11 @@ public final class DeepMap {
   private static WriteHint.WriteStrategy extractDefaultStrategy(final List<WriteHint<?>> hints) {
     WriteHint.WriteStrategy defaultStrategy = null;
     for (final var hint : hints) {
-      if (!(hint instanceof WriteHint.DefaultWriteHint(WriteHint.WriteStrategy strat))) continue;
+      if (!(hint instanceof WriteHint.DefaultWriteHint defaultHint)) continue;
       if (defaultStrategy != null) throw new IllegalArgumentException(
         "Duplicate writeBeans(...) default — at most one default write strategy per Telescope.map(...) call."
       );
-      defaultStrategy = strat;
+      defaultStrategy = defaultHint.strategy();
     }
     return defaultStrategy;
   }
@@ -248,7 +248,7 @@ public final class DeepMap {
       final Class<?> effectiveSource = internals.sourceClass() == null ? topSource : internals.sourceClass();
       final Class<?> effectiveTarget = internals.targetClass() == null ? topTarget : internals.targetClass();
       final var key = new TypePair(effectiveSource, effectiveTarget);
-      grouped.computeIfAbsent(key, _ -> new ArrayList<>()).add(row);
+      grouped.computeIfAbsent(key, __ -> new ArrayList<>()).add(row);
     }
     return grouped;
   }
@@ -532,49 +532,41 @@ public final class DeepMap {
   private static <S, T> T applyForward(final T initial, final S s, final List<Mapping<?, ?>> fixups) {
     T t = initial;
     for (final var fx : fixups) {
-      switch (fx) {
-        case TelescopeTo<?, ?, ?> r -> {
-          final var srcAcc = (Telescope.Accessor<S, Object>) r.srcAccessor();
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          t = tgtT.set(t, srcAcc.apply(s));
+      if (fx instanceof TelescopeTo<?, ?, ?> r) {
+        final var srcAcc = (Telescope.Accessor<S, Object>) r.srcAccessor();
+        final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+        t = tgtT.set(t, srcAcc.apply(s));
+      } else if (fx instanceof FromTelescopeTo<?, ?, ?> r) {
+        final var srcT = (Telescope<S, Object>) r.sourceTelescope();
+        // The target side is a flat accessor; we need to rebuild t with the named target field
+        // overridden by srcT.read(s). Delegate to overrideTargetField, which uses the target
+        // Reflective.construct the same way the source-side path does in applyBackward.
+        t = overrideTargetField(t, r, srcT, s);
+      } else if (fx instanceof TelescopeToTelescope<?, ?, ?> r) {
+        final var srcT = (Telescope<S, Object>) r.sourceTelescope();
+        final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+        if (r.kind() == TelescopeToTelescope.Kind.ZIP) {
+          final var values = srcT.toList(s);
+          final var targetCount = tgtT.count(t);
+          if (values.size() != targetCount) throw new IllegalStateException(
+            "Mapping.zip: source has " +
+              values.size() +
+              " focus(es), target has " +
+              targetCount +
+              " — cardinality must match for positional zip."
+          );
+          t = tgtT.updateIndexed(t, (i, _ignored) -> values.get(i));
+        } else {
+          t = tgtT.set(t, srcT.read(s));
         }
-        case FromTelescopeTo<?, ?, ?> r -> {
-          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
-          // The target side is a flat accessor; we need to rebuild t with the named target field
-          // overridden by srcT.read(s). Delegate to overrideTargetField, which uses the target
-          // Reflective.construct the same way the source-side path does in applyBackward.
-          t = overrideTargetField(t, r, srcT, s);
-        }
-        case TelescopeToTelescope<?, ?, ?> r -> {
-          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          if (r.kind() == TelescopeToTelescope.Kind.ZIP) {
-            final var values = srcT.toList(s);
-            final var targetCount = tgtT.count(t);
-            if (values.size() != targetCount) throw new IllegalStateException(
-              "Mapping.zip: source has " +
-                values.size() +
-                " focus(es), target has " +
-                targetCount +
-                " — cardinality must match for positional zip."
-            );
-            t = tgtT.updateIndexed(t, (i, _ignored) -> values.get(i));
-          } else {
-            t = tgtT.set(t, srcT.read(s));
-          }
-        }
-        case Constant<?, ?, ?> r -> {
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          t = tgtT.set(t, r.value());
-        }
-        case Compute<?, ?, ?> r -> {
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          t = tgtT.set(t, r.supplier().get());
-        }
-        default -> {
-          /* non-telescope mappings are not routed through this wrapper */
-        }
+      } else if (fx instanceof Constant<?, ?, ?> r) {
+        final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+        t = tgtT.set(t, r.value());
+      } else if (fx instanceof Compute<?, ?, ?> r) {
+        final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+        t = tgtT.set(t, r.supplier().get());
       }
+      // non-telescope mappings are not routed through this wrapper
     }
     return t;
   }
@@ -603,34 +595,29 @@ public final class DeepMap {
     );
     // Telescope-source fixups overlay AFTER the name-keyed rebuild, via srcT.set on s.
     for (final var fx : fixups) {
-      switch (fx) {
-        case FromTelescopeTo<?, ?, ?> r -> {
-          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
-          final var tgtAcc = (Telescope.Accessor<T, Object>) r.tgtAccessor();
-          s = srcT.set(s, tgtAcc.apply(t));
-        }
-        case TelescopeToTelescope<?, ?, ?> r -> {
-          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          if (r.kind() == TelescopeToTelescope.Kind.ZIP) {
-            final var values = tgtT.toList(t);
-            final var sourceCount = srcT.count(s);
-            if (values.size() != sourceCount) throw new IllegalStateException(
-              "Mapping.zip: target has " +
-                values.size() +
-                " focus(es), source has " +
-                sourceCount +
-                " — cardinality must match for positional zip."
-            );
-            s = srcT.updateIndexed(s, (i, _ignored) -> values.get(i));
-          } else {
-            s = srcT.set(s, tgtT.read(t));
-          }
-        }
-        default -> {
-          /* TelescopeTo already handled above via fieldOverrides */
+      if (fx instanceof FromTelescopeTo<?, ?, ?> r) {
+        final var srcT = (Telescope<S, Object>) r.sourceTelescope();
+        final var tgtAcc = (Telescope.Accessor<T, Object>) r.tgtAccessor();
+        s = srcT.set(s, tgtAcc.apply(t));
+      } else if (fx instanceof TelescopeToTelescope<?, ?, ?> r) {
+        final var srcT = (Telescope<S, Object>) r.sourceTelescope();
+        final var tgtT = (Telescope<T, Object>) r.targetTelescope();
+        if (r.kind() == TelescopeToTelescope.Kind.ZIP) {
+          final var values = tgtT.toList(t);
+          final var sourceCount = srcT.count(s);
+          if (values.size() != sourceCount) throw new IllegalStateException(
+            "Mapping.zip: target has " +
+              values.size() +
+              " focus(es), source has " +
+              sourceCount +
+              " — cardinality must match for positional zip."
+          );
+          s = srcT.updateIndexed(s, (i, _ignored) -> values.get(i));
+        } else {
+          s = srcT.set(s, tgtT.read(t));
         }
       }
+      // TelescopeTo already handled above via fieldOverrides
     }
     return s;
   }
@@ -750,34 +737,36 @@ public final class DeepMap {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Iso<?, ?> fieldIsoOf(final Mapping<?, ?> row, final Type srcType, final Type tgtType) {
-    return switch (row) {
-      // Inline the contributed leaf-level Iso for each row variant. Reading the public components
-      // directly keeps Iso (internal) out of the mapping types' public signatures — so the mapping
-      // types stay portable across packages without needing @SuppressWarnings("exports").
-      case SameTypedTo<?, ?, ?> _ -> Iso.identity();
-      case TypedTransformTo<?, ?, ?, ?> r -> Iso.of((Function) r.forward(), (Function) r.backward());
-      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType);
-      // Drop rows never reach this method — populateIso short-circuits on `instanceof Drop` before
-      // calling fieldIsoOf. The case is here only to make the switch exhaustive for the sealed
-      // hierarchy; reaching it indicates a routing bug above.
-      case Drop<?, ?, ?> _ -> throw new IllegalStateException("Drop row should not reach fieldIsoOf");
-      // Telescope-based rows never reach this method — populateIso short-circuits on each of them
-      // before calling fieldIsoOf. They apply as post-fixups at the outer pair, not as per-field
-      // leaf Isos. The cases are here only to make the switch exhaustive for the sealed hierarchy;
-      // reaching any of them indicates a routing bug above.
-      case TelescopeTo<?, ?, ?> _ -> throw new IllegalStateException("TelescopeTo row should not reach fieldIsoOf");
-      case FromTelescopeTo<?, ?, ?> _ -> throw new IllegalStateException(
-        "FromTelescopeTo row should not reach fieldIsoOf"
-      );
-      case TelescopeToTelescope<?, ?, ?> _ -> throw new IllegalStateException(
-        "TelescopeToTelescope row should not reach fieldIsoOf"
-      );
-      // Constant / Compute rows apply as telescope post-fixups, same pattern as TelescopeTo and
-      // friends — they don't contribute a per-field leaf Iso. The cases exist only to keep the
-      // sealed switch exhaustive; reaching them indicates a routing bug above.
-      case Constant<?, ?, ?> _ -> throw new IllegalStateException("Constant row should not reach fieldIsoOf");
-      case Compute<?, ?, ?> _ -> throw new IllegalStateException("Compute row should not reach fieldIsoOf");
-    };
+    // Inline the contributed leaf-level Iso for each row variant. Reading the public components
+    // directly keeps Iso (internal) out of the mapping types' public signatures — so the mapping
+    // types stay portable across packages without needing @SuppressWarnings("exports").
+    if (row instanceof SameTypedTo<?, ?, ?>) return Iso.identity();
+    if (row instanceof TypedTransformTo<?, ?, ?, ?> r) return Iso.of((Function) r.forward(), (Function) r.backward());
+    if (row instanceof Via<?, ?> r) return liftViaIfNeeded(r, srcType, tgtType);
+    // Drop rows never reach this method — populateIso short-circuits on `instanceof Drop` before
+    // calling fieldIsoOf. The check is here only to make the dispatch exhaustive over the sealed
+    // hierarchy; reaching it indicates a routing bug above.
+    if (row instanceof Drop<?, ?, ?>) throw new IllegalStateException("Drop row should not reach fieldIsoOf");
+    // Telescope-based rows never reach this method — populateIso short-circuits on each of them
+    // before calling fieldIsoOf. They apply as post-fixups at the outer pair, not as per-field
+    // leaf Isos. The checks are here only to make the dispatch exhaustive over the sealed
+    // hierarchy;
+    // reaching any of them indicates a routing bug above.
+    if (row instanceof TelescopeTo<?, ?, ?>) throw new IllegalStateException(
+      "TelescopeTo row should not reach fieldIsoOf"
+    );
+    if (row instanceof FromTelescopeTo<?, ?, ?>) throw new IllegalStateException(
+      "FromTelescopeTo row should not reach fieldIsoOf"
+    );
+    if (row instanceof TelescopeToTelescope<?, ?, ?>) throw new IllegalStateException(
+      "TelescopeToTelescope row should not reach fieldIsoOf"
+    );
+    // Constant / Compute rows apply as telescope post-fixups, same pattern as TelescopeTo and
+    // friends — they don't contribute a per-field leaf Iso. The checks exist only to keep the
+    // sealed dispatch exhaustive; reaching them indicates a routing bug above.
+    if (row instanceof Constant<?, ?, ?>) throw new IllegalStateException("Constant row should not reach fieldIsoOf");
+    if (row instanceof Compute<?, ?, ?>) throw new IllegalStateException("Compute row should not reach fieldIsoOf");
+    throw new IllegalStateException("unreachable: Mapping is sealed");
   }
 
   /**
@@ -1048,7 +1037,7 @@ public final class DeepMap {
    * return {@code null}. Only ever invoked in the {@link #remapIso} backward loop for source-only
    * fields that have no target counterpart; the forward direction skips the field entirely.
    */
-  private static final Iso<Object, Object> NULLING_ISO = Iso.of(_ -> null, _ -> null);
+  private static final Iso<Object, Object> NULLING_ISO = Iso.of(__ -> null, __ -> null);
 
   /**
    * Forward-only iso that materialises a fresh default-tree instance of {@code type} on every
@@ -1063,7 +1052,7 @@ public final class DeepMap {
    * null the unannotated path produces today, no worse.
    */
   private static Iso<Object, Object> defaultAllocatorIso(final Class<?> type) {
-    return Iso.of(_ -> recursiveDefault(type), _ -> null);
+    return Iso.of(__ -> recursiveDefault(type), __ -> null);
   }
 
   /**
@@ -1146,7 +1135,7 @@ public final class DeepMap {
     }
     if (fieldType.isPrimitive()) {
       final var value = primitiveDefault(fieldType);
-      return Iso.of(_ -> value, _ -> value);
+      return Iso.of(__ -> value, __ -> value);
     }
     return NULLING_ISO;
   }

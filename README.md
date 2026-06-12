@@ -13,11 +13,11 @@ through lists, sets, maps, optionals, and sealed-type variants in one chain. Ski
 containers. Drop-in `telescope-spring-boot-starter` (Spring Boot 4) or `telescope-quarkus` (Quarkus 3) for autoconfig +
 a typed `Mapper<A,B>` bean registry — one dependency, zero wiring.
 
-[![JVM 25+](https://img.shields.io/badge/JVM-25%2B-brightgreen.svg?&logo=openjdk)](https://openjdk.org/projects/jdk/25/)
+[![JVM 17+](https://img.shields.io/badge/JVM-17%2B-brightgreen.svg?&logo=openjdk)](https://openjdk.org/projects/jdk/17/)
 [![Build](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml/badge.svg)](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml)
 [![Codecov](https://codecov.io/gh/eschizoid/telescope/graph/badge.svg?token=a235ea8b-e6dc-45c6-8fea-e5050940c5d4)](https://codecov.io/gh/eschizoid/telescope)
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.eschizoid/telescope.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.eschizoid/telescope)
-[![Javadoc](https://javadoc.io/badge2/io.github.eschizoid/telescope/javadoc.svg?color=purple)](https://javadoc.io/doc/io.github.eschizoid/telescope)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.eschizoid/telescope-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.eschizoid/telescope-core)
+[![Javadoc](https://javadoc.io/badge2/io.github.eschizoid/telescope-core/javadoc.svg?color=purple)](https://javadoc.io/doc/io.github.eschizoid/telescope-core)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ---

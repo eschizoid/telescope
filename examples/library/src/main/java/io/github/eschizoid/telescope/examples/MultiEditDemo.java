@@ -72,10 +72,10 @@ final class MultiEditDemo {
 
     System.out.println("[all/over] dept names trimmed: " + out.departments().stream().map(Department::name).toList());
     System.out.println(
-      "[all/over] team names trimmed: " + out.departments().getFirst().teams().stream().map(Team::name).toList()
+      "[all/over] team names trimmed: " + out.departments().get(0).teams().stream().map(Team::name).toList()
     );
     System.out.println(
-      "[all/over] first user email  : " + out.departments().getFirst().teams().getFirst().users().getFirst().email()
+      "[all/over] first user email  : " + out.departments().get(0).teams().get(0).users().get(0).email()
     );
 
     // The same normalizer is reusable on a different source.
@@ -85,8 +85,7 @@ final class MultiEditDemo {
     );
     final var another2 = normalize.apply(another);
     System.out.println(
-      "[all/over] reused on another : " +
-        another2.departments().getFirst().teams().getFirst().users().getFirst().email()
+      "[all/over] reused on another : " + another2.departments().get(0).teams().get(0).users().get(0).email()
     );
   }
 }
