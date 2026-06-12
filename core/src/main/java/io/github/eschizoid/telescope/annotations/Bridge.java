@@ -66,8 +66,8 @@ public @interface Bridge {
   /**
    * Source field names that exist on the annotated source but not on the target. Forward conversion
    * skips them; backward conversion fills the dropped slot with {@code null} for reference types,
-   * {@code 0} for numeric primitives, {@code false} for {@code boolean}, and the NUL character
-   * ({@code '\u0000'}) for {@code char}. Use this when the source carries fields the target shape
+   * {@code 0} for numeric primitives, {@code false} for {@code boolean}, and {@code '\0'} (the NUL
+   * character) for {@code char}. Use this when the source carries fields the target shape
    * legitimately doesn't (e.g. an internal-only field that the partner DTO does not carry).
    *
    * <p>Drops do not need a counterpart on the other side — they relax the strict-bijection check by
