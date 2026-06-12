@@ -135,6 +135,22 @@ Telescope.mapper(Cart.class, CartDto.class,
 
 Every hop is typed; `javac` and the IDE refactor follow each step.
 
+Need eager literals or per-call computed values stamped at the target — MapStruct's `@Mapping(constant = "...")` and
+`@Mapping(expression = "java(...)")`? Declared in the same `Telescope.mapper(...)` call:
+
+```java
+Telescope.mapper(Order.class, OrderDto.class,
+  to(Order::id,                OrderDto::id),
+  constant(OrderDto::tenant,   "production"),       // eager literal
+  compute (OrderDto::createdAt, Instant::now),      // fresh per call
+  compute (OrderDto::traceId,   UUID::randomUUID),
+  compute (OrderDto::metadata,  HashMap::new));     // fresh container per call
+```
+
+`constant` captures once at row construction; `compute` invokes the supplier each forward call (the right choice
+whenever a literal would share one mutable reference — `HashMap::new`, `Instant::now`, `UUID::randomUUID`). Both are
+forward-only by design; backward direction silently drops the slot, matching MapStruct semantics.
+
 ### Beans
 
 POJOs don't need a mirror record. Navigate the bean directly with `ofBean`; `set`/`update` rebuild it immutably, so the
@@ -191,7 +207,14 @@ capability lists, vs-MapStruct callouts, and benchmark cross-links.
   workloads (nested records with list-of-records inside) telescope codegen ties MapStruct within noise. See
   [Performance honesty](#performance-honesty).
 
-  The case for telescope is the shapes MapStruct doesn't compose to:
+  Telescope's `Telescope.mapper(...)` covers the MapStruct `@Mapping(...)` parity surface in one call — same-name
+  auto-mapping, renames via `Mapping.to(srcAcc, tgtAcc)`, typed transforms, nested mappers via `Mapping.via(...)`,
+  nested-path correspondences via `Mapping.to(srcAcc, tgtTelescope)` (closes `@Mapping(target = "a.b.c")`), eager
+  literals via `Mapping.constant(...)` (closes `@Mapping(constant = "...")`), per-call computed values via
+  `Mapping.compute(..., Supplier)` (closes `@Mapping(expression = "java(...)")`), and recursive intermediate allocation
+  for record targets so flat sources lift into deeply-nested records without per-hop glue.
+
+  But the case for telescope is the shapes MapStruct doesn't compose to AT ALL:
   - deep navigation as a primitive
   - effectful update (`updateAsync` / `updateValidated` / `updateEither` / `updateOptional`)
   - sealed-narrow paradigm hop
@@ -315,18 +338,19 @@ directions:
 
 | Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope runtime (ns/op) |
 | ------ | ------------- | ----------------: | ------------------------: | ------------------------: |
-| flat   | bean → record |     3.861 ± 1.002 |             5.649 ± 0.292 |            433.10 ± 81.76 |
-| flat   | record → bean |     3.626 ± 0.145 |             7.710 ± 0.435 |            540.00 ± 85.20 |
-| nested | bean → record |     5.572 ± 0.503 |            11.065 ± 0.291 |           556.03 ± 187.58 |
-| nested | record → bean |     5.844 ± 0.296 |            12.289 ± 1.275 |            775.93 ± 31.86 |
-| deep   | bean → record |    73.221 ± 26.95 |            70.358 ± 7.192 |          1967.67 ± 209.23 |
-| deep   | record → bean |  115.222 ± 140.14 |          112.457 ± 175.52 |          2565.21 ± 122.47 |
+| flat   | bean → record |     3.486 ± 0.018 |             5.300 ± 1.328 |            340.13 ± 7.892 |
+| flat   | record → bean |     3.520 ± 0.304 |             7.230 ± 0.146 |           464.27 ± 23.501 |
+| nested | bean → record |     5.361 ± 1.309 |            10.156 ± 0.151 |           501.43 ± 15.365 |
+| nested | record → bean |     5.363 ± 0.126 |            10.469 ± 0.250 |           709.86 ± 12.432 |
+| deep   | bean → record |    50.292 ± 2.534 |            58.048 ± 0.816 |          2024.06 ± 380.21 |
+| deep   | record → bean |   61.424 ± 23.792 |           63.456 ± 12.446 |          2292.43 ± 28.228 |
 
 **Codegen path vs MapStruct, forward direction:**
 
-- **Flat tier:** MapStruct 3.86 ns, telescope 5.65 ns — **1.46× behind** (~1.8 ns absolute).
-- **Nested tier:** MapStruct 5.57 ns, telescope 11.07 ns — **1.99× behind** (~5.5 ns absolute).
-- **Deep tier:** MapStruct 73.22 ns, telescope 70.36 ns — **tied within noise** (error bars overlap completely).
+- **Flat tier:** MapStruct 3.49 ns, telescope 5.30 ns — **1.52× behind** (~1.8 ns absolute).
+- **Nested tier:** MapStruct 5.36 ns, telescope 10.16 ns — **1.90× behind** (~4.8 ns absolute).
+- **Deep tier:** MapStruct 50.29 ns, telescope 58.05 ns — **tied within noise** (error bars overlap; backward direction
+  shows MapStruct 61.42 ± 23.79 vs telescope 63.46 ± 12.45, statistically indistinguishable).
 
 On the realistic deep workload (nested records with element-by-element list conversion) telescope's `@Bridge` codegen
 matches hand-templated MapStruct bytecode. On flat scalar-pair dispatch, MapStruct is still ~1.8 ns faster per call —
@@ -1457,23 +1481,10 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
    For zero runtime-check points, use the **`@Focus` / `@BeanFocus` / `@Bridge` annotation processors** — they generate
    a typed `<X>Path<R>` navigator at compile time where every step is a typed method call.
 
-7. **Pre-1.0 versioning policy — minor versions can break source and binary compatibility.** Telescope is still 0.x; we
-   hold the right to evolve the public surface between minor releases when it improves the DSL. Recent breaks worth
-   knowing about:
-   - **The `Telescope.fromBean(...).viaX()` / `Telescope.mapBean(...).build()` fluent chains were demolished** in favor
-     of the unified `Telescope.map(A.class, B.class, ...)` factory that handles record↔record, POJO↔POJO, and
-     cross-paradigm in one entry point. Forcing a specific bean write strategy is now an explicit
-     `WriteHint.writeBean(target, strategy)` row instead of `.viaFields()` / `.viaConstructor()` / `.viaBuilder()`.
-   - **`Telescope.each()` no-arg (runtime-dispatched escape hatch) was deleted**; arrays are no longer first-class
-     containers (wrap as `List`). Replacement: the typed `.list/.set/.map/.optional(accessor)` instance methods return
-     narrower subclasses (`ListTelescope` / `SetTelescope` / `MapTelescope` / `OptionalTelescope`) whose `.each()` /
-     `.values()` / `.present()` terminals are compile-checked; pre-built `Telescope<S, List<X>>` paths use
-     `Telescope.asList(path).each()` (and friends).
-   - **`.field(String)` / `.field(String, Class<B>)` renamed to `.fieldByName(...)`** so the runtime-check nature is
-     loud at the call site (see constraint #6). Source-incompatible. No `@Deprecated` shim — clean break.
-
-   After 1.0 these guarantees tighten — source + binary compat across minor versions, breaks only on majors. We're not
-   there yet; keep your build configured to rebuild against each minor.
+7. **Versioning policy — semver from 1.0 onward.** Source + binary compatibility across minor versions; breaks only on
+   majors. The pre-1.0 churn (the `fromBean.viaX` / `mapBean.build` chains collapsed into one `Telescope.map(A, B, ...)`
+   factory, `.each()` no-arg deleted in favor of typed `.list/.set/.map/.optional(accessor)` subclasses,
+   `.field(String)` renamed to `.fieldByName(String)`) is behind us; the surface frozen in 1.0 is the contract.
 
 ---
 
