@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
@@ -64,38 +63,23 @@ class MetadataHolderProbeTest {
   }
 
   @Test
-  @DisplayName("lensFromHolder returns null when no <X>FieldOptics sibling is on the classpath")
-  void lensFromHolderReturnsNullWhenAbsent() {
-    final var result = MetadataHolderProbe.lensFromHolder(UnannotatedRecord.class, "name");
-    assertNull(result, "absent holder should produce a null Lens so dispatch can fall through");
+  @DisplayName("HolderRef.constantsByName exposes the raw codegen-emitted Telescope constants as Object")
+  void constantsByNameExposesRawTelescopeConstants() {
+    // :internal can't see Telescope, so the holder's constants are typed as Object. The :core
+    // caller (Telescope#singleHolderLens / #holderReadersFor) does the cast to recover the
+    // underlying Lens — keeping the cast on the side of the module boundary that owns the type.
+    final var maybeHolder = MetadataHolderProbe.probeFor(ProbedRecord.class);
+    assertNotNull(maybeHolder.orElse(null), "holder should be discovered for a class with a sibling <X>FieldOptics");
+    final var holder = maybeHolder.get();
+    assertNotNull(holder.constantsByName().get("name"), "'name' must be present in the holder's constant map");
+    assertNotNull(holder.constantsByName().get("age"), "'age' must be present in the holder's constant map");
+    assertNull(holder.constantsByName().get("nonExistentField"), "unknown names should map to null");
   }
 
   @Test
-  @DisplayName("lensFromHolder returns the holder's pre-baked Lens when name matches a constant")
-  void lensFromHolderReturnsConstantWhenPresent() {
-    final var lens = MetadataHolderProbe.<ProbedRecord, String>lensFromHolder(ProbedRecord.class, "name");
-    assertNotNull(lens, "holder is present and 'name' is a known constant — expected a non-null Lens");
-    final var rec = new ProbedRecord("alice", 30);
-    assertEquals("alice", lens.get(rec), "the holder's lens should read 'name' identically to the record accessor");
-    final var renamed = lens.set(rec, "bob");
-    assertEquals("bob", renamed.name(), "the holder's lens setter should rebuild the record with the new value");
-    assertEquals(30, renamed.age(), "other components should be carried over unchanged");
-  }
-
-  @Test
-  @DisplayName("holder present but name missing throws IllegalStateException with a precise diagnostic")
-  void holderPresentNameMissingThrows() {
-    final var thrown = assertThrows(
-      IllegalStateException.class,
-      () -> MetadataHolderProbe.lensFromHolder(ProbedRecord.class, "nonExistentField"),
-      "silent fallback would mask stale codegen — a known-holder name miss must throw"
-    );
-    final var msg = thrown.getMessage();
-    assertTrue(msg.contains("nonExistentField"), "diagnostic should name the missing component, got: " + msg);
-    assertTrue(msg.contains("ProbedRecord"), "diagnostic should name the source class, got: " + msg);
-    assertTrue(
-      msg.contains("Re-run the @Focus") || msg.contains("@BeanFocus"),
-      "diagnostic should point the user at the codegen step, got: " + msg
-    );
+  @DisplayName("probeFor returns Optional.empty() for an unannotated class — no <X>FieldOptics sibling")
+  void probeForReturnsEmptyForUnannotatedClass() {
+    final var result = MetadataHolderProbe.probeFor(UnannotatedRecord.class);
+    assertTrue(result.isEmpty(), "absent holder should produce Optional.empty() so the dispatch site can fall through");
   }
 }

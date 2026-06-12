@@ -22,6 +22,7 @@ import io.github.eschizoid.telescope.runtime.instances.OptionalK;
 import io.github.eschizoid.telescope.runtime.instances.ValidatedK;
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -77,18 +78,12 @@ public sealed class Telescope<
   @FunctionalInterface
   public interface Accessor<A, B> extends Function<A, B>, Serializable {}
 
-  // Static-init bridge: register an extractor that pulls the package-private `optic` field out of
-  // any Telescope. This is the ONLY compile-time edge between :api and :internal in this direction
-  // (the reverse, :api -> :internal, is the qualified-exports module dependency). The bridge lets
-  // MetadataHolderProbe (in :internal) recover a Lens from a codegen-emitted Telescope constant
-  // without importing Telescope. Order is safe: every dispatch site that calls probeFor() lives
-  // inside Telescope, so this <clinit> has fired before any probe runs.
-  static {
-    MetadataHolderProbe.setOpticExtractor(t -> ((Telescope<?, ?>) t).optic);
-  }
-
   // Package-private — read by the conversion-builder classes in this same package (e.g.
-  // BeanTo's iso-unwrap check, Mapper's asTelescope).
+  // BeanTo's iso-unwrap check, Mapper's asTelescope) AND by the holder-extraction helpers below
+  // (singleHolderLens, holderReadersFor) which unwrap codegen-emitted Telescope constants to
+  // their underlying Lens. The cast site lives here in :core because Telescope is a :core type;
+  // :internal sees the constants only as raw Object — no callback, no global state, no
+  // static-init bridge between the modules.
   final Traversal<S, A> optic;
   // How accessor-based navigation (field/each/eachValue/whenPresent) turns a method reference into
   // a field Lens: records read/rebuild via the canonical constructor, beans via getters +
@@ -1287,6 +1282,74 @@ public sealed class Telescope<
     return dispatch.lensFor(getter);
   }
 
+  /**
+   * Single-name holder lens lookup used by {@link RecordFieldOptics} / {@link BeanFieldOptics}.
+   * When {@code cls} has a sibling {@code <X>FieldOptics} holder on the classpath, the codegen-
+   * emitted {@code Telescope} constant for {@code name} is unwrapped to its underlying {@code
+   * Lens}. Returns {@code null} when no holder is present (caller falls back to the reflective
+   * {@link Records#fieldLens} / {@link Beans#lens} path). Throws when the holder IS present but the
+   * requested name is missing — silent fallback would mask stale codegen.
+   *
+   * <p>The cast {@code (Telescope<?, ?>) constant} lives here in {@code :core} so {@code :internal}
+   * sees the holder constants only as raw {@code Object}. No callback, no global state, no
+   * static-init bridge between the modules.
+   */
+  @SuppressWarnings("unchecked")
+  static <S, A> Lens<S, A> singleHolderLens(final Class<S> cls, final String name) {
+    if (cls == null) return null;
+    final var maybeHolder = MetadataHolderProbe.probeFor(cls);
+    if (maybeHolder.isEmpty()) return null;
+    final var holder = maybeHolder.get();
+    final var constant = holder.constantsByName().get(name);
+    if (constant == null) throw new IllegalStateException(
+      "Component '" +
+        name +
+        "' not found in " +
+        cls.getName() +
+        "'s metadata holder (" +
+        holder.holderClass().getName() +
+        "). Re-run the @Focus / @BeanFocus processor."
+    );
+    return (Lens<S, A>) (Lens<?, ?>) ((Telescope<?, ?>) constant).optic;
+  }
+
+  /**
+   * Holder-readers table for the structural-iso backward branch: a {@code name → Lens} map covering
+   * every name in {@code componentNames}, or {@code null} when {@code cls} has no sibling holder OR
+   * the holder is missing any one of the named constants (all-or-nothing semantics that match the
+   * original {@code Reflective#structuralIso} dispatch shape — one branch outside the Iso's hot
+   * loop, not {@code N} branches inside).
+   *
+   * <p>Passed into {@link io.github.eschizoid.telescope.internal.Reflective#structuralIso(Class,
+   * Map, java.util.function.Function)} by {@link DeepMap} so {@code :internal} can short-circuit
+   * the reflective {@link io.github.eschizoid.telescope.internal.Reflective#read} path without
+   * importing {@code Telescope}.
+   */
+  @SuppressWarnings("unchecked")
+  static Map<String, Lens<Object, Object>> holderReadersFor(final Class<?> cls, final String[] componentNames) {
+    final var maybeHolder = MetadataHolderProbe.probeFor(cls);
+    if (maybeHolder.isEmpty()) return null;
+    final var holder = maybeHolder.get();
+    final var readers = new LinkedHashMap<String, Lens<Object, Object>>();
+    for (final var name : componentNames) {
+      final var constant = holder.constantsByName().get(name);
+      if (constant == null) return null;
+      readers.put(name, (Lens<Object, Object>) (Lens<?, ?>) ((Telescope<?, ?>) constant).optic);
+    }
+    return readers;
+  }
+
+  /**
+   * Holder-constructor accessor for the structural-iso forward branch: the bound {@code
+   * construct(Function<String, Object>)} the codegen-emitted holder exposes, or {@code null} when
+   * no holder is on the classpath. Doesn't need any cast — the constructor is stored as {@code
+   * Function<Function<String, Object>, Object>} in the {@link MetadataHolderProbe.HolderRef},
+   * untyped at the {@code Telescope} level.
+   */
+  static Function<Function<String, Object>, Object> holderConstructorFor(final Class<?> cls) {
+    return MetadataHolderProbe.probeFor(cls).map(MetadataHolderProbe.HolderRef::constructor).orElse(null);
+  }
+
   /** Records: read + rebuild via the canonical constructor, keyed by component name. */
   private enum RecordFieldOptics implements FieldOptics {
     INSTANCE;
@@ -1295,7 +1358,7 @@ public sealed class Telescope<
     public <A, B> Lens<A, B> lensFor(final Accessor<A, ?> getter) {
       final var name = methodNameOf(getter);
       final Class<A> implClass = Telescope.implClassOf(getter);
-      final var holderLens = MetadataHolderProbe.<A, B>lensFromHolder(implClass, name);
+      final var holderLens = Telescope.<A, B>singleHolderLens(implClass, name);
       if (holderLens != null) return holderLens;
       // Pass the declaring class so the lens captures (info, idx, reader) at construction —
       // eliminates the per-call (class, name) → idx scan that the string-only fieldLens(name)
@@ -1317,7 +1380,7 @@ public sealed class Telescope<
       // match how @BeanFocus codegen emits them — Beans.propertyOf strips the same prefixes the
       // codegen would have stripped when naming the per-property method on <X>Telescope.
       final var property = Beans.propertyOf(rawName);
-      final var holderLens = MetadataHolderProbe.<A, B>lensFromHolder(implClass, property);
+      final var holderLens = Telescope.<A, B>singleHolderLens(implClass, property);
       if (holderLens != null) return holderLens;
       return Beans.lens(implClass, property, Beans.autoWriter(implClass));
     }
