@@ -1106,4 +1106,269 @@ class BridgeProcessorTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("Renames — source/target field name remapping")
+  class Renames {
+
+    @Test
+    @DisplayName("@Rename matches source.orderNumber to target.referenceCode in both directions")
+    void renameMapsBothDirections() {
+      final var compilation = compile(
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(value = demo.OrderEntity.class, renames = {
+            @Rename(source = "orderNumber", target = "referenceCode")
+          })
+          public record Order(Long id, String orderNumber) {}
+          """
+        ),
+        source(
+          "demo.OrderEntity",
+          """
+          package demo;
+          public record OrderEntity(Long id, String referenceCode) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
+
+      // Forward: build OrderEntity reading source.orderNumber() into the referenceCode slot.
+      assertTrue(bridge.contains("new demo.OrderEntity(s.id(), s.orderNumber())"), bridge);
+      // Backward: build Order reading target.referenceCode() into the orderNumber slot.
+      assertTrue(bridge.contains("new demo.Order(t.id(), t.referenceCode())"), bridge);
+    }
+
+    @Test
+    @DisplayName("misspelled rename source is a compile error pointing at the source")
+    void misspelledRenameSourceIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(value = demo.B.class, renames = {@Rename(source = "ordreNumber", target = "referenceCode")})
+          public record A(Long id, String orderNumber) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(Long id, String referenceCode) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "misspelled rename source should fail");
+      assertTrue(
+        compilation.hasError("source=\"ordreNumber\" is not a field of A"),
+        () -> "expected misspelled-source diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("misspelled rename target is a compile error pointing at the source")
+    void misspelledRenameTargetIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(value = demo.B.class, renames = {@Rename(source = "orderNumber", target = "refrenceCode")})
+          public record A(Long id, String orderNumber) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(Long id, String referenceCode) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "misspelled rename target should fail");
+      assertTrue(
+        compilation.hasError("target=\"refrenceCode\" is not a field of B"),
+        () -> "expected misspelled-target diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("a field listed in BOTH renames and drops is a compile error")
+    void renameAndDropOnSameFieldIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(
+            value = demo.B.class,
+            drops = {"orderNumber"},
+            renames = {@Rename(source = "orderNumber", target = "referenceCode")}
+          )
+          public record A(Long id, String orderNumber) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(Long id, String referenceCode) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "rename + drop on the same field should fail");
+      assertTrue(
+        compilation.hasError("appears in both renames and drops"),
+        () -> "expected dual-membership diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Transform per-field conversion routes through the BridgeFn class in both directions")
+    void transformRoutesThroughBridgeFn() {
+      final var compilation = compile(
+        source(
+          "demo.CentsConverter",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          import java.math.BigDecimal;
+          public final class CentsConverter implements BridgeFn<BigDecimal, Long> {
+            public CentsConverter() {}
+            @Override public Long forward(BigDecimal x) { return x.movePointRight(2).longValueExact(); }
+            @Override public BigDecimal backward(Long c) { return BigDecimal.valueOf(c).movePointLeft(2); }
+          }
+          """
+        ),
+        source(
+          "demo.LineItem",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          import java.math.BigDecimal;
+          @Bridge(value = demo.LineItemEntity.class, transforms = {
+            @Transform(field = "unitPrice", using = demo.CentsConverter.class)
+          })
+          public record LineItem(String id, BigDecimal unitPrice) {}
+          """
+        ),
+        source(
+          "demo.LineItemEntity",
+          """
+          package demo;
+          public record LineItemEntity(String id, Long unitPrice) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.LineItemBridge");
+      assertNotNull(bridge, () -> "LineItemBridge missing; saw " + compilation.generated().keySet());
+
+      // Static instance of the user's BridgeFn.
+      assertTrue(
+        bridge.contains("private static final demo.CentsConverter __tx_unitPrice = new demo.CentsConverter();"),
+        bridge
+      );
+      // Forward routes the source field through .forward(...).
+      assertTrue(bridge.contains("new demo.LineItemEntity(s.id(), __tx_unitPrice.forward(s.unitPrice()))"), bridge);
+      // Backward routes the target field through .backward(...).
+      assertTrue(bridge.contains("new demo.LineItem(t.id(), __tx_unitPrice.backward(t.unitPrice()))"), bridge);
+    }
+
+    @Test
+    @DisplayName("misspelled transform field is a compile error pointing at the source")
+    void misspelledTransformFieldIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Conv",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class Conv implements BridgeFn<String, String> {
+            public Conv() {}
+            @Override public String forward(String x) { return x; }
+            @Override public String backward(String x) { return x; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.B.class, transforms = {
+            @Transform(field = "nmae", using = demo.Conv.class)
+          })
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String name) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "misspelled transform field should fail");
+      assertTrue(
+        compilation.hasError("transforms field=\"nmae\" is not a field of A"),
+        () -> "expected misspelled-transform diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("two renames cannot share the same source or the same target")
+    void duplicateRenameSourceIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(value = demo.B.class, renames = {
+            @Rename(source = "name", target = "a"),
+            @Rename(source = "name", target = "b")
+          })
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String a, String b) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "duplicate rename source should fail");
+      assertTrue(
+        compilation.hasError("source \"name\" appears twice"),
+        () -> "expected duplicate-source diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+  }
 }

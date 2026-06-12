@@ -75,4 +75,39 @@ public @interface Bridge {
    * error.
    */
   String[] drops() default {};
+
+  /**
+   * Source-to-target name remappings — pairs whose source field name and target field name differ.
+   * The bijection check considers a renamed source name and its mapped target name as matched. See
+   * {@link Rename} for the per-pair shape.
+   *
+   * <pre>{@code
+   * @Bridge(value = OrderEntity.class, renames = {
+   *   @Rename(source = "orderNumber", target = "referenceCode")
+   * })
+   * }</pre>
+   *
+   * <p>Each rename's source must name a real field on the annotated source; each target must name a
+   * real field on the bridge target. No two renames may share the same source or the same target —
+   * the name relation stays a bijection within the rename set.
+   */
+  Rename[] renames() default {};
+
+  /**
+   * Per-field typed conversions — for cases where the two sides name compatible fields but the
+   * types differ (e.g. {@code BigDecimal} on the source, {@code long} on the target). Each {@link
+   * Transform} names a source field and a {@link io.github.eschizoid.telescope.conversion.BridgeFn}
+   * class whose {@code forward}/{@code backward} convert the value in each direction.
+   *
+   * <pre>{@code
+   * @Bridge(value = LineItemEntity.class, transforms = {
+   *   @Transform(field = "unitPrice", using = CentsConverter.class)
+   * })
+   * }</pre>
+   *
+   * <p>Each transform's field must be a real field on the annotated source. A field with a
+   * transform is exempt from the same-type check that other fields go through; the transform's
+   * input/output types are the bridge contract for that slot.
+   */
+  Transform[] transforms() default {};
 }

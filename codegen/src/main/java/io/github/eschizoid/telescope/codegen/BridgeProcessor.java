@@ -82,6 +82,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // read in generate().
   private final Map<TypePair, Set<String>> dropsByPair = new HashMap<>();
 
+  // Per-pair renames: source field name -> target field name for fields whose two sides have
+  // different names. The bijection check applies renames on the source side before comparing
+  // to target names; planFields and the field-read expressions follow the mapping. Populated in
+  // process(), read in generate().
+  private final Map<TypePair, Map<String, String>> renamesByPair = new HashMap<>();
+
+  // Per-pair per-field transforms: source field name -> BridgeFn class FQN. The transformed field
+  // is
+  // routed through new <Class>().forward(...) / .backward(...) on each direction and is exempt from
+  // the same-type bijection check. Populated in process(), read in generate().
+  private final Map<TypePair, Map<String, String>> transformsByPair = new HashMap<>();
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var anno = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
@@ -90,6 +102,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // Reset per-run bookkeeping so a second processing round starts from a clean slate.
     multiTargetSources.clear();
     dropsByPair.clear();
+    renamesByPair.clear();
+    transformsByPair.clear();
 
     final Deque<TypePair> pending = new ArrayDeque<>();
     final Set<TypePair> seen = new HashSet<>();
@@ -132,6 +146,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         userDeclared.add(pair);
         final var drops = dropsFromMirror(bridgeAm);
         if (!drops.isEmpty()) dropsByPair.put(pair, drops);
+        final var renames = renamesFromMirror(element, bridgeAm);
+        if (renames == null) continue; // invalid rename — error already reported, skip this pair
+        if (!renames.isEmpty()) renamesByPair.put(pair, renames);
+        final var transforms = transformsFromMirror(element, bridgeAm);
+        if (transforms == null) continue; // invalid transform — already reported, skip this pair
+        if (!transforms.isEmpty()) transformsByPair.put(pair, transforms);
         if (seen.add(pair)) pending.add(pair);
       }
     }
@@ -189,6 +209,86 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return Set.of();
   }
 
+  // Read renames from a @Bridge mirror. Returns null when a rename is malformed (already reported
+  // via error()) so the caller can skip the pair; returns an empty map when no renames are present.
+  private Map<String, String> renamesFromMirror(final Element element, final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (!entry.getKey().getSimpleName().contentEquals("renames")) continue;
+      @SuppressWarnings("unchecked")
+      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
+      final var result = new LinkedHashMap<String, String>();
+      final var seenSources = new HashSet<String>();
+      final var seenTargets = new HashSet<String>();
+      for (final var av : list) {
+        final var renameAm = (AnnotationMirror) av.getValue();
+        String src = null;
+        String tgt = null;
+        for (final var re : renameAm.getElementValues().entrySet()) {
+          final var k = re.getKey().getSimpleName().toString();
+          if (k.equals("source")) src = (String) re.getValue().getValue();
+          else if (k.equals("target")) tgt = (String) re.getValue().getValue();
+        }
+        if (src == null || tgt == null || src.isEmpty() || tgt.isEmpty()) {
+          error(element, "@Rename requires both `source` and `target` field names");
+          return null;
+        }
+        if (!seenSources.add(src)) {
+          error(element, "@Rename source \"" + src + "\" appears twice in the renames list");
+          return null;
+        }
+        if (!seenTargets.add(tgt)) {
+          error(element, "@Rename target \"" + tgt + "\" appears twice in the renames list");
+          return null;
+        }
+        result.put(src, tgt);
+      }
+      return result;
+    }
+    return Map.of();
+  }
+
+  // Read transforms from a @Bridge mirror. Returns null on a malformed transform (already reported)
+  // so the caller can skip the pair. Empty map when no transforms are present. The map keys are
+  // source field names; values are the BridgeFn class FQN to instantiate at emit time.
+  private Map<String, String> transformsFromMirror(final Element element, final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (!entry.getKey().getSimpleName().contentEquals("transforms")) continue;
+      @SuppressWarnings("unchecked")
+      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
+      final var result = new LinkedHashMap<String, String>();
+      for (final var av : list) {
+        final var transformAm = (AnnotationMirror) av.getValue();
+        String field = null;
+        TypeMirror using = null;
+        for (final var te : transformAm.getElementValues().entrySet()) {
+          final var k = te.getKey().getSimpleName().toString();
+          if (k.equals("field")) field = (String) te.getValue().getValue();
+          else if (k.equals("using")) using = (TypeMirror) te.getValue().getValue();
+        }
+        if (field == null || field.isEmpty()) {
+          error(element, "@Transform requires a non-empty `field` name");
+          return null;
+        }
+        if (using == null || using.getKind() != TypeKind.DECLARED) {
+          error(element, "@Transform `using` must be a class implementing BridgeFn");
+          return null;
+        }
+        final var usingEl = (TypeElement) ((DeclaredType) using).asElement();
+        if (usingEl.getNestingKind() != NestingKind.TOP_LEVEL) {
+          error(element, "@Transform `using` must be a top-level class");
+          return null;
+        }
+        if (result.containsKey(field)) {
+          error(element, "@Transform field=\"" + field + "\" is declared more than once");
+          return null;
+        }
+        result.put(field, usingEl.getQualifiedName().toString());
+      }
+      return result;
+    }
+    return Map.of();
+  }
+
   private static String defaultLiteralFor(final TypeMirror type) {
     return switch (type.getKind()) {
       case BOOLEAN -> "false";
@@ -222,6 +322,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var sourceFields = fieldsOf(source);
     final var targetFields = fieldsOf(target);
     final var drops = dropsByPair.getOrDefault(thisPair, Set.of());
+    final var renames = renamesByPair.getOrDefault(thisPair, Map.of());
+    final var transforms = transformsByPair.getOrDefault(thisPair, Map.of());
+
+    // Validate every transform field is a real source field (drops would mask the validation).
+    for (final var t : transforms.keySet()) {
+      if (!sourceFields.stream().anyMatch(f -> f.name().equals(t))) {
+        error(
+          source,
+          "@Bridge transforms field=\"" +
+            t +
+            "\" is not a field of " +
+            source.getSimpleName() +
+            " — known fields: " +
+            sourceFields.stream().map(Field::name).collect(Collectors.toSet())
+        );
+        return;
+      }
+      if (drops.contains(t)) {
+        error(source, "@Bridge field \"" + t + "\" appears in both transforms and drops — it must be one or the other");
+        return;
+      }
+    }
 
     // Validate every drop name actually names a source field. A misspelled or non-existent drop
     // is a precise compile error rather than a silent no-op.
@@ -236,38 +358,92 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
 
-    // Bijection check sees only the non-dropped source fields. Drops relax the strictness by
-    // exactly
-    // the names listed; everything else must still match name-for-name.
+    // Validate renames: source side must exist on the source, target side on the target. A renamed
+    // source cannot also be a drop (it would be redundant; the user picks one).
+    final var targetNames = targetFields.stream().map(Field::name).collect(Collectors.toSet());
+    for (final var e : renames.entrySet()) {
+      if (!sourceNames.contains(e.getKey())) {
+        error(
+          source,
+          "@Bridge renames source=\"" +
+            e.getKey() +
+            "\" is not a field of " +
+            source.getSimpleName() +
+            " — known fields: " +
+            sourceNames
+        );
+        return;
+      }
+      if (!targetNames.contains(e.getValue())) {
+        error(
+          source,
+          "@Bridge renames target=\"" +
+            e.getValue() +
+            "\" is not a field of " +
+            target.getSimpleName() +
+            " — known fields: " +
+            targetNames
+        );
+        return;
+      }
+      if (drops.contains(e.getKey())) {
+        error(
+          source,
+          "@Bridge field \"" + e.getKey() + "\" appears in both renames and drops — it must be one or the other"
+        );
+        return;
+      }
+    }
+    final var reverseRenames = new LinkedHashMap<String, String>();
+    for (final var e : renames.entrySet()) reverseRenames.put(e.getValue(), e.getKey());
+
+    // Bijection check: apply forward renames on the source side, then compare to target names.
+    // Dropped sources are excluded from the check entirely.
     final var nonDroppedSourceFields = drops.isEmpty()
       ? sourceFields
       : sourceFields
           .stream()
           .filter(f -> !drops.contains(f.name()))
           .toList();
-    if (!sameNames(source, nonDroppedSourceFields, target, targetFields)) return;
+    if (!sameNames(source, nonDroppedSourceFields, target, targetFields, renames)) return;
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
-    // value (and vice versa). Per-field decisions can also enqueue new TypePairs to emit.
+    // value (and vice versa). Per-field decisions can also enqueue new TypePairs to emit. Plans are
+    // keyed by SOURCE field name; the target side is looked up via the rename map.
     final var fieldPlans = planFields(
       source,
       target,
       nonDroppedSourceFields,
       targetFields,
+      renames,
+      transforms,
       pending,
       seen,
       userDeclared
     );
     if (fieldPlans == null) return;
 
-    final Function<String, String> readForward = name ->
-      applyForward(name, fieldPlans.get(name), readExpr(source, "s", fieldByName(nonDroppedSourceFields, name)));
-    // Backward walks ALL source fields, including dropped ones. For drops, the target has no
-    // counterpart — emit the type's zero value (null for refs, 0/false/'\0' for primitives).
-    final Function<String, String> readBackward = name -> {
-      if (drops.contains(name)) return defaultLiteralFor(fieldByName(sourceFields, name).type());
-      return applyBackward(name, fieldPlans.get(name), readExpr(target, "t", fieldByName(targetFields, name)));
+    // readForward is called with TARGET field names (we walk targetFields). Reverse-rename to find
+    // the matching source field, then use the source name to look up the plan and read the source.
+    final Function<String, String> readForward = targetName -> {
+      final var srcName = reverseRenames.getOrDefault(targetName, targetName);
+      return applyForward(
+        srcName,
+        fieldPlans.get(srcName),
+        readExpr(source, "s", fieldByName(nonDroppedSourceFields, srcName))
+      );
+    };
+    // readBackward is called with SOURCE field names. For drops, emit the type's zero value.
+    // Otherwise forward-rename the source name to find the matching target field for the read.
+    final Function<String, String> readBackward = sourceName -> {
+      if (drops.contains(sourceName)) return defaultLiteralFor(fieldByName(sourceFields, sourceName).type());
+      final var tgtName = renames.getOrDefault(sourceName, sourceName);
+      return applyBackward(
+        sourceName,
+        fieldPlans.get(sourceName),
+        readExpr(target, "t", fieldByName(targetFields, tgtName))
+      );
     };
 
     final var forwardBody = buildExpr(target, readForward, targetFields);
@@ -286,6 +462,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         (userDeclared.contains(thisPair) ? "." : " (auto-generated for nested sub-pair " + targetFq + ")."),
       source,
       out -> {
+        // Per-field @Transform: one static instance of each user-declared BridgeFn
+        // implementation,
+        // named `__tx_<sourceField>`. applyForward / applyBackward emit
+        // `__tx_<field>.forward(...)`
+        // / `.backward(...)` on the transformed slot.
+        if (!transforms.isEmpty()) {
+          for (final var e : transforms.entrySet()) {
+            out.println(
+              "  private static final " + e.getValue() + " __tx_" + e.getKey() + " = new " + e.getValue() + "();"
+            );
+          }
+          out.println();
+        }
         // Static forward / backward methods so child bridges can reference us by
         // `BridgeName.forward(...)` / `.backward(...)` (direct static calls; no method-ref
         // lambda).
@@ -319,7 +508,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println(
           "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(new Fn());"
         );
-        emitContainerHelpers(out, fieldPlans, nonDroppedSourceFields, targetFields);
+        emitContainerHelpers(out, fieldPlans, nonDroppedSourceFields, targetFields, renames);
       }
     );
   }
@@ -545,6 +734,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       OPTIONAL,
       OPTIONAL_TO_NULLABLE,
       NULLABLE_TO_OPTIONAL,
+      TRANSFORM,
     }
 
     static FieldPlan identity() {
@@ -598,13 +788,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement target,
     final List<Field> sourceFields,
     final List<Field> targetFields,
+    final Map<String, String> renames,
+    final Map<String, String> transforms,
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
     final Set<TypePair> userDeclared
   ) {
     final var plans = new LinkedHashMap<String, FieldPlan>();
     for (final var sf : sourceFields) {
-      final var tf = fieldByName(targetFields, sf.name());
+      // Per-field transform supersedes the type-match logic — the transform IS the contract.
+      if (transforms.containsKey(sf.name())) {
+        plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.TRANSFORM, transforms.get(sf.name())));
+        continue;
+      }
+      final var tf = fieldByName(targetFields, renames.getOrDefault(sf.name(), sf.name()));
       // (1) Same type → identity. Covers same-typed containers too (List<X>↔List<X> is identity).
       if (isSameType(sf.type(), tf.type())) {
         plans.put(sf.name(), FieldPlan.identity());
@@ -801,6 +998,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         : "__fwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL_TO_NULLABLE -> readExpr + ".map(" + fwdElement + ").orElse(null)";
       case NULLABLE_TO_OPTIONAL -> "Optional.ofNullable(" + readExpr + ").map(" + fwdElement + ")";
+      case TRANSFORM -> "__tx_" + fieldName + ".forward(" + readExpr + ")";
     };
   }
 
@@ -824,6 +1022,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // For the cross-paradigm bridges, forward and backward are mirror images.
       case OPTIONAL_TO_NULLABLE -> "Optional.ofNullable(" + readExpr + ").map(" + bwdElement + ")";
       case NULLABLE_TO_OPTIONAL -> readExpr + ".map(" + bwdElement + ").orElse(null)";
+      case TRANSFORM -> "__tx_" + fieldName + ".backward(" + readExpr + ")";
     };
   }
 
@@ -868,14 +1067,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final PrintWriter out,
     final Map<String, FieldPlan> fieldPlans,
     final List<Field> sourceFields,
-    final List<Field> targetFields
+    final List<Field> targetFields,
+    final Map<String, String> renames
   ) {
     for (final var entry : fieldPlans.entrySet()) {
       final var fieldName = entry.getKey();
       final var plan = entry.getValue();
       if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) continue;
       final var srcType = fieldByName(sourceFields, fieldName).type();
-      final var tgtType = fieldByName(targetFields, fieldName).type();
+      final var tgtType = fieldByName(targetFields, renames.getOrDefault(fieldName, fieldName)).type();
       switch (plan.kind()) {
         case LIST -> {
           emitListHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward");
@@ -1117,9 +1317,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement source,
     final List<Field> sourceFields,
     final TypeElement target,
-    final List<Field> targetFields
+    final List<Field> targetFields,
+    final Map<String, String> renames
   ) {
-    final var sn = sourceFields.stream().map(Field::name).collect(Collectors.toCollection(TreeSet::new));
+    final var sn = sourceFields
+      .stream()
+      .map(f -> renames.getOrDefault(f.name(), f.name()))
+      .collect(Collectors.toCollection(TreeSet::new));
     final var tn = targetFields.stream().map(Field::name).collect(Collectors.toCollection(TreeSet::new));
     if (sn.equals(tn)) return true;
     error(
@@ -1130,7 +1334,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         target.getSimpleName() +
         " must expose the same field names (a bijection). " +
         source.getSimpleName() +
-        " has " +
+        (renames.isEmpty() ? " has " : " (after renames) has ") +
         sn +
         ", " +
         target.getSimpleName() +
