@@ -51,4 +51,7 @@ jmh {
     failOnError = true
     // Optional filter — `-Pjmh.includes=HolderDispatchBenchmark` runs only matching benchmarks.
     (project.findProperty("jmh.includes") as String?)?.let { includes = listOf(it) }
+    // Optional per-iteration time overrides — `-Pjmh.timeOnIteration=2s -Pjmh.warmupTime=2s` for quick smoke runs.
+    (project.findProperty("jmh.timeOnIteration") as String?)?.let { timeOnIteration = it }
+    (project.findProperty("jmh.warmupTime") as String?)?.let { warmup = it }
 }

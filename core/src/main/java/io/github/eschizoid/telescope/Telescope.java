@@ -62,7 +62,12 @@ import java.util.function.Predicate;
 public sealed class Telescope<
   S,
   A
-> permits Telescope.ListTelescope, Telescope.SetTelescope, Telescope.MapTelescope, Telescope.OptionalTelescope {
+> permits
+  Telescope.ListTelescope,
+  Telescope.SetTelescope,
+  Telescope.MapTelescope,
+  Telescope.OptionalTelescope,
+  Telescope.BridgeTelescope {
 
   /**
    * Serializable functional interface for the method references that drive field navigation ({@code
@@ -222,19 +227,18 @@ public sealed class Telescope<
    * @see BridgeFn
    */
   public static <A, B> Telescope<A, B> bridge(final BridgeFn<A, B> fn) {
-    return wrap(
-      new Iso<A, B>() {
-        @Override
-        public B to(final A source) {
-          return fn.forward(source);
-        }
-
-        @Override
-        public A from(final B value) {
-          return fn.backward(value);
-        }
+    final Iso<A, B> iso = new Iso<A, B>() {
+      @Override
+      public B to(final A source) {
+        return fn.forward(source);
       }
-    );
+
+      @Override
+      public A from(final B value) {
+        return fn.backward(value);
+      }
+    };
+    return new BridgeTelescope<>(iso, fn);
   }
 
   /**
@@ -1512,6 +1516,32 @@ public sealed class Telescope<
         this.chain,
         this.firstHopName
       );
+    }
+  }
+
+  // Specialised Telescope for @Bridge-emitted constants. The parent's read/set terminals walk
+  // optic instanceof Lens → Iso.get default → anonymous Iso.to → BridgeFn.forward — three virtual
+  // hops to reach a static call. Holding the BridgeFn directly lets read/set fire fn.forward /
+  // fn.backward in one virtual hop. The Iso is still the underlying optic — composition (.then,
+  // .field, .each, .as, etc.) returns a regular Telescope and keeps lattice semantics intact; the
+  // fast path applies only when a terminal is invoked directly on the bridge constant.
+  private static final class BridgeTelescope<S, T> extends Telescope<S, T> {
+
+    private final BridgeFn<S, T> fn;
+
+    BridgeTelescope(final Iso<S, T> iso, final BridgeFn<S, T> fn) {
+      super(iso);
+      this.fn = fn;
+    }
+
+    @Override
+    public T read(final S source) {
+      return fn.forward(source);
+    }
+
+    @Override
+    public S set(final S source, final T value) {
+      return fn.backward(value);
     }
   }
 }
