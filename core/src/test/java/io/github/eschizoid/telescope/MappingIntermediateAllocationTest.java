@@ -18,8 +18,12 @@ import org.junit.jupiter.api.Test;
  * overlay then descends into the allocated structure and writes the leaf — no per-hop allocation
  * glue from the user, no fall-back to {@code Mapping.via(...)}.
  *
- * <p>Records only for v1.0. Bean intermediates still need a {@code Mapping.via(...)} workaround
- * because bean construction (no-arg ctor vs. builder vs. fields-only) isn't always one-shot.
+ * <p>Both records and beans are supported. Records recurse through their canonical constructors with
+ * default component values at every hop. Beans are allocated from their public no-arg constructor —
+ * the resulting instance has default-initialised fields that the subsequent telescope-row write
+ * overwrites via the bean's setters. A bean without a public no-arg ctor falls back to {@code null}
+ * (same behaviour as before bean-intermediate support landed), so the records path is unchanged
+ * and bean users who need a builder shape still reach for {@code Mapping.via(...)}.
  */
 class MappingIntermediateAllocationTest {
 
@@ -116,6 +120,79 @@ class MappingIntermediateAllocationTest {
       assertNotNull(out.outer().mid());
       assertNotNull(out.outer().mid().inner());
       assertEquals("payload", out.outer().mid().inner().value());
+    }
+  }
+
+  @Nested
+  @DisplayName("bean-intermediate allocation — synthesises a fresh bean from its no-arg ctor")
+  class BeanIntermediate {
+
+    static class AddressBean {
+
+      private String city;
+      private String zip;
+
+      public AddressBean() {}
+
+      public String getCity() {
+        return city;
+      }
+
+      public void setCity(final String city) {
+        this.city = city;
+      }
+
+      public String getZip() {
+        return zip;
+      }
+
+      public void setZip(final String zip) {
+        this.zip = zip;
+      }
+    }
+
+    static class PersonBean {
+
+      private String name;
+      private AddressBean address;
+
+      public PersonBean() {}
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      public AddressBean getAddress() {
+        return address;
+      }
+
+      public void setAddress(final AddressBean address) {
+        this.address = address;
+      }
+    }
+
+    @Test
+    @DisplayName("flat source routes into a freshly-allocated bean intermediate at the telescope-targeted slot")
+    void flatSourceRoutesIntoAllocatedBean() {
+      record Slim(String displayCity) {}
+
+      final var mapper = Telescope.mapper(
+        Slim.class,
+        PersonBean.class,
+        to(
+          Slim::displayCity,
+          Telescope.ofBean(PersonBean.class).field(PersonBean::getAddress).field(AddressBean::getCity)
+        )
+      );
+
+      final var out = mapper.forward(new Slim("Brooklyn"));
+      assertNotNull(out.getAddress(), "bean intermediate AddressBean should be allocated from its no-arg ctor");
+      assertEquals("Brooklyn", out.getAddress().getCity());
+      assertEquals(null, out.getAddress().getZip());
     }
   }
 }

@@ -17,6 +17,8 @@ import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.time.temporal.Temporal;
@@ -1049,28 +1051,31 @@ public final class DeepMap {
   private static final Iso<Object, Object> NULLING_ISO = Iso.of(_ -> null, _ -> null);
 
   /**
-   * Forward-only iso that materialises a fresh default-tree instance of {@code recordType} on every
+   * Forward-only iso that materialises a fresh default-tree instance of {@code type} on every
    * forward call. Used as the placeholder for telescope-row-claimed target fields that have no
    * same-name source counterpart — the post-fixup overlay descends into the allocated instance and
    * writes the leaf, so a fully-flat source can be lifted into a deeply-nested target without
    * per-hop allocation glue.
    *
-   * <p>Records only. Bean intermediates still get {@link #NULLING_ISO}; bean allocation needs a
-   * no-arg constructor or builder shape that isn't always present and would muddy the v1.0
-   * cut-line.
+   * <p>Records recurse via their canonical constructor with default component values. Beans
+   * (JavaBean shape) get a fresh instance from their public no-arg constructor. Anything without a
+   * usable construction strategy falls back to {@code null} — the user will see the same downstream
+   * null the unannotated path produces today, no worse.
    */
-  private static Iso<Object, Object> defaultAllocatorIso(final Class<?> recordType) {
-    return Iso.of(_ -> recursiveDefault(recordType), _ -> null);
+  private static Iso<Object, Object> defaultAllocatorIso(final Class<?> type) {
+    return Iso.of(_ -> recursiveDefault(type), _ -> null);
   }
 
   /**
    * Construct a default-tree instance of {@code type} — primitives get their JLS default (0, false,
-   * etc.), records recurse via their canonical constructor with the same scheme, all other
-   * reference types get {@code null}.
+   * etc.), records recurse via their canonical constructor with the same scheme, beans get a fresh
+   * instance from their public no-arg constructor (uninitialised fields default to null/zero, which
+   * the telescope-row write then overwrites). Anything else returns {@code null}.
    *
    * <p>Cycles between record types can't arise in practice: each canonical ctor needs every other
-   * type already constructible, so a record cycle would fail at compile time. No cycle-detection
-   * needed.
+   * type already constructible, so a record cycle would fail at compile time. Bean cycles are
+   * possible in principle but the no-arg ctor doesn't recurse into fields, so a self-referencing
+   * bean is handled with a single allocation regardless of its field shape.
    */
   @SuppressWarnings({ "rawtypes", "unchecked" })
   private static Object recursiveDefault(final Class<?> type) {
@@ -1080,6 +1085,24 @@ public final class DeepMap {
       final var byName = new HashMap<String, Object>(comps.length);
       for (final var comp : comps) byName.put(comp.getName(), recursiveDefault(comp.getType()));
       return io.github.eschizoid.telescope.internal.Records.construct((Class) type, byName::get);
+    }
+    // Bean intermediate: instantiate via public no-arg ctor only when the type is plausibly a
+    // user-domain bean (excludes String/Number/Boolean/etc. that have public no-arg ctors we don't
+    // want to materialise as defaults). Telescope-row writes go through the bean's setters at each
+    // hop, so each intermediate just needs to be non-null; the setters overwrite the
+    // default-initialised fields. If the type is not bean-allocatable, return null — same
+    // behaviour as before bean-intermediate support, so the records path is unchanged.
+    if (beanIntermediateAllocatable(type)) {
+      try {
+        return type.getDeclaredConstructor().newInstance();
+      } catch (
+        final NoSuchMethodException
+        | InstantiationException
+        | IllegalAccessException
+        | InvocationTargetException ignored
+      ) {
+        // fall through to null
+      }
     }
     return null;
   }
@@ -1106,12 +1129,27 @@ public final class DeepMap {
     final boolean claimedByTelescopeWrite
   ) {
     if (fieldType == null) return NULLING_ISO;
-    if (claimedByTelescopeWrite && fieldType.isRecord()) return defaultAllocatorIso(fieldType);
+    if (claimedByTelescopeWrite && (fieldType.isRecord() || beanIntermediateAllocatable(fieldType))) {
+      return defaultAllocatorIso(fieldType);
+    }
     if (fieldType.isPrimitive()) {
       final var value = primitiveDefault(fieldType);
       return Iso.of(_ -> value, _ -> value);
     }
     return NULLING_ISO;
+  }
+
+  // True when the bean has a usable public no-arg constructor — the strategy {@link
+  // #recursiveDefault} uses for bean intermediates. Anything else stays on the legacy nulling path.
+  private static boolean beanIntermediateAllocatable(final Class<?> type) {
+    if (type.isPrimitive() || type.isInterface() || type.isArray()) return false;
+    if (type == String.class || Number.class.isAssignableFrom(type) || type == Boolean.class) return false;
+    try {
+      final var ctor = type.getDeclaredConstructor();
+      return Modifier.isPublic(ctor.getModifiers());
+    } catch (final NoSuchMethodException e) {
+      return false;
+    }
   }
 
   /**
