@@ -73,8 +73,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Set<TypePair> seen = new HashSet<>();
     final Set<TypePair> userDeclared = new HashSet<>();
     for (final var element : roundEnv.getElementsAnnotatedWith(anno)) {
-      if (element.getKind() != ElementKind.RECORD && element.getKind() != ElementKind.CLASS) {
-        error(element, "@Bridge is only supported on records and classes");
+      final var kind = element.getKind();
+      final var isSealedInterface = kind == ElementKind.INTERFACE && element.getModifiers().contains(Modifier.SEALED);
+      if (kind != ElementKind.RECORD && kind != ElementKind.CLASS && !isSealedInterface) {
+        error(element, "@Bridge is only supported on records, classes, or sealed interfaces");
         continue;
       }
       if (element.getEnclosingElement().getKind() != ElementKind.PACKAGE) {
@@ -83,7 +85,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       final var target = targetType(element);
       if (target == null || target.getKind() != TypeKind.DECLARED) {
-        error(element, "@Bridge value must be a class or record type");
+        error(element, "@Bridge value must be a class, record, or sealed-interface type");
         continue;
       }
       final var targetEl = (TypeElement) ((DeclaredType) target).asElement();
@@ -118,6 +120,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Set<TypePair> seen,
     final Set<TypePair> userDeclared
   ) {
+    if (source.getKind() == ElementKind.INTERFACE) {
+      generateSealed(source, target, pending, seen, userDeclared);
+      return;
+    }
     final var pkg = processingEnv.getElementUtils().getPackageOf(source).getQualifiedName().toString();
     final var sourceFq = source.getQualifiedName().toString();
     final var targetFq = target.getQualifiedName().toString();
@@ -192,6 +198,154 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         emitContainerHelpers(out, fieldPlans, sourceFields, targetFields);
       }
     );
+  }
+
+  // Sealed-source bridge: dispatch on the permits clause and delegate each case to the per-case
+  // bridge that the user already declared with @Bridge on the subtype. The emitted forward/backward
+  // are pattern-match switches over the sealed permits; no field walking, no rebuild — just one
+  // dispatch arm per case. Requires every permit case to be @Bridge-annotated and its target to be
+  // a permit of the sealed target.
+  private void generateSealed(
+    final TypeElement source,
+    final TypeElement target,
+    final Deque<TypePair> pending,
+    final Set<TypePair> seen,
+    final Set<TypePair> userDeclared
+  ) {
+    if (target.getKind() != ElementKind.INTERFACE || !target.getModifiers().contains(Modifier.SEALED)) {
+      error(
+        source,
+        "@Bridge on a sealed interface requires the target to also be a sealed interface; " +
+          target.getQualifiedName() +
+          " is not."
+      );
+      return;
+    }
+    final var sourcePermits = source.getPermittedSubclasses();
+    if (sourcePermits.isEmpty()) {
+      error(source, "@Bridge on a sealed interface requires an explicit permits clause.");
+      return;
+    }
+    final var targetPermitsFq = new HashSet<String>();
+    for (final var tp : target.getPermittedSubclasses()) {
+      if (tp.getKind() == TypeKind.DECLARED) {
+        targetPermitsFq.add(((TypeElement) ((DeclaredType) tp).asElement()).getQualifiedName().toString());
+      }
+    }
+
+    record CaseEntry(TypeElement sourceCase, TypeElement targetCase, String bridgeFq) {}
+    final List<CaseEntry> entries = new ArrayList<>();
+    for (final var sp : sourcePermits) {
+      if (sp.getKind() != TypeKind.DECLARED) continue;
+      final var sourceCaseEl = (TypeElement) ((DeclaredType) sp).asElement();
+      final var caseTarget = targetType(sourceCaseEl);
+      if (caseTarget == null || caseTarget.getKind() != TypeKind.DECLARED) {
+        error(
+          source,
+          "Subtype " +
+            sourceCaseEl.getSimpleName() +
+            " of @Bridge sealed " +
+            source.getSimpleName() +
+            " must itself be @Bridge-annotated."
+        );
+        return;
+      }
+      final var targetCaseEl = (TypeElement) ((DeclaredType) caseTarget).asElement();
+      final var targetCaseFq = targetCaseEl.getQualifiedName().toString();
+      if (!targetPermitsFq.contains(targetCaseFq)) {
+        error(
+          source,
+          "Subtype " +
+            sourceCaseEl.getSimpleName() +
+            "'s @Bridge target " +
+            targetCaseFq +
+            " is not a permits of sealed target " +
+            target.getQualifiedName() +
+            "."
+        );
+        return;
+      }
+      final var caseBridgeSimple = bridgeClassName(sourceCaseEl, targetCaseEl, true);
+      final var caseSourcePkg = processingEnv
+        .getElementUtils()
+        .getPackageOf(sourceCaseEl)
+        .getQualifiedName()
+        .toString();
+      final var caseBridgeFq = caseSourcePkg.isEmpty() ? caseBridgeSimple : caseSourcePkg + "." + caseBridgeSimple;
+      entries.add(new CaseEntry(sourceCaseEl, targetCaseEl, caseBridgeFq));
+      // Defensively enqueue the per-case pair too — if the user @Bridge'd it (required), it's
+      // already in the queue; this is idempotent via `seen`.
+      final var casePair = new TypePair(sourceCaseEl.getQualifiedName().toString(), targetCaseFq);
+      if (seen.add(casePair)) pending.add(casePair);
+    }
+
+    final var pkg = processingEnv.getElementUtils().getPackageOf(source).getQualifiedName().toString();
+    final var sourceFq = source.getQualifiedName().toString();
+    final var targetFq = target.getQualifiedName().toString();
+    final var thisPair = new TypePair(sourceFq, targetFq);
+    final var bridgeName = bridgeClassName(source, target, userDeclared.contains(thisPair));
+    final var qualifiedBridge = pkg.isEmpty() ? bridgeName : pkg + "." + bridgeName;
+
+    writeClass(
+      qualifiedBridge,
+      bridgeName,
+      Set.of("io.github.eschizoid.telescope.conversion.BridgeFn"),
+      "Generated by telescope-codegen for @Bridge sealed " + source.getSimpleName() + ".",
+      source,
+      out -> {
+        out.println("  public static " + targetFq + " forward(final " + sourceFq + " s) {");
+        out.println("    return switch (s) {");
+        for (final var e : entries) {
+          final var v = camelLower(e.sourceCase().getSimpleName().toString());
+          out.println(
+            "      case " + e.sourceCase().getQualifiedName() + " " + v + " -> " + e.bridgeFq() + ".forward(" + v + ");"
+          );
+        }
+        out.println("    };");
+        out.println("  }");
+        out.println();
+        out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
+        out.println("    return switch (t) {");
+        for (final var e : entries) {
+          final var v = camelLower(e.targetCase().getSimpleName().toString());
+          out.println(
+            "      case " +
+              e.targetCase().getQualifiedName() +
+              " " +
+              v +
+              " -> " +
+              e.bridgeFq() +
+              ".backward(" +
+              v +
+              ");"
+          );
+        }
+        out.println("    };");
+        out.println("  }");
+        out.println();
+        out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
+        out.println("  private static final class Fn implements BridgeFn<" + sourceFq + ", " + targetFq + "> {");
+        out.println("    @Override");
+        out.println("    public " + targetFq + " forward(final " + sourceFq + " s) {");
+        out.println("      return " + bridgeName + ".forward(s);");
+        out.println("    }");
+        out.println();
+        out.println("    @Override");
+        out.println("    public " + sourceFq + " backward(final " + targetFq + " t) {");
+        out.println("      return " + bridgeName + ".backward(t);");
+        out.println("    }");
+        out.println("  }");
+        out.println();
+        out.println(
+          "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(new Fn());"
+        );
+      }
+    );
+  }
+
+  private static String camelLower(final String simpleName) {
+    if (simpleName.isEmpty()) return simpleName;
+    return Character.toLowerCase(simpleName.charAt(0)) + simpleName.substring(1);
   }
 
   /**

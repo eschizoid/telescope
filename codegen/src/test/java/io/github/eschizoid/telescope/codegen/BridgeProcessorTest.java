@@ -581,8 +581,8 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "an enum @Bridge should fail");
       assertTrue(
-        compilation.hasError("@Bridge is only supported on records and classes"),
-        () -> "expected records-and-classes diagnostic; saw " + compilation.errorMessages()
+        compilation.hasError("@Bridge is only supported on records, classes, or sealed interfaces"),
+        () -> "expected records/classes/sealed-interfaces diagnostic; saw " + compilation.errorMessages()
       );
     }
 
@@ -670,6 +670,250 @@ class BridgeProcessorTest {
       assertTrue(
         compilation.hasError("no usable construction strategy"),
         () -> "expected no-strategy diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("Sealed roots — pattern-match dispatch over per-case bridges")
+  class SealedRoots {
+
+    @Test
+    @DisplayName("sealed interface ↔ sealed interface emits a switch over permits that delegates to per-case bridges")
+    void sealedToSealed() {
+      final var compilation = compile(
+        source(
+          "demo.payment.Payment",
+          """
+          package demo.payment;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import demo.bean.PaymentEntity;
+          @Bridge(PaymentEntity.class)
+          public sealed interface Payment permits CreditCard, PayPal {}
+          """
+        ),
+        source(
+          "demo.payment.CreditCard",
+          """
+          package demo.payment;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import demo.bean.CreditCardEntity;
+          @Bridge(CreditCardEntity.class)
+          public record CreditCard(String number, String holder) implements Payment {}
+          """
+        ),
+        source(
+          "demo.payment.PayPal",
+          """
+          package demo.payment;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import demo.bean.PayPalEntity;
+          @Bridge(PayPalEntity.class)
+          public record PayPal(String email, String token) implements Payment {}
+          """
+        ),
+        source(
+          "demo.bean.PaymentEntity",
+          """
+          package demo.bean;
+          public sealed interface PaymentEntity permits CreditCardEntity, PayPalEntity {}
+          """
+        ),
+        source(
+          "demo.bean.CreditCardEntity",
+          """
+          package demo.bean;
+          public final class CreditCardEntity implements PaymentEntity {
+            private String number; private String holder;
+            public CreditCardEntity() {}
+            public String getNumber() { return number; }
+            public void setNumber(String n) { this.number = n; }
+            public String getHolder() { return holder; }
+            public void setHolder(String h) { this.holder = h; }
+          }
+          """
+        ),
+        source(
+          "demo.bean.PayPalEntity",
+          """
+          package demo.bean;
+          public final class PayPalEntity implements PaymentEntity {
+            private String email; private String token;
+            public PayPalEntity() {}
+            public String getEmail() { return email; }
+            public void setEmail(String e) { this.email = e; }
+            public String getToken() { return token; }
+            public void setToken(String t) { this.token = t; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+
+      final var sealedBridge = compilation.generated().get("demo.payment.PaymentBridge");
+      assertNotNull(sealedBridge, () -> "PaymentBridge not generated; saw " + compilation.generated().keySet());
+      // Forward switch fans out to per-case bridges.
+      assertTrue(
+        sealedBridge.contains("case demo.payment.CreditCard creditCard -> demo.payment.CreditCardBridge.forward("),
+        sealedBridge
+      );
+      assertTrue(
+        sealedBridge.contains("case demo.payment.PayPal payPal -> demo.payment.PayPalBridge.forward("),
+        sealedBridge
+      );
+      // Backward switch dispatches on the bean side's permits.
+      assertTrue(
+        sealedBridge.contains(
+          "case demo.bean.CreditCardEntity creditCardEntity -> demo.payment.CreditCardBridge.backward("
+        ),
+        sealedBridge
+      );
+      assertTrue(
+        sealedBridge.contains("case demo.bean.PayPalEntity payPalEntity -> demo.payment.PayPalBridge.backward("),
+        sealedBridge
+      );
+      // The umbrella BRIDGE constant exposes the composed Telescope at the sealed-root level.
+      assertTrue(
+        sealedBridge.contains(
+          "public static final Telescope<demo.payment.Payment, demo.bean.PaymentEntity> BRIDGE = Telescope.bridge(new Fn());"
+        ),
+        sealedBridge
+      );
+
+      // Per-case bridges should also be emitted (drive by their own @Bridge annotations).
+      assertNotNull(compilation.generated().get("demo.payment.CreditCardBridge"), "CreditCardBridge missing");
+      assertNotNull(compilation.generated().get("demo.payment.PayPalBridge"), "PayPalBridge missing");
+    }
+
+    @Test
+    @DisplayName("sealed source with non-sealed target is an error")
+    void nonSealedTargetIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.B.class)
+          public sealed interface A permits Aa {}
+          """
+        ),
+        source(
+          "demo.Aa",
+          """
+          package demo;
+          public record Aa(String x) implements A {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String x) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "sealed-source + non-sealed-target should fail");
+      assertTrue(
+        compilation.hasError("requires the target to also be a sealed interface"),
+        () -> "expected sealed-target diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("permit case missing @Bridge is an error")
+    void caseMissingBridgeIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.B.class)
+          public sealed interface A permits Aa {}
+          """
+        ),
+        source(
+          "demo.Aa",
+          """
+          package demo;
+          public record Aa(String x) implements A {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public sealed interface B permits Bb {}
+          """
+        ),
+        source(
+          "demo.Bb",
+          """
+          package demo;
+          public record Bb(String x) implements B {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "missing per-case @Bridge should fail");
+      assertTrue(
+        compilation.hasError("must itself be @Bridge-annotated"),
+        () -> "expected per-case-required diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("permit case's @Bridge target is not a permit of the sealed target — error")
+    void caseTargetNotInPermitsIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.B.class)
+          public sealed interface A permits Aa {}
+          """
+        ),
+        source(
+          "demo.Aa",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.Stranger.class)
+          public record Aa(String x) implements A {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public sealed interface B permits Bb {}
+          """
+        ),
+        source(
+          "demo.Bb",
+          """
+          package demo;
+          public record Bb(String x) implements B {}
+          """
+        ),
+        source(
+          "demo.Stranger",
+          """
+          package demo;
+          public record Stranger(String x) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "off-permits target should fail");
+      assertTrue(
+        compilation.hasError("is not a permits of sealed target"),
+        () -> "expected off-permits diagnostic; saw " + compilation.errorMessages()
       );
     }
   }

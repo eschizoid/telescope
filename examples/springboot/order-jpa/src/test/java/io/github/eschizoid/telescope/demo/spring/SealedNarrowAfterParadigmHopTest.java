@@ -5,9 +5,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.demo.spring.domain.Order;
 import io.github.eschizoid.telescope.demo.spring.domain.payment.CreditCard;
+import io.github.eschizoid.telescope.demo.spring.domain.payment.PaymentBridge;
 import io.github.eschizoid.telescope.demo.spring.legacy.CreditCardEntity;
 import io.github.eschizoid.telescope.demo.spring.legacy.PayPalEntity;
-import io.github.eschizoid.telescope.demo.spring.mapping.PaymentMappers;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
  * <pre>{@code
  * Telescope.of(Order.class)                  // record-side entry
  *     .field(Order::payment)                  // Telescope<Order, Payment>
- *     .then(PaymentMappers.paymentBridge())   // Telescope<Order, PaymentEntity> — paradigm hop
+ *     .then(PaymentBridge.BRIDGE)             // Telescope<Order, PaymentEntity> — paradigm hop
  *     .as(CreditCardEntity.class)             // narrow on the BEAN side via Prism.downcast
  *     .field(CreditCardEntity::getCardNumber) // bean getter — bean-side field-optics dispatch
  * }</pre>
@@ -38,7 +38,7 @@ class SealedNarrowAfterParadigmHopTest {
   void readThroughChainReturnsBeanProperty() {
     final Telescope<Order, String> chain = Telescope.of(Order.class)
       .field(Order::payment)
-      .then(PaymentMappers.paymentBridge())
+      .then(PaymentBridge.BRIDGE)
       .as(CreditCardEntity.class)
       .field(CreditCardEntity::getCardNumber);
 
@@ -50,7 +50,7 @@ class SealedNarrowAfterParadigmHopTest {
   void updateThroughChainRewritesViaBridge() {
     final Telescope<Order, String> chain = Telescope.of(Order.class)
       .field(Order::payment)
-      .then(PaymentMappers.paymentBridge())
+      .then(PaymentBridge.BRIDGE)
       .as(CreditCardEntity.class)
       .field(CreditCardEntity::getCardNumber);
 
@@ -66,7 +66,7 @@ class SealedNarrowAfterParadigmHopTest {
   void narrowSkipOnMismatch() {
     final var chain = Telescope.of(Order.class)
       .field(Order::payment)
-      .then(PaymentMappers.paymentBridge())
+      .then(PaymentBridge.BRIDGE)
       .as(PayPalEntity.class)
       .field(PayPalEntity::getEmail);
 
