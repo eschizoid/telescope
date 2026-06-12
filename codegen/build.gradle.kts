@@ -6,7 +6,7 @@ plugins {
     jacoco
 }
 
-description = "telescope-codegen — @Focus annotation processor that emits *Focus Lens-constant companions"
+description = "telescope-codegen — @Focus / @BeanFocus / @Bridge annotation processors that emit typed <X>Telescope navigators for reflection-free deep navigation"
 
 base {
     archivesName = "telescope-codegen"
@@ -69,7 +69,7 @@ publishing {
 
             pom {
                 name.set("telescope-codegen")
-                description.set("@Focus annotation processor for telescope.")
+                description.set("Compile-time codegen for telescope — @Focus / @BeanFocus / @Bridge annotation processors that emit typed <X>Telescope navigators for reflection-free deep navigation.")
                 url.set("https://github.com/eschizoid/telescope")
                 inceptionYear.set("2025")
 
