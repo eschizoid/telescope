@@ -114,4 +114,25 @@ class MatchTest {
       assertTrue(ex.getMessage().contains("BankTransfer"));
     }
   }
+
+  @Nested
+  @DisplayName("guards — sharpened from PR-89 review")
+  class SharpenedGuards {
+
+    @Test
+    @DisplayName("exhaustive() missing-permit error lists names in source-declaration order (deterministic)")
+    void missingPermitOrderingDeterministic() {
+      // Payment permits CreditCard, BankTransfer, Crypto — register only CreditCard so two are
+      // missing. Ordering must follow Payment.getPermittedSubclasses() (BankTransfer, then Crypto)
+      // not the hash-bucketed Set.of iteration.
+      final var ex = assertThrows(IllegalStateException.class, () ->
+        Match.<Payment, String>of(Payment.class).when(CreditCard.class, c -> "c").exhaustive()
+      );
+      final var msg = ex.getMessage();
+      assertTrue(msg.contains("BankTransfer"));
+      assertTrue(msg.contains("Crypto"));
+      // Source-declaration order: BankTransfer appears before Crypto in the message.
+      assertTrue(msg.indexOf("BankTransfer") < msg.indexOf("Crypto"), () -> "expected source order, got: " + msg);
+    }
+  }
 }

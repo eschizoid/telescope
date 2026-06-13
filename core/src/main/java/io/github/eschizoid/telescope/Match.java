@@ -2,7 +2,6 @@ package io.github.eschizoid.telescope;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.Function;
 
 /**
@@ -93,10 +92,12 @@ public final class Match<P, R> {
    */
   public Function<P, R> exhaustive() {
     final var permits = sealedRoot.getPermittedSubclasses();
-    final var permitSet = Set.of(permits);
     final var registered = handlers.keySet();
+    // Walk `permits` directly (source-declaration order from the JVM), not Set.of(permits) — the
+    // HashSet iteration order would be non-deterministic across JVM runs, leading to differently-
+    // ordered error messages on each invocation.
     final var missing = new java.util.ArrayList<String>();
-    for (final var permit : permitSet) {
+    for (final var permit : permits) {
       if (!registered.contains(permit)) missing.add(permit.getSimpleName());
     }
     if (!missing.isEmpty()) throw new IllegalStateException(
