@@ -753,28 +753,31 @@ class BridgeProcessorTest {
 
       final var sealedBridge = compilation.generated().get("demo.payment.PaymentBridge");
       assertNotNull(sealedBridge, () -> "PaymentBridge not generated; saw " + compilation.generated().keySet());
-      // Forward fans out to per-case bridges via instanceof chain (Java 17 source level).
+      // Forward fans out to per-case bridges via a static Match dispatcher routed through the
+      // internal lattice's Prism substrate. Exhaustiveness is verified at class-load by
+      // .exhaustive() reading getPermittedSubclasses().
       assertTrue(
-        sealedBridge.contains(
-          "if (s instanceof demo.payment.CreditCard creditCard) return demo.payment.CreditCardBridge.forward("
-        ),
+        sealedBridge.contains(".when(demo.payment.CreditCard.class, demo.payment.CreditCardBridge::forward)"),
         sealedBridge
       );
       assertTrue(
-        sealedBridge.contains("if (s instanceof demo.payment.PayPal payPal) return demo.payment.PayPalBridge.forward("),
+        sealedBridge.contains(".when(demo.payment.PayPal.class, demo.payment.PayPalBridge::forward)"),
         sealedBridge
       );
-      // Backward dispatches on the bean side's permits.
+      // Backward dispatches on the bean side's permits via the same Match shape.
       assertTrue(
-        sealedBridge.contains(
-          "if (t instanceof demo.bean.CreditCardEntity creditCardEntity) return demo.payment.CreditCardBridge.backward("
-        ),
+        sealedBridge.contains(".when(demo.bean.CreditCardEntity.class, demo.payment.CreditCardBridge::backward)"),
         sealedBridge
       );
       assertTrue(
-        sealedBridge.contains(
-          "if (t instanceof demo.bean.PayPalEntity payPalEntity) return demo.payment.PayPalBridge.backward("
-        ),
+        sealedBridge.contains(".when(demo.bean.PayPalEntity.class, demo.payment.PayPalBridge::backward)"),
+        sealedBridge
+      );
+      // .exhaustive() terminal verifies the sealed-permits coverage at class-init time.
+      assertTrue(sealedBridge.contains(".exhaustive();"), sealedBridge);
+      // The Function<S, T> static fields are what the forward/backward methods delegate to.
+      assertTrue(
+        sealedBridge.contains("private static final Function<demo.payment.Payment, demo.bean.PaymentEntity> FORWARD ="),
         sealedBridge
       );
       // The umbrella BRIDGE constant exposes the composed Telescope at the sealed-root level.
