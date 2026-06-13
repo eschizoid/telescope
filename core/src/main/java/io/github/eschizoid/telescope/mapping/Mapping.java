@@ -154,7 +154,10 @@ public sealed interface Mapping<A, B>
     final Predicate<? super X> missing
   ) {
     Objects.requireNonNull(missing, "Mapping.toOrElse: missing predicate is null");
-    return new TypedTransformTo<>(src, tgt, x -> missing.test(x) ? defaultValue : x, y -> y);
+    // Null-short-circuit BEFORE the predicate fires so predicates like String::isBlank /
+    // List::isEmpty don't NPE on a null source value. Matches the 3-arg toOrElse's strict-null
+    // semantics for the leading-null case.
+    return new TypedTransformTo<>(src, tgt, x -> x == null || missing.test(x) ? defaultValue : x, y -> y);
   }
 
   /**
@@ -196,7 +199,9 @@ public sealed interface Mapping<A, B>
     final Predicate<? super X> missing
   ) {
     Objects.requireNonNull(missing, "Mapping.toOrElseGet: missing predicate is null");
-    return new TypedTransformTo<>(src, tgt, x -> missing.test(x) ? supplier.get() : x, y -> y);
+    // Null-short-circuit BEFORE the predicate fires — see the parallel toOrElse overload for the
+    // rationale (String::isBlank / List::isEmpty would NPE on null).
+    return new TypedTransformTo<>(src, tgt, x -> x == null || missing.test(x) ? supplier.get() : x, y -> y);
   }
 
   /**

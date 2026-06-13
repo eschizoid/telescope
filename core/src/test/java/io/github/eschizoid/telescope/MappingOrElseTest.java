@@ -141,11 +141,31 @@ class MappingOrElseTest {
       assertEquals("GENERATED", mapper.forward(new Src("", 1)).region());
       assertEquals(1, calls.get());
 
-      // null → predicate's `null.isBlank()` would NPE; supplier still gates on the predicate
-      // (User responsibility to pick a predicate that handles null appropriately — here we test
-      // the non-null-non-blank path stays clean.)
+      // non-blank, non-null → predicate is false, supplier is NOT invoked
       assertEquals("US", mapper.forward(new Src("US", 1)).region());
       assertEquals(1, calls.get(), "supplier NOT invoked when predicate is false");
+
+      // null → null-short-circuit BEFORE the predicate, so `String::isBlank` doesn't NPE on null.
+      // Supplier fires; result is the supplier's value.
+      assertEquals("GENERATED", mapper.forward(new Src(null, 1)).region());
+      assertEquals(2, calls.get(), "supplier invoked on null source via null-short-circuit");
+    }
+
+    @Test
+    @DisplayName("predicate-gated toOrElse(value, predicate) null-short-circuits before the predicate")
+    void valueDefaultNullSafe() {
+      final var mapper = Telescope.mapper(
+        Src.class,
+        Dst.class,
+        toOrElse(Src::region, Dst::region, "FALLBACK", String::isBlank)
+      );
+
+      // null → null-short-circuit, predicate not called, default lands on target
+      assertEquals("FALLBACK", mapper.forward(new Src(null, 1)).region());
+      // blank → predicate true, default lands
+      assertEquals("FALLBACK", mapper.forward(new Src("   ", 1)).region());
+      // non-blank → predicate false, source passes through
+      assertEquals("UK", mapper.forward(new Src("UK", 1)).region());
     }
   }
 }
