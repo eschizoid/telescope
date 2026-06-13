@@ -440,8 +440,14 @@ public final class Beans {
   }
 
   private static <P> BeanWriter<P> computeAutoWriter(final Class<P> cls) {
+    // SETTERS first when the target supports it (no-arg ctor + any setter): the Lombok @Data shape
+    // is overwhelmingly the common case in real codebases, and a publicly exposed setter is the
+    // user-expected write path. A static builder() takes over when SETTERS isn't applicable
+    // (immutable @Builder-only targets), and field injection backs both up for no-arg-ctor targets
+    // without setters.
+    if (hasNoArgConstructor(cls) && hasAnySetter(cls)) return settersWriter(cls);
     if (hasStaticBuilder(cls)) return builderWriter(cls);
-    if (hasNoArgConstructor(cls)) return hasAnySetter(cls) ? settersWriter(cls) : fieldsWriter(cls);
+    if (hasNoArgConstructor(cls)) return fieldsWriter(cls);
     final var props = propertyNames(cls);
     final var sole = solePublicConstructor(cls, props.length);
     // Refuse to silently use positional fallback: getter-iteration order is not guaranteed to match
