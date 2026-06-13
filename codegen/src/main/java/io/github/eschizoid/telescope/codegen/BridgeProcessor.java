@@ -82,11 +82,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // read in generate().
   private final Map<TypePair, Set<String>> dropsByPair = new HashMap<>();
 
-  // Per-pair renames: source field name -> target field name for fields whose two sides have
-  // different names. The bijection check applies renames on the source side before comparing
-  // to target names; planFields and the field-read expressions follow the mapping. Populated in
+  // Per-pair renames: source field name -> primary target field name for fields whose two sides
+  // have different names. The bijection check applies renames on the source side before comparing
+  // to target names; planFields and the field-read expressions follow the mapping. For forward-only
+  // fan-out (one source feeding multiple targets), this map holds the FIRST-declared target — that's
+  // the one backward reads from. Extra fan-out targets live in renameFanoutsByPair. Populated in
   // process(), read in generate().
   private final Map<TypePair, Map<String, String>> renamesByPair = new HashMap<>();
+
+  // Per-pair forward-only fan-out extras: source field name -> ordered list of EXTRA target field
+  // names beyond the primary in renamesByPair. Only present when @Rename(forwardOnly = true) is used
+  // on two or more renames sharing a source. Forward writes the source value to every target
+  // (primary + extras); backward reads only the primary. Populated in process(), read in generate().
+  private final Map<TypePair, Map<String, List<String>>> renameFanoutsByPair = new HashMap<>();
 
   // Per-pair per-field transforms: source field name -> BridgeFn class FQN. The transformed field
   // is
@@ -112,6 +120,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     multiTargetSources.clear();
     dropsByPair.clear();
     renamesByPair.clear();
+    renameFanoutsByPair.clear();
     transformsByPair.clear();
     constantsByPair.clear();
     computesByPair.clear();
@@ -157,9 +166,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         userDeclared.add(pair);
         final var drops = dropsFromMirror(bridgeAm);
         if (!drops.isEmpty()) dropsByPair.put(pair, drops);
-        final var renames = renamesFromMirror(element, bridgeAm);
-        if (renames == null) continue; // invalid rename — error already reported, skip this pair
-        if (!renames.isEmpty()) renamesByPair.put(pair, renames);
+        final var renameSet = renamesFromMirror(element, bridgeAm);
+        if (renameSet == null) continue; // invalid rename — error already reported, skip this pair
+        if (!renameSet.bySource().isEmpty()) renamesByPair.put(pair, renameSet.bySource());
+        if (!renameSet.fanoutExtras().isEmpty()) renameFanoutsByPair.put(pair, renameSet.fanoutExtras());
         final var transforms = transformsFromMirror(element, bridgeAm);
         if (transforms == null) continue; // invalid transform — already reported, skip this pair
         if (!transforms.isEmpty()) transformsByPair.put(pair, transforms);
@@ -226,42 +236,70 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return Set.of();
   }
 
+  // Result of parsing a @Bridge's renames list. `bySource` holds the first-declared target per
+  // source (the slot that backward direction reads from). `fanoutExtras` holds the extra targets
+  // declared via @Rename(forwardOnly = true) sharing the same source — those targets receive the
+  // same source value during forward emission but are invisible to backward. Empty fanoutExtras
+  // means no fan-out was declared.
+  private record RenameSet(Map<String, String> bySource, Map<String, List<String>> fanoutExtras) {
+    static RenameSet empty() {
+      return new RenameSet(Map.of(), Map.of());
+    }
+  }
+
   // Read renames from a @Bridge mirror. Returns null when a rename is malformed (already reported
-  // via error()) so the caller can skip the pair; returns an empty map when no renames are present.
-  private Map<String, String> renamesFromMirror(final Element element, final AnnotationMirror am) {
+  // via error()) so the caller can skip the pair; returns an empty RenameSet when no renames are
+  // present. Forward-only fan-out: when two renames share a source and BOTH set forwardOnly = true,
+  // the second target lands in fanoutExtras. A source-collision with any rename not flagged
+  // forwardOnly is still an error — the user must opt in on every conflicting entry.
+  private RenameSet renamesFromMirror(final Element element, final AnnotationMirror am) {
     for (final var entry : am.getElementValues().entrySet()) {
       if (!entry.getKey().getSimpleName().contentEquals("renames")) continue;
       @SuppressWarnings("unchecked")
       final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
-      final var result = new LinkedHashMap<String, String>();
-      final var seenSources = new HashSet<String>();
+      final var primary = new LinkedHashMap<String, String>();
+      final var fanoutExtras = new LinkedHashMap<String, List<String>>();
       final var seenTargets = new HashSet<String>();
+      final var sourceForwardOnly = new HashMap<String, Boolean>();
       for (final var av : list) {
         final var renameAm = (AnnotationMirror) av.getValue();
         String src = null;
         String tgt = null;
+        Boolean forwardOnly = Boolean.FALSE;
         for (final var re : renameAm.getElementValues().entrySet()) {
           final var k = re.getKey().getSimpleName().toString();
           if (k.equals("source")) src = (String) re.getValue().getValue();
           else if (k.equals("target")) tgt = (String) re.getValue().getValue();
+          else if (k.equals("forwardOnly")) forwardOnly = (Boolean) re.getValue().getValue();
         }
         if (src == null || tgt == null || src.isEmpty() || tgt.isEmpty()) {
           error(element, "@Rename requires both `source` and `target` field names");
-          return null;
-        }
-        if (!seenSources.add(src)) {
-          error(element, "@Rename source \"" + src + "\" appears twice in the renames list");
           return null;
         }
         if (!seenTargets.add(tgt)) {
           error(element, "@Rename target \"" + tgt + "\" appears twice in the renames list");
           return null;
         }
-        result.put(src, tgt);
+        if (primary.containsKey(src)) {
+          if (!Boolean.TRUE.equals(forwardOnly) || !Boolean.TRUE.equals(sourceForwardOnly.get(src))) {
+            error(
+              element,
+              "@Rename source \"" +
+                src +
+                "\" appears twice in the renames list — set forwardOnly = true on every conflicting" +
+                " entry to opt into forward-only fan-out"
+            );
+            return null;
+          }
+          fanoutExtras.computeIfAbsent(src, __ -> new ArrayList<>()).add(tgt);
+        } else {
+          primary.put(src, tgt);
+          sourceForwardOnly.put(src, forwardOnly);
+        }
       }
-      return result;
+      return new RenameSet(primary, fanoutExtras);
     }
-    return Map.of();
+    return RenameSet.empty();
   }
 
   // Read transforms from a @Bridge mirror. Returns null on a malformed transform (already reported)
@@ -573,6 +611,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var targetFields = fieldsOf(target);
     final var drops = dropsByPair.getOrDefault(thisPair, Set.of());
     final var renames = renamesByPair.getOrDefault(thisPair, Map.of());
+    final var renameFanouts = renameFanoutsByPair.getOrDefault(thisPair, Map.of());
     final var transforms = transformsByPair.getOrDefault(thisPair, Map.of());
     final var rawConstants = constantsByPair.getOrDefault(thisPair, Map.of());
     final var computes = computesByPair.getOrDefault(thisPair, Map.of());
@@ -646,14 +685,65 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return;
       }
     }
+    // Validate forward-only fan-out extras: every extra target must exist on the target side, each
+    // extra target's type must match the primary target's type (forward writes one source value into
+    // every target slot — they must be assignment-compatible), and the extra target can't double up
+    // with a constant/compute injection. seenTargets across the whole rename set is already enforced
+    // upstream in renamesFromMirror; this loop adds the source-side existence + type checks.
+    for (final var fanout : renameFanouts.entrySet()) {
+      final var srcName = fanout.getKey();
+      final var primaryTgt = renames.get(srcName);
+      final var primaryType = fieldByName(targetFields, primaryTgt).type();
+      for (final var extraTgt : fanout.getValue()) {
+        if (!targetNames.contains(extraTgt)) {
+          error(
+            source,
+            "@Bridge renames target=\"" +
+              extraTgt +
+              "\" (forwardOnly fan-out from \"" +
+              srcName +
+              "\") is not a field of " +
+              target.getSimpleName() +
+              " — known fields: " +
+              targetNames
+          );
+          return;
+        }
+        final var extraType = fieldByName(targetFields, extraTgt).type();
+        if (!isSameType(primaryType, extraType)) {
+          error(
+            source,
+            "@Bridge renames source=\"" +
+              srcName +
+              "\" fans out to targets with different types — \"" +
+              primaryTgt +
+              "\" is " +
+              primaryType +
+              ", \"" +
+              extraTgt +
+              "\" is " +
+              extraType +
+              ". Forward-only fan-out writes the same source value into every target; all targets must" +
+              " share the same type."
+          );
+          return;
+        }
+      }
+    }
     final var reverseRenames = new LinkedHashMap<String, String>();
     for (final var e : renames.entrySet()) reverseRenames.put(e.getValue(), e.getKey());
+    // Fan-out extras: every extra target reads from the same source as the primary. Adding them to
+    // reverseRenames lets readForward emit each extra target's read expression off the same source.
+    for (final var fanout : renameFanouts.entrySet()) {
+      for (final var extraTgt : fanout.getValue()) reverseRenames.put(extraTgt, fanout.getKey());
+    }
 
     // Validate constants + computes (forward-only target-side injections). Each named field must
     // exist on the target; a target field may not be injected by more than one mechanism, nor by a
     // mechanism that also reaches that target name through a rename. Parse constant values here so
     // type errors fire alongside the rest of the per-pair validation.
-    final var renameTargetNames = renames.values().stream().collect(Collectors.toSet());
+    final var renameTargetNames = new LinkedHashSet<>(renames.values());
+    for (final var extras : renameFanouts.values()) renameTargetNames.addAll(extras);
     final var injectedTargetFields = new LinkedHashSet<String>();
     final var parsedConstants = new LinkedHashMap<String, String>();
     for (final var e : rawConstants.entrySet()) {
@@ -721,7 +811,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           .stream()
           .filter(f -> !drops.contains(f.name()))
           .toList();
-    if (!sameNames(source, nonDroppedSourceFields, target, targetFields, renames, injectedTargetFields)) return;
+    if (!sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields))
+      return;
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
@@ -1649,12 +1740,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement target,
     final List<Field> targetFields,
     final Map<String, String> renames,
+    final Map<String, List<String>> renameFanouts,
     final Set<String> injectedTargetFields
   ) {
-    final var sn = sourceFields
-      .stream()
-      .map(f -> renames.getOrDefault(f.name(), f.name()))
-      .collect(Collectors.toCollection(TreeSet::new));
+    final var sn = new TreeSet<String>();
+    for (final var f : sourceFields) {
+      sn.add(renames.getOrDefault(f.name(), f.name()));
+      // Forward-only fan-out: every extra target counts as a source-derived name in the bijection,
+      // since forward writes the source value into every fan-out target slot.
+      final var extras = renameFanouts.get(f.name());
+      if (extras != null) sn.addAll(extras);
+    }
     final var tn = targetFields
       .stream()
       .map(Field::name)

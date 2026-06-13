@@ -1575,5 +1575,146 @@ class BridgeProcessorTest {
         () -> "expected duplicate-source diagnostic; saw " + compilation.errorMessages()
       );
     }
+
+    @Test
+    @DisplayName("@Rename(forwardOnly=true) fan-out: one source feeds multiple targets; backward reads primary only")
+    void forwardOnlyFanoutEmitsMultiTargetWrite() {
+      final var compilation = compile(
+        source(
+          "demo.Audit",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(value = demo.AuditEntity.class, renames = {
+            @Rename(source = "businessUnit", target = "cretnUserId",  forwardOnly = true),
+            @Rename(source = "businessUnit", target = "lastUpdtdUserId", forwardOnly = true)
+          })
+          public record Audit(String businessUnit) {}
+          """
+        ),
+        source(
+          "demo.AuditEntity",
+          """
+          package demo;
+          public record AuditEntity(String cretnUserId, String lastUpdtdUserId) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.AuditBridge");
+      assertNotNull(bridge, () -> "AuditBridge missing; saw " + compilation.generated().keySet());
+
+      // Forward: source.businessUnit() flows into BOTH target columns positionally.
+      assertTrue(
+        bridge.contains("new demo.AuditEntity(s.businessUnit(), s.businessUnit())"),
+        () -> "forward must fan source into every target; saw: " + bridge
+      );
+      // Backward: only the FIRST declared fan-out target (cretnUserId) reconstructs the source.
+      assertTrue(
+        bridge.contains("new demo.Audit(t.cretnUserId())"),
+        () -> "backward must read the primary fan-out target only; saw: " + bridge
+      );
+    }
+
+    @Test
+    @DisplayName("@Rename source-collision is still rejected if any conflicting entry omits forwardOnly")
+    void forwardOnlyMustBeSetOnEveryConflictingRename() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(value = demo.B.class, renames = {
+            @Rename(source = "name", target = "a",  forwardOnly = true),
+            @Rename(source = "name", target = "b") // forwardOnly defaults to false — opt-in required
+          })
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String a, String b) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "partial forwardOnly opt-in should fail");
+      assertTrue(
+        compilation.hasError("set forwardOnly = true on every conflicting"),
+        () -> "expected partial-opt-in diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Rename forwardOnly fan-out rejects targets with mismatched types")
+    void forwardOnlyFanoutRejectsTypeMismatch() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(value = demo.B.class, renames = {
+            @Rename(source = "value", target = "asString", forwardOnly = true),
+            @Rename(source = "value", target = "asInt",    forwardOnly = true)
+          })
+          public record A(String value) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String asString, int asInt) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "type-mismatched fan-out should fail");
+      assertTrue(
+        compilation.hasError("fans out to targets with different types"),
+        () -> "expected type-mismatch diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Rename forwardOnly fan-out rejects an extra target that doesn't exist on the target side")
+    void forwardOnlyFanoutRejectsMissingExtraTarget() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(value = demo.B.class, renames = {
+            @Rename(source = "name", target = "a",        forwardOnly = true),
+            @Rename(source = "name", target = "missingX", forwardOnly = true)
+          })
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String a, String b) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "missing extra target should fail");
+      assertTrue(
+        compilation.hasError("target=\"missingX\""),
+        () -> "expected missing-extra-target diagnostic; saw " + compilation.errorMessages()
+      );
+    }
   }
 }
