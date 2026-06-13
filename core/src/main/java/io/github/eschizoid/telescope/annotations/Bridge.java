@@ -188,4 +188,14 @@ public @interface Bridge {
    * }</pre>
    */
   ViaMapper[] viaMappers() default {};
+
+  /**
+   * Override for the POJO construction strategy when emitting the target's rebuild block. Records
+   * always use the canonical constructor and ignore this setting. Default {@link
+   * WriteStrategy#AUTO} runs the priority ladder (name-matched ctor → static builder() → no-arg
+   * + setters); the other values force one specific strategy and surface a precise compile error
+   * when the POJO doesn't expose the required shape. Mirrors the runtime {@code
+   * WriteHint.writeBean(cls, strategy)} hint.
+   */
+  WriteStrategy writeStrategy() default WriteStrategy.AUTO;
 }
