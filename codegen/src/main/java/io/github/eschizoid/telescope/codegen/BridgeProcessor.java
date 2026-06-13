@@ -767,7 +767,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
 
-    // Validate viaMappers fields exist and don't overlap with drops or transforms.
+    // Validate viaMappers fields exist and don't overlap with drops, transforms, renames, or
+    // defaults. VM1 (renames overlap) and VM2 (defaults overlap) from the round-2 review: each
+    // combination produces structurally valid emission with undefined or wrong semantics —
+    // rename-overlap dispatches via the user-named bridge on the renamed-source-name slot;
+    // default-overlap passes a literal-typed value to the bridge expecting the source type. Both
+    // are silent-wrong paths until the user hits the generated-file diagnostic — too late.
     for (final var v : viaMappers.keySet()) {
       if (!sourceFields.stream().anyMatch(f -> f.name().equals(v))) {
         error(
@@ -787,6 +792,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       if (transforms.containsKey(v)) {
         error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and transforms — pick one.");
+        return;
+      }
+      if (renames.containsKey(v)) {
+        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and renames — pick one.");
+        return;
+      }
+      if (rawDefaults.containsKey(v)) {
+        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and defaults — pick one.");
         return;
       }
     }

@@ -1886,6 +1886,88 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("VM1: @ViaMapper + @Rename on the same field rejected at build")
+    void viaMapperAndRenameOnSameFieldRejected() {
+      final var compilation = compile(
+        source(
+          "demo.AddressBridge",
+          """
+          package demo;
+          public final class AddressBridge {
+            public static demo.AddressDto forward(demo.Address a) { return new demo.AddressDto(a.line()); }
+            public static demo.Address backward(demo.AddressDto a) { return new demo.Address(a.line()); }
+          }
+          """
+        ),
+        source("demo.Address", "package demo; public record Address(String line) {}"),
+        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(
+            value = demo.OrderDto.class,
+            renames = { @Rename(source = "address", target = "shipping") },
+            viaMappers = { @ViaMapper(field = "address", using = demo.AddressBridge.class) }
+          )
+          public record Order(String id, demo.Address address) {}
+          """
+        ),
+        source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto shipping) {}")
+      );
+
+      assertFalse(compilation.success(), "viaMappers + renames overlap should fail");
+      assertTrue(
+        compilation.hasError("appears in both viaMappers and renames"),
+        () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("VM2: @ViaMapper + @Default on the same field rejected at build")
+    void viaMapperAndDefaultsOnSameFieldRejected() {
+      final var compilation = compile(
+        source(
+          "demo.AddressBridge",
+          """
+          package demo;
+          public final class AddressBridge {
+            public static demo.AddressDto forward(demo.Address a) { return new demo.AddressDto(a.line()); }
+            public static demo.Address backward(demo.AddressDto a) { return new demo.Address(a.line()); }
+          }
+          """
+        ),
+        source("demo.Address", "package demo; public record Address(String line) {}"),
+        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Default;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(
+            value = demo.OrderDto.class,
+            defaults = { @Default(field = "address", value = "null") },
+            viaMappers = { @ViaMapper(field = "address", using = demo.AddressBridge.class) }
+          )
+          public record Order(String id, demo.Address address) {}
+          """
+        ),
+        source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
+      );
+
+      assertFalse(compilation.success(), "viaMappers + defaults overlap should fail");
+      assertTrue(
+        compilation.hasError("appears in both viaMappers and defaults"),
+        () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
     @DisplayName("@Default on a primitive-typed source field is a compile error")
     void defaultsOnPrimitiveRejected() {
       final var compilation = compile(
