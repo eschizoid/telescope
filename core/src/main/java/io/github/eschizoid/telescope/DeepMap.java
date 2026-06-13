@@ -744,11 +744,12 @@ public final class DeepMap {
     if (row instanceof SameTypedTo<?, ?, ?>) return Iso.identity();
     if (row instanceof TypedTransformTo<?, ?, ?, ?> r) return Iso.of((Function) r.forward(), (Function) r.backward());
     if (row instanceof ForwardOnlyTransformTo<?, ?, ?, ?> r) {
-      // Forward-only row: the backward leg throws at the field site. `Telescope.mapper(...)`
-      // rejects rows of this shape up front and points the user at `Telescope.mapperForward(...)`
-      // (which never invokes the backward leg) — so the throwing backward only fires if a caller
-      // builds a bidirectional Mapper anyway via the cross-package factory and then invokes
-      // backward(...). The throw names the field for self-diagnosis.
+      // DEAD-BRANCH-DEFENSIVE: this throwingBackward lambda is unreachable via the public API.
+      // Both factory entries Telescope.map(...) and Telescope.mapper(...) call rejectForwardOnlyRows
+      // up front; Telescope.mapperForward(...) accepts the row but never invokes the backward leg.
+      // The guard remains so a future cross-package construction path that bypasses rejectForwardOnlyRows
+      // produces a precise field-naming error rather than silent corruption. NOT a coverage target —
+      // see DeepMapDeadBranchNotes for the full reasoning.
       final String fieldName = r.sourceField();
       final Function<Object, Object> throwingBackward = y -> {
         throw new UnsupportedOperationException(
@@ -761,15 +762,14 @@ public final class DeepMap {
       return Iso.of((Function) r.forward(), throwingBackward);
     }
     if (row instanceof Via<?, ?> r) return liftViaIfNeeded(r, srcType, tgtType);
-    // Drop rows never reach this method — populateIso short-circuits on `instanceof Drop` before
-    // calling fieldIsoOf. The check is here only to make the dispatch exhaustive over the sealed
-    // hierarchy; reaching it indicates a routing bug above.
+    // DEAD-BRANCH-DEFENSIVE block (rows below): every permit of the sealed Mapping hierarchy that
+    // is NOT a per-field leaf Iso is filtered out by populateIso BEFORE this method is called. The
+    // checks remain solely as a compile-time exhaustiveness backstop — if a future permit is added
+    // to Mapping and populateIso forgets to short-circuit, the corresponding throw here surfaces
+    // the routing bug with a clear class name. NOT coverage targets — these can only fire when a
+    // routing change in populateIso introduces a regression, at which point the test failure is in
+    // populateIso, not here.
     if (row instanceof Drop<?, ?, ?>) throw new IllegalStateException("Drop row should not reach fieldIsoOf");
-    // Telescope-based rows never reach this method — populateIso short-circuits on each of them
-    // before calling fieldIsoOf. They apply as post-fixups at the outer pair, not as per-field
-    // leaf Isos. The checks are here only to make the dispatch exhaustive over the sealed
-    // hierarchy;
-    // reaching any of them indicates a routing bug above.
     if (row instanceof TelescopeTo<?, ?, ?>) throw new IllegalStateException(
       "TelescopeTo row should not reach fieldIsoOf"
     );
@@ -779,9 +779,6 @@ public final class DeepMap {
     if (row instanceof TelescopeToTelescope<?, ?, ?>) throw new IllegalStateException(
       "TelescopeToTelescope row should not reach fieldIsoOf"
     );
-    // Constant / Compute rows apply as telescope post-fixups, same pattern as TelescopeTo and
-    // friends — they don't contribute a per-field leaf Iso. The checks exist only to keep the
-    // sealed dispatch exhaustive; reaching them indicates a routing bug above.
     if (row instanceof Constant<?, ?, ?>) throw new IllegalStateException("Constant row should not reach fieldIsoOf");
     if (row instanceof Compute<?, ?, ?>) throw new IllegalStateException("Compute row should not reach fieldIsoOf");
     throw new IllegalStateException("unreachable: Mapping is sealed");
