@@ -66,6 +66,10 @@ public @interface Transform {
    * direction for this field, the same way {@code @Bridge(drops = ...)} fills dropped sources on
    * backward. The user's {@code BridgeFn#backward} is never invoked; implementations may stub it
    * or throw. Mirrors the runtime {@code Mapping.forward(srcAcc, tgtAcc, fn)} factory.
+   *
+   * <p>The generated {@code patch(base, partial)} method also skips the backward read for this
+   * slot and preserves {@code base.field()} unchanged — a forward-only transform has no defined
+   * inverse, so there is no way to overlay a partial value back onto the source.
    */
   boolean forwardOnly() default false;
 }
