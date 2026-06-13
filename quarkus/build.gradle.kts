@@ -1,9 +1,25 @@
+import org.jboss.jandex.Indexer
+import org.jboss.jandex.IndexWriter
+
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        // Runs in the build script's classpath so the custom `jandex` task below can call the
+        // smallrye Indexer directly. The kordamp `org.kordamp.gradle.jandex` plugin (2.1.0) is
+        // incompatible with Gradle's configuration cache — it serializes a SourceSet field on the
+        // task, which CC rejects. Replacing the plugin with a one-shot custom task keeps CC happy
+        // and produces a bit-identical META-INF/jandex.idx.
+        classpath("io.smallrye:jandex:3.2.7")
+    }
+}
+
 plugins {
     `java-library`
     `maven-publish`
     signing
     jacoco
-    id("org.kordamp.gradle.jandex") version "2.1.0"
 }
 
 description = "telescope-quarkus — Quarkus CDI extension + Mapper<A,B> bean registry for telescope"
@@ -37,11 +53,48 @@ tasks.withType<Test>().configureEach {
     }
 }
 
+// Custom CC-compatible Jandex indexer. Walks the main compileJava output and writes
+// META-INF/jandex.idx into a generated-resources directory that the runtime jar task injects
+// directly — not wired through the main resources SourceSet, so the sources jar (from
+// `withSourcesJar()`) stays clean. The kordamp plugin replaced here (org.kordamp.gradle.jandex
+// 2.1.0) is incompatible with Gradle's configuration cache; this 30-line replacement is fully
+// CC-compatible and produces the same META-INF/jandex.idx layout in the published jar.
+val jandexOutputDir: Provider<Directory> = layout.buildDirectory.dir("generated/jandex")
+
+val jandex by tasks.registering {
+    description = "Generate META-INF/jandex.idx for the main classes"
+    group = "build"
+
+    val classesDir: Provider<Directory> = layout.buildDirectory.dir("classes/java/main")
+    val indexFile: Provider<RegularFile> = jandexOutputDir.map { it.file("META-INF/jandex.idx") }
+
+    inputs.dir(classesDir).withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.file(indexFile)
+    dependsOn("compileJava")
+
+    doLast {
+        val indexer = Indexer()
+        classesDir.get().asFileTree
+            .matching { include("**/*.class") }
+            .forEach { classFile ->
+                classFile.inputStream().use { input -> indexer.index(input) }
+            }
+        val out = indexFile.get().asFile
+        out.parentFile.mkdirs()
+        out.outputStream().use { os -> IndexWriter(os).write(indexer.complete()) }
+    }
+}
+
+tasks.jar {
+    dependsOn(jandex)
+    from(jandexOutputDir)
+}
+
 tasks.jacocoTestReport {
-    // The :jandex task writes META-INF/jandex.idx into build/resources/main, which is also a
+    // jandex writes META-INF/jandex.idx into the main resources output, which is also a
     // jacocoTestReport classpath input. Gradle's strict task validation refuses to assume the
     // order — declare it explicitly.
-    mustRunAfter("jandex")
+    mustRunAfter(jandex)
     reports {
         csv.required.set(true)
         xml.required.set(true)
@@ -50,7 +103,7 @@ tasks.jacocoTestReport {
 }
 
 tasks.withType<Javadoc>().configureEach {
-    mustRunAfter("jandex")
+    mustRunAfter(jandex)
     (options as StandardJavadocDocletOptions).apply {
         addStringOption("Xdoclint:all,-missing", "-quiet")
     }
