@@ -1968,6 +1968,57 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("Generated *Bridge class includes a patch(base, partial) static for sparse overlay")
+    void patchEmitsSparseOverlay() {
+      final var compilation = compile(
+        source(
+          "demo.User",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.UserDto.class)
+          public record User(String id, String email, int age) {}
+          """
+        ),
+        source(
+          "demo.UserDto",
+          """
+          package demo;
+          public record UserDto(String id, String email, int age) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.UserBridge");
+      assertNotNull(bridge, () -> "UserBridge missing; saw " + compilation.generated().keySet());
+
+      // Patch method exists with the right signature.
+      assertTrue(
+        bridge.contains("public static demo.User patch(final demo.User base, final demo.UserDto partial)"),
+        () -> "expected patch(base, partial) signature, saw: " + bridge
+      );
+      // String components: null-gate to base.
+      assertTrue(
+        bridge.contains("(partial.id() != null ? partial.id() : base.id())"),
+        () -> "expected null-gate on id, saw: " + bridge
+      );
+      assertTrue(
+        bridge.contains("(partial.email() != null ? partial.email() : base.email())"),
+        () -> "expected null-gate on email, saw: " + bridge
+      );
+      // Primitive component (int age): always overlaid from partial (no null gate).
+      assertTrue(
+        bridge.contains("new demo.User(") && bridge.contains("partial.age()"),
+        () -> "expected primitive int age always patched from partial, saw: " + bridge
+      );
+      assertTrue(
+        !bridge.contains("partial.age() != null"),
+        () -> "primitive int age must NOT be null-gated, saw: " + bridge
+      );
+    }
+
+    @Test
     @DisplayName("@Bridge(writeStrategy = SETTERS) forces the no-arg+setters strategy on a POJO that also has a builder")
     void writeStrategyForcesSetters() {
       final var compilation = compile(

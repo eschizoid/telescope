@@ -1149,6 +1149,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (forwardBody == null) return;
     final var backwardBody = buildExpr(source, readBackward, sourceFields, writeStrategy, source);
     if (backwardBody == null) return;
+    // Patch emits a sparse overlay: for each source field, read from `partial` (the user's
+    // partially-populated target) when the target's component is non-null, else fall back to the
+    // corresponding read on `base`. Primitive target components are always treated as
+    // patch-present (matching runtime Mapper#patch semantics: a boxed primitive is never null).
+    final Function<String, String> readPatch = sourceName -> {
+      final var sf = fieldByName(sourceFields, sourceName);
+      final var baseRead = readExpr(source, "base", sf);
+      if (drops.contains(sourceName)) return baseRead;
+      if (forwardOnlyTransforms.contains(sourceName)) return baseRead;
+      final var tgtName = renames.getOrDefault(sourceName, sourceName);
+      final var tf = fieldByName(targetFields, tgtName);
+      final var partialRead = applyBackward(
+        sourceName,
+        fieldPlans.get(sourceName),
+        readExpr(target, "partial", tf)
+      );
+      // Primitive target components autobox to non-null wrappers on read — always patch them.
+      if (tf.type().getKind().isPrimitive()) return partialRead;
+      // Reference components: conditional on the target value being non-null.
+      return "(" + readExpr(target, "partial", tf) + " != null ? " + partialRead + " : " + baseRead + ")";
+    };
+    final var patchBody = buildExpr(source, readPatch, sourceFields, writeStrategy);
+    if (patchBody == null) return;
 
     final var imports = new TreeSet<>(importsFor(fieldPlans));
     imports.add("io.github.eschizoid.telescope.conversion.BridgeFn");
@@ -1200,6 +1223,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println();
         out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
         emitMethodBody(out, backwardBody);
+        out.println("  }");
+        out.println();
+        // Sparse-overlay patch: read non-null fields of `partial` (a partially-populated target)
+        // and apply them onto `base` via backward. Mirrors the runtime Mapper#patch(base, partial)
+        // semantics. Reference target components null-gate to base; primitive components autobox
+        // to non-null and are always overlaid.
+        out.println(
+          "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
+        );
+        emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
         out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
