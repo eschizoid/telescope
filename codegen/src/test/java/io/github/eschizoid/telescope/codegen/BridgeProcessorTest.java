@@ -1998,6 +1998,11 @@ class BridgeProcessorTest {
         bridge.contains("public static demo.User patch(final demo.User base, final demo.UserDto partial)"),
         () -> "expected patch(base, partial) signature, saw: " + bridge
       );
+      // P5-1: null-guard at top of patch body — matches runtime Mapper#patch semantics.
+      assertTrue(
+        bridge.contains("if (base == null || partial == null) return base"),
+        () -> "expected null-guard at top of patch body, saw: " + bridge
+      );
       // String components: null-gate to base.
       assertTrue(
         bridge.contains("(partial.id() != null ? partial.id() : base.id())"),
@@ -2015,6 +2020,58 @@ class BridgeProcessorTest {
       assertTrue(
         !bridge.contains("partial.age() != null"),
         () -> "primitive int age must NOT be null-gated, saw: " + bridge
+      );
+    }
+
+    @Test
+    @DisplayName("P5-3/P5-4: nested RECURSE fields recursively patch, not full-backward")
+    void patchRecursesIntoNestedSubBridges() {
+      final var compilation = compile(
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.OrderDto.class)
+          public record Order(String id, demo.Customer customer) {}
+          """
+        ),
+        source("demo.Customer", "package demo; public record Customer(String name, String email) {}"),
+        source(
+          "demo.OrderDto",
+          """
+          package demo;
+          public record OrderDto(String id, demo.CustomerDto customer) {}
+          """
+        ),
+        source("demo.CustomerDto", "package demo; public record CustomerDto(String name, String email) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
+
+      // The nested customer slot should call SubBridge.patch(base.customer(), partial.customer())
+      // — recursive patch — not SubBridge.backward(partial.customer()) which would full-rebuild
+      // the customer and discard any sub-fields that the partial doesn't carry.
+      final var subBridge = "CustomerToCustomerDtoBridge";
+      assertTrue(
+        bridge.contains(subBridge + ".patch(base.customer(), partial.customer())"),
+        () ->
+          "expected nested patch delegation '" +
+          subBridge +
+          ".patch(base.customer(), partial.customer())', saw: " +
+          bridge
+      );
+      // And the null-gate still wraps the patch call so a null partial.customer() falls back to
+      // base.customer() unchanged.
+      assertTrue(
+        bridge.contains(
+          "(partial.customer() != null ? " +
+          subBridge +
+          ".patch(base.customer(), partial.customer()) : base.customer())"
+        ),
+        () -> "expected null-gate around nested patch, saw: " + bridge
       );
     }
 
