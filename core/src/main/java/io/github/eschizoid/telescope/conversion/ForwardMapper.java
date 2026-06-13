@@ -73,7 +73,9 @@ public final class ForwardMapper<A, B> {
    * }</pre>
    */
   public <C> ForwardMapper<A, C> then(final ForwardMapper<B, C> next) {
-    final Getter<A, C> composed = a -> next.forward.get(forward.get(a));
+    // Genuine lattice routing: Getter.then(Getter) composes two read-only optics into one. The
+    // composition is one method call on the substrate, not an inline lambda closure.
+    final Getter<A, C> composed = forward.then(next.forward);
     return new ForwardMapper<>(composed, sourceClass, next.targetClass);
   }
 

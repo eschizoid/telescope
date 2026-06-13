@@ -14,8 +14,9 @@ import java.util.stream.Stream;
  * }</pre>
  *
  * <p>Falls out of the lattice as the read-only specialization that {@link Lens} extends. Rarely
- * built directly — most field navigation produces a full {@link Lens}. There is no {@code
- * then(...)} here; composition happens on the read+write optics.
+ * built directly — most field navigation produces a full {@link Lens}. Two Getters compose into a
+ * Getter via {@link #then(Getter)}; the write-side composition lives on {@link Lens} and the other
+ * read+write optics.
  */
 @FunctionalInterface
 public interface Getter<S, A> extends Fold<S, A> {
@@ -26,5 +27,15 @@ public interface Getter<S, A> extends Fold<S, A> {
   @Override
   default Stream<A> getAll(final S source) {
     return Stream.of(get(source));
+  }
+
+  /**
+   * Compose with another {@code Getter} to read deeper. {@code this.then(next).get(s)} is
+   * equivalent to {@code next.get(this.get(s))} — the canonical Getter-composition shape from the
+   * lattice. Used by {@link io.github.eschizoid.telescope.conversion.ForwardMapper#then} to keep
+   * forward-only composition lattice-routed instead of an ad-hoc {@code Function} closure.
+   */
+  default <B> Getter<S, B> then(final Getter<A, B> next) {
+    return s -> next.get(get(s));
   }
 }
