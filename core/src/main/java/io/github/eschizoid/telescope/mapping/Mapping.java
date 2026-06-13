@@ -73,6 +73,38 @@ public sealed interface Mapping<A, B>
   }
 
   /**
+   * Forward-only typed-transform correspondence: same shape as {@link #to(Accessor, Accessor,
+   * Function, Function)} but the backward function is supplied automatically and throws {@link
+   * UnsupportedOperationException} at the row level if invoked. Use this for one-shot entity →
+   * DB-schema mappings whose backward direction is never called — saves the boilerplate of passing
+   * an unused inverse function, and the throw message names the field so the failure is
+   * self-diagnosing if a downstream user does call {@link
+   * io.github.eschizoid.telescope.conversion.Mapper#backward} on the resulting mapper.
+   *
+   * <pre>{@code
+   * into(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString)
+   * }</pre>
+   *
+   * <p>For the bidirectional variant, supply the inverse explicitly via {@link #to(Accessor,
+   * Accessor, Function, Function)}.
+   */
+  static <A, B, X, Y> Mapping<A, B> into(
+    final Accessor<A, X> src,
+    final Accessor<B, Y> tgt,
+    final Function<? super X, ? extends Y> forward
+  ) {
+    final String fieldName = LambdaIntrospection.methodNameOf(src);
+    final Function<? super Y, ? extends X> throwingBackward = y -> {
+      throw new UnsupportedOperationException(
+        "Mapping.into is forward-only — backward direction is undefined for field '" +
+          fieldName +
+          "'. Use Mapping.to(src, tgt, forward, backward) if a bidirectional row is required."
+      );
+    };
+    return new TypedTransformTo<>(src, tgt, forward, throwingBackward);
+  }
+
+  /**
    * Nested-target correspondence: stamp a flat source field through a multi-hop {@link Telescope}
    * on the target side. Closes the gap with MapStruct's {@code @Mapping(source = "flat", target =
    * "a.b.c")} by letting the second argument be a real {@code Telescope<B, X>} built with the same
