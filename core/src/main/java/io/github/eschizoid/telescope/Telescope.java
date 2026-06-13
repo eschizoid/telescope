@@ -823,6 +823,63 @@ public sealed class Telescope<
   }
 
   /**
+   * Compose a post-read hook onto the path: every value flowing OUT of this telescope (via {@link
+   * #read}, {@link #find}, {@link #toList}, {@link #count}, {@link #exists}, the {@link #update}
+   * family's pre-hook leaf, or downstream {@link #then} composition) is passed through {@code hook}
+   * before reaching the caller / next stage. The lattice-native equivalent of {@link
+   * io.github.eschizoid.telescope.conversion.Mapper#afterForward(java.util.function.Function)
+   * Mapper.afterForward}, but applied at the path level — composes through {@code .then(...)},
+   * {@link Edit#over Edit.over}, {@link #updateAsync}, and codegen-generated navigators. MapStruct
+   * cannot reach this; its annotations bind to mapper methods, not paths.
+   *
+   * <p>Writes pass through unchanged — only the read side gets the hook. For symmetric write
+   * transformation, see {@link #before(Function)}.
+   *
+   * <p><b>Lattice note — one-sided shape.</b> The internal {@link
+   * io.github.eschizoid.telescope.internal.optics.Iso} composed here uses {@code hook} on the read
+   * side and identity on the write side, so the produced Iso does <em>not</em> satisfy the
+   * round-trip law ({@code from(to(a)) == a} only holds when {@code hook} is identity). Safe under
+   * {@code Lens.then(Iso)} composition — which routes reads and writes through separate legs and
+   * never round-trips a single value through both — but future contributors must not assume this is
+   * a lawful Iso in isolation. The same caveat applies to {@link #before(Function)}, {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#into Mapping.into}, and {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#toOrElse Mapping.toOrElse}.
+   *
+   * <pre>{@code
+   * Telescope.of(User.class).field(User::email).after(String::trim)
+   *     .read(user);                 // returns the trimmed email
+   * }</pre>
+   */
+  public Telescope<S, A> after(final Function<? super A, ? extends A> hook) {
+    return this.then(Telescope.iso(hook, a -> a));
+  }
+
+  /**
+   * Compose a pre-write hook onto the path: every value flowing IN to this telescope (via {@link
+   * #set}, {@link #update}, {@link #updateAsync}, {@link Edit#over Edit.over}'s write-leaf, or
+   * downstream {@link #then} composition) is passed through {@code hook} before reaching the
+   * underlying writer. The lattice-native equivalent of {@link
+   * io.github.eschizoid.telescope.conversion.Mapper#beforeBackward(java.util.function.Function)
+   * Mapper.beforeBackward}, applied at the path level.
+   *
+   * <p>Reads pass through unchanged — only the write side gets the hook. For symmetric read
+   * transformation, see {@link #after(Function)}.
+   *
+   * <p><b>Lattice note — one-sided shape.</b> Same caveat as {@link #after(Function)}: the composed
+   * Iso uses identity on the read side and {@code hook} on the write side, so the round-trip law
+   * holds only when {@code hook} is identity. Safe under {@code Lens.then(Iso)} composition; not a
+   * lawful Iso in isolation.
+   *
+   * <pre>{@code
+   * Telescope.of(User.class).field(User::email).before(String::toLowerCase)
+   *     .set(user, "ALICE@X.COM");   // writes "alice@x.com"
+   * }</pre>
+   */
+  public Telescope<S, A> before(final Function<? super A, ? extends A> hook) {
+    return this.then(Telescope.iso(a -> a, hook));
+  }
+
+  /**
    * Compose this telescope with another via the lattice's {@code .then}. Lets you build a path in
    * pieces and stitch them together, and is how reusable conversions ({@link #from}, {@link
    * #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)}) get threaded into a
