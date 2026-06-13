@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.BridgeFn;
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.effects.Either;
@@ -506,6 +507,38 @@ public sealed class Telescope<
    */
   public static <A, B> Mapper<A, B> mapper(final Class<A> source, final Class<B> target, final MapStep... steps) {
     return DeepMap.resolveMapper(source, target, steps);
+  }
+
+  /**
+   * Forward-only sibling of {@link #mapper(Class, Class, MapStep...)} — returns a {@link
+   * ForwardMapper} whose backward direction is not present at the type level. Use when the
+   * conversion is genuinely one-way (entity → DTO write-only, audit-log projection, normalisation
+   * pipeline) and rows include {@link io.github.eschizoid.telescope.mapping.Mapping#into into(...)}
+   * / {@link io.github.eschizoid.telescope.mapping.Mapping#constant constant(...)} / {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#compute compute(...)} that make the backward
+   * direction meaningless.
+   *
+   * <p>The compiler enforces the one-way contract — there is no {@code backward(...)} method on
+   * {@link ForwardMapper} to call. MapStruct cannot express "this mapper is one-way" in its type
+   * system; this is the differentiator the type system buys.
+   *
+   * <pre>{@code
+   * ForwardMapper<UserEntity, UserDto> projector = Telescope.mapperForward(
+   *     UserEntity.class, UserDto.class,
+   *     to(UserEntity::id, UserDto::id),
+   *     into(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString),
+   *     constant(UserDto::tenant, "production"));
+   *
+   * UserDto dto = projector.forward(entity);
+   * }</pre>
+   */
+  public static <A, B> ForwardMapper<A, B> mapperForward(
+    final Class<A> source,
+    final Class<B> target,
+    final MapStep... steps
+  ) {
+    final var bidi = DeepMap.resolveMapper(source, target, steps);
+    return ForwardMapper.create(bidi::forward, source, target);
   }
 
   /**
