@@ -1143,9 +1143,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
     };
 
-    final var forwardBody = buildExpr(target, readForward, targetFields, writeStrategy);
+    // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
+    // declaration rather than at `target` (which may be a third-party POJO with no annotation).
+    final var forwardBody = buildExpr(target, readForward, targetFields, writeStrategy, source);
     if (forwardBody == null) return;
-    final var backwardBody = buildExpr(source, readBackward, sourceFields, writeStrategy);
+    final var backwardBody = buildExpr(source, readBackward, sourceFields, writeStrategy, source);
     if (backwardBody == null) return;
 
     final var imports = new TreeSet<>(importsFor(fieldPlans));
@@ -1930,7 +1932,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   // Construct `to` from a name->expression reader: canonical ctor (record), or name-matched ctor /
   // builder / no-arg+setters (POJO). Returns an expression or a `{ ... return x; }` block; null on
-  // failure (error reported on `to`).
+  // failure (error reported on `annotationSite` so the diagnostic lands at the user's @Bridge,
+  // not at the target class, which may be third-party).
   //
   // writeStrategy: AUTO (run the priority ladder), CONSTRUCTOR / BUILDER / SETTERS (force one).
   // Records always use the canonical constructor regardless of the strategy.
@@ -1938,7 +1941,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement to,
     final Function<String, String> read,
     final List<Field> toFields,
-    final String writeStrategy
+    final String writeStrategy,
+    final TypeElement annotationSite
   ) {
     final var toFq = to.getQualifiedName().toString();
     if (to.getKind() == ElementKind.RECORD) {
@@ -1970,10 +1974,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       if (!auto) {
         error(
-          to,
+          annotationSite,
           "@Bridge writeStrategy = CONSTRUCTOR on " +
+            annotationSite.getQualifiedName() +
+            " (target " +
             toFq +
-            ": no public constructor whose parameter names match the bridge fields. Switch to AUTO, BUILDER, or SETTERS, or add a name-matched constructor."
+            "): no public constructor whose parameter names match the bridge fields. Switch to AUTO, BUILDER, or SETTERS, or add a name-matched constructor."
         );
         return null;
       }
@@ -1997,10 +2003,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       if (!auto) {
         error(
-          to,
+          annotationSite,
           "@Bridge writeStrategy = BUILDER on " +
+            annotationSite.getQualifiedName() +
+            " (target " +
             toFq +
-            ": no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or SETTERS, or add a builder()."
+            "): no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or SETTERS, or add a builder()."
         );
         return null;
       }
@@ -2022,10 +2030,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       if (!auto) {
         error(
-          to,
+          annotationSite,
           "@Bridge writeStrategy = SETTERS on " +
+            annotationSite.getQualifiedName() +
+            " (target " +
             toFq +
-            ": no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a no-arg constructor."
+            "): no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a no-arg constructor."
         );
         return null;
       }
