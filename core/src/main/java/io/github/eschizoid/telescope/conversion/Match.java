@@ -1,6 +1,9 @@
-package io.github.eschizoid.telescope;
+package io.github.eschizoid.telescope.conversion;
 
+import io.github.eschizoid.telescope.internal.optics.Prism;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 
@@ -9,12 +12,18 @@ import java.util.function.Function;
  * the runtime class of {@code P} against a per-permit set of handlers, then verifies at the {@link
  * #exhaustive()} terminal that every permit was covered.
  *
+ * <p>Internally each {@code .when(...)} call binds a lattice {@link Prism} (via {@link
+ * Prism#downcast(Class)} — the lattice's sealed-narrowing primitive) to its handler, so the
+ * sealed-dispatch logic routes through the optic substrate rather than a hand-rolled {@link
+ * Function}/{@code Map} table. The public surface stays a plain {@link Function} so call sites
+ * don't have to name the lattice's internal types.
+ *
  * <p>Uses {@link Class#getPermittedSubclasses()} (Java 17 JEP 409) to discover the sealed hierarchy
- * at construction time. MapStruct cannot reach this primitive — its annotation model pre-dates
- * sealed types (Java 11 floor). The exhaustiveness guarantee is enforced at the {@code
+ * at {@code .exhaustive()} build time. MapStruct cannot reach this primitive — its annotation model
+ * pre-dates sealed types (Java 11 floor). The exhaustiveness guarantee is enforced at the {@code
  * .exhaustive()} call rather than via the compile-time switch exhaustiveness check, which means the
- * same dispatcher works under {@code --release 17} (PR #80's cross-compile target) without the
- * {@code switch} on type-patterns (Java 21+) the language gives you for free.
+ * same dispatcher works under {@code --release 17} without the {@code switch} on type-patterns
+ * (Java 21+) the language gives you for free.
  *
  * <pre>{@code
  * sealed interface Payment permits CreditCard, BankTransfer, Crypto {}
@@ -26,26 +35,22 @@ import java.util.function.Function;
  *     .exhaustive();   // ↑ throws if any permit lacks a .when(...) handler
  * }</pre>
  *
- * <p>Composes naturally with {@link io.github.eschizoid.telescope.conversion.Mapper#asTelescope()
- * Mapper.asTelescope()} so the dispatcher can be chained into a longer {@link Telescope} path:
- *
- * <pre>{@code
- * Telescope.of(Order.class)
- *     .field(Order::payment)
- *     .update(order, dispatch.compose(... ).andThen( ... ));
- * }</pre>
- *
  * @param <P> the sealed parent type
  * @param <R> the dispatch result type
  */
 public final class Match<P, R> {
 
   private final Class<P> sealedRoot;
-  private final Map<Class<? extends P>, Function<? super P, ? extends R>> handlers;
+  private final Map<Class<? extends P>, Entry<P, ?, R>> entries;
 
-  private Match(final Class<P> sealedRoot, final Map<Class<? extends P>, Function<? super P, ? extends R>> handlers) {
+  // One dispatcher entry — pairs a lattice Prism (narrowing P → S) with the per-permit handler.
+  // Kept private so the Prism stays an implementation detail of Match — call-site users never
+  // see the internal optic type, matching the project's two-layer mantra.
+  private record Entry<P, S extends P, R>(Prism<P, S> prism, Function<? super S, ? extends R> handler) {}
+
+  private Match(final Class<P> sealedRoot, final Map<Class<? extends P>, Entry<P, ?, R>> entries) {
     this.sealedRoot = sealedRoot;
-    this.handlers = handlers;
+    this.entries = entries;
   }
 
   /**
@@ -64,19 +69,23 @@ public final class Match<P, R> {
 
   /**
    * Register a handler for one permit of the sealed hierarchy. Returns a new builder — chains
-   * compose left-to-right. Same handler registered twice throws at the {@code when} call.
+   * compose left-to-right. Same permit registered twice throws at the {@code when} call.
+   *
+   * <p>Internally creates a {@link Prism} via {@link Prism#downcast(Class)} that narrows the parent
+   * {@code P} to the permit subtype {@code S} on hit and rebuilds {@code P} as identity on the
+   * reverse direction. Composition through the lattice keeps the dispatcher routed through the
+   * optic substrate.
    */
   public <S extends P> Match<P, R> when(final Class<S> caseClass, final Function<? super S, ? extends R> handler) {
-    if (handlers.containsKey(caseClass)) throw new IllegalArgumentException(
+    if (entries.containsKey(caseClass)) throw new IllegalArgumentException(
       "Match.when(" +
         caseClass.getName() +
         "): handler already registered. " +
         "Each permit of the sealed hierarchy may have at most one handler."
     );
-    final var next = new LinkedHashMap<>(handlers);
-    @SuppressWarnings({ "unchecked", "rawtypes" })
-    final Function<? super P, ? extends R> typed = (Function) handler;
-    next.put(caseClass, typed);
+    final var next = new LinkedHashMap<>(entries);
+    final Prism<P, S> prism = Prism.downcast(caseClass);
+    next.put(caseClass, new Entry<>(prism, handler));
     return new Match<>(sealedRoot, next);
   }
 
@@ -85,18 +94,17 @@ public final class Match<P, R> {
    * subclasses via {@link Class#getPermittedSubclasses()} and throws if any permit lacks a
    * registered handler — naming the missing permits in the error message.
    *
-   * <p>The returned {@link Function} dispatches by {@link Class#isInstance(Object)} test in
-   * registration order. At runtime, the first matching handler wins (so a permit handler can be
-   * registered redundantly under a parent permit if the user wants that semantics; the typical case
-   * is one handler per permit).
+   * <p>The returned {@link Function} dispatches by walking the registered entries in insertion
+   * order and routing through each entry's {@link Prism}; the first prism whose {@code
+   * getOption(P)} returns non-empty wins.
    */
   public Function<P, R> exhaustive() {
     final var permits = sealedRoot.getPermittedSubclasses();
-    final var registered = handlers.keySet();
+    final var registered = entries.keySet();
     // Walk `permits` directly (source-declaration order from the JVM), not Set.of(permits) — the
     // HashSet iteration order would be non-deterministic across JVM runs, leading to differently-
     // ordered error messages on each invocation.
-    final var missing = new java.util.ArrayList<String>();
+    final var missing = new ArrayList<String>();
     for (final var permit : permits) {
       if (!registered.contains(permit)) missing.add(permit.getSimpleName());
     }
@@ -108,18 +116,7 @@ public final class Match<P, R> {
         String.join(", ", missing) +
         ". Add a .when(<class>, handler) call for each, or use .partial() to allow missing handlers."
     );
-    final var snapshot = Map.copyOf(handlers);
-    return p -> {
-      for (final var entry : snapshot.entrySet()) {
-        if (entry.getKey().isInstance(p)) return entry.getValue().apply(p);
-      }
-      throw new IllegalStateException(
-        "Match: input class " +
-          (p == null ? "null" : p.getClass().getName()) +
-          " does not match any registered permit of " +
-          sealedRoot.getSimpleName()
-      );
-    };
+    return buildDispatch(List.copyOf(entries.values()), sealedRoot);
   }
 
   /**
@@ -128,17 +125,29 @@ public final class Match<P, R> {
    * with a self-diagnosing message naming the runtime class.
    */
   public Function<P, R> partial() {
-    final var snapshot = Map.copyOf(handlers);
-    final var rootName = sealedRoot.getSimpleName();
+    return buildDispatch(List.copyOf(entries.values()), sealedRoot);
+  }
+
+  /**
+   * Compose the registered Prism+handler entries into a single dispatch function. Walks each
+   * entry's {@link Prism#getOption(Object)} in registration order; the first hit wins.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static <P, R> Function<P, R> buildDispatch(final List<Entry<P, ?, R>> snapshot, final Class<P> rootClass) {
+    final String rootName = rootClass.getSimpleName();
     return p -> {
-      for (final var entry : snapshot.entrySet()) {
-        if (entry.getKey().isInstance(p)) return entry.getValue().apply(p);
+      for (final var entry : snapshot) {
+        final var opt = entry.prism().getOption(p);
+        if (opt.isPresent()) {
+          final Function handler = entry.handler();
+          return (R) handler.apply(opt.get());
+        }
       }
       throw new IllegalStateException(
-        "Match.partial(" +
-          rootName +
-          "): no handler registered for runtime class " +
-          (p == null ? "null" : p.getClass().getName())
+        "Match: no handler matched runtime class " +
+          (p == null ? "null" : p.getClass().getName()) +
+          " for sealed root " +
+          rootName
       );
     };
   }
