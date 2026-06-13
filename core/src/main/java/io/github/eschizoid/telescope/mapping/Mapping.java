@@ -82,26 +82,31 @@ public sealed interface Mapping<A, B>
    * io.github.eschizoid.telescope.conversion.Mapper#backward} on the resulting mapper.
    *
    * <pre>{@code
-   * into(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString)
+   * forward(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString)
    * }</pre>
+   *
+   * <p>Naming chain: {@code Mapping.forward(...)} rows feed the {@link
+   * io.github.eschizoid.telescope.Telescope#mapperForward(Class, Class, MapStep...)} factory,
+   * producing a {@link io.github.eschizoid.telescope.conversion.ForwardMapper}. The three names
+   * rhyme so the forward-only family is self-discoverable at the call site.
    *
    * <p>For the bidirectional variant, supply the inverse explicitly via {@link #to(Accessor,
    * Accessor, Function, Function)}.
    */
-  static <A, B, X, Y> Mapping<A, B> into(
+  static <A, B, X, Y> Mapping<A, B> forward(
     final Accessor<A, X> src,
     final Accessor<B, Y> tgt,
-    final Function<? super X, ? extends Y> forward
+    final Function<? super X, ? extends Y> fn
   ) {
     final String fieldName = LambdaIntrospection.methodNameOf(src);
     final Function<? super Y, ? extends X> throwingBackward = y -> {
       throw new UnsupportedOperationException(
-        "Mapping.into is forward-only — backward direction is undefined for field '" +
+        "Mapping.forward is forward-only — backward direction is undefined for field '" +
           fieldName +
           "'. Use Mapping.to(src, tgt, forward, backward) if a bidirectional row is required."
       );
     };
-    return new TypedTransformTo<>(src, tgt, forward, throwingBackward);
+    return new TypedTransformTo<>(src, tgt, fn, throwingBackward);
   }
 
   /**
