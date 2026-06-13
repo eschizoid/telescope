@@ -509,6 +509,57 @@ public sealed class Telescope<
   }
 
   /**
+   * Forward-only multi-source mapper that reads from two source objects and assembles a single
+   * target. Each {@link io.github.eschizoid.telescope.mapping.MergeStep MergeStep} row picks one
+   * slot of the {@link Sources2} tuple ({@link
+   * io.github.eschizoid.telescope.mapping.MergeStep#first first(...)} for {@code A}, {@link
+   * io.github.eschizoid.telescope.mapping.MergeStep#second second(...)} for {@code B}) and binds it
+   * to a target component by name.
+   *
+   * <pre>{@code
+   * Mapper<Sources2<Customer, Audit>, Profile> mapper = Telescope.merge(
+   *     Customer.class, Audit.class, Profile.class,
+   *     first(Customer::id,        Profile::id),
+   *     first(Customer::email,     Profile::email),
+   *     second(Audit::createdBy,   Profile::createdBy),
+   *     second(Audit::createdAt,   Profile::createdAt));
+   *
+   * Profile p = mapper.forward(new Sources2<>(customer, audit));
+   * }</pre>
+   *
+   * <p>Designed for the ~60% of enterprise mappers whose forward direction reads from more than one
+   * source object — replaces the {@code Edit.over(...)} workaround that loses the typed
+   * single-source contract.
+   *
+   * <p><b>Backward is unsupported.</b> The multi-source case has no general inverse (which source
+   * gets which fields back?); {@link Mapper#backward(Object)} and {@link Mapper#patch(Object,
+   * Object)} both throw on the returned mapper. For bidirectional same-source mapping, use {@link
+   * #mapper(Class, Class, MapStep...)} on each source individually.
+   *
+   * @param <A> the first source type
+   * @param <B> the second source type
+   * @param <T> the target type
+   * @param sourceA the first source class
+   * @param sourceB the second source class
+   * @param target the target class
+   * @param steps the per-component correspondences, each built via {@link
+   *     io.github.eschizoid.telescope.mapping.MergeStep#first} or {@link
+   *     io.github.eschizoid.telescope.mapping.MergeStep#second}
+   * @return a {@code Mapper} whose {@code forward} reads from {@link Sources2} and assembles the
+   *     target; whose {@code backward} throws {@link UnsupportedOperationException}
+   */
+  @SafeVarargs
+  @SuppressWarnings("varargs")
+  public static <A, B, T> Mapper<Sources2<A, B>, T> merge(
+    final Class<A> sourceA,
+    final Class<B> sourceB,
+    final Class<T> target,
+    final io.github.eschizoid.telescope.mapping.MergeStep<A, B, T>... steps
+  ) {
+    return Merge.build(sourceA, sourceB, target, steps);
+  }
+
+  /**
    * Descend into a record field via method reference. Backed by a {@link Lens}. The argument must
    * be a method reference to a record component accessor ({@code User::email}); a lambda ({@code u
    * -> u.email()}) is rejected at runtime because its synthetic name can't be recovered.
