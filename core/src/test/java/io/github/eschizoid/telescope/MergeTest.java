@@ -192,6 +192,26 @@ class MergeTest {
 
       assertEquals(new Profile("c-8", "o@p.com", "auditor8", "2026-08-08"), mapper.forward(Sources.of(c, a)));
     }
+
+    // R2 — auto-backfill is loud, not silent, on type mismatch.
+    record TypoCustomer(long id, String email) {}
+
+    @Test
+    @DisplayName("auto() throws at build time when a name matches but types differ — masked null was a footgun")
+    void autoTypeMismatchLoud() {
+      // TypoCustomer.id is long; Profile.id is String. Name matches by accident; types diverge.
+      // Pre-R2 this silently dropped the row and the user got a null id at runtime.
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.merge(
+          Profile.class,
+          auto(TypoCustomer.class),
+          from(Audit::createdBy, Profile::createdBy),
+          from(Audit::createdAt, Profile::createdAt)
+        )
+      );
+      assertTrue(ex.getMessage().contains("'id'"));
+      assertTrue(ex.getMessage().contains("types differ"));
+    }
   }
 
   @Nested
@@ -287,11 +307,13 @@ class MergeTest {
         from(Audit::createdBy, Profile::createdBy)
       );
 
-      // Bag has only Customer — Audit row will fail at forward time with a precise diagnostic.
+      // Bag has only Customer — Audit row will fail at forward time with a precise diagnostic
+      // that names BOTH the missing class and what's actually present in the bag (R4).
       final var bag = Sources.of(new Customer("c-1", "x@y.com"));
       final var ex = assertThrows(IllegalStateException.class, () -> mapper.forward(bag));
       assertTrue(ex.getMessage().contains("Audit"));
       assertTrue(ex.getMessage().contains("createdBy"));
+      assertTrue(ex.getMessage().contains("Customer"), () -> "expected bag contents in message, got: " + ex.getMessage());
     }
   }
 

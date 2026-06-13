@@ -539,8 +539,8 @@ public sealed class Telescope<
    * no per-arity ceremony.
    *
    * <p><b>Distinct runtime classes.</b> Each source in the {@link Sources} bag must have a
-   * distinct runtime class; {@link Sources#of(Object[])} throws on duplicates. If the merge
-   * legitimately needs two values of the same class, wrap one in a marker subclass.
+   * distinct runtime class; {@link Sources#of(Object[])} throws on duplicates. If two same-typed
+   * sources are needed, pre-aggregate them into a named holder record before the merge.
    *
    * <p><b>Backward is unsupported.</b> The multi-source case has no general inverse (which source
    * gets which fields back?); {@link Mapper#backward(Object)} and {@link Mapper#patch(Object,
@@ -552,6 +552,10 @@ public sealed class Telescope<
    * @param steps the per-component correspondences
    * @return a {@code Mapper} whose {@code forward} reads from {@link Sources} and assembles the
    *     target; whose {@code backward} throws {@link UnsupportedOperationException}
+   * @see io.github.eschizoid.telescope.mapping.MergeStep#from(Accessor, Accessor)
+   * @see io.github.eschizoid.telescope.mapping.MergeStep#auto(Class)
+   * @see Sources#of(Object[])
+   * @see Sources#builder()
    */
   @SafeVarargs
   @SuppressWarnings("varargs")

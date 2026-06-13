@@ -33,8 +33,9 @@ import java.util.Objects;
  * to {@link #of(Object[])} or {@link Builder#with(Object)} throws {@link
  * IllegalArgumentException} at construction time with a precise diagnostic. This constraint
  * mirrors how the merge engine resolves rows: each {@code MergeStep.from(...)} row identifies its
- * source by the accessor's declaring class. If the user genuinely needs two values of the same
- * class, the call site should wrap one of them in a marker subclass or pre-aggregate.
+ * source by the accessor's declaring class. If two same-typed sources are genuinely needed,
+ * pre-aggregate them into a named holder record before the merge — records are final, so
+ * subclassing the offending type is not an option.
  *
  * <p>Forward direction reads each row's source via {@link #byClass(Class)} at runtime. Backward is
  * unsupported on every multi-source mapper — the throw on the produced {@link
@@ -65,7 +66,7 @@ public final class Sources {
       if (map.put(s.getClass(), s) != null) throw new IllegalArgumentException(
         "Sources.of: two sources share runtime class " +
           s.getClass().getName() +
-          ". Each merge source must have a distinct class — wrap one in a marker subclass if two same-typed sources are needed."
+          ". Each merge source must have a distinct class — for two same-typed sources, pre-aggregate them into a named holder record (records are final; subclassing is not available)."
       );
       list.add(s);
     }
@@ -80,6 +81,15 @@ public final class Sources {
   /** Number of sources in the bag. */
   public int arity() {
     return ordered.size();
+  }
+
+  /**
+   * The runtime classes of all sources in the bag, in insertion order. Used by the merge engine's
+   * forward-time diagnostic to name what IS present when a row's source class is missing — gives
+   * the user actionable information without exposing the source values themselves.
+   */
+  public java.util.Set<Class<?>> classes() {
+    return bySrcClass.keySet();
   }
 
   /**
@@ -112,7 +122,7 @@ public final class Sources {
       if (entries.put(source.getClass(), source) != null) throw new IllegalArgumentException(
         "Sources.Builder.with: two sources share runtime class " +
           source.getClass().getName() +
-          ". Each merge source must have a distinct class — wrap one in a marker subclass if two same-typed sources are needed."
+          ". Each merge source must have a distinct class — for two same-typed sources, pre-aggregate them into a named holder record (records are final; subclassing is not available)."
       );
       return this;
     }

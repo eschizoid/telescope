@@ -57,7 +57,11 @@ final class Merge {
             r.sourceClass().getName() +
             " (required by the row writing target field '" +
             r.tgtName() +
-            "'). Pass a value of that class via Sources.of(...) or Sources.builder().with(...)."
+            "'). Sources bag contains: " +
+            sources.classes().stream().map(Class::getSimpleName).toList() +
+            ". Pass a value of " +
+            r.sourceClass().getSimpleName() +
+            " via Sources.of(...) or Sources.builder().with(...)."
         );
         byName.put(r.tgtName(), r.srcAccessor().get(src));
       }
@@ -122,7 +126,20 @@ final class Merge {
       if (claimedTgt.contains(name)) continue;
       final var srcType = sourceRefl.genericType(sourceClass, name);
       final var tgtType = targetRefl.genericType(targetClass, name);
-      if (srcType == null || tgtType == null || !srcType.equals(tgtType)) continue;
+      if (srcType == null || tgtType == null) continue; // bean introspection couldn't recover one side; skip silently
+      if (!srcType.equals(tgtType)) throw new IllegalArgumentException(
+        "Telescope.merge: step at index " +
+          index +
+          " auto(" +
+          sourceClass.getSimpleName() +
+          ") matched field '" +
+          name +
+          "' by name but types differ: source=" +
+          srcType +
+          ", target=" +
+          tgtType +
+          ". Add an explicit MergeStep.from(...) row with a converter, or rename to break the name match if this row was unintentional."
+      );
       claimedTgt.add(name);
       final String capturedName = name;
       final Getter<Object, Object> reader = src -> sourceRefl.read(src, capturedName);
