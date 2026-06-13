@@ -7,6 +7,7 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.Compute;
 import io.github.eschizoid.telescope.mapping.Constant;
 import io.github.eschizoid.telescope.mapping.Drop;
+import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.FromTelescopeTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
@@ -742,6 +743,23 @@ public final class DeepMap {
     // types stay portable across packages without needing @SuppressWarnings("exports").
     if (row instanceof SameTypedTo<?, ?, ?>) return Iso.identity();
     if (row instanceof TypedTransformTo<?, ?, ?, ?> r) return Iso.of((Function) r.forward(), (Function) r.backward());
+    if (row instanceof ForwardOnlyTransformTo<?, ?, ?, ?> r) {
+      // Forward-only row: the backward leg throws at the field site. `Telescope.mapper(...)`
+      // rejects rows of this shape up front and points the user at `Telescope.mapperForward(...)`
+      // (which never invokes the backward leg) — so the throwing backward only fires if a caller
+      // builds a bidirectional Mapper anyway via the cross-package factory and then invokes
+      // backward(...). The throw names the field for self-diagnosis.
+      final String fieldName = r.sourceField();
+      final Function<Object, Object> throwingBackward = y -> {
+        throw new UnsupportedOperationException(
+          "Mapping.forward is forward-only — backward direction is undefined for field '" +
+            fieldName +
+            "'. Use Telescope.mapperForward(...) for a forward-only mapper, or Mapping.to(src, " +
+            "tgt, forward, backward) for an explicit bidirectional row."
+        );
+      };
+      return Iso.of((Function) r.forward(), throwingBackward);
+    }
     if (row instanceof Via<?, ?> r) return liftViaIfNeeded(r, srcType, tgtType);
     // Drop rows never reach this method — populateIso short-circuits on `instanceof Drop` before
     // calling fieldIsoOf. The check is here only to make the dispatch exhaustive over the sealed

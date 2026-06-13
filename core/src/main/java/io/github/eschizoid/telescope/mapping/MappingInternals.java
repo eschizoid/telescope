@@ -19,6 +19,7 @@ public sealed interface MappingInternals<
 > permits
   SameTypedTo,
   TypedTransformTo,
+  ForwardOnlyTransformTo,
   Via,
   Drop,
   TelescopeTo,
