@@ -39,6 +39,17 @@ class MappingForwardTest {
       assertTrue(ex.getMessage().contains("createdAtIso"), () -> ex.getMessage());
       assertTrue(ex.getMessage().contains("mapperForward"));
     }
+
+    @Test
+    @DisplayName("Telescope.map(...) also rejects forward(...) rows — closes the silent-corruption gap")
+    void mapAlsoRejectsForward() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.map(Entity.class, Dto.class, forward(Entity::createdAt, Dto::createdAtIso, Instant::toString))
+      );
+      assertTrue(ex.getMessage().contains("Telescope.map"));
+      assertTrue(ex.getMessage().contains("Mapping.forward"));
+      assertTrue(ex.getMessage().contains("createdAtIso"));
+    }
   }
 
   @Nested
