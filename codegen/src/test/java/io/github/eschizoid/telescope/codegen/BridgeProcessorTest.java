@@ -1968,6 +1968,100 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("@Bridge(writeStrategy = SETTERS) forces the no-arg+setters strategy on a POJO that also has a builder")
+    void writeStrategyForcesSetters() {
+      final var compilation = compile(
+        source(
+          "demo.PA",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.WriteStrategy;
+          @Bridge(value = demo.PB.class, writeStrategy = WriteStrategy.SETTERS)
+          public class PA {
+            private String id;
+            public PA() {}
+            public String getId() { return id; }
+            public void setId(String id) { this.id = id; }
+          }
+          """
+        ),
+        source(
+          "demo.PB",
+          """
+          package demo;
+          public class PB {
+            private String id;
+            public PB() {}
+            public String getId() { return id; }
+            public void setId(String id) { this.id = id; }
+            // PB also exposes a builder — under AUTO the processor would prefer the name-matched
+            // ctor path first; SETTERS should force the no-arg + setters shape regardless.
+            public static Builder builder() { return new Builder(); }
+            public static class Builder {
+              private String id;
+              public Builder id(String id) { this.id = id; return this; }
+              public PB build() { final var p = new PB(); p.setId(id); return p; }
+            }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.PABridge");
+      assertNotNull(bridge, () -> "PABridge missing; saw " + compilation.generated().keySet());
+
+      // Forward uses no-arg + setter path, NOT the builder.
+      assertTrue(
+        bridge.contains("final var out = new demo.PB()") && bridge.contains("out.setId(s.getId())"),
+        () -> "expected SETTERS shape on forward, saw: " + bridge
+      );
+      assertTrue(!bridge.contains("demo.PB.builder()"), () -> "should not call builder() when SETTERS forced");
+    }
+
+    @Test
+    @DisplayName("@Bridge(writeStrategy = CONSTRUCTOR) on a POJO without name-matched ctor is a precise error")
+    void writeStrategyConstructorMismatchRejected() {
+      final var compilation = compile(
+        source(
+          "demo.PA",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.WriteStrategy;
+          @Bridge(value = demo.PB.class, writeStrategy = WriteStrategy.CONSTRUCTOR)
+          public class PA {
+            private String id;
+            public PA() {}
+            public String getId() { return id; }
+            public void setId(String id) { this.id = id; }
+          }
+          """
+        ),
+        source(
+          "demo.PB",
+          """
+          package demo;
+          // No public name-matched constructor — no-arg only.
+          public class PB {
+            private String id;
+            public PB() {}
+            public String getId() { return id; }
+            public void setId(String id) { this.id = id; }
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "@Bridge(writeStrategy=CONSTRUCTOR) without a matching ctor should fail");
+      assertTrue(
+        compilation.hasError("writeStrategy = CONSTRUCTOR"),
+        () -> "expected CONSTRUCTOR-strategy diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
     @DisplayName("@Default on a primitive-typed source field is a compile error")
     void defaultsOnPrimitiveRejected() {
       final var compilation = compile(

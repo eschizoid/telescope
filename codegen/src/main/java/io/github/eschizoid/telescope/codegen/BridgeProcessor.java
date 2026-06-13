@@ -124,6 +124,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // the runtime Mapping.via(srcAcc, tgtAcc, mapper) factory.
   private final Map<TypePair, Map<String, String>> viaMappersByPair = new HashMap<>();
 
+  // Per-pair user-specified write strategy override. AUTO (the default) preserves today's
+  // ctor → builder → no-arg+setters ladder; other values force one strategy and surface a precise
+  // error if the POJO doesn't support it. Mirrors the runtime WriteHint.writeBean(cls, strategy)
+  // hint. Populated in process(), read in generate().
+  private final Map<TypePair, String> writeStrategyByPair = new HashMap<>();
+
   // Per-pair constants: target field name -> the already-emitted Java literal expression
   // ("\"API\"", "true", "0L", "null", etc.). Forward-only — injected into the target ctor arg;
   // backward silently drops the slot. Populated in process(), validated + emitted in generate().
@@ -147,6 +153,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     forwardOnlyTransformsByPair.clear();
     defaultsByPair.clear();
     viaMappersByPair.clear();
+    writeStrategyByPair.clear();
     constantsByPair.clear();
     computesByPair.clear();
 
@@ -214,6 +221,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var viaMappers = viaMappersFromMirror(element, bridgeAm);
         if (viaMappers == null) continue; // invalid viaMapper — already reported, skip this pair
         if (!viaMappers.isEmpty()) viaMappersByPair.put(pair, viaMappers);
+        final var writeStrategy = writeStrategyFromMirror(bridgeAm);
+        if (writeStrategy != null && !"AUTO".equals(writeStrategy)) writeStrategyByPair.put(pair, writeStrategy);
         if (seen.add(pair)) pending.add(pair);
       }
     }
@@ -389,6 +398,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return new TransformSet(result, forwardOnlySet);
     }
     return TransformSet.empty();
+  }
+
+  // Read writeStrategy from a @Bridge mirror. Returns the enum name (AUTO / CONSTRUCTOR / BUILDER
+  // / SETTERS) when explicitly set; null when the user didn't supply a value (treated as AUTO).
+  private String writeStrategyFromMirror(final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (!entry.getKey().getSimpleName().contentEquals("writeStrategy")) continue;
+      final var val = entry.getValue().getValue();
+      if (val instanceof javax.lang.model.element.VariableElement ve) return ve.getSimpleName().toString();
+      return val == null ? null : val.toString();
+    }
+    return null;
   }
 
   // Read viaMappers from a @Bridge mirror. Returns source-field-name -> bridge-class FQN. The
@@ -744,6 +765,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var forwardOnlyTransforms = forwardOnlyTransformsByPair.getOrDefault(thisPair, Set.of());
     final var rawDefaults = defaultsByPair.getOrDefault(thisPair, Map.of());
     final var viaMappers = viaMappersByPair.getOrDefault(thisPair, Map.of());
+    final var writeStrategy = writeStrategyByPair.getOrDefault(thisPair, "AUTO");
     final var rawConstants = constantsByPair.getOrDefault(thisPair, Map.of());
     final var computes = computesByPair.getOrDefault(thisPair, Map.of());
 
@@ -1121,9 +1143,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
     };
 
-    final var forwardBody = buildExpr(target, readForward, targetFields);
+    final var forwardBody = buildExpr(target, readForward, targetFields, writeStrategy);
     if (forwardBody == null) return;
-    final var backwardBody = buildExpr(source, readBackward, sourceFields);
+    final var backwardBody = buildExpr(source, readBackward, sourceFields, writeStrategy);
     if (backwardBody == null) return;
 
     final var imports = new TreeSet<>(importsFor(fieldPlans));
@@ -1909,7 +1931,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // Construct `to` from a name->expression reader: canonical ctor (record), or name-matched ctor /
   // builder / no-arg+setters (POJO). Returns an expression or a `{ ... return x; }` block; null on
   // failure (error reported on `to`).
-  private String buildExpr(final TypeElement to, final Function<String, String> read, final List<Field> toFields) {
+  //
+  // writeStrategy: AUTO (run the priority ladder), CONSTRUCTOR / BUILDER / SETTERS (force one).
+  // Records always use the canonical constructor regardless of the strategy.
+  private String buildExpr(
+    final TypeElement to,
+    final Function<String, String> read,
+    final List<Field> toFields,
+    final String writeStrategy
+  ) {
     final var toFq = to.getQualifiedName().toString();
     if (to.getKind() == ElementKind.RECORD) {
       final var args = to
@@ -1920,50 +1950,85 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return "new " + toFq + "(" + args + ")";
     }
 
+    final var auto = "AUTO".equals(writeStrategy);
+
     // POJO: a public constructor whose parameter names match the fields (order-independent).
-    for (final var ctor : ElementFilter.constructorsIn(to.getEnclosedElements())) {
-      if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != toFields.size()) continue;
-      final var args = new ArrayList<String>();
-      var matched = true;
-      for (final var p : ctor.getParameters()) {
-        final var pn = p.getSimpleName().toString();
-        if (!hasField(toFields, pn)) {
-          matched = false;
-          break;
+    if (auto || "CONSTRUCTOR".equals(writeStrategy)) {
+      for (final var ctor : ElementFilter.constructorsIn(to.getEnclosedElements())) {
+        if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != toFields.size()) continue;
+        final var args = new ArrayList<String>();
+        var matched = true;
+        for (final var p : ctor.getParameters()) {
+          final var pn = p.getSimpleName().toString();
+          if (!hasField(toFields, pn)) {
+            matched = false;
+            break;
+          }
+          args.add(read.apply(pn));
         }
-        args.add(read.apply(pn));
+        if (matched) return "new " + toFq + "(" + String.join(", ", args) + ")";
       }
-      if (matched) return "new " + toFq + "(" + String.join(", ", args) + ")";
+      if (!auto) {
+        error(
+          to,
+          "@Bridge writeStrategy = CONSTRUCTOR on " +
+            toFq +
+            ": no public constructor whose parameter names match the bridge fields. Switch to AUTO, BUILDER, or SETTERS, or add a name-matched constructor."
+        );
+        return null;
+      }
     }
 
     // POJO: a static builder() with a method per field.
-    final var builder = staticBuilderMethod(to);
-    if (builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED) {
-      final var builderType = (TypeElement) ((DeclaredType) builder.getReturnType()).asElement();
-      final var sb = new StringBuilder(toFq + ".builder()");
-      for (final var f : toFields) {
-        final var method = builderSetter(builderType, f.name());
-        if (method == null) {
-          error(to, "@Bridge: builder " + builderType.getQualifiedName() + " has no method for '" + f.name() + "'");
-          return null;
+    if (auto || "BUILDER".equals(writeStrategy)) {
+      final var builder = staticBuilderMethod(to);
+      if (builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED) {
+        final var builderType = (TypeElement) ((DeclaredType) builder.getReturnType()).asElement();
+        final var sb = new StringBuilder(toFq + ".builder()");
+        for (final var f : toFields) {
+          final var method = builderSetter(builderType, f.name());
+          if (method == null) {
+            error(to, "@Bridge: builder " + builderType.getQualifiedName() + " has no method for '" + f.name() + "'");
+            return null;
+          }
+          sb.append(".").append(method).append("(").append(read.apply(f.name())).append(")");
         }
-        sb.append(".").append(method).append("(").append(read.apply(f.name())).append(")");
+        return sb.append(".build()").toString();
       }
-      return sb.append(".build()").toString();
+      if (!auto) {
+        error(
+          to,
+          "@Bridge writeStrategy = BUILDER on " +
+            toFq +
+            ": no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or SETTERS, or add a builder()."
+        );
+        return null;
+      }
     }
 
     // POJO: a no-arg constructor plus a setter per field.
-    if (hasPublicNoArgConstructor(to)) {
-      final var sb = new StringBuilder("{ final var out = new " + toFq + "(); ");
-      for (final var f : toFields) {
-        final var setter = setterName(to, f.name());
-        if (setter == null) {
-          error(to, "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'");
-          return null;
+    if (auto || "SETTERS".equals(writeStrategy)) {
+      if (hasPublicNoArgConstructor(to)) {
+        final var sb = new StringBuilder("{ final var out = new " + toFq + "(); ");
+        for (final var f : toFields) {
+          final var setter = setterName(to, f.name());
+          if (setter == null) {
+            error(to, "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'");
+            return null;
+          }
+          sb.append("out.").append(setter).append("(").append(read.apply(f.name())).append("); ");
         }
-        sb.append("out.").append(setter).append("(").append(read.apply(f.name())).append("); ");
+        return sb.append("return out; }").toString();
       }
-      return sb.append("return out; }").toString();
+      if (!auto) {
+        error(
+          to,
+          "@Bridge writeStrategy = SETTERS on " +
+            toFq +
+            ": no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a no-arg constructor."
+        );
+        return null;
+      }
     }
 
     error(
