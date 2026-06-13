@@ -148,4 +148,26 @@ public @interface Bridge {
    * #drops()} for the same pair.
    */
   Compute[] computes() default {};
+
+  /**
+   * Null-coalescing default values for source fields. Each {@link Default} names a source field
+   * and a fallback literal that the forward direction substitutes when the source value is
+   * {@code null}. Mirrors MapStruct's {@code @Mapping(defaultValue = …)} and the runtime
+   * {@link io.github.eschizoid.telescope.mapping.Mapping#toOrElse(
+   * io.github.eschizoid.telescope.Telescope.Accessor,
+   * io.github.eschizoid.telescope.Telescope.Accessor, Object) Mapping.toOrElse(srcAcc, tgtAcc,
+   * defaultValue)} factory.
+   *
+   * <pre>{@code
+   * @Bridge(value = UserEntity.class, defaults = {
+   *   @Default(field = "region", value = "EMEA")
+   * })
+   * public record User(String id, String region) {}
+   * }</pre>
+   *
+   * <p>Backward direction is identity — the substituted default round-trips back to the source
+   * slot as itself. A field listed in {@code defaults} cannot also appear in {@link #drops()} for
+   * this pair (the two mechanisms have incompatible semantics).
+   */
+  Default[] defaults() default {};
 }

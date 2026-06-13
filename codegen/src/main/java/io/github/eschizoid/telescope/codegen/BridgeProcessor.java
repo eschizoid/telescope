@@ -111,6 +111,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // Populated in process(), read in generate().
   private final Map<TypePair, Set<String>> forwardOnlyTransformsByPair = new HashMap<>();
 
+  // Per-pair source-field defaults: source field name -> already-parsed Java-literal expression
+  // (e.g. "\"EMEA\"", "42", "true"). Forward direction wraps the source read in (s.field == null
+  // ? <literal> : s.field()) when an entry is present. Backward is identity. Mirrors the runtime
+  // Mapping.toOrElse(srcAcc, tgtAcc, defaultValue) factory. Populated + validated in process().
+  private final Map<TypePair, Map<String, String>> defaultsByPair = new HashMap<>();
+
   // Per-pair constants: target field name -> the already-emitted Java literal expression
   // ("\"API\"", "true", "0L", "null", etc.). Forward-only — injected into the target ctor arg;
   // backward silently drops the slot. Populated in process(), validated + emitted in generate().
@@ -132,6 +138,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     renameFanoutsByPair.clear();
     transformsByPair.clear();
     forwardOnlyTransformsByPair.clear();
+    defaultsByPair.clear();
     constantsByPair.clear();
     computesByPair.clear();
 
@@ -193,6 +200,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var computes = computesFromMirror(element, bridgeAm);
         if (computes == null) continue; // invalid compute — already reported, skip this pair
         if (!computes.isEmpty()) computesByPair.put(pair, computes);
+        final var rawDefaults = defaultsFromMirror(element, bridgeAm);
+        if (rawDefaults == null) continue; // invalid default — already reported, skip this pair
+        if (!rawDefaults.isEmpty()) defaultsByPair.put(pair, rawDefaults);
         if (seen.add(pair)) pending.add(pair);
       }
     }
@@ -368,6 +378,44 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return new TransformSet(result, forwardOnlySet);
     }
     return TransformSet.empty();
+  }
+
+  // Read defaults from a @Bridge mirror. Returns the raw source-field-name -> raw-string-value
+  // map. Per-pair validation (field exists on source, type is reference-typed, value parses
+  // against the field type) happens in generate() where the source TypeElement is available.
+  // Returns null on a structural error (already reported).
+  private Map<String, String> defaultsFromMirror(final Element element, final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (!entry.getKey().getSimpleName().contentEquals("defaults")) continue;
+      @SuppressWarnings("unchecked")
+      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
+      final var result = new LinkedHashMap<String, String>();
+      for (final var av : list) {
+        final var defAm = (AnnotationMirror) av.getValue();
+        String field = null;
+        String value = null;
+        for (final var de : defAm.getElementValues().entrySet()) {
+          final var k = de.getKey().getSimpleName().toString();
+          if (k.equals("field")) field = (String) de.getValue().getValue();
+          else if (k.equals("value")) value = (String) de.getValue().getValue();
+        }
+        if (field == null || field.isEmpty()) {
+          error(element, "@Default requires a non-empty `field` name");
+          return null;
+        }
+        if (value == null) {
+          error(element, "@Default requires a `value`");
+          return null;
+        }
+        if (result.containsKey(field)) {
+          error(element, "@Default field=\"" + field + "\" is declared more than once");
+          return null;
+        }
+        result.put(field, value);
+      }
+      return result;
+    }
+    return Map.of();
   }
 
   // Read constants from a @Bridge mirror. Returns the raw target-field-name -> raw-string-value
@@ -640,6 +688,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var renameFanouts = renameFanoutsByPair.getOrDefault(thisPair, Map.of());
     final var transforms = transformsByPair.getOrDefault(thisPair, Map.of());
     final var forwardOnlyTransforms = forwardOnlyTransformsByPair.getOrDefault(thisPair, Set.of());
+    final var rawDefaults = defaultsByPair.getOrDefault(thisPair, Map.of());
     final var rawConstants = constantsByPair.getOrDefault(thisPair, Map.of());
     final var computes = computesByPair.getOrDefault(thisPair, Map.of());
 
@@ -773,6 +822,57 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // type errors fire alongside the rest of the per-pair validation.
     final var renameTargetNames = new LinkedHashSet<>(renames.values());
     for (final var extras : renameFanouts.values()) renameTargetNames.addAll(extras);
+
+    // Validate @Default rows (source-side null-coalescing). Each named field must exist on the
+    // source, must be a reference type (primitives can never be null), and must not overlap with
+    // drops (the two have incompatible semantics: drop discards the value, default substitutes one
+    // when null). The value parses against the source field's type using the same parser as
+    // @Constant — String, primitives, "null" for reference types.
+    final var parsedDefaults = new LinkedHashMap<String, String>();
+    for (final var e : rawDefaults.entrySet()) {
+      final var fieldName = e.getKey();
+      final var sf = sourceFields
+        .stream()
+        .filter(f -> f.name().equals(fieldName))
+        .findFirst()
+        .orElse(null);
+      if (sf == null) {
+        error(
+          source,
+          "@Bridge defaults field=\"" +
+            fieldName +
+            "\" is not a field of " +
+            source.getSimpleName() +
+            " — known fields: " +
+            sourceNames
+        );
+        return;
+      }
+      if (sf.type().getKind().isPrimitive()) {
+        error(
+          source,
+          "@Bridge defaults field=\"" +
+            fieldName +
+            "\" has primitive type " +
+            sf.type() +
+            " — primitives cannot be null, so the default would never fire. Use the wrapper type or rework the source shape."
+        );
+        return;
+      }
+      if (drops.contains(fieldName)) {
+        error(
+          source,
+          "@Bridge field \"" +
+            fieldName +
+            "\" appears in both defaults and drops — pick one (drop discards, default substitutes when null)."
+        );
+        return;
+      }
+      final var lit = parseConstantLiteral(source, fieldName, e.getValue(), sf.type());
+      if (lit == null) return;
+      parsedDefaults.put(fieldName, lit);
+    }
+
     final var injectedTargetFields = new LinkedHashSet<String>();
     final var parsedConstants = new LinkedHashMap<String, String>();
     for (final var e : rawConstants.entrySet()) {
@@ -864,16 +964,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // readForward is called with TARGET field names (we walk targetFields). Injected targets
     // (constants, computes) take priority — they're forward-only literal/Supplier expressions with
     // no source counterpart. Otherwise reverse-rename to find the matching source field, then use
-    // the source name to look up the plan and read the source.
+    // the source name to look up the plan and read the source. When the source field has a
+    // @Default, wrap the source read in a (s.x() == null ? <literal> : s.x()) coalesce so the
+    // forward direction substitutes the default for null sources.
     final Function<String, String> readForward = targetName -> {
       if (parsedConstants.containsKey(targetName)) return parsedConstants.get(targetName);
       if (computes.containsKey(targetName)) return "__cp_" + targetName + ".get()";
       final var srcName = reverseRenames.getOrDefault(targetName, targetName);
-      return applyForward(
-        srcName,
-        fieldPlans.get(srcName),
-        readExpr(source, "s", fieldByName(nonDroppedSourceFields, srcName))
-      );
+      final var rawRead = readExpr(source, "s", fieldByName(nonDroppedSourceFields, srcName));
+      final var read = parsedDefaults.containsKey(srcName)
+        ? "(" + rawRead + " == null ? " + parsedDefaults.get(srcName) + " : " + rawRead + ")"
+        : rawRead;
+      return applyForward(srcName, fieldPlans.get(srcName), read);
     };
     // readBackward is called with SOURCE field names. For drops AND forward-only transforms, emit
     // the type's zero value — both mechanisms have no defined backward and the source slot must be

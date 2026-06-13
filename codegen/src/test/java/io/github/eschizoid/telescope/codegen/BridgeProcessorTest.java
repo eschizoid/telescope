@@ -1775,5 +1775,75 @@ class BridgeProcessorTest {
         () -> "expected missing-extra-target diagnostic; saw " + compilation.errorMessages()
       );
     }
+
+    @Test
+    @DisplayName("@Default(field, value) — forward null-coalesces, backward is identity")
+    void defaultsNullCoalescing() {
+      final var compilation = compile(
+        source(
+          "demo.User",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Default;
+          @Bridge(value = demo.UserEntity.class, defaults = {
+            @Default(field = "region", value = "EMEA")
+          })
+          public record User(String id, String region) {}
+          """
+        ),
+        source(
+          "demo.UserEntity",
+          """
+          package demo;
+          public record UserEntity(String id, String region) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.UserBridge");
+      assertNotNull(bridge, () -> "UserBridge missing; saw " + compilation.generated().keySet());
+
+      // Forward null-coalesces: source `region` null → "EMEA"; otherwise pass-through.
+      assertTrue(
+        bridge.contains("(s.region() == null ? \"EMEA\" : s.region())"),
+        () -> "expected null-coalesce on region forward, saw: " + bridge
+      );
+      // Backward is identity — the default doesn't appear in backward expression.
+      assertTrue(bridge.contains("new demo.User(t.id(), t.region())"), bridge);
+    }
+
+    @Test
+    @DisplayName("@Default on a primitive-typed source field is a compile error")
+    void defaultsOnPrimitiveRejected() {
+      final var compilation = compile(
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Default;
+          @Bridge(value = demo.B.class, defaults = {
+            @Default(field = "count", value = "0")
+          })
+          public record A(String name, int count) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String name, int count) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "@Default on primitive should fail");
+      assertTrue(
+        compilation.hasError("primitives cannot be null"),
+        () -> "expected primitive-rejection diagnostic; saw " + compilation.errorMessages()
+      );
+    }
   }
 }
