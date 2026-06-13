@@ -43,6 +43,7 @@ public sealed interface Mapping<A, B>
   permits
     SameTypedTo,
     TypedTransformTo,
+    ForwardOnlyTransformTo,
     Via,
     Drop,
     TelescopeTo,
@@ -100,15 +101,7 @@ public sealed interface Mapping<A, B>
     final Accessor<B, Y> tgt,
     final Function<? super X, ? extends Y> fn
   ) {
-    final String fieldName = LambdaIntrospection.methodNameOf(src);
-    final Function<? super Y, ? extends X> throwingBackward = y -> {
-      throw new UnsupportedOperationException(
-        "Mapping.forward is forward-only — backward direction is undefined for field '" +
-          fieldName +
-          "'. Use Mapping.to(src, tgt, forward, backward) if a bidirectional row is required."
-      );
-    };
-    return new TypedTransformTo<>(src, tgt, fn, throwingBackward);
+    return new ForwardOnlyTransformTo<>(src, tgt, fn);
   }
 
   /**

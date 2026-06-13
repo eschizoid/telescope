@@ -506,14 +506,48 @@ public sealed class Telescope<
    * @see #map(Class, Class, MapStep...)
    */
   public static <A, B> Mapper<A, B> mapper(final Class<A> source, final Class<B> target, final MapStep... steps) {
+    rejectForwardOnlyRows(source, target, steps, "Telescope.mapper");
     return DeepMap.resolveMapper(source, target, steps);
+  }
+
+  // Detect forward-only rows (`Mapping.forward(...)`) and steer the caller to mapperForward(...)
+  // so the partial-Iso shape doesn't silently corrupt downstream Mapper.backward / Mapper.patch
+  // semantics. The check is O(steps.length); rows are typically <20 per mapper. Skips for
+  // mapperForward callers which legitimately accept forward-only rows.
+  private static void rejectForwardOnlyRows(
+    final Class<?> source,
+    final Class<?> target,
+    final MapStep[] steps,
+    final String factoryName
+  ) {
+    for (final var step : steps) {
+      if (step instanceof io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo<?, ?, ?, ?> r) {
+        throw new IllegalArgumentException(
+          factoryName +
+            "(" +
+            source.getSimpleName() +
+            ", " +
+            target.getSimpleName() +
+            ", ...) cannot accept a Mapping.forward(...) row for field '" +
+            ((io.github.eschizoid.telescope.mapping.MappingInternals<?, ?>) r).targetField() +
+            "' — forward(...) is forward-only and would silently corrupt Mapper.backward / Mapper.patch. " +
+            "Use Telescope.mapperForward(" +
+            source.getSimpleName() +
+            ", " +
+            target.getSimpleName() +
+            ", ...) for a typed forward-only result, or Mapping.to(src, tgt, forward, backward) for " +
+            "an explicit bidirectional row."
+        );
+      }
+    }
   }
 
   /**
    * Forward-only sibling of {@link #mapper(Class, Class, MapStep...)} — returns a {@link
    * ForwardMapper} whose backward direction is not present at the type level. Use when the
    * conversion is genuinely one-way (entity → DTO write-only, audit-log projection, normalisation
-   * pipeline) and rows include {@link io.github.eschizoid.telescope.mapping.Mapping#into into(...)}
+   * pipeline) and rows include {@link io.github.eschizoid.telescope.mapping.Mapping#forward
+   * forward(...)}
    * / {@link io.github.eschizoid.telescope.mapping.Mapping#constant constant(...)} / {@link
    * io.github.eschizoid.telescope.mapping.Mapping#compute compute(...)} that make the backward
    * direction meaningless.
@@ -842,7 +876,7 @@ public sealed class Telescope<
    * {@code Lens.then(Iso)} composition — which routes reads and writes through separate legs and
    * never round-trips a single value through both — but future contributors must not assume this is
    * a lawful Iso in isolation. The same caveat applies to {@link #before(Function)}, {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#into Mapping.into}, and {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#forward Mapping.forward}, and {@link
    * io.github.eschizoid.telescope.mapping.Mapping#toOrElse Mapping.toOrElse}.
    *
    * <pre>{@code
