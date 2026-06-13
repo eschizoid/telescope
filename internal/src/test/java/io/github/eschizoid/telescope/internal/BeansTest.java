@@ -203,6 +203,63 @@ class BeansTest {
     }
   }
 
+  // The Lombok `@Data @Builder` shape: a public no-arg ctor + setters AND a static builder().
+  // Real-world enterprise codebases are dominated by this combination, and SETTERS is the
+  // user-expected default — exposed publicly by @Setter, idiomatic across web tier and JPA. Pins
+  // the autoWriter probe order's preference for SETTERS over BUILDER when both apply.
+  static final class DataAndBuilder {
+
+    private String name;
+    private int score;
+
+    public DataAndBuilder() {}
+
+    DataAndBuilder(final String name, final int score) {
+      this.name = name;
+      this.score = score;
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public int getScore() {
+      return score;
+    }
+
+    public void setName(final String name) {
+      this.name = name;
+    }
+
+    public void setScore(final int score) {
+      this.score = score;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      private String name;
+      private int score;
+
+      public Builder name(final String n) {
+        this.name = n;
+        return this;
+      }
+
+      public Builder score(final int s) {
+        this.score = s;
+        return this;
+      }
+
+      public DataAndBuilder build() {
+        return new DataAndBuilder(name, score);
+      }
+    }
+  }
+
   static final class WithBuilderWithSetter {
 
     private final String name;
@@ -815,7 +872,7 @@ class BeansTest {
   class AutoWriter {
 
     @Test
-    @DisplayName("autoWriter picks BuilderWriter when a static builder() is present")
+    @DisplayName("autoWriter picks BuilderWriter when a static builder() is present (no setters)")
     void autoPicksBuilder() {
       final var writer = Beans.autoWriter(WithBuilder.class);
       assertEquals("BuilderWriter", writer.getClass().getSimpleName());
@@ -830,6 +887,21 @@ class BeansTest {
       final var writer = Beans.autoWriter(NoArgSetters.class);
       final var pojo = writer.construct(new String[] { "name" }, n -> "e");
       assertEquals("e", pojo.getName());
+    }
+
+    @Test
+    @DisplayName("autoWriter prefers SettersWriter over BuilderWriter when both apply (@Data @Builder shape)")
+    void autoPrefersSettersOverBuilder() {
+      final var writer = Beans.autoWriter(DataAndBuilder.class);
+      assertEquals(
+        "SettersWriter",
+        writer.getClass().getSimpleName(),
+        "for Lombok @Data @Builder POJOs, SETTERS is the user-expected default — the public setters " +
+          "and the builder both apply, and SETTERS wins so no explicit writeBean hint is required"
+      );
+      final var pojo = writer.construct(new String[] { "name", "score" }, n -> Objects.equals(n, "name") ? "y" : 42);
+      assertEquals("y", pojo.getName());
+      assertEquals(42, pojo.getScore());
     }
 
     @Test
