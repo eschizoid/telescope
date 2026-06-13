@@ -1845,5 +1845,52 @@ class BridgeProcessorTest {
         () -> "expected primitive-rejection diagnostic; saw " + compilation.errorMessages()
       );
     }
+
+    @Test
+    @DisplayName("FD-1: @Default + @Transform on the same field rejected at build")
+    void defaultsAndTransformsOnSameFieldRejected() {
+      final var compilation = compile(
+        source(
+          "demo.NoopFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class NoopFn implements BridgeFn<String, String> {
+            public NoopFn() {}
+            @Override public String forward(String x) { return x; }
+            @Override public String backward(String x) { return x; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Default;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(
+            value = demo.B.class,
+            transforms = { @Transform(field = "name", using = demo.NoopFn.class) },
+            defaults   = { @Default(field   = "name", value = "anonymous") }
+          )
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String name) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "defaults + transforms overlap should fail");
+      assertTrue(
+        compilation.hasError("appears in both defaults and transforms"),
+        () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
+      );
+    }
   }
 }
