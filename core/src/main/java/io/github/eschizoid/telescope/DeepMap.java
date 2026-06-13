@@ -367,9 +367,9 @@ public final class DeepMap {
         continue;
       }
       final var tgtField = tgtRefl.normalize(internals.targetField());
-      // Fail fast on duplicates within this type-pair — two rows that target the same source or
-      // target field would silently overwrite each other in byTargetName/bySourceName and could
-      // produce non-bijective forward/backward (each direction using a different correspondence).
+      // Fail fast on duplicate target — two rows targeting the same target field would silently
+      // overwrite each other in byTargetName and could produce non-bijective forward/backward
+      // (each direction using a different correspondence).
       if (!claimedTgt.add(tgtField)) throw new IllegalArgumentException(
         "Deep map " +
           source.getSimpleName() +
@@ -379,15 +379,15 @@ public final class DeepMap {
           tgtField +
           "'. Each (source, target) type pair may declare at most one row per target field."
       );
-      if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
-        "Deep map " +
-          source.getSimpleName() +
-          " → " +
-          target.getSimpleName() +
-          ": duplicate override row for source field '" +
-          srcField +
-          "'. Each (source, target) type pair may declare at most one row per source field."
-      );
+      // Same-source fan-out IS permitted: one source field feeding multiple target fields is a
+      // common enterprise pattern (e.g. `businessUnit → cretnUserId AND lastUpdtdUserId` on
+      // audit-column rebuilds). Forward direction broadcasts the source value to every target row
+      // correctly. Backward direction is non-bijective for the fan-out source field — the last
+      // registered row wins the `bySourceName` slot, so backward reconstructs that source field
+      // from one target's value. Round-trip equality holds when the user keeps fan-out targets in
+      // sync (typically same-typed copies of the same column), and the test pin makes the
+      // last-row-wins behaviour explicit so silent ambiguity is impossible.
+      claimedSrc.add(srcField);
       final var rowIso = fieldIsoOf(row, srcRefl.genericType(source, srcField), tgtRefl.genericType(target, tgtField));
       final var step = new FieldStep(srcField, tgtField, rowIso);
       byTargetName.put(tgtField, step);
