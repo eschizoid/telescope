@@ -94,10 +94,99 @@ public final class Beans {
    */
   private static final Class<?> HIBERNATE_PROXY = loadOptionalClass("org.hibernate.proxy.HibernateProxy");
 
+  /**
+   * LMF-bound dispatch for {@code HibernateProxy#getHibernateLazyInitializer()}. Built once at
+   * class init when Hibernate is on the classpath; null otherwise (the {@link #persistentClassOf}
+   * fast-path short-circuits before consulting it). Replaces the per-call {@code
+   * Method.getMethod("getHibernateLazyInitializer")} + {@code Method.invoke} pair that previously
+   * fired on every proxied bean read.
+   */
+  private static final Function<Object, Object> HIBERNATE_LAZY_INITIALIZER = buildHibernateLazyInitializerFn();
+
+  /**
+   * LMF-bound dispatch for {@code LazyInitializer#getPersistentClass()}. Same shape as {@link
+   * #HIBERNATE_LAZY_INITIALIZER} — built once, called per proxy read.
+   */
+  private static final Function<Object, Class<?>> HIBERNATE_PERSISTENT_CLASS = buildHibernatePersistentClassFn();
+
   private static Class<?> loadOptionalClass(final String fqn) {
     try {
       return Class.forName(fqn, false, Beans.class.getClassLoader());
     } catch (final ClassNotFoundException e) {
+      return null;
+    }
+  }
+
+  /**
+   * Build an LMF-bound no-arg constructor as a {@link Supplier}. Shared between {@link
+   * FieldsWriter} and {@link SettersWriter} (both need a no-arg ctor as a {@code Supplier} for the
+   * hot-path construct step; centralizing here keeps the LMF setup in one place).
+   */
+  @SuppressWarnings("unchecked")
+  static Supplier<Object> buildCtorSupplier(
+    final Class<?> cls,
+    final Constructor<?> ctor,
+    final MethodHandles.Lookup lookup
+  ) {
+    try {
+      final var handle = lookup.unreflectConstructor(ctor);
+      final var callSite = LambdaMetafactory.metafactory(
+        lookup,
+        "get",
+        MethodType.methodType(Supplier.class),
+        MethodType.methodType(Object.class),
+        handle,
+        MethodType.methodType(cls)
+      );
+      return (Supplier<Object>) callSite.getTarget().invoke();
+    } catch (final Throwable t) {
+      throw new RuntimeException("Failed to instantiate " + cls.getName(), t);
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Function<Object, Object> buildHibernateLazyInitializerFn() {
+    if (HIBERNATE_PROXY == null) return null;
+    try {
+      final var method = HIBERNATE_PROXY.getMethod("getHibernateLazyInitializer");
+      final var lookup = MethodHandles.lookup();
+      final var handle = lookup.unreflect(method);
+      final var site = LambdaMetafactory.metafactory(
+        lookup,
+        "apply",
+        MethodType.methodType(Function.class),
+        MethodType.methodType(Object.class, Object.class),
+        handle,
+        MethodType.methodType(method.getReturnType(), HIBERNATE_PROXY)
+      );
+      return (Function<Object, Object>) site.getTarget().invokeExact();
+    } catch (final Throwable t) {
+      return null;
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Function<Object, Class<?>> buildHibernatePersistentClassFn() {
+    if (HIBERNATE_PROXY == null) return null;
+    try {
+      final var lazyInitializer = Class.forName(
+        "org.hibernate.proxy.LazyInitializer",
+        false,
+        Beans.class.getClassLoader()
+      );
+      final var method = lazyInitializer.getMethod("getPersistentClass");
+      final var lookup = MethodHandles.lookup();
+      final var handle = lookup.unreflect(method);
+      final var site = LambdaMetafactory.metafactory(
+        lookup,
+        "apply",
+        MethodType.methodType(Function.class),
+        MethodType.methodType(Object.class, Object.class),
+        handle,
+        MethodType.methodType(Class.class, lazyInitializer)
+      );
+      return (Function<Object, Class<?>>) site.getTarget().invokeExact();
+    } catch (final Throwable t) {
       return null;
     }
   }
@@ -114,19 +203,22 @@ public final class Beans {
    * neither of which initializes the proxy — so this is safe to call before the entity is actually
    * read, the same shape Hibernate's own {@code
    * HibernateProxyHelper.getClassWithoutInitializingProxy} follows.
+   *
+   * <p>Dispatch is LMF-cached: the two {@code Method.invoke} pairs that previously fired on every
+   * call are now one {@link Function#apply} each, bound once at class init. Hot-path savings are
+   * material when LAZY-fetched entities flow through deep-mapping.
    */
   public static Class<?> persistentClassOf(final Object pojo) {
     if (pojo == null) return null;
     final var raw = pojo.getClass();
     if (HIBERNATE_PROXY == null || !HIBERNATE_PROXY.isInstance(pojo)) return raw;
+    if (HIBERNATE_LAZY_INITIALIZER == null || HIBERNATE_PERSISTENT_CLASS == null) return raw;
     try {
-      final var getInitializer = HIBERNATE_PROXY.getMethod("getHibernateLazyInitializer");
-      final var initializer = getInitializer.invoke(pojo);
+      final var initializer = HIBERNATE_LAZY_INITIALIZER.apply(pojo);
       if (initializer == null) return raw;
-      final var getPersistentClass = initializer.getClass().getMethod("getPersistentClass");
-      final var persistentClass = (Class<?>) getPersistentClass.invoke(initializer);
+      final var persistentClass = HIBERNATE_PERSISTENT_CLASS.apply(initializer);
       return persistentClass != null ? persistentClass : raw;
-    } catch (final ReflectiveOperationException e) {
+    } catch (final RuntimeException e) {
       return raw;
     }
   }
@@ -336,7 +428,12 @@ public final class Beans {
         continue;
       }
       if (!"class".equals(prop) && !map.containsKey(prop)) {
-        m.setAccessible(true);
+        // No setAccessible(true) here — the stored Method is consulted only for metadata
+        // (getGenericReturnType, getName, getDeclaringClass); actual invocation goes through the
+        // LMF-built Function in GETTER_INVOKERS, which acquires access via privateLookupIn at
+        // build time. A raw setAccessible(true) here would also throw InaccessibleObjectException
+        // on JPMS-strict modules that `exports` but do not `opens` their packages — false-negative
+        // for a path the LMF route succeeds on.
         map.put(prop, m);
       }
     }
@@ -656,7 +753,7 @@ public final class Beans {
         fs.put(f.getName(), f);
       }
       final var lookup = privateLookupOrThrow(cls, cls, "FIELDS strategy");
-      this.ctorFn = buildCtorSupplier(cls, ctor, lookup);
+      this.ctorFn = Beans.buildCtorSupplier(cls, ctor, lookup);
       final var setterMap = new LinkedHashMap<String, BiConsumer<Object, Object>>();
       for (final var entry : fs.entrySet()) {
         setterMap.put(entry.getKey(), buildFieldSetter(cls, entry.getValue(), lookup));
@@ -709,27 +806,8 @@ public final class Beans {
       }
     }
 
-    @SuppressWarnings("unchecked")
-    private static Supplier<Object> buildCtorSupplier(
-      final Class<?> cls,
-      final Constructor<?> ctor,
-      final MethodHandles.Lookup lookup
-    ) {
-      try {
-        final var handle = lookup.unreflectConstructor(ctor);
-        final var callSite = LambdaMetafactory.metafactory(
-          lookup,
-          "get",
-          MethodType.methodType(Supplier.class),
-          MethodType.methodType(Object.class),
-          handle,
-          MethodType.methodType(cls)
-        );
-        return (Supplier<Object>) callSite.getTarget().invoke();
-      } catch (final Throwable t) {
-        throw new RuntimeException("Failed to instantiate " + cls.getName(), t);
-      }
-    }
+    // buildCtorSupplier lives on the outer Beans class so sibling writers (SettersWriter,
+    // FieldsWriter) can share the same LMF Supplier construction.
 
     private static BiConsumer<Object, Object> buildFieldSetter(
       final Class<?> cls,
@@ -1138,25 +1216,32 @@ public final class Beans {
   static final class SettersWriter<P> implements BeanWriter<P> {
 
     private final Class<P> cls;
-    private final Constructor<P> ctor;
+    private final Supplier<Object> ctorFn;
     private final Map<String, BiConsumer<Object, Object>> setterInvokers = new ConcurrentHashMap<>();
 
     SettersWriter(final Class<P> cls) {
       this.cls = cls;
+      final Constructor<P> ctor;
       try {
-        this.ctor = cls.getDeclaredConstructor();
+        ctor = cls.getDeclaredConstructor();
       } catch (final NoSuchMethodException e) {
         throw new IllegalStateException("writeBean(" + cls.getName() + ", SETTERS) requires a no-arg constructor", e);
       }
-      ctor.setAccessible(true);
+      // Build the no-arg ctor as an LMF-bound Supplier — mirrors FieldsWriter / BuilderWriter and
+      // closes the ADR-0005 gap that left SettersWriter calling Constructor.newInstance on every
+      // write. SETTERS is the autoWriter default for Lombok @Data beans, so this fires on the
+      // dominant bean-write path.
+      final var lookup = privateLookupOrThrow(cls, cls, "SETTERS strategy");
+      this.ctorFn = buildCtorSupplier(cls, ctor, lookup);
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public P construct(final String[] names, final Function<String, Object> valueByName) {
       final P pojo;
       try {
-        pojo = ctor.newInstance();
-      } catch (final ReflectiveOperationException e) {
+        pojo = (P) ctorFn.get();
+      } catch (final RuntimeException e) {
         throw new RuntimeException("Failed to instantiate " + cls.getName(), e);
       }
       for (final var name : names) {
