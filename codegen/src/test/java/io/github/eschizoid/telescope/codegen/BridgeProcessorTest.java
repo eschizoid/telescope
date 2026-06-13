@@ -1815,6 +1815,77 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("@ViaMapper(field, using) — codegen delegates the field to the named bridge class")
+    void viaMapperRoutesToNamedBridge() {
+      final var compilation = compile(
+        source(
+          "demo.AddressBridge",
+          """
+          package demo;
+          public final class AddressBridge {
+            public static demo.AddressDto forward(demo.Address a) {
+              return new demo.AddressDto(a.line() + " (forwarded)");
+            }
+            public static demo.Address backward(demo.AddressDto a) {
+              return new demo.Address(a.line() + " (backwarded)");
+            }
+          }
+          """
+        ),
+        source(
+          "demo.Address",
+          """
+          package demo;
+          public record Address(String line) {}
+          """
+        ),
+        source(
+          "demo.AddressDto",
+          """
+          package demo;
+          public record AddressDto(String line) {}
+          """
+        ),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(value = demo.OrderDto.class, viaMappers = {
+            @ViaMapper(field = "address", using = demo.AddressBridge.class)
+          })
+          public record Order(String id, demo.Address address) {}
+          """
+        ),
+        source(
+          "demo.OrderDto",
+          """
+          package demo;
+          public record OrderDto(String id, demo.AddressDto address) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
+
+      // Forward routes through the user-named bridge.
+      assertTrue(
+        bridge.contains("new demo.OrderDto(s.id(), demo.AddressBridge.forward(s.address()))"),
+        () -> "expected forward via AddressBridge, saw: " + bridge
+      );
+      // Backward routes through the user-named bridge.
+      assertTrue(
+        bridge.contains("new demo.Order(t.id(), demo.AddressBridge.backward(t.address()))"),
+        () -> "expected backward via AddressBridge, saw: " + bridge
+      );
+      // No auto-sub-bridge AddressBridge2 / AddressToAddressDtoBridge was generated for this pair.
+      assertNull(compilation.generated().get("demo.AddressToAddressDtoBridge"));
+    }
+
+    @Test
     @DisplayName("@Default on a primitive-typed source field is a compile error")
     void defaultsOnPrimitiveRejected() {
       final var compilation = compile(

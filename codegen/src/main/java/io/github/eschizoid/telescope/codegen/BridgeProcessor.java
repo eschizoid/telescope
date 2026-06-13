@@ -117,6 +117,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // Mapping.toOrElse(srcAcc, tgtAcc, defaultValue) factory. Populated + validated in process().
   private final Map<TypePair, Map<String, String>> defaultsByPair = new HashMap<>();
 
+  // Per-pair user-specified nested-bridge overrides: source field name -> bridge class FQN. The
+  // referenced class must expose `public static T forward(S)` + `public static S backward(T)` at
+  // signatures matching the field. When present, planFields uses FieldPlan.recurse(userBridge)
+  // for the row instead of deriving / emitting a sub-bridge for the field's nested pair. Mirrors
+  // the runtime Mapping.via(srcAcc, tgtAcc, mapper) factory.
+  private final Map<TypePair, Map<String, String>> viaMappersByPair = new HashMap<>();
+
   // Per-pair constants: target field name -> the already-emitted Java literal expression
   // ("\"API\"", "true", "0L", "null", etc.). Forward-only — injected into the target ctor arg;
   // backward silently drops the slot. Populated in process(), validated + emitted in generate().
@@ -139,6 +146,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     transformsByPair.clear();
     forwardOnlyTransformsByPair.clear();
     defaultsByPair.clear();
+    viaMappersByPair.clear();
     constantsByPair.clear();
     computesByPair.clear();
 
@@ -203,6 +211,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var rawDefaults = defaultsFromMirror(element, bridgeAm);
         if (rawDefaults == null) continue; // invalid default — already reported, skip this pair
         if (!rawDefaults.isEmpty()) defaultsByPair.put(pair, rawDefaults);
+        final var viaMappers = viaMappersFromMirror(element, bridgeAm);
+        if (viaMappers == null) continue; // invalid viaMapper — already reported, skip this pair
+        if (!viaMappers.isEmpty()) viaMappersByPair.put(pair, viaMappers);
         if (seen.add(pair)) pending.add(pair);
       }
     }
@@ -378,6 +389,49 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return new TransformSet(result, forwardOnlySet);
     }
     return TransformSet.empty();
+  }
+
+  // Read viaMappers from a @Bridge mirror. Returns source-field-name -> bridge-class FQN. The
+  // referenced class's signatures are validated at the generated code level — if the static
+  // forward/backward methods don't exist or don't match the field types, javac surfaces the error
+  // at the generated bridge body. Returns null on a structural error (already reported).
+  private Map<String, String> viaMappersFromMirror(final Element element, final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (!entry.getKey().getSimpleName().contentEquals("viaMappers")) continue;
+      @SuppressWarnings("unchecked")
+      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
+      final var result = new LinkedHashMap<String, String>();
+      for (final var av : list) {
+        final var viaAm = (AnnotationMirror) av.getValue();
+        String field = null;
+        TypeMirror using = null;
+        for (final var ve : viaAm.getElementValues().entrySet()) {
+          final var k = ve.getKey().getSimpleName().toString();
+          if (k.equals("field")) field = (String) ve.getValue().getValue();
+          else if (k.equals("using")) using = (TypeMirror) ve.getValue().getValue();
+        }
+        if (field == null || field.isEmpty()) {
+          error(element, "@ViaMapper requires a non-empty `field` name");
+          return null;
+        }
+        if (using == null || using.getKind() != TypeKind.DECLARED) {
+          error(element, "@ViaMapper `using` must be a class (typically a generated <X>Bridge)");
+          return null;
+        }
+        final var usingEl = (TypeElement) ((DeclaredType) using).asElement();
+        if (usingEl.getNestingKind() != NestingKind.TOP_LEVEL) {
+          error(element, "@ViaMapper `using` must be a top-level class");
+          return null;
+        }
+        if (result.containsKey(field)) {
+          error(element, "@ViaMapper field=\"" + field + "\" is declared more than once");
+          return null;
+        }
+        result.put(field, usingEl.getQualifiedName().toString());
+      }
+      return result;
+    }
+    return Map.of();
   }
 
   // Read defaults from a @Bridge mirror. Returns the raw source-field-name -> raw-string-value
@@ -689,6 +743,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var transforms = transformsByPair.getOrDefault(thisPair, Map.of());
     final var forwardOnlyTransforms = forwardOnlyTransformsByPair.getOrDefault(thisPair, Set.of());
     final var rawDefaults = defaultsByPair.getOrDefault(thisPair, Map.of());
+    final var viaMappers = viaMappersByPair.getOrDefault(thisPair, Map.of());
     final var rawConstants = constantsByPair.getOrDefault(thisPair, Map.of());
     final var computes = computesByPair.getOrDefault(thisPair, Map.of());
 
@@ -708,6 +763,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       if (drops.contains(t)) {
         error(source, "@Bridge field \"" + t + "\" appears in both transforms and drops — pick one.");
+        return;
+      }
+    }
+
+    // Validate viaMappers fields exist and don't overlap with drops or transforms.
+    for (final var v : viaMappers.keySet()) {
+      if (!sourceFields.stream().anyMatch(f -> f.name().equals(v))) {
+        error(
+          source,
+          "@Bridge viaMappers field=\"" +
+            v +
+            "\" is not a field of " +
+            source.getSimpleName() +
+            " — known fields: " +
+            sourceFields.stream().map(Field::name).collect(Collectors.toSet())
+        );
+        return;
+      }
+      if (drops.contains(v)) {
+        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and drops — pick one.");
+        return;
+      }
+      if (transforms.containsKey(v)) {
+        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and transforms — pick one.");
         return;
       }
     }
@@ -989,6 +1068,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       targetFields,
       renames,
       transforms,
+      viaMappers,
       pending,
       seen,
       userDeclared
@@ -1382,6 +1462,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> targetFields,
     final Map<String, String> renames,
     final Map<String, String> transforms,
+    final Map<String, String> viaMappers,
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
     final Set<TypePair> userDeclared
@@ -1391,6 +1472,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // Per-field transform supersedes the type-match logic — the transform IS the contract.
       if (transforms.containsKey(sf.name())) {
         plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.TRANSFORM, transforms.get(sf.name())));
+        continue;
+      }
+      // Per-field viaMapper supersedes auto-recursion — the user-supplied bridge class IS the
+      // contract. Emit a RECURSE plan whose subBridgeName is the user's class FQN; applyForward /
+      // applyBackward already emit `<class>.forward(...)` / `<class>.backward(...)` for RECURSE,
+      // so no new dispatch arm is needed.
+      if (viaMappers.containsKey(sf.name())) {
+        plans.put(sf.name(), FieldPlan.recurse(viaMappers.get(sf.name())));
         continue;
       }
       final var tf = fieldByName(targetFields, renames.getOrDefault(sf.name(), sf.name()));

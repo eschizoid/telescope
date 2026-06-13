@@ -170,4 +170,22 @@ public @interface Bridge {
    * this pair (the two mechanisms have incompatible semantics).
    */
   Default[] defaults() default {};
+
+  /**
+   * Per-field nested-bridge overrides. Each {@link ViaMapper} names a source field and a bridge
+   * class to delegate to — escape hatch when the auto-recursion can't reach the nested type or
+   * when the user wants to point at a specific {@code BRIDGE} constant. Mirrors the runtime
+   * {@link io.github.eschizoid.telescope.mapping.Mapping#via(
+   * io.github.eschizoid.telescope.Telescope.Accessor,
+   * io.github.eschizoid.telescope.Telescope.Accessor,
+   * io.github.eschizoid.telescope.conversion.Mapper) Mapping.via(srcAcc, tgtAcc, mapper)} factory.
+   *
+   * <pre>{@code
+   * @Bridge(value = OrderEntity.class, viaMappers = {
+   *   @ViaMapper(field = "address", using = AddressBridge.class)
+   * })
+   * public record Order(String id, Address address) {}
+   * }</pre>
+   */
+  ViaMapper[] viaMappers() default {};
 }
