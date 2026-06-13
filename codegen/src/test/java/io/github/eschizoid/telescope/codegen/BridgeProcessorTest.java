@@ -1302,6 +1302,65 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("@Transform(forwardOnly=true) — backward zero-fills the slot, BridgeFn.backward is never invoked")
+    void transformForwardOnlyEmitsZeroFill() {
+      final var compilation = compile(
+        source(
+          "demo.AuditTimestampFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          import java.time.Instant;
+          public final class AuditTimestampFn implements BridgeFn<Instant, String> {
+            public AuditTimestampFn() {}
+            @Override public String forward(Instant x) { return x.toString(); }
+            // Backward stubbed — never invoked when forwardOnly=true. The generated bridge
+            // emits a zero-fill instead of calling this method.
+            @Override public Instant backward(String s) { throw new UnsupportedOperationException(); }
+          }
+          """
+        ),
+        source(
+          "demo.Audit",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          import java.time.Instant;
+          @Bridge(value = demo.AuditEntity.class, transforms = {
+            @Transform(field = "createdAt", using = demo.AuditTimestampFn.class, forwardOnly = true)
+          })
+          public record Audit(String id, Instant createdAt) {}
+          """
+        ),
+        source(
+          "demo.AuditEntity",
+          """
+          package demo;
+          public record AuditEntity(String id, String createdAt) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.AuditBridge");
+      assertNotNull(bridge, () -> "AuditBridge missing; saw " + compilation.generated().keySet());
+
+      // Forward routes through the BridgeFn unchanged.
+      assertTrue(bridge.contains("new demo.AuditEntity(s.id(), __tx_createdAt.forward(s.createdAt()))"), bridge);
+      // Backward emits null (the reference-type zero-fill) for the forward-only slot — does NOT
+      // call __tx_createdAt.backward(t.createdAt()).
+      assertTrue(
+        bridge.contains("new demo.Audit(t.id(), null)"),
+        () -> "expected backward zero-fill for forwardOnly transform slot, saw: " + bridge
+      );
+      assertTrue(
+        !bridge.contains("__tx_createdAt.backward"),
+        () -> "backward must NOT invoke BridgeFn.backward for forwardOnly transform, saw: " + bridge
+      );
+    }
+
+    @Test
     @DisplayName("misspelled transform field is a compile error pointing at the source")
     void misspelledTransformFieldIsRejected() {
       final var compilation = compile(

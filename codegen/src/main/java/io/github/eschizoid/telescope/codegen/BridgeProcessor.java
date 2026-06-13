@@ -105,6 +105,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // the same-type bijection check. Populated in process(), read in generate().
   private final Map<TypePair, Map<String, String>> transformsByPair = new HashMap<>();
 
+  // Per-pair set of source field names whose @Transform was declared with forwardOnly = true.
+  // Backward direction emits a zero-value fill for these slots (the same shape `drops` uses) and
+  // never invokes the user's BridgeFn.backward. Mirrors the runtime Mapping.forward(...) semantics.
+  // Populated in process(), read in generate().
+  private final Map<TypePair, Set<String>> forwardOnlyTransformsByPair = new HashMap<>();
+
   // Per-pair constants: target field name -> the already-emitted Java literal expression
   // ("\"API\"", "true", "0L", "null", etc.). Forward-only — injected into the target ctor arg;
   // backward silently drops the slot. Populated in process(), validated + emitted in generate().
@@ -125,6 +131,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     renamesByPair.clear();
     renameFanoutsByPair.clear();
     transformsByPair.clear();
+    forwardOnlyTransformsByPair.clear();
     constantsByPair.clear();
     computesByPair.clear();
 
@@ -173,9 +180,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (renameSet == null) continue; // invalid rename — error already reported, skip this pair
         if (!renameSet.bySource().isEmpty()) renamesByPair.put(pair, renameSet.bySource());
         if (!renameSet.fanoutExtras().isEmpty()) renameFanoutsByPair.put(pair, renameSet.fanoutExtras());
-        final var transforms = transformsFromMirror(element, bridgeAm);
-        if (transforms == null) continue; // invalid transform — already reported, skip this pair
-        if (!transforms.isEmpty()) transformsByPair.put(pair, transforms);
+        final var transformSet = transformsFromMirror(element, bridgeAm);
+        if (transformSet == null) continue; // invalid transform — already reported, skip this pair
+        if (!transformSet.byField().isEmpty()) transformsByPair.put(pair, transformSet.byField());
+        if (!transformSet.forwardOnlyFields().isEmpty()) forwardOnlyTransformsByPair.put(
+          pair,
+          transformSet.forwardOnlyFields()
+        );
         final var constants = constantsFromMirror(element, bridgeAm);
         if (constants == null) continue; // invalid constant — already reported, skip this pair
         if (!constants.isEmpty()) constantsByPair.put(pair, constants);
@@ -305,23 +316,34 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return RenameSet.empty();
   }
 
+  // Result of parsing a @Bridge's transforms list. `byField` carries the source-field → BridgeFn
+  // class FQN map (the long-standing shape); `forwardOnlyFields` carries the subset of source
+  // field names whose @Transform was declared with forwardOnly = true.
+  private record TransformSet(Map<String, String> byField, Set<String> forwardOnlyFields) {
+    static TransformSet empty() {
+      return new TransformSet(Map.of(), Set.of());
+    }
+  }
+
   // Read transforms from a @Bridge mirror. Returns null on a malformed transform (already reported)
-  // so the caller can skip the pair. Empty map when no transforms are present. The map keys are
-  // source field names; values are the BridgeFn class FQN to instantiate at emit time.
-  private Map<String, String> transformsFromMirror(final Element element, final AnnotationMirror am) {
+  // so the caller can skip the pair. Empty TransformSet when no transforms are present.
+  private TransformSet transformsFromMirror(final Element element, final AnnotationMirror am) {
     for (final var entry : am.getElementValues().entrySet()) {
       if (!entry.getKey().getSimpleName().contentEquals("transforms")) continue;
       @SuppressWarnings("unchecked")
       final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
       final var result = new LinkedHashMap<String, String>();
+      final var forwardOnlySet = new LinkedHashSet<String>();
       for (final var av : list) {
         final var transformAm = (AnnotationMirror) av.getValue();
         String field = null;
         TypeMirror using = null;
+        Boolean forwardOnly = Boolean.FALSE;
         for (final var te : transformAm.getElementValues().entrySet()) {
           final var k = te.getKey().getSimpleName().toString();
           if (k.equals("field")) field = (String) te.getValue().getValue();
           else if (k.equals("using")) using = (TypeMirror) te.getValue().getValue();
+          else if (k.equals("forwardOnly")) forwardOnly = (Boolean) te.getValue().getValue();
         }
         if (field == null || field.isEmpty()) {
           error(element, "@Transform requires a non-empty `field` name");
@@ -341,10 +363,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           return null;
         }
         result.put(field, usingEl.getQualifiedName().toString());
+        if (Boolean.TRUE.equals(forwardOnly)) forwardOnlySet.add(field);
       }
-      return result;
+      return new TransformSet(result, forwardOnlySet);
     }
-    return Map.of();
+    return TransformSet.empty();
   }
 
   // Read constants from a @Bridge mirror. Returns the raw target-field-name -> raw-string-value
@@ -616,6 +639,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var renames = renamesByPair.getOrDefault(thisPair, Map.of());
     final var renameFanouts = renameFanoutsByPair.getOrDefault(thisPair, Map.of());
     final var transforms = transformsByPair.getOrDefault(thisPair, Map.of());
+    final var forwardOnlyTransforms = forwardOnlyTransformsByPair.getOrDefault(thisPair, Set.of());
     final var rawConstants = constantsByPair.getOrDefault(thisPair, Map.of());
     final var computes = computesByPair.getOrDefault(thisPair, Map.of());
 
@@ -851,10 +875,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         readExpr(source, "s", fieldByName(nonDroppedSourceFields, srcName))
       );
     };
-    // readBackward is called with SOURCE field names. For drops, emit the type's zero value.
-    // Otherwise forward-rename the source name to find the matching target field for the read.
+    // readBackward is called with SOURCE field names. For drops AND forward-only transforms, emit
+    // the type's zero value — both mechanisms have no defined backward and the source slot must be
+    // filled with something. Otherwise forward-rename the source name to find the matching target
+    // field for the read.
     final Function<String, String> readBackward = sourceName -> {
       if (drops.contains(sourceName)) return defaultLiteralFor(fieldByName(sourceFields, sourceName).type());
+      if (forwardOnlyTransforms.contains(sourceName)) return defaultLiteralFor(
+        fieldByName(sourceFields, sourceName).type()
+      );
       final var tgtName = renames.getOrDefault(sourceName, sourceName);
       return applyBackward(
         sourceName,
