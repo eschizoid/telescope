@@ -205,4 +205,65 @@ class MapperPostHooksTest {
       assertEquals(1, afterBwd.get(), "afterBackward fired on backward()");
     }
   }
+
+  @Nested
+  @DisplayName("asTelescope() — propagates hooks (regression: previously dropped them silently)")
+  class AsTelescopePropagatesHooks {
+
+    @Test
+    @DisplayName("asTelescope().read(a) runs beforeForward + afterForward (forward leg)")
+    void asTelescopeReadFiresForwardHooks() {
+      final var beforeFwd = new AtomicInteger();
+      final var afterFwd = new AtomicInteger();
+
+      final var telescope = baseMapper()
+        .beforeForward(e -> {
+          beforeFwd.incrementAndGet();
+          return e;
+        })
+        .afterForward(d -> {
+          afterFwd.incrementAndGet();
+          return d;
+        })
+        .asTelescope();
+
+      telescope.read(new Entity("e-1", "Alice", "Wonderland", 0L));
+      assertEquals(1, beforeFwd.get(), "beforeForward must fire on asTelescope().read()");
+      assertEquals(1, afterFwd.get(), "afterForward must fire on asTelescope().read()");
+    }
+
+    @Test
+    @DisplayName("asTelescope().set(a, b) runs beforeBackward + afterBackward (backward leg)")
+    void asTelescopeSetFiresBackwardHooks() {
+      final var beforeBwd = new AtomicInteger();
+      final var afterBwd = new AtomicInteger();
+
+      final var telescope = baseMapper()
+        .beforeBackward(d -> {
+          beforeBwd.incrementAndGet();
+          return d;
+        })
+        .afterBackward(e -> {
+          afterBwd.incrementAndGet();
+          return e;
+        })
+        .asTelescope();
+
+      telescope.set(new Entity("e-1", "X", "Y", 0L), new Dto("e-1", "X", null));
+      assertEquals(1, beforeBwd.get(), "beforeBackward must fire on asTelescope().set()");
+      assertEquals(1, afterBwd.get(), "afterBackward must fire on asTelescope().set()");
+    }
+
+    @Test
+    @DisplayName("asTelescope() preserves a hook's value-transforming behavior (not just side effects)")
+    void asTelescopePropagatesValueTransform() {
+      final var telescope = baseMapper()
+        .afterForward(d -> new Dto(d.id(), d.fullName() + "!", d.updatedAtMillis()))
+        .asTelescope();
+
+      final var dto = telescope.read(new Entity("e-1", "Alice", "X", 0L));
+      // afterForward suffixes "!" — if asTelescope() dropped the hook, this would just be "Alice"
+      assertEquals("Alice!", dto.fullName());
+    }
+  }
 }

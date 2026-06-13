@@ -155,7 +155,11 @@ public final class Mapper<A, B> {
    * }</pre>
    */
   public Telescope<A, B> asTelescope() {
-    return Telescope.iso(iso::to, iso::from);
+    // Route through this::forward / this::backward (NOT iso::to / iso::from) so the four hook
+    // fields (beforeForward / afterForward / beforeBackward / afterBackward) compose into the
+    // returned Telescope. Calling iso::to directly bypasses the hook chain — a configured mapper
+    // would silently drop its hooks when handed to longer .then(...) chains via this method.
+    return Telescope.iso(this::forward, this::backward);
   }
 
   /**
@@ -241,6 +245,9 @@ public final class Mapper<A, B> {
    * Telescope.mapper(Entity.class, Dto.class, ...)
    *     .beforeForward(e -> e.normalised());
    * }</pre>
+   *
+   * @see io.github.eschizoid.telescope.Telescope#before(Function) for the path-level (single-
+   *     direction, lattice-native) sibling that composes through {@code .then(...)} chains.
    */
   public Mapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
     final Function<A, A> prev = this.preForward;
@@ -275,6 +282,9 @@ public final class Mapper<A, B> {
    * Telescope.mapper(Entity.class, Dto.class, ...)
    *     .afterForward(dto -> dto.withUpdatedAt(Instant.now().toString()));
    * }</pre>
+   *
+   * @see io.github.eschizoid.telescope.Telescope#after(Function) for the path-level (single-
+   *     direction, lattice-native) sibling that composes through {@code .then(...)} chains.
    */
   public Mapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
     return afterForward((a, b) -> hook.apply(b));
