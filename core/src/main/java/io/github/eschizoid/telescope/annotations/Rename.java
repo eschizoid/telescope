@@ -17,15 +17,15 @@ import java.lang.annotation.RetentionPolicy;
  *
  * <p>Both names must be real field names on their respective sides. A misspelled name on either
  * side is a compile error. Multiple renames cannot reference the same target name. By default two
- * renames cannot share the same source either — set {@link #forwardOnly()} to {@code true} on
- * both (or all) of them to enable forward-only fan-out where one source field feeds multiple
- * target columns.
+ * renames cannot share the same source either — set {@link #forwardOnly()} to {@code true} on both
+ * (or all) of them to enable forward-only fan-out where one source field feeds multiple target
+ * columns.
  *
  * <h2>Forward-only fan-out</h2>
  *
- * <p>Some enterprise audit shapes need a single source field to feed two or more correlated
- * target columns (the canonical {@code businessUnit → cretnUserId AND lastUpdtdUserId} case).
- * Mark the conflicting renames {@code forwardOnly = true} to opt in:
+ * <p>Some enterprise audit shapes need a single source field to feed two or more correlated target
+ * columns (the canonical {@code businessUnit → cretnUserId AND lastUpdtdUserId} case). Mark the
+ * conflicting renames {@code forwardOnly = true} to opt in:
  *
  * <pre>{@code
  * @Bridge(value = AuditEntity.class, renames = {
@@ -36,8 +36,8 @@ import java.lang.annotation.RetentionPolicy;
  * }</pre>
  *
  * <p>Forward writes the source value to <em>every</em> target column. Backward reconstructs the
- * source from the <em>first</em> declared fan-out target — declaration order is the contract.
- * This mirrors the runtime fan-out semantics enabled in {@code Telescope.mapper(...)}.
+ * source from the <em>first</em> declared fan-out target — declaration order is the contract. This
+ * mirrors the runtime fan-out semantics enabled in {@code Telescope.mapper(...)}.
  */
 @Retention(RetentionPolicy.SOURCE)
 public @interface Rename {
@@ -48,10 +48,10 @@ public @interface Rename {
   String target();
 
   /**
-   * Opt in to forward-only fan-out when another {@link Rename} on the same {@link Bridge}
-   * declares the same {@link #source()}. Backward direction reads from the first declared
-   * fan-out target only — pick declaration order to control which target reconstructs the
-   * source. See the type-level javadoc for the audit-column fan-out shape.
+   * Opt in to forward-only fan-out when another {@link Rename} on the same {@link Bridge} declares
+   * the same {@link #source()}. Backward direction reads from the first declared fan-out target
+   * only — pick declaration order to control which target reconstructs the source. See the
+   * type-level javadoc for the audit-column fan-out shape.
    */
   boolean forwardOnly() default false;
 }

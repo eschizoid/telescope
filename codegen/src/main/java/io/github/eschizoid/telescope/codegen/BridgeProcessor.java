@@ -85,15 +85,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // Per-pair renames: source field name -> primary target field name for fields whose two sides
   // have different names. The bijection check applies renames on the source side before comparing
   // to target names; planFields and the field-read expressions follow the mapping. For forward-only
-  // fan-out (one source feeding multiple targets), this map holds the FIRST-declared target — that's
+  // fan-out (one source feeding multiple targets), this map holds the FIRST-declared target —
+  // that's
   // the one backward reads from. Extra fan-out targets live in renameFanoutsByPair. Populated in
   // process(), read in generate().
   private final Map<TypePair, Map<String, String>> renamesByPair = new HashMap<>();
 
   // Per-pair forward-only fan-out extras: source field name -> ordered list of EXTRA target field
-  // names beyond the primary in renamesByPair. Only present when @Rename(forwardOnly = true) is used
+  // names beyond the primary in renamesByPair. Only present when @Rename(forwardOnly = true) is
+  // used
   // on two or more renames sharing a source. Forward writes the source value to every target
-  // (primary + extras); backward reads only the primary. Populated in process(), read in generate().
+  // (primary + extras); backward reads only the primary. Populated in process(), read in
+  // generate().
   private final Map<TypePair, Map<String, List<String>>> renameFanoutsByPair = new HashMap<>();
 
   // Per-pair per-field transforms: source field name -> BridgeFn class FQN. The transformed field
@@ -686,9 +689,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
     // Validate forward-only fan-out extras: every extra target must exist on the target side, each
-    // extra target's type must match the primary target's type (forward writes one source value into
+    // extra target's type must match the primary target's type (forward writes one source value
+    // into
     // every target slot — they must be assignment-compatible), and the extra target can't double up
-    // with a constant/compute injection. seenTargets across the whole rename set is already enforced
+    // with a constant/compute injection. seenTargets across the whole rename set is already
+    // enforced
     // upstream in renamesFromMirror; this loop adds the source-side existence + type checks.
     for (final var fanout : renameFanouts.entrySet()) {
       final var srcName = fanout.getKey();
@@ -811,8 +816,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           .stream()
           .filter(f -> !drops.contains(f.name()))
           .toList();
-    if (!sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields))
-      return;
+    if (
+      !sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields)
+    ) return;
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
