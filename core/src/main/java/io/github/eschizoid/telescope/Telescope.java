@@ -510,11 +510,11 @@ public sealed class Telescope<
 
   /**
    * Forward-only multi-source mapper that reads from two source objects and assembles a single
-   * target. Each {@link io.github.eschizoid.telescope.mapping.MergeStep MergeStep} row picks one
+   * target. Each {@link io.github.eschizoid.telescope.mapping.MergeStep2 MergeStep2} row picks one
    * slot of the {@link Sources2} tuple ({@link
-   * io.github.eschizoid.telescope.mapping.MergeStep#first first(...)} for {@code A}, {@link
-   * io.github.eschizoid.telescope.mapping.MergeStep#second second(...)} for {@code B}) and binds it
-   * to a target component by name.
+   * io.github.eschizoid.telescope.mapping.MergeStep2#first first(...)} for {@code A}, {@link
+   * io.github.eschizoid.telescope.mapping.MergeStep2#second second(...)} for {@code B}) and binds
+   * it to a target component by name.
    *
    * <pre>{@code
    * Mapper<Sources2<Customer, Audit>, Profile> mapper = Telescope.merge(
@@ -524,12 +524,14 @@ public sealed class Telescope<
    *     second(Audit::createdBy,   Profile::createdBy),
    *     second(Audit::createdAt,   Profile::createdAt));
    *
-   * Profile p = mapper.forward(new Sources2<>(customer, audit));
+   * Profile p = mapper.forward(Sources.of(customer, audit));
    * }</pre>
    *
    * <p>Designed for the ~60% of enterprise mappers whose forward direction reads from more than one
    * source object — replaces the {@code Edit.over(...)} workaround that loses the typed
-   * single-source contract.
+   * single-source contract. For arity 3 see {@link #merge(Class, Class, Class, Class,
+   * io.github.eschizoid.telescope.mapping.MergeStep3[])}; the family stops at arity 5 by design
+   * (see {@link Sources}).
    *
    * <p><b>Backward is unsupported.</b> The multi-source case has no general inverse (which source
    * gets which fields back?); {@link Mapper#backward(Object)} and {@link Mapper#patch(Object,
@@ -542,9 +544,7 @@ public sealed class Telescope<
    * @param sourceA the first source class
    * @param sourceB the second source class
    * @param target the target class
-   * @param steps the per-component correspondences, each built via {@link
-   *     io.github.eschizoid.telescope.mapping.MergeStep#first} or {@link
-   *     io.github.eschizoid.telescope.mapping.MergeStep#second}
+   * @param steps the per-component correspondences
    * @return a {@code Mapper} whose {@code forward} reads from {@link Sources2} and assembles the
    *     target; whose {@code backward} throws {@link UnsupportedOperationException}
    */
@@ -554,9 +554,44 @@ public sealed class Telescope<
     final Class<A> sourceA,
     final Class<B> sourceB,
     final Class<T> target,
-    final io.github.eschizoid.telescope.mapping.MergeStep<A, B, T>... steps
+    final io.github.eschizoid.telescope.mapping.MergeStep2<A, B, T>... steps
   ) {
-    return Merge.build(sourceA, sourceB, target, steps);
+    return Merge.build2(sourceA, sourceB, target, steps);
+  }
+
+  /**
+   * Three-source forward-only mapper — arity-3 sibling of {@link #merge(Class, Class, Class,
+   * io.github.eschizoid.telescope.mapping.MergeStep2[])}. Each {@link
+   * io.github.eschizoid.telescope.mapping.MergeStep3 MergeStep3} row picks one slot of the {@link
+   * Sources3} tuple and binds it to a target component by name.
+   *
+   * <pre>{@code
+   * Mapper<Sources3<Customer, Audit, LineItem>, Invoice> mapper = Telescope.merge(
+   *     Customer.class, Audit.class, LineItem.class, Invoice.class,
+   *     from(Customer::id,         Invoice::customerId),
+   *     from(Audit::createdBy,     Invoice::createdBy),
+   *     from(LineItem::totalCents, Invoice::totalCents));
+   *
+   * Invoice inv = mapper.forward(Sources.of(customer, audit, lineItem));
+   * }</pre>
+   *
+   * <p>Same forward-only contract as the 2-source overload: {@code backward}/{@code patch} throw.
+   *
+   * @param <A> the first source type
+   * @param <B> the second source type
+   * @param <C> the third source type
+   * @param <T> the target type
+   */
+  @SafeVarargs
+  @SuppressWarnings("varargs")
+  public static <A, B, C, T> Mapper<Sources3<A, B, C>, T> merge(
+    final Class<A> sourceA,
+    final Class<B> sourceB,
+    final Class<C> sourceC,
+    final Class<T> target,
+    final io.github.eschizoid.telescope.mapping.MergeStep3<A, B, C, T>... steps
+  ) {
+    return Merge.build3(sourceA, sourceB, sourceC, target, steps);
   }
 
   /**
