@@ -747,9 +747,9 @@ public final class DeepMap {
       // DEAD-BRANCH-DEFENSIVE: this throwingBackward lambda is unreachable via the public API.
       // Both factory entries Telescope.map(...) and Telescope.mapper(...) call rejectForwardOnlyRows
       // up front; Telescope.mapperForward(...) accepts the row but never invokes the backward leg.
-      // The guard remains so a future cross-package construction path that bypasses rejectForwardOnlyRows
-      // produces a precise field-naming error rather than silent corruption. NOT a coverage target —
-      // see DeepMapDeadBranchNotes for the full reasoning.
+      // The guard remains so a future cross-package construction path that bypasses
+      // rejectForwardOnlyRows produces a precise field-naming error rather than silent corruption.
+      // NOT a coverage target.
       final String fieldName = r.sourceField();
       final Function<Object, Object> throwingBackward = y -> {
         throw new UnsupportedOperationException(
