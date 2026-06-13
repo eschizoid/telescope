@@ -494,6 +494,10 @@ public sealed class Telescope<
   // No @SafeVarargs needed: MapStep is reifiable (no type parameter), so this varargs method does
   // not produce heap-pollution warnings for callers.
   public static <A, B> Telescope<A, B> map(final Class<A> source, final Class<B> target, final MapStep... steps) {
+    // Mirror the rejection that .mapper(...) does — a forward-only row would silently corrupt the
+    // returned Telescope's backward leg (set/update through a path whose constituent Iso has a
+    // throwing inverse). Catching it at the factory boundary keeps the diagnostic at the call site.
+    rejectForwardOnlyRows(source, target, steps, "Telescope.map");
     return new Telescope<>(DeepMap.resolve(source, target, steps));
   }
 
