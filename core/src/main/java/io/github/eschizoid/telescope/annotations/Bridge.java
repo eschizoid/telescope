@@ -89,9 +89,9 @@ public @interface Bridge {
    *
    * <p>Each rename's source must name a real field on the annotated source; each target must name a
    * real field on the bridge target. No two renames may share the same target. By default no two
-   * renames may share the same source either; opt into forward-only fan-out by setting
-   * {@link Rename#forwardOnly()} on all conflicting renames — backward then reads from the first
-   * declared fan-out target. The non-fan-out case stays a strict bijection within the rename set.
+   * renames may share the same source either; opt into forward-only fan-out by setting {@link
+   * Rename#forwardOnly()} on all conflicting renames — backward then reads from the first declared
+   * fan-out target. The non-fan-out case stays a strict bijection within the rename set.
    */
   Rename[] renames() default {};
 
