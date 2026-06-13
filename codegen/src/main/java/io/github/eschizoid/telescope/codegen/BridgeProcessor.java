@@ -868,6 +868,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         );
         return;
       }
+      // FD-1: defaults + transforms on the same field stack two modifiers with undefined
+      // ordering — the @Transform decides the conversion, the @Default wraps the source read in
+      // a null-coalesce that the transform then consumes. The combination is structurally
+      // accidental rather than designed; reject explicitly so the user picks one.
+      if (transforms.containsKey(fieldName)) {
+        error(
+          source,
+          "@Bridge field \"" +
+            fieldName +
+            "\" appears in both defaults and transforms — pick one (use a transform that handles null internally, or remove the default)."
+        );
+        return;
+      }
       final var lit = parseConstantLiteral(source, fieldName, e.getValue(), sf.type());
       if (lit == null) return;
       parsedDefaults.put(fieldName, lit);
