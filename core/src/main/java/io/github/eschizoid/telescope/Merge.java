@@ -4,30 +4,35 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Getter;
-import io.github.eschizoid.telescope.mapping.MergeStep;
+import io.github.eschizoid.telescope.mapping.MergeStep2;
+import io.github.eschizoid.telescope.mapping.MergeStep3;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 
 /**
- * Engine for {@link Telescope#merge(Class, Class, Class, MergeStep[])} — the two-source
- * forward-only mapper. Each {@link MergeStep} row picks its source value from the {@link
- * Sources2#first()} or {@link Sources2#second()} slot (explicit factories) or via build-time class
- * inference (the recommended {@link
- * MergeStep#from(io.github.eschizoid.telescope.Telescope.Accessor,
- * io.github.eschizoid.telescope.Telescope.Accessor) from(...)} factory), normalizes the row's
- * target-side accessor to its component name, and the rebuild reads through {@link
- * Reflective#construct} the same way {@code DeepMap}'s name-keyed rebuild does — records via
- * canonical constructor, beans via the auto-detected write strategy. Unmapped target components
- * fall through to {@code null} (or the primitive default), matching {@code Telescope.map(...)}'s
- * missing-source semantics.
+ * Engine for {@link Telescope#merge(Class, Class, Class, MergeStep2[])} and its arity-3 sibling
+ * {@link Telescope#merge(Class, Class, Class, Class, MergeStep3[])} — the multi-source forward-only
+ * mappers. Each row picks its source value from a {@link Sources} slot (explicit factory or
+ * build-time class inference), and the rebuild reads through {@link Reflective#construct} the same
+ * way {@code DeepMap}'s name-keyed rebuild does — records via canonical constructor, beans via the
+ * auto-detected write strategy. Unmapped target components fall through to {@code null} (or the
+ * primitive default), matching {@code Telescope.map(...)}'s missing-source semantics.
+ *
+ * <p>Engine is slot-indexed, not slot-named: {@link ResolvedStep#slot()} is a 0-based integer that
+ * the forward function feeds to {@link Sources#slot(int)}. This keeps the dispatch loop
+ * arity-generic, so adding {@code Sources4} / {@code Sources5} is a mechanical extension — the
+ * dispatch carries through with no engine changes.
  *
  * <p>Build-time guards (each a precise {@link IllegalArgumentException} naming the row + the
  * factory): null source/target accessor, duplicate target field across rows, and source class
- * mismatching neither slot for {@link MergeStep.FromInferred from(...)} rows.
+ * mismatching any declared slot for {@code from(...)} / {@code auto(...)} rows.
  *
  * <p>Backward is documented as unsupported — the multi-source case has no general inverse, so the
  * backward {@link java.util.function.Function} on the produced {@link Mapper} throws.
@@ -36,32 +41,35 @@ final class Merge {
 
   private Merge() {}
 
+  // ---------------------------------------------------------------------------
+  // Arity 2
+  // ---------------------------------------------------------------------------
+
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  static <A, B, T> Mapper<Sources2<A, B>, T> build(
+  static <A, B, T> Mapper<Sources2<A, B>, T> build2(
     final Class<A> sourceA,
     final Class<B> sourceB,
     final Class<T> target,
-    final MergeStep<A, B, T>[] steps
+    final MergeStep2<A, B, T>[] steps
   ) {
     Objects.requireNonNull(sourceA, "Telescope.merge: sourceA class is null");
     Objects.requireNonNull(sourceB, "Telescope.merge: sourceB class is null");
     Objects.requireNonNull(target, "Telescope.merge: target class is null");
     final var targetRefl = Reflective.of(target);
+    final var sourceClasses = new Class<?>[] { sourceA, sourceB };
 
-    // Resolve every step to a (slot, srcAccessor, tgtName) triple up front, so the per-call
-    // forward function does no SerializedLambda decode and no `instanceof` dispatch.
-    final var plan = new ResolvedStep[steps.length];
+    final var plan = new ArrayList<ResolvedStep>(steps.length);
     final Set<String> claimedTgt = new HashSet<>();
     for (int i = 0; i < steps.length; i++) {
       final var step = steps[i];
       if (step == null) throw new IllegalArgumentException("Telescope.merge: step at index " + i + " is null");
-      plan[i] = resolveStep(step, i, sourceA, sourceB, targetRefl, claimedTgt);
+      resolveStep2(step, i, sourceClasses, target, targetRefl, claimedTgt, plan);
     }
 
     final Function<Sources2<A, B>, T> forward = sources -> {
-      final Map<String, Object> byName = new HashMap<>(plan.length * 2);
+      final Map<String, Object> byName = new HashMap<>(plan.size() * 2);
       for (final var r : plan) {
-        final Object src = r.useFirst() ? sources.first() : sources.second();
+        final Object src = sources.slot(r.slot());
         byName.put(r.tgtName(), r.srcAccessor().get(src));
       }
       return (T) targetRefl.construct(target, byName::get);
@@ -78,63 +86,220 @@ final class Merge {
     return Mapper.create(forward, backward, sourcesClass, target, Map.of());
   }
 
-  /**
-   * Build-time resolution per row: validate accessors, dedupe target slot, and resolve the slot
-   * dispatch (explicit first/second, or class-inferred). Throws a precise IAE naming the row index
-   * + the factory on every failure path so user diagnostics are self-correlating.
-   */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static ResolvedStep resolveStep(
-    final MergeStep<?, ?, ?> step,
+  private static void resolveStep2(
+    final MergeStep2<?, ?, ?> step,
     final int index,
-    final Class<?> sourceA,
-    final Class<?> sourceB,
+    final Class<?>[] sourceClasses,
+    final Class<?> targetClass,
     final Reflective targetRefl,
-    final Set<String> claimedTgt
+    final Set<String> claimedTgt,
+    final List<ResolvedStep> out
   ) {
-    final boolean useFirst;
-    // Lattice-routed: hold the source accessor as the lattice's read-only optic primitive
-    // (Getter), not a bare Function. Per CLAUDE.md "A Function<Object, Object> field that COULD
-    // have been a Getter<X, Y> is a smell" — the row's read shape lives in the lattice.
+    if (step instanceof MergeStep2.AutoSameName<?, ?, ?> r) {
+      resolveAutoBackfill(r.sourceClass(), index, sourceClasses, targetClass, targetRefl, claimedTgt, out);
+      return;
+    }
+    final int slot;
     final Getter<Object, Object> srcAccessor;
     final Telescope.Accessor<?, ?> tgtAccessor;
-
-    if (step instanceof MergeStep.FromInferred<?, ?, ?, ?> r) {
+    if (step instanceof MergeStep2.FromInferred<?, ?, ?, ?> r) {
       ensureAccessorPresent(r.src(), index, "from", "source");
       ensureAccessorPresent(r.tgt(), index, "from", "target");
-      final Class<?> srcClass = LambdaIntrospection.implClassOf(r.src());
-      if (srcClass.equals(sourceA)) useFirst = true;
-      else if (srcClass.equals(sourceB)) useFirst = false;
-      else throw new IllegalArgumentException(
-        "Telescope.merge: step at index " +
-          index +
-          " uses from(" +
-          srcClass.getSimpleName() +
-          "::...) but neither sourceA (" +
-          sourceA.getSimpleName() +
-          ") nor sourceB (" +
-          sourceB.getSimpleName() +
-          ") matches. Use MergeStep.first(...) / .second(...) explicitly, or fix the source accessor."
-      );
+      slot = inferSlot(r.src(), index, "from", sourceClasses);
       srcAccessor = asGetter(r.src());
       tgtAccessor = r.tgt();
-    } else if (step instanceof MergeStep.FromFirst<?, ?, ?, ?> r) {
+    } else if (step instanceof MergeStep2.FromFirst<?, ?, ?, ?> r) {
       ensureAccessorPresent(r.src(), index, "first", "source");
       ensureAccessorPresent(r.tgt(), index, "first", "target");
-      useFirst = true;
+      slot = 0;
       srcAccessor = asGetter(r.src());
       tgtAccessor = r.tgt();
-    } else if (step instanceof MergeStep.FromSecond<?, ?, ?, ?> r) {
+    } else if (step instanceof MergeStep2.FromSecond<?, ?, ?, ?> r) {
       ensureAccessorPresent(r.src(), index, "second", "source");
       ensureAccessorPresent(r.tgt(), index, "second", "target");
-      useFirst = false;
+      slot = 1;
       srcAccessor = asGetter(r.src());
       tgtAccessor = r.tgt();
     } else {
-      throw new IllegalStateException("unreachable: MergeStep is sealed");
+      throw new IllegalStateException("unreachable: MergeStep2 is sealed");
+    }
+    final String tgtName = targetRefl.normalize(LambdaIntrospection.methodNameOf(tgtAccessor));
+    claimTarget(tgtName, index, claimedTgt);
+    out.add(new ResolvedStep(slot, srcAccessor, tgtName));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Arity 3
+  // ---------------------------------------------------------------------------
+
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  static <A, B, C, T> Mapper<Sources3<A, B, C>, T> build3(
+    final Class<A> sourceA,
+    final Class<B> sourceB,
+    final Class<C> sourceC,
+    final Class<T> target,
+    final MergeStep3<A, B, C, T>[] steps
+  ) {
+    Objects.requireNonNull(sourceA, "Telescope.merge: sourceA class is null");
+    Objects.requireNonNull(sourceB, "Telescope.merge: sourceB class is null");
+    Objects.requireNonNull(sourceC, "Telescope.merge: sourceC class is null");
+    Objects.requireNonNull(target, "Telescope.merge: target class is null");
+    final var targetRefl = Reflective.of(target);
+    final var sourceClasses = new Class<?>[] { sourceA, sourceB, sourceC };
+
+    final var plan = new ArrayList<ResolvedStep>(steps.length);
+    final Set<String> claimedTgt = new HashSet<>();
+    for (int i = 0; i < steps.length; i++) {
+      final var step = steps[i];
+      if (step == null) throw new IllegalArgumentException("Telescope.merge: step at index " + i + " is null");
+      resolveStep3(step, i, sourceClasses, target, targetRefl, claimedTgt, plan);
     }
 
+    final Function<Sources3<A, B, C>, T> forward = sources -> {
+      final Map<String, Object> byName = new HashMap<>(plan.size() * 2);
+      for (final var r : plan) {
+        final Object src = sources.slot(r.slot());
+        byName.put(r.tgtName(), r.srcAccessor().get(src));
+      }
+      return (T) targetRefl.construct(target, byName::get);
+    };
+
+    final Function<T, Sources3<A, B, C>> backward = t -> {
+      throw new UnsupportedOperationException(
+        "Telescope.merge produces a forward-only mapper — the multi-source case has no general " +
+          "inverse. Use Mapper.forward(...) only; backward/patch are unsupported."
+      );
+    };
+
+    final Class<Sources3<A, B, C>> sourcesClass = (Class) Sources3.class;
+    return Mapper.create(forward, backward, sourcesClass, target, Map.of());
+  }
+
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static void resolveStep3(
+    final MergeStep3<?, ?, ?, ?> step,
+    final int index,
+    final Class<?>[] sourceClasses,
+    final Class<?> targetClass,
+    final Reflective targetRefl,
+    final Set<String> claimedTgt,
+    final List<ResolvedStep> out
+  ) {
+    if (step instanceof MergeStep3.AutoSameName<?, ?, ?, ?> r) {
+      resolveAutoBackfill(r.sourceClass(), index, sourceClasses, targetClass, targetRefl, claimedTgt, out);
+      return;
+    }
+    final int slot;
+    final Getter<Object, Object> srcAccessor;
+    final Telescope.Accessor<?, ?> tgtAccessor;
+    if (step instanceof MergeStep3.FromInferred<?, ?, ?, ?, ?> r) {
+      ensureAccessorPresent(r.src(), index, "from", "source");
+      ensureAccessorPresent(r.tgt(), index, "from", "target");
+      slot = inferSlot(r.src(), index, "from", sourceClasses);
+      srcAccessor = asGetter(r.src());
+      tgtAccessor = r.tgt();
+    } else if (step instanceof MergeStep3.FromFirst<?, ?, ?, ?, ?> r) {
+      ensureAccessorPresent(r.src(), index, "first", "source");
+      ensureAccessorPresent(r.tgt(), index, "first", "target");
+      slot = 0;
+      srcAccessor = asGetter(r.src());
+      tgtAccessor = r.tgt();
+    } else if (step instanceof MergeStep3.FromSecond<?, ?, ?, ?, ?> r) {
+      ensureAccessorPresent(r.src(), index, "second", "source");
+      ensureAccessorPresent(r.tgt(), index, "second", "target");
+      slot = 1;
+      srcAccessor = asGetter(r.src());
+      tgtAccessor = r.tgt();
+    } else if (step instanceof MergeStep3.FromThird<?, ?, ?, ?, ?> r) {
+      ensureAccessorPresent(r.src(), index, "third", "source");
+      ensureAccessorPresent(r.tgt(), index, "third", "target");
+      slot = 2;
+      srcAccessor = asGetter(r.src());
+      tgtAccessor = r.tgt();
+    } else {
+      throw new IllegalStateException("unreachable: MergeStep3 is sealed");
+    }
     final String tgtName = targetRefl.normalize(LambdaIntrospection.methodNameOf(tgtAccessor));
+    claimTarget(tgtName, index, claimedTgt);
+    out.add(new ResolvedStep(slot, srcAccessor, tgtName));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shared helpers — arity-generic by design
+  // ---------------------------------------------------------------------------
+
+  private static int inferSlot(
+    final Telescope.Accessor<?, ?> srcAccessor,
+    final int index,
+    final String factory,
+    final Class<?>[] sourceClasses
+  ) {
+    final Class<?> srcClass = LambdaIntrospection.implClassOf(srcAccessor);
+    for (int s = 0; s < sourceClasses.length; s++) if (srcClass.equals(sourceClasses[s])) return s;
+    throw new IllegalArgumentException(
+      "Telescope.merge: step at index " +
+        index +
+        " uses " +
+        factory +
+        "(" +
+        srcClass.getSimpleName() +
+        "::...) but none of the declared sources (" +
+        Arrays.stream(sourceClasses).map(Class::getSimpleName).toList() +
+        ") match. Use explicit MergeStep.first(...) / .second(...) / .third(...), or fix the source accessor."
+    );
+  }
+
+  // Auto-backfill: enumerate the source class's component names, intersect with target names that
+  // are still unclaimed AND that have a matching generic type, and emit a ResolvedStep per match
+  // reading the source slot via a name-keyed getter. Wrong sourceClass (not in sourceClasses)
+  // throws an IAE. Skipped names (type mismatch or already claimed) are silent — the user can mix
+  // auto(...) with explicit rows to override per-component decisions.
+  private static void resolveAutoBackfill(
+    final Class<?> sourceClass,
+    final int index,
+    final Class<?>[] sourceClasses,
+    final Class<?> targetClass,
+    final Reflective targetRefl,
+    final Set<String> claimedTgt,
+    final List<ResolvedStep> out
+  ) {
+    int slot = -1;
+    for (int s = 0; s < sourceClasses.length; s++) if (sourceClass.equals(sourceClasses[s])) {
+      slot = s;
+      break;
+    }
+    if (slot < 0) throw new IllegalArgumentException(
+      "Telescope.merge: step at index " +
+        index +
+        " calls auto(" +
+        sourceClass.getSimpleName() +
+        ") but " +
+        sourceClass.getSimpleName() +
+        " is not one of the declared sources (" +
+        Arrays.stream(sourceClasses).map(Class::getSimpleName).toList() +
+        "). Use auto(...) with a class declared in the merge's source list."
+    );
+    final var sourceRefl = Reflective.of(sourceClass);
+    final var srcNames = sourceRefl.names(sourceClass);
+    final var tgtNames = Set.of(targetRefl.names(targetClass));
+    for (final var name : srcNames) {
+      if (!tgtNames.contains(name)) continue;
+      if (claimedTgt.contains(name)) continue;
+      // Type-match — same-name same-type backfill matches Mapping#auto() semantics. Mismatches
+      // are silently skipped (the user can override with an explicit row).
+      final var srcType = sourceRefl.genericType(sourceClass, name);
+      final var tgtType = targetRefl.genericType(targetClass, name);
+      if (srcType == null || tgtType == null || !srcType.equals(tgtType)) continue;
+      claimedTgt.add(name);
+      final int capturedSlot = slot;
+      final String capturedName = name;
+      final Getter<Object, Object> reader = src -> sourceRefl.read(src, capturedName);
+      out.add(new ResolvedStep(capturedSlot, reader, capturedName));
+    }
+  }
+
+  private static void claimTarget(final String tgtName, final int index, final Set<String> claimedTgt) {
     if (!claimedTgt.add(tgtName)) throw new IllegalArgumentException(
       "Telescope.merge: step at index " +
         index +
@@ -142,7 +307,6 @@ final class Merge {
         tgtName +
         "' which an earlier step already claimed. Each target component may be written by at most one row."
     );
-    return new ResolvedStep(useFirst, srcAccessor, tgtName);
   }
 
   private static void ensureAccessorPresent(
@@ -172,5 +336,6 @@ final class Merge {
 
   // ResolvedStep holds the row's per-call dispatch triple. `srcAccessor` is typed as the lattice's
   // `Getter<Object, Object>` rather than a raw `Function` — see CLAUDE.md's "Lattice-first" rule.
-  private record ResolvedStep(boolean useFirst, Getter<Object, Object> srcAccessor, String tgtName) {}
+  // `slot` is a 0-based slot index into the Sources tuple — arity-generic dispatch.
+  record ResolvedStep(int slot, Getter<Object, Object> srcAccessor, String tgtName) {}
 }

@@ -1,8 +1,8 @@
 package io.github.eschizoid.telescope;
 
-import static io.github.eschizoid.telescope.mapping.MergeStep.first;
-import static io.github.eschizoid.telescope.mapping.MergeStep.from;
-import static io.github.eschizoid.telescope.mapping.MergeStep.second;
+import static io.github.eschizoid.telescope.mapping.MergeStep2.first;
+import static io.github.eschizoid.telescope.mapping.MergeStep2.from;
+import static io.github.eschizoid.telescope.mapping.MergeStep2.second;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -17,8 +17,9 @@ import org.junit.jupiter.api.Test;
  * io.github.eschizoid.telescope.mapping.MergeStep[])} — the two-source forward-only mapper.
  *
  * <p>Covers all three row factories ({@code from} with class inference, explicit {@code first} /
- * {@code second}), the unsupported-backward contract, and the build-time guards (null accessors,
- * duplicate target, slot inference mismatch).
+ * {@code second}), the unsupported-backward contract, the build-time guards (null accessors,
+ * duplicate target, slot inference mismatch), {@code auto(...)} same-name backfill, arity-3
+ * {@code Sources3} mapping, and the {@code Sources.of(...)} tuple shortcut.
  */
 class MergeTest {
 
@@ -227,6 +228,167 @@ class MergeTest {
       );
       assertTrue(ex.getMessage().contains("index 0"));
       assertTrue(ex.getMessage().toLowerCase().contains("source"));
+    }
+  }
+
+  @Nested
+  @DisplayName("Sources.of(...) shortcut hides the new-Sources2/3 ceremony at the call site")
+  class SourcesShortcut {
+
+    @Test
+    @DisplayName("Sources.of(a, b) is interchangeable with new Sources2<>(a, b)")
+    void shortcutMatchesExplicitCtor() {
+      final var c = new Customer("c-9", "z@z.com");
+      final var a = new Audit("u9", "2026-09-09");
+      final Mapper<Sources2<Customer, Audit>, Profile> mapper = Telescope.merge(
+        Customer.class,
+        Audit.class,
+        Profile.class,
+        from(Customer::id, Profile::id),
+        from(Customer::email, Profile::email),
+        from(Audit::createdBy, Profile::createdBy),
+        from(Audit::createdAt, Profile::createdAt)
+      );
+      assertEquals(mapper.forward(new Sources2<>(c, a)), mapper.forward(Sources.of(c, a)));
+    }
+  }
+
+  @Nested
+  @DisplayName("auto(Class<S>) — same-name same-type backfill")
+  class AutoBackfill {
+
+    @Test
+    @DisplayName("auto(Customer.class) backfills id + email; explicit rows handle the remaining target slots")
+    void autoBackfillsMatchingNames() {
+      final var c = new Customer("c-7", "n@m.com");
+      final var a = new Audit("auditor7", "2026-07-07");
+
+      final Mapper<Sources2<Customer, Audit>, Profile> mapper = Telescope.merge(
+        Customer.class,
+        Audit.class,
+        Profile.class,
+        io.github.eschizoid.telescope.mapping.MergeStep2.auto(Customer.class),
+        from(Audit::createdBy, Profile::createdBy),
+        from(Audit::createdAt, Profile::createdAt)
+      );
+
+      assertEquals(new Profile("c-7", "n@m.com", "auditor7", "2026-07-07"), mapper.forward(Sources.of(c, a)));
+    }
+
+    @Test
+    @DisplayName("auto(Wrong.class) where Wrong is neither sourceA nor sourceB throws at build time")
+    void autoMismatchedSourceClass() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.merge(
+          Customer.class,
+          Audit.class,
+          Profile.class,
+          io.github.eschizoid.telescope.mapping.MergeStep2.auto(BuildTimeGuards.Stray.class)
+        )
+      );
+      assertTrue(ex.getMessage().contains("Stray"));
+      assertTrue(ex.getMessage().toLowerCase().contains("auto"));
+    }
+
+    @Test
+    @DisplayName("explicit rows take precedence over auto() — auto silently skips already-claimed names")
+    void autoSkipsAlreadyClaimed() {
+      final var c = new Customer("c-8", "o@p.com");
+      final var a = new Audit("auditor8", "2026-08-08");
+
+      final Mapper<Sources2<Customer, Audit>, Profile> mapper = Telescope.merge(
+        Customer.class,
+        Audit.class,
+        Profile.class,
+        from(Customer::id, Profile::id), // claim id explicitly
+        io.github.eschizoid.telescope.mapping.MergeStep2.auto(Customer.class), // backfills email only
+        from(Audit::createdBy, Profile::createdBy),
+        from(Audit::createdAt, Profile::createdAt)
+      );
+
+      assertEquals(new Profile("c-8", "o@p.com", "auditor8", "2026-08-08"), mapper.forward(Sources.of(c, a)));
+    }
+  }
+
+  @Nested
+  @DisplayName("arity 3 — Sources3 + MergeStep3 mirror the 2-source surface")
+  class Arity3 {
+
+    record LineItem(long totalCents) {}
+
+    record Invoice(String id, String createdBy, long totalCents) {}
+
+    @Test
+    @DisplayName("3-source forward — from(...) infers each row's slot from the source class")
+    void threeSourceForward() {
+      final var c = new Customer("c-3", "k@l.com");
+      final var a = new Audit("u3", "2026-03-03");
+      final var li = new LineItem(1599L);
+
+      final Mapper<Sources3<Customer, Audit, LineItem>, Invoice> mapper = Telescope.merge(
+        Customer.class,
+        Audit.class,
+        LineItem.class,
+        Invoice.class,
+        io.github.eschizoid.telescope.mapping.MergeStep3.from(Customer::id, Invoice::id),
+        io.github.eschizoid.telescope.mapping.MergeStep3.from(Audit::createdBy, Invoice::createdBy),
+        io.github.eschizoid.telescope.mapping.MergeStep3.from(LineItem::totalCents, Invoice::totalCents)
+      );
+
+      assertEquals(new Invoice("c-3", "u3", 1599L), mapper.forward(Sources.of(c, a, li)));
+    }
+
+    @Test
+    @DisplayName("3-source forward — explicit first/second/third still work for shared-class sources")
+    void threeSourceExplicitSlots() {
+      final var c = new Customer("c-4", "m@n.com");
+      final var a = new Audit("u4", "2026-04-04");
+      final var li = new LineItem(2500L);
+
+      final Mapper<Sources3<Customer, Audit, LineItem>, Invoice> mapper = Telescope.merge(
+        Customer.class,
+        Audit.class,
+        LineItem.class,
+        Invoice.class,
+        io.github.eschizoid.telescope.mapping.MergeStep3.first(Customer::id, Invoice::id),
+        io.github.eschizoid.telescope.mapping.MergeStep3.second(Audit::createdBy, Invoice::createdBy),
+        io.github.eschizoid.telescope.mapping.MergeStep3.third(LineItem::totalCents, Invoice::totalCents)
+      );
+
+      assertEquals(new Invoice("c-4", "u4", 2500L), mapper.forward(Sources.of(c, a, li)));
+    }
+
+    @Test
+    @DisplayName("auto(LineItem.class) backfills totalCents on the arity-3 merge")
+    void threeSourceAutoBackfill() {
+      final var c = new Customer("c-5", "q@r.com");
+      final var a = new Audit("u5", "2026-05-05");
+      final var li = new LineItem(3700L);
+
+      final Mapper<Sources3<Customer, Audit, LineItem>, Invoice> mapper = Telescope.merge(
+        Customer.class,
+        Audit.class,
+        LineItem.class,
+        Invoice.class,
+        io.github.eschizoid.telescope.mapping.MergeStep3.from(Customer::id, Invoice::id),
+        io.github.eschizoid.telescope.mapping.MergeStep3.from(Audit::createdBy, Invoice::createdBy),
+        io.github.eschizoid.telescope.mapping.MergeStep3.auto(LineItem.class)
+      );
+
+      assertEquals(new Invoice("c-5", "u5", 3700L), mapper.forward(Sources.of(c, a, li)));
+    }
+
+    @Test
+    @DisplayName("3-source backward is unsupported")
+    void threeSourceBackwardThrows() {
+      final Mapper<Sources3<Customer, Audit, LineItem>, Invoice> mapper = Telescope.merge(
+        Customer.class,
+        Audit.class,
+        LineItem.class,
+        Invoice.class,
+        io.github.eschizoid.telescope.mapping.MergeStep3.from(Customer::id, Invoice::id)
+      );
+      assertThrows(UnsupportedOperationException.class, () -> mapper.backward(new Invoice("x", "y", 0L)));
     }
   }
 }
