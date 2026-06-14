@@ -837,17 +837,31 @@ recursion caches each type pair as it descends, and re-entry returns the in-prog
 
 **Override forms.** Static-import-friendly factories on `Mapping`:
 
+| Factory                       | Purpose                                            | MapStruct equivalent                       |
+| ----------------------------- | -------------------------------------------------- | ------------------------------------------ |
+| `to(src, tgt)`                | Rename, same leaf type                             | `@Mapping(source, target)`                 |
+| `to(src, tgt, fwd, bwd)`      | Bidirectional typed transform                      | `@Mapping(source, target, qualifiedBy)`    |
+| `forward(src, tgt, fn)`       | Forward-only typed transform                       | (separate `@Mapper` interface)             |
+| `toOrElse(src, tgt, default)` | Null-coalesce to a default value                   | `@Mapping(defaultValue = "...")`           |
+| `toOrElseGet(src, tgt, sup)`  | Null-coalesce via a `Supplier`                     | `@Mapping(defaultExpression = "java(…)")`  |
+| `enumTo(src, tgt, SE, TE)`    | By-name enum mapping with build-time exhaustiveness | `@ValueMapping(source = "X", target = "Y")` |
+| `via(src, tgt, mapper)`       | Drop in a pre-built nested mapper                  | (composition by hand)                      |
+| `constant(tgt, value)`        | Forward-only literal at the target slot            | `@Mapping(constant = "...")`               |
+| `compute(tgt, supplier)`      | Forward-only supplier-computed value               | `@Mapping(expression = "java(...)")`       |
+| `drop(src)`                   | Skip the source field; backward zero-fills it      | `@Mapping(ignore = true)`                  |
+
+Example — three of those rows together:
+
 ```java
-to     (UserEntity::name,      UserDto::fullName)                                       // rename, same type
-to     (EventEntity::year,     EventDto::year,        Object::toString, Integer::parseInt) // typed transform
-forward(EventEntity::createdAt,EventDto::createdAtIso,Instant::toString)                // forward-only transform
-toOrElse  (UserEntity::region, UserDto::region, "EMEA")                                 // null → default
-toOrElseGet(UserEntity::id,    UserDto::id,     UUID::randomUUID)                        // null → supplier
-enumTo (UserEntity::status,    UserDto::status, EntityStatus.class, DtoStatus.class)    // by-name enum, exhaustiveness-checked
-via    (UserEntity::address,   UserDto::address, addressMapper)                          // drop in a pre-built nested mapper
-constant(UserDto::tenant,      "production")                                             // forward-only literal at the target slot
-compute (UserDto::createdAt,   Instant::now)                                             // forward-only supplier at the target slot
-drop   (UserEntity::internalCode)                                                        // skip the source field; backward zero-fills
+import static io.github.eschizoid.telescope.mapping.Mapping.*;
+
+Telescope.mapper(
+  UserEntity.class,
+  UserDto.class,
+  to(UserEntity::name, UserDto::fullName),
+  toOrElse(UserEntity::region, UserDto::region, "EMEA"),
+  enumTo(UserEntity::status, UserDto::status, EntityStatus.class, DtoStatus.class)
+);
 ```
 
 The `via(...)` row works in two flavours: pass an **accessor-typed** mapper (e.g.
