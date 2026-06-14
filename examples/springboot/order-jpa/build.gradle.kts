@@ -20,6 +20,10 @@ repositories {
     mavenCentral()
 }
 
+springBoot {
+    mainClass.set("io.github.eschizoid.telescope.demo.spring.DemoApplication")
+}
+
 dependencies {
     // Depends on the telescope library *directly* — this submodule wires Mapper<A, B> beans by
     // hand in @Configuration classes (see OrderMappers). The sibling product-starter submodule
