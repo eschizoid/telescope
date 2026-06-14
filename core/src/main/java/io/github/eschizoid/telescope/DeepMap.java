@@ -732,6 +732,13 @@ public final class DeepMap {
     //       scalar/record/bean. Common case: record uses Optional<Address> while the JPA-mapped
     //       entity uses a nullable AddressEmbeddable. Lift the element conversion through
     //       Iso.liftOptionalToNullable so Optional.empty() ↔ null and Optional.of(x) ↔ to(x).
+    //
+    //       Element-level recursion passes PROPAGATE deliberately: NullStrategy.DEFAULT is a
+    //       field-level semantic (matches MapStruct SET_TO_DEFAULT). Wrapping the element-level
+    //       Iso would (1) double-wrap when the outer autoIso wraps the lifted result, and (2)
+    //       corrupt the {@code .reverse()} on the second branch — coalesceForward's documented
+    //       non-bijection at the null/default boundary would land on the BACKWARD direction post-
+    //       reverse. Field-level wrap fires once at the outer autoIso return; that's enough.
     if (srcShape != null && srcShape.kind == ContainerShape.Kind.OPTIONAL && tgtShape == null) {
       final var elementIso = autoIso(
         srcShape.elementType,
@@ -740,7 +747,7 @@ public final class DeepMap {
         overrides,
         beanRefl,
         cache,
-        nullStrategy
+        NullHint.NullStrategy.PROPAGATE
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso));
     }
@@ -752,7 +759,7 @@ public final class DeepMap {
         overrides,
         beanRefl,
         cache,
-        nullStrategy
+        NullHint.NullStrategy.PROPAGATE
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso)).reverse();
     }
@@ -770,6 +777,11 @@ public final class DeepMap {
             ". Key types must match exactly; auto-lifting preserves the source keys."
         );
       }
+      // Element-level recursion passes PROPAGATE — see the cross-Optional branch above for the
+      // rationale. NullStrategy.DEFAULT is a field-level semantic and the outer autoIso wraps the
+      // lifted result once; double-wrapping the element-level would over-substitute null elements
+      // inside the collection (per MapStruct's SET_TO_DEFAULT the gate is at the field, not the
+      // element).
       final var elementIso = autoIso(
         srcShape.elementType,
         tgtShape.elementType,
@@ -777,7 +789,7 @@ public final class DeepMap {
         overrides,
         beanRefl,
         cache,
-        nullStrategy
+        NullHint.NullStrategy.PROPAGATE
       );
       return switch (srcShape.kind) {
         case LIST -> Iso.liftList(eraseIso(elementIso));

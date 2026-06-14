@@ -170,6 +170,31 @@ class NullStrategyTest {
   }
 
   @Nested
+  @DisplayName("Container-element nulls — DEFAULT applies at field level only, NOT per-element")
+  class ContainerElementNulls {
+
+    record TaggedSrc(List<String> tags) {}
+
+    record TaggedDst(List<String> tags) {}
+
+    @Test
+    @DisplayName("null source list → empty target list; null elements INSIDE source list are preserved")
+    void nullFieldVsNullElements() {
+      final var mapper = Telescope.mapper(TaggedSrc.class, TaggedDst.class, nullSourceValues(DEFAULT));
+
+      // Whole-field null → empty list (field-level DEFAULT)
+      assertEquals(List.of(), mapper.forward(new TaggedSrc(null)).tags());
+
+      // List containing a null element → null PRESERVED in target. NullStrategy.DEFAULT is a
+      // field-level semantic (matches MapStruct SET_TO_DEFAULT); the gate sits at the field, not
+      // inside the container. A regression that double-wrapped at element level would replace
+      // the inner null with "" and break this assertion.
+      final var withNullElement = new TaggedSrc(java.util.Arrays.asList("a", null, "c"));
+      assertEquals(java.util.Arrays.asList("a", null, "c"), mapper.forward(withNullElement).tags());
+    }
+  }
+
+  @Nested
   @DisplayName("Hint validation — duplicate nullSourceValues rejected at mapper build time")
   class HintValidation {
 
