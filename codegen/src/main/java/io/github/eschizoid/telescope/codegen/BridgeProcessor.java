@@ -1994,7 +1994,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         for (final var f : toFields) {
           final var method = builderSetter(builderType, f.name());
           if (method == null) {
-            error(to, "@Bridge: builder " + builderType.getQualifiedName() + " has no method for '" + f.name() + "'");
+            error(
+              annotationSite,
+              "@Bridge: builder " +
+                builderType.getQualifiedName() +
+                " (target " +
+                toFq +
+                ") has no method for '" +
+                f.name() +
+                "'"
+            );
             return null;
           }
           sb.append(".").append(method).append("(").append(read.apply(f.name())).append(")");
@@ -2021,7 +2030,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         for (final var f : toFields) {
           final var setter = setterName(to, f.name());
           if (setter == null) {
-            error(to, "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'");
+            error(
+              annotationSite,
+              "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'"
+            );
             return null;
           }
           sb.append("out.").append(setter).append("(").append(read.apply(f.name())).append("); ");
@@ -2042,7 +2054,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
 
     error(
-      to,
+      annotationSite,
       "@Bridge: " +
         toFq +
         " has no usable construction strategy — needs a record canonical constructor, a constructor " +
