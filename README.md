@@ -273,8 +273,9 @@ final var mapper = Telescope.mapper(
   Order.class,
   OrderDto.class,
   Mapping.to(Order::getCustomerName, OrderDto::getFullName),
-  Mapping.to(Order::getCreatedAt,    OrderDto::getCreatedDate)
+  Mapping.to(Order::getCreatedAt, OrderDto::getCreatedDate)
 );
+
 // Same-named fields backfill automatically — recursion is auto by default, no explicit row needed.
 
 final OrderDto dto = mapper.forward(order);
@@ -911,7 +912,9 @@ import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 
-class LegacyUser { /* getId(), getEmail(), getName() + no-arg ctor + setters */ }
+class LegacyUser {
+  /* getId(), getEmail(), getName() + no-arg ctor + setters */
+}
 
 record UserRecord(String id, String email, String name) {}
 
