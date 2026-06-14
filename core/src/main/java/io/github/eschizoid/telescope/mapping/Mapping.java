@@ -5,7 +5,9 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
+import java.util.Objects;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /**
@@ -41,6 +43,7 @@ public sealed interface Mapping<A, B>
   permits
     SameTypedTo,
     TypedTransformTo,
+    ForwardOnlyTransformTo,
     Via,
     Drop,
     TelescopeTo,
@@ -70,6 +73,128 @@ public sealed interface Mapping<A, B>
     final Function<? super Y, ? extends X> backward
   ) {
     return new TypedTransformTo<>(src, tgt, forward, backward);
+  }
+
+  /**
+   * Forward-only typed-transform correspondence: same shape as {@link #to(Accessor, Accessor,
+   * Function, Function)} but the backward function is supplied automatically and throws {@link
+   * UnsupportedOperationException} at the row level if invoked. Use this for one-shot entity →
+   * DB-schema mappings whose backward direction is never called — saves the boilerplate of passing
+   * an unused inverse function, and the throw message names the field so the failure is
+   * self-diagnosing if a downstream user does call {@link
+   * io.github.eschizoid.telescope.conversion.Mapper#backward} on the resulting mapper.
+   *
+   * <pre>{@code
+   * forward(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString)
+   * }</pre>
+   *
+   * <p>Naming chain: {@code Mapping.forward(...)} rows feed the {@link
+   * io.github.eschizoid.telescope.Telescope#mapperForward(Class, Class, MapStep...)} factory,
+   * producing a {@link io.github.eschizoid.telescope.conversion.ForwardMapper}. The three names
+   * rhyme so the forward-only family is self-discoverable at the call site.
+   *
+   * <p>For the bidirectional variant, supply the inverse explicitly via {@link #to(Accessor,
+   * Accessor, Function, Function)}.
+   */
+  static <A, B, X, Y> Mapping<A, B> forward(
+    final Accessor<A, X> src,
+    final Accessor<B, Y> tgt,
+    final Function<? super X, ? extends Y> fn
+  ) {
+    return new ForwardOnlyTransformTo<>(src, tgt, fn);
+  }
+
+  /**
+   * Null-coalescing same-typed correspondence: when the source accessor returns {@code null}, the
+   * target receives {@code defaultValue} instead. Source and target share the same leaf type {@code
+   * X}; non-null source values pass through unchanged. Closes MapStruct's {@code defaultValue} gap
+   * without the inline {@code n == null ? FALLBACK : n} lambda.
+   *
+   * <pre>{@code
+   * toOrElse(UserEntity::displayName, UserDto::displayName, "(unnamed)")
+   * }</pre>
+   *
+   * <p>Backward direction is identity — the default value, if it lands on the target, round-trips
+   * back to the source slot as that same value rather than the original null. Accept the asymmetry
+   * when the default is a domain-meaningful sentinel rather than a placeholder; reach for an
+   * explicit 4-arg {@link #to(Accessor, Accessor, Function, Function)} when both directions need
+   * bespoke logic.
+   */
+  static <A, B, X> Mapping<A, B> toOrElse(final Accessor<A, X> src, final Accessor<B, X> tgt, final X defaultValue) {
+    return new TypedTransformTo<>(src, tgt, x -> x == null ? defaultValue : x, y -> y);
+  }
+
+  /**
+   * Predicate-gated null-coalescing same-typed correspondence: the target receives {@code
+   * defaultValue} when {@code missing.test(srcValue)} returns true. Generalises {@link
+   * #toOrElse(Accessor, Accessor, Object)} (which is strict-null) to cover empty-string,
+   * empty-collection, zero-numeric, or any custom predicate-equivalent of "missing". MapStruct has
+   * no equivalent — {@code defaultValue} is strictly null-checked at the bytecode level.
+   *
+   * <pre>{@code
+   * toOrElse(Src::displayName, Dst::displayName, "(unnamed)", String::isBlank)
+   * toOrElse(Src::items,       Dst::items,       List.of(),  List::isEmpty)
+   * }</pre>
+   *
+   * <p>Backward direction is identity; the asymmetry of {@link #toOrElse(Accessor, Accessor,
+   * Object)} applies here too. Reach for the explicit 4-arg {@link #to(Accessor, Accessor,
+   * Function, Function)} when both directions need bespoke logic.
+   */
+  static <A, B, X> Mapping<A, B> toOrElse(
+    final Accessor<A, X> src,
+    final Accessor<B, X> tgt,
+    final X defaultValue,
+    final Predicate<? super X> missing
+  ) {
+    Objects.requireNonNull(missing, "Mapping.toOrElse: missing predicate is null");
+    // Null-short-circuit BEFORE the predicate fires so predicates like String::isBlank /
+    // List::isEmpty don't NPE on a null source value. Matches the 3-arg toOrElse's strict-null
+    // semantics for the leading-null case.
+    return new TypedTransformTo<>(src, tgt, x -> x == null || missing.test(x) ? defaultValue : x, y -> y);
+  }
+
+  /**
+   * Lazy null-coalescing same-typed correspondence: like {@link #toOrElse(Accessor, Accessor,
+   * Object)} but the fallback comes from a {@link Supplier} so an expensive-to-construct default is
+   * only materialized when the source actually is {@code null}. Closes MapStruct's {@code
+   * defaultExpression = "java(…)"} gap.
+   *
+   * <pre>{@code
+   * toOrElseGet(UserEntity::createdAt, UserDto::createdAt, Instant::now)
+   * }</pre>
+   *
+   * <p>Same backward-is-identity trade-off as {@link #toOrElse(Accessor, Accessor, Object)} — the
+   * supplied value, once it lands on the target, round-trips back to the source slot as itself
+   * rather than the original null.
+   */
+  static <A, B, X> Mapping<A, B> toOrElseGet(
+    final Accessor<A, X> src,
+    final Accessor<B, X> tgt,
+    final Supplier<? extends X> supplier
+  ) {
+    return new TypedTransformTo<>(src, tgt, x -> x == null ? supplier.get() : x, y -> y);
+  }
+
+  /**
+   * Predicate-gated lazy null-coalescing same-typed correspondence: {@code supplier.get()} runs
+   * when {@code missing.test(srcValue)} returns true. Generalises {@link #toOrElseGet(Accessor,
+   * Accessor, Supplier)} the same way the 4-arg {@link #toOrElse(Accessor, Accessor, Object,
+   * Predicate)} generalises {@link #toOrElse(Accessor, Accessor, Object)}.
+   *
+   * <pre>{@code
+   * toOrElseGet(Src::traceId, Dst::traceId, UUID::randomUUID, String::isBlank)
+   * }</pre>
+   */
+  static <A, B, X> Mapping<A, B> toOrElseGet(
+    final Accessor<A, X> src,
+    final Accessor<B, X> tgt,
+    final Supplier<? extends X> supplier,
+    final Predicate<? super X> missing
+  ) {
+    Objects.requireNonNull(missing, "Mapping.toOrElseGet: missing predicate is null");
+    // Null-short-circuit BEFORE the predicate fires — see the parallel toOrElse overload for the
+    // rationale (String::isBlank / List::isEmpty would NPE on null).
+    return new TypedTransformTo<>(src, tgt, x -> x == null || missing.test(x) ? supplier.get() : x, y -> y);
   }
 
   /**

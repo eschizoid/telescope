@@ -33,6 +33,18 @@ import java.lang.annotation.RetentionPolicy;
  *
  * <p>{@code field} names the source side. Pair with a sibling {@link Rename} when the target's
  * matching field has a different name.
+ *
+ * <h2>Forward-only transforms</h2>
+ *
+ * <p>Set {@link #forwardOnly()} to {@code true} when the conversion is genuinely one-way and the
+ * {@code BridgeFn} should not be required to implement backward. The processor emits a zero-value
+ * fallback in the backward direction (mirroring the {@code @Bridge(drops = ...)} backward fill) and
+ * skips the {@code __tx_<field>.backward(...)} call-site. The user's {@code BridgeFn} can implement
+ * {@code backward} as a stub (e.g. throwing {@link UnsupportedOperationException}); the generated
+ * bridge never invokes it.
+ *
+ * <p>This mirrors the runtime {@code Mapping.forward(srcAcc, tgtAcc, fn)} factory — same forward-
+ * only semantics, same "this slot's backward is undefined" contract.
  */
 @Retention(RetentionPolicy.SOURCE)
 public @interface Transform {
@@ -48,4 +60,16 @@ public @interface Transform {
    */
   @SuppressWarnings("rawtypes")
   Class<? extends BridgeFn> using();
+
+  /**
+   * Opt in to forward-only semantics: the generated bridge emits a zero-value fill in the backward
+   * direction for this field, the same way {@code @Bridge(drops = ...)} fills dropped sources on
+   * backward. The user's {@code BridgeFn#backward} is never invoked; implementations may stub it or
+   * throw. Mirrors the runtime {@code Mapping.forward(srcAcc, tgtAcc, fn)} factory.
+   *
+   * <p>The generated {@code patch(base, partial)} method also skips the backward read for this slot
+   * and preserves {@code base.field()} unchanged — a forward-only transform has no defined inverse,
+   * so there is no way to overlay a partial value back onto the source.
+   */
+  boolean forwardOnly() default false;
 }

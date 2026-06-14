@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -43,6 +44,26 @@ public final class Mapper<A, B> {
   private final Reflective sourceRefl;
   private final Reflective targetRefl;
   private final Map<String, PatchEntry> patchByTargetField;
+  // Folded hook chains — null = no hook. Composed by repeated calls to before*/after*. Each side
+  // is a single Function/BiFunction reference at call time so HotSpot stays monomorphic regardless
+  // of chain depth (avoids the megamorphic Iso.of cliff that the per-hook-Iso composition shape
+  // produced at 3+ hooks).
+  //
+  // Lattice mandate carve-out — these are NOT routed through the optic lattice on purpose. The
+  // lattice's bidirectional substrate (`Iso<A, B>`) requires the round-trip law `from(to(a)) == a`.
+  // A user-supplied hook like `e -> e.normalised()` has no inverse — wrapping it as
+  // `Iso.of(hook, identity)` would construct a fake Iso that silently violates the laws
+  // `OpticLawsTest` pins. That's worse than admitting the hook isn't lattice-shaped. The Telescope-
+  // level equivalents (`Telescope.after/before`, PR #90) get away with the partial-Iso shape
+  // because Telescope is read-or-write through a Traversal — there's no single-value round-trip
+  // through both legs. `Mapper.forward(a)` and `Mapper.backward(b)` ARE both surfaces of a single
+  // contract, so the lattice-routed shape would break composition. The four hook fields below own
+  // that responsibility instead, and the engine `forward` / `backward` methods (just above)
+  // compose them around the underlying iso explicitly.
+  private final Function<A, A> preForward;
+  private final BiFunction<A, B, B> postForward;
+  private final Function<B, B> preBackward;
+  private final BiFunction<B, A, A> postBackward;
 
   /**
    * <b>Module-internal seam — NOT public API.</b> Construct a mapper directly from an {@link Iso},
@@ -59,6 +80,19 @@ public final class Mapper<A, B> {
     final Class<B> targetClass,
     final Map<String, PatchEntry> patchByTargetField
   ) {
+    this(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null);
+  }
+
+  private Mapper(
+    final Iso<A, B> iso,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final Map<String, PatchEntry> patchByTargetField,
+    final Function<A, A> preForward,
+    final BiFunction<A, B, B> postForward,
+    final Function<B, B> preBackward,
+    final BiFunction<B, A, A> postBackward
+  ) {
     this.iso = iso;
     this.sourceClass = sourceClass;
     this.targetClass = targetClass;
@@ -66,6 +100,10 @@ public final class Mapper<A, B> {
     this.targetRefl = Reflective.of(targetClass);
     // Defensive copy — patch behavior must not mutate after construction.
     this.patchByTargetField = Map.copyOf(patchByTargetField);
+    this.preForward = preForward;
+    this.postForward = postForward;
+    this.preBackward = preBackward;
+    this.postBackward = postBackward;
   }
 
   /**
@@ -101,7 +139,7 @@ public final class Mapper<A, B> {
    * use {@link #patch}.
    */
   public B read(final A a) {
-    return iso.to(a);
+    return forward(a);
   }
 
   /**
@@ -117,7 +155,11 @@ public final class Mapper<A, B> {
    * }</pre>
    */
   public Telescope<A, B> asTelescope() {
-    return Telescope.iso(iso::to, iso::from);
+    // Route through this::forward / this::backward (NOT iso::to / iso::from) so the four hook
+    // fields (beforeForward / afterForward / beforeBackward / afterBackward) compose into the
+    // returned Telescope. Calling iso::to directly bypasses the hook chain — a configured mapper
+    // would silently drop its hooks when handed to longer .then(...) chains via this method.
+    return Telescope.iso(this::forward, this::backward);
   }
 
   /**
@@ -175,12 +217,151 @@ public final class Mapper<A, B> {
    * io.github.eschizoid.telescope.mapping.Mapping#via via(...)} row).
    */
   public B forward(final A a) {
-    return iso.to(a);
+    final A a1 = preForward == null ? a : preForward.apply(a);
+    final B b = iso.to(a1);
+    return postForward == null ? b : postForward.apply(a1, b);
   }
 
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */
   public A backward(final B b) {
-    return iso.from(b);
+    final B b1 = preBackward == null ? b : preBackward.apply(b);
+    final A a = iso.from(b1);
+    return postBackward == null ? a : postBackward.apply(b1, a);
+  }
+
+  /**
+   * Compose a pre-forward hook: before the structural forward direction reads from {@code A}, run
+   * {@code hook} on the source and feed the result into the conversion. MapStruct's
+   * {@code @BeforeMapping void prep(Source src)} equivalent — the canonical place for input
+   * normalisation, validation, or canonicalisation.
+   *
+   * <p>The hook is a {@link Function}, not a {@link java.util.function.Consumer}, so it works for
+   * both immutable record sources (return a new {@code A} with the hook's changes) and mutable bean
+   * sources (mutate {@code a} in place and {@code return a} the same instance).
+   *
+   * <p>Returns a new {@code Mapper} — chains compose left-to-right.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Entity.class, Dto.class, ...)
+   *     .beforeForward(e -> e.normalised());
+   * }</pre>
+   *
+   * @see io.github.eschizoid.telescope.Telescope#before(Function) for the path-level (single-
+   *     direction, lattice-native) sibling that composes through {@code .then(...)} chains.
+   */
+  public Mapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
+    final Function<A, A> prev = this.preForward;
+    final Function<A, A> next = prev == null ? a -> hook.apply(a) : a -> hook.apply(prev.apply(a));
+    return new Mapper<>(
+      iso,
+      sourceClass,
+      targetClass,
+      patchByTargetField,
+      next,
+      postForward,
+      preBackward,
+      postBackward
+    );
+  }
+
+  /**
+   * Compose a post-forward hook: after the structural forward direction produces a {@code B}, run
+   * {@code hook} on it and return whatever the hook returns. Closes MapStruct's
+   * {@code @AfterMapping} gap for the common "stamp a derived/computed value after the structural
+   * mapping completes" case ({@code entity.setUpdatedAt(Instant.now())} after the row data is in
+   * place).
+   *
+   * <p>The hook is a {@link Function}, not a {@link java.util.function.Consumer}, so it works for
+   * both immutable record targets (return a new {@code B} with the hook's changes) and mutable bean
+   * targets (mutate {@code b} in place and {@code return b} the same instance).
+   *
+   * <p>Returns a new {@code Mapper} — chains compose left-to-right (the first {@code afterForward}
+   * call's hook runs first, the second runs second, etc.). The backward direction is unchanged.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Entity.class, Dto.class, ...)
+   *     .afterForward(dto -> dto.withUpdatedAt(Instant.now().toString()));
+   * }</pre>
+   *
+   * @see io.github.eschizoid.telescope.Telescope#after(Function) for the path-level (single-
+   *     direction, lattice-native) sibling that composes through {@code .then(...)} chains.
+   */
+  public Mapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
+    return afterForward((a, b) -> hook.apply(b));
+  }
+
+  /**
+   * Source-aware post-forward hook: same as {@link #afterForward(Function)} but the hook receives
+   * BOTH the source {@code A} (as seen by the forward direction, after any {@link
+   * #beforeForward(Function)} normalisation) AND the structural result {@code B}. MapStruct's
+   * {@code @AfterMapping void enrich(Source src, @MappingTarget Dto dto)} equivalent — typed, not
+   * reflective.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Entity.class, Dto.class, ...)
+   *     .afterForward((src, dto) -> dto.withDisplayName(src.firstName() + " " + src.lastName()));
+   * }</pre>
+   */
+  public Mapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
+    final BiFunction<A, B, B> prev = this.postForward;
+    final BiFunction<A, B, B> next =
+      prev == null ? (a, b) -> hook.apply(a, b) : (a, b) -> hook.apply(a, prev.apply(a, b));
+    return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, preForward, next, preBackward, postBackward);
+  }
+
+  /**
+   * Compose a pre-backward hook: before the structural backward direction consumes a {@code B}, run
+   * {@code hook} on it and feed the result into {@code backward}. The MapStruct
+   * {@code @BeforeMapping} equivalent for the backward direction.
+   *
+   * <p>Returns a new {@code Mapper} — chains compose left-to-right (the first {@code
+   * beforeBackward} call's hook runs first on a backward invocation). The forward direction is
+   * unchanged.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Entity.class, Dto.class, ...)
+   *     .beforeBackward(dto -> dto.normalised());
+   * }</pre>
+   */
+  public Mapper<A, B> beforeBackward(final Function<? super B, ? extends B> hook) {
+    final Function<B, B> prev = this.preBackward;
+    final Function<B, B> next = prev == null ? b -> hook.apply(b) : b -> hook.apply(prev.apply(b));
+    return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, preForward, postForward, next, postBackward);
+  }
+
+  /**
+   * Compose a post-backward hook: after the structural backward direction produces a rebuilt {@code
+   * A}, run {@code hook} on it and return whatever the hook returns. The symmetric mirror of {@link
+   * #afterForward(Function)} for the backward direction.
+   *
+   * <p>The canonical place to stamp source-side derived fields after a target → source rebuild
+   * (e.g. {@code entity.setLastModifiedBy(currentUser())} during a backward write).
+   *
+   * <pre>{@code
+   * Telescope.mapper(Entity.class, Dto.class, ...)
+   *     .afterBackward(e -> e.withLastModifiedAt(Instant.now()));
+   * }</pre>
+   */
+  public Mapper<A, B> afterBackward(final Function<? super A, ? extends A> hook) {
+    return afterBackward((b, a) -> hook.apply(a));
+  }
+
+  /**
+   * Target-aware post-backward hook: same as {@link #afterBackward(Function)} but the hook receives
+   * BOTH the target {@code B} (as seen by the backward direction, after any {@link
+   * #beforeBackward(Function)} normalisation) AND the rebuilt source {@code A}. Use when the stamp
+   * depends on a target-side field that the source doesn't carry.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Entity.class, Dto.class, ...)
+   *     .afterBackward((dto, entity) -> entity.withAuditTrail(dto.actor() + "@" + Instant.now()));
+   * }</pre>
+   */
+  public Mapper<A, B> afterBackward(final BiFunction<? super B, ? super A, ? extends A> hook) {
+    final BiFunction<B, A, A> prev = this.postBackward;
+    final BiFunction<B, A, A> next =
+      prev == null ? (b, a) -> hook.apply(b, a) : (b, a) -> hook.apply(b, prev.apply(b, a));
+    return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, preForward, postForward, preBackward, next);
   }
 
   /**

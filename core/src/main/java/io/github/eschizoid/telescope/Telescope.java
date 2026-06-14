@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.BridgeFn;
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.effects.Either;
@@ -493,6 +494,10 @@ public sealed class Telescope<
   // No @SafeVarargs needed: MapStep is reifiable (no type parameter), so this varargs method does
   // not produce heap-pollution warnings for callers.
   public static <A, B> Telescope<A, B> map(final Class<A> source, final Class<B> target, final MapStep... steps) {
+    // Mirror the rejection that .mapper(...) does — a forward-only row would silently corrupt the
+    // returned Telescope's backward leg (set/update through a path whose constituent Iso has a
+    // throwing inverse). Catching it at the factory boundary keeps the diagnostic at the call site.
+    rejectForwardOnlyRows(source, target, steps, "Telescope.map");
     return new Telescope<>(DeepMap.resolve(source, target, steps));
   }
 
@@ -505,7 +510,130 @@ public sealed class Telescope<
    * @see #map(Class, Class, MapStep...)
    */
   public static <A, B> Mapper<A, B> mapper(final Class<A> source, final Class<B> target, final MapStep... steps) {
+    rejectForwardOnlyRows(source, target, steps, "Telescope.mapper");
     return DeepMap.resolveMapper(source, target, steps);
+  }
+
+  // Detect forward-only rows (`Mapping.forward(...)`) and steer the caller to mapperForward(...)
+  // so the partial-Iso shape doesn't silently corrupt downstream Mapper.backward / Mapper.patch
+  // semantics. The check is O(steps.length); rows are typically <20 per mapper. Skips for
+  // mapperForward callers which legitimately accept forward-only rows.
+  private static void rejectForwardOnlyRows(
+    final Class<?> source,
+    final Class<?> target,
+    final MapStep[] steps,
+    final String factoryName
+  ) {
+    for (final var step : steps) {
+      if (step instanceof io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo<?, ?, ?, ?> r) {
+        throw new IllegalArgumentException(
+          factoryName +
+            "(" +
+            source.getSimpleName() +
+            ", " +
+            target.getSimpleName() +
+            ", ...) cannot accept a Mapping.forward(...) row for field '" +
+            ((io.github.eschizoid.telescope.mapping.MappingInternals<?, ?>) r).targetField() +
+            "' — forward(...) is forward-only and would silently corrupt Mapper.backward / Mapper.patch. " +
+            "Use Telescope.mapperForward(" +
+            source.getSimpleName() +
+            ", " +
+            target.getSimpleName() +
+            ", ...) for a typed forward-only result, or Mapping.to(src, tgt, forward, backward) for " +
+            "an explicit bidirectional row."
+        );
+      }
+    }
+  }
+
+  /**
+   * Forward-only sibling of {@link #mapper(Class, Class, MapStep...)} — returns a {@link
+   * ForwardMapper} whose backward direction is not present at the type level. Use when the
+   * conversion is genuinely one-way (entity → DTO write-only, audit-log projection, normalisation
+   * pipeline) and rows include {@link io.github.eschizoid.telescope.mapping.Mapping#forward
+   * forward(...)} / {@link io.github.eschizoid.telescope.mapping.Mapping#constant constant(...)} /
+   * {@link io.github.eschizoid.telescope.mapping.Mapping#compute compute(...)} that make the
+   * backward direction meaningless.
+   *
+   * <p>The compiler enforces the one-way contract — there is no {@code backward(...)} method on
+   * {@link ForwardMapper} to call. MapStruct cannot express "this mapper is one-way" in its type
+   * system; this is the differentiator the type system buys.
+   *
+   * <pre>{@code
+   * ForwardMapper<UserEntity, UserDto> projector = Telescope.mapperForward(
+   *     UserEntity.class, UserDto.class,
+   *     to(UserEntity::id, UserDto::id),
+   *     into(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString),
+   *     constant(UserDto::tenant, "production"));
+   *
+   * UserDto dto = projector.forward(entity);
+   * }</pre>
+   */
+  public static <A, B> ForwardMapper<A, B> mapperForward(
+    final Class<A> source,
+    final Class<B> target,
+    final MapStep... steps
+  ) {
+    final var bidi = DeepMap.resolveMapper(source, target, steps);
+    return ForwardMapper.create(bidi::forward, source, target);
+  }
+
+  /**
+   * Forward-only N-source mapper that reads from any number of source objects (one per distinct
+   * runtime class) and assembles a single target. Each {@link
+   * io.github.eschizoid.telescope.mapping.MergeStep MergeStep} row identifies its source by the
+   * accessor's declaring class (via {@code SerializedLambda} inference) and binds it to a target
+   * component by name.
+   *
+   * <pre>{@code
+   * Mapper<Sources, Profile> mapper = Telescope.merge(Profile.class,
+   *     from(Customer::id,        Profile::id),
+   *     from(Customer::email,     Profile::email),
+   *     from(Audit::createdBy,    Profile::createdBy),
+   *     from(Audit::createdAt,    Profile::createdAt));
+   *
+   * Profile p = mapper.forward(Sources.of(customer, audit));
+   *
+   * // Same factory, more sources — no new overload, no per-arity ceremony:
+   * Mapper<Sources, Invoice> bigger = Telescope.merge(Invoice.class,
+   *     from(Customer::id,         Invoice::customerId),
+   *     from(Audit::createdBy,     Invoice::createdBy),
+   *     from(LineItem::totalCents, Invoice::totalCents),
+   *     from(Tax::rate,            Invoice::taxRate),
+   *     from(Promo::code,          Invoice::promoCode));
+   * Invoice inv = bigger.forward(Sources.of(c, a, li, tax, promo));
+   * }</pre>
+   *
+   * <p>Replaces the {@code Edit.over(...)} workaround that loses the typed single-source contract.
+   * The recommended path for {@code PLAN.md} item 1.3 — single arity-agnostic factory, no per-arity
+   * ceremony.
+   *
+   * <p><b>Distinct runtime classes.</b> Each source in the {@link Sources} bag must have a distinct
+   * runtime class; {@link Sources#of(Object[])} throws on duplicates. If two same-typed sources are
+   * needed, pre-aggregate them into a named holder record before the merge.
+   *
+   * <p><b>Backward is unsupported.</b> The multi-source case has no general inverse (which source
+   * gets which fields back?); {@link Mapper#backward(Object)} and {@link Mapper#patch(Object,
+   * Object)} both throw on the returned mapper. For bidirectional same-source mapping, use {@link
+   * #mapper(Class, Class, MapStep...)} on each source individually.
+   *
+   * @param <T> the target type
+   * @param target the target class
+   * @param steps the per-component correspondences
+   * @return a {@code Mapper} whose {@code forward} reads from {@link Sources} and assembles the
+   *     target; whose {@code backward} throws {@link UnsupportedOperationException}
+   * @see io.github.eschizoid.telescope.mapping.MergeStep#from(Accessor, Accessor)
+   * @see io.github.eschizoid.telescope.mapping.MergeStep#auto(Class)
+   * @see Sources#of(Object[])
+   * @see Sources#builder()
+   */
+  @SafeVarargs
+  @SuppressWarnings("varargs")
+  public static <T> Mapper<Sources, T> merge(
+    final Class<T> target,
+    final io.github.eschizoid.telescope.mapping.MergeStep<T>... steps
+  ) {
+    return Merge.build(target, steps);
   }
 
   /**
@@ -729,6 +857,63 @@ public sealed class Telescope<
    */
   public Telescope<S, A> filter(final Predicate<? super A> predicate) {
     return new Telescope<>(optic.filter(predicate), fieldOptics, chain);
+  }
+
+  /**
+   * Compose a post-read hook onto the path: every value flowing OUT of this telescope (via {@link
+   * #read}, {@link #find}, {@link #toList}, {@link #count}, {@link #exists}, the {@link #update}
+   * family's pre-hook leaf, or downstream {@link #then} composition) is passed through {@code hook}
+   * before reaching the caller / next stage. The lattice-native equivalent of {@link
+   * io.github.eschizoid.telescope.conversion.Mapper#afterForward(java.util.function.Function)
+   * Mapper.afterForward}, but applied at the path level — composes through {@code .then(...)},
+   * {@link Edit#over Edit.over}, {@link #updateAsync}, and codegen-generated navigators. MapStruct
+   * cannot reach this; its annotations bind to mapper methods, not paths.
+   *
+   * <p>Writes pass through unchanged — only the read side gets the hook. For symmetric write
+   * transformation, see {@link #before(Function)}.
+   *
+   * <p><b>Lattice note — one-sided shape.</b> The internal {@link
+   * io.github.eschizoid.telescope.internal.optics.Iso} composed here uses {@code hook} on the read
+   * side and identity on the write side, so the produced Iso does <em>not</em> satisfy the
+   * round-trip law ({@code from(to(a)) == a} only holds when {@code hook} is identity). Safe under
+   * {@code Lens.then(Iso)} composition — which routes reads and writes through separate legs and
+   * never round-trips a single value through both — but future contributors must not assume this is
+   * a lawful Iso in isolation. The same caveat applies to {@link #before(Function)}, {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#forward Mapping.forward}, and {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#toOrElse Mapping.toOrElse}.
+   *
+   * <pre>{@code
+   * Telescope.of(User.class).field(User::email).after(String::trim)
+   *     .read(user);                 // returns the trimmed email
+   * }</pre>
+   */
+  public Telescope<S, A> after(final Function<? super A, ? extends A> hook) {
+    return this.then(Telescope.iso(hook, a -> a));
+  }
+
+  /**
+   * Compose a pre-write hook onto the path: every value flowing IN to this telescope (via {@link
+   * #set}, {@link #update}, {@link #updateAsync}, {@link Edit#over Edit.over}'s write-leaf, or
+   * downstream {@link #then} composition) is passed through {@code hook} before reaching the
+   * underlying writer. The lattice-native equivalent of {@link
+   * io.github.eschizoid.telescope.conversion.Mapper#beforeBackward(java.util.function.Function)
+   * Mapper.beforeBackward}, applied at the path level.
+   *
+   * <p>Reads pass through unchanged — only the write side gets the hook. For symmetric read
+   * transformation, see {@link #after(Function)}.
+   *
+   * <p><b>Lattice note — one-sided shape.</b> Same caveat as {@link #after(Function)}: the composed
+   * Iso uses identity on the read side and {@code hook} on the write side, so the round-trip law
+   * holds only when {@code hook} is identity. Safe under {@code Lens.then(Iso)} composition; not a
+   * lawful Iso in isolation.
+   *
+   * <pre>{@code
+   * Telescope.of(User.class).field(User::email).before(String::toLowerCase)
+   *     .set(user, "ALICE@X.COM");   // writes "alice@x.com"
+   * }</pre>
+   */
+  public Telescope<S, A> before(final Function<? super A, ? extends A> hook) {
+    return this.then(Telescope.iso(a -> a, hook));
   }
 
   /**

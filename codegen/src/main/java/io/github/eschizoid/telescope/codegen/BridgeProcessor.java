@@ -82,17 +82,53 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // read in generate().
   private final Map<TypePair, Set<String>> dropsByPair = new HashMap<>();
 
-  // Per-pair renames: source field name -> target field name for fields whose two sides have
-  // different names. The bijection check applies renames on the source side before comparing
-  // to target names; planFields and the field-read expressions follow the mapping. Populated in
+  // Per-pair renames: source field name -> primary target field name for fields whose two sides
+  // have different names. The bijection check applies renames on the source side before comparing
+  // to target names; planFields and the field-read expressions follow the mapping. For forward-only
+  // fan-out (one source feeding multiple targets), this map holds the FIRST-declared target —
+  // that's
+  // the one backward reads from. Extra fan-out targets live in renameFanoutsByPair. Populated in
   // process(), read in generate().
   private final Map<TypePair, Map<String, String>> renamesByPair = new HashMap<>();
+
+  // Per-pair forward-only fan-out extras: source field name -> ordered list of EXTRA target field
+  // names beyond the primary in renamesByPair. Only present when @Rename(forwardOnly = true) is
+  // used
+  // on two or more renames sharing a source. Forward writes the source value to every target
+  // (primary + extras); backward reads only the primary. Populated in process(), read in
+  // generate().
+  private final Map<TypePair, Map<String, List<String>>> renameFanoutsByPair = new HashMap<>();
 
   // Per-pair per-field transforms: source field name -> BridgeFn class FQN. The transformed field
   // is
   // routed through new <Class>().forward(...) / .backward(...) on each direction and is exempt from
   // the same-type bijection check. Populated in process(), read in generate().
   private final Map<TypePair, Map<String, String>> transformsByPair = new HashMap<>();
+
+  // Per-pair set of source field names whose @Transform was declared with forwardOnly = true.
+  // Backward direction emits a zero-value fill for these slots (the same shape `drops` uses) and
+  // never invokes the user's BridgeFn.backward. Mirrors the runtime Mapping.forward(...) semantics.
+  // Populated in process(), read in generate().
+  private final Map<TypePair, Set<String>> forwardOnlyTransformsByPair = new HashMap<>();
+
+  // Per-pair source-field defaults: source field name -> already-parsed Java-literal expression
+  // (e.g. "\"EMEA\"", "42", "true"). Forward direction wraps the source read in (s.field == null
+  // ? <literal> : s.field()) when an entry is present. Backward is identity. Mirrors the runtime
+  // Mapping.toOrElse(srcAcc, tgtAcc, defaultValue) factory. Populated + validated in process().
+  private final Map<TypePair, Map<String, String>> defaultsByPair = new HashMap<>();
+
+  // Per-pair user-specified nested-bridge overrides: source field name -> bridge class FQN. The
+  // referenced class must expose `public static T forward(S)` + `public static S backward(T)` at
+  // signatures matching the field. When present, planFields uses FieldPlan.recurse(userBridge)
+  // for the row instead of deriving / emitting a sub-bridge for the field's nested pair. Mirrors
+  // the runtime Mapping.via(srcAcc, tgtAcc, mapper) factory.
+  private final Map<TypePair, Map<String, String>> viaMappersByPair = new HashMap<>();
+
+  // Per-pair user-specified write strategy override. AUTO (the default) preserves today's
+  // ctor → builder → no-arg+setters ladder; other values force one strategy and surface a precise
+  // error if the POJO doesn't support it. Mirrors the runtime WriteHint.writeBean(cls, strategy)
+  // hint. Populated in process(), read in generate().
+  private final Map<TypePair, String> writeStrategyByPair = new HashMap<>();
 
   // Per-pair constants: target field name -> the already-emitted Java literal expression
   // ("\"API\"", "true", "0L", "null", etc.). Forward-only — injected into the target ctor arg;
@@ -112,7 +148,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     multiTargetSources.clear();
     dropsByPair.clear();
     renamesByPair.clear();
+    renameFanoutsByPair.clear();
     transformsByPair.clear();
+    forwardOnlyTransformsByPair.clear();
+    defaultsByPair.clear();
+    viaMappersByPair.clear();
+    writeStrategyByPair.clear();
     constantsByPair.clear();
     computesByPair.clear();
 
@@ -157,18 +198,31 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         userDeclared.add(pair);
         final var drops = dropsFromMirror(bridgeAm);
         if (!drops.isEmpty()) dropsByPair.put(pair, drops);
-        final var renames = renamesFromMirror(element, bridgeAm);
-        if (renames == null) continue; // invalid rename — error already reported, skip this pair
-        if (!renames.isEmpty()) renamesByPair.put(pair, renames);
-        final var transforms = transformsFromMirror(element, bridgeAm);
-        if (transforms == null) continue; // invalid transform — already reported, skip this pair
-        if (!transforms.isEmpty()) transformsByPair.put(pair, transforms);
+        final var renameSet = renamesFromMirror(element, bridgeAm);
+        if (renameSet == null) continue; // invalid rename — error already reported, skip this pair
+        if (!renameSet.bySource().isEmpty()) renamesByPair.put(pair, renameSet.bySource());
+        if (!renameSet.fanoutExtras().isEmpty()) renameFanoutsByPair.put(pair, renameSet.fanoutExtras());
+        final var transformSet = transformsFromMirror(element, bridgeAm);
+        if (transformSet == null) continue; // invalid transform — already reported, skip this pair
+        if (!transformSet.byField().isEmpty()) transformsByPair.put(pair, transformSet.byField());
+        if (!transformSet.forwardOnlyFields().isEmpty()) forwardOnlyTransformsByPair.put(
+          pair,
+          transformSet.forwardOnlyFields()
+        );
         final var constants = constantsFromMirror(element, bridgeAm);
         if (constants == null) continue; // invalid constant — already reported, skip this pair
         if (!constants.isEmpty()) constantsByPair.put(pair, constants);
         final var computes = computesFromMirror(element, bridgeAm);
         if (computes == null) continue; // invalid compute — already reported, skip this pair
         if (!computes.isEmpty()) computesByPair.put(pair, computes);
+        final var rawDefaults = defaultsFromMirror(element, bridgeAm);
+        if (rawDefaults == null) continue; // invalid default — already reported, skip this pair
+        if (!rawDefaults.isEmpty()) defaultsByPair.put(pair, rawDefaults);
+        final var viaMappers = viaMappersFromMirror(element, bridgeAm);
+        if (viaMappers == null) continue; // invalid viaMapper — already reported, skip this pair
+        if (!viaMappers.isEmpty()) viaMappersByPair.put(pair, viaMappers);
+        final var writeStrategy = writeStrategyFromMirror(bridgeAm);
+        if (writeStrategy != null && !"AUTO".equals(writeStrategy)) writeStrategyByPair.put(pair, writeStrategy);
         if (seen.add(pair)) pending.add(pair);
       }
     }
@@ -226,61 +280,100 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return Set.of();
   }
 
+  // Result of parsing a @Bridge's renames list. `bySource` holds the first-declared target per
+  // source (the slot that backward direction reads from). `fanoutExtras` holds the extra targets
+  // declared via @Rename(forwardOnly = true) sharing the same source — those targets receive the
+  // same source value during forward emission but are invisible to backward. Empty fanoutExtras
+  // means no fan-out was declared.
+  private record RenameSet(Map<String, String> bySource, Map<String, List<String>> fanoutExtras) {
+    static RenameSet empty() {
+      return new RenameSet(Map.of(), Map.of());
+    }
+  }
+
   // Read renames from a @Bridge mirror. Returns null when a rename is malformed (already reported
-  // via error()) so the caller can skip the pair; returns an empty map when no renames are present.
-  private Map<String, String> renamesFromMirror(final Element element, final AnnotationMirror am) {
+  // via error()) so the caller can skip the pair; returns an empty RenameSet when no renames are
+  // present. Forward-only fan-out: when two renames share a source and BOTH set forwardOnly = true,
+  // the second target lands in fanoutExtras. A source-collision with any rename not flagged
+  // forwardOnly is still an error — the user must opt in on every conflicting entry.
+  private RenameSet renamesFromMirror(final Element element, final AnnotationMirror am) {
     for (final var entry : am.getElementValues().entrySet()) {
       if (!entry.getKey().getSimpleName().contentEquals("renames")) continue;
       @SuppressWarnings("unchecked")
       final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
-      final var result = new LinkedHashMap<String, String>();
-      final var seenSources = new HashSet<String>();
+      final var primary = new LinkedHashMap<String, String>();
+      final var fanoutExtras = new LinkedHashMap<String, List<String>>();
       final var seenTargets = new HashSet<String>();
+      final var sourceForwardOnly = new HashMap<String, Boolean>();
       for (final var av : list) {
         final var renameAm = (AnnotationMirror) av.getValue();
         String src = null;
         String tgt = null;
+        Boolean forwardOnly = Boolean.FALSE;
         for (final var re : renameAm.getElementValues().entrySet()) {
           final var k = re.getKey().getSimpleName().toString();
           if (k.equals("source")) src = (String) re.getValue().getValue();
           else if (k.equals("target")) tgt = (String) re.getValue().getValue();
+          else if (k.equals("forwardOnly")) forwardOnly = (Boolean) re.getValue().getValue();
         }
         if (src == null || tgt == null || src.isEmpty() || tgt.isEmpty()) {
           error(element, "@Rename requires both `source` and `target` field names");
-          return null;
-        }
-        if (!seenSources.add(src)) {
-          error(element, "@Rename source \"" + src + "\" appears twice in the renames list");
           return null;
         }
         if (!seenTargets.add(tgt)) {
           error(element, "@Rename target \"" + tgt + "\" appears twice in the renames list");
           return null;
         }
-        result.put(src, tgt);
+        if (primary.containsKey(src)) {
+          if (!Boolean.TRUE.equals(forwardOnly) || !Boolean.TRUE.equals(sourceForwardOnly.get(src))) {
+            error(
+              element,
+              "@Rename source \"" +
+                src +
+                "\" appears twice in the renames list — set forwardOnly = true on every conflicting" +
+                " entry to opt into forward-only fan-out"
+            );
+            return null;
+          }
+          fanoutExtras.computeIfAbsent(src, __ -> new ArrayList<>()).add(tgt);
+        } else {
+          primary.put(src, tgt);
+          sourceForwardOnly.put(src, forwardOnly);
+        }
       }
-      return result;
+      return new RenameSet(primary, fanoutExtras);
     }
-    return Map.of();
+    return RenameSet.empty();
+  }
+
+  // Result of parsing a @Bridge's transforms list. `byField` carries the source-field → BridgeFn
+  // class FQN map (the long-standing shape); `forwardOnlyFields` carries the subset of source
+  // field names whose @Transform was declared with forwardOnly = true.
+  private record TransformSet(Map<String, String> byField, Set<String> forwardOnlyFields) {
+    static TransformSet empty() {
+      return new TransformSet(Map.of(), Set.of());
+    }
   }
 
   // Read transforms from a @Bridge mirror. Returns null on a malformed transform (already reported)
-  // so the caller can skip the pair. Empty map when no transforms are present. The map keys are
-  // source field names; values are the BridgeFn class FQN to instantiate at emit time.
-  private Map<String, String> transformsFromMirror(final Element element, final AnnotationMirror am) {
+  // so the caller can skip the pair. Empty TransformSet when no transforms are present.
+  private TransformSet transformsFromMirror(final Element element, final AnnotationMirror am) {
     for (final var entry : am.getElementValues().entrySet()) {
       if (!entry.getKey().getSimpleName().contentEquals("transforms")) continue;
       @SuppressWarnings("unchecked")
       final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
       final var result = new LinkedHashMap<String, String>();
+      final var forwardOnlySet = new LinkedHashSet<String>();
       for (final var av : list) {
         final var transformAm = (AnnotationMirror) av.getValue();
         String field = null;
         TypeMirror using = null;
+        Boolean forwardOnly = Boolean.FALSE;
         for (final var te : transformAm.getElementValues().entrySet()) {
           final var k = te.getKey().getSimpleName().toString();
           if (k.equals("field")) field = (String) te.getValue().getValue();
           else if (k.equals("using")) using = (TypeMirror) te.getValue().getValue();
+          else if (k.equals("forwardOnly")) forwardOnly = (Boolean) te.getValue().getValue();
         }
         if (field == null || field.isEmpty()) {
           error(element, "@Transform requires a non-empty `field` name");
@@ -300,6 +393,100 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           return null;
         }
         result.put(field, usingEl.getQualifiedName().toString());
+        if (Boolean.TRUE.equals(forwardOnly)) forwardOnlySet.add(field);
+      }
+      return new TransformSet(result, forwardOnlySet);
+    }
+    return TransformSet.empty();
+  }
+
+  // Read writeStrategy from a @Bridge mirror. Returns the enum name (AUTO / CONSTRUCTOR / BUILDER
+  // / SETTERS) when explicitly set; null when the user didn't supply a value (treated as AUTO).
+  private String writeStrategyFromMirror(final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (!entry.getKey().getSimpleName().contentEquals("writeStrategy")) continue;
+      final var val = entry.getValue().getValue();
+      if (val instanceof javax.lang.model.element.VariableElement ve) return ve.getSimpleName().toString();
+      return val == null ? null : val.toString();
+    }
+    return null;
+  }
+
+  // Read viaMappers from a @Bridge mirror. Returns source-field-name -> bridge-class FQN. The
+  // referenced class's signatures are validated at the generated code level — if the static
+  // forward/backward methods don't exist or don't match the field types, javac surfaces the error
+  // at the generated bridge body. Returns null on a structural error (already reported).
+  private Map<String, String> viaMappersFromMirror(final Element element, final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (!entry.getKey().getSimpleName().contentEquals("viaMappers")) continue;
+      @SuppressWarnings("unchecked")
+      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
+      final var result = new LinkedHashMap<String, String>();
+      for (final var av : list) {
+        final var viaAm = (AnnotationMirror) av.getValue();
+        String field = null;
+        TypeMirror using = null;
+        for (final var ve : viaAm.getElementValues().entrySet()) {
+          final var k = ve.getKey().getSimpleName().toString();
+          if (k.equals("field")) field = (String) ve.getValue().getValue();
+          else if (k.equals("using")) using = (TypeMirror) ve.getValue().getValue();
+        }
+        if (field == null || field.isEmpty()) {
+          error(element, "@ViaMapper requires a non-empty `field` name");
+          return null;
+        }
+        if (using == null || using.getKind() != TypeKind.DECLARED) {
+          error(element, "@ViaMapper `using` must be a class (typically a generated <X>Bridge)");
+          return null;
+        }
+        final var usingEl = (TypeElement) ((DeclaredType) using).asElement();
+        if (usingEl.getNestingKind() != NestingKind.TOP_LEVEL) {
+          error(element, "@ViaMapper `using` must be a top-level class");
+          return null;
+        }
+        if (result.containsKey(field)) {
+          error(element, "@ViaMapper field=\"" + field + "\" is declared more than once");
+          return null;
+        }
+        result.put(field, usingEl.getQualifiedName().toString());
+      }
+      return result;
+    }
+    return Map.of();
+  }
+
+  // Read defaults from a @Bridge mirror. Returns the raw source-field-name -> raw-string-value
+  // map. Per-pair validation (field exists on source, type is reference-typed, value parses
+  // against the field type) happens in generate() where the source TypeElement is available.
+  // Returns null on a structural error (already reported).
+  private Map<String, String> defaultsFromMirror(final Element element, final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (!entry.getKey().getSimpleName().contentEquals("defaults")) continue;
+      @SuppressWarnings("unchecked")
+      final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
+      final var result = new LinkedHashMap<String, String>();
+      for (final var av : list) {
+        final var defAm = (AnnotationMirror) av.getValue();
+        String field = null;
+        String value = null;
+        for (final var de : defAm.getElementValues().entrySet()) {
+          final var k = de.getKey().getSimpleName().toString();
+          if (k.equals("field")) field = (String) de.getValue().getValue();
+          else if (k.equals("value")) value = (String) de.getValue().getValue();
+        }
+        if (field == null || field.isEmpty()) {
+          error(element, "@Default requires a non-empty `field` name");
+          return null;
+        }
+        if (value == null) {
+          error(element, "@Default requires a `value`");
+          return null;
+        }
+        if (result.containsKey(field)) {
+          error(element, "@Default field=\"" + field + "\" is declared more than once");
+          return null;
+        }
+        result.put(field, value);
       }
       return result;
     }
@@ -573,7 +760,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var targetFields = fieldsOf(target);
     final var drops = dropsByPair.getOrDefault(thisPair, Set.of());
     final var renames = renamesByPair.getOrDefault(thisPair, Map.of());
+    final var renameFanouts = renameFanoutsByPair.getOrDefault(thisPair, Map.of());
     final var transforms = transformsByPair.getOrDefault(thisPair, Map.of());
+    final var forwardOnlyTransforms = forwardOnlyTransformsByPair.getOrDefault(thisPair, Set.of());
+    final var rawDefaults = defaultsByPair.getOrDefault(thisPair, Map.of());
+    final var viaMappers = viaMappersByPair.getOrDefault(thisPair, Map.of());
+    final var writeStrategy = writeStrategyByPair.getOrDefault(thisPair, "AUTO");
     final var rawConstants = constantsByPair.getOrDefault(thisPair, Map.of());
     final var computes = computesByPair.getOrDefault(thisPair, Map.of());
 
@@ -592,7 +784,44 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return;
       }
       if (drops.contains(t)) {
-        error(source, "@Bridge field \"" + t + "\" appears in both transforms and drops — it must be one or the other");
+        error(source, "@Bridge field \"" + t + "\" appears in both transforms and drops — pick one.");
+        return;
+      }
+    }
+
+    // Validate viaMappers fields exist and don't overlap with drops, transforms, renames, or
+    // defaults. VM1 (renames overlap) and VM2 (defaults overlap) from the round-2 review: each
+    // combination produces structurally valid emission with undefined or wrong semantics —
+    // rename-overlap dispatches via the user-named bridge on the renamed-source-name slot;
+    // default-overlap passes a literal-typed value to the bridge expecting the source type. Both
+    // are silent-wrong paths until the user hits the generated-file diagnostic — too late.
+    for (final var v : viaMappers.keySet()) {
+      if (!sourceFields.stream().anyMatch(f -> f.name().equals(v))) {
+        error(
+          source,
+          "@Bridge viaMappers field=\"" +
+            v +
+            "\" is not a field of " +
+            source.getSimpleName() +
+            " — known fields: " +
+            sourceFields.stream().map(Field::name).collect(Collectors.toSet())
+        );
+        return;
+      }
+      if (drops.contains(v)) {
+        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and drops — pick one.");
+        return;
+      }
+      if (transforms.containsKey(v)) {
+        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and transforms — pick one.");
+        return;
+      }
+      if (renames.containsKey(v)) {
+        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and renames — pick one.");
+        return;
+      }
+      if (rawDefaults.containsKey(v)) {
+        error(source, "@Bridge field \"" + v + "\" appears in both viaMappers and defaults — pick one.");
         return;
       }
     }
@@ -639,21 +868,148 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return;
       }
       if (drops.contains(e.getKey())) {
+        error(source, "@Bridge field \"" + e.getKey() + "\" appears in both renames and drops — pick one.");
+        return;
+      }
+      // OL-1: renames + transforms on the same source field is undefined behavior. The transform
+      // dispatches on the source field name; the rename relabels the TARGET slot. Together they
+      // accidentally compile to correct code in scalar cases but the combination has no documented
+      // contract — reject explicitly so the user picks one.
+      if (transforms.containsKey(e.getKey())) {
         error(
           source,
-          "@Bridge field \"" + e.getKey() + "\" appears in both renames and drops — it must be one or the other"
+          "@Bridge field \"" +
+            e.getKey() +
+            "\" appears in both renames and transforms — pick one (the transform consumes the source field; the target slot name comes from the bijection, not @Rename)."
         );
         return;
       }
     }
+    // Validate forward-only fan-out extras: every extra target must exist on the target side, each
+    // extra target's type must match the primary target's type (forward writes one source value
+    // into
+    // every target slot — they must be assignment-compatible), and the extra target can't double up
+    // with a constant/compute injection. seenTargets across the whole rename set is already
+    // enforced
+    // upstream in renamesFromMirror; this loop adds the source-side existence + type checks.
+    for (final var fanout : renameFanouts.entrySet()) {
+      final var srcName = fanout.getKey();
+      final var primaryTgt = renames.get(srcName);
+      final var primaryType = fieldByName(targetFields, primaryTgt).type();
+      for (final var extraTgt : fanout.getValue()) {
+        if (!targetNames.contains(extraTgt)) {
+          error(
+            source,
+            "@Bridge renames target=\"" +
+              extraTgt +
+              "\" (forwardOnly fan-out from \"" +
+              srcName +
+              "\") is not a field of " +
+              target.getSimpleName() +
+              " — known fields: " +
+              targetNames
+          );
+          return;
+        }
+        final var extraType = fieldByName(targetFields, extraTgt).type();
+        if (!isSameType(primaryType, extraType)) {
+          error(
+            source,
+            "@Bridge renames source=\"" +
+              srcName +
+              "\" fans out to targets with different types — \"" +
+              primaryTgt +
+              "\" is " +
+              primaryType +
+              ", \"" +
+              extraTgt +
+              "\" is " +
+              extraType +
+              ". Forward-only fan-out writes the same source value into every target; all targets must" +
+              " share the same type."
+          );
+          return;
+        }
+      }
+    }
     final var reverseRenames = new LinkedHashMap<String, String>();
     for (final var e : renames.entrySet()) reverseRenames.put(e.getValue(), e.getKey());
+    // Fan-out extras: every extra target reads from the same source as the primary. Adding them to
+    // reverseRenames lets readForward emit each extra target's read expression off the same source.
+    for (final var fanout : renameFanouts.entrySet()) {
+      for (final var extraTgt : fanout.getValue()) reverseRenames.put(extraTgt, fanout.getKey());
+    }
 
     // Validate constants + computes (forward-only target-side injections). Each named field must
     // exist on the target; a target field may not be injected by more than one mechanism, nor by a
     // mechanism that also reaches that target name through a rename. Parse constant values here so
     // type errors fire alongside the rest of the per-pair validation.
-    final var renameTargetNames = renames.values().stream().collect(Collectors.toSet());
+    final var renameTargetNames = new LinkedHashSet<>(renames.values());
+    for (final var extras : renameFanouts.values()) renameTargetNames.addAll(extras);
+
+    // Validate @Default rows (source-side null-coalescing). Each named field must exist on the
+    // source, must be a reference type (primitives can never be null), and must not overlap with
+    // drops (the two have incompatible semantics: drop discards the value, default substitutes one
+    // when null). The value parses against the source field's type using the same parser as
+    // @Constant — String, primitives, "null" for reference types.
+    final var parsedDefaults = new LinkedHashMap<String, String>();
+    for (final var e : rawDefaults.entrySet()) {
+      final var fieldName = e.getKey();
+      final var sf = sourceFields
+        .stream()
+        .filter(f -> f.name().equals(fieldName))
+        .findFirst()
+        .orElse(null);
+      if (sf == null) {
+        error(
+          source,
+          "@Bridge defaults field=\"" +
+            fieldName +
+            "\" is not a field of " +
+            source.getSimpleName() +
+            " — known fields: " +
+            sourceNames
+        );
+        return;
+      }
+      if (sf.type().getKind().isPrimitive()) {
+        error(
+          source,
+          "@Bridge defaults field=\"" +
+            fieldName +
+            "\" has primitive type " +
+            sf.type() +
+            " — primitives cannot be null, so the default would never fire. Use the wrapper type or rework the source shape."
+        );
+        return;
+      }
+      if (drops.contains(fieldName)) {
+        error(
+          source,
+          "@Bridge field \"" +
+            fieldName +
+            "\" appears in both defaults and drops — pick one (drop discards, default substitutes when null)."
+        );
+        return;
+      }
+      // FD-1: defaults + transforms on the same field stack two modifiers with undefined
+      // ordering — the @Transform decides the conversion, the @Default wraps the source read in
+      // a null-coalesce that the transform then consumes. The combination is structurally
+      // accidental rather than designed; reject explicitly so the user picks one.
+      if (transforms.containsKey(fieldName)) {
+        error(
+          source,
+          "@Bridge field \"" +
+            fieldName +
+            "\" appears in both defaults and transforms — pick one (use a transform that handles null internally, or remove the default)."
+        );
+        return;
+      }
+      final var lit = parseConstantLiteral(source, fieldName, e.getValue(), sf.type());
+      if (lit == null) return;
+      parsedDefaults.put(fieldName, lit);
+    }
+
     final var injectedTargetFields = new LinkedHashSet<String>();
     final var parsedConstants = new LinkedHashMap<String, String>();
     for (final var e : rawConstants.entrySet()) {
@@ -678,7 +1034,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (renameTargetNames.contains(fieldName)) {
         error(
           source,
-          "@Bridge target \"" + fieldName + "\" is already targeted by a rename; cannot also be a constant"
+          "@Bridge target \"" + fieldName + "\" appears in both renames (target slot) and constants — pick one."
         );
         return;
       }
@@ -702,11 +1058,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return;
       }
       if (parsedConstants.containsKey(fieldName)) {
-        error(source, "@Bridge target \"" + fieldName + "\" appears in both constants and computes");
+        error(
+          source,
+          "@Bridge target \"" +
+            fieldName +
+            "\" appears in both constants and computes — pick one (constants inject a literal; computes inject a Supplier result)."
+        );
         return;
       }
       if (renameTargetNames.contains(fieldName)) {
-        error(source, "@Bridge target \"" + fieldName + "\" is already targeted by a rename; cannot also be a compute");
+        error(
+          source,
+          "@Bridge target \"" + fieldName + "\" appears in both renames (target slot) and computes — pick one."
+        );
         return;
       }
       injectedTargetFields.add(fieldName);
@@ -721,7 +1085,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           .stream()
           .filter(f -> !drops.contains(f.name()))
           .toList();
-    if (!sameNames(source, nonDroppedSourceFields, target, targetFields, renames, injectedTargetFields)) return;
+    if (
+      !sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields)
+    ) return;
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
@@ -734,6 +1100,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       targetFields,
       renames,
       transforms,
+      viaMappers,
       pending,
       seen,
       userDeclared
@@ -743,21 +1110,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // readForward is called with TARGET field names (we walk targetFields). Injected targets
     // (constants, computes) take priority — they're forward-only literal/Supplier expressions with
     // no source counterpart. Otherwise reverse-rename to find the matching source field, then use
-    // the source name to look up the plan and read the source.
+    // the source name to look up the plan and read the source. When the source field has a
+    // @Default, wrap the source read in a (s.x() == null ? <literal> : s.x()) coalesce so the
+    // forward direction substitutes the default for null sources.
     final Function<String, String> readForward = targetName -> {
       if (parsedConstants.containsKey(targetName)) return parsedConstants.get(targetName);
       if (computes.containsKey(targetName)) return "__cp_" + targetName + ".get()";
       final var srcName = reverseRenames.getOrDefault(targetName, targetName);
-      return applyForward(
-        srcName,
-        fieldPlans.get(srcName),
-        readExpr(source, "s", fieldByName(nonDroppedSourceFields, srcName))
-      );
+      final var rawRead = readExpr(source, "s", fieldByName(nonDroppedSourceFields, srcName));
+      final var read = parsedDefaults.containsKey(srcName)
+        ? "(" + rawRead + " == null ? " + parsedDefaults.get(srcName) + " : " + rawRead + ")"
+        : rawRead;
+      return applyForward(srcName, fieldPlans.get(srcName), read);
     };
-    // readBackward is called with SOURCE field names. For drops, emit the type's zero value.
-    // Otherwise forward-rename the source name to find the matching target field for the read.
+    // readBackward is called with SOURCE field names. For drops AND forward-only transforms, emit
+    // the type's zero value — both mechanisms have no defined backward and the source slot must be
+    // filled with something. Otherwise forward-rename the source name to find the matching target
+    // field for the read.
     final Function<String, String> readBackward = sourceName -> {
       if (drops.contains(sourceName)) return defaultLiteralFor(fieldByName(sourceFields, sourceName).type());
+      if (forwardOnlyTransforms.contains(sourceName)) return defaultLiteralFor(
+        fieldByName(sourceFields, sourceName).type()
+      );
       final var tgtName = renames.getOrDefault(sourceName, sourceName);
       return applyBackward(
         sourceName,
@@ -766,10 +1140,83 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
     };
 
-    final var forwardBody = buildExpr(target, readForward, targetFields);
+    // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
+    // declaration rather than at `target` (which may be a third-party POJO with no annotation).
+    final var forwardBody = buildExpr(target, readForward, targetFields, writeStrategy, source);
     if (forwardBody == null) return;
-    final var backwardBody = buildExpr(source, readBackward, sourceFields);
+    final var backwardBody = buildExpr(source, readBackward, sourceFields, writeStrategy, source);
     if (backwardBody == null) return;
+    // Patch emits a sparse overlay: for each source field, read from `partial` (the user's
+    // partially-populated target) when the target's component is non-null, else fall back to the
+    // corresponding read on `base`. Primitive target components are always treated as
+    // patch-present (matching runtime Mapper#patch semantics: a boxed primitive is never null).
+    //
+    // P5-DBL: each reference-type source slot needs its partial.field() value referenced THREE
+    // times (null-check + patch call + @Default outer wrap). Calling partial.<getter>() that many
+    // times is safe for record accessors but unsafe for bean getters with side effects (lazy-init,
+    // audit logging, counters). Same for SubBridge.patch(...) on RECURSE fields when @Default is
+    // configured. We avoid double-evaluation by precomputing one local per source field in a
+    // prelude block, then referencing the locals in the conditional. The prelude is collected
+    // here as patchLocals (declarations) keyed by source field name.
+    final var patchLocals = new java.util.LinkedHashMap<String, String>();
+    final Function<String, String> readPatch = sourceName -> {
+      final var sf = fieldByName(sourceFields, sourceName);
+      final var baseRead = readExpr(source, "base", sf);
+      if (drops.contains(sourceName)) return baseRead;
+      if (forwardOnlyTransforms.contains(sourceName)) return baseRead;
+      final var tgtName = renames.getOrDefault(sourceName, sourceName);
+      final var tf = fieldByName(targetFields, tgtName);
+      final var plan = fieldPlans.get(sourceName);
+      final var partialReadExpr = readExpr(target, "partial", tf);
+      // Primitive target components autobox to non-null wrappers on read — always patch them.
+      // No conditional, so no double-eval; just route through applyBackward.
+      if (tf.type().getKind().isPrimitive()) return applyBackward(sourceName, plan, partialReadExpr);
+      // Reference-type slots: precompute partial.<getter>() once into __pp_<sourceName>.
+      final var pLocal = "__pp_" + sourceName;
+      patchLocals.put(pLocal, tf.type() + " " + pLocal + " = " + partialReadExpr + ";");
+      // P5-3: nested RECURSE plans use SubBridge.patch(base.field, partial.field) — recursive
+      // patch all the way down so a sparse partial only overlays non-null sub-components.
+      final String partialRead;
+      if (plan.kind() == FieldPlan.Kind.RECURSE) {
+        partialRead = plan.subBridgeName() + ".patch(" + baseRead + ", " + pLocal + ")";
+      } else {
+        partialRead = applyBackward(sourceName, plan, pLocal);
+      }
+      // P5-5 + P5-DBL: when a @Default is configured, the outer null-coalesce needs to
+      // reference
+      // the conditional's result without re-evaluating the entire ternary. Precompute via a
+      // second
+      // local __cond_<sourceName> so the @Default check sees a single value.
+      final var conditional = "(" + pLocal + " != null ? " + partialRead + " : " + baseRead + ")";
+      if (parsedDefaults.containsKey(sourceName)) {
+        final var cLocal = "__cond_" + sourceName;
+        patchLocals.put(cLocal, sf.type() + " " + cLocal + " = " + conditional + ";");
+        return "(" + cLocal + " == null ? " + parsedDefaults.get(sourceName) + " : " + cLocal + ")";
+      }
+      return conditional;
+    };
+    final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source);
+    if (patchInner == null) return;
+    // Wrap the inner expression in a block prelude carrying the precomputed locals so the final
+    // emitted body has the right shape: { final <type> __pp_X = ...; ... return <inner>; }
+    final String patchBody;
+    if (patchLocals.isEmpty()) {
+      patchBody = patchInner;
+    } else {
+      final var sb = new StringBuilder("{ ");
+      for (final var decl : patchLocals.values()) sb.append("final ").append(decl).append(" ");
+      // If the inner expression is already a block (POJO writeStrategy path: "{ ...; return out;
+      // }"),
+      // strip both braces and inline the body so we don't double-close the outer block.
+      if (patchInner.startsWith("{") && patchInner.endsWith("}")) {
+        final var stripped = patchInner.substring(1, patchInner.length() - 1).trim();
+        sb.append(stripped).append(" }");
+        patchBody = sb.toString();
+      } else {
+        sb.append("return ").append(patchInner).append("; }");
+        patchBody = sb.toString();
+      }
+    }
 
     final var imports = new TreeSet<>(importsFor(fieldPlans));
     imports.add("io.github.eschizoid.telescope.conversion.BridgeFn");
@@ -821,6 +1268,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println();
         out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
         emitMethodBody(out, backwardBody);
+        out.println("  }");
+        out.println();
+        // Sparse-overlay patch: read non-null fields of `partial` (a partially-populated target)
+        // and apply them onto `base`. Mirrors the runtime Mapper#patch(base, partial) semantics.
+        // Reference target components null-gate to base; primitive components autobox to non-null
+        // and are always overlaid; nested RECURSE plans recursively patch all the way down.
+        out.println(
+          "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
+        );
+        // P5-1: match runtime Mapper#patch's null-guard. Without this guard, a sparse PATCH
+        // request that arrives with no body (partial == null) would NPE on the first
+        // partial.field() call; runtime returns `base` cleanly in the same situation.
+        out.println("    if (base == null || partial == null) return base;");
+        emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
         out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
@@ -962,44 +1423,70 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     writeClass(
       qualifiedBridge,
       bridgeName,
-      Set.of("io.github.eschizoid.telescope.conversion.BridgeFn"),
+      Set.of(
+        "io.github.eschizoid.telescope.conversion.BridgeFn",
+        "io.github.eschizoid.telescope.conversion.Match",
+        "java.util.function.Function"
+      ),
       "Generated by telescope-codegen for @Bridge sealed " + source.getSimpleName() + ".",
       source,
       out -> {
-        out.println("  public static " + targetFq + " forward(final " + sourceFq + " s) {");
+        // Sealed-dispatch via Match — the dispatch is lattice-routed (Match composes internal
+        // Prism instances per permit) and exhaustiveness is verified at class-load time by
+        // .exhaustive() reading getPermittedSubclasses(). Belt-and-suspenders: if the processor
+        // misses a permit, .exhaustive() throws loudly at class init rather than silently
+        // defaulting to the unreachable-throw at first invocation of the orphan case.
+        out.println("  private static final Function<" + sourceFq + ", " + targetFq + "> FORWARD =");
+        out.println("    Match.<" + sourceFq + ", " + targetFq + ">of(" + sourceFq + ".class)");
         for (final var e : entries) {
-          final var v = camelLower(e.sourceCase().getSimpleName().toString());
-          out.println(
-            "    if (s instanceof " +
-              e.sourceCase().getQualifiedName() +
-              " " +
-              v +
-              ") return " +
-              e.bridgeFq() +
-              ".forward(" +
-              v +
-              ");"
-          );
+          out.println("      .when(" + e.sourceCase().getQualifiedName() + ".class, " + e.bridgeFq() + "::forward)");
         }
-        out.println("    throw new IllegalStateException(\"unreachable: sealed type\");");
+        out.println("      .exhaustive();");
+        out.println();
+        out.println("  private static final Function<" + targetFq + ", " + sourceFq + "> BACKWARD =");
+        out.println("    Match.<" + targetFq + ", " + sourceFq + ">of(" + targetFq + ".class)");
+        for (final var e : entries) {
+          out.println("      .when(" + e.targetCase().getQualifiedName() + ".class, " + e.bridgeFq() + "::backward)");
+        }
+        out.println("      .exhaustive();");
+        out.println();
+        out.println("  public static " + targetFq + " forward(final " + sourceFq + " s) {");
+        out.println("    return FORWARD.apply(s);");
         out.println("  }");
         out.println();
         out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
+        out.println("    return BACKWARD.apply(t);");
+        out.println("  }");
+        out.println();
+        // P5-6: sealed-umbrella patch — dispatch each (basePermit, partialPermit) pair to the
+        // per-case bridge's patch when both sides land on the matching sealed case.
+        //
+        // P5-SLD: when the cases DON'T match (e.g. base is a CreditCard, partial is a
+        // BankTransferEntity), return `base` unchanged. Patch is an OVERLAY contract: the partial
+        // refines the base. If the partial's sealed case is incompatible with the base's case,
+        // there is no defined overlay — silently switching the concrete sealed type via a full
+        // backward conversion would surprise HTTP-PATCH callers ("PATCH /payments/123 with a
+        // bank-transfer body just changed my CreditCard into a BankTransfer"). No-op is the
+        // safe contract; callers who genuinely want the case switch should call backward()
+        // explicitly.
+        out.println(
+          "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
+        );
+        out.println("    if (base == null || partial == null) return base;");
         for (final var e : entries) {
-          final var v = camelLower(e.targetCase().getSimpleName().toString());
+          final var sCase = e.sourceCase().getQualifiedName();
+          final var tCase = e.targetCase().getQualifiedName();
           out.println(
-            "    if (t instanceof " +
-              e.targetCase().getQualifiedName() +
-              " " +
-              v +
-              ") return " +
+            "    if (base instanceof " +
+              sCase +
+              " sb && partial instanceof " +
+              tCase +
+              " tp) return " +
               e.bridgeFq() +
-              ".backward(" +
-              v +
-              ");"
+              ".patch(sb, tp);"
           );
         }
-        out.println("    throw new IllegalStateException(\"unreachable: sealed type\");");
+        out.println("    return base; // P5-SLD: case mismatch is a no-op, not a type switch.");
         out.println("  }");
         out.println();
         out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
@@ -1125,6 +1612,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> targetFields,
     final Map<String, String> renames,
     final Map<String, String> transforms,
+    final Map<String, String> viaMappers,
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
     final Set<TypePair> userDeclared
@@ -1134,6 +1622,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // Per-field transform supersedes the type-match logic — the transform IS the contract.
       if (transforms.containsKey(sf.name())) {
         plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.TRANSFORM, transforms.get(sf.name())));
+        continue;
+      }
+      // Per-field viaMapper supersedes auto-recursion — the user-supplied bridge class IS the
+      // contract. Emit a RECURSE plan whose subBridgeName is the user's class FQN; applyForward /
+      // applyBackward already emit `<class>.forward(...)` / `<class>.backward(...)` for RECURSE,
+      // so no new dispatch arm is needed.
+      if (viaMappers.containsKey(sf.name())) {
+        plans.put(sf.name(), FieldPlan.recurse(viaMappers.get(sf.name())));
         continue;
       }
       final var tf = fieldByName(targetFields, renames.getOrDefault(sf.name(), sf.name()));
@@ -1549,8 +2045,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   // Construct `to` from a name->expression reader: canonical ctor (record), or name-matched ctor /
   // builder / no-arg+setters (POJO). Returns an expression or a `{ ... return x; }` block; null on
-  // failure (error reported on `to`).
-  private String buildExpr(final TypeElement to, final Function<String, String> read, final List<Field> toFields) {
+  // failure (error reported on `annotationSite` so the diagnostic lands at the user's @Bridge,
+  // not at the target class, which may be third-party).
+  //
+  // writeStrategy: AUTO (run the priority ladder), CONSTRUCTOR / BUILDER / SETTERS (force one).
+  // Records always use the canonical constructor regardless of the strategy.
+  private String buildExpr(
+    final TypeElement to,
+    final Function<String, String> read,
+    final List<Field> toFields,
+    final String writeStrategy,
+    final TypeElement annotationSite
+  ) {
     final var toFq = to.getQualifiedName().toString();
     if (to.getKind() == ElementKind.RECORD) {
       final var args = to
@@ -1561,54 +2067,107 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return "new " + toFq + "(" + args + ")";
     }
 
+    final var auto = "AUTO".equals(writeStrategy);
+
     // POJO: a public constructor whose parameter names match the fields (order-independent).
-    for (final var ctor : ElementFilter.constructorsIn(to.getEnclosedElements())) {
-      if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != toFields.size()) continue;
-      final var args = new ArrayList<String>();
-      var matched = true;
-      for (final var p : ctor.getParameters()) {
-        final var pn = p.getSimpleName().toString();
-        if (!hasField(toFields, pn)) {
-          matched = false;
-          break;
+    if (auto || "CONSTRUCTOR".equals(writeStrategy)) {
+      for (final var ctor : ElementFilter.constructorsIn(to.getEnclosedElements())) {
+        if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != toFields.size()) continue;
+        final var args = new ArrayList<String>();
+        var matched = true;
+        for (final var p : ctor.getParameters()) {
+          final var pn = p.getSimpleName().toString();
+          if (!hasField(toFields, pn)) {
+            matched = false;
+            break;
+          }
+          args.add(read.apply(pn));
         }
-        args.add(read.apply(pn));
+        if (matched) return "new " + toFq + "(" + String.join(", ", args) + ")";
       }
-      if (matched) return "new " + toFq + "(" + String.join(", ", args) + ")";
+      if (!auto) {
+        error(
+          annotationSite,
+          "@Bridge writeStrategy = CONSTRUCTOR on " +
+            annotationSite.getQualifiedName() +
+            " (target " +
+            toFq +
+            "): no public constructor whose parameter names match the bridge fields. Switch to AUTO, BUILDER, or SETTERS, or add a name-matched constructor."
+        );
+        return null;
+      }
     }
 
     // POJO: a static builder() with a method per field.
-    final var builder = staticBuilderMethod(to);
-    if (builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED) {
-      final var builderType = (TypeElement) ((DeclaredType) builder.getReturnType()).asElement();
-      final var sb = new StringBuilder(toFq + ".builder()");
-      for (final var f : toFields) {
-        final var method = builderSetter(builderType, f.name());
-        if (method == null) {
-          error(to, "@Bridge: builder " + builderType.getQualifiedName() + " has no method for '" + f.name() + "'");
-          return null;
+    if (auto || "BUILDER".equals(writeStrategy)) {
+      final var builder = staticBuilderMethod(to);
+      if (builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED) {
+        final var builderType = (TypeElement) ((DeclaredType) builder.getReturnType()).asElement();
+        final var sb = new StringBuilder(toFq + ".builder()");
+        for (final var f : toFields) {
+          final var method = builderSetter(builderType, f.name());
+          if (method == null) {
+            error(
+              annotationSite,
+              "@Bridge: builder " +
+                builderType.getQualifiedName() +
+                " (target " +
+                toFq +
+                ") has no method for '" +
+                f.name() +
+                "'"
+            );
+            return null;
+          }
+          sb.append(".").append(method).append("(").append(read.apply(f.name())).append(")");
         }
-        sb.append(".").append(method).append("(").append(read.apply(f.name())).append(")");
+        return sb.append(".build()").toString();
       }
-      return sb.append(".build()").toString();
+      if (!auto) {
+        error(
+          annotationSite,
+          "@Bridge writeStrategy = BUILDER on " +
+            annotationSite.getQualifiedName() +
+            " (target " +
+            toFq +
+            "): no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or SETTERS, or add a builder()."
+        );
+        return null;
+      }
     }
 
     // POJO: a no-arg constructor plus a setter per field.
-    if (hasPublicNoArgConstructor(to)) {
-      final var sb = new StringBuilder("{ final var out = new " + toFq + "(); ");
-      for (final var f : toFields) {
-        final var setter = setterName(to, f.name());
-        if (setter == null) {
-          error(to, "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'");
-          return null;
+    if (auto || "SETTERS".equals(writeStrategy)) {
+      if (hasPublicNoArgConstructor(to)) {
+        final var sb = new StringBuilder("{ final var out = new " + toFq + "(); ");
+        for (final var f : toFields) {
+          final var setter = setterName(to, f.name());
+          if (setter == null) {
+            error(
+              annotationSite,
+              "@Bridge: " + toFq + " has a no-arg constructor but no setter for '" + f.name() + "'"
+            );
+            return null;
+          }
+          sb.append("out.").append(setter).append("(").append(read.apply(f.name())).append("); ");
         }
-        sb.append("out.").append(setter).append("(").append(read.apply(f.name())).append("); ");
+        return sb.append("return out; }").toString();
       }
-      return sb.append("return out; }").toString();
+      if (!auto) {
+        error(
+          annotationSite,
+          "@Bridge writeStrategy = SETTERS on " +
+            annotationSite.getQualifiedName() +
+            " (target " +
+            toFq +
+            "): no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a no-arg constructor."
+        );
+        return null;
+      }
     }
 
     error(
-      to,
+      annotationSite,
       "@Bridge: " +
         toFq +
         " has no usable construction strategy — needs a record canonical constructor, a constructor " +
@@ -1654,12 +2213,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement target,
     final List<Field> targetFields,
     final Map<String, String> renames,
+    final Map<String, List<String>> renameFanouts,
     final Set<String> injectedTargetFields
   ) {
-    final var sn = sourceFields
-      .stream()
-      .map(f -> renames.getOrDefault(f.name(), f.name()))
-      .collect(Collectors.toCollection(TreeSet::new));
+    final var sn = new TreeSet<String>();
+    for (final var f : sourceFields) {
+      sn.add(renames.getOrDefault(f.name(), f.name()));
+      // Forward-only fan-out: every extra target counts as a source-derived name in the bijection,
+      // since forward writes the source value into every fan-out target slot.
+      final var extras = renameFanouts.get(f.name());
+      if (extras != null) sn.addAll(extras);
+    }
     final var tn = targetFields
       .stream()
       .map(Field::name)

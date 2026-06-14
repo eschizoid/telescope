@@ -7,6 +7,7 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.Compute;
 import io.github.eschizoid.telescope.mapping.Constant;
 import io.github.eschizoid.telescope.mapping.Drop;
+import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.FromTelescopeTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
@@ -367,9 +368,9 @@ public final class DeepMap {
         continue;
       }
       final var tgtField = tgtRefl.normalize(internals.targetField());
-      // Fail fast on duplicates within this type-pair — two rows that target the same source or
-      // target field would silently overwrite each other in byTargetName/bySourceName and could
-      // produce non-bijective forward/backward (each direction using a different correspondence).
+      // Fail fast on duplicate target — two rows targeting the same target field would silently
+      // overwrite each other in byTargetName and could produce non-bijective forward/backward
+      // (each direction using a different correspondence).
       if (!claimedTgt.add(tgtField)) throw new IllegalArgumentException(
         "Deep map " +
           source.getSimpleName() +
@@ -379,15 +380,15 @@ public final class DeepMap {
           tgtField +
           "'. Each (source, target) type pair may declare at most one row per target field."
       );
-      if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
-        "Deep map " +
-          source.getSimpleName() +
-          " → " +
-          target.getSimpleName() +
-          ": duplicate override row for source field '" +
-          srcField +
-          "'. Each (source, target) type pair may declare at most one row per source field."
-      );
+      // Same-source fan-out IS permitted: one source field feeding multiple target fields is a
+      // common enterprise pattern (e.g. `businessUnit → cretnUserId AND lastUpdtdUserId` on
+      // audit-column rebuilds). Forward direction broadcasts the source value to every target row
+      // correctly. Backward direction is non-bijective for the fan-out source field — the last
+      // registered row wins the `bySourceName` slot, so backward reconstructs that source field
+      // from one target's value. Round-trip equality holds when the user keeps fan-out targets in
+      // sync (typically same-typed copies of the same column), and the test pin makes the
+      // last-row-wins behaviour explicit so silent ambiguity is impossible.
+      claimedSrc.add(srcField);
       final var rowIso = fieldIsoOf(row, srcRefl.genericType(source, srcField), tgtRefl.genericType(target, tgtField));
       final var step = new FieldStep(srcField, tgtField, rowIso);
       byTargetName.put(tgtField, step);
@@ -742,16 +743,34 @@ public final class DeepMap {
     // types stay portable across packages without needing @SuppressWarnings("exports").
     if (row instanceof SameTypedTo<?, ?, ?>) return Iso.identity();
     if (row instanceof TypedTransformTo<?, ?, ?, ?> r) return Iso.of((Function) r.forward(), (Function) r.backward());
+    if (row instanceof ForwardOnlyTransformTo<?, ?, ?, ?> r) {
+      // DEAD-BRANCH-DEFENSIVE: this throwingBackward lambda is unreachable via the public API.
+      // Both factory entries Telescope.map(...) and Telescope.mapper(...) call
+      // rejectForwardOnlyRows
+      // up front; Telescope.mapperForward(...) accepts the row but never invokes the backward leg.
+      // The guard remains so a future cross-package construction path that bypasses
+      // rejectForwardOnlyRows produces a precise field-naming error rather than silent corruption.
+      // NOT a coverage target.
+      final String fieldName = r.sourceField();
+      final Function<Object, Object> throwingBackward = y -> {
+        throw new UnsupportedOperationException(
+          "Mapping.forward is forward-only — backward direction is undefined for field '" +
+            fieldName +
+            "'. Use Telescope.mapperForward(...) for a forward-only mapper, or Mapping.to(src, " +
+            "tgt, forward, backward) for an explicit bidirectional row."
+        );
+      };
+      return Iso.of((Function) r.forward(), throwingBackward);
+    }
     if (row instanceof Via<?, ?> r) return liftViaIfNeeded(r, srcType, tgtType);
-    // Drop rows never reach this method — populateIso short-circuits on `instanceof Drop` before
-    // calling fieldIsoOf. The check is here only to make the dispatch exhaustive over the sealed
-    // hierarchy; reaching it indicates a routing bug above.
+    // DEAD-BRANCH-DEFENSIVE block (rows below): every permit of the sealed Mapping hierarchy that
+    // is NOT a per-field leaf Iso is filtered out by populateIso BEFORE this method is called. The
+    // checks remain solely as a compile-time exhaustiveness backstop — if a future permit is added
+    // to Mapping and populateIso forgets to short-circuit, the corresponding throw here surfaces
+    // the routing bug with a clear class name. NOT coverage targets — these can only fire when a
+    // routing change in populateIso introduces a regression, at which point the test failure is in
+    // populateIso, not here.
     if (row instanceof Drop<?, ?, ?>) throw new IllegalStateException("Drop row should not reach fieldIsoOf");
-    // Telescope-based rows never reach this method — populateIso short-circuits on each of them
-    // before calling fieldIsoOf. They apply as post-fixups at the outer pair, not as per-field
-    // leaf Isos. The checks are here only to make the dispatch exhaustive over the sealed
-    // hierarchy;
-    // reaching any of them indicates a routing bug above.
     if (row instanceof TelescopeTo<?, ?, ?>) throw new IllegalStateException(
       "TelescopeTo row should not reach fieldIsoOf"
     );
@@ -761,9 +780,6 @@ public final class DeepMap {
     if (row instanceof TelescopeToTelescope<?, ?, ?>) throw new IllegalStateException(
       "TelescopeToTelescope row should not reach fieldIsoOf"
     );
-    // Constant / Compute rows apply as telescope post-fixups, same pattern as TelescopeTo and
-    // friends — they don't contribute a per-field leaf Iso. The checks exist only to keep the
-    // sealed dispatch exhaustive; reaching them indicates a routing bug above.
     if (row instanceof Constant<?, ?, ?>) throw new IllegalStateException("Constant row should not reach fieldIsoOf");
     if (row instanceof Compute<?, ?, ?>) throw new IllegalStateException("Compute row should not reach fieldIsoOf");
     throw new IllegalStateException("unreachable: Mapping is sealed");

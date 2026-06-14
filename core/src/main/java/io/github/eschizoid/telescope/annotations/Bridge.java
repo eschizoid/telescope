@@ -88,8 +88,10 @@ public @interface Bridge {
    * }</pre>
    *
    * <p>Each rename's source must name a real field on the annotated source; each target must name a
-   * real field on the bridge target. No two renames may share the same source or the same target —
-   * the name relation stays a bijection within the rename set.
+   * real field on the bridge target. No two renames may share the same target. By default no two
+   * renames may share the same source either; opt into forward-only fan-out by setting {@link
+   * Rename#forwardOnly()} on all conflicting renames — backward then reads from the first declared
+   * fan-out target. The non-fan-out case stays a strict bijection within the rename set.
    */
   Rename[] renames() default {};
 
@@ -146,4 +148,54 @@ public @interface Bridge {
    * #drops()} for the same pair.
    */
   Compute[] computes() default {};
+
+  /**
+   * Null-coalescing default values for source fields. Each {@link Default} names a source field and
+   * a fallback literal that the forward direction substitutes when the source value is {@code
+   * null}. Mirrors MapStruct's {@code @Mapping(defaultValue = …)} and the runtime {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#toOrElse(
+   * io.github.eschizoid.telescope.Telescope.Accessor,
+   * io.github.eschizoid.telescope.Telescope.Accessor, Object) Mapping.toOrElse(srcAcc, tgtAcc,
+   * defaultValue)} factory.
+   *
+   * <pre>{@code
+   * @Bridge(value = UserEntity.class, defaults = {
+   *   @Default(field = "region", value = "EMEA")
+   * })
+   * public record User(String id, String region) {}
+   * }</pre>
+   *
+   * <p>Backward direction is identity — the substituted default round-trips back to the source slot
+   * as itself. A field listed in {@code defaults} cannot also appear in {@link #drops()} for this
+   * pair (the two mechanisms have incompatible semantics).
+   */
+  Default[] defaults() default {};
+
+  /**
+   * Per-field nested-bridge overrides. Each {@link ViaMapper} names a source field and a bridge
+   * class to delegate to — escape hatch when the auto-recursion can't reach the nested type or when
+   * the user wants to point at a specific {@code BRIDGE} constant. Mirrors the runtime {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#via(
+   * io.github.eschizoid.telescope.Telescope.Accessor,
+   * io.github.eschizoid.telescope.Telescope.Accessor,
+   * io.github.eschizoid.telescope.conversion.Mapper) Mapping.via(srcAcc, tgtAcc, mapper)} factory.
+   *
+   * <pre>{@code
+   * @Bridge(value = OrderEntity.class, viaMappers = {
+   *   @ViaMapper(field = "address", using = AddressBridge.class)
+   * })
+   * public record Order(String id, Address address) {}
+   * }</pre>
+   */
+  ViaMapper[] viaMappers() default {};
+
+  /**
+   * Override for the POJO construction strategy when emitting the target's rebuild block. Records
+   * always use the canonical constructor and ignore this setting. Default {@link
+   * WriteStrategy#AUTO} runs the priority ladder (name-matched ctor → static builder() → no-arg +
+   * setters); the other values force one specific strategy and surface a precise compile error when
+   * the POJO doesn't expose the required shape. Mirrors the runtime {@code WriteHint.writeBean(cls,
+   * strategy)} hint.
+   */
+  WriteStrategy writeStrategy() default WriteStrategy.AUTO;
 }
