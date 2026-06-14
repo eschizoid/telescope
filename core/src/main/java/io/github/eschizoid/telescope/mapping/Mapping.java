@@ -52,7 +52,8 @@ public sealed interface Mapping<A, B>
     FromTelescopeTo,
     TelescopeToTelescope,
     Constant,
-    Compute
+    Compute,
+    Conditional
 {
   /**
    * Source class this row keys against — the declaring class of the source accessor, recovered via
@@ -592,5 +593,57 @@ public sealed interface Mapping<A, B>
    */
   static <A, B, X> Mapping<A, B> compute(final Telescope<B, X> targetTelescope, final Supplier<? extends X> supplier) {
     return new Compute<>(targetTelescope, supplier);
+  }
+
+  /**
+   * Predicate-gated wrapper around a telescope-based row — closes MapStruct's {@code @Condition}
+   * for whole-source predicate gating. The inner row's forward effect applies only when {@code
+   * predicate.test(source)} returns {@code true}; otherwise it is skipped. Backward direction
+   * applies the inner row unconditionally — by the time we have a target, the original source is
+   * gone, so the predicate isn't checkable on the reverse leg.
+   *
+   * <pre>{@code
+   * Telescope.mapper(Order.class, OrderDto.class,
+   *     to(Order::id, OrderDto::id),
+   *     when(order -> order.shipping() != null,
+   *         to(Telescope.of(Order.class).field(Order::shipping).field(Shipping::country),
+   *            OrderDto::shipCountry)),
+   *     when(order -> order.priority() == Priority.HIGH,
+   *         constant(OrderDto::expediteFlag, true)));
+   * }</pre>
+   *
+   * <p><b>Scope.</b> Inner row must be telescope-based: {@link #to(Accessor, Telescope)}, {@link
+   * #to(Telescope, Accessor)}, {@link #to(Telescope, Telescope)}, {@link #zip(Telescope,
+   * Telescope)}, {@link #constant(Telescope, Object)}, {@link #compute(Telescope, Supplier)},
+   * {@link #constant(Accessor, Object)}, or {@link #compute(Accessor, Supplier)}. Field-iso rows
+   * (plain {@code to(srcAcc, tgtAcc)}, {@code via}, {@code drop}) are rejected at construction —
+   * for field-level predicate gating use {@link #toOrElse(Accessor, Accessor, Object, Predicate)},
+   * which expresses "if predicate matches source value, use default" at the field level.
+   *
+   * <p><b>Codegen 1:1.</b> Because the codegen-emitted {@code <X>Telescope} navigators ARE {@link
+   * Telescope} instances, a {@code when(...)} row composes transparently with codegen targets:
+   * {@code when(p, constant(OrderDtoTelescope.of().audit().tenant(), "prod"))} uses the
+   * compile-checked codegen path inside the predicate-gated wrapper at zero extra cost.
+   *
+   * <p><b>Nesting rejected.</b> {@code when(p1, when(p2, ...))} throws at construction. Combine
+   * predicates at the {@link Predicate} layer: {@code when(p1.and(p2), inner)}.
+   *
+   * <p><b>Backward direction is lossy by design.</b> {@code when(...)} is forward-only — same
+   * retraction semantics as {@link #constant(Telescope, Object)} / {@link #compute(Telescope,
+   * Supplier)}. For inner rows that DO have a meaningful backward leg when used unwrapped (the
+   * {@code to(srcTelescope, tgtAcc)} / {@code to(srcTelescope, tgtTelescope)} / {@code
+   * zip(srcTelescope, tgtTelescope)} family), wrapping in {@code when(...)} silently drops that
+   * backward leg: {@code mapper.backward(t)} leaves the source-side slot at the {@code baseS}
+   * value. If you need bidirectional behavior and the predicate can be folded into the data,
+   * express it via {@link #toOrElse(Accessor, Accessor, Object)} at the field level (still
+   * bidirectional) instead of {@code when(...)} on a telescope row.
+   *
+   * <p><b>Predicate exceptions.</b> If {@code predicate.test(source)} throws at apply time, the
+   * exception is decorated with the failing row's inner-kind + source field and rethrown as an
+   * {@link IllegalStateException}. The decoration points the user back at the {@code when(...)}
+   * call site rather than at an opaque internal stack frame.
+   */
+  static <A, B> Mapping<A, B> when(final Predicate<? super A> predicate, final Mapping<A, B> inner) {
+    return new Conditional<>(predicate, inner);
   }
 }
