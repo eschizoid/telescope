@@ -107,6 +107,31 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
   }
 
   /**
+   * Forward-only coalescer — wraps an inner {@link Iso} so the forward direction substitutes {@code
+   * defaultValue} when the input is {@code null}; backward direction delegates unchanged.
+   *
+   * <p><b>Intentionally non-bijective at the {@code null}/{@code defaultValue} boundary.</b>
+   * Standard Iso round-trip laws ({@code from . to = id} and {@code to . from = id}) hold for
+   * non-null inputs; at {@code null}, {@code from(to(null)) = from(defaultValue)} which is NOT
+   * {@code null}. The factory exists explicitly because deep-mapping null-handling strategies
+   * (MapStruct {@code SET_TO_DEFAULT} equivalent) are forward-only semantics — backward symmetry
+   * would conflate the user's deliberate {@code defaultValue} on the target with a previous {@code
+   * null} on the source, losing meaningful values. The asymmetry is the feature, not a bug.
+   *
+   * <p>Use the factory through the public {@link io.github.eschizoid.telescope.mapping.NullHint}
+   * surface — {@code DeepMap} wraps every auto-recursed per-field Iso with this when {@code
+   * nullSourceValues(DEFAULT)} is selected. Not for general path composition; reach for {@link
+   * #identity()} if you want a real Iso.
+   *
+   * <p><b>Lattice posture.</b> Named differently from {@code of(...)} on purpose — anything that 's
+   * a proper Iso satisfies {@code OpticLawsTest}; {@code coalesceForward(...)} does not, and the
+   * explicit name signals that to anyone reading the call site or composing through it.
+   */
+  static <X, Y> Iso<X, Y> coalesceForward(final Iso<X, Y> inner, final Y defaultValue) {
+    return of(x -> x == null ? defaultValue : inner.to(x), inner::from);
+  }
+
+  /**
    * Lift an element-level {@code Iso<X, Y>} into a {@code List}-level {@code Iso<List<X>,
    * List<Y>>}. Element-wise forward / backward via streaming. Used by the deep mapping factory to
    * derive a container-level conversion from a record-pair conversion automatically.
