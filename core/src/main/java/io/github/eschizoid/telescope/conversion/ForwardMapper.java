@@ -91,7 +91,7 @@ public final class ForwardMapper<A, B> {
    * {@code Getter<A, A>} and composing it before the existing read. Chains compose left-to-right.
    */
   public ForwardMapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
-    final Getter<A, A> pre = a -> hook.apply(a);
+    final Getter<A, A> pre = hook::apply;
     return new ForwardMapper<>(pre.then(forward), sourceClass, targetClass);
   }
 
@@ -103,7 +103,7 @@ public final class ForwardMapper<A, B> {
    * <p>Lattice-native: routes through {@code Getter.then(Getter)}.
    */
   public ForwardMapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
-    final Getter<B, B> post = b -> hook.apply(b);
+    final Getter<B, B> post = hook::apply;
     return new ForwardMapper<>(forward.then(post), sourceClass, targetClass);
   }
 

@@ -152,10 +152,7 @@ class LombokFocusProcessorTest {
       // Utility holder — final class, private no-arg ctor only.
       assertTrue(Modifier.isFinal(holder.getModifiers()), "holder must be final");
       assertEquals(1, holder.getDeclaredConstructors().length, "holder must have exactly one (private) constructor");
-      assertTrue(
-        Modifier.isPrivate(holder.getDeclaredConstructors()[0].getModifiers()),
-        "holder ctor must be private"
-      );
+      assertTrue(Modifier.isPrivate(holder.getDeclaredConstructors()[0].getModifiers()), "holder ctor must be private");
 
       assertHolderField(holder, "id");
       assertHolderField(holder, "email");

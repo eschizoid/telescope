@@ -209,10 +209,7 @@ class DeepMapCoverageTest {
       final var mapper = Telescope.mapper(
         Slim.class,
         BeanOuter.class,
-        Mapping.to(
-          Slim::value,
-          Telescope.ofBean(BeanOuter.class).field(BeanOuter::getInner).field(BeanInner::getValue)
-        )
+        Mapping.to(Slim::value, Telescope.ofBean(BeanOuter.class).field(BeanOuter::getInner).field(BeanInner::getValue))
       );
 
       final var out = mapper.forward(new Slim("hello"));
@@ -275,10 +272,7 @@ class DeepMapCoverageTest {
       final var mapper = Telescope.mapper(
         Slim.class,
         Outer.class,
-        Mapping.to(
-          Slim::tag,
-          Telescope.of(Outer.class).field(Outer::prims).field(AllPrims::tag)
-        )
+        Mapping.to(Slim::tag, Telescope.of(Outer.class).field(Outer::prims).field(AllPrims::tag))
       );
 
       // Slim has no fields matching long/byte/short/char/float; the AllPrims intermediate is

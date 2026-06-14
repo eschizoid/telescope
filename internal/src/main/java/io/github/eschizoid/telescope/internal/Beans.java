@@ -89,6 +89,21 @@ public final class Beans {
   };
 
   /**
+   * Per-class cached {@link Supplier} that returns a fresh allocation of {@code cls}: tries a
+   * public no-arg constructor first, then a public static {@code builder().build()} pair, and
+   * finally yields {@code null} if neither shape works. Used by {@code DeepMap} for intermediate
+   * bean allocations during recursive default-tree materialisation. LMF-cached so the per-call cost
+   * is one virtual {@code Supplier.get()} regardless of which shape applies — no per-call {@code
+   * Class.getDeclaredConstructor} / {@code Method.getMethod("build")} reflection.
+   */
+  private static final ClassValue<Supplier<Object>> INTERMEDIATE_ALLOCATORS = new ClassValue<>() {
+    @Override
+    protected Supplier<Object> computeValue(final Class<?> type) {
+      return computeIntermediateAllocator(type);
+    }
+  };
+
+  /**
    * The {@code org.hibernate.proxy.HibernateProxy} interface, or {@code null} when Hibernate isn't
    * on the classpath. Resolved once via reflection so the {@code :core} module stays free of any
    * Hibernate dependency.
@@ -115,6 +130,85 @@ public final class Beans {
       return Class.forName(fqn, false, Beans.class.getClassLoader());
     } catch (final ClassNotFoundException e) {
       return null;
+    }
+  }
+
+  /**
+   * Public, cached entry point for intermediate bean allocation during recursive default-tree
+   * materialisation in {@code DeepMap.recursiveDefault}. Returns a {@link Supplier} that yields a
+   * fresh instance via either a public no-arg constructor or a public static {@code
+   * builder().build()} pair; yields {@code null} when neither shape works. Cached per class via
+   * {@link ClassValue} — the per-call cost is one virtual {@code Supplier.get()}.
+   */
+  public static Supplier<Object> intermediateAllocator(final Class<?> cls) {
+    return INTERMEDIATE_ALLOCATORS.get(cls);
+  }
+
+  private static Supplier<Object> computeIntermediateAllocator(final Class<?> type) {
+    // Try a public no-arg ctor first — matches DeepMap.recursiveDefault's prior strategy.
+    try {
+      final var ctor = type.getDeclaredConstructor();
+      if (Modifier.isPublic(ctor.getModifiers())) {
+        final var lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
+        return buildCtorSupplier(type, ctor, lookup);
+      }
+    } catch (final NoSuchMethodException | IllegalAccessException ignored) {
+      // No public no-arg ctor — try the builder pattern.
+    }
+    try {
+      final var builderMethod = type.getMethod("builder");
+      if (Modifier.isStatic(builderMethod.getModifiers()) && Modifier.isPublic(builderMethod.getModifiers())) {
+        return buildBuilderBuildSupplier(type, builderMethod);
+      }
+    } catch (final NoSuchMethodException ignored) {
+      // No static builder() — fall through to the null supplier.
+    }
+    return () -> null;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Supplier<Object> buildBuilderBuildSupplier(final Class<?> type, final Method builderMethod) {
+    try {
+      // privateLookupIn lets the lookup cross JPMS module + package boundaries to reach the
+      // user's builder method. The user's package must be `opens io.github.eschizoid.telescope`
+      // (same JPMS requirement as the rest of the runtime path); without it, the unreflect
+      // throws IllegalAccessException and we fall through to the null supplier.
+      final var lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
+      final var builderHandle = lookup.unreflect(builderMethod);
+      final var builderReturnType = builderMethod.getReturnType();
+      final var builderCallSite = LambdaMetafactory.metafactory(
+        lookup,
+        "get",
+        MethodType.methodType(Supplier.class),
+        MethodType.methodType(Object.class),
+        builderHandle,
+        MethodType.methodType(builderReturnType)
+      );
+      final var builderFn = (Supplier<Object>) builderCallSite.getTarget().invoke();
+      final var buildMethod = builderReturnType.getMethod("build");
+      // The Builder class itself usually lives in the same package as `type`, but for nested
+      // builders (Builder is an inner class of the enclosing type) the same lookup already
+      // covers it. For builders in different packages we'd need a second privateLookupIn keyed
+      // on the builder class; the tests cover the common nested-Builder shape that the same
+      // lookup handles.
+      final var buildLookup =
+        builderReturnType == type ? lookup : MethodHandles.privateLookupIn(builderReturnType, MethodHandles.lookup());
+      final var buildHandle = buildLookup.unreflect(buildMethod);
+      final var buildCallSite = LambdaMetafactory.metafactory(
+        buildLookup,
+        "apply",
+        MethodType.methodType(Function.class),
+        MethodType.methodType(Object.class, Object.class),
+        buildHandle,
+        MethodType.methodType(buildMethod.getReturnType(), builderReturnType)
+      );
+      final var buildFn = (Function<Object, Object>) buildCallSite.getTarget().invoke();
+      return () -> buildFn.apply(builderFn.get());
+    } catch (final Throwable t) {
+      // If we can't bind either half of the chain, yield null instead of failing eagerly — the
+      // caller (DeepMap.recursiveDefault) treats null as "no intermediate available" and skips
+      // that branch of the default tree.
+      return () -> null;
     }
   }
 
