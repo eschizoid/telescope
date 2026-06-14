@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
+import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.Compute;
@@ -11,6 +12,7 @@ import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.FromTelescopeTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
+import io.github.eschizoid.telescope.mapping.NullHint;
 import io.github.eschizoid.telescope.mapping.SameTypedTo;
 import io.github.eschizoid.telescope.mapping.TelescopeTo;
 import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
@@ -93,10 +95,13 @@ public final class DeepMap {
   ) {
     final var overrides = new ArrayList<Mapping<?, ?>>();
     final var hints = new ArrayList<WriteHint<?>>();
+    final var nullHints = new ArrayList<NullHint>();
     for (final var step : steps) {
       if (step instanceof Mapping<?, ?> m) overrides.add(m);
       else if (step instanceof WriteHint<?> h) hints.add(h);
+      else if (step instanceof NullHint nh) nullHints.add(nh);
     }
+    final var nullStrategy = extractNullStrategy(nullHints);
     final var hintMap = buildHintMap(hints);
     final var defaultStrategy = extractDefaultStrategy(hints);
     final var defaultWriterFactory = defaultWriterFactoryFor(defaultStrategy);
@@ -110,7 +115,7 @@ public final class DeepMap {
     final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new), source, target);
     final var cache = new HashMap<TypePair, Iso<?, ?>>();
     final var topSteps = new LinkedHashMap<String, FieldStep>();
-    populateIso(source, target, overrideTable, beanRefl, cache, topSteps);
+    populateIso(source, target, overrideTable, beanRefl, cache, topSteps, nullStrategy);
     validateAllHintsConsumed(hintMap, cache);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
     final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
@@ -148,6 +153,24 @@ public final class DeepMap {
       map.put(cls, writerFor(hint));
     }
     return map;
+  }
+
+  /**
+   * Pull out the single optional {@link NullHint#nullSourceValues(NullHint.NullStrategy)
+   * nullSourceValues(…)} strategy. Returns {@link NullHint.NullStrategy#PROPAGATE} when no hint is
+   * supplied (the v0.x default); throws on duplicates so the misconfiguration surfaces at
+   * mapper-build time rather than at first apply.
+   */
+  private static NullHint.NullStrategy extractNullStrategy(final List<NullHint> hints) {
+    NullHint.NullStrategy strategy = null;
+    for (final var hint : hints) {
+      if (strategy != null) throw new IllegalArgumentException(
+        "Duplicate nullSourceValues(...) hint — at most one null-source-value strategy per " +
+          "Telescope.map(...) call."
+      );
+      strategy = hint.strategy();
+    }
+    return strategy == null ? NullHint.NullStrategy.PROPAGATE : strategy;
   }
 
   /**
@@ -264,7 +287,8 @@ public final class DeepMap {
     final Map<TypePair, List<Mapping<?, ?>>> overrides,
     final Reflective beanRefl,
     final Map<TypePair, Iso<?, ?>> cache,
-    final Map<String, FieldStep> topStepsOut
+    final Map<String, FieldStep> topStepsOut,
+    final NullHint.NullStrategy nullStrategy
   ) {
     final var key = new TypePair(source, target);
     if (cache.containsKey(key)) return;
@@ -385,7 +409,18 @@ public final class DeepMap {
       // sync (typically same-typed copies of the same column), and the test pin makes the
       // last-row-wins behaviour explicit so silent ambiguity is impossible.
       claimedSrc.add(srcField);
-      final var rowIso = fieldIsoOf(row, srcRefl.genericType(source, srcField), tgtRefl.genericType(target, tgtField));
+      final var tgtType = tgtRefl.genericType(target, tgtField);
+      final var rawRowIso = fieldIsoOf(row, srcRefl.genericType(source, srcField), tgtType);
+      // SameTypedTo rows are pure identity at the leaf — wrap with default-on-null when the
+      // mapper's null strategy is DEFAULT so an unset source field lands as the type default
+      // instead of null. Other field-iso rows (TypedTransformTo, ForwardOnlyTransformTo, Via)
+      // carry user-supplied forward functions and are explicitly NOT wrapped — the user already
+      // decided how their lambda handles null. This precedence rule lets toOrElse(...) (a
+      // TypedTransformTo) and explicit transforms win over the global hint without any extra
+      // marker on the row, which is the simplest "per-row beats per-mapper" semantics.
+      final var rowIso = (nullStrategy == NullHint.NullStrategy.DEFAULT && row instanceof SameTypedTo<?, ?, ?>)
+        ? wrapDefaultOnNull(rawRowIso, tgtType)
+        : rawRowIso;
       final var step = new FieldStep(srcField, tgtField, rowIso);
       byTargetName.put(tgtField, step);
       bySourceName.put(srcField, step);
@@ -439,7 +474,15 @@ public final class DeepMap {
       final var step = new FieldStep(
         name,
         name,
-        autoIso(srcRefl.genericType(source, name), tgtRefl.genericType(target, name), name, overrides, beanRefl, cache)
+        autoIso(
+          srcRefl.genericType(source, name),
+          tgtRefl.genericType(target, name),
+          name,
+          overrides,
+          beanRefl,
+          cache,
+          nullStrategy
+        )
       );
       byTargetName.put(name, step);
       bySourceName.put(name, step);
@@ -647,7 +690,26 @@ public final class DeepMap {
     final String componentName,
     final Map<TypePair, List<Mapping<?, ?>>> overrides,
     final Reflective beanRefl,
-    final Map<TypePair, Iso<?, ?>> cache
+    final Map<TypePair, Iso<?, ?>> cache,
+    final NullHint.NullStrategy nullStrategy
+  ) {
+    final var raw = computeAutoIso(srcType, tgtType, componentName, overrides, beanRefl, cache, nullStrategy);
+    // DEFAULT strategy wraps EVERY auto-recursed per-component Iso uniformly: scalar identity,
+    // recursive record/bean pair, lifted container, cross-Optional bridge. When the source value
+    // is null, the wrapper substitutes the per-leaf-type default from NullDefaults#defaultFor so
+    // bean-side targets see a usable value rather than null. Non-DEFAULT strategy short-circuits
+    // to the raw Iso for a no-op cost.
+    return nullStrategy == NullHint.NullStrategy.DEFAULT ? wrapDefaultOnNull(raw, tgtType) : raw;
+  }
+
+  private static Iso<?, ?> computeAutoIso(
+    final Type srcType,
+    final Type tgtType,
+    final String componentName,
+    final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final Reflective beanRefl,
+    final Map<TypePair, Iso<?, ?>> cache,
+    final NullHint.NullStrategy nullStrategy
   ) {
     // (a) Same generic type → identity Iso.
     if (srcType.equals(tgtType)) return Iso.identity();
@@ -655,7 +717,7 @@ public final class DeepMap {
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
     if (srcType instanceof Class<?> srcCls && tgtType instanceof Class<?> tgtCls) {
       if (isReflectable(srcCls) && isReflectable(tgtCls)) {
-        populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null);
+        populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null, nullStrategy);
         return lazyCacheIso(cache, new TypePair(srcCls, tgtCls));
       }
     }
@@ -671,11 +733,27 @@ public final class DeepMap {
     //       entity uses a nullable AddressEmbeddable. Lift the element conversion through
     //       Iso.liftOptionalToNullable so Optional.empty() ↔ null and Optional.of(x) ↔ to(x).
     if (srcShape != null && srcShape.kind == ContainerShape.Kind.OPTIONAL && tgtShape == null) {
-      final var elementIso = autoIso(srcShape.elementType, tgtType, componentName + "[*]", overrides, beanRefl, cache);
+      final var elementIso = autoIso(
+        srcShape.elementType,
+        tgtType,
+        componentName + "[*]",
+        overrides,
+        beanRefl,
+        cache,
+        nullStrategy
+      );
       return Iso.liftOptionalToNullable(eraseIso(elementIso));
     }
     if (tgtShape != null && tgtShape.kind == ContainerShape.Kind.OPTIONAL && srcShape == null) {
-      final var elementIso = autoIso(srcType, tgtShape.elementType, componentName + "[*]", overrides, beanRefl, cache);
+      final var elementIso = autoIso(
+        srcType,
+        tgtShape.elementType,
+        componentName + "[*]",
+        overrides,
+        beanRefl,
+        cache,
+        nullStrategy
+      );
       return Iso.liftOptionalToNullable(eraseIso(elementIso)).reverse();
     }
 
@@ -698,7 +776,8 @@ public final class DeepMap {
         componentName + "[*]",
         overrides,
         beanRefl,
-        cache
+        cache,
+        nullStrategy
       );
       return switch (srcShape.kind) {
         case LIST -> Iso.liftList(eraseIso(elementIso));
@@ -717,6 +796,23 @@ public final class DeepMap {
         tgtType.getTypeName() +
         ". Shapes must match: same scalar, both records/beans, or both same-kind container."
     );
+  }
+
+  /**
+   * Apply the {@code source == null → typeDefault} substitution to a per-field Iso. Delegates to
+   * {@link Iso#coalesceForward(Iso, Object)} — the lattice primitive that explicitly documents the
+   * deliberate non-bijection at the null/default boundary (the standard Iso round-trip law cannot
+   * hold there because the asymmetry IS the MapStruct {@code SET_TO_DEFAULT} semantic). When the
+   * default is {@code null} (records, beans, custom types — anything {@link
+   * NullDefaults#defaultFor} returns {@code null} for), the wrap is skipped entirely as a no-op
+   * cost optimization.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Iso<?, ?> wrapDefaultOnNull(final Iso<?, ?> inner, final Type tgtType) {
+    final var defaultValue = NullDefaults.defaultFor(tgtType);
+    if (defaultValue == null) return inner;
+    final Iso<Object, Object> erased = (Iso) inner;
+    return Iso.coalesceForward(erased, defaultValue);
   }
 
   /**
