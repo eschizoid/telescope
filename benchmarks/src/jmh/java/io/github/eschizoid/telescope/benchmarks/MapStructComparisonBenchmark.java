@@ -69,6 +69,11 @@ public class MapStructComparisonBenchmark {
   private McFlatRec flatRec;
   private Mapper<McFlatBean, McFlatRec> flatRuntimeMapper;
 
+  // Tier-A fast-path validation: record-to-record same-shape. Exercises the new fast-path that
+  // bypasses structural Iso composition entirely. Per Tier 2 #1.6, expected 91× → 5-10× MapStruct.
+  private McFlatRec flatRecB;
+  private Mapper<McFlatRec, McFlatRec> flatRecToRecMapper;
+
   // ---------- Nested tier: outer + one nested record ----------
 
   private McNestedBean nestedBean;
@@ -87,6 +92,8 @@ public class MapStructComparisonBenchmark {
     flatBean = new McFlatBean(42L, "alice@example.com", "Alice", 30, true);
     flatRec = new McFlatRec(42L, "alice@example.com", "Alice", 30, true);
     flatRuntimeMapper = Telescope.mapper(McFlatBean.class, McFlatRec.class);
+    flatRecB = new McFlatRec(99L, "bob@example.com", "Bob", 40, false);
+    flatRecToRecMapper = Telescope.mapper(McFlatRec.class, McFlatRec.class);
 
     // Nested tier — outer + nested address.
     nestedBean = new McNestedBean(7L, "bob@example.com", new McAddressBean("123 Main St", "Brooklyn", "11201"));
@@ -97,6 +104,13 @@ public class MapStructComparisonBenchmark {
     deepBean = buildCompanyBean();
     deepRec = buildCompanyRec();
     deepRuntimeMapper = Telescope.mapper(McCompanyBean.class, McCompanyRec.class);
+  }
+
+  // ---------- Tier-A fast-path validation: record → record ----------
+
+  @Benchmark
+  public void flat_telescope_runtime_recordToRecord(final Blackhole bh) {
+    bh.consume(flatRecToRecMapper.forward(flatRecB));
   }
 
   // ---------- Flat — forward (bean → record) ----------
