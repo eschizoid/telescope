@@ -1097,7 +1097,18 @@ public final class DeepMap {
       tgtHolderConstructor
     );
     final Iso<Map<String, Object>, Map<String, Object>> remap = remapIso(byTargetName, bySourceName);
-    return nullable(srcReader.then(remap).then(tgtBuilder));
+    // Fuse the 3-hop chain into ONE Iso whose forward / backward bodies dispatch the three
+    // underlying Iso calls inline. Equivalent to {@code srcReader.then(remap).then(tgtBuilder)},
+    // but the {@link Iso#then(Iso)} chain allocated two intermediate anonymous Iso classes per
+    // pair and paid three virtual {@code Iso#to} dispatches per call. The fused form pays ONE
+    // virtual {@code Iso#to} dispatch through the {@link Iso#of} wrapper. The three inner calls
+    // remain virtual through the captured Iso references, but they live in the same method body
+    // so the JIT inlines through them as monomorphic call sites once the type-pair stabilises.
+    final Iso<S, T> fused = Iso.of(
+      s -> tgtBuilder.to(remap.to(srcReader.to(s))),
+      t -> srcReader.from(remap.from(tgtBuilder.from(t)))
+    );
+    return nullable(fused);
   }
 
   /**
