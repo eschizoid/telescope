@@ -4,14 +4,10 @@
 
 # telescope
 
-**Optics-based DSL for Java records and POJOs.**
+**Build a typed path through your nested data — then read, update, or convert through it. Bidirectionally. One line.**
 
-One type drives deep navigation, immutable update, bidirectional mapping, and effectful update across records, plain
-POJOs, and Lombok `@Data` classes — no category-theory jargon, no hand-written copy constructors. Reach fields nested
-through lists, sets, maps, optionals, and sealed-type variants in one chain. Skip codegen for the runtime path, or add
-`@Focus` / `@BeanFocus` / `@Bridge` annotations for compile-time-bound navigators with deep recursion through
-containers. Drop-in `telescope-spring-boot-starter` (Spring Boot 4) or `telescope-quarkus` (Quarkus 3) for autoconfig +
-a typed `Mapper<A,B>` bean registry — one dependency, zero wiring.
+Works on Java records, POJOs, and Lombok `@Data` classes. Compile-time codegen is optional. Spring Boot starter and
+Quarkus extension ship as separate artifacts.
 
 [![JVM 17+](https://img.shields.io/badge/JVM-17%2B-brightgreen.svg?&logo=openjdk)](https://openjdk.org/projects/jdk/17/)
 [![Build](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml/badge.svg)](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml)
@@ -22,7 +18,78 @@ a typed `Mapper<A,B>` bean registry — one dependency, zero wiring.
 
 ---
 
-## 30 seconds
+## Install
+
+```kotlin
+// Gradle (Kotlin DSL)
+dependencies {
+  implementation("io.github.eschizoid:telescope-core:0.10.0")
+}
+```
+
+```xml
+<!-- Maven -->
+<dependency>
+  <groupId>io.github.eschizoid</groupId>
+  <artifactId>telescope-core</artifactId>
+  <version>0.10.0</version>
+</dependency>
+```
+
+That's the runtime. Compile-time codegen, Spring Boot starter, Quarkus extension, and JPMS setup are
+[listed below](#additional-artifacts).
+
+---
+
+## First 5 minutes
+
+You have nested data and you want to update a field deep inside without writing copy constructors:
+
+```java
+record Address(String city, String zip) {}
+
+record User(String name, Address address) {}
+
+// 1. Build a typed path once.
+final var userCity = Telescope.of(User.class).field(User::address).field(Address::city);
+
+// 2. Use it for reading, updating, anything else.
+String city = userCity.read(alice); // → "Springfield"
+User shouted = userCity.update(alice, String::toUpperCase); // → city becomes "SPRINGFIELD"
+```
+
+That's the whole model. Every other capability — mapping between types, navigating containers, lifting through
+async/validation effects — is the same path with a different terminal method.
+
+**What's next:**
+
+- Navigate `List<X>` / `Optional<X>` / `Map<K, V>` → [Cookbook](#cookbook)
+- Convert between types (record↔record, POJO↔record) → [Type conversion](#type-conversion)
+- Lift through async / validated / either / optional effects → [Effects](#effects)
+- Compile-time-bound navigators for hot paths →
+  [Compile-time codegen](#compile-time-reflection-free-navigation-focus--beanfocus)
+
+---
+
+## Picking your entry point
+
+Two questions decide it: are you working with **records** or **POJOs**, and do you want to **navigate** one type in
+place or **convert** between two types?
+
+| You want to…                          | Records                                       | POJOs                                | POJO ⇄ record                                  |
+| ------------------------------------- | --------------------------------------------- | ------------------------------------ | ---------------------------------------------- |
+| **Navigate & update** in place        | `Telescope.of(R.class)`                       | `Telescope.ofBean(P.class)`          | bridge first (below), then navigate the record |
+| **Convert / map** between two types   | `Telescope.map(A.class, B.class, to(...), …)` | `Telescope.map(A.class, B.class, …)` | `Telescope.map(P.class, R.class, …)`           |
+| **Reflection-free** (compile-checked) | `@Focus` (navigate)                           | `@BeanFocus` (navigate)              | `@Bridge` (convert, any pair)                  |
+
+Conversions are bidirectional `Iso`s, so any cell in the middle row composes into a longer navigation path with
+`.then(...)`. Mismatched names get an explicit `Mapping.to(srcAccessor, tgtAccessor)` row in the `Telescope.map(...)`
+call; classes the auto-detect can't handle get a `WriteHint.writeBean(target, strategy)` row. Both are covered under
+[Working with POJOs](#working-with-pojos).
+
+---
+
+## More 30-second vignettes
 
 ### Records
 
@@ -368,36 +435,18 @@ primitive: MapStruct can't compile any of it, so the question doesn't really com
 
 ---
 
-## Installation
+## Additional artifacts
 
-Published to Maven Central under `io.github.eschizoid`. Six artifacts in the family:
+Published to Maven Central under `io.github.eschizoid`. The six artifacts in the family:
 
 | Artifact                        | Role                                                                                                                                                                |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `telescope-core`                | The DSL — `Telescope`, `Mapper`, `Mapping`, `Either` / `Validated`, annotations. The one you add.                                                                   |
+| `telescope-core`                | The DSL — `Telescope`, `Mapper`, `Mapping`, `Either` / `Validated`, annotations. The one you add for the runtime path.                                              |
 | `telescope-internal`            | Optic lattice + reflection helpers. Transitive only — pulled in automatically; users cannot reference it (JPMS qualified exports block visibility at compile time). |
 | `telescope-codegen`             | Optional `@Focus` / `@BeanFocus` / `@Bridge` annotation processor — see [Compile-time field navigation](#compile-time-reflection-free-navigation-focus--beanfocus). |
 | `telescope-lombok`              | Lombok-aware variant of the processor for `@Data` / `@Value` / `@Builder` POJOs.                                                                                    |
 | `telescope-spring-boot-starter` | Spring Boot 4 autoconfig + `Mapper<A, B>` bean registry.                                                                                                            |
 | `telescope-quarkus`             | Quarkus 3 CDI extension with the same registry shape.                                                                                                               |
-
-Gradle (Kotlin DSL):
-
-```kotlin
-dependencies {
-    implementation("io.github.eschizoid:telescope-core:0.10.0")
-}
-```
-
-Maven:
-
-```xml
-<dependency>
-  <groupId>io.github.eschizoid</groupId>
-  <artifactId>telescope-core</artifactId>
-  <version>0.10.0</version>
-</dependency>
-```
 
 ### Compile-time `@Focus` codegen (optional)
 
@@ -442,40 +491,47 @@ Maven:
 
 ### JPMS / modular consumers
 
-`telescope-core` declares the named module `io.github.eschizoid.telescope`. If your project has a `module-info.java`,
-add:
+If your project has a `module-info.java`, add the `requires` and, for the runtime navigation path, an `opens` for the
+package containing your records / beans / POJOs:
 
 ```java
-requires io.github.eschizoid.telescope;
+module com.acme.app {
+  requires io.github.eschizoid.telescope;
+
+  // Only needed if you use the RUNTIME path (Telescope.of, .ofBean, .map, .mapper).
+  // The codegen path (@Focus / @BeanFocus / @Bridge) needs no opens.
+  opens com.acme.model to io.github.eschizoid.telescope;
+}
 ```
 
-That single `requires` is enough — `io.github.eschizoid.telescope.internal` comes in via `requires transitive` from the
-`telescope-core` module declaration, but its packages are qualified-exported to `telescope-core` only, so you cannot
-accidentally reference internal lattice types from your own code.
+The `opens` target is **your** package — the one telescope needs to reach into — not telescope's. Runtime navigation
+binds accessors via `MethodHandles.privateLookupIn(yourClass, MethodHandles.lookup())` and feeds the handles to
+`LambdaMetafactory` for hot-path dispatch. Without an `opens`, the lookup fails with `IllegalAccessException`, surfaced
+as:
 
-`telescope-codegen` is a compile-time-only processor and isn't required on the module path.
+> `Cannot access <YourClass> ... to build LambdaMetafactory <kind>. Add 'opens <pkg> to io.github.eschizoid.telescope;' to that module's module-info.java.`
+
+Copy the package from the error message into the `opens` directive.
+
+`telescope-internal` comes in transitively via `telescope-core`'s module declaration, but its packages are
+qualified-exported to `telescope-core` only, so you cannot accidentally reference internal lattice types from your own
+code. `telescope-codegen` is compile-time-only and isn't on the runtime module path.
+
+**Codegen escape hatch.** The `@Focus` / `@BeanFocus` / `@Bridge` processors emit compile-time navigators that read
+components and call constructors / builders / setters directly — no `privateLookupIn`, no `LambdaMetafactory`, no
+`opens` requirement. If adding the `opens` is awkward (e.g. a downstream module you don't own), the codegen path
+sidesteps the JPMS constraint entirely. See
+[Compile-time, reflection-free navigation](#compile-time-reflection-free-navigation-focus--beanfocus).
+
+**Classpath users (no `module-info.java`).** No `opens` needed — the JVM grants unnamed-module access automatically.
+This section is JPMS-only.
 
 ---
 
 ## The DSL surface
 
-A single class, `Telescope<S, A>`, where `S` is the root type and `A` is the leaf you focus on.
-
-### Which entry point?
-
-Two questions decide it: are you working with **records** or **POJOs**, and do you want to **navigate** one type in
-place or **convert** between two types?
-
-| You want to…                          | Records                                       | POJOs                                | POJO ⇄ record                                  |
-| ------------------------------------- | --------------------------------------------- | ------------------------------------ | ---------------------------------------------- |
-| **Navigate & update** in place        | `Telescope.of(R.class)`                       | `Telescope.ofBean(P.class)`          | bridge first (below), then navigate the record |
-| **Convert / map** between two types   | `Telescope.map(A.class, B.class, to(...), …)` | `Telescope.map(A.class, B.class, …)` | `Telescope.map(P.class, R.class, …)`           |
-| **Reflection-free** (compile-checked) | `@Focus` (navigate)                           | `@BeanFocus` (navigate)              | `@Bridge` (convert, any pair)                  |
-
-Conversions are bidirectional `Iso`s, so any cell in the middle row composes into a longer navigation path with
-`.then(...)`. Mismatched names get an explicit `Mapping.to(srcAccessor, tgtAccessor)` row in the `Telescope.map(...)`
-call; classes the auto-detect can't handle get a `WriteHint.writeBean(target, strategy)` row. Both are covered under
-[Working with POJOs](#working-with-pojos).
+A single class, `Telescope<S, A>`, where `S` is the root type and `A` is the leaf you focus on. The full method
+inventory lives here as a reference; pick what you need by what you're trying to do, not by reading top-to-bottom.
 
 ### Build
 
@@ -1086,47 +1142,6 @@ field-injection fallback) uses `setAccessible`, so under JPMS the POJO's package
 
 ---
 
-## JPMS (modular projects)
-
-If your project has a `module-info.java` and you use telescope's **runtime** navigation (`Telescope.of(...)`,
-`Telescope.ofBean(...)`, `Telescope.map(...)`, `Telescope.mapper(...)`), open the package containing your
-records/beans/POJOs to telescope:
-
-```java
-module com.acme.app {
-  requires io.github.eschizoid.telescope;
-
-  opens com.acme.model to io.github.eschizoid.telescope;
-}
-```
-
-Replace `com.acme.model` with the package that holds the types you navigate. The `opens` target is **your** package —
-the one telescope needs to reach into — not telescope's.
-
-### Why
-
-Runtime navigation binds accessors via `MethodHandles.privateLookupIn(yourClass, MethodHandles.lookup())` and feeds the
-handles to `LambdaMetafactory` for hot-path dispatch. Same access rules as `setAccessible(true)`: without an `opens`,
-the lookup fails with `IllegalAccessException`, surfaced as:
-
-> `Cannot access <YourClass> ... to build LambdaMetafactory <kind>. Add 'opens <pkg> to io.github.eschizoid.telescope;' to that module's module-info.java.`
-
-Copy the package from the error message into the `opens` directive and you're done.
-
-### Escape hatch — codegen
-
-The `@Focus` / `@BeanFocus` / `@Bridge` annotation processors emit compile-time navigators that read components and call
-constructors / builders / setters directly — no `privateLookupIn`, no `LambdaMetafactory`, no `opens` requirement. If
-adding the `opens` is awkward (e.g. a downstream module you don't own), the codegen path sidesteps the JPMS constraint
-entirely. See [Compile-time, reflection-free navigation](#compile-time-reflection-free-navigation-focus--beanfocus).
-
-### Unnamed-module (classpath) users
-
-No `module-info.java` means no `opens` needed — the JVM grants unnamed-module access automatically. This section is
-JPMS-only.
-
----
-
 ## Compile-time, reflection-free navigation (`@Focus` / `@BeanFocus`)
 
 The reflection-based `Telescope.of(User.class).field(User::name)` path resolves the field name at runtime — fast enough
@@ -1245,9 +1260,13 @@ UserBeanPath.of().email().update(user, String::toLowerCase);   // no reflection
 
 ## Effects
 
-The same path that powers `update(...)` lifts into four common effects — async, all-or-nothing, short-circuit, and
-error-accumulating. Pick the method by the function you have; the type system picks the applicative. Chaining stages of
-different effects is handled by the bridge methods on `Either` / `Validated` — see [Chaining stages](#chaining-stages).
+The same path that powers `.update(...)` lifts through four effects with one method change: **async**,
+**all-or-nothing**, **short-circuit**, and **error-accumulating**. Validate every email in a `Batch` and report all the
+bad ones in one call? Two lines. Run an HTTP normalisation call for every focused element with bounded concurrency? Pass
+an `Executor`. The DSL writes the structural plumbing; you supply the per-element function.
+
+Pick the method by the function you have — the type system picks the applicative. Chaining stages of different effects
+is handled by the bridge methods on `Either` / `Validated`; see [Chaining stages](#chaining-stages).
 
 ### Picking the method
 
@@ -1459,36 +1478,25 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
 
 ---
 
-## Architecture
+## Architecture (short version)
 
-Three modules, hard line between public and internal:
+Three modules with a hard public/internal boundary:
 
-- **`telescope-core`** (module `io.github.eschizoid.telescope`) — the public DSL. Five exported packages: `telescope`
-  (root: `Telescope`, `Indexed`, `Edit`), `telescope.conversion` (`Mapper`, `From`, `To`), `telescope.mapping`
-  (`Mapping` / `MapStep` / `WriteHint` row types), `telescope.effects` (`Either`, `Validated`), and
-  `telescope.annotations` (`@Focus` / `@BeanFocus` / `@Bridge`). The only artifact users import directly.
-- **`telescope-internal`** (module `io.github.eschizoid.telescope.internal`) — the optic lattice (`Fold`, `Getter`,
-  `Setter`, `Traversal`, `Affine`, `Lens`, `Prism`, `Iso`), `Kind` / `Applicative` HKT-emulation, collection traversals,
-  and reflection helpers (`Records`, `Beans`, `Reflective`, `LambdaIntrospection`, `MetadataHolderProbe`). Every package
-  is qualified-exported `to io.github.eschizoid.telescope` only — JPMS makes lattice types invisible to user code at
-  compile time, regardless of classpath. The artifact ships as a transitive dependency of `telescope-core`.
-- **`telescope-codegen`** (module `io.github.eschizoid.telescope.codegen`) — compile-time-only annotation processor. Not
-  required on the runtime module path.
+- **`telescope-core`** — the public DSL. `Telescope<S, A>` plus the `Mapping` / `Mapper` / `Edit` / effects vocabulary
+  and the `@Focus` / `@BeanFocus` / `@Bridge` annotations.
+- **`telescope-internal`** — the optic lattice (`Iso`, `Lens`, `Prism`, `Affine`, `Traversal`, `Getter`, `Setter`,
+  `Fold`), `Kind` / `Applicative` HKT-emulation, and reflection helpers. Packages are qualified-exported
+  `to io.github.eschizoid.telescope` only via JPMS, so the lattice types never appear on your classpath at compile time.
+  The lattice is the substrate, not the API.
+- **`telescope-codegen`** — compile-time-only annotation processor. Not required on the runtime module path.
 
-Each DSL method builds the appropriate optic and composes it via the lattice:
-
-| DSL call                | Built internally                                           | Composed via            |
-| ----------------------- | ---------------------------------------------------------- | ----------------------- |
-| `Telescope.of(C.class)` | `Iso.identity()`                                           | —                       |
-| `.field(C::name)`       | `Records.fieldLens(name)` → `Lens<C, X>`                   | `Traversal.then(Lens)`  |
-| `.each(C::items)`       | `Lens<C, Iterable<X>>` + `Traversals.eachIterable()`       | two `.then` calls       |
-| `.list(C::items)`       | `Lens<C, List<X>>`; `.each()` adds `Traversals.eachList()` | one `.then` per step    |
-| `.as(Updated.class)`    | `Prism.downcast(Updated.class)`                            | `Traversal.then(Prism)` |
-| `.filter(p)`            | —                                                          | `Traversal.filter`      |
-
-Operations (`read`, `set`, `update`, `toList`, `count`, `exists`) delegate to the underlying optic's methods. The
-lattice handles all composition rules (`Lens.then(Prism) = Affine`, `Iso.then(Iso) = Iso`, etc.) and laws (get-set,
-set-get, set-set, iso round-trip, prism round-trip).
+Each DSL method builds the appropriate optic and composes it via the lattice — `Telescope.of(C.class)` is
+`Iso.identity()`, `.field(C::name)` is a `Records.fieldLens(name)` wrapped as `Lens<C, X>` and composed via
+`Traversal.then(Lens)`, `.each(C::items)` is two `.then` calls (one for the container `Lens`, one for the element
+`Traversal`), `.as(Updated.class)` is `Prism.downcast(Updated.class)` via `Traversal.then(Prism)`, and so on. Operations
+(`read`, `set`, `update`, `toList`, `count`, `exists`) delegate to the underlying optic's methods. Composition rules
+(`Lens.then(Prism) = Affine`, `Iso.then(Iso) = Iso`, etc.) and laws (get-set, set-get, set-set, iso round-trip, prism
+partial round-trip) live in the lattice and are pinned by `OpticLawsTest`.
 
 If you ever want the optic types as public API (Monocle interop, or extending the library), flip the
 `exports … to io.github.eschizoid.telescope` lines in `telescope-internal`'s `module-info.java` to unqualified exports.
