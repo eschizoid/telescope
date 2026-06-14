@@ -228,7 +228,7 @@ public sealed class Telescope<
    * @see BridgeFn
    */
   public static <A, B> Telescope<A, B> bridge(final BridgeFn<A, B> fn) {
-    final Iso<A, B> iso = new Iso<A, B>() {
+    final Iso<A, B> iso = new Iso<>() {
       @Override
       public B to(final A source) {
         return fn.forward(source);
@@ -1502,7 +1502,7 @@ public sealed class Telescope<
         holder.holderClass().getName() +
         "). Re-run the @Focus / @BeanFocus processor."
     );
-    return (Lens<S, A>) (Lens<?, ?>) ((Telescope<?, ?>) constant).optic;
+    return (Lens<S, A>) ((Telescope<?, ?>) constant).optic;
   }
 
   /**
@@ -1526,7 +1526,7 @@ public sealed class Telescope<
     for (final var name : componentNames) {
       final var constant = holder.constantsByName().get(name);
       if (constant == null) return null;
-      readers.put(name, (Lens<Object, Object>) (Lens<?, ?>) ((Telescope<?, ?>) constant).optic);
+      readers.put(name, (Lens<Object, Object>) ((Telescope<?, ?>) constant).optic);
     }
     return readers;
   }

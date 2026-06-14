@@ -748,7 +748,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
     // Validate every transform field is a real source field (drops would mask the validation).
     for (final var t : transforms.keySet()) {
-      if (!sourceFields.stream().anyMatch(f -> f.name().equals(t))) {
+      if (sourceFields.stream().noneMatch(f -> f.name().equals(t))) {
         error(
           source,
           "@Bridge transforms field=\"" +
@@ -773,7 +773,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // default-overlap passes a literal-typed value to the bridge expecting the source type. Both
     // are silent-wrong paths until the user hits the generated-file diagnostic — too late.
     for (final var v : viaMappers.keySet()) {
-      if (!sourceFields.stream().anyMatch(f -> f.name().equals(v))) {
+      if (sourceFields.stream().noneMatch(f -> f.name().equals(v))) {
         error(
           source,
           "@Bridge viaMappers field=\"" +
@@ -1384,7 +1384,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         } else if (caseBridges.size() == 1) {
           // Single @Bridge whose target isn't in the sealed-target permits — name it explicitly.
           final var only = targetTypeFromMirror(caseBridges.get(0));
-          final var onlyEl = (TypeElement) ((DeclaredType) only).asElement();
+          if (!(only instanceof DeclaredType decl)) continue;
+          final var onlyEl = (TypeElement) decl.asElement();
           error(
             source,
             "Subtype " +
@@ -1521,11 +1522,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         );
       }
     );
-  }
-
-  private static String camelLower(final String simpleName) {
-    if (simpleName.isEmpty()) return simpleName;
-    return Character.toLowerCase(simpleName.charAt(0)) + simpleName.substring(1);
   }
 
   /**

@@ -115,7 +115,6 @@ public sealed interface Validated<E, A> {
    *     company -> "saved " + company.name());
    * }</pre>
    */
-  @SuppressWarnings("unchecked")
   default <T> T fold(
     final Function<? super List<E>, ? extends T> onInvalid,
     final Function<? super A, ? extends T> onValid
@@ -165,9 +164,8 @@ public sealed interface Validated<E, A> {
    * final Validated<String, Integer> v = parse(input).andThen(this::inRange);
    * }</pre>
    */
-  @SuppressWarnings("unchecked")
   default <B> Validated<E, B> andThen(final Function<? super A, ? extends Validated<E, B>> f) {
-    return fold(Validated::invalid, v -> (Validated<E, B>) f.apply(v));
+    return fold(Validated::invalid, f);
   }
 
   /**

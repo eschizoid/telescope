@@ -17,7 +17,6 @@ import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -1081,31 +1080,12 @@ public final class DeepMap {
     // pattern (Lombok @Builder, Immutables-style). Skip JDK scalars / containers entirely so the
     // records path stays unchanged. Telescope-row writes go through the bean's setters at each
     // hop, so each intermediate just needs to be non-null; the setters overwrite the
-    // default-initialised fields. If neither strategy works, return null — same behaviour as
-    // before bean-intermediate support.
+    // default-initialised fields. If neither strategy works, the cached supplier yields null —
+    // same behaviour as before bean-intermediate support, but no per-call
+    // `getDeclaredConstructor` / `getMethod("builder")` reflection: both shapes are LMF-cached
+    // per class via {@link Beans#intermediateAllocator}.
     if (beanIntermediateAllocatable(type)) {
-      try {
-        return type.getDeclaredConstructor().newInstance();
-      } catch (
-        final NoSuchMethodException
-        | InstantiationException
-        | IllegalAccessException
-        | InvocationTargetException ignored
-      ) {
-        // no public no-arg ctor — try the builder pattern
-      }
-      try {
-        final var builderMethod = type.getMethod("builder");
-        if (Modifier.isStatic(builderMethod.getModifiers()) && Modifier.isPublic(builderMethod.getModifiers())) {
-          final var builder = builderMethod.invoke(null);
-          if (builder != null) {
-            final var buildMethod = builder.getClass().getMethod("build");
-            return buildMethod.invoke(builder);
-          }
-        }
-      } catch (final NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
-        // fall through to null
-      }
+      return Beans.intermediateAllocator(type).get();
     }
     return null;
   }

@@ -60,7 +60,7 @@ public final class Sources {
   public static Sources of(final Object... sources) {
     Objects.requireNonNull(sources, "Sources.of: sources array is null");
     final var map = new LinkedHashMap<Class<?>, Object>();
-    final var list = new ArrayList<Object>(sources.length);
+    final var list = new ArrayList<>(sources.length);
     for (final var s : sources) {
       if (s == null) throw new IllegalArgumentException(
         "Sources.of: source at position " + list.size() + " is null. Every source in a merge bag must be non-null."

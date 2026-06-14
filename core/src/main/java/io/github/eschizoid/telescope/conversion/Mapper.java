@@ -251,7 +251,7 @@ public final class Mapper<A, B> {
    */
   public Mapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
     final Function<A, A> prev = this.preForward;
-    final Function<A, A> next = prev == null ? a -> hook.apply(a) : a -> hook.apply(prev.apply(a));
+    final Function<A, A> next = prev == null ? hook::apply : a -> hook.apply(prev.apply(a));
     return new Mapper<>(
       iso,
       sourceClass,
@@ -304,8 +304,7 @@ public final class Mapper<A, B> {
    */
   public Mapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
     final BiFunction<A, B, B> prev = this.postForward;
-    final BiFunction<A, B, B> next =
-      prev == null ? (a, b) -> hook.apply(a, b) : (a, b) -> hook.apply(a, prev.apply(a, b));
+    final BiFunction<A, B, B> next = prev == null ? hook::apply : (a, b) -> hook.apply(a, prev.apply(a, b));
     return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, preForward, next, preBackward, postBackward);
   }
 
@@ -325,7 +324,7 @@ public final class Mapper<A, B> {
    */
   public Mapper<A, B> beforeBackward(final Function<? super B, ? extends B> hook) {
     final Function<B, B> prev = this.preBackward;
-    final Function<B, B> next = prev == null ? b -> hook.apply(b) : b -> hook.apply(prev.apply(b));
+    final Function<B, B> next = prev == null ? hook::apply : b -> hook.apply(prev.apply(b));
     return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, preForward, postForward, next, postBackward);
   }
 
@@ -359,8 +358,7 @@ public final class Mapper<A, B> {
    */
   public Mapper<A, B> afterBackward(final BiFunction<? super B, ? super A, ? extends A> hook) {
     final BiFunction<B, A, A> prev = this.postBackward;
-    final BiFunction<B, A, A> next =
-      prev == null ? (b, a) -> hook.apply(b, a) : (b, a) -> hook.apply(b, prev.apply(b, a));
+    final BiFunction<B, A, A> next = prev == null ? hook::apply : (b, a) -> hook.apply(b, prev.apply(b, a));
     return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, preForward, postForward, preBackward, next);
   }
 

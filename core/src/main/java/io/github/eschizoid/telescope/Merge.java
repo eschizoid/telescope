@@ -141,9 +141,8 @@ final class Merge {
           ". Add an explicit MergeStep.from(...) row with a converter, or rename to break the name match if this row was unintentional."
       );
       claimedTgt.add(name);
-      final String capturedName = name;
-      final Getter<Object, Object> reader = src -> sourceRefl.read(src, capturedName);
-      out.add(new ResolvedStep(sourceClass, reader, capturedName));
+      final Getter<Object, Object> reader = src -> sourceRefl.read(src, name);
+      out.add(new ResolvedStep(sourceClass, reader, name));
     }
   }
 

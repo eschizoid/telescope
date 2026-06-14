@@ -101,10 +101,7 @@ class TypedContainerPathTest {
       final Telescope<TagSet, Set<Tag>> raw = Telescope.of(TagSet.class).field(TagSet::tags);
       final SetTelescope<TagSet, Tag> promoted = Telescope.asSet(raw);
       final var src = new TagSet("alice", new LinkedHashSet<>(List.of(new Tag("a"))));
-      assertEquals(
-        Set.of(new Tag("a")),
-        promoted.each().toList(src).stream().collect(Collectors.toSet())
-      );
+      assertEquals(Set.of(new Tag("a")), promoted.each().toList(src).stream().collect(Collectors.toSet()));
     }
   }
 

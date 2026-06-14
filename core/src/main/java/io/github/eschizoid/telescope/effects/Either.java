@@ -92,7 +92,6 @@ public sealed interface Either<L, R> {
    *     company -> "saved " + company.name());
    * }</pre>
    */
-  @SuppressWarnings("unchecked")
   default <T> T fold(final Function<? super L, ? extends T> onLeft, final Function<? super R, ? extends T> onRight) {
     // Sealed-aware dispatch: a single instanceof + a guaranteed-safe cast on the other branch.
     // Avoids the dead "second instanceof always true" branch the explicit double-instanceof pattern
@@ -125,9 +124,8 @@ public sealed interface Either<L, R> {
    * Either<String, Integer> parsed = Either.right("42").flatMap(s -> parseInt(s));  // parseInt returns Either
    * }</pre>
    */
-  @SuppressWarnings("unchecked")
   default <T> Either<L, T> flatMap(final Function<? super R, ? extends Either<L, T>> f) {
-    return fold(Either::left, r -> (Either<L, T>) f.apply(r));
+    return fold(Either::left, f);
   }
 
   /**
