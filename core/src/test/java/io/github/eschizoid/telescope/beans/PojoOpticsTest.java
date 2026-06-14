@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -260,24 +262,24 @@ class PojoOpticsTest {
 
   static final class ContainerBean {
 
-    private java.util.Map<String, String> labels;
-    private java.util.Optional<String> note;
+    private Map<String, String> labels;
+    private Optional<String> note;
 
     public ContainerBean() {}
 
-    public java.util.Map<String, String> getLabels() {
+    public Map<String, String> getLabels() {
       return labels;
     }
 
-    public java.util.Optional<String> getNote() {
+    public Optional<String> getNote() {
       return note;
     }
 
-    public void setLabels(final java.util.Map<String, String> labels) {
+    public void setLabels(final Map<String, String> labels) {
       this.labels = labels;
     }
 
-    public void setNote(final java.util.Optional<String> note) {
+    public void setNote(final Optional<String> note) {
       this.note = note;
     }
   }
@@ -290,29 +292,29 @@ class PojoOpticsTest {
     @DisplayName("eachValue updates a Map property's values, keys preserved")
     void eachValue() {
       final var bean = new ContainerBean();
-      bean.setLabels(java.util.Map.of("a", "x", "b", "y"));
-      bean.setNote(java.util.Optional.of("hi"));
+      bean.setLabels(Map.of("a", "x", "b", "y"));
+      bean.setNote(Optional.of("hi"));
 
       final var after = Telescope.ofBean(ContainerBean.class)
         .eachValue(ContainerBean::getLabels)
         .update(bean, String::toUpperCase);
 
-      assertEquals(java.util.Map.of("a", "X", "b", "Y"), after.getLabels());
-      assertEquals(java.util.Optional.of("hi"), after.getNote());
+      assertEquals(Map.of("a", "X", "b", "Y"), after.getLabels());
+      assertEquals(Optional.of("hi"), after.getNote());
     }
 
     @Test
     @DisplayName("whenPresent updates an Optional property when present")
     void whenPresent() {
       final var bean = new ContainerBean();
-      bean.setLabels(java.util.Map.of());
-      bean.setNote(java.util.Optional.of("hi"));
+      bean.setLabels(Map.of());
+      bean.setNote(Optional.of("hi"));
 
       final var after = Telescope.ofBean(ContainerBean.class)
         .whenPresent(ContainerBean::getNote)
         .update(bean, String::toUpperCase);
 
-      assertEquals(java.util.Optional.of("HI"), after.getNote());
+      assertEquals(Optional.of("HI"), after.getNote());
     }
   }
 

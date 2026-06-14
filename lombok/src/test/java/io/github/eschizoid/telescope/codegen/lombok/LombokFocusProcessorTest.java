@@ -10,6 +10,8 @@ import io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUser;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.SameRoundConsumer;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.ValueBuilderUser;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.function.Function;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -148,10 +150,10 @@ class LombokFocusProcessorTest {
       assertNotNull(holder);
 
       // Utility holder — final class, private no-arg ctor only.
-      assertTrue(java.lang.reflect.Modifier.isFinal(holder.getModifiers()), "holder must be final");
+      assertTrue(Modifier.isFinal(holder.getModifiers()), "holder must be final");
       assertEquals(1, holder.getDeclaredConstructors().length, "holder must have exactly one (private) constructor");
       assertTrue(
-        java.lang.reflect.Modifier.isPrivate(holder.getDeclaredConstructors()[0].getModifiers()),
+        Modifier.isPrivate(holder.getDeclaredConstructors()[0].getModifiers()),
         "holder ctor must be private"
       );
 
@@ -198,14 +200,14 @@ class LombokFocusProcessorTest {
     @DisplayName("Phase D: @Data holder exposes a public static construct(Function) that rebuilds via setters")
     void dataHolderConstruct() throws Exception {
       final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserFieldOptics");
-      final var constructMethod = holder.getDeclaredMethod("construct", java.util.function.Function.class);
+      final var constructMethod = holder.getDeclaredMethod("construct", Function.class);
       final var mods = constructMethod.getModifiers();
-      assertTrue(java.lang.reflect.Modifier.isPublic(mods), "construct must be public");
-      assertTrue(java.lang.reflect.Modifier.isStatic(mods), "construct must be static");
+      assertTrue(Modifier.isPublic(mods), "construct must be public");
+      assertTrue(Modifier.isStatic(mods), "construct must be static");
       assertEquals(DataUser.class, constructMethod.getReturnType(), "construct must return DataUser");
 
       // Drive it directly with a name-keyed lookup function.
-      final java.util.function.Function<String, Object> values = name ->
+      final Function<String, Object> values = name ->
         switch (name) {
           case "id" -> "X-123";
           case "email" -> "noreply@example.com";
@@ -220,10 +222,10 @@ class LombokFocusProcessorTest {
     @DisplayName("Phase D: @Builder holder exposes a public static construct(Function) that chains the builder")
     void builderHolderConstruct() throws Exception {
       final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserFieldOptics");
-      final var constructMethod = holder.getDeclaredMethod("construct", java.util.function.Function.class);
+      final var constructMethod = holder.getDeclaredMethod("construct", Function.class);
       assertEquals(BuilderUser.class, constructMethod.getReturnType());
 
-      final java.util.function.Function<String, Object> values = name ->
+      final Function<String, Object> values = name ->
         switch (name) {
           case "id" -> "B-1";
           case "email" -> "builder@example.com";
@@ -238,9 +240,9 @@ class LombokFocusProcessorTest {
   private static void assertHolderField(final Class<?> holder, final String name) throws Exception {
     final var field = holder.getDeclaredField(name);
     final var mods = field.getModifiers();
-    assertTrue(java.lang.reflect.Modifier.isPublic(mods), name + " must be public");
-    assertTrue(java.lang.reflect.Modifier.isStatic(mods), name + " must be static");
-    assertTrue(java.lang.reflect.Modifier.isFinal(mods), name + " must be final");
+    assertTrue(Modifier.isPublic(mods), name + " must be public");
+    assertTrue(Modifier.isStatic(mods), name + " must be static");
+    assertTrue(Modifier.isFinal(mods), name + " must be final");
     assertEquals(Telescope.class, field.getType(), () -> name + " must be a Telescope; was " + field.getType());
   }
 
@@ -283,7 +285,7 @@ class LombokFocusProcessorTest {
 
   private static void assertHasFocusMethod(final Class<?> pathClass, final Class<?> rootType) throws Exception {
     final var start = pathClass.getDeclaredMethod("of");
-    assertTrue(java.lang.reflect.Modifier.isStatic(start.getModifiers()), "start() must be static");
+    assertTrue(Modifier.isStatic(start.getModifiers()), "start() must be static");
     assertEquals(pathClass, start.getReturnType(), () -> "start() should return " + pathClass.getSimpleName());
   }
 

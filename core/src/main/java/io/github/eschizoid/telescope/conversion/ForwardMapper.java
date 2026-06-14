@@ -45,7 +45,7 @@ public final class ForwardMapper<A, B> {
    * io.github.eschizoid.telescope.mapping.MapStep...)}.
    */
   public static <A, B> ForwardMapper<A, B> create(
-    final java.util.function.Function<? super A, ? extends B> forward,
+    final Function<? super A, ? extends B> forward,
     final Class<A> sourceClass,
     final Class<B> targetClass
   ) {

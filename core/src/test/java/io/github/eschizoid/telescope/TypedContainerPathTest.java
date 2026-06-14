@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -102,7 +103,7 @@ class TypedContainerPathTest {
       final var src = new TagSet("alice", new LinkedHashSet<>(List.of(new Tag("a"))));
       assertEquals(
         Set.of(new Tag("a")),
-        promoted.each().toList(src).stream().collect(java.util.stream.Collectors.toSet())
+        promoted.each().toList(src).stream().collect(Collectors.toSet())
       );
     }
   }

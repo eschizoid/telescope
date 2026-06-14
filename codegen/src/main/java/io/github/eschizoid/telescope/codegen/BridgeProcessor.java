@@ -1168,7 +1168,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // configured. We avoid double-evaluation by precomputing one local per source field in a
     // prelude block, then referencing the locals in the conditional. The prelude is collected
     // here as patchLocals (declarations) keyed by source field name.
-    final var patchLocals = new java.util.LinkedHashMap<String, String>();
+    final var patchLocals = new LinkedHashMap<String, String>();
     final Function<String, String> readPatch = sourceName -> {
       final var sf = fieldByName(sourceFields, sourceName);
       final var baseRead = readExpr(source, "base", sf);

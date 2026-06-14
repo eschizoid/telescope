@@ -973,7 +973,7 @@ class DeepMappingTest {
     }
 
     // --- two-arg drop(srcAcc, target) — scoped to a nested pair ---
-    record CustomerRich(String name, java.util.Set<String> tags) {}
+    record CustomerRich(String name, Set<String> tags) {}
 
     record CustomerPartner(String name) {}
 
