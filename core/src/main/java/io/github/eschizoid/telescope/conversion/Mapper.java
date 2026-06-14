@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.MapStep;
@@ -220,6 +221,61 @@ public final class Mapper<A, B> {
     final A a1 = preForward == null ? a : preForward.apply(a);
     final B b = iso.to(a1);
     return postForward == null ? b : postForward.apply(a1, b);
+  }
+
+  /**
+   * In-place update: mutate an existing {@code target} with values derived from {@code source},
+   * preserving {@code target}'s identity. Closes MapStruct's {@code @MappingTarget} for the bean
+   * path — common when wiring a "load entity by ID, update fields, persist" pattern through JPA's
+   * managed-entity contract where allocating a fresh instance loses the persistence-context
+   * tracking.
+   *
+   * <pre>{@code
+   * final UserEntity managed = repository.findById(id).orElseThrow();
+   * userMapper.into(managed, dto);   // writes dto's mapped fields onto `managed` in place
+   * repository.save(managed);
+   * }</pre>
+   *
+   * <p>Semantically equivalent to {@code forward(source)} writes — every property the forward
+   * mapping would set is set on {@code target} via its public {@code setX(value)} setter. The hook
+   * chain (before/after) runs as it does in {@link #forward}; the only difference is the final
+   * write step targets {@code target} rather than a fresh allocation.
+   *
+   * <p><b>Records rejected.</b> Records are immutable; calling {@code into(...)} on a record-target
+   * mapper throws {@link UnsupportedOperationException} at apply time. Use {@link #forward(Object)}
+   * and discard / replace the receiver, or have the target type be a bean with setters.
+   *
+   * <p><b>Setter requirement.</b> Every property emitted by the mapping must have a public {@code
+   * setX(...)} setter on {@code target.getClass()}. A missing setter throws {@link
+   * IllegalArgumentException} naming the property; this is intentional — silently skipping
+   * properties without setters would hide the mapping's intent.
+   *
+   * <p><b>Return value for chaining.</b> Returns {@code target} (the same reference passed in) so
+   * call sites can fluently chain ({@code repository.save(mapper.into(managed, dto))}).
+   *
+   * @param target the existing instance to mutate; must not be null and must not be a record
+   * @param source the source value to map from
+   * @return {@code target} (same reference, mutated in place)
+   * @throws NullPointerException if {@code target} or {@code source} is null
+   * @throws UnsupportedOperationException if {@code target}'s class is a record
+   * @throws IllegalArgumentException if any mapped property lacks a public setter on {@code
+   *     target.getClass()}
+   */
+  public B into(final B target, final A source) {
+    if (target == null) throw new NullPointerException("target");
+    if (source == null) throw new NullPointerException("source");
+    if (targetClass.isRecord()) {
+      throw new UnsupportedOperationException(
+        "Mapper.into(target, source) requires a mutable target — records are immutable. " +
+          "Use Mapper.forward(source) and discard the receiver, or have your target type be a bean " +
+          "with public setters."
+      );
+    }
+    final B produced = forward(source);
+    for (final var name : targetRefl.names(targetClass)) {
+      Beans.writeBeanProperty(target, name, targetRefl.read(produced, name));
+    }
+    return target;
   }
 
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */

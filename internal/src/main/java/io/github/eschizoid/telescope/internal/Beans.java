@@ -81,6 +81,19 @@ public final class Beans {
     }
   };
 
+  // Per-class setter-invoker cache for {@link #writeBeanProperty}. Mirrors the GETTER_INVOKERS
+  // shape: ClassValue at the class layer, ConcurrentHashMap at the per-property layer for lazy
+  // single-property resolution (one Method scan + LMF compile per (cls, name) the in-place
+  // mutation path actually visits). Separate from SettersWriter's per-instance setterInvokers so
+  // the public Beans.writeBeanProperty helper doesn't require the no-arg constructor SettersWriter
+  // demands (in-place mutation needs setters, not a ctor — Mapper.into is given the target).
+  private static final ClassValue<Map<String, BiConsumer<Object, Object>>> SETTER_INVOKERS = new ClassValue<>() {
+    @Override
+    protected Map<String, BiConsumer<Object, Object>> computeValue(final Class<?> type) {
+      return new ConcurrentHashMap<>();
+    }
+  };
+
   private static final ClassValue<BeanWriter<?>> AUTO_WRITER_CACHE = new ClassValue<>() {
     @Override
     protected BeanWriter<?> computeValue(final Class<?> type) {
@@ -364,6 +377,61 @@ public final class Beans {
       "No getter for property '" + name + "' on " + beanClass.getName()
     );
     return reader.apply(pojo);
+  }
+
+  /**
+   * Write {@code value} into the {@code name} property of an existing bean via its public {@code
+   * setX(value)} setter. The setter is resolved once and cached per {@code (pojo.getClass(), name)}
+   * via {@code ClassValue<ConcurrentHashMap>}, then dispatched through a {@link LambdaMetafactory}
+   * -bound {@link BiConsumer} — same hot-path posture as {@link #readProperty(Object, String)}.
+   *
+   * <p>Used by {@code Mapper.into(target, source)} — the {@code @MappingTarget} equivalent — for
+   * in-place mutation of an existing target instance. Unlike {@link #settersWriter(Class)}, this
+   * helper does NOT require a no-arg constructor on the target's class: the user supplies the
+   * already-constructed target. Only the setters need to be public.
+   *
+   * @throws IllegalArgumentException when {@code pojo.getClass()} exposes no public setter named
+   *     {@code "set<Capitalized name>"} taking exactly one argument
+   * @throws IllegalStateException via {@link MethodHandles#privateLookupIn} when the setter's
+   *     declaring class lives in a closed-package module without an {@code opens} directive
+   */
+  public static void writeBeanProperty(final Object pojo, final String name, final Object value) {
+    final var beanClass = persistentClassOf(pojo);
+    final var setter = SETTER_INVOKERS.get(beanClass).computeIfAbsent(name, n -> buildSetterInvoker(beanClass, n));
+    setter.accept(pojo, value);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static BiConsumer<Object, Object> buildSetterInvoker(final Class<?> cls, final String name) {
+    final var set = "set" + capitalize(name);
+    Method setter = null;
+    for (final var m : cls.getMethods()) {
+      if (m.getParameterCount() == 1 && m.getName().equals(set)) {
+        setter = m;
+        break;
+      }
+    }
+    if (setter == null) throw new IllegalArgumentException(
+      "writeBeanProperty(" + cls.getName() + ", '" + name + "'): no setter '" + set + "'"
+    );
+    final var declaringClass = setter.getDeclaringClass();
+    final var lookup = privateLookupOrThrow(declaringClass, cls, "setter");
+    final var paramType = setter.getParameterTypes()[0];
+    final var instantiatedParamType = wrap(paramType);
+    try {
+      final var handle = lookup.unreflect(setter);
+      final var callSite = LambdaMetafactory.metafactory(
+        lookup,
+        "accept",
+        MethodType.methodType(BiConsumer.class),
+        MethodType.methodType(void.class, Object.class, Object.class),
+        handle,
+        MethodType.methodType(void.class, declaringClass, instantiatedParamType)
+      );
+      return (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+    } catch (final Throwable t) {
+      throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
+    }
   }
 
   /**
