@@ -389,6 +389,10 @@ class MappingWhenTest {
       final var msg = ex.getMessage();
       assertEquals(true, msg.contains("Mapping.when"), "message names the construct");
       assertEquals(true, msg.contains("Constant"), "message names the inner kind");
+      // The failure class name (NullPointerException) MUST appear even when the predicate's NPE
+      // carries a null message — otherwise the user sees "Predicate failure: null" and learns
+      // nothing actionable. This pins the decoration improvement.
+      assertEquals(true, msg.contains("NullPointerException"), "message names the failure class");
       assertEquals(true, ex.getCause() instanceof NullPointerException, "original predicate cause preserved");
     }
   }

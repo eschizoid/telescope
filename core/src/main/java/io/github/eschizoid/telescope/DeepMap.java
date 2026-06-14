@@ -558,13 +558,20 @@ public final class DeepMap {
           // propagate raw — the breadcrumb is even more valuable for those.
           final var inner = cond.inner();
           final var innerField = inner.sourceField() == null ? "<telescope>" : inner.sourceField();
+          // Include the failure CLASS name — predicate.test() commonly throws NPE on null
+          // navigation, where getMessage() returns null and "Predicate failure: null" tells the
+          // user nothing. The class name (NullPointerException, ClassCastException, etc.) carries
+          // the actionable signal even when the message is null.
+          final var failureType = predicateFailure.getClass().getSimpleName();
+          final var failureMsg = predicateFailure.getMessage();
           throw new IllegalStateException(
             "Mapping.when(...) predicate threw — inner=" +
               inner.getClass().getSimpleName() +
               " (sourceField=" +
               innerField +
               "). Predicate failure: " +
-              predicateFailure.getMessage(),
+              failureType +
+              (failureMsg == null ? "" : ": " + failureMsg),
             predicateFailure
           );
         }
