@@ -1,9 +1,11 @@
 package io.github.eschizoid.telescope;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Class-keyed bag of source objects consumed by {@link Telescope#merge(Class,
@@ -58,7 +60,7 @@ public final class Sources {
   public static Sources of(final Object... sources) {
     Objects.requireNonNull(sources, "Sources.of: sources array is null");
     final var map = new LinkedHashMap<Class<?>, Object>();
-    final var list = new java.util.ArrayList<Object>(sources.length);
+    final var list = new ArrayList<Object>(sources.length);
     for (final var s : sources) {
       if (s == null) throw new IllegalArgumentException(
         "Sources.of: source at position " + list.size() + " is null. Every source in a merge bag must be non-null."
@@ -88,7 +90,7 @@ public final class Sources {
    * forward-time diagnostic to name what IS present when a row's source class is missing — gives
    * the user actionable information without exposing the source values themselves.
    */
-  public java.util.Set<Class<?>> classes() {
+  public Set<Class<?>> classes() {
     return bySrcClass.keySet();
   }
 

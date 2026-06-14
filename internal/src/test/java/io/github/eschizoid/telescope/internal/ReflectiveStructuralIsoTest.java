@@ -2,7 +2,9 @@ package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -66,7 +68,7 @@ class ReflectiveStructuralIsoTest {
     void componentOrderPreserved() {
       final var iso = Reflective.RECORDS.structuralIso(User.class);
       final Map<String, Object> decomposed = iso.from(new User("alice", 30));
-      assertEquals(java.util.List.of("name", "age"), new java.util.ArrayList<>(decomposed.keySet()));
+      assertEquals(List.of("name", "age"), new ArrayList<>(decomposed.keySet()));
     }
   }
 

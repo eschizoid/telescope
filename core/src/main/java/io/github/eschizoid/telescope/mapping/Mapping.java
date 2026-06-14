@@ -6,6 +6,8 @@ import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import java.util.Objects;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -187,13 +189,13 @@ public sealed interface Mapping<A, B>
     final Class<SE> srcEnum,
     final Class<TE> tgtEnum
   ) {
-    final java.util.Set<String> srcNames = new java.util.TreeSet<>();
+    final Set<String> srcNames = new TreeSet<>();
     for (final var c : srcEnum.getEnumConstants()) srcNames.add(c.name());
-    final java.util.Set<String> tgtNames = new java.util.TreeSet<>();
+    final Set<String> tgtNames = new TreeSet<>();
     for (final var c : tgtEnum.getEnumConstants()) tgtNames.add(c.name());
-    final var missingInTarget = new java.util.TreeSet<>(srcNames);
+    final var missingInTarget = new TreeSet<>(srcNames);
     missingInTarget.removeAll(tgtNames);
-    final var missingInSource = new java.util.TreeSet<>(tgtNames);
+    final var missingInSource = new TreeSet<>(tgtNames);
     missingInSource.removeAll(srcNames);
     if (missingInTarget.isEmpty() && missingInSource.isEmpty()) return;
     final var msg = new StringBuilder("Mapping.enumTo(")

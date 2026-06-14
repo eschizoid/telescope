@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.mapping.Mapping;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -30,9 +32,9 @@ class DeepMapCoverageTest {
   @DisplayName("D1 — zip(...) backward cardinality mismatch")
   class ZipBackwardCardinality {
 
-    record Cart(java.util.List<String> items) {}
+    record Cart(List<String> items) {}
 
-    record CartDto(java.util.List<String> lines) {}
+    record CartDto(List<String> lines) {}
 
     @Test
     @DisplayName("zip backward throws naming both counts when target focuses != source focuses")
@@ -46,7 +48,7 @@ class DeepMapCoverageTest {
       // items — the zip-backward path enforces cardinality (line 609 in DeepMap.java) since the
       // positional copy can't reconcile unequal lengths. Direct mapper.backward(dto) drives
       // applyBackward, which is where the guard lives.
-      final var dto = new CartDto(java.util.List.of("x", "y", "z"));
+      final var dto = new CartDto(List.of("x", "y", "z"));
       final var ex = assertThrows(IllegalStateException.class, () -> mapper.backward(dto));
       final var msg = ex.getMessage();
       assertTrue(msg.toLowerCase().contains("cardinality"));
@@ -207,7 +209,7 @@ class DeepMapCoverageTest {
       final var mapper = Telescope.mapper(
         Slim.class,
         BeanOuter.class,
-        io.github.eschizoid.telescope.mapping.Mapping.to(
+        Mapping.to(
           Slim::value,
           Telescope.ofBean(BeanOuter.class).field(BeanOuter::getInner).field(BeanInner::getValue)
         )
@@ -273,7 +275,7 @@ class DeepMapCoverageTest {
       final var mapper = Telescope.mapper(
         Slim.class,
         Outer.class,
-        io.github.eschizoid.telescope.mapping.Mapping.to(
+        Mapping.to(
           Slim::tag,
           Telescope.of(Outer.class).field(Outer::prims).field(AllPrims::tag)
         )

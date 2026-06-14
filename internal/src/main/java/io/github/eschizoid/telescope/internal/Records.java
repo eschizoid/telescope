@@ -7,6 +7,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.RecordComponent;
+import java.lang.reflect.Type;
 import java.util.Arrays;
 import java.util.function.Function;
 
@@ -149,7 +150,7 @@ public final class Records {
    *
    * @throws IllegalArgumentException if the name doesn't match a component on {@code recordClass}
    */
-  public static java.lang.reflect.Type componentType(final Class<?> recordClass, final String name) {
+  public static Type componentType(final Class<?> recordClass, final String name) {
     for (final var c : info(recordClass).components()) if (c.getName().equals(name)) return c.getGenericType();
     throw noField(name, recordClass);
   }

@@ -12,6 +12,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Type;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -285,7 +286,7 @@ public final class Beans {
    *
    * @throws IllegalArgumentException if no getter is found
    */
-  public static java.lang.reflect.Type propertyType(final Class<?> beanClass, final String name) {
+  public static Type propertyType(final Class<?> beanClass, final String name) {
     final var getter = getters(beanClass).get(name);
     if (getter == null) throw new IllegalArgumentException(
       "No getter for property '" + name + "' on " + beanClass.getName()

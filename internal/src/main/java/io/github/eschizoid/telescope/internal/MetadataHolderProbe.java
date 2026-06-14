@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal;
 import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Map;
 import java.util.Optional;
@@ -106,7 +107,7 @@ public final class MetadataHolderProbe {
    */
   @SuppressWarnings("unchecked")
   private static Map<String, Object> readConstants(final Class<?> holder) throws ReflectiveOperationException {
-    final java.lang.reflect.Method method;
+    final Method method;
     try {
       method = holder.getDeclaredMethod("constants");
     } catch (final NoSuchMethodException e) {
@@ -147,7 +148,7 @@ public final class MetadataHolderProbe {
     final Class<?> holder,
     final Class<?> target
   ) {
-    final java.lang.reflect.Method method;
+    final Method method;
     try {
       method = holder.getDeclaredMethod("construct", Function.class);
     } catch (final NoSuchMethodException e) {

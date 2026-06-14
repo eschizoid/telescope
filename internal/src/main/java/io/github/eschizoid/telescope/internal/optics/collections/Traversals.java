@@ -12,6 +12,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 /**
  * Built-in {@link Traversal}s (and one {@link Affine}) for {@code java.util} container types — the
@@ -122,7 +123,7 @@ public final class Traversals {
       @Override
       public Stream<E> getAll(final C source) {
         if (source == null) return Stream.empty();
-        return java.util.stream.StreamSupport.stream(source.spliterator(), false);
+        return StreamSupport.stream(source.spliterator(), false);
       }
 
       @Override

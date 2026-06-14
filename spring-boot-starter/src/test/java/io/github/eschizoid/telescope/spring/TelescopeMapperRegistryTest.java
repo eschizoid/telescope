@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -140,7 +141,7 @@ class TelescopeMapperRegistryTest {
 
     @Bean
     TelescopeMapperRegistry telescopeMapperRegistry() {
-      return new TelescopeMapperRegistry(java.util.List.of(), true);
+      return new TelescopeMapperRegistry(List.of(), true);
     }
   }
 }
