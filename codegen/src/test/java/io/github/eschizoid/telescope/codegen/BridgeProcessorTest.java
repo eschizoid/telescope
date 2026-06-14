@@ -1815,6 +1815,52 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName(
+      "GAP-1: @Default + @Rename on the same source field compose — null-coalesce feeds the renamed target slot"
+    )
+    void defaultAndRenameOnSameFieldCompose() {
+      // The two modifiers operate on different axes: @Default null-coalesces the SOURCE read,
+      // @Rename relocates the TARGET slot. They are not mutually exclusive (unlike @Default +
+      // @Drop or @Default + @Transform), so the processor accepts the combination and the
+      // generated forward expression is the source-side null-coalesce written into the renamed
+      // target slot. This test pins that contract — if a future change starts rejecting the
+      // composition, the failure here surfaces the regression immediately.
+      final var compilation = compile(
+        source(
+          "demo.User",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Default;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(
+            value = demo.UserDto.class,
+            renames = { @Rename(source = "region", target = "area") },
+            defaults = { @Default(field = "region", value = "EMEA") }
+          )
+          public record User(String id, String region) {}
+          """
+        ),
+        source("demo.UserDto", "package demo; public record UserDto(String id, String area) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.UserBridge");
+      assertNotNull(bridge, () -> "UserBridge missing; saw " + compilation.generated().keySet());
+
+      // Forward: source.region null-coalesces to "EMEA", then writes into target.area (renamed).
+      assertTrue(
+        bridge.contains("new demo.UserDto(s.id(), (s.region() == null ? \"EMEA\" : s.region()))"),
+        () -> "expected null-coalesce on region feeding renamed `area` slot, saw: " + bridge
+      );
+      // Backward: target.area reads back into source.region (no default on backward).
+      assertTrue(
+        bridge.contains("new demo.User(t.id(), t.area())"),
+        () -> "expected backward writes target.area into source.region, saw: " + bridge
+      );
+    }
+
+    @Test
     @DisplayName("@ViaMapper(field, using) — codegen delegates the field to the named bridge class")
     void viaMapperRoutesToNamedBridge() {
       final var compilation = compile(
@@ -1883,6 +1929,60 @@ class BridgeProcessorTest {
       );
       // No auto-sub-bridge AddressBridge2 / AddressToAddressDtoBridge was generated for this pair.
       assertNull(compilation.generated().get("demo.AddressToAddressDtoBridge"));
+    }
+
+    @Test
+    @DisplayName("GAP-3: @ViaMapper patch() delegates to user bridge's patch(base, partial) — not backward(partial)")
+    void viaMapperPatchDelegatesToUserBridgePatch() {
+      final var compilation = compile(
+        source(
+          "demo.AddressBridge",
+          """
+          package demo;
+          public final class AddressBridge {
+            public static demo.AddressDto forward(demo.Address a) { return new demo.AddressDto(a.line()); }
+            public static demo.Address backward(demo.AddressDto a) { return new demo.Address(a.line()); }
+            public static demo.Address patch(demo.Address base, demo.AddressDto partial) {
+              if (base == null || partial == null) return base;
+              return new demo.Address(partial.line() != null ? partial.line() : base.line());
+            }
+          }
+          """
+        ),
+        source("demo.Address", "package demo; public record Address(String line) {}"),
+        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(value = demo.OrderDto.class, viaMappers = {
+            @ViaMapper(field = "address", using = demo.AddressBridge.class)
+          })
+          public record Order(String id, demo.Address address) {}
+          """
+        ),
+        source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
+
+      // The patch body must recursively patch through the user-named AddressBridge — not
+      // call .backward(__pp_address) which would discard `base.address()` state. Locks in
+      // the P5 sparse-overlay semantics for @ViaMapper-governed fields, parallel to the
+      // auto-sub-bridge RECURSE path covered by patchRecursesIntoNestedSubBridges.
+      assertTrue(
+        bridge.contains("demo.AddressBridge.patch(base.address(), __pp_address)"),
+        () -> "expected AddressBridge.patch(base.address(), __pp_address), saw: " + bridge
+      );
+      // Negative: backward(__pp_address) would mean the base sub-component state is lost.
+      assertFalse(
+        bridge.contains("demo.AddressBridge.backward(__pp_address)"),
+        () -> "patch must not fall through to backward(...) on @ViaMapper fields; saw: " + bridge
+      );
     }
 
     @Test
@@ -2210,6 +2310,63 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("P5-T4: @Default on a List<X> source field in patch declares __cond_ with the container type")
+    void patchDefaultOnContainerField() {
+      // @Default on a container source field exercises a different applyBackward arm than the
+      // scalar RECURSE path covered by patchDefaultAndRecurseUsesCondLocal. The __cond_ local
+      // declaration must use the source field's container type (List<E>), and the conditional
+      // must remain type-compatible — applyBackward for an identity-element LIST returns the
+      // defensive-copy expression, which is also List<E>-typed. This pins the type-rendering
+      // contract for container patches.
+      final var compilation = compile(
+        source(
+          "demo.Cart",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Default;
+          import java.util.List;
+          @Bridge(
+            value = demo.CartDto.class,
+            defaults = { @Default(field = "items", value = "null") }
+          )
+          public record Cart(String id, List<String> items) {}
+          """
+        ),
+        source(
+          "demo.CartDto",
+          """
+          package demo;
+          import java.util.List;
+          public record CartDto(String id, List<String> items) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.CartBridge");
+      assertNotNull(bridge, () -> "CartBridge missing; saw " + compilation.generated().keySet());
+
+      // __pp_items must be typed to the target field's container type.
+      assertTrue(
+        bridge.contains("__pp_items = partial.items()"),
+        () -> "expected __pp_items local from partial.items(), saw: " + bridge
+      );
+      // __cond_items must be typed to the source field's container type. The bare type token
+      // varies by TypeMirror#toString implementation (List vs java.util.List) — accept either
+      // shape, but require the variable name and assignment.
+      assertTrue(
+        bridge.contains("__cond_items =") && bridge.contains("(__pp_items != null"),
+        () -> "expected __cond_items conditional bound to __pp_items ternary, saw: " + bridge
+      );
+      // The null-coalesce against the default must reference __cond_items, not re-evaluate.
+      assertTrue(
+        bridge.contains("(__cond_items == null ? null : __cond_items)"),
+        () -> "expected default null-coalesce through __cond_items, saw: " + bridge
+      );
+    }
+
+    @Test
     @DisplayName("P5-T3a: forward-only @Transform field reads from base in patch (no backward call)")
     void patchForwardOnlyTransformReadsBase() {
       final var compilation = compile(
@@ -2337,6 +2494,168 @@ class BridgeProcessorTest {
         () -> "expected SETTERS shape on forward, saw: " + bridge
       );
       assertTrue(!bridge.contains("demo.PB.builder()"), () -> "should not call builder() when SETTERS forced");
+    }
+
+    @Test
+    @DisplayName("P5-T5: patch() for SETTERS-strategy POJO source emits { __pp_ locals; new + setters; return }")
+    void patchEmitsSparseOverlayForSettersPojo() {
+      // Source is a POJO with ONLY a public no-arg ctor + setters — no name-matched public ctor,
+      // no builder() — so backward/patch is forced down the SETTERS branch of buildExpr. This
+      // exercises the block-wrap branch (line ~1211): the SETTERS body is itself a block, so
+      // the patchLocals prelude must inline INSIDE the block, not wrap it twice. P5-BR's trim()
+      // brace-detection guard is the safety net here; the assertion below pins the inline shape.
+      final var compilation = compile(
+        source(
+          "demo.PA",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.PB.class)
+          public class PA {
+            private String id;
+            private String email;
+            public PA() {}
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public void setId(String id) { this.id = id; }
+            public void setEmail(String email) { this.email = email; }
+          }
+          """
+        ),
+        source(
+          "demo.PB",
+          """
+          package demo;
+          public class PB {
+            private String id;
+            private String email;
+            public PB() {}
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public void setId(String id) { this.id = id; }
+            public void setEmail(String email) { this.email = email; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.PABridge");
+      assertNotNull(bridge, () -> "PABridge missing; saw " + compilation.generated().keySet());
+
+      // Scope the index check to the patch method body, otherwise `new demo.PA()` resolves to
+      // backward()'s allocation which sits earlier in the file.
+      final var patchStart = bridge.indexOf("public static demo.PA patch(");
+      assertTrue(patchStart > 0, () -> "patch method missing from bridge; saw: " + bridge);
+      final var patchBody = bridge.substring(patchStart);
+      // __pp_ locals MUST appear before `new demo.PA()` — the block-wrap branch (P5-BR) inlines
+      // the locals into the existing SETTERS block rather than wrapping it twice.
+      final var ppIdIdx = patchBody.indexOf("__pp_id = partial.getId()");
+      final var ppEmailIdx = patchBody.indexOf("__pp_email = partial.getEmail()");
+      final var newPaIdx = patchBody.indexOf("new demo.PA()");
+      assertTrue(
+        ppIdIdx > 0 && ppEmailIdx > 0 && newPaIdx > 0,
+        () -> "missing locals or ctor in patch body: " + patchBody
+      );
+      assertTrue(ppIdIdx < newPaIdx, () -> "__pp_id must precede the constructor allocation; saw: " + patchBody);
+      assertTrue(ppEmailIdx < newPaIdx, () -> "__pp_email must precede the constructor allocation; saw: " + patchBody);
+      // Setter calls thread the null-gate ternary against base getters.
+      assertTrue(
+        bridge.contains("out.setId((__pp_id != null ? __pp_id : base.getId()))"),
+        () -> "expected setId with null-gate against base.getId(), saw: " + bridge
+      );
+      assertTrue(
+        bridge.contains("out.setEmail((__pp_email != null ? __pp_email : base.getEmail()))"),
+        () -> "expected setEmail with null-gate against base.getEmail(), saw: " + bridge
+      );
+      // The body must NOT contain `}}` — that's the double-close hazard P5-DBL guarded against.
+      assertFalse(
+        bridge.contains("return out; } }") || bridge.contains("}}"),
+        () -> "patch body must not double-close the SETTERS block; saw: " + bridge
+      );
+    }
+
+    @Test
+    @DisplayName("GAP-2: patch() for BUILDER-strategy POJO source chains builder().field(__pp_? : base).build()")
+    void patchEmitsSparseOverlayForBuilderPojo() {
+      // Source is a POJO with ONLY a static builder() — no name-matched public ctor — so the
+      // backward/patch direction is forced down the BUILDER branch of buildExpr. This pins the
+      // null-gated builder-chain shape that the patch path must emit for builder-shaped sources
+      // (parallel to patchEmitsSparseOverlay which covers the record canonical-ctor shape).
+      final var compilation = compile(
+        source(
+          "demo.PA",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.PB.class)
+          public class PA {
+            private String id;
+            private String email;
+            // Intentionally private — no name-matched public ctor for CONSTRUCTOR path.
+            private PA() {}
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public static Builder builder() { return new Builder(); }
+            public static class Builder {
+              private final PA p = new PA();
+              public Builder id(String v) { p.id = v; return this; }
+              public Builder email(String v) { p.email = v; return this; }
+              public PA build() { return p; }
+            }
+          }
+          """
+        ),
+        source(
+          "demo.PB",
+          """
+          package demo;
+          public class PB {
+            private String id;
+            private String email;
+            private PB() {}
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public static Builder builder() { return new Builder(); }
+            public static class Builder {
+              private final PB p = new PB();
+              public Builder id(String v) { p.id = v; return this; }
+              public Builder email(String v) { p.email = v; return this; }
+              public PB build() { return p; }
+            }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.PABridge");
+      assertNotNull(bridge, () -> "PABridge missing; saw " + compilation.generated().keySet());
+
+      // Patch body must precompute __pp_ locals (P5-DBL) and then thread them through the
+      // builder chain with null-gates against base.getX().
+      assertTrue(
+        bridge.contains("final java.lang.String __pp_id = partial.getId()"),
+        () -> "expected __pp_id local from partial.getId(), saw: " + bridge
+      );
+      assertTrue(
+        bridge.contains("final java.lang.String __pp_email = partial.getEmail()"),
+        () -> "expected __pp_email local from partial.getEmail(), saw: " + bridge
+      );
+      // The builder chain must use the conditional ternary for each setter.
+      assertTrue(
+        bridge.contains("demo.PA.builder().id((__pp_id != null ? __pp_id : base.getId()))"),
+        () -> "expected builder().id(__pp_id != null ? __pp_id : base.getId()), saw: " + bridge
+      );
+      assertTrue(
+        bridge.contains(".email((__pp_email != null ? __pp_email : base.getEmail())).build()"),
+        () -> "expected .email(...).build() chain, saw: " + bridge
+      );
+      // Negative: SETTERS-style { out.setX(...) } shape must not appear for the builder path.
+      assertFalse(
+        bridge.contains("final var out = new demo.PA()"),
+        () -> "BUILDER strategy must not fall through to SETTERS shape; saw: " + bridge
+      );
     }
 
     @Test
@@ -2505,6 +2824,288 @@ class BridgeProcessorTest {
       assertFalse(compilation.success(), "defaults + transforms overlap should fail");
       assertTrue(
         compilation.hasError("appears in both defaults and transforms"),
+        () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "KITCHEN: drops + @Rename + @Default + @Transform + @ViaMapper + @Compute compose end-to-end with patch"
+    )
+    void kitchenSinkAllModifiersCompose() {
+      // Exercises every modifier on a single @Bridge declaration. The goal isn't coverage of
+      // any one mechanism — each is pinned by its own dedicated test elsewhere — but rather to
+      // catch silent interaction bugs that only show up when multiple modifiers are stacked on
+      // the same generation pass. If any pair regresses in a way the unit tests miss, this is
+      // the test that shouts.
+      final var compilation = compile(
+        source(
+          "demo.QtyFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class QtyFn implements BridgeFn<String, String> {
+            public QtyFn() {}
+            @Override public String forward(String x) { return x == null ? "0" : x.trim(); }
+            @Override public String backward(String x) { return x; }
+          }
+          """
+        ),
+        source(
+          "demo.EnvSupplier",
+          """
+          package demo;
+          import java.util.function.Supplier;
+          public final class EnvSupplier implements Supplier<String> {
+            public EnvSupplier() {}
+            @Override public String get() { return "prod"; }
+          }
+          """
+        ),
+        source(
+          "demo.AddressBridge",
+          """
+          package demo;
+          public final class AddressBridge {
+            public static demo.AddressDto forward(demo.Address a) { return new demo.AddressDto(a.line()); }
+            public static demo.Address backward(demo.AddressDto a) { return new demo.Address(a.line()); }
+            public static demo.Address patch(demo.Address base, demo.AddressDto partial) {
+              if (base == null || partial == null) return base;
+              return new demo.Address(partial.line() != null ? partial.line() : base.line());
+            }
+          }
+          """
+        ),
+        source("demo.Address", "package demo; public record Address(String line) {}"),
+        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Compute;
+          import io.github.eschizoid.telescope.annotations.Default;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(
+            value      = demo.OrderDto.class,
+            drops      = { "id" },
+            renames    = { @Rename(source    = "name", target = "renamed") },
+            defaults   = { @Default(field    = "tag",  value  = "X") },
+            transforms = { @Transform(field  = "qty",  using  = demo.QtyFn.class) },
+            viaMappers = { @ViaMapper(field  = "addr", using  = demo.AddressBridge.class) },
+            computes   = { @Compute(field    = "env",  using  = demo.EnvSupplier.class) }
+          )
+          public record Order(String id, String name, String tag, String qty, demo.Address addr) {}
+          """
+        ),
+        source(
+          "demo.OrderDto",
+          """
+          package demo;
+          public record OrderDto(String renamed, String tag, String qty, demo.AddressDto addr, String env) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
+
+      // FORWARD ────────────────────────────────────────────────────────────────────────────
+      // drops: source.id never read; @Rename: source.name → target.renamed; @Default:
+      // null-coalesce on source.tag; @Transform: source.qty through __tx_qty.forward;
+      // @ViaMapper: source.addr through AddressBridge.forward; @Compute: target.env from
+      // EnvSupplier with no source involvement.
+      assertTrue(
+        bridge.contains("s.name()") &&
+          bridge.contains("(s.tag() == null ? \"X\" : s.tag())") &&
+          bridge.contains("__tx_qty.forward(s.qty())") &&
+          bridge.contains("demo.AddressBridge.forward(s.addr())") &&
+          bridge.contains("__cp_env.get()"),
+        () -> "forward composition incomplete; saw: " + bridge
+      );
+      assertFalse(bridge.contains("s.id()"), () -> "dropped source.id must not appear in forward; saw: " + bridge);
+
+      // BACKWARD ───────────────────────────────────────────────────────────────────────────
+      // drops fill source.id with null; @Rename reads target.renamed into source.name;
+      // @Transform routes target.qty through __tx_qty.backward; @ViaMapper routes
+      // target.addr through AddressBridge.backward; @Default does NOT apply on backward.
+      assertTrue(
+        bridge.contains(
+          "new demo.Order(null, t.renamed(), t.tag(), __tx_qty.backward(t.qty()), demo.AddressBridge.backward(t.addr()))"
+        ),
+        () -> "backward composition off; saw: " + bridge
+      );
+
+      // PATCH ──────────────────────────────────────────────────────────────────────────────
+      // Dropped + computed slots read from base; renamed source uses __pp_name from
+      // partial.renamed(); @Transform threads through __tx_qty.backward(__pp_qty); @ViaMapper
+      // delegates to AddressBridge.patch(base.addr(), __pp_addr); @Default emits __cond_tag.
+      assertTrue(
+        bridge.contains("__pp_name = partial.renamed()"),
+        () -> "expected __pp_name from partial.renamed(); saw: " + bridge
+      );
+      assertTrue(bridge.contains("__pp_qty = partial.qty()"), () -> "expected __pp_qty local; saw: " + bridge);
+      assertTrue(bridge.contains("__pp_addr = partial.addr()"), () -> "expected __pp_addr local; saw: " + bridge);
+      assertTrue(bridge.contains("__pp_tag = partial.tag()"), () -> "expected __pp_tag local; saw: " + bridge);
+      assertTrue(
+        bridge.contains("__cond_tag =") && bridge.contains("(__cond_tag == null ? \"X\" : __cond_tag)"),
+        () -> "expected __cond_tag default coalesce; saw: " + bridge
+      );
+      assertTrue(
+        bridge.contains("demo.AddressBridge.patch(base.addr(), __pp_addr)"),
+        () -> "expected @ViaMapper patch routing; saw: " + bridge
+      );
+      assertTrue(
+        bridge.contains("__tx_qty.backward(__pp_qty)"),
+        () -> "expected transform via __tx_qty.backward in patch; saw: " + bridge
+      );
+      // Negative: dropped source.id must read from base in patch, never from partial.
+      assertTrue(bridge.contains("base.id()"), () -> "dropped field must read from base in patch; saw: " + bridge);
+    }
+
+    @Test
+    @DisplayName("GAP-5a: @Compute + @Default on the same field rejected at build")
+    void computeAndDefaultOnSameFieldRejected() {
+      final var compilation = compile(
+        source(
+          "demo.NowSupplier",
+          """
+          package demo;
+          import java.util.function.Supplier;
+          public final class NowSupplier implements Supplier<String> {
+            public NowSupplier() {}
+            @Override public String get() { return "now"; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Compute;
+          import io.github.eschizoid.telescope.annotations.Default;
+          @Bridge(
+            value = demo.B.class,
+            computes = { @Compute(field = "ts", using = demo.NowSupplier.class) },
+            defaults = { @Default(field = "ts", value = "fallback") }
+          )
+          public record A(String id, String ts) {}
+          """
+        ),
+        source("demo.B", "package demo; public record B(String id, String ts) {}")
+      );
+
+      assertFalse(compilation.success(), "computes + defaults overlap should fail");
+      assertTrue(
+        compilation.hasError("appears in both computes (target slot) and defaults"),
+        () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("GAP-5b: @Compute + @Transform on the same field rejected at build")
+    void computeAndTransformOnSameFieldRejected() {
+      final var compilation = compile(
+        source(
+          "demo.NowSupplier",
+          """
+          package demo;
+          import java.util.function.Supplier;
+          public final class NowSupplier implements Supplier<String> {
+            public NowSupplier() {}
+            @Override public String get() { return "now"; }
+          }
+          """
+        ),
+        source(
+          "demo.NoopFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class NoopFn implements BridgeFn<String, String> {
+            public NoopFn() {}
+            @Override public String forward(String x) { return x; }
+            @Override public String backward(String x) { return x; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Compute;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(
+            value = demo.B.class,
+            computes   = { @Compute(field   = "ts", using = demo.NowSupplier.class) },
+            transforms = { @Transform(field = "ts", using = demo.NoopFn.class) }
+          )
+          public record A(String id, String ts) {}
+          """
+        ),
+        source("demo.B", "package demo; public record B(String id, String ts) {}")
+      );
+
+      assertFalse(compilation.success(), "computes + transforms overlap should fail");
+      assertTrue(
+        compilation.hasError("appears in both computes (target slot) and transforms"),
+        () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("GAP-5c: @Compute + @ViaMapper on the same field rejected at build")
+    void computeAndViaMapperOnSameFieldRejected() {
+      final var compilation = compile(
+        source(
+          "demo.NowSupplier",
+          """
+          package demo;
+          import java.util.function.Supplier;
+          public final class NowSupplier implements Supplier<demo.Inner> {
+            public NowSupplier() {}
+            @Override public demo.Inner get() { return new demo.Inner("computed"); }
+          }
+          """
+        ),
+        source(
+          "demo.InnerBridge",
+          """
+          package demo;
+          public final class InnerBridge {
+            public static demo.InnerDto forward(demo.Inner i) { return new demo.InnerDto(i.v()); }
+            public static demo.Inner backward(demo.InnerDto i) { return new demo.Inner(i.v()); }
+          }
+          """
+        ),
+        source("demo.Inner", "package demo; public record Inner(String v) {}"),
+        source("demo.InnerDto", "package demo; public record InnerDto(String v) {}"),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Compute;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(
+            value = demo.B.class,
+            computes   = { @Compute(field   = "inner", using = demo.NowSupplier.class) },
+            viaMappers = { @ViaMapper(field = "inner", using = demo.InnerBridge.class) }
+          )
+          public record A(String id, demo.Inner inner) {}
+          """
+        ),
+        source("demo.B", "package demo; public record B(String id, demo.Inner inner) {}")
+      );
+
+      assertFalse(compilation.success(), "computes + viaMappers overlap should fail");
+      assertTrue(
+        compilation.hasError("appears in both computes (target slot) and viaMappers"),
         () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
       );
     }

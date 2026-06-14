@@ -24,7 +24,7 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 public record FromTelescopeTo<A, B, X>(
   Telescope<A, X> sourceTelescope,
   Accessor<B, X> tgtAccessor
-) implements Mapping<A, B>, MappingInternals<A, B> {
+) implements Mapping<A, B> {
   /**
    * Returns {@code null} — the source side is a {@link Telescope} whose root class isn't
    * recoverable at runtime (Java generics erased). The engine pins the row to the outer mapper pair

@@ -77,67 +77,47 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // unambiguous. Populated in process(), read in generate() / generateSealed().
   private final Set<String> multiTargetSources = new HashSet<>();
 
-  // Per-pair drops: source field names that are absent on the target by user declaration. Forward
-  // skips them; backward fills the dropped slot with the type's zero value. Populated in process(),
-  // read in generate().
-  private final Map<TypePair, Set<String>> dropsByPair = new HashMap<>();
+  /**
+   * Single per-pair configuration record holding every modifier parsed from the {@code @Bridge}
+   * annotation. Consolidating ten separate {@code Map<TypePair, ?>} fields into one {@code
+   * Map<TypePair, BridgeConfig>} eliminates the {@code clear()} maintenance hazard — adding a new
+   * attribute means adding a record component, not declaring a new instance field AND remembering
+   * to clear it at the top of each {@link #process(Set, RoundEnvironment)} round.
+   *
+   * <p>Each component holds the per-pair view of one modifier; an empty map / set / null
+   * placeholder is fine when that modifier wasn't used on the pair. {@link #EMPTY} is the
+   * fall-through value for pairs that were never registered.
+   */
+  private record BridgeConfig(
+    Set<String> drops,
+    Map<String, String> renames,
+    Map<String, List<String>> renameFanouts,
+    Map<String, String> transforms,
+    Set<String> forwardOnlyTransforms,
+    Map<String, String> defaults,
+    Map<String, String> viaMappers,
+    String writeStrategy,
+    Map<String, String> constants,
+    Map<String, String> computes
+  ) {
+    static final BridgeConfig EMPTY = new BridgeConfig(
+      Set.of(),
+      Map.of(),
+      Map.of(),
+      Map.of(),
+      Set.of(),
+      Map.of(),
+      Map.of(),
+      "AUTO",
+      Map.of(),
+      Map.of()
+    );
+  }
 
-  // Per-pair renames: source field name -> primary target field name for fields whose two sides
-  // have different names. The bijection check applies renames on the source side before comparing
-  // to target names; planFields and the field-read expressions follow the mapping. For forward-only
-  // fan-out (one source feeding multiple targets), this map holds the FIRST-declared target —
-  // that's
-  // the one backward reads from. Extra fan-out targets live in renameFanoutsByPair. Populated in
-  // process(), read in generate().
-  private final Map<TypePair, Map<String, String>> renamesByPair = new HashMap<>();
-
-  // Per-pair forward-only fan-out extras: source field name -> ordered list of EXTRA target field
-  // names beyond the primary in renamesByPair. Only present when @Rename(forwardOnly = true) is
-  // used
-  // on two or more renames sharing a source. Forward writes the source value to every target
-  // (primary + extras); backward reads only the primary. Populated in process(), read in
-  // generate().
-  private final Map<TypePair, Map<String, List<String>>> renameFanoutsByPair = new HashMap<>();
-
-  // Per-pair per-field transforms: source field name -> BridgeFn class FQN. The transformed field
-  // is
-  // routed through new <Class>().forward(...) / .backward(...) on each direction and is exempt from
-  // the same-type bijection check. Populated in process(), read in generate().
-  private final Map<TypePair, Map<String, String>> transformsByPair = new HashMap<>();
-
-  // Per-pair set of source field names whose @Transform was declared with forwardOnly = true.
-  // Backward direction emits a zero-value fill for these slots (the same shape `drops` uses) and
-  // never invokes the user's BridgeFn.backward. Mirrors the runtime Mapping.forward(...) semantics.
-  // Populated in process(), read in generate().
-  private final Map<TypePair, Set<String>> forwardOnlyTransformsByPair = new HashMap<>();
-
-  // Per-pair source-field defaults: source field name -> already-parsed Java-literal expression
-  // (e.g. "\"EMEA\"", "42", "true"). Forward direction wraps the source read in (s.field == null
-  // ? <literal> : s.field()) when an entry is present. Backward is identity. Mirrors the runtime
-  // Mapping.toOrElse(srcAcc, tgtAcc, defaultValue) factory. Populated + validated in process().
-  private final Map<TypePair, Map<String, String>> defaultsByPair = new HashMap<>();
-
-  // Per-pair user-specified nested-bridge overrides: source field name -> bridge class FQN. The
-  // referenced class must expose `public static T forward(S)` + `public static S backward(T)` at
-  // signatures matching the field. When present, planFields uses FieldPlan.recurse(userBridge)
-  // for the row instead of deriving / emitting a sub-bridge for the field's nested pair. Mirrors
-  // the runtime Mapping.via(srcAcc, tgtAcc, mapper) factory.
-  private final Map<TypePair, Map<String, String>> viaMappersByPair = new HashMap<>();
-
-  // Per-pair user-specified write strategy override. AUTO (the default) preserves today's
-  // ctor → builder → no-arg+setters ladder; other values force one strategy and surface a precise
-  // error if the POJO doesn't support it. Mirrors the runtime WriteHint.writeBean(cls, strategy)
-  // hint. Populated in process(), read in generate().
-  private final Map<TypePair, String> writeStrategyByPair = new HashMap<>();
-
-  // Per-pair constants: target field name -> the already-emitted Java literal expression
-  // ("\"API\"", "true", "0L", "null", etc.). Forward-only — injected into the target ctor arg;
-  // backward silently drops the slot. Populated in process(), validated + emitted in generate().
-  private final Map<TypePair, Map<String, String>> constantsByPair = new HashMap<>();
-
-  // Per-pair computes: target field name -> Supplier class FQN. The bridge emits one static
-  // instance per computed field and calls .get() in the forward direction. Forward-only.
-  private final Map<TypePair, Map<String, String>> computesByPair = new HashMap<>();
+  // One map indexed by TypePair carries every modifier parsed from @Bridge. Replaces ten separate
+  // *ByPair fields whose individual clear() calls were a maintenance hazard (forgetting one on a
+  // new attribute = cross-round stale state).
+  private final Map<TypePair, BridgeConfig> configsByPair = new HashMap<>();
 
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
@@ -146,16 +126,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var bridgesAnno = processingEnv.getElementUtils().getTypeElement(BRIDGES_ANNOTATION);
     // Reset per-run bookkeeping so a second processing round starts from a clean slate.
     multiTargetSources.clear();
-    dropsByPair.clear();
-    renamesByPair.clear();
-    renameFanoutsByPair.clear();
-    transformsByPair.clear();
-    forwardOnlyTransformsByPair.clear();
-    defaultsByPair.clear();
-    viaMappersByPair.clear();
-    writeStrategyByPair.clear();
-    constantsByPair.clear();
-    computesByPair.clear();
+    configsByPair.clear();
 
     final Deque<TypePair> pending = new ArrayDeque<>();
     final Set<TypePair> seen = new HashSet<>();
@@ -197,32 +168,37 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var pair = new TypePair(sourceFq, targetEl.getQualifiedName().toString());
         userDeclared.add(pair);
         final var drops = dropsFromMirror(bridgeAm);
-        if (!drops.isEmpty()) dropsByPair.put(pair, drops);
         final var renameSet = renamesFromMirror(element, bridgeAm);
         if (renameSet == null) continue; // invalid rename — error already reported, skip this pair
-        if (!renameSet.bySource().isEmpty()) renamesByPair.put(pair, renameSet.bySource());
-        if (!renameSet.fanoutExtras().isEmpty()) renameFanoutsByPair.put(pair, renameSet.fanoutExtras());
         final var transformSet = transformsFromMirror(element, bridgeAm);
         if (transformSet == null) continue; // invalid transform — already reported, skip this pair
-        if (!transformSet.byField().isEmpty()) transformsByPair.put(pair, transformSet.byField());
-        if (!transformSet.forwardOnlyFields().isEmpty()) forwardOnlyTransformsByPair.put(
-          pair,
-          transformSet.forwardOnlyFields()
-        );
         final var constants = constantsFromMirror(element, bridgeAm);
         if (constants == null) continue; // invalid constant — already reported, skip this pair
-        if (!constants.isEmpty()) constantsByPair.put(pair, constants);
         final var computes = computesFromMirror(element, bridgeAm);
         if (computes == null) continue; // invalid compute — already reported, skip this pair
-        if (!computes.isEmpty()) computesByPair.put(pair, computes);
         final var rawDefaults = defaultsFromMirror(element, bridgeAm);
         if (rawDefaults == null) continue; // invalid default — already reported, skip this pair
-        if (!rawDefaults.isEmpty()) defaultsByPair.put(pair, rawDefaults);
         final var viaMappers = viaMappersFromMirror(element, bridgeAm);
         if (viaMappers == null) continue; // invalid viaMapper — already reported, skip this pair
-        if (!viaMappers.isEmpty()) viaMappersByPair.put(pair, viaMappers);
-        final var writeStrategy = writeStrategyFromMirror(bridgeAm);
-        if (writeStrategy != null && !"AUTO".equals(writeStrategy)) writeStrategyByPair.put(pair, writeStrategy);
+        final var rawWriteStrategy = writeStrategyFromMirror(bridgeAm);
+        final var writeStrategy = (rawWriteStrategy == null || "AUTO".equals(rawWriteStrategy))
+          ? "AUTO"
+          : rawWriteStrategy;
+        configsByPair.put(
+          pair,
+          new BridgeConfig(
+            drops,
+            renameSet.bySource(),
+            renameSet.fanoutExtras(),
+            transformSet.byField(),
+            transformSet.forwardOnlyFields(),
+            rawDefaults,
+            viaMappers,
+            writeStrategy,
+            constants,
+            computes
+          )
+        );
         if (seen.add(pair)) pending.add(pair);
       }
     }
@@ -758,16 +734,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
     final var sourceFields = fieldsOf(source);
     final var targetFields = fieldsOf(target);
-    final var drops = dropsByPair.getOrDefault(thisPair, Set.of());
-    final var renames = renamesByPair.getOrDefault(thisPair, Map.of());
-    final var renameFanouts = renameFanoutsByPair.getOrDefault(thisPair, Map.of());
-    final var transforms = transformsByPair.getOrDefault(thisPair, Map.of());
-    final var forwardOnlyTransforms = forwardOnlyTransformsByPair.getOrDefault(thisPair, Set.of());
-    final var rawDefaults = defaultsByPair.getOrDefault(thisPair, Map.of());
-    final var viaMappers = viaMappersByPair.getOrDefault(thisPair, Map.of());
-    final var writeStrategy = writeStrategyByPair.getOrDefault(thisPair, "AUTO");
-    final var rawConstants = constantsByPair.getOrDefault(thisPair, Map.of());
-    final var computes = computesByPair.getOrDefault(thisPair, Map.of());
+    final var cfg = configsByPair.getOrDefault(thisPair, BridgeConfig.EMPTY);
+    final var drops = cfg.drops();
+    final var renames = cfg.renames();
+    final var renameFanouts = cfg.renameFanouts();
+    final var transforms = cfg.transforms();
+    final var forwardOnlyTransforms = cfg.forwardOnlyTransforms();
+    final var rawDefaults = cfg.defaults();
+    final var viaMappers = cfg.viaMappers();
+    final var writeStrategy = cfg.writeStrategy();
+    final var rawConstants = cfg.constants();
+    final var computes = cfg.computes();
 
     // Validate every transform field is a real source field (drops would mask the validation).
     for (final var t : transforms.keySet()) {
@@ -1073,6 +1050,39 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         );
         return;
       }
+      // GAP-5: when @Compute owns target.X and source.X exists with a source-side modifier
+      // (@Default / @Transform / @ViaMapper), the source-side annotation becomes dead code —
+      // the supplier short-circuits any source read for that slot. Reject loudly so the user
+      // either drops the source-side modifier or renames source.X to a different target slot.
+      if (sourceNames.contains(fieldName)) {
+        if (parsedDefaults.containsKey(fieldName)) {
+          error(
+            source,
+            "@Bridge field \"" +
+              fieldName +
+              "\" appears in both computes (target slot) and defaults — pick one (compute supplies the slot from a Supplier; the default would never fire)."
+          );
+          return;
+        }
+        if (transforms.containsKey(fieldName)) {
+          error(
+            source,
+            "@Bridge field \"" +
+              fieldName +
+              "\" appears in both computes (target slot) and transforms — pick one (compute supplies the slot from a Supplier; the source-side transform would never be consumed)."
+          );
+          return;
+        }
+        if (viaMappers.containsKey(fieldName)) {
+          error(
+            source,
+            "@Bridge field \"" +
+              fieldName +
+              "\" appears in both computes (target slot) and viaMappers — pick one (compute supplies the slot from a Supplier; the via-mapper would never be invoked)."
+          );
+          return;
+        }
+      }
       injectedTargetFields.add(fieldName);
     }
 
@@ -1207,9 +1217,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       for (final var decl : patchLocals.values()) sb.append("final ").append(decl).append(" ");
       // If the inner expression is already a block (POJO writeStrategy path: "{ ...; return out;
       // }"),
-      // strip both braces and inline the body so we don't double-close the outer block.
-      if (patchInner.startsWith("{") && patchInner.endsWith("}")) {
-        final var stripped = patchInner.substring(1, patchInner.length() - 1).trim();
+      // strip both braces and inline the body so we don't double-close the outer block. The
+      // .trim() on the brace check is a safety net: if any future buildExpr emit path prepends
+      // whitespace, the brace detection still recognises the block shape rather than silently
+      // falling through to the expression branch and generating non-compiling output.
+      final var trimmedInner = patchInner.trim();
+      if (trimmedInner.startsWith("{") && trimmedInner.endsWith("}")) {
+        final var stripped = trimmedInner.substring(1, trimmedInner.length() - 1).trim();
         sb.append(stripped).append(" }");
         patchBody = sb.toString();
       } else {

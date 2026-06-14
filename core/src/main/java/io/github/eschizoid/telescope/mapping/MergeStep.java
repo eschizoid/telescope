@@ -64,7 +64,8 @@ public sealed interface MergeStep<T> permits MergeStep.FromInferred, MergeStep.A
    * sourceClass} gets a free {@code from(sourceClass::<comp>, target::<comp>)} row at build time —
    * minus names already claimed by explicit rows in the same merge.
    *
-   * <p>Mirrors {@link Mapping#auto()} for the multi-source case: when many target fields come
+   * <p>Mirrors the implicit same-name auto-mapping that {@link Telescope#mapper(Class, Class,
+   * MapStep...)} performs when no explicit row claims a target field: when many target fields come
    * straight from one source by name, write one {@code auto(Source.class)} row plus the exceptions,
    * instead of N explicit rows.
    *

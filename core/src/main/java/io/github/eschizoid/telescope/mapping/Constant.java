@@ -24,10 +24,7 @@ import io.github.eschizoid.telescope.Telescope;
  * this type at the call site. The engine in {@link DeepMap} routes this row through the
  * telescope-fixup machinery.
  */
-public record Constant<A, B, X>(
-  Telescope<B, X> targetTelescope,
-  X value
-) implements Mapping<A, B>, MappingInternals<A, B> {
+public record Constant<A, B, X>(Telescope<B, X> targetTelescope, X value) implements Mapping<A, B> {
   /** Returns {@code null} — no source-side accessor; outer-pair pinning. */
   @Override
   public Class<A> sourceClass() {

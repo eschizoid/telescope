@@ -23,7 +23,7 @@ import java.util.function.Supplier;
 public record Compute<A, B, X>(
   Telescope<B, X> targetTelescope,
   Supplier<? extends X> supplier
-) implements Mapping<A, B>, MappingInternals<A, B> {
+) implements Mapping<A, B> {
   /** Returns {@code null} — no source-side accessor; outer-pair pinning. */
   @Override
   public Class<A> sourceClass() {

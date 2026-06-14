@@ -37,7 +37,7 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 public record TelescopeTo<A, B, X>(
   Accessor<A, X> srcAccessor,
   Telescope<B, X> targetTelescope
-) implements Mapping<A, B>, MappingInternals<A, B> {
+) implements Mapping<A, B> {
   @Override
   public Class<A> sourceClass() {
     return LambdaIntrospection.implClassOf(srcAccessor);

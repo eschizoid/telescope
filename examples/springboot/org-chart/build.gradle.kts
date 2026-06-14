@@ -26,6 +26,10 @@ repositories {
     mavenCentral()
 }
 
+springBoot {
+    mainClass.set("io.github.eschizoid.telescope.demo.orgchart.DemoApplication")
+}
+
 dependencies {
     implementation(project(":core"))
 
