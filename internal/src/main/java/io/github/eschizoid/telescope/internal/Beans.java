@@ -13,6 +13,7 @@ import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -454,6 +455,112 @@ public final class Beans {
       "No getter for property '" + name + "' on " + beanClass.getName()
     );
     return getter.getGenericReturnType();
+  }
+
+  /**
+   * Tier-A runtime fast-path for bean-to-bean same-shape mapping. Builds a {@code Function<S, T>}
+   * that allocates a fresh {@code T} via the no-arg constructor and copies each property via cached
+   * LMF getter+setter dispatch — bypassing the structural Iso composition entirely.
+   *
+   * <p>Eligibility (all must hold):
+   *
+   * <ul>
+   *   <li>Both classes are non-record beans with a public no-arg constructor.
+   *   <li>Every target property has a same-named source property with EXACTLY the same type.
+   *   <li>Every property's type is a leaf scalar (primitive, primitive wrapper, String, enum).
+   *       Containers and nested beans fall back to the slow path so deep-copy / lift semantics are
+   *       preserved.
+   * </ul>
+   *
+   * <p>Returns {@code null} when not eligible. Per-pair cache via {@link #BEAN_FAST_PATH_CACHE}.
+   */
+  @SuppressWarnings("unchecked")
+  public static <S, T> Function<S, T> fastPathForward(final Class<S> sourceClass, final Class<T> targetClass) {
+    final var key = new BeanFastPathKey(sourceClass, targetClass);
+    final var cached = BEAN_FAST_PATH_CACHE.get(key);
+    if (cached == BeanFastPathBuilt.NOT_ELIGIBLE) return null;
+    if (cached != null) return (Function<S, T>) cached.fn;
+    final var built = buildBeanFastPath(sourceClass, targetClass);
+    BEAN_FAST_PATH_CACHE.put(key, built);
+    return built == BeanFastPathBuilt.NOT_ELIGIBLE ? null : (Function<S, T>) built.fn;
+  }
+
+  private record BeanFastPathKey(Class<?> source, Class<?> target) {}
+
+  private record BeanFastPathBuilt(Function<?, ?> fn) {
+    static final BeanFastPathBuilt NOT_ELIGIBLE = new BeanFastPathBuilt(null);
+  }
+
+  private static final ConcurrentHashMap<BeanFastPathKey, BeanFastPathBuilt> BEAN_FAST_PATH_CACHE =
+    new ConcurrentHashMap<>();
+
+  @SuppressWarnings("unchecked")
+  private static BeanFastPathBuilt buildBeanFastPath(final Class<?> sourceClass, final Class<?> targetClass) {
+    if (sourceClass.isRecord() || targetClass.isRecord()) return BeanFastPathBuilt.NOT_ELIGIBLE;
+    final Constructor<?> ctor;
+    try {
+      ctor = targetClass.getDeclaredConstructor();
+    } catch (final NoSuchMethodException nsme) {
+      return BeanFastPathBuilt.NOT_ELIGIBLE;
+    }
+    final var srcGetters = getters(sourceClass);
+    final var srcGetterInvokers = GETTER_INVOKERS.get(sourceClass);
+    final var tgtSetters = scanSetters(targetClass);
+    if (tgtSetters.isEmpty()) return BeanFastPathBuilt.NOT_ELIGIBLE;
+    // For each target property (setX), verify a same-named, same-type source getter exists.
+    // Build a parallel list of (sourceGetter, targetSetter) pairs.
+    final var pairs = new ArrayList<GetterSetterPair>(tgtSetters.size());
+    for (final var entry : tgtSetters.entrySet()) {
+      final var name = entry.getKey();
+      final var setter = entry.getValue();
+      final var srcGetter = srcGetters.get(name);
+      if (srcGetter == null) return BeanFastPathBuilt.NOT_ELIGIBLE;
+      final var paramType = setter.getParameterTypes()[0];
+      if (paramType != srcGetter.getReturnType()) return BeanFastPathBuilt.NOT_ELIGIBLE;
+      if (!isFlatScalar(paramType)) return BeanFastPathBuilt.NOT_ELIGIBLE;
+      final var reader = srcGetterInvokers.get(name);
+      if (reader == null) return BeanFastPathBuilt.NOT_ELIGIBLE;
+      final var writer = SETTER_INVOKERS.get(targetClass).computeIfAbsent(name, n ->
+        buildSetterInvoker(targetClass, n)
+      );
+      pairs.add(new GetterSetterPair(reader, writer));
+    }
+    final Supplier<Object> ctorSupplier = buildCtorSupplier(
+      targetClass,
+      (Constructor<Object>) ctor,
+      privateLookupOrThrow(targetClass, targetClass, "no-arg ctor")
+    );
+    final var frozenPairs = pairs.toArray(GetterSetterPair[]::new);
+    final Function<Object, Object> fn = s -> {
+      if (s == null) return null;
+      final var t = ctorSupplier.get();
+      for (final var p : frozenPairs) p.setter.accept(t, p.getter.apply(s));
+      return t;
+    };
+    return new BeanFastPathBuilt(fn);
+  }
+
+  private record GetterSetterPair(Function<Object, Object> getter, BiConsumer<Object, Object> setter) {}
+
+  private static java.util.LinkedHashMap<String, Method> scanSetters(final Class<?> cls) {
+    final var setters = new java.util.LinkedHashMap<String, Method>();
+    for (final var m : cls.getMethods()) {
+      if (m.getParameterCount() != 1) continue;
+      final var name = m.getName();
+      if (!name.startsWith("set") || name.length() < 4) continue;
+      final var prop = Character.toLowerCase(name.charAt(3)) + name.substring(4);
+      setters.put(prop, m);
+    }
+    return setters;
+  }
+
+  private static boolean isFlatScalar(final Class<?> type) {
+    if (type.isPrimitive()) return true;
+    if (type.isEnum()) return true;
+    if (type == String.class) return true;
+    if (type == Integer.class || type == Long.class || type == Double.class || type == Float.class) return true;
+    if (type == Short.class || type == Byte.class || type == Boolean.class || type == Character.class) return true;
+    return false;
   }
 
   private static Map<String, Method> getters(final Class<?> cls) {

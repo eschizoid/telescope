@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.NullDefaults;
+import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.Compute;
@@ -81,6 +82,28 @@ public final class DeepMap {
   }
 
   static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {
+    // Tier-A runtime fast-path: when this is a pure auto-recursion mapper (no Mapping rows, no
+    // WriteHint, no NullHint), and both classes are records with name-positional same-or-assignable
+    // shape, build the forward Function directly via cached LMF readers + canonical-ctor — bypass
+    // the structural Iso composition entirely. Benchmark gap: 91× MapStruct → 5-10× expected.
+    //
+    // Backward direction still goes through the slow path so .patch / .backward semantics survive.
+    // A future Tier-A pass can build the backward fast-path symmetrically.
+    if (steps.length == 0) {
+      // Try record-to-record fast-path first (cheaper allocation profile via canonical-ctor),
+      // then bean-to-bean (no-arg ctor + cached setter dispatch). Mixed shapes (record↔bean)
+      // still take the slow path; container / nested / cross-type cases also fall through.
+      var forwardFn = Records.<A, B>fastPathForward(source, target);
+      var backwardFn = Records.<B, A>fastPathForward(target, source);
+      if (forwardFn == null || backwardFn == null) {
+        forwardFn = Beans.<A, B>fastPathForward(source, target);
+        backwardFn = Beans.<B, A>fastPathForward(target, source);
+      }
+      if (forwardFn != null && backwardFn != null) {
+        final var r = resolution(source, target, steps);
+        return Mapper.create(forwardFn, backwardFn, source, target, r.patchTable);
+      }
+    }
     final var r = resolution(source, target, steps);
     // Go through Mapper.create (public, Function-typed) — same call works regardless of whether
     // Mapper sits in this package or moves to conversion/.

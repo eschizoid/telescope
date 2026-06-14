@@ -9,6 +9,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.util.Arrays;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 /**
@@ -201,6 +202,105 @@ public final class Records {
     final var args = new Object[comps.length];
     for (var i = 0; i < comps.length; i++) args[i] = valueByName.apply(comps[i].getName());
     return (R) info.ctorFn().apply(args);
+  }
+
+  /**
+   * Tier-A runtime fast-path: build a {@code Function<S, T>} that maps a source record to a target
+   * record by name-positional reads + canonical-constructor invocation, bypassing the structural
+   * {@link io.github.eschizoid.telescope.internal.optics.Iso} composition chain entirely.
+   *
+   * <p>Eligibility (all must hold):
+   *
+   * <ul>
+   *   <li>Both {@code sourceClass} and {@code targetClass} are records.
+   *   <li>Every target component has a same-named source component.
+   *   <li>Every same-named pair has assignable types: source component's type is assignable to
+   *       target component's type (covers identity matches; cross-type conversions still take the
+   *       slow path).
+   * </ul>
+   *
+   * <p>When eligible, returns a {@code Function<S, T>} that resolves the reader array once and the
+   * constructor function once at composition time, then per-call does only:
+   *
+   * <pre>{@code
+   * Object[] args = new Object[N];
+   * args[0] = reader[i0].apply(s);   // LMF-built reader, JIT-inlines
+   * args[1] = reader[i1].apply(s);
+   * ...
+   * return (T) ctorFn.apply(args);   // LMF-built canonical ctor invoker
+   * }</pre>
+   *
+   * <p>Returns {@code null} when not eligible — the caller falls back to the slow path.
+   *
+   * <p><b>Per-pair cache.</b> Eligibility + Function build is memoized via {@link #FAST_PATH_CACHE}
+   * so the per-pair setup runs once and subsequent {@code mapper.forward(s)} calls dispatch through
+   * a single virtual call.
+   */
+  @SuppressWarnings("unchecked")
+  public static <S, T> Function<S, T> fastPathForward(final Class<S> sourceClass, final Class<T> targetClass) {
+    final var key = new FastPathKey(sourceClass, targetClass);
+    final var cached = FAST_PATH_CACHE.get(key);
+    if (cached == FastPathBuilt.NOT_ELIGIBLE) return null;
+    if (cached != null) return (Function<S, T>) cached.fn;
+    final var built = buildFastPath(sourceClass, targetClass);
+    FAST_PATH_CACHE.put(key, built);
+    return built == FastPathBuilt.NOT_ELIGIBLE ? null : (Function<S, T>) built.fn;
+  }
+
+  private record FastPathKey(Class<?> source, Class<?> target) {}
+
+  private record FastPathBuilt(Function<?, ?> fn) {
+    static final FastPathBuilt NOT_ELIGIBLE = new FastPathBuilt(null);
+  }
+
+  private static final ConcurrentHashMap<FastPathKey, FastPathBuilt> FAST_PATH_CACHE = new ConcurrentHashMap<>();
+
+  private static FastPathBuilt buildFastPath(final Class<?> sourceClass, final Class<?> targetClass) {
+    if (!sourceClass.isRecord() || !targetClass.isRecord()) return FastPathBuilt.NOT_ELIGIBLE;
+    final var srcInfo = info(sourceClass);
+    final var tgtInfo = info(targetClass);
+    final var tgtComps = tgtInfo.components();
+    final var srcComps = srcInfo.components();
+    // Tier-A scope: flat scalar records only. Containers (List/Set/Map/Optional) and nested
+    // record/bean types still take the slow path because (a) deep-copy semantics need the
+    // structural Iso, (b) cycle detection lives there, (c) cross-type element conversions live
+    // there. Fast-path is the dominant win for the flat tier (5 scalar fields, 91× MapStruct);
+    // nested cases are 40× — the slow path already amortises constant overhead at that size.
+    final var sourceIndexPerTargetSlot = new int[tgtComps.length];
+    for (var ti = 0; ti < tgtComps.length; ti++) {
+      final var tName = tgtComps[ti].getName();
+      final var tType = tgtComps[ti].getType();
+      if (!isFlatScalar(tType)) return FastPathBuilt.NOT_ELIGIBLE;
+      var found = -1;
+      for (var si = 0; si < srcComps.length; si++) {
+        if (!srcComps[si].getName().equals(tName)) continue;
+        if (tType != srcComps[si].getType()) return FastPathBuilt.NOT_ELIGIBLE;
+        found = si;
+        break;
+      }
+      if (found < 0) return FastPathBuilt.NOT_ELIGIBLE;
+      sourceIndexPerTargetSlot[ti] = found;
+    }
+    final var readers = srcInfo.readers();
+    final var ctorFn = tgtInfo.ctorFn();
+    final var positions = sourceIndexPerTargetSlot;
+    final var arity = positions.length;
+    final Function<Object, Object> fn = s -> {
+      if (s == null) return null;
+      final var args = new Object[arity];
+      for (var i = 0; i < arity; i++) args[i] = readers[positions[i]].apply(s);
+      return ctorFn.apply(args);
+    };
+    return new FastPathBuilt(fn);
+  }
+
+  private static boolean isFlatScalar(final Class<?> type) {
+    if (type.isPrimitive()) return true;
+    if (type.isEnum()) return true;
+    if (type == String.class) return true;
+    if (type == Integer.class || type == Long.class || type == Double.class || type == Float.class) return true;
+    if (type == Short.class || type == Byte.class || type == Boolean.class || type == Character.class) return true;
+    return false;
   }
 
   private static Object readField(final Object source, final String fieldName) {
