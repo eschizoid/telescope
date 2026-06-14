@@ -5,6 +5,7 @@ import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.Compute;
+import io.github.eschizoid.telescope.mapping.Conditional;
 import io.github.eschizoid.telescope.mapping.Constant;
 import io.github.eschizoid.telescope.mapping.Drop;
 import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
@@ -34,6 +35,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Engine for {@link Telescope#map(Class, Class, MapStep...)} / {@link Telescope#mapper(Class,
@@ -289,7 +291,13 @@ public final class DeepMap {
     final var telescopeWritesTgt = new HashSet<String>();
     final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
 
-    for (final var row : overrides.getOrDefault(key, List.of())) {
+    for (final var rawRow : overrides.getOrDefault(key, List.of())) {
+      // Conditional<A, B>(predicate, inner) wraps a telescope-based row. For soft-claim routing,
+      // peel to the inner — Conditional delegates sourceField/targetField/sourceClass/targetClass
+      // to inner already, so the metadata is identical, but the telescope-shape checks below need
+      // the concrete inner type. The Conditional itself (rawRow) goes into telescopeFixups so
+      // applyForward can evaluate the predicate before dispatching the inner's effect.
+      final Mapping<?, ?> row = (rawRow instanceof Conditional<?, ?> c) ? c.inner() : rawRow;
       // Normalize raw method names per side — record::name stays "name", bean::getName becomes
       // "name".
       final var srcField = srcRefl.normalize(row.sourceField());
@@ -300,7 +308,7 @@ public final class DeepMap {
         telescopeReadsSrc.add(srcField);
         final var firstTgtHop = tRow.targetTelescope().firstHopName();
         if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
-        telescopeFixups.add(tRow);
+        telescopeFixups.add(rawRow);
         continue;
       }
       // FromTelescopeTo: nested source telescope → flat target accessor — soft claim mirror.
@@ -309,7 +317,7 @@ public final class DeepMap {
         telescopeWritesTgt.add(tgtRefl.normalize(row.targetField()));
         final var firstSrcHop = fRow.sourceTelescope().firstHopName();
         if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
-        telescopeFixups.add(fRow);
+        telescopeFixups.add(rawRow);
         continue;
       }
       // TelescopeToTelescope (covers both Kind.BROADCAST from Mapping.to and Kind.ZIP from
@@ -321,7 +329,7 @@ public final class DeepMap {
         final var firstTgtHop = ttRow.targetTelescope().firstHopName();
         if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
         if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
-        telescopeFixups.add(ttRow);
+        telescopeFixups.add(rawRow);
         continue;
       }
       // Constant / Compute rows are target-injection telescope fixups: claim the target
@@ -335,13 +343,13 @@ public final class DeepMap {
       if (row instanceof Constant<?, ?, ?> cRow) {
         final var firstTgtHop = cRow.targetTelescope().firstHopName();
         if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
-        telescopeFixups.add(cRow);
+        telescopeFixups.add(rawRow);
         continue;
       }
       if (row instanceof Compute<?, ?, ?> cpRow) {
         final var firstTgtHop = cpRow.targetTelescope().firstHopName();
         if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
-        telescopeFixups.add(cpRow);
+        telescopeFixups.add(rawRow);
         continue;
       }
       // Drop rows claim a source field with no target counterpart — they exist to satisfy the
@@ -528,7 +536,40 @@ public final class DeepMap {
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static <S, T> T applyForward(final T initial, final S s, final List<Mapping<?, ?>> fixups) {
     T t = initial;
-    for (final var fx : fixups) {
+    for (final var rawFx : fixups) {
+      // Conditional<A, B>(predicate, inner) gates the inner row's forward effect by the source
+      // predicate. When the predicate rejects the source, skip the row entirely — the target
+      // field keeps whatever the base structural Iso produced. Predicate cast widens the
+      // upper-bound wildcard `? super A` against the type-erased source `s`; safe because the
+      // mapper's Class<A> verifies s at runtime through the surrounding forward(...) entry.
+      final Mapping<?, ?> fx;
+      if (rawFx instanceof Conditional<?, ?> cond) {
+        final var predicate = (Predicate<Object>) cond.predicate();
+        final boolean accepted;
+        try {
+          accepted = predicate.test(s);
+        } catch (final RuntimeException predicateFailure) {
+          // Decorate user-predicate exceptions with the row's inner-kind + source field
+          // breadcrumb so the failure points at the user's when(...) site, not at an opaque
+          // applyForward stack frame. Matches the self-diagnosing style of Mapping.zip's
+          // cardinality check below.
+          final var inner = cond.inner();
+          final var innerField = inner.sourceField() == null ? "<telescope>" : inner.sourceField();
+          throw new IllegalStateException(
+            "Mapping.when(...) predicate threw — inner=" +
+              inner.getClass().getSimpleName() +
+              " (sourceField=" +
+              innerField +
+              "). Predicate failure: " +
+              predicateFailure.getMessage(),
+            predicateFailure
+          );
+        }
+        if (!accepted) continue;
+        fx = cond.inner();
+      } else {
+        fx = rawFx;
+      }
       if (fx instanceof TelescopeTo<?, ?, ?> r) {
         final var srcAcc = (Telescope.Accessor<S, Object>) r.srcAccessor();
         final var tgtT = (Telescope<T, Object>) r.targetTelescope();
@@ -582,6 +623,10 @@ public final class DeepMap {
     // they apply via srcT.set on the rebuilt baseS, after the name-keyed rebuild finishes.
     final var fieldOverrides = new HashMap<String, Object>();
     for (final var fx : fixups) {
+      // Conditional rows are forward-only by design — same retraction semantics as Constant /
+      // Compute. The source rebuild leaves the corresponding source field at the baseS value;
+      // forward(backward(t)) is intentionally asymmetric for predicate-gated rows.
+      if (fx instanceof Conditional<?, ?>) continue;
       if (fx instanceof TelescopeTo<?, ?, ?> r) {
         final var tgtT = (Telescope<T, Object>) r.targetTelescope();
         fieldOverrides.put(srcRefl.normalize(r.sourceField()), tgtT.read(t));
@@ -592,6 +637,7 @@ public final class DeepMap {
     );
     // Telescope-source fixups overlay AFTER the name-keyed rebuild, via srcT.set on s.
     for (final var fx : fixups) {
+      if (fx instanceof Conditional<?, ?>) continue;
       if (fx instanceof FromTelescopeTo<?, ?, ?> r) {
         final var srcT = (Telescope<S, Object>) r.sourceTelescope();
         final var tgtAcc = (Telescope.Accessor<T, Object>) r.tgtAccessor();
