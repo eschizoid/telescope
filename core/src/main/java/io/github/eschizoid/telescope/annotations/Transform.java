@@ -56,10 +56,49 @@ public @interface Transform {
 
   /**
    * A {@link BridgeFn} implementation whose {@code forward}/{@code backward} convert this field's
-   * value in each direction. Must be a top-level type with a public no-arg constructor.
+   * value in each direction, OR — when {@link #method()} is set — any class containing a static
+   * method named {@link #method()} taking one argument and returning the converted value. The
+   * {@link BridgeFn} shape is the default; the {@code method}-named form unlocks MapStruct's
+   * {@code @Named} qualifier-dispatch pattern where a single helper class hosts several conversion
+   * methods (different fields point at different methods on the same class).
+   *
+   * <p>Without {@code method}: must be a top-level {@link BridgeFn} subtype with a public no-arg
+   * constructor — the generated bridge instantiates one static instance per transformed field.
+   *
+   * <p>With {@code method}: may be any top-level class. The generated bridge emits a direct {@code
+   * UsingClass.methodName(value)} call (no instantiation, no {@code BridgeFn} requirement). The
+   * named method must be static, take exactly one argument, and return the converted value. Always
+   * forward-only (qualifier dispatch is inherently asymmetric — the inverse method name isn't
+   * recoverable from a forward method name). {@link #forwardOnly()} is implicitly true when {@code
+   * method} is set.
    */
   @SuppressWarnings("rawtypes")
-  Class<? extends BridgeFn> using();
+  Class<?> using();
+
+  /**
+   * Optional named static method on {@link #using()} to invoke for the forward conversion. When
+   * non-empty, switches the row from the {@link BridgeFn}-shape to the qualifier-dispatch shape:
+   * {@code using} no longer needs to implement {@link BridgeFn}, and the generated bridge emits a
+   * direct {@code UsingClass.methodName(value)} call.
+   *
+   * <pre>{@code
+   * public final class DateHelpers {
+   *   public static String expiry(Instant i)   { return DateTimeFormatter.ISO_INSTANT.format(i); }
+   *   public static String createdAt(Instant i) { return i.atZone(ZoneOffset.UTC).toString(); }
+   * }
+   *
+   * @Bridge(value = UserDto.class, transforms = {
+   *   @Transform(field = "expiresAt", using = DateHelpers.class, method = "expiry"),
+   *   @Transform(field = "createdAt", using = DateHelpers.class, method = "createdAt")
+   * })
+   * public record UserEntity(String id, Instant expiresAt, Instant createdAt) {}
+   * }</pre>
+   *
+   * <p>Always implicitly forward-only — see {@link #using()} for the full contract.
+   *
+   * <p>Default empty ({@code ""}) preserves the existing {@link BridgeFn}-shape semantics.
+   */
+  String method() default "";
 
   /**
    * Opt in to forward-only semantics: the generated bridge emits a zero-value fill in the backward
@@ -70,6 +109,9 @@ public @interface Transform {
    * <p>The generated {@code patch(base, partial)} method also skips the backward read for this slot
    * and preserves {@code base.field()} unchanged — a forward-only transform has no defined inverse,
    * so there is no way to overlay a partial value back onto the source.
+   *
+   * <p>Implicitly {@code true} when {@link #method()} is set — qualifier dispatch is inherently
+   * one-direction (the inverse method name isn't recoverable from a forward method name).
    */
   boolean forwardOnly() default false;
 }
