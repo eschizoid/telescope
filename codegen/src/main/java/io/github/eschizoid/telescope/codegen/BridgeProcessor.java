@@ -1146,6 +1146,77 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (forwardBody == null) return;
     final var backwardBody = buildExpr(source, readBackward, sourceFields, writeStrategy, source);
     if (backwardBody == null) return;
+    // Patch emits a sparse overlay: for each source field, read from `partial` (the user's
+    // partially-populated target) when the target's component is non-null, else fall back to the
+    // corresponding read on `base`. Primitive target components are always treated as
+    // patch-present (matching runtime Mapper#patch semantics: a boxed primitive is never null).
+    //
+    // P5-DBL: each reference-type source slot needs its partial.field() value referenced THREE
+    // times (null-check + patch call + @Default outer wrap). Calling partial.<getter>() that many
+    // times is safe for record accessors but unsafe for bean getters with side effects (lazy-init,
+    // audit logging, counters). Same for SubBridge.patch(...) on RECURSE fields when @Default is
+    // configured. We avoid double-evaluation by precomputing one local per source field in a
+    // prelude block, then referencing the locals in the conditional. The prelude is collected
+    // here as patchLocals (declarations) keyed by source field name.
+    final var patchLocals = new java.util.LinkedHashMap<String, String>();
+    final Function<String, String> readPatch = sourceName -> {
+      final var sf = fieldByName(sourceFields, sourceName);
+      final var baseRead = readExpr(source, "base", sf);
+      if (drops.contains(sourceName)) return baseRead;
+      if (forwardOnlyTransforms.contains(sourceName)) return baseRead;
+      final var tgtName = renames.getOrDefault(sourceName, sourceName);
+      final var tf = fieldByName(targetFields, tgtName);
+      final var plan = fieldPlans.get(sourceName);
+      final var partialReadExpr = readExpr(target, "partial", tf);
+      // Primitive target components autobox to non-null wrappers on read — always patch them.
+      // No conditional, so no double-eval; just route through applyBackward.
+      if (tf.type().getKind().isPrimitive()) return applyBackward(sourceName, plan, partialReadExpr);
+      // Reference-type slots: precompute partial.<getter>() once into __pp_<sourceName>.
+      final var pLocal = "__pp_" + sourceName;
+      patchLocals.put(pLocal, tf.type() + " " + pLocal + " = " + partialReadExpr + ";");
+      // P5-3: nested RECURSE plans use SubBridge.patch(base.field, partial.field) — recursive
+      // patch all the way down so a sparse partial only overlays non-null sub-components.
+      final String partialRead;
+      if (plan.kind() == FieldPlan.Kind.RECURSE) {
+        partialRead = plan.subBridgeName() + ".patch(" + baseRead + ", " + pLocal + ")";
+      } else {
+        partialRead = applyBackward(sourceName, plan, pLocal);
+      }
+      // P5-5 + P5-DBL: when a @Default is configured, the outer null-coalesce needs to
+      // reference
+      // the conditional's result without re-evaluating the entire ternary. Precompute via a
+      // second
+      // local __cond_<sourceName> so the @Default check sees a single value.
+      final var conditional = "(" + pLocal + " != null ? " + partialRead + " : " + baseRead + ")";
+      if (parsedDefaults.containsKey(sourceName)) {
+        final var cLocal = "__cond_" + sourceName;
+        patchLocals.put(cLocal, sf.type() + " " + cLocal + " = " + conditional + ";");
+        return "(" + cLocal + " == null ? " + parsedDefaults.get(sourceName) + " : " + cLocal + ")";
+      }
+      return conditional;
+    };
+    final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source);
+    if (patchInner == null) return;
+    // Wrap the inner expression in a block prelude carrying the precomputed locals so the final
+    // emitted body has the right shape: { final <type> __pp_X = ...; ... return <inner>; }
+    final String patchBody;
+    if (patchLocals.isEmpty()) {
+      patchBody = patchInner;
+    } else {
+      final var sb = new StringBuilder("{ ");
+      for (final var decl : patchLocals.values()) sb.append("final ").append(decl).append(" ");
+      // If the inner expression is already a block (POJO writeStrategy path: "{ ...; return out;
+      // }"),
+      // strip both braces and inline the body so we don't double-close the outer block.
+      if (patchInner.startsWith("{") && patchInner.endsWith("}")) {
+        final var stripped = patchInner.substring(1, patchInner.length() - 1).trim();
+        sb.append(stripped).append(" }");
+        patchBody = sb.toString();
+      } else {
+        sb.append("return ").append(patchInner).append("; }");
+        patchBody = sb.toString();
+      }
+    }
 
     final var imports = new TreeSet<>(importsFor(fieldPlans));
     imports.add("io.github.eschizoid.telescope.conversion.BridgeFn");
@@ -1197,6 +1268,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println();
         out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
         emitMethodBody(out, backwardBody);
+        out.println("  }");
+        out.println();
+        // Sparse-overlay patch: read non-null fields of `partial` (a partially-populated target)
+        // and apply them onto `base`. Mirrors the runtime Mapper#patch(base, partial) semantics.
+        // Reference target components null-gate to base; primitive components autobox to non-null
+        // and are always overlaid; nested RECURSE plans recursively patch all the way down.
+        out.println(
+          "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
+        );
+        // P5-1: match runtime Mapper#patch's null-guard. Without this guard, a sparse PATCH
+        // request that arrives with no body (partial == null) would NPE on the first
+        // partial.field() call; runtime returns `base` cleanly in the same situation.
+        out.println("    if (base == null || partial == null) return base;");
+        emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
         out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");
@@ -1371,6 +1456,37 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println();
         out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
         out.println("    return BACKWARD.apply(t);");
+        out.println("  }");
+        out.println();
+        // P5-6: sealed-umbrella patch — dispatch each (basePermit, partialPermit) pair to the
+        // per-case bridge's patch when both sides land on the matching sealed case.
+        //
+        // P5-SLD: when the cases DON'T match (e.g. base is a CreditCard, partial is a
+        // BankTransferEntity), return `base` unchanged. Patch is an OVERLAY contract: the partial
+        // refines the base. If the partial's sealed case is incompatible with the base's case,
+        // there is no defined overlay — silently switching the concrete sealed type via a full
+        // backward conversion would surprise HTTP-PATCH callers ("PATCH /payments/123 with a
+        // bank-transfer body just changed my CreditCard into a BankTransfer"). No-op is the
+        // safe contract; callers who genuinely want the case switch should call backward()
+        // explicitly.
+        out.println(
+          "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
+        );
+        out.println("    if (base == null || partial == null) return base;");
+        for (final var e : entries) {
+          final var sCase = e.sourceCase().getQualifiedName();
+          final var tCase = e.targetCase().getQualifiedName();
+          out.println(
+            "    if (base instanceof " +
+              sCase +
+              " sb && partial instanceof " +
+              tCase +
+              " tp) return " +
+              e.bridgeFq() +
+              ".patch(sb, tp);"
+          );
+        }
+        out.println("    return base; // P5-SLD: case mismatch is a no-op, not a type switch.");
         out.println("  }");
         out.println();
         out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");

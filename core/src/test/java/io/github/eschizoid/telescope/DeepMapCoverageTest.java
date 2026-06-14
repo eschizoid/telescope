@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static io.github.eschizoid.telescope.mapping.Mapping.zip;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -47,10 +48,15 @@ class DeepMapCoverageTest {
       // applyBackward, which is where the guard lives.
       final var dto = new CartDto(java.util.List.of("x", "y", "z"));
       final var ex = assertThrows(IllegalStateException.class, () -> mapper.backward(dto));
-      assertTrue(ex.getMessage().toLowerCase().contains("cardinality"));
-      // Tighten — pin both counts so dropping them from the diagnostic regresses the test.
-      assertTrue(ex.getMessage().contains("3"), () -> "expected target count 3 in message, was: " + ex.getMessage());
-      assertTrue(ex.getMessage().contains("0"), () -> "expected source count 0 in message, was: " + ex.getMessage());
+      final var msg = ex.getMessage();
+      assertTrue(msg.toLowerCase().contains("cardinality"));
+      // D1-tighten²: word-bounded regex so the "0" assertion can't accidentally match incidental
+      // characters in a future diagnostic. Both counts must appear as standalone tokens, in some
+      // order — the relationship between them is the load-bearing semantic, not the order.
+      assertTrue(
+        msg.matches("(?s).*\\b3\\b.*\\b0\\b.*") || msg.matches("(?s).*\\b0\\b.*\\b3\\b.*"),
+        () -> "cardinality message must mention both 3 and 0 as word-bounded tokens, was: " + msg
+      );
     }
   }
 
@@ -147,11 +153,71 @@ class DeepMapCoverageTest {
     }
   }
 
-  // NOTE — FU-1 (placeholderIsoFor fieldType == null) and FU-2 (recursiveDefault POJO fallback)
-  // were identified by the round-2 review as uncovered branches. Both are reachable only via
-  // mid-recursion paths the strict-mapper validation blocks at construction time
-  // ("target field has no same-name source field"), so the branches may be effectively dead under
-  // any valid mapper configuration. Documented here so a future reviewer doesn't re-test them.
+  // NOTE — FU-1 (placeholderIsoFor fieldType == null) targets a path reachable only via raw
+  // / wildcard component types that the strict-mapper validation blocks at construction time.
+  // Documented here so a future reviewer doesn't re-test it.
+
+  @Nested
+  @DisplayName("FU-2 — recursiveDefault POJO bean-arm via TelescopeTo through a bean intermediate")
+  class RecursiveDefaultBeanArm {
+
+    // A POJO bean intermediate with a public no-arg ctor and writable property. recursiveDefault
+    // routes through this when a TelescopeTo row claims a nested field whose ancestor type is a
+    // bean with no same-name source counterpart — exercising the bean arm at DeepMap.java:1099+
+    // (the no-arg-ctor instantiation + property writes) that wasn't covered by the round-2 FU-2
+    // claim. Round-3 review correctly identified this as reachable.
+    public static class BeanInner {
+
+      private String value;
+
+      public BeanInner() {}
+
+      public String getValue() {
+        return value;
+      }
+
+      public void setValue(final String value) {
+        this.value = value;
+      }
+    }
+
+    public static class BeanOuter {
+
+      private BeanInner inner;
+
+      public BeanOuter() {}
+
+      public BeanInner getInner() {
+        return inner;
+      }
+
+      public void setInner(final BeanInner inner) {
+        this.inner = inner;
+      }
+    }
+
+    record Slim(String value) {}
+
+    @Test
+    @DisplayName("Bean intermediate allocated via no-arg ctor when TelescopeTo claims a nested field")
+    void beanIntermediateAllocated() {
+      // Slim → BeanOuter via a telescope path through Outer::inner → Inner::value. BeanInner has
+      // no same-name source field for "inner"; recursiveDefault must allocate it via no-arg ctor
+      // so the telescope set() can write `value` onto it.
+      final var mapper = Telescope.mapper(
+        Slim.class,
+        BeanOuter.class,
+        io.github.eschizoid.telescope.mapping.Mapping.to(
+          Slim::value,
+          Telescope.ofBean(BeanOuter.class).field(BeanOuter::getInner).field(BeanInner::getValue)
+        )
+      );
+
+      final var out = mapper.forward(new Slim("hello"));
+      assertNotNull(out.getInner(), "BeanInner must be allocated via no-arg ctor, not null");
+      assertEquals("hello", out.getInner().getValue());
+    }
+  }
 
   @Nested
   @DisplayName("FU-3 — autoIso cross-paradigm Optional ↔ nullable bridge, both directions")
