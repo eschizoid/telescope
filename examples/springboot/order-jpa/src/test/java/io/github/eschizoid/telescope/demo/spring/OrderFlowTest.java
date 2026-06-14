@@ -62,9 +62,9 @@ class OrderFlowTest {
     assertThat(body.shippingAddress().city()).isEqualTo("Brooklyn");
     assertThat(body.billingAddress().city()).isEqualTo("Brooklyn");
     assertThat(body.lineItems()).hasSize(2);
-    assertThat(body.lineItems().getFirst().sku()).isEqualTo("SKU-A");
-    assertThat(body.lineItems().getFirst().quantity()).isEqualTo(2);
-    assertThat(body.lineItems().getFirst().unitPrice()).isEqualByComparingTo("19.99");
+    assertThat(body.lineItems().get(0).sku()).isEqualTo("SKU-A");
+    assertThat(body.lineItems().get(0).quantity()).isEqualTo(2);
+    assertThat(body.lineItems().get(0).unitPrice()).isEqualByComparingTo("19.99");
     assertThat(body.lineItems().get(1).unitPrice()).isEqualByComparingTo("49.50");
     assertThat(body.giftWrap()).isPresent();
     assertThat(body.giftWrap().get().street()).isEqualTo("300 Gift Rd");

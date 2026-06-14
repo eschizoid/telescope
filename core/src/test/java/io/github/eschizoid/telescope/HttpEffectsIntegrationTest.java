@@ -85,7 +85,7 @@ class HttpEffectsIntegrationTest {
     void parallelUuid() throws Exception {
       final var input = new Batch(List.of(new Item("a", "x"), new Item("b", "x"), new Item("c", "x")));
 
-      final CompletableFuture<Batch> done = CODES.updateAsync(input, _ -> getAsync().thenApply(HttpResponse::body));
+      final CompletableFuture<Batch> done = CODES.updateAsync(input, __ -> getAsync().thenApply(HttpResponse::body));
 
       final var out = done.get(15, TimeUnit.SECONDS);
       final var codes = out.items().stream().map(Item::code).toList();

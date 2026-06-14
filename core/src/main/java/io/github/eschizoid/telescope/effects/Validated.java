@@ -115,14 +115,17 @@ public sealed interface Validated<E, A> {
    *     company -> "saved " + company.name());
    * }</pre>
    */
+  @SuppressWarnings("unchecked")
   default <T> T fold(
     final Function<? super List<E>, ? extends T> onInvalid,
     final Function<? super A, ? extends T> onValid
   ) {
-    return switch (this) {
-      case Invalid<E, A> inv -> onInvalid.apply(inv.errors());
-      case Valid<E, A> v -> onValid.apply(v.value());
-    };
+    // Sealed-aware dispatch: a single instanceof + a guaranteed-safe cast on the other branch.
+    // Every other default method on Validated delegates here, so the sealed-dispatch logic lives
+    // in one place and the partial-coverage / dead-throw branches the explicit double-instanceof
+    // pattern produces don't multiply across each method.
+    if (this instanceof Invalid<E, A> inv) return onInvalid.apply(inv.errors());
+    return onValid.apply(((Valid<E, A>) this).value());
   }
 
   /**
@@ -134,10 +137,7 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default <T> Validated<E, T> map(final Function<? super A, ? extends T> f) {
-    return switch (this) {
-      case Invalid<E, A> inv -> new Invalid<>(inv.errors());
-      case Valid<E, A> v -> new Valid<>(f.apply(v.value()));
-    };
+    return fold(Validated::invalid, v -> Validated.valid(f.apply(v)));
   }
 
   /**
@@ -150,10 +150,7 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default <T> Validated<T, A> mapErrors(final Function<? super E, ? extends T> f) {
-    return switch (this) {
-      case Invalid<E, A> inv -> new Invalid<>(inv.errors().stream().<T>map(f).toList());
-      case Valid<E, A> v -> new Valid<>(v.value());
-    };
+    return fold(errors -> Validated.invalid(errors.stream().<T>map(f).toList()), Validated::valid);
   }
 
   /**
@@ -168,11 +165,9 @@ public sealed interface Validated<E, A> {
    * final Validated<String, Integer> v = parse(input).andThen(this::inRange);
    * }</pre>
    */
+  @SuppressWarnings("unchecked")
   default <B> Validated<E, B> andThen(final Function<? super A, ? extends Validated<E, B>> f) {
-    return switch (this) {
-      case Invalid<E, A> inv -> new Invalid<>(inv.errors());
-      case Valid<E, A> v -> f.apply(v.value());
-    };
+    return fold(Validated::invalid, v -> (Validated<E, B>) f.apply(v));
   }
 
   /**
@@ -186,10 +181,7 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default Either<List<E>, A> toEither() {
-    return switch (this) {
-      case Invalid<E, A> inv -> Either.left(inv.errors());
-      case Valid<E, A> v -> Either.right(v.value());
-    };
+    return fold(Either::left, Either::right);
   }
 
   /**
@@ -201,10 +193,7 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default A getOrElse(final A defaultValue) {
-    return switch (this) {
-      case Invalid<E, A> ignored -> defaultValue;
-      case Valid<E, A> v -> v.value();
-    };
+    return fold(errors -> defaultValue, v -> v);
   }
 
   /**
@@ -216,10 +205,7 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default A getOrElseGet(final Supplier<? extends A> supplier) {
-    return switch (this) {
-      case Invalid<E, A> ignored -> supplier.get();
-      case Valid<E, A> v -> v.value();
-    };
+    return fold(errors -> supplier.get(), v -> v);
   }
 
   /**
@@ -232,10 +218,7 @@ public sealed interface Validated<E, A> {
    * }</pre>
    */
   default Optional<A> toOptional() {
-    return switch (this) {
-      case Invalid<E, A> ignored -> Optional.empty();
-      case Valid<E, A> v -> Optional.ofNullable(v.value());
-    };
+    return fold(errors -> Optional.empty(), Optional::ofNullable);
   }
 
   /**
@@ -255,10 +238,10 @@ public sealed interface Validated<E, A> {
   default <B> CompletableFuture<Validated<E, B>> flatMapAsync(
     final Function<? super A, ? extends CompletableFuture<? extends B>> f
   ) {
-    return switch (this) {
-      case Invalid<E, A> inv -> CompletableFuture.completedFuture(Validated.invalid(inv.errors()));
-      case Valid<E, A> v -> f.apply(v.value()).thenApply(Validated::<E, B>valid);
-    };
+    return fold(
+      errors -> CompletableFuture.completedFuture(Validated.invalid(errors)),
+      v -> f.apply(v).thenApply(Validated::<E, B>valid)
+    );
   }
 
   /**
@@ -280,9 +263,10 @@ public sealed interface Validated<E, A> {
     final var values = new ArrayList<A>(inputs.size());
     final var errors = new ArrayList<E>();
     for (final var v : inputs) {
-      switch (v) {
-        case Valid<E, A> ok -> values.add(ok.value());
-        case Invalid<E, A> bad -> errors.addAll(bad.errors());
+      if (v instanceof Valid<E, A> ok) {
+        values.add(ok.value());
+      } else if (v instanceof Invalid<E, A> bad) {
+        errors.addAll(bad.errors());
       }
     }
     if (!errors.isEmpty()) return new Invalid<>(errors);
@@ -306,14 +290,16 @@ public sealed interface Validated<E, A> {
     final Validated<E, B> right,
     final BiFunction<? super A, ? super B, ? extends C> f
   ) {
-    if (left instanceof Invalid<E, A>(List<E> errors) && right instanceof Invalid<E, B>(List<E> errors1)) {
-      final var combined = new ArrayList<E>(errors.size() + errors1.size());
-      combined.addAll(errors);
-      combined.addAll(errors1);
+    if (left instanceof Invalid<E, A> leftInvalid && right instanceof Invalid<E, B> rightInvalid) {
+      final var leftErrors = leftInvalid.errors();
+      final var rightErrors = rightInvalid.errors();
+      final var combined = new ArrayList<E>(leftErrors.size() + rightErrors.size());
+      combined.addAll(leftErrors);
+      combined.addAll(rightErrors);
       return new Invalid<>(combined);
     }
-    if (left instanceof Invalid<E, A>(List<E> errors)) return new Invalid<>(errors);
-    if (right instanceof Invalid<E, B>(List<E> errors)) return new Invalid<>(errors);
+    if (left instanceof Invalid<E, A> leftInvalid) return new Invalid<>(leftInvalid.errors());
+    if (right instanceof Invalid<E, B> rightInvalid) return new Invalid<>(rightInvalid.errors());
     final var l = ((Valid<E, A>) left).value();
     final var r = ((Valid<E, B>) right).value();
     return new Valid<>(f.apply(l, r));

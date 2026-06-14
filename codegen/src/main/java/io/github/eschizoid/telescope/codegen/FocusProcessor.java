@@ -44,7 +44,7 @@ import javax.lang.model.element.TypeElement;
  * </ul>
  */
 @SupportedAnnotationTypes("io.github.eschizoid.telescope.annotations.Focus")
-@SupportedSourceVersion(SourceVersion.RELEASE_25)
+@SupportedSourceVersion(SourceVersion.RELEASE_17)
 public final class FocusProcessor extends AbstractTelescopeProcessor {
 
   /**
@@ -219,7 +219,7 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
     if (components.isEmpty()) {
       out.println("    return Map.of();");
     } else if (components.size() == 1) {
-      final var onlyName = components.getFirst().getSimpleName();
+      final var onlyName = components.get(0).getSimpleName();
       out.println("    return Map.of(\"" + onlyName + "\", " + onlyName + ");");
     } else {
       out.println("    return Map.ofEntries(");
