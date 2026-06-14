@@ -41,6 +41,22 @@ import java.util.function.Predicate;
  * <p><b>Nesting.</b> {@code when(when(...))} is rejected at construction. For multi-predicate
  * logic, compose at the predicate layer ({@code Predicate#and} / {@code Predicate#or}).
  *
+ * <p><b>Predicate purity.</b> The predicate is invoked exactly once per top-level forward call for
+ * each {@code when(...)} row at the outer pair. Recursive structural mapping does NOT re-invoke the
+ * predicate at nested pairs — Conditional rows pin to the top-level pair (see the "Pinning"
+ * paragraph below). The engine makes no broader guarantee under future cycle-detection or sub-pair
+ * caching changes, however, so predicates should be pure / side-effect-free. Predicates that need
+ * to fire on every forward call should land their effect in a {@code Mapper.afterForward} hook
+ * instead, where the contract is explicit.
+ *
+ * <p><b>Same target field — last write wins.</b> Multiple Conditional rows whose inner telescopes
+ * claim the same target leaf compose in insertion order — when both predicates accept, the later
+ * row overwrites the earlier. The engine's strict duplicate-target check exempts telescope-based
+ * rows (Conditional and the inner rows it wraps) because telescope writes may descend to different
+ * deep leaves; that exemption applies here too. Order your {@code when(...)} rows so the
+ * most-specific case lands last, or refactor to a single row whose predicate disambiguates ({@code
+ * when(p1.and(p2.negate()), rowA)}, {@code when(p1.and(p2), rowB)}).
+ *
  * <p><b>Pinning — top-level only.</b> Every supported inner row carries at least one {@link
  * Telescope}, whose root class isn't recoverable at runtime (generics erased). Inner rows therefore
  * report {@code null} for {@code sourceClass} / {@code targetClass}; {@code Conditional}

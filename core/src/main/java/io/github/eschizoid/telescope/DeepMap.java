@@ -548,11 +548,14 @@ public final class DeepMap {
         final boolean accepted;
         try {
           accepted = predicate.test(s);
-        } catch (final RuntimeException predicateFailure) {
-          // Decorate user-predicate exceptions with the row's inner-kind + source field
-          // breadcrumb so the failure points at the user's when(...) site, not at an opaque
-          // applyForward stack frame. Matches the self-diagnosing style of Mapping.zip's
-          // cardinality check below.
+        } catch (final Throwable predicateFailure) {
+          // Decorate user-predicate exceptions (including Errors like StackOverflowError on a
+          // self-recursive predicate, AssertionError on a `assert` in the body, and
+          // NoClassDefFoundError) with the row's inner-kind + source field breadcrumb so the
+          // failure points at the user's when(...) site, not at an opaque applyForward stack
+          // frame. Matches the self-diagnosing style of Mapping.zip's cardinality check below.
+          // Widened from RuntimeException to Throwable because the original catch let Errors
+          // propagate raw — the breadcrumb is even more valuable for those.
           final var inner = cond.inner();
           final var innerField = inner.sourceField() == null ? "<telescope>" : inner.sourceField();
           throw new IllegalStateException(
