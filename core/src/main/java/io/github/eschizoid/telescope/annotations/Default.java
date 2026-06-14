@@ -10,8 +10,8 @@ import java.lang.annotation.RetentionPolicy;
  * io.github.eschizoid.telescope.Telescope.Accessor, Object) Mapping.toOrElse(srcAcc, tgtAcc,
  * defaultValue)} factory.
  *
- * <p>Forward direction: if {@code source.field() == null}, the generated bridge substitutes
- * {@link #value()} as the literal expression — otherwise the source value passes through unchanged.
+ * <p>Forward direction: if {@code source.field() == null}, the generated bridge substitutes {@link
+ * #value()} as the literal expression — otherwise the source value passes through unchanged.
  * Backward direction is identity (whatever lands on the target round-trips back to the source slot
  * as itself, including the substituted default — same asymmetry the runtime form accepts).
  *

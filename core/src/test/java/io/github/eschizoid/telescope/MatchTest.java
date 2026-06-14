@@ -127,7 +127,9 @@ class MatchTest {
       // missing. Ordering must follow Payment.getPermittedSubclasses() (BankTransfer, then Crypto)
       // not the hash-bucketed Set.of iteration.
       final var ex = assertThrows(IllegalStateException.class, () ->
-        Match.<Payment, String>of(Payment.class).when(CreditCard.class, c -> "c").exhaustive()
+        Match.<Payment, String>of(Payment.class)
+          .when(CreditCard.class, c -> "c")
+          .exhaustive()
       );
       final var msg = ex.getMessage();
       assertTrue(msg.contains("BankTransfer"));

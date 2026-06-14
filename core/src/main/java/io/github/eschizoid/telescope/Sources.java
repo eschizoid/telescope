@@ -11,9 +11,9 @@ import java.util.Objects;
  * entry's runtime class is the lookup key; the merge engine reads the value for a row's source
  * class at forward time.
  *
- * <p>One concept, any arity. There are no {@code Sources2}/{@code Sources3} specializations
- * because the typed tuple variants didn't pay their way at higher arities and split the public
- * surface unnecessarily.
+ * <p>One concept, any arity. There are no {@code Sources2}/{@code Sources3} specializations because
+ * the typed tuple variants didn't pay their way at higher arities and split the public surface
+ * unnecessarily.
  *
  * <h2>Building</h2>
  *
@@ -30,12 +30,12 @@ import java.util.Objects;
  * <h2>Constraint — distinct runtime classes</h2>
  *
  * <p>Every source must have a distinct runtime class; passing two values of the same runtime class
- * to {@link #of(Object[])} or {@link Builder#with(Object)} throws {@link
- * IllegalArgumentException} at construction time with a precise diagnostic. This constraint
- * mirrors how the merge engine resolves rows: each {@code MergeStep.from(...)} row identifies its
- * source by the accessor's declaring class. If two same-typed sources are genuinely needed,
- * pre-aggregate them into a named holder record before the merge — records are final, so
- * subclassing the offending type is not an option.
+ * to {@link #of(Object[])} or {@link Builder#with(Object)} throws {@link IllegalArgumentException}
+ * at construction time with a precise diagnostic. This constraint mirrors how the merge engine
+ * resolves rows: each {@code MergeStep.from(...)} row identifies its source by the accessor's
+ * declaring class. If two same-typed sources are genuinely needed, pre-aggregate them into a named
+ * holder record before the merge — records are final, so subclassing the offending type is not an
+ * option.
  *
  * <p>Forward direction reads each row's source via {@link #byClass(Class)} at runtime. Backward is
  * unsupported on every multi-source mapper — the throw on the produced {@link
@@ -52,8 +52,8 @@ public final class Sources {
   }
 
   /**
-   * Build a bag from the supplied source objects. Each entry's runtime class is used as the
-   * lookup key; duplicate classes across the varargs throw {@link IllegalArgumentException}.
+   * Build a bag from the supplied source objects. Each entry's runtime class is used as the lookup
+   * key; duplicate classes across the varargs throw {@link IllegalArgumentException}.
    */
   public static Sources of(final Object... sources) {
     Objects.requireNonNull(sources, "Sources.of: sources array is null");

@@ -149,10 +149,7 @@ class MergeTest {
         from(Audit::createdAt, Profile::createdAt)
       );
 
-      assertEquals(
-        mapper.forward(Sources.of(c, a)),
-        mapper.forward(Sources.builder().with(c).with(a).build())
-      );
+      assertEquals(mapper.forward(Sources.of(c, a)), mapper.forward(Sources.builder().with(c).with(a).build()));
     }
   }
 
@@ -313,7 +310,10 @@ class MergeTest {
       final var ex = assertThrows(IllegalStateException.class, () -> mapper.forward(bag));
       assertTrue(ex.getMessage().contains("Audit"));
       assertTrue(ex.getMessage().contains("createdBy"));
-      assertTrue(ex.getMessage().contains("Customer"), () -> "expected bag contents in message, got: " + ex.getMessage());
+      assertTrue(
+        ex.getMessage().contains("Customer"),
+        () -> "expected bag contents in message, got: " + ex.getMessage()
+      );
     }
   }
 

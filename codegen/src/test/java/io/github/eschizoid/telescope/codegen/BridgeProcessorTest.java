@@ -1968,7 +1968,9 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Bridge(writeStrategy = SETTERS) forces the no-arg+setters strategy on a POJO that also has a builder")
+    @DisplayName(
+      "@Bridge(writeStrategy = SETTERS) forces the no-arg+setters strategy on a POJO that also has a builder"
+    )
     void writeStrategyForcesSetters() {
       final var compilation = compile(
         source(

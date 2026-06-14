@@ -150,10 +150,10 @@ public @interface Bridge {
   Compute[] computes() default {};
 
   /**
-   * Null-coalescing default values for source fields. Each {@link Default} names a source field
-   * and a fallback literal that the forward direction substitutes when the source value is
-   * {@code null}. Mirrors MapStruct's {@code @Mapping(defaultValue = …)} and the runtime
-   * {@link io.github.eschizoid.telescope.mapping.Mapping#toOrElse(
+   * Null-coalescing default values for source fields. Each {@link Default} names a source field and
+   * a fallback literal that the forward direction substitutes when the source value is {@code
+   * null}. Mirrors MapStruct's {@code @Mapping(defaultValue = …)} and the runtime {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#toOrElse(
    * io.github.eschizoid.telescope.Telescope.Accessor,
    * io.github.eschizoid.telescope.Telescope.Accessor, Object) Mapping.toOrElse(srcAcc, tgtAcc,
    * defaultValue)} factory.
@@ -165,17 +165,17 @@ public @interface Bridge {
    * public record User(String id, String region) {}
    * }</pre>
    *
-   * <p>Backward direction is identity — the substituted default round-trips back to the source
-   * slot as itself. A field listed in {@code defaults} cannot also appear in {@link #drops()} for
-   * this pair (the two mechanisms have incompatible semantics).
+   * <p>Backward direction is identity — the substituted default round-trips back to the source slot
+   * as itself. A field listed in {@code defaults} cannot also appear in {@link #drops()} for this
+   * pair (the two mechanisms have incompatible semantics).
    */
   Default[] defaults() default {};
 
   /**
    * Per-field nested-bridge overrides. Each {@link ViaMapper} names a source field and a bridge
-   * class to delegate to — escape hatch when the auto-recursion can't reach the nested type or
-   * when the user wants to point at a specific {@code BRIDGE} constant. Mirrors the runtime
-   * {@link io.github.eschizoid.telescope.mapping.Mapping#via(
+   * class to delegate to — escape hatch when the auto-recursion can't reach the nested type or when
+   * the user wants to point at a specific {@code BRIDGE} constant. Mirrors the runtime {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#via(
    * io.github.eschizoid.telescope.Telescope.Accessor,
    * io.github.eschizoid.telescope.Telescope.Accessor,
    * io.github.eschizoid.telescope.conversion.Mapper) Mapping.via(srcAcc, tgtAcc, mapper)} factory.
@@ -192,10 +192,10 @@ public @interface Bridge {
   /**
    * Override for the POJO construction strategy when emitting the target's rebuild block. Records
    * always use the canonical constructor and ignore this setting. Default {@link
-   * WriteStrategy#AUTO} runs the priority ladder (name-matched ctor → static builder() → no-arg
-   * + setters); the other values force one specific strategy and surface a precise compile error
-   * when the POJO doesn't expose the required shape. Mirrors the runtime {@code
-   * WriteHint.writeBean(cls, strategy)} hint.
+   * WriteStrategy#AUTO} runs the priority ladder (name-matched ctor → static builder() → no-arg +
+   * setters); the other values force one specific strategy and surface a precise compile error when
+   * the POJO doesn't expose the required shape. Mirrors the runtime {@code WriteHint.writeBean(cls,
+   * strategy)} hint.
    */
   WriteStrategy writeStrategy() default WriteStrategy.AUTO;
 }

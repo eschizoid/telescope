@@ -10,8 +10,8 @@ import java.lang.annotation.RetentionPolicy;
  * io.github.eschizoid.telescope.Telescope.Accessor,
  * io.github.eschizoid.telescope.conversion.Mapper) Mapping.via(srcAcc, tgtAcc, mapper)} factory —
  * the escape hatch for fields whose nested type-pair the auto-recursion can't handle, or where the
- * user wants to point at a specific {@code BRIDGE} constant instead of letting the processor emit
- * a fresh sub-bridge.
+ * user wants to point at a specific {@code BRIDGE} constant instead of letting the processor emit a
+ * fresh sub-bridge.
  *
  * <pre>{@code
  * @Bridge(value = OrderEntity.class, viaMappers = {
@@ -31,9 +31,8 @@ import java.lang.annotation.RetentionPolicy;
  * io.github.eschizoid.telescope.conversion.BridgeFn} class that the processor <em>instantiates</em>
  * with a no-arg constructor and dispatches as {@code __tx_field.forward(...)} (instance method),
  * {@code @ViaMapper} expects a class with <em>static</em> methods and emits a direct {@code
- * Class.forward(...)} call. Pointing at a {@code BridgeFn} class here would produce a compile
- * error in the generated bridge body — the static-call shape doesn't match the instance-method
- * signature.
+ * Class.forward(...)} call. Pointing at a {@code BridgeFn} class here would produce a compile error
+ * in the generated bridge body — the static-call shape doesn't match the instance-method signature.
  *
  * <h2>When to use</h2>
  *
@@ -46,8 +45,8 @@ import java.lang.annotation.RetentionPolicy;
  *       wants the parent to reference it explicitly.
  * </ul>
  *
- * <p>A field listed in {@code viaMappers} cannot also appear in {@link Bridge#drops()} or
- * {@link Bridge#defaults()} for the same pair — pick one mechanism per field.
+ * <p>A field listed in {@code viaMappers} cannot also appear in {@link Bridge#drops()} or {@link
+ * Bridge#defaults()} for the same pair — pick one mechanism per field.
  */
 @Retention(RetentionPolicy.SOURCE)
 public @interface ViaMapper {
@@ -58,8 +57,8 @@ public @interface ViaMapper {
   String field();
 
   /**
-   * The bridge class to delegate to. Must expose {@code public static T forward(S)} and
-   * {@code public static S backward(T)} whose signatures match the field's source/target types.
+   * The bridge class to delegate to. Must expose {@code public static T forward(S)} and {@code
+   * public static S backward(T)} whose signatures match the field's source/target types.
    */
   Class<?> using();
 }

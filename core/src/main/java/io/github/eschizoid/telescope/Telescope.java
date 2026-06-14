@@ -551,10 +551,9 @@ public sealed class Telescope<
    * ForwardMapper} whose backward direction is not present at the type level. Use when the
    * conversion is genuinely one-way (entity → DTO write-only, audit-log projection, normalisation
    * pipeline) and rows include {@link io.github.eschizoid.telescope.mapping.Mapping#forward
-   * forward(...)}
-   * / {@link io.github.eschizoid.telescope.mapping.Mapping#constant constant(...)} / {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#compute compute(...)} that make the backward
-   * direction meaningless.
+   * forward(...)} / {@link io.github.eschizoid.telescope.mapping.Mapping#constant constant(...)} /
+   * {@link io.github.eschizoid.telescope.mapping.Mapping#compute compute(...)} that make the
+   * backward direction meaningless.
    *
    * <p>The compiler enforces the one-way contract — there is no {@code backward(...)} method on
    * {@link ForwardMapper} to call. MapStruct cannot express "this mapper is one-way" in its type
@@ -605,13 +604,13 @@ public sealed class Telescope<
    * Invoice inv = bigger.forward(Sources.of(c, a, li, tax, promo));
    * }</pre>
    *
-   * <p>Replaces the {@code Edit.over(...)} workaround that loses the typed single-source
-   * contract. The recommended path for {@code PLAN.md} item 1.3 — single arity-agnostic factory,
-   * no per-arity ceremony.
+   * <p>Replaces the {@code Edit.over(...)} workaround that loses the typed single-source contract.
+   * The recommended path for {@code PLAN.md} item 1.3 — single arity-agnostic factory, no per-arity
+   * ceremony.
    *
-   * <p><b>Distinct runtime classes.</b> Each source in the {@link Sources} bag must have a
-   * distinct runtime class; {@link Sources#of(Object[])} throws on duplicates. If two same-typed
-   * sources are needed, pre-aggregate them into a named holder record before the merge.
+   * <p><b>Distinct runtime classes.</b> Each source in the {@link Sources} bag must have a distinct
+   * runtime class; {@link Sources#of(Object[])} throws on duplicates. If two same-typed sources are
+   * needed, pre-aggregate them into a named holder record before the merge.
    *
    * <p><b>Backward is unsupported.</b> The multi-source case has no general inverse (which source
    * gets which fields back?); {@link Mapper#backward(Object)} and {@link Mapper#patch(Object,

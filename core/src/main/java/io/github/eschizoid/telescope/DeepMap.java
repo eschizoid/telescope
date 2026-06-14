@@ -745,7 +745,8 @@ public final class DeepMap {
     if (row instanceof TypedTransformTo<?, ?, ?, ?> r) return Iso.of((Function) r.forward(), (Function) r.backward());
     if (row instanceof ForwardOnlyTransformTo<?, ?, ?, ?> r) {
       // DEAD-BRANCH-DEFENSIVE: this throwingBackward lambda is unreachable via the public API.
-      // Both factory entries Telescope.map(...) and Telescope.mapper(...) call rejectForwardOnlyRows
+      // Both factory entries Telescope.map(...) and Telescope.mapper(...) call
+      // rejectForwardOnlyRows
       // up front; Telescope.mapperForward(...) accepts the row but never invokes the backward leg.
       // The guard remains so a future cross-package construction path that bypasses
       // rejectForwardOnlyRows produces a precise field-naming error rather than silent corruption.

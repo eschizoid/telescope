@@ -15,14 +15,14 @@ import java.util.Set;
 import java.util.function.Function;
 
 /**
- * Engine for {@link Telescope#merge(Class, MergeStep[])} — the N-source forward-only mapper.
- * Single arity-agnostic build path: every row carries its source class (recovered via {@code
+ * Engine for {@link Telescope#merge(Class, MergeStep[])} — the N-source forward-only mapper. Single
+ * arity-agnostic build path: every row carries its source class (recovered via {@code
  * SerializedLambda} for explicit {@code from(...)} rows, supplied directly for {@code auto(...)}
  * rows), and the forward dispatch reads the matching value from {@link Sources#byClass(Class)} at
  * runtime.
  *
- * <p>Build-time guards (each a precise {@link IllegalArgumentException} naming the row index +
- * the factory): null source/target accessor, duplicate target field across rows.
+ * <p>Build-time guards (each a precise {@link IllegalArgumentException} naming the row index + the
+ * factory): null source/target accessor, duplicate target field across rows.
  *
  * <p>Forward-time guard (an {@link IllegalStateException}): if the supplied {@link Sources} bag
  * lacks an entry for one of the row source classes, the failure surfaces with the missing class

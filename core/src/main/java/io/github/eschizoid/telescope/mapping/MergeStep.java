@@ -6,21 +6,20 @@ import io.github.eschizoid.telescope.Telescope.Accessor;
 
 /**
  * One correspondence row for {@link Telescope#merge(Class, MergeStep[])} — the N-source
- * forward-only mapper. Each row binds one entry of {@link Sources} (looked up by source class) to
- * a target component by name.
+ * forward-only mapper. Each row binds one entry of {@link Sources} (looked up by source class) to a
+ * target component by name.
  *
- * <p>Single arity-agnostic type. The source slot is recovered from the source accessor's
- * declaring class via {@code SerializedLambda} — the same mechanism that drives {@code
- * Mapping.auto()} — so the row factories scale to any number of source classes without per-arity
- * specialization.
+ * <p>Single arity-agnostic type. The source slot is recovered from the source accessor's declaring
+ * class via {@code SerializedLambda} — the same mechanism that drives {@code Mapping.auto()} — so
+ * the row factories scale to any number of source classes without per-arity specialization.
  *
  * <p>Sealed over two package-private records; users construct rows through the static factories
  * below.
  *
  * <p>Note that {@code merge} is forward-only — there is no equivalent of {@link Mapping#to(
- * Accessor, Accessor, java.util.function.Function, java.util.function.Function)}'s typed
- * transform or {@code .via(...)} nested-mapper here because the backward direction is documented
- * as unsupported when more than one source contributes to a single target.
+ * Accessor, Accessor, java.util.function.Function, java.util.function.Function)}'s typed transform
+ * or {@code .via(...)} nested-mapper here because the backward direction is documented as
+ * unsupported when more than one source contributes to a single target.
  *
  * @param <T> the target type
  */
@@ -34,9 +33,8 @@ public sealed interface MergeStep<T> permits MergeStep.FromInferred, MergeStep.A
   record FromInferred<T, X>(Accessor<?, X> src, Accessor<T, X> tgt) implements MergeStep<T> {}
 
   /**
-   * A backfill marker: at build time, every target component whose name + type matches a
-   * component on {@code sourceClass} is auto-mapped, EXCEPT names already claimed by explicit
-   * rows.
+   * A backfill marker: at build time, every target component whose name + type matches a component
+   * on {@code sourceClass} is auto-mapped, EXCEPT names already claimed by explicit rows.
    *
    * <p>Internal — construct via {@link #auto(Class)}.
    */
@@ -63,12 +61,12 @@ public sealed interface MergeStep<T> permits MergeStep.FromInferred, MergeStep.A
 
   /**
    * Auto-backfill row: every target component whose name + type matches a component on {@code
-   * sourceClass} gets a free {@code from(sourceClass::<comp>, target::<comp>)} row at build
-   * time — minus names already claimed by explicit rows in the same merge.
+   * sourceClass} gets a free {@code from(sourceClass::<comp>, target::<comp>)} row at build time —
+   * minus names already claimed by explicit rows in the same merge.
    *
    * <p>Mirrors {@link Mapping#auto()} for the multi-source case: when many target fields come
-   * straight from one source by name, write one {@code auto(Source.class)} row plus the
-   * exceptions, instead of N explicit rows.
+   * straight from one source by name, write one {@code auto(Source.class)} row plus the exceptions,
+   * instead of N explicit rows.
    *
    * <pre>{@code
    * Telescope.merge(Profile.class,

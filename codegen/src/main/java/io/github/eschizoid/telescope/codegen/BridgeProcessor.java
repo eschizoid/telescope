@@ -868,10 +868,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return;
       }
       if (drops.contains(e.getKey())) {
-        error(
-          source,
-          "@Bridge field \"" + e.getKey() + "\" appears in both renames and drops — pick one."
-        );
+        error(source, "@Bridge field \"" + e.getKey() + "\" appears in both renames and drops — pick one.");
         return;
       }
       // OL-1: renames + transforms on the same source field is undefined behavior. The transform

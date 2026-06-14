@@ -20,8 +20,8 @@ import org.junit.jupiter.api.Test;
  * guards or lift permutations, the failure mode would be a silent wrong result rather than a clear
  * exception. The tests here exist to make the guards regression-proof.
  *
- * <p>This is a coverage-pinning file, not an exploratory one. Each test targets one specific
- * line range identified in the audit.
+ * <p>This is a coverage-pinning file, not an exploratory one. Each test targets one specific line
+ * range identified in the audit.
  */
 class DeepMapCoverageTest {
 
@@ -39,10 +39,7 @@ class DeepMapCoverageTest {
       final var mapper = Telescope.mapper(
         Cart.class,
         CartDto.class,
-        zip(
-          Telescope.of(Cart.class).each(Cart::items),
-          Telescope.of(CartDto.class).each(CartDto::lines)
-        )
+        zip(Telescope.of(Cart.class).each(Cart::items), Telescope.of(CartDto.class).each(CartDto::lines))
       );
       // Backward direction: target dto with 3 lines decoded against a source rebuilt with N
       // items — the zip-backward path enforces cardinality (line 609 in DeepMap.java) since the
@@ -138,7 +135,11 @@ class DeepMapCoverageTest {
     void viaMapKeyMismatchRejected() {
       final var elementMapper = Telescope.mapper(UserEntity.class, UserDto.class);
       final var ex = assertThrows(IllegalStateException.class, () ->
-        Telescope.mapper(SrcMapHolder.class, TgtMapHolder.class, via(SrcMapHolder::byId, TgtMapHolder::byId, elementMapper))
+        Telescope.mapper(
+          SrcMapHolder.class,
+          TgtMapHolder.class,
+          via(SrcMapHolder::byId, TgtMapHolder::byId, elementMapper)
+        )
       );
       assertTrue(ex.getMessage().toLowerCase().contains("key types"));
       assertTrue(ex.getMessage().contains("String"));
