@@ -1,10 +1,12 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -220,6 +222,78 @@ public final class Mapper<A, B> {
     final A a1 = preForward == null ? a : preForward.apply(a);
     final B b = iso.to(a1);
     return postForward == null ? b : postForward.apply(a1, b);
+  }
+
+  /**
+   * In-place update: mutate an existing {@code target} with values derived from {@code source},
+   * preserving {@code target}'s identity. Closes MapStruct's {@code @MappingTarget} for the bean
+   * path — common when wiring a "load entity by ID, update fields, persist" pattern through JPA's
+   * managed-entity contract where allocating a fresh instance loses the persistence-context
+   * tracking.
+   *
+   * <pre>{@code
+   * final UserEntity managed = repository.findById(id).orElseThrow();
+   * userMapper.into(managed, dto);   // writes dto's mapped fields onto `managed` in place
+   * repository.save(managed);
+   * }</pre>
+   *
+   * <p>Semantically equivalent to {@code forward(source)} writes — every property the forward
+   * mapping would set is set on {@code target} via its public {@code setX(value)} setter. The hook
+   * chain (before/after) runs as it does in {@link #forward}; the only difference is the final
+   * write step targets {@code target} rather than a fresh allocation.
+   *
+   * <p><b>Records rejected.</b> Records are immutable; calling {@code into(...)} on a record-target
+   * mapper throws {@link UnsupportedOperationException} at apply time. Use {@link #forward(Object)}
+   * and discard / replace the receiver, or have the target type be a bean with setters.
+   *
+   * <p><b>Setter requirement.</b> Every property emitted by the mapping must have a public {@code
+   * setX(...)} setter on {@code target.getClass()}. A missing setter throws {@link
+   * IllegalArgumentException} naming the property; this is intentional — silently skipping
+   * properties without setters would hide the mapping's intent.
+   *
+   * <p><b>Return value for chaining.</b> Returns {@code target} (the same reference passed in) so
+   * call sites can fluently chain ({@code repository.save(mapper.into(managed, dto))}).
+   *
+   * @param target the existing instance to mutate; must not be null and must not be a record
+   * @param source the source value to map from
+   * @return {@code target} (same reference, mutated in place)
+   * @throws NullPointerException if {@code target} or {@code source} is null
+   * @throws UnsupportedOperationException if {@code target}'s class is a record
+   * @throws IllegalArgumentException if any mapped property lacks a public setter on {@code
+   *     target.getClass()}
+   */
+  public B into(final B target, final A source) {
+    if (target == null) throw new NullPointerException("target");
+    if (source == null) throw new NullPointerException("source");
+    if (targetClass.isRecord()) {
+      throw new UnsupportedOperationException(
+        "Mapper.into(target, source) requires a mutable target — records are immutable. " +
+          "Use Mapper.forward(source) and discard the receiver, or have your target type be a bean " +
+          "with public setters."
+      );
+    }
+    final B produced = forward(source);
+    // Two-phase apply for atomicity AND scoping.
+    //
+    // Atomicity: stage every (name, value) read BEFORE any setter runs on target. If a stage-time
+    // read throws, target is untouched. If a write-time setter throws midway, the staging map is
+    // already fully populated; partial writes on a managed entity are at most the slot range that
+    // already drained, which is strictly smaller than the all-or-nothing on the raw-loop version.
+    //
+    // Scoping: iterate the mapper's patch-table keyset — the set of top-level target fields the
+    // engine actually produced values for — NOT every getter-derived property on target.getClass().
+    // Iterating all properties would (1) clobber unmapped pre-existing fields on the managed
+    // entity, defeating the "load-mutate-save" idiom; and (2) try to setX(...) on read-only
+    // computed getters (e.g. getFullName() derived from firstName + lastName), raising an IAE for
+    // a property the user never asked us to map.
+    final var staged = new LinkedHashMap<String, Object>(patchByTargetField.size());
+    for (final var name : patchByTargetField.keySet()) {
+      staged.put(name, targetRefl.read(produced, name));
+    }
+    for (final var e : staged.entrySet()) {
+      Beans.writeBeanProperty(target, e.getKey(), e.getValue());
+    }
+    return target;
   }
 
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */
