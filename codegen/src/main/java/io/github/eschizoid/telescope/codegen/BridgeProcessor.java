@@ -387,11 +387,69 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           error(element, "@Transform field=\"" + field + "\" is declared more than once");
           return null;
         }
+        // Validate `method` is either empty (legacy BridgeFn shape) or a syntactically valid Java
+        // identifier — whitespace, punctuation, or reserved-word inputs would otherwise produce
+        // emit-time syntactic garbage at the generated bridge body that javac surfaces with a
+        // cryptic "identifier expected" pointing at synthetic source the user never wrote.
+        final boolean hasMethod = method != null && !method.isBlank();
+        if (method != null && !method.isEmpty() && !hasMethod) {
+          error(element, "@Transform `method` must not be blank (was \"" + method + "\")");
+          return null;
+        }
+        if (hasMethod && !javax.lang.model.SourceVersion.isIdentifier(method)) {
+          error(element, "@Transform `method` must be a valid Java identifier (was \"" + method + "\")");
+          return null;
+        }
+        if (hasMethod) {
+          // Validate the named method exists, is static, and takes exactly one argument. Defers the
+          // parameter / return type compatibility check to javac at the generated bridge body —
+          // that depends on the source/target field types and javac resolves it precisely there.
+          // What we catch here: typos, instance methods (would emit static-call syntax against an
+          // instance method → cryptic generated-source error), arity mismatches, and the
+          // surprisingly common "method exists on a superclass with restricted visibility" case.
+          final var matches = new java.util.ArrayList<javax.lang.model.element.ExecutableElement>();
+          for (final var e : usingEl.getEnclosedElements()) {
+            if (!(e instanceof javax.lang.model.element.ExecutableElement m)) continue;
+            if (!m.getSimpleName().contentEquals(method)) continue;
+            if (m.getParameters().size() != 1) continue;
+            matches.add(m);
+          }
+          if (matches.isEmpty()) {
+            error(
+              element,
+              "@Transform `method` not found: " +
+                usingEl.getQualifiedName() +
+                "." +
+                method +
+                "(<one arg>) does not exist. Add a public static method with exactly one parameter."
+            );
+            return null;
+          }
+          // Pick the first match that is static; report a clear error if none are static.
+          javax.lang.model.element.ExecutableElement staticMatch = null;
+          for (final var m : matches) {
+            if (m.getModifiers().contains(javax.lang.model.element.Modifier.STATIC)) {
+              staticMatch = m;
+              break;
+            }
+          }
+          if (staticMatch == null) {
+            error(
+              element,
+              "@Transform `method` " +
+                usingEl.getQualifiedName() +
+                "." +
+                method +
+                "(...) exists but is not static. Qualifier dispatch emits a static-method call; mark it `public static`."
+            );
+            return null;
+          }
+        }
         result.put(field, usingEl.getQualifiedName().toString());
         // Qualifier dispatch (method != "") is inherently forward-only. forwardOnly = true is the
         // user-explicit form; non-empty method implies the same.
-        if (Boolean.TRUE.equals(forwardOnly) || (method != null && !method.isEmpty())) forwardOnlySet.add(field);
-        if (method != null && !method.isEmpty()) methodsByField.put(field, method);
+        if (Boolean.TRUE.equals(forwardOnly) || hasMethod) forwardOnlySet.add(field);
+        if (hasMethod) methodsByField.put(field, method);
       }
       return new TransformSet(result, forwardOnlySet, methodsByField);
     }

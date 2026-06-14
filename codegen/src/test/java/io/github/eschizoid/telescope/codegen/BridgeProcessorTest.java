@@ -1512,6 +1512,125 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("@Transform(method = \"  \") — whitespace method name rejected at processor time")
+    void transformBlankMethodRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Helpers",
+          """
+          package demo;
+          public final class Helpers {
+            public static String identity(String s) { return s; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.B.class, transforms = {
+            @Transform(field = "name", using = demo.Helpers.class, method = "  ")
+          })
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String name) {}
+          """
+        )
+      );
+      assertTrue(
+        !compilation.success() && compilation.hasError("must not be blank"),
+        () -> "expected 'must not be blank' diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Transform(method = \"missing\") — non-existent method rejected at processor time")
+    void transformMissingMethodRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Helpers",
+          """
+          package demo;
+          public final class Helpers {
+            public static String identity(String s) { return s; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.B.class, transforms = {
+            @Transform(field = "name", using = demo.Helpers.class, method = "nonexistent")
+          })
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String name) {}
+          """
+        )
+      );
+      assertTrue(
+        !compilation.success() && compilation.hasError("method` not found"),
+        () -> "expected 'method not found' diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Transform(method = \"instanceMethod\") — non-static method rejected at processor time")
+    void transformNonStaticMethodRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Helpers",
+          """
+          package demo;
+          public final class Helpers {
+            public Helpers() {}
+            // instance method — qualifier dispatch needs static
+            public String mutate(String s) { return s; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.B.class, transforms = {
+            @Transform(field = "name", using = demo.Helpers.class, method = "mutate")
+          })
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String name) {}
+          """
+        )
+      );
+      assertTrue(
+        !compilation.success() && compilation.hasError("is not static"),
+        () -> "expected 'is not static' diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
     @DisplayName("misspelled transform field is a compile error pointing at the source")
     void misspelledTransformFieldIsRejected() {
       final var compilation = compile(
