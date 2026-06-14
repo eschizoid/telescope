@@ -428,6 +428,14 @@ even with the LMF substrate, so it runs 30–80× slower than MapStruct's genera
 `Reflection.invoke`-based mappers. Sub-microsecond on flat and nested, single-microsecond on deep. Codegen on hot paths;
 the runtime path is fine for one-shot conversions in tests or non-hot service code.
 
+**Runtime fast-path — record ↔ record + bean ↔ bean.** When the source and target share the same kind (both records or
+both beans), have the same name + same type per component, and every component is a flat scalar (primitive / primitive
+wrapper / `String` / `enum`), the engine bypasses structural-`Iso` composition entirely. A per-pair `Function<S, T>` is
+built once at `Telescope.mapper(...)` time via cached `LambdaMetafactory` readers + canonical-constructor spreader (or
+no-arg ctor + setter dispatch for beans). Measured: flat record → record drops from **~360 ns/op to ~44 ns/op** — from
+**~91× to ~11× MapStruct**. Mixed shape (record ↔ bean), containers, nested records still go through the slow path so
+deep-copy / lift / cycle semantics survive unchanged.
+
 If you're in a tight inner loop where 1 ns matters, pick MapStruct. For realistic deep workloads — nested records with
 list-of-records inside — the codegen rows are a tie and you're picking on capability. Sealed-narrow paradigm hop,
 effectful update (`updateAsync`, `updateValidated`), JPA cycles, Hibernate `LAZY` proxy unwrap, deep navigation as a

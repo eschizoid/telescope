@@ -230,6 +230,31 @@ iteration). Three depth tiers, both directions, three engines per cell. All 18 r
 The MapStruct and telescope-codegen columns were re-measured together on the same machine sitting. The telescope-runtime
 column is from an earlier run (the runtime dispatch path was untouched between the two batches).
 
+#### Runtime fast-path — record ↔ record (PR #117)
+
+When the source and target are both records with the same name + same type per component and all
+components are flat scalars (primitive / primitive wrapper / `String` / `enum`), the engine
+bypasses the structural `Iso` composition entirely. A per-pair `Function<S, T>` is built once at
+`Telescope.mapper(...)` time via cached `LambdaMetafactory` readers + canonical-constructor
+spreader; per-call dispatch is one virtual `Function#apply` followed by N inlined reader calls and
+the ctor.
+
+| Path                                       | ns/op | vs MapStruct |
+| ------------------------------------------ | ----: | -----------: |
+| Telescope runtime record → record          |    44 |       ~11×   |
+| Telescope runtime bean → record (slow)     |   413 |      ~103×   |
+| Telescope codegen (`@Bridge`) bean → record |   5.5 |       1.4×   |
+| MapStruct generated bean → record          |   4.0 |        1×    |
+
+**91× → 11× MapStruct on the record↔record path** — within the predicted "5–10×" band, just over.
+The bean ↔ record case still takes the slow path because of the mixed shape (records use canonical
+constructor; beans use no-arg ctor + setters — fast-path eligibility tightens deliberately so
+nested / container / cycle cases keep their existing deep-copy semantics).
+
+Bean ↔ bean (both POJOs, same shape, same flat-scalar rules) gets the same treatment via a sibling
+`Beans.fastPathForward` path. Mixed shape (record ↔ bean), container components, and nested
+records all fall through to the existing slow path.
+
 #### What the numbers say
 
 Three tiers, forward direction. On flat (4.40 vs 5.44 ns), telescope codegen runs 1.24× behind MapStruct — absolute gap
