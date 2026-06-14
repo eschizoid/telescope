@@ -55,6 +55,7 @@ final var userCity = Telescope.of(User.class).field(User::address).field(Address
 
 // 2. Use it for reading, updating, anything else.
 String city = userCity.read(alice); // → "Springfield"
+
 User shouted = userCity.update(alice, String::toUpperCase); // → city becomes "SPRINGFIELD"
 ```
 
