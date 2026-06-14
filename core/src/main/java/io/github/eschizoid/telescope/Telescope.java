@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.conversion.BridgeFn;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
+import io.github.eschizoid.telescope.conversion.MapperBuilder;
 import io.github.eschizoid.telescope.effects.Either;
 import io.github.eschizoid.telescope.effects.Validated;
 import io.github.eschizoid.telescope.internal.Beans;
@@ -512,6 +513,34 @@ public sealed class Telescope<
   public static <A, B> Mapper<A, B> mapper(final Class<A> source, final Class<B> target, final MapStep... steps) {
     rejectForwardOnlyRows(source, target, steps, "Telescope.mapper");
     return DeepMap.resolveMapper(source, target, steps);
+  }
+
+  /**
+   * Fluent builder for assembling a {@link Mapper} from multiple groups of {@link MapStep} rows —
+   * closes MapStruct's {@code @InheritConfiguration} for sharing row sets across related mappers.
+   * Use when several mappers share a base group (audit columns, tenant pinning, null-handling
+   * defaults) and each variant adds its own rows; the builder reads as a sequence of intentional
+   * inherit / add steps rather than an opaque array spread.
+   *
+   * <pre>{@code
+   * private static final MapStep[] AUDIT_COLUMNS = {
+   *     to(Entity::createdAt, Dto::createdAt),
+   *     to(Entity::updatedAt, Dto::updatedAt)};
+   *
+   * final var userMapper = Telescope.mapperBuilder(User.class, UserDto.class)
+   *     .inherit(AUDIT_COLUMNS)
+   *     .add(to(User::email, UserDto::emailAddress))
+   *     .build();
+   * }</pre>
+   *
+   * <p>Mechanically equivalent to spreading the accumulated steps into {@link #mapper(Class, Class,
+   * MapStep...)}; the engine's row-routing / hint-validation / sealed-permit dispatch all run
+   * unchanged. See {@link MapperBuilder} for full semantics.
+   *
+   * @see MapperBuilder
+   */
+  public static <A, B> MapperBuilder<A, B> mapperBuilder(final Class<A> source, final Class<B> target) {
+    return MapperBuilder.create(source, target);
   }
 
   // Detect forward-only rows (`Mapping.forward(...)`) and steer the caller to mapperForward(...)
