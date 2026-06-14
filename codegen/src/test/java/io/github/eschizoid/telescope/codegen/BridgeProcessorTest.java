@@ -1847,6 +1847,47 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("OL-1: @Rename + @Transform on the same source field rejected at build")
+    void renamesAndTransformsOnSameFieldRejected() {
+      final var compilation = compile(
+        source(
+          "demo.NoopFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class NoopFn implements BridgeFn<String, String> {
+            public NoopFn() {}
+            @Override public String forward(String x) { return x; }
+            @Override public String backward(String x) { return x; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(
+            value = demo.B.class,
+            renames    = { @Rename(source    = "name", target = "label") },
+            transforms = { @Transform(field  = "name", using  = demo.NoopFn.class) }
+          )
+          public record A(String name) {}
+          """
+        ),
+        source("demo.B", "package demo; public record B(String label) {}")
+      );
+
+      assertFalse(compilation.success(), "renames + transforms overlap should fail");
+      assertTrue(
+        compilation.hasError("appears in both renames and transforms"),
+        () -> "expected overlap diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
     @DisplayName("FD-1: @Default + @Transform on the same field rejected at build")
     void defaultsAndTransformsOnSameFieldRejected() {
       final var compilation = compile(

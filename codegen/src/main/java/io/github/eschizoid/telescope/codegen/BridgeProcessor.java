@@ -707,7 +707,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return;
       }
       if (drops.contains(t)) {
-        error(source, "@Bridge field \"" + t + "\" appears in both transforms and drops — it must be one or the other");
+        error(source, "@Bridge field \"" + t + "\" appears in both transforms and drops — pick one.");
         return;
       }
     }
@@ -756,7 +756,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (drops.contains(e.getKey())) {
         error(
           source,
-          "@Bridge field \"" + e.getKey() + "\" appears in both renames and drops — it must be one or the other"
+          "@Bridge field \"" + e.getKey() + "\" appears in both renames and drops — pick one."
+        );
+        return;
+      }
+      // OL-1: renames + transforms on the same source field is undefined behavior. The transform
+      // dispatches on the source field name; the rename relabels the TARGET slot. Together they
+      // accidentally compile to correct code in scalar cases but the combination has no documented
+      // contract — reject explicitly so the user picks one.
+      if (transforms.containsKey(e.getKey())) {
+        error(
+          source,
+          "@Bridge field \"" +
+            e.getKey() +
+            "\" appears in both renames and transforms — pick one (the transform consumes the source field; the target slot name comes from the bijection, not @Rename)."
         );
         return;
       }
@@ -910,7 +923,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (renameTargetNames.contains(fieldName)) {
         error(
           source,
-          "@Bridge target \"" + fieldName + "\" is already targeted by a rename; cannot also be a constant"
+          "@Bridge target \"" + fieldName + "\" appears in both renames (target slot) and constants — pick one."
         );
         return;
       }
@@ -934,11 +947,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return;
       }
       if (parsedConstants.containsKey(fieldName)) {
-        error(source, "@Bridge target \"" + fieldName + "\" appears in both constants and computes");
+        error(
+          source,
+          "@Bridge target \"" +
+            fieldName +
+            "\" appears in both constants and computes — pick one (constants inject a literal; computes inject a Supplier result)."
+        );
         return;
       }
       if (renameTargetNames.contains(fieldName)) {
-        error(source, "@Bridge target \"" + fieldName + "\" is already targeted by a rename; cannot also be a compute");
+        error(
+          source,
+          "@Bridge target \"" + fieldName + "\" appears in both renames (target slot) and computes — pick one."
+        );
         return;
       }
       injectedTargetFields.add(fieldName);
