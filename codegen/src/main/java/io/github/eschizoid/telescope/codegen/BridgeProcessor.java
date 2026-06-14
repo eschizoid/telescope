@@ -23,6 +23,7 @@ import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
@@ -387,16 +388,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           error(element, "@Transform field=\"" + field + "\" is declared more than once");
           return null;
         }
-        // Validate `method` is either empty (legacy BridgeFn shape) or a syntactically valid Java
+        // Validate `method` is either empty (legacy BridgeFn shape) or a syntactically clean Java
         // identifier — whitespace, punctuation, or reserved-word inputs would otherwise produce
         // emit-time syntactic garbage at the generated bridge body that javac surfaces with a
         // cryptic "identifier expected" pointing at synthetic source the user never wrote.
-        final boolean hasMethod = method != null && !method.isBlank();
-        if (method != null && !method.isEmpty() && !hasMethod) {
+        //
+        // Diagnostic shape, in order: BLANK > WHITESPACE-PADDED > INVALID-IDENTIFIER > MISSING-
+        // METHOD > NON-STATIC. Each level gives the user a precise fix to apply.
+        final var hasMethod = method != null && !method.isEmpty();
+        if (hasMethod && method.isBlank()) {
           error(element, "@Transform `method` must not be blank (was \"" + method + "\")");
           return null;
         }
-        if (hasMethod && !javax.lang.model.SourceVersion.isIdentifier(method)) {
+        if (hasMethod && !method.equals(method.strip())) {
+          error(
+            element,
+            "@Transform `method` must not have leading/trailing whitespace (was \"" + method + "\"). Trim and retry."
+          );
+          return null;
+        }
+        if (hasMethod && !SourceVersion.isIdentifier(method)) {
           error(element, "@Transform `method` must be a valid Java identifier (was \"" + method + "\")");
           return null;
         }
@@ -405,11 +416,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // parameter / return type compatibility check to javac at the generated bridge body —
           // that depends on the source/target field types and javac resolves it precisely there.
           // What we catch here: typos, instance methods (would emit static-call syntax against an
-          // instance method → cryptic generated-source error), arity mismatches, and the
-          // surprisingly common "method exists on a superclass with restricted visibility" case.
-          final var matches = new java.util.ArrayList<javax.lang.model.element.ExecutableElement>();
+          // instance method → cryptic generated-source error), and arity mismatches.
+          final var matches = new ArrayList<ExecutableElement>();
           for (final var e : usingEl.getEnclosedElements()) {
-            if (!(e instanceof javax.lang.model.element.ExecutableElement m)) continue;
+            if (!(e instanceof ExecutableElement m)) continue;
             if (!m.getSimpleName().contentEquals(method)) continue;
             if (m.getParameters().size() != 1) continue;
             matches.add(m);
@@ -426,9 +436,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             return null;
           }
           // Pick the first match that is static; report a clear error if none are static.
-          javax.lang.model.element.ExecutableElement staticMatch = null;
+          ExecutableElement staticMatch = null;
           for (final var m : matches) {
-            if (m.getModifiers().contains(javax.lang.model.element.Modifier.STATIC)) {
+            if (m.getModifiers().contains(Modifier.STATIC)) {
               staticMatch = m;
               break;
             }
