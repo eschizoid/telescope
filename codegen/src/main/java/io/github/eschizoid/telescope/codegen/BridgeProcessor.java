@@ -23,6 +23,7 @@ import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
@@ -98,7 +99,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     Map<String, String> viaMappers,
     String writeStrategy,
     Map<String, String> constants,
-    Map<String, String> computes
+    Map<String, String> computes,
+    // Per-source-field qualifier method name. Set when @Transform supplies a non-empty `method`
+    // attribute — codegen emits a direct {@code UsingClass.methodName(value)} call instead of
+    // instantiating a BridgeFn. Always implicitly forward-only; the source field also lands in
+    // forwardOnlyTransforms when this map carries an entry for it.
+    Map<String, String> transformMethods
   ) {
     static final BridgeConfig EMPTY = new BridgeConfig(
       Set.of(),
@@ -109,6 +115,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       Map.of(),
       Map.of(),
       "AUTO",
+      Map.of(),
       Map.of(),
       Map.of()
     );
@@ -196,7 +203,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             viaMappers,
             writeStrategy,
             constants,
-            computes
+            computes,
+            transformSet.methodsByField()
           )
         );
         if (seen.add(pair)) pending.add(pair);
@@ -322,12 +330,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return RenameSet.empty();
   }
 
-  // Result of parsing a @Bridge's transforms list. `byField` carries the source-field → BridgeFn
+  // Result of parsing a @Bridge's transforms list. `byField` carries the source-field → using
   // class FQN map (the long-standing shape); `forwardOnlyFields` carries the subset of source
-  // field names whose @Transform was declared with forwardOnly = true.
-  private record TransformSet(Map<String, String> byField, Set<String> forwardOnlyFields) {
+  // field names whose @Transform was declared with forwardOnly = true or with a non-empty `method`
+  // attribute (qualifier dispatch is implicitly forward-only); `methodsByField` carries the
+  // qualifier method name when set, empty when the row uses the BridgeFn shape.
+  private record TransformSet(
+    Map<String, String> byField,
+    Set<String> forwardOnlyFields,
+    Map<String, String> methodsByField
+  ) {
     static TransformSet empty() {
-      return new TransformSet(Map.of(), Set.of());
+      return new TransformSet(Map.of(), Set.of(), Map.of());
     }
   }
 
@@ -340,23 +354,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var list = (List<? extends AnnotationValue>) entry.getValue().getValue();
       final var result = new LinkedHashMap<String, String>();
       final var forwardOnlySet = new LinkedHashSet<String>();
+      final var methodsByField = new LinkedHashMap<String, String>();
       for (final var av : list) {
         final var transformAm = (AnnotationMirror) av.getValue();
         String field = null;
         TypeMirror using = null;
         Boolean forwardOnly = Boolean.FALSE;
+        String method = "";
         for (final var te : transformAm.getElementValues().entrySet()) {
           final var k = te.getKey().getSimpleName().toString();
           if (k.equals("field")) field = (String) te.getValue().getValue();
           else if (k.equals("using")) using = (TypeMirror) te.getValue().getValue();
           else if (k.equals("forwardOnly")) forwardOnly = (Boolean) te.getValue().getValue();
+          else if (k.equals("method")) method = (String) te.getValue().getValue();
         }
         if (field == null || field.isEmpty()) {
           error(element, "@Transform requires a non-empty `field` name");
           return null;
         }
         if (using == null || using.getKind() != TypeKind.DECLARED) {
-          error(element, "@Transform `using` must be a class implementing BridgeFn");
+          error(
+            element,
+            "@Transform `using` must be a class (BridgeFn implementor, or any class when `method` is set)"
+          );
           return null;
         }
         final var usingEl = (TypeElement) ((DeclaredType) using).asElement();
@@ -368,10 +388,80 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           error(element, "@Transform field=\"" + field + "\" is declared more than once");
           return null;
         }
+        // Validate `method` is either empty (legacy BridgeFn shape) or a syntactically clean Java
+        // identifier — whitespace, punctuation, or reserved-word inputs would otherwise produce
+        // emit-time syntactic garbage at the generated bridge body that javac surfaces with a
+        // cryptic "identifier expected" pointing at synthetic source the user never wrote.
+        //
+        // Diagnostic shape, in order: BLANK > WHITESPACE-PADDED > INVALID-IDENTIFIER > MISSING-
+        // METHOD > NON-STATIC. Each level gives the user a precise fix to apply.
+        final var hasMethod = method != null && !method.isEmpty();
+        if (hasMethod && method.isBlank()) {
+          error(element, "@Transform `method` must not be blank (was \"" + method + "\")");
+          return null;
+        }
+        if (hasMethod && !method.equals(method.strip())) {
+          error(
+            element,
+            "@Transform `method` must not have leading/trailing whitespace (was \"" + method + "\"). Trim and retry."
+          );
+          return null;
+        }
+        if (hasMethod && !SourceVersion.isIdentifier(method)) {
+          error(element, "@Transform `method` must be a valid Java identifier (was \"" + method + "\")");
+          return null;
+        }
+        if (hasMethod) {
+          // Validate the named method exists, is static, and takes exactly one argument. Defers the
+          // parameter / return type compatibility check to javac at the generated bridge body —
+          // that depends on the source/target field types and javac resolves it precisely there.
+          // What we catch here: typos, instance methods (would emit static-call syntax against an
+          // instance method → cryptic generated-source error), and arity mismatches.
+          final var matches = new ArrayList<ExecutableElement>();
+          for (final var e : usingEl.getEnclosedElements()) {
+            if (!(e instanceof ExecutableElement m)) continue;
+            if (!m.getSimpleName().contentEquals(method)) continue;
+            if (m.getParameters().size() != 1) continue;
+            matches.add(m);
+          }
+          if (matches.isEmpty()) {
+            error(
+              element,
+              "@Transform `method` not found: " +
+                usingEl.getQualifiedName() +
+                "." +
+                method +
+                "(<one arg>) does not exist. Add a public static method with exactly one parameter."
+            );
+            return null;
+          }
+          // Pick the first match that is static; report a clear error if none are static.
+          ExecutableElement staticMatch = null;
+          for (final var m : matches) {
+            if (m.getModifiers().contains(Modifier.STATIC)) {
+              staticMatch = m;
+              break;
+            }
+          }
+          if (staticMatch == null) {
+            error(
+              element,
+              "@Transform `method` " +
+                usingEl.getQualifiedName() +
+                "." +
+                method +
+                "(...) exists but is not static. Qualifier dispatch emits a static-method call; mark it `public static`."
+            );
+            return null;
+          }
+        }
         result.put(field, usingEl.getQualifiedName().toString());
-        if (Boolean.TRUE.equals(forwardOnly)) forwardOnlySet.add(field);
+        // Qualifier dispatch (method != "") is inherently forward-only. forwardOnly = true is the
+        // user-explicit form; non-empty method implies the same.
+        if (Boolean.TRUE.equals(forwardOnly) || hasMethod) forwardOnlySet.add(field);
+        if (hasMethod) methodsByField.put(field, method);
       }
-      return new TransformSet(result, forwardOnlySet);
+      return new TransformSet(result, forwardOnlySet, methodsByField);
     }
     return TransformSet.empty();
   }
@@ -1110,6 +1200,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       targetFields,
       renames,
       transforms,
+      cfg.transformMethods(),
       viaMappers,
       pending,
       seen,
@@ -1248,13 +1339,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // named `__tx_<sourceField>`. applyForward / applyBackward emit
         // `__tx_<field>.forward(...)`
         // / `.backward(...)` on the transformed slot.
+        //
+        // Qualifier-dispatch rows (cfg.transformMethods()) skip the singleton declaration — the
+        // emitted code calls UsingClass.methodName(...) directly, so no instance is needed.
         if (!transforms.isEmpty()) {
+          boolean anyEmitted = false;
           for (final var e : transforms.entrySet()) {
+            if (cfg.transformMethods().containsKey(e.getKey())) continue;
             out.println(
               "  private static final " + e.getValue() + " __tx_" + e.getKey() + " = new " + e.getValue() + "();"
             );
+            anyEmitted = true;
           }
-          out.println();
+          if (anyEmitted) out.println();
         }
         // Per-field @Compute: one static instance of each user-declared Supplier implementation,
         // named `__cp_<targetField>`. readForward emits `__cp_<field>.get()` for the forward
@@ -1558,7 +1655,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    *   <li>{@code NULLABLE_TO_OPTIONAL} — mirror direction.
    * </ul>
    */
-  private record FieldPlan(Kind kind, String subBridgeName) {
+  private record FieldPlan(Kind kind, String subBridgeName, String qualifierMethod) {
     enum Kind {
       IDENTITY,
       RECURSE,
@@ -1572,15 +1669,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
 
     static FieldPlan identity() {
-      return new FieldPlan(Kind.IDENTITY, null);
+      return new FieldPlan(Kind.IDENTITY, null, null);
     }
 
     static FieldPlan recurse(final String subBridgeName) {
-      return new FieldPlan(Kind.RECURSE, Objects.requireNonNull(subBridgeName));
+      return new FieldPlan(Kind.RECURSE, Objects.requireNonNull(subBridgeName), null);
     }
 
     static FieldPlan ofKind(final Kind kind, final String subBridgeName) {
-      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName));
+      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null);
+    }
+
+    // Qualifier-dispatch TRANSFORM variant: the `using` class hosts a named static method, NOT a
+    // BridgeFn implementor. Codegen emits a direct {@code UsingClass.methodName(value)} call and
+    // does not declare a {@code __tx_<field>} singleton instance.
+    static FieldPlan ofTransformQualified(final String usingClassFqn, final String method) {
+      return new FieldPlan(Kind.TRANSFORM, Objects.requireNonNull(usingClassFqn), Objects.requireNonNull(method));
     }
   }
 
@@ -1622,6 +1726,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> targetFields,
     final Map<String, String> renames,
     final Map<String, String> transforms,
+    final Map<String, String> transformMethods,
     final Map<String, String> viaMappers,
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
@@ -1631,7 +1736,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var sf : sourceFields) {
       // Per-field transform supersedes the type-match logic — the transform IS the contract.
       if (transforms.containsKey(sf.name())) {
-        plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.TRANSFORM, transforms.get(sf.name())));
+        final var method = transformMethods.get(sf.name());
+        if (method != null && !method.isEmpty()) {
+          // Qualifier-dispatch variant: emit a direct UsingClass.methodName(...) call.
+          plans.put(sf.name(), FieldPlan.ofTransformQualified(transforms.get(sf.name()), method));
+        } else {
+          plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.TRANSFORM, transforms.get(sf.name())));
+        }
         continue;
       }
       // Per-field viaMapper supersedes auto-recursion — the user-supplied bridge class IS the
@@ -1839,7 +1950,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         : "__fwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL_TO_NULLABLE -> readExpr + ".map(" + fwdElement + ").orElse(null)";
       case NULLABLE_TO_OPTIONAL -> "Optional.ofNullable(" + readExpr + ").map(" + fwdElement + ")";
-      case TRANSFORM -> "__tx_" + fieldName + ".forward(" + readExpr + ")";
+      // Qualifier dispatch: emit a direct {@code UsingClass.methodName(value)} call. Otherwise
+      // dispatch through the {@code __tx_<field>} BridgeFn singleton instance (legacy shape).
+      case TRANSFORM -> plan.qualifierMethod() != null
+        ? plan.subBridgeName() + "." + plan.qualifierMethod() + "(" + readExpr + ")"
+        : "__tx_" + fieldName + ".forward(" + readExpr + ")";
     };
   }
 

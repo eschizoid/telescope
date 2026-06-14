@@ -1361,6 +1361,276 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName(
+      "@Transform(method = \"...\") — qualifier dispatch emits direct static-method call, no BridgeFn instance"
+    )
+    void transformQualifierDispatchEmitsDirectStaticCall() {
+      final var compilation = compile(
+        source(
+          "demo.DateHelpers",
+          """
+          package demo;
+          import java.time.Instant;
+          import java.time.ZoneOffset;
+          import java.time.format.DateTimeFormatter;
+          public final class DateHelpers {
+            private DateHelpers() {}
+            public static String expiry(Instant i)    { return DateTimeFormatter.ISO_INSTANT.format(i); }
+            public static String createdAt(Instant i) { return i.atZone(ZoneOffset.UTC).toString(); }
+          }
+          """
+        ),
+        source(
+          "demo.UserEntity",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          import java.time.Instant;
+          @Bridge(value = demo.UserDto.class, transforms = {
+            @Transform(field = "expiresAt", using = demo.DateHelpers.class, method = "expiry"),
+            @Transform(field = "registeredAt", using = demo.DateHelpers.class, method = "createdAt")
+          })
+          public record UserEntity(String id, Instant expiresAt, Instant registeredAt) {}
+          """
+        ),
+        source(
+          "demo.UserDto",
+          """
+          package demo;
+          public record UserDto(String id, String expiresAt, String registeredAt) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.UserEntityBridge");
+      assertNotNull(bridge, () -> "UserEntityBridge missing; saw " + compilation.generated().keySet());
+
+      // NO __tx_ singleton — qualifier dispatch calls the static method directly.
+      assertTrue(
+        !bridge.contains("__tx_expiresAt"),
+        () -> "qualifier dispatch must NOT emit __tx_ field; saw: " + bridge
+      );
+      assertTrue(
+        !bridge.contains("new demo.DateHelpers()"),
+        () -> "qualifier dispatch must NOT instantiate the helper class; saw: " + bridge
+      );
+
+      // Forward emits direct UsingClass.methodName(value) calls per qualified field.
+      assertTrue(
+        bridge.contains("demo.DateHelpers.expiry(s.expiresAt())"),
+        () -> "expected demo.DateHelpers.expiry(...) call; saw: " + bridge
+      );
+      assertTrue(
+        bridge.contains("demo.DateHelpers.createdAt(s.registeredAt())"),
+        () -> "expected demo.DateHelpers.createdAt(...) call; saw: " + bridge
+      );
+
+      // Qualifier dispatch is implicitly forward-only — backward zero-fills.
+      assertTrue(
+        bridge.contains("new demo.UserEntity(t.id(), null, null)"),
+        () -> "expected backward zero-fill on qualifier-dispatch slots; saw: " + bridge
+      );
+    }
+
+    @Test
+    @DisplayName("@Transform(using=BridgeFn) and @Transform(method=...) coexist on the same bridge")
+    void transformBridgeFnAndQualifierCoexist() {
+      final var compilation = compile(
+        source(
+          "demo.CentsConverter",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          import java.math.BigDecimal;
+          public final class CentsConverter implements BridgeFn<BigDecimal, Long> {
+            public CentsConverter() {}
+            @Override public Long forward(BigDecimal x) { return x.movePointRight(2).longValueExact(); }
+            @Override public BigDecimal backward(Long c) { return BigDecimal.valueOf(c).movePointLeft(2); }
+          }
+          """
+        ),
+        source(
+          "demo.Helpers",
+          """
+          package demo;
+          import java.time.Instant;
+          public final class Helpers {
+            private Helpers() {}
+            public static String asIso(Instant i) { return i.toString(); }
+          }
+          """
+        ),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          import java.math.BigDecimal;
+          import java.time.Instant;
+          @Bridge(value = demo.OrderEntity.class, transforms = {
+            @Transform(field = "price", using = demo.CentsConverter.class),
+            @Transform(field = "createdAt", using = demo.Helpers.class, method = "asIso")
+          })
+          public record Order(String id, BigDecimal price, Instant createdAt) {}
+          """
+        ),
+        source(
+          "demo.OrderEntity",
+          """
+          package demo;
+          public record OrderEntity(String id, Long price, String createdAt) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
+
+      // BridgeFn-shape: __tx_price singleton + .forward/.backward calls
+      assertTrue(
+        bridge.contains("private static final demo.CentsConverter __tx_price = new demo.CentsConverter();"),
+        bridge
+      );
+      assertTrue(bridge.contains("__tx_price.forward(s.price())"), bridge);
+      assertTrue(bridge.contains("__tx_price.backward(t.price())"), bridge);
+
+      // Qualifier dispatch: no __tx_createdAt, direct method call
+      assertTrue(
+        !bridge.contains("__tx_createdAt"),
+        () -> "qualifier field MUST NOT have a __tx_ singleton; saw: " + bridge
+      );
+      assertTrue(bridge.contains("demo.Helpers.asIso(s.createdAt())"), bridge);
+      // Forward-only on qualifier slot — backward zero-fills the createdAt slot
+      assertTrue(
+        !bridge.contains("Helpers.asIso(t.createdAt())"),
+        () -> "backward must NOT call qualifier method; saw: " + bridge
+      );
+    }
+
+    @Test
+    @DisplayName("@Transform(method = \"  \") — whitespace method name rejected at processor time")
+    void transformBlankMethodRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Helpers",
+          """
+          package demo;
+          public final class Helpers {
+            public static String identity(String s) { return s; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.B.class, transforms = {
+            @Transform(field = "name", using = demo.Helpers.class, method = "  ")
+          })
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String name) {}
+          """
+        )
+      );
+      assertTrue(
+        !compilation.success() && compilation.hasError("must not be blank"),
+        () -> "expected 'must not be blank' diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Transform(method = \"missing\") — non-existent method rejected at processor time")
+    void transformMissingMethodRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Helpers",
+          """
+          package demo;
+          public final class Helpers {
+            public static String identity(String s) { return s; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.B.class, transforms = {
+            @Transform(field = "name", using = demo.Helpers.class, method = "nonexistent")
+          })
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String name) {}
+          """
+        )
+      );
+      assertTrue(
+        !compilation.success() && compilation.hasError("method` not found"),
+        () -> "expected 'method not found' diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Transform(method = \"instanceMethod\") — non-static method rejected at processor time")
+    void transformNonStaticMethodRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Helpers",
+          """
+          package demo;
+          public final class Helpers {
+            public Helpers() {}
+            // instance method — qualifier dispatch needs static
+            public String mutate(String s) { return s; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.B.class, transforms = {
+            @Transform(field = "name", using = demo.Helpers.class, method = "mutate")
+          })
+          public record A(String name) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B(String name) {}
+          """
+        )
+      );
+      assertTrue(
+        !compilation.success() && compilation.hasError("is not static"),
+        () -> "expected 'is not static' diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
     @DisplayName("misspelled transform field is a compile error pointing at the source")
     void misspelledTransformFieldIsRejected() {
       final var compilation = compile(
