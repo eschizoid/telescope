@@ -32,7 +32,7 @@ public interface Getter<S, A> extends Fold<S, A> {
   /**
    * Compose with another {@code Getter} to read deeper. {@code this.then(next).get(s)} is
    * equivalent to {@code next.get(this.get(s))} — the canonical Getter-composition shape from the
-   * lattice. Used by {@link io.github.eschizoid.telescope.conversion.ForwardMapper#then} to keep
+   * lattice. Used by {@code ForwardMapper#then} in the {@code conversion} package to keep
    * forward-only composition lattice-routed instead of an ad-hoc {@code Function} closure.
    */
   default <B> Getter<S, B> then(final Getter<A, B> next) {

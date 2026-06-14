@@ -22,6 +22,10 @@ repositories {
     mavenCentral()
 }
 
+springBoot {
+    mainClass.set("io.github.eschizoid.telescope.demo.starter.DemoApplication")
+}
+
 dependencies {
     // ONE telescope dependency — the Spring Boot starter pulls in telescope core transitively AND
     // contributes TelescopeAutoConfiguration on startup (which registers a TelescopeMapperRegistry

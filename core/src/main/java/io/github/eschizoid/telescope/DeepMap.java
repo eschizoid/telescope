@@ -11,7 +11,6 @@ import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.FromTelescopeTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
-import io.github.eschizoid.telescope.mapping.MappingInternals;
 import io.github.eschizoid.telescope.mapping.SameTypedTo;
 import io.github.eschizoid.telescope.mapping.TelescopeTo;
 import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
@@ -237,7 +236,6 @@ public final class DeepMap {
   ) {
     final var grouped = new HashMap<TypePair, List<Mapping<?, ?>>>();
     for (final var row : overrides) {
-      final var internals = internalsOf(row);
       // Rows with null sourceClass / targetClass pin to the top-level pair the user passed to
       // Telescope.mapper(...). Two reasons a class field comes back null:
       //   - Drop(srcAcc) — single-arg form, no explicit target.
@@ -246,8 +244,8 @@ public final class DeepMap {
       //     from method-ref accessors but the root Class<S> isn't carried at runtime).
       // In both cases the substitution lands the row on the outer (topSource, topTarget) bucket so
       // populateIso picks it up at the outermost (source, target) recursion frame only.
-      final Class<?> effectiveSource = internals.sourceClass() == null ? topSource : internals.sourceClass();
-      final Class<?> effectiveTarget = internals.targetClass() == null ? topTarget : internals.targetClass();
+      final Class<?> effectiveSource = row.sourceClass() == null ? topSource : row.sourceClass();
+      final Class<?> effectiveTarget = row.targetClass() == null ? topTarget : row.targetClass();
       final var key = new TypePair(effectiveSource, effectiveTarget);
       grouped.computeIfAbsent(key, __ -> new ArrayList<>()).add(row);
     }
@@ -295,8 +293,7 @@ public final class DeepMap {
     for (final var row : overrides.getOrDefault(key, List.of())) {
       // Normalize raw method names per side — record::name stays "name", bean::getName becomes
       // "name".
-      final var internals = internalsOf(row);
-      final var srcField = srcRefl.normalize(internals.sourceField());
+      final var srcField = srcRefl.normalize(row.sourceField());
       // TelescopeTo: flat source accessor → nested target telescope.
       // Soft claim on the source field (from srcAcc) AND the target telescope's first hop name.
       // Multiple rows sharing the same source field or top-level target field all compose.
@@ -310,7 +307,7 @@ public final class DeepMap {
       // FromTelescopeTo: nested source telescope → flat target accessor — soft claim mirror.
       // Soft claim on the target field (from tgtAcc) AND the source telescope's first hop name.
       if (row instanceof FromTelescopeTo<?, ?, ?> fRow) {
-        telescopeWritesTgt.add(tgtRefl.normalize(internals.targetField()));
+        telescopeWritesTgt.add(tgtRefl.normalize(row.targetField()));
         final var firstSrcHop = fRow.sourceTelescope().firstHopName();
         if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
         telescopeFixups.add(fRow);
@@ -367,7 +364,7 @@ public final class DeepMap {
         bySourceName.put(srcField, new FieldStep(srcField, null, NULLING_ISO));
         continue;
       }
-      final var tgtField = tgtRefl.normalize(internals.targetField());
+      final var tgtField = tgtRefl.normalize(row.targetField());
       // Fail fast on duplicate target — two rows targeting the same target field would silently
       // overwrite each other in byTargetName and could produce non-bijective forward/backward
       // (each direction using a different correspondence).
@@ -831,17 +828,6 @@ public final class DeepMap {
 
   private static boolean elementTypeMatches(final Type elementType, final Class<?> mapperClass) {
     return elementType instanceof Class<?> cls && cls.equals(mapperClass);
-  }
-
-  /**
-   * Recover the {@link MappingInternals} view of a {@link Mapping} row — the {@code
-   * SerializedLambda}-derived declaring classes and method names that key overrides by {@code
-   * (sourceClass, targetClass)} pair. The cast is safe because the three permitted {@link Mapping}
-   * record impls ({@link SameTypedTo}, {@link TypedTransformTo}, {@link Via}) all implement {@link
-   * MappingInternals} — same sealed permit list on both interfaces.
-   */
-  private static MappingInternals<?, ?> internalsOf(final Mapping<?, ?> row) {
-    return (MappingInternals<?, ?>) row;
   }
 
   /**

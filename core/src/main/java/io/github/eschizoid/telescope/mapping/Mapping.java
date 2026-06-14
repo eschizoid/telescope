@@ -52,6 +52,45 @@ public sealed interface Mapping<A, B>
     Constant,
     Compute
 {
+  /**
+   * Source class this row keys against — the declaring class of the source accessor, recovered via
+   * {@code SerializedLambda}. May be {@code null} for permits whose source side is a {@code
+   * Telescope<A, ?>} (root class isn't recoverable at runtime — generics erased); the engine pins
+   * the row to the outer mapper pair instead.
+   *
+   * <p>Internal accessor exposed so {@code DeepMap} can key overrides by {@code (sourceClass,
+   * targetClass)} without a cross-interface cast. Not intended as a user-facing introspection
+   * surface — implementations live in package-private records.
+   */
+  Class<A> sourceClass();
+
+  /**
+   * Target class this row keys against — the declaring class of the target accessor. May be {@code
+   * null} for permits whose target side is a {@code Telescope<B, ?>}; same outer-pair pinning as
+   * for {@link #sourceClass}.
+   *
+   * <p>Internal accessor — see {@link #sourceClass()}.
+   */
+  Class<B> targetClass();
+
+  /**
+   * Source record component name this row claims — the source accessor's method name recovered via
+   * {@code SerializedLambda}. May be {@code null} for permits whose source side is a {@code
+   * Telescope<A, ?>}: the path's leaf isn't a top-level source field.
+   *
+   * <p>Internal accessor — see {@link #sourceClass()}.
+   */
+  String sourceField();
+
+  /**
+   * Target record component name this row claims — the target accessor's method name. May be {@code
+   * null} for permits whose target side is a {@code Telescope<B, ?>}: the path's leaf isn't a
+   * top-level target field.
+   *
+   * <p>Internal accessor — see {@link #sourceClass()}.
+   */
+  String targetField();
+
   /** Same-typed correspondence: {@code src↔tgt}, both with leaf type {@code X}. Identity. */
   static <A, B, X> Mapping<A, B> to(final Accessor<A, X> src, final Accessor<B, X> tgt) {
     return new SameTypedTo<>(src, tgt);

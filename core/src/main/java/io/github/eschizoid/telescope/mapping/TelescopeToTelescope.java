@@ -30,7 +30,7 @@ public record TelescopeToTelescope<A, B, X>(
   Telescope<A, X> sourceTelescope,
   Telescope<B, X> targetTelescope,
   Kind kind
-) implements Mapping<A, B>, MappingInternals<A, B> {
+) implements Mapping<A, B> {
   /** Discriminates broadcast vs positional-zip semantics. */
   public enum Kind {
     /** Single-value semantics: {@code Telescope.set} broadcasts on a many-focus target. */

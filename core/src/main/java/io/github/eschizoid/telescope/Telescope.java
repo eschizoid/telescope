@@ -533,7 +533,7 @@ public sealed class Telescope<
             ", " +
             target.getSimpleName() +
             ", ...) cannot accept a Mapping.forward(...) row for field '" +
-            ((io.github.eschizoid.telescope.mapping.MappingInternals<?, ?>) r).targetField() +
+            r.targetField() +
             "' — forward(...) is forward-only and would silently corrupt Mapper.backward / Mapper.patch. " +
             "Use Telescope.mapperForward(" +
             source.getSimpleName() +

@@ -23,6 +23,10 @@ repositories {
     mavenCentral()
 }
 
+springBoot {
+    mainClass.set("io.github.eschizoid.telescope.demo.invoicing.DemoApplication")
+}
+
 dependencies {
     implementation(project(":core"))
     annotationProcessor(project(":codegen"))

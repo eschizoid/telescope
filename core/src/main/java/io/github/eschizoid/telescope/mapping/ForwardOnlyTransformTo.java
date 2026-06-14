@@ -5,7 +5,7 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import java.util.function.Function;
 
 /**
- * Forward-only typed-transform correspondence row from {@link Mapping#into(Accessor, Accessor,
+ * Forward-only typed-transform correspondence row from {@link Mapping#forward(Accessor, Accessor,
  * Function)}. Carries only the {@code forward} function — there is no backward field — so the row
  * itself cannot pretend to be a bidirectional correspondence.
  *
@@ -18,14 +18,14 @@ import java.util.function.Function;
  * concern that the original {@link TypedTransformTo} shape carried with its throwing-backward
  * field.
  *
- * <p>Internal — users construct via {@link Mapping#into(Accessor, Accessor, Function)} and never
+ * <p>Internal — users construct via {@link Mapping#forward(Accessor, Accessor, Function)} and never
  * see this type at the call site.
  */
 public record ForwardOnlyTransformTo<A, B, X, Y>(
   Accessor<A, X> src,
   Accessor<B, Y> tgt,
   Function<? super X, ? extends Y> forward
-) implements Mapping<A, B>, MappingInternals<A, B> {
+) implements Mapping<A, B> {
   @Override
   public Class<A> sourceClass() {
     return LambdaIntrospection.implClassOf(src);

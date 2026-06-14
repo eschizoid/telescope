@@ -2,6 +2,8 @@ package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.optics.Getter;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
  * A forward-only {@code A → B} mapper produced by {@link Telescope#mapperForward(Class, Class,
@@ -77,6 +79,49 @@ public final class ForwardMapper<A, B> {
     // composition is one method call on the substrate, not an inline lambda closure.
     final Getter<A, C> composed = forward.then(next.forward);
     return new ForwardMapper<>(composed, sourceClass, next.targetClass);
+  }
+
+  /**
+   * Compose a pre-forward hook: before the structural forward runs, transform the source {@code A}
+   * via {@code hook} and feed the result into {@code forward}. Mirrors {@link
+   * Mapper#beforeForward(Function)} for the forward-only tier — useful for source normalisation
+   * before the projection runs.
+   *
+   * <p>Lattice-native: routes through {@code Getter.then(Getter)} by lifting {@code hook} as a
+   * {@code Getter<A, A>} and composing it before the existing read. Chains compose left-to-right.
+   */
+  public ForwardMapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
+    final Getter<A, A> pre = a -> hook.apply(a);
+    return new ForwardMapper<>(pre.then(forward), sourceClass, targetClass);
+  }
+
+  /**
+   * Compose a post-forward hook: after the structural forward produces a {@code B}, transform it
+   * via {@code hook} before returning. Mirrors {@link Mapper#afterForward(Function)} for the
+   * forward-only tier — closes the "stamp a derived value after the projection" gap.
+   *
+   * <p>Lattice-native: routes through {@code Getter.then(Getter)}.
+   */
+  public ForwardMapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
+    final Getter<B, B> post = b -> hook.apply(b);
+    return new ForwardMapper<>(forward.then(post), sourceClass, targetClass);
+  }
+
+  /**
+   * Source-aware post-forward hook: receives BOTH the source {@code A} (after any prior {@link
+   * #beforeForward(Function)}) AND the structural result {@code B}. MapStruct's
+   * {@code @AfterMapping void enrich(Source src, @MappingTarget Dto dto)} equivalent for the
+   * forward-only tier.
+   *
+   * <p>Cannot factor cleanly through a pure {@code Getter.then(Getter)} composition — the hook
+   * needs both inputs at the same evaluation site — so the new {@code Getter} closes over both the
+   * prior read and the hook in one lambda. Still on-lattice: the substrate stays {@code Getter<A,
+   * B>}, not a raw {@code Function}.
+   */
+  public ForwardMapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
+    final Getter<A, B> prior = forward;
+    final Getter<A, B> wrapped = a -> hook.apply(a, prior.get(a));
+    return new ForwardMapper<>(wrapped, sourceClass, targetClass);
   }
 
   /** The mapper's source class. */

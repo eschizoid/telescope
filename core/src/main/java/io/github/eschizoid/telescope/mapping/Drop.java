@@ -17,10 +17,7 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
  * <p>Package-private — users construct via the {@link Mapping#drop(Accessor)} / {@link
  * Mapping#drop(Accessor, Class)} factories and never see this type at the call site.
  */
-public record Drop<A, B, X>(
-  Accessor<A, X> src,
-  Class<B> explicitTarget
-) implements Mapping<A, B>, MappingInternals<A, B> {
+public record Drop<A, B, X>(Accessor<A, X> src, Class<B> explicitTarget) implements Mapping<A, B> {
   @Override
   public Class<A> sourceClass() {
     return LambdaIntrospection.implClassOf(src);

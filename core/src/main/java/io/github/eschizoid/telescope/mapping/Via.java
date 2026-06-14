@@ -16,11 +16,7 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
  * <p>Internal — users construct via {@link Mapping#via(Accessor, Accessor, Mapper)} and never see
  * this type at the call site.
  */
-public record Via<A, B>(
-  Accessor<A, ?> src,
-  Accessor<B, ?> tgt,
-  Mapper<?, ?> nested
-) implements Mapping<A, B>, MappingInternals<A, B> {
+public record Via<A, B>(Accessor<A, ?> src, Accessor<B, ?> tgt, Mapper<?, ?> nested) implements Mapping<A, B> {
   @Override
   public Class<A> sourceClass() {
     return LambdaIntrospection.implClassOf(src);
