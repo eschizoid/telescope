@@ -1,7 +1,7 @@
 [versions]
 junit = "6.1.0"
 spotless = "7.0.0"
-googleJavaFormat = "1.35.0"
+googleJavaFormat = "1.28.0"
 prettier = "3.8.1"
 prettierPluginJava = "2.8.1"
 testcontainers = "2.0.4"
