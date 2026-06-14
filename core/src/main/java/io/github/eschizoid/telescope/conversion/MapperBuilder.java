@@ -61,6 +61,13 @@ import java.util.Objects;
  * Telescope#map(Class, Class, MapStep...)} engines — no parallel resolution path, no duplicated
  * recursion. The engine's row-routing, hint-validation, sealed-permit dispatch all run unchanged.
  *
+ * <p><b>Not thread-safe.</b> The internal step list is a plain {@link java.util.ArrayList}; two
+ * threads concurrently calling {@link #add(MapStep...)} / {@link #inherit(MapStep...)} / {@link
+ * #build()} on the same builder can throw {@link java.util.ConcurrentModificationException} or
+ * produce a torn snapshot. Construct one builder per call site, or guard the builder externally if
+ * shared. Snapshot semantics ("rows added after build() affect only future builds") hold for the
+ * single-threaded case.
+ *
  * <p>Constructed via {@link Telescope#mapperBuilder(Class, Class)} — package-private constructor.
  */
 public final class MapperBuilder<A, B> {
@@ -97,8 +104,7 @@ public final class MapperBuilder<A, B> {
    * @return this builder for chaining
    */
   public MapperBuilder<A, B> inherit(final MapStep... rows) {
-    Objects.requireNonNull(rows, "rows");
-    Collections.addAll(steps, rows);
+    addAllChecked(rows);
     return this;
   }
 
@@ -110,9 +116,24 @@ public final class MapperBuilder<A, B> {
    * @return this builder for chaining
    */
   public MapperBuilder<A, B> add(final MapStep... rows) {
-    Objects.requireNonNull(rows, "rows");
-    Collections.addAll(steps, rows);
+    addAllChecked(rows);
     return this;
+  }
+
+  /**
+   * Append {@code rows} to {@link #steps} after validating that neither the array nor any element
+   * is {@code null}. A {@code null} element silently slipping through would land in the engine's
+   * partitioning loop and be discarded with no diagnostic — six months later the user debugs why
+   * one field "didn't map." The named-index NPE message points the user at the offending slot in
+   * their {@code static final MapStep[]} constant.
+   */
+  private void addAllChecked(final MapStep[] rows) {
+    Objects.requireNonNull(rows, "rows");
+    for (int i = 0; i < rows.length; i++) {
+      final var idx = i;
+      Objects.requireNonNull(rows[i], () -> "rows[" + idx + "]");
+    }
+    Collections.addAll(steps, rows);
   }
 
   /**

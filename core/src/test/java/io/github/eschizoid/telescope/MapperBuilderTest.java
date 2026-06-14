@@ -183,6 +183,31 @@ class MapperBuilderTest {
     }
 
     @Test
+    @DisplayName("inherit(MapStep[] with null element) throws NPE naming the failing index")
+    void inheritNullElement() {
+      final var builder = Telescope.mapperBuilder(Entity.class, Dto.class);
+      final MapStep[] withNullSlot = {
+        to(Entity::createdAt, Dto::createdAt),
+        null,
+        to(Entity::updatedAt, Dto::updatedAt),
+      };
+
+      final var ex = assertThrows(NullPointerException.class, () -> builder.inherit(withNullSlot));
+      assertEquals(true, ex.getMessage().contains("rows[1]"), "NPE message names the failing index");
+    }
+
+    @Test
+    @DisplayName("add(MapStep, null) throws NPE naming the failing index")
+    void addNullElement() {
+      final var builder = Telescope.mapperBuilder(Entity.class, Dto.class);
+
+      final var ex = assertThrows(NullPointerException.class, () ->
+        builder.add(to(Entity::createdAt, Dto::createdAt), null)
+      );
+      assertEquals(true, ex.getMessage().contains("rows[1]"), "NPE message names the failing index");
+    }
+
+    @Test
     @DisplayName("null source class throws NullPointerException")
     void nullSourceClass() {
       assertThrows(NullPointerException.class, () -> Telescope.mapperBuilder(null, Dto.class));
