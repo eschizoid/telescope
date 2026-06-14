@@ -207,11 +207,11 @@ capability lists, vs-MapStruct callouts, and benchmark cross-links.
   On deeper workloads (nested records with list-of-records inside) the two engines match. See
   [Performance honesty](#performance-honesty).
 
-  Telescope covers the common `@Mapping(...)` shapes — same-name auto, renames, typed transforms, nested mappers,
-  flat → nested-path correspondences, eager literals, per-call computed values, forward-only mappers, multi-source
-  merge, by-name enum mapping, null-coalescing defaults, lifecycle hooks, and Spring/Quarkus autoconfig — plus the
-  shapes MapStruct can't compose to: deep navigation, effectful update, sealed-root dispatch, JPA cycles and Hibernate
-  `LAZY` proxy unwrap, bidirectional from one declaration. See [How it compares to MapStruct](#how-it-compares-to-mapstruct)
+  Telescope covers the common `@Mapping(...)` shapes — same-name auto, renames, typed transforms, nested mappers, flat →
+  nested-path correspondences, eager literals, per-call computed values, forward-only mappers, multi-source merge,
+  by-name enum mapping, null-coalescing defaults, lifecycle hooks, and Spring/Quarkus autoconfig — plus the shapes
+  MapStruct can't compose to: deep navigation, effectful update, sealed-root dispatch, JPA cycles and Hibernate `LAZY`
+  proxy unwrap, bidirectional from one declaration. See [How it compares to MapStruct](#how-it-compares-to-mapstruct)
   for the full row-by-row comparison and [When telescope is the right pick](#when-telescope-is-the-right-pick) for the
   short version.
 
@@ -233,24 +233,24 @@ integration. Telescope is an **optics DSL** where mapping is one capability amon
 update, and sealed-type narrowing. They overlap on the deep record↔record / bean↔record / bean↔bean band; the rest of
 each tool's surface doesn't.
 
-| Capability                                   | telescope                                                                                                                     | MapStruct                                                  |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| **Bidirectional out of the box**             | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)`                           | One direction per `@Mapper` interface; reverse is separate |
-| **Deep nested navigation + update**          | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                                              | Not in scope                                               |
-| **Effectful update**                         | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                                                         | Not in scope                                               |
-| **Compile-time codegen**                     | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                                                     | `@Mapper` interfaces                                       |
-| **Runtime path (no codegen required)**       | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later                                       | Compile-time only                                          |
-| **Sealed types / pattern matching**          | `.as(Subtype.class)` narrows; the path stays type-safe                                                                        | Not in scope                                               |
-| **Sealed-root dispatch**                     | `Match.of(...).when(Case.class, ...).exhaustive()` — compile-checked permit list, lattice-routed via `Prism.downcast()`       | Not in scope                                               |
-| **Multi-source mappers (N → 1)**             | `Telescope.merge(Target.class, from(A::id, T::id), …)` returning `Mapper<Sources, T>` with a class-keyed `Sources` bag        | Multi-source methods with `@Mapping(source = "param.x")`   |
-| **Forward-only mappers**                     | `Telescope.mapperForward(...)` returning typed `ForwardMapper<A, B>` — no `backward` method at the type level                 | Write a separate `@Mapper` interface                       |
-| **Enum value mapping**                       | `Mapping.enumTo(src, tgt, SrcEnum.class, TgtEnum.class)` with build-time exhaustiveness                                       | `@ValueMapping(source = "X", target = "Y")`                |
-| **Null-coalescing defaults**                 | `Mapping.toOrElse(src, tgt, default)` / `toOrElseGet(src, tgt, supplier)` (predicate-gated overload)                          | `@Mapping(defaultValue = "...")` / `defaultExpression`     |
-| **Conditional / drop**                       | `Mapping.drop(src)` skips the field; predicate-gated `toOrElse(src, tgt, Predicate, default)` for value-conditional fallback  | `@Mapping(condition = "...")`                              |
-| **`@BeforeMapping` / `@AfterMapping` hooks** | `Mapper.beforeForward(...)` / `afterForward(...)` / `beforeBackward(...)` / `afterBackward(...)` — chain composes left-to-right | Annotation-driven                                          |
+| Capability                                   | telescope                                                                                                                                          | MapStruct                                                  |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **Bidirectional out of the box**             | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)`                                                | One direction per `@Mapper` interface; reverse is separate |
+| **Deep nested navigation + update**          | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                                                                   | Not in scope                                               |
+| **Effectful update**                         | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                                                                              | Not in scope                                               |
+| **Compile-time codegen**                     | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                                                                          | `@Mapper` interfaces                                       |
+| **Runtime path (no codegen required)**       | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later                                                            | Compile-time only                                          |
+| **Sealed types / pattern matching**          | `.as(Subtype.class)` narrows; the path stays type-safe                                                                                             | Not in scope                                               |
+| **Sealed-root dispatch**                     | `Match.of(...).when(Case.class, ...).exhaustive()` — compile-checked permit list, lattice-routed via `Prism.downcast()`                            | Not in scope                                               |
+| **Multi-source mappers (N → 1)**             | `Telescope.merge(Target.class, from(A::id, T::id), …)` returning `Mapper<Sources, T>` with a class-keyed `Sources` bag                             | Multi-source methods with `@Mapping(source = "param.x")`   |
+| **Forward-only mappers**                     | `Telescope.mapperForward(...)` returning typed `ForwardMapper<A, B>` — no `backward` method at the type level                                      | Write a separate `@Mapper` interface                       |
+| **Enum value mapping**                       | `Mapping.enumTo(src, tgt, SrcEnum.class, TgtEnum.class)` with build-time exhaustiveness                                                            | `@ValueMapping(source = "X", target = "Y")`                |
+| **Null-coalescing defaults**                 | `Mapping.toOrElse(src, tgt, default)` / `toOrElseGet(src, tgt, supplier)` (predicate-gated overload)                                               | `@Mapping(defaultValue = "...")` / `defaultExpression`     |
+| **Conditional / drop**                       | `Mapping.drop(src)` skips the field; predicate-gated `toOrElse(src, tgt, Predicate, default)` for value-conditional fallback                       | `@Mapping(condition = "...")`                              |
+| **`@BeforeMapping` / `@AfterMapping` hooks** | `Mapper.beforeForward(...)` / `afterForward(...)` / `beforeBackward(...)` / `afterBackward(...)` — chain composes left-to-right                    | Annotation-driven                                          |
 | **Spring / Quarkus / CDI integration**       | `telescope-spring-boot-starter` (Spring Boot 4 autoconfig + `Mapper<A, B>` bean registry) + `telescope-quarkus` (Arc extension, Jandex-discovered) | Native via `componentModel = "spring"` / `"jsr330"` / etc. |
-| **Maturity**                                 | 1.0 line; JMH-backed perf claims                                                                                              | Ten years; thousands of production deployments             |
-| **Dispatch perf — codegen vs codegen**       | 1.2–1.9× behind on flat/nested forward; **matches on the deep tier** — see Performance honesty below for the measured numbers | Direct bytecode, monomorphic call site                     |
+| **Maturity**                                 | 1.0 line; JMH-backed perf claims                                                                                                                   | Ten years; thousands of production deployments             |
+| **Dispatch perf — codegen vs codegen**       | 1.2–1.9× behind on flat/nested forward; **matches on the deep tier** — see Performance honesty below for the measured numbers                      | Direct bytecode, monomorphic call site                     |
 
 #### Per-field source/target mapping — side by side
 
@@ -837,18 +837,18 @@ recursion caches each type pair as it descends, and re-entry returns the in-prog
 
 **Override forms.** Static-import-friendly factories on `Mapping`:
 
-| Factory                       | Purpose                                            | MapStruct equivalent                       |
-| ----------------------------- | -------------------------------------------------- | ------------------------------------------ |
-| `to(src, tgt)`                | Rename, same leaf type                             | `@Mapping(source, target)`                 |
-| `to(src, tgt, fwd, bwd)`      | Bidirectional typed transform                      | `@Mapping(source, target, qualifiedBy)`    |
-| `forward(src, tgt, fn)`       | Forward-only typed transform                       | (separate `@Mapper` interface)             |
-| `toOrElse(src, tgt, default)` | Null-coalesce to a default value                   | `@Mapping(defaultValue = "...")`           |
-| `toOrElseGet(src, tgt, sup)`  | Null-coalesce via a `Supplier`                     | `@Mapping(defaultExpression = "java(…)")`  |
+| Factory                       | Purpose                                             | MapStruct equivalent                        |
+| ----------------------------- | --------------------------------------------------- | ------------------------------------------- |
+| `to(src, tgt)`                | Rename, same leaf type                              | `@Mapping(source, target)`                  |
+| `to(src, tgt, fwd, bwd)`      | Bidirectional typed transform                       | `@Mapping(source, target, qualifiedBy)`     |
+| `forward(src, tgt, fn)`       | Forward-only typed transform                        | (separate `@Mapper` interface)              |
+| `toOrElse(src, tgt, default)` | Null-coalesce to a default value                    | `@Mapping(defaultValue = "...")`            |
+| `toOrElseGet(src, tgt, sup)`  | Null-coalesce via a `Supplier`                      | `@Mapping(defaultExpression = "java(…)")`   |
 | `enumTo(src, tgt, SE, TE)`    | By-name enum mapping with build-time exhaustiveness | `@ValueMapping(source = "X", target = "Y")` |
-| `via(src, tgt, mapper)`       | Drop in a pre-built nested mapper                  | (composition by hand)                      |
-| `constant(tgt, value)`        | Forward-only literal at the target slot            | `@Mapping(constant = "...")`               |
-| `compute(tgt, supplier)`      | Forward-only supplier-computed value               | `@Mapping(expression = "java(...)")`       |
-| `drop(src)`                   | Skip the source field; backward zero-fills it      | `@Mapping(ignore = true)`                  |
+| `via(src, tgt, mapper)`       | Drop in a pre-built nested mapper                   | (composition by hand)                       |
+| `constant(tgt, value)`        | Forward-only literal at the target slot             | `@Mapping(constant = "...")`                |
+| `compute(tgt, supplier)`      | Forward-only supplier-computed value                | `@Mapping(expression = "java(...)")`        |
+| `drop(src)`                   | Skip the source field; backward zero-fills it       | `@Mapping(ignore = true)`                   |
 
 Example — three of those rows together:
 
