@@ -202,28 +202,18 @@ capability lists, vs-MapStruct callouts, and benchmark cross-links.
 
 ## What it is _not_
 
-- **Not a MapStruct replacement, and not trying to be.** MapStruct emits one hand-tuned method body per type pair and
-  it's still ~1.5–2× faster on flat-pair dispatch — about 1.8 ns absolute on a 5-field conversion. On deeper workloads
-  (nested records with list-of-records inside) the two engines match. See [Performance honesty](#performance-honesty).
+- **Not a MapStruct replacement, but the mapping surface is roughly at parity.** MapStruct emits one hand-tuned method
+  body per type pair and is still ~1.5–2× faster on flat-pair dispatch — about 1.8 ns absolute on a 5-field conversion.
+  On deeper workloads (nested records with list-of-records inside) the two engines match. See
+  [Performance honesty](#performance-honesty).
 
-  On the mapping surface itself, `Telescope.mapper(...)` covers what `@Mapping(...)` covers, in one call. Same-name
-  auto-mapping, renames via `Mapping.to(srcAcc, tgtAcc)`, typed transforms, nested mappers via `Mapping.via(...)`,
-  nested-path correspondences via `Mapping.to(srcAcc, tgtTelescope)` (the `@Mapping(target = "a.b.c")` case), eager
-  literals via `Mapping.constant(...)` (the `@Mapping(constant = "...")` case), per-call computed values via
-  `Mapping.compute(..., Supplier)` (the `@Mapping(expression = "java(...)")` case), plus recursive intermediate
-  allocation for record targets so a flat source lifts into a deeply-nested record without per-hop glue.
-
-  The reason to pick telescope anyway is the shapes MapStruct just can't compose to:
-  - deep navigation as a primitive
-  - effectful update (`updateAsync`, `updateValidated`, `updateEither`, `updateOptional`)
-  - sealed-narrow paradigm hop
-  - JPA cycle handling and Hibernate `LAZY` proxy unwrap
-  - bidirectional from one declaration
-
-  `telescope-quarkus` is an Arc extension (Jandex-discovered, native-image safe). Spring autoconfig is trivial enough
-  that wiring stays bring-your-own; the [`examples/springboot/`](examples/springboot) directory has four Boot apps
-  showing how. If your problem is one of the shapes above, see
-  [When telescope is the right pick](#when-telescope-is-the-right-pick). If not, pick MapStruct.
+  Telescope covers the common `@Mapping(...)` shapes — same-name auto, renames, typed transforms, nested mappers, flat →
+  nested-path correspondences, eager literals, per-call computed values, forward-only mappers, multi-source merge,
+  by-name enum mapping, null-coalescing defaults, lifecycle hooks, and Spring/Quarkus autoconfig — plus the shapes
+  MapStruct can't compose to: deep navigation, effectful update, sealed-root dispatch, JPA cycles and Hibernate `LAZY`
+  proxy unwrap, bidirectional from one declaration. See [How it compares to MapStruct](#how-it-compares-to-mapstruct)
+  for the full row-by-row comparison and [When telescope is the right pick](#when-telescope-is-the-right-pick) for the
+  short version.
 
 - **Not a fuzzy auto-mapper.** `Telescope.map(...)` matches fields by exact name and type, nothing more — no fuzzy name
   heuristics, no flattening, no inferred relationships (that's ModelMapper / Dozer territory, and they lost to MapStruct
@@ -243,19 +233,24 @@ integration. Telescope is an **optics DSL** where mapping is one capability amon
 update, and sealed-type narrowing. They overlap on the deep record↔record / bean↔record / bean↔bean band; the rest of
 each tool's surface doesn't.
 
-| Capability                                   | telescope                                                                                                                     | MapStruct                                                  |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| **Bidirectional out of the box**             | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)`                           | One direction per `@Mapper` interface; reverse is separate |
-| **Deep nested navigation + update**          | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                                              | Not in scope                                               |
-| **Effectful update**                         | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                                                         | Not in scope                                               |
-| **Compile-time codegen**                     | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                                                     | `@Mapper` interfaces                                       |
-| **Runtime path (no codegen required)**       | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later                                       | Compile-time only                                          |
-| **Sealed types / pattern matching**          | `.as(Subtype.class)` narrows; the path stays type-safe                                                                        | Not in scope                                               |
-| **Conditional / expression-based mappings**  | `Mapping.via(srcAcc, tgtAcc, customMapper)` only — no embedded expression language                                            | `@Mapping(expression = "...")`, `condition = "..."`        |
-| **`@BeforeMapping` / `@AfterMapping` hooks** | Not supported                                                                                                                 | Yes                                                        |
-| **Spring / Quarkus / CDI integration**       | None today — bring-your-own wiring                                                                                            | Native via `componentModel = "spring"` / `"jsr330"` / etc. |
-| **Maturity**                                 | 1.0 line; JMH-backed perf claims                                                                                              | Ten years; thousands of production deployments             |
-| **Dispatch perf — codegen vs codegen**       | 1.2–1.9× behind on flat/nested forward; **matches on the deep tier** — see Performance honesty below for the measured numbers | Direct bytecode, monomorphic call site                     |
+| Capability                                   | telescope                                                                                                                                          | MapStruct                                                  |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **Bidirectional out of the box**             | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)`                                                | One direction per `@Mapper` interface; reverse is separate |
+| **Deep nested navigation + update**          | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                                                                   | Not in scope                                               |
+| **Effectful update**                         | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                                                                              | Not in scope                                               |
+| **Compile-time codegen**                     | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                                                                          | `@Mapper` interfaces                                       |
+| **Runtime path (no codegen required)**       | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later                                                            | Compile-time only                                          |
+| **Sealed types / pattern matching**          | `.as(Subtype.class)` narrows; the path stays type-safe                                                                                             | Not in scope                                               |
+| **Sealed-root dispatch**                     | `Match.of(...).when(Case.class, ...).exhaustive()` — compile-checked permit list, lattice-routed via `Prism.downcast()`                            | Not in scope                                               |
+| **Multi-source mappers (N → 1)**             | `Telescope.merge(Target.class, from(A::id, T::id), …)` returning `Mapper<Sources, T>` with a class-keyed `Sources` bag                             | Multi-source methods with `@Mapping(source = "param.x")`   |
+| **Forward-only mappers**                     | `Telescope.mapperForward(...)` returning typed `ForwardMapper<A, B>` — no `backward` method at the type level                                      | Write a separate `@Mapper` interface                       |
+| **Enum value mapping**                       | `Mapping.enumTo(src, tgt, SrcEnum.class, TgtEnum.class)` with build-time exhaustiveness                                                            | `@ValueMapping(source = "X", target = "Y")`                |
+| **Null-coalescing defaults**                 | `Mapping.toOrElse(src, tgt, default)` / `toOrElseGet(src, tgt, supplier)` (predicate-gated overload)                                               | `@Mapping(defaultValue = "...")` / `defaultExpression`     |
+| **Conditional / drop**                       | `Mapping.drop(src)` skips the field; predicate-gated `toOrElse(src, tgt, Predicate, default)` for value-conditional fallback                       | `@Mapping(condition = "...")`                              |
+| **`@BeforeMapping` / `@AfterMapping` hooks** | `Mapper.beforeForward(...)` / `afterForward(...)` / `beforeBackward(...)` / `afterBackward(...)` — chain composes left-to-right                    | Annotation-driven                                          |
+| **Spring / Quarkus / CDI integration**       | `telescope-spring-boot-starter` (Spring Boot 4 autoconfig + `Mapper<A, B>` bean registry) + `telescope-quarkus` (Arc extension, Jandex-discovered) | Native via `componentModel = "spring"` / `"jsr330"` / etc. |
+| **Maturity**                                 | 1.0 line; JMH-backed perf claims                                                                                                                   | Ten years; thousands of production deployments             |
+| **Dispatch perf — codegen vs codegen**       | 1.2–1.9× behind on flat/nested forward; **matches on the deep tier** — see Performance honesty below for the measured numbers                      | Direct bytecode, monomorphic call site                     |
 
 #### Per-field source/target mapping — side by side
 
@@ -275,23 +270,22 @@ public interface OrderMapper {
 ```java
 // telescope — varargs factory
 final var mapper = Telescope.mapper(
+  Order.class,
+  OrderDto.class,
   Mapping.to(Order::getCustomerName, OrderDto::getFullName),
-  Mapping.to(Order::getCreatedAt, OrderDto::getCreatedDate),
-  Mapping.auto() // same-named fields backfill automatically
+  Mapping.to(Order::getCreatedAt, OrderDto::getCreatedDate)
 );
+
+// Same-named fields backfill automatically — recursion is auto by default, no explicit row needed.
 
 final OrderDto dto = mapper.forward(order);
 
 final Order back = mapper.backward(dto);
 ```
 
-```java
-// telescope — fluent chain (equivalent shape)
-Telescope.map(Order.class).to(OrderDto.class)
-  .field(Order::getCustomerName, OrderDto::getFullName)
-  .field(Order::getCreatedAt,    OrderDto::getCreatedDate)
-  .build();
-```
+`Telescope.map(...)` is the sibling that returns a `Telescope<A, B>` instead of a `Mapper<A, B>` — same factory shape,
+same row vocabulary, useful when you want to thread the conversion into a longer `.then(...)` chain rather than call
+`forward` / `backward` / `patch` on a Mapper handle.
 
 | Aspect                               | MapStruct                                               | telescope                                                                  |
 | ------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -309,10 +303,14 @@ guarantee that everything you wrote against the source/target types compiles iff
 
 #### When MapStruct is the right pick
 
-- You need flat `Entity → Dto` conversion with hand-tuned `@Mapping` expressions, `@BeforeMapping` / `@AfterMapping`
-  lifecycle hooks, or `condition = "..."` predicates
-- You need Spring / Quarkus / CDI integration via `componentModel`
-- You don't need bidirectional, deep navigation, or effects — and you'd never reach for optics for anything else
+- You need embedded expression-language mapping bodies — `@Mapping(expression = "java(...)")` or
+  `@Mapping(qualifiedByName = "...")` qualifier dispatch — and want them inline in the annotation rather than as plain
+  Java mappers passed to `Mapping.via(...)`
+- You need MapStruct-specific declarative shapes telescope doesn't expose: `@InheritConfiguration` row-set reuse, full
+  `@SubclassMapping` polymorphic dispatch, or `@MappingTarget` update-in-place semantics (telescope's `Mapper.patch`
+  covers sparse overlay, not full update-into-existing)
+- The mappers are flat `Entity → Dto` only — no bidirectional, deep navigation, sealed dispatch, multi-source merge, or
+  effectful update needs — and you'd never reach for optics for anything else
 
 #### When telescope is the right pick
 
@@ -323,6 +321,11 @@ guarantee that everything you wrote against the source/target types compiles iff
   list, no inverse interface to write
 - You need to lift a mapping (or a field update) through an **effect** — `updateValidated`, `updateAsync`,
   `updateOptional`, `updateEither`
+- You have **multi-source mappers** (`N → 1`) — `Telescope.merge(Target.class, from(A::id, T::id), …)` returns a
+  `Mapper<Sources, T>` with a class-keyed bag; declared once, reusable
+- You have a **sealed root** to dispatch on — `Match.of(animal).when(Dog.class, …).when(Cat.class, …).exhaustive()`
+  gives compile-checked exhaustiveness over the permit list (and the `@Bridge` codegen emits exactly this for sealed
+  source types)
 - You're navigating a mix of **records and POJOs** at any depth and don't want to materialize intermediate DTOs to
   bridge between them
 - You want the same `Telescope<S, A>` type to do reading, updating, mapping, and conversion — one mental model instead
@@ -382,7 +385,7 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:0.4.1")
+    implementation("io.github.eschizoid:telescope-core:0.10.0")
 }
 ```
 
@@ -392,7 +395,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>0.4.1</version>
+  <version>0.10.0</version>
 </dependency>
 ```
 
@@ -404,8 +407,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:0.4.1")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:0.4.1")
+    implementation("io.github.eschizoid:telescope-core:0.10.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:0.10.0")
 }
 ```
 
@@ -415,7 +418,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>0.4.1</version>
+  <version>0.10.0</version>
 </dependency>
 
 <build>
@@ -428,7 +431,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>0.4.1</version>
+            <version>0.10.0</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
@@ -833,12 +836,33 @@ applied; otherwise the recursion auto-resolves that component.
 **Cycle handling.** Self-referencing structures (a `User` that contains `Optional<User>`) terminate naturally — the
 recursion caches each type pair as it descends, and re-entry returns the in-progress entry instead of recursing forever.
 
-**Override forms.** Three accepted row shapes:
+**Override forms.** Static-import-friendly factories on `Mapping`:
+
+| Factory                       | Purpose                                             | MapStruct equivalent                        |
+| ----------------------------- | --------------------------------------------------- | ------------------------------------------- |
+| `to(src, tgt)`                | Rename, same leaf type                              | `@Mapping(source, target)`                  |
+| `to(src, tgt, fwd, bwd)`      | Bidirectional typed transform                       | `@Mapping(source, target, qualifiedBy)`     |
+| `forward(src, tgt, fn)`       | Forward-only typed transform                        | (separate `@Mapper` interface)              |
+| `toOrElse(src, tgt, default)` | Null-coalesce to a default value                    | `@Mapping(defaultValue = "...")`            |
+| `toOrElseGet(src, tgt, sup)`  | Null-coalesce via a `Supplier`                      | `@Mapping(defaultExpression = "java(…)")`   |
+| `enumTo(src, tgt, SE, TE)`    | By-name enum mapping with build-time exhaustiveness | `@ValueMapping(source = "X", target = "Y")` |
+| `via(src, tgt, mapper)`       | Drop in a pre-built nested mapper                   | (composition by hand)                       |
+| `constant(tgt, value)`        | Forward-only literal at the target slot             | `@Mapping(constant = "...")`                |
+| `compute(tgt, supplier)`      | Forward-only supplier-computed value                | `@Mapping(expression = "java(...)")`        |
+| `drop(src)`                   | Skip the source field; backward zero-fills it       | `@Mapping(ignore = true)`                   |
+
+Example — three of those rows together:
 
 ```java
-to(UserEntity::name, UserDto::fullName)                                              // rename, same type
-to(EventEntity::year, EventDto::year, Object::toString, Integer::parseInt)           // typed transform
-via(UserEntity::address, UserDto::address, addressMapper)                            // drop in a pre-built nested mapper
+import static io.github.eschizoid.telescope.mapping.Mapping.*;
+
+Telescope.mapper(
+  UserEntity.class,
+  UserDto.class,
+  to(UserEntity::name, UserDto::fullName),
+  toOrElse(UserEntity::region, UserDto::region, "EMEA"),
+  enumTo(UserEntity::status, UserDto::status, EntityStatus.class, DtoStatus.class)
+);
 ```
 
 The `via(...)` row works in two flavours: pass an **accessor-typed** mapper (e.g.
@@ -878,63 +902,30 @@ at every type pair the recursion encounters. The alternative is to navigate the 
 
 ### Convert — `Telescope.map` / `Telescope.mapper`
 
-**Unified deep mapping.** Pass the two root classes plus any override / hint rows; recursion does the rest. Same-name
-components identity-map, nested records/POJOs recurse, `List`/`Set`/`Map`/`Optional` lift the inner Iso through the
-container automatically (to any depth — `List<Map<K, Set<X>>>` resolves by construction). The result is a
-`Telescope<A, B>` (an `Iso`), so it composes with anything else.
+The same factory described under [Type conversion](#type-conversion) handles POJO↔POJO and cross-paradigm record↔POJO
+pairs without ceremony — components match by name on either side (`Pojo::getX` / `RecordOrPojo::x` normalised to `x`),
+nested POJOs recurse, and container hops auto-lift. The POJO mechanics this section covers are the bean-construction
+lever (`writeBean` / `writeBeans`) for when the auto-detect ladder can't pick a strategy.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.Mapping.via;
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 
 class LegacyUser {
-  /* getId(), getEmail(), getName() + a no-arg ctor / all-args ctor / builder() */
+  /* getId(), getEmail(), getName() + no-arg ctor + setters */
 }
 
 record UserRecord(String id, String email, String name) {}
 
-// Same-name 1-liner — every component lines up by getter/component name.
+// Same-name 1-liner — every getter/component lines up by normalised name.
 final Telescope<LegacyUser, UserRecord> bridge = Telescope.map(LegacyUser.class, UserRecord.class);
-
-UserRecord rec = bridge.read(legacyUser); // forward
-
-LegacyUser back = bridge.set(legacyUser, rec); // backward
 ```
 
-**Renames and transforms.** When names differ, supply `Mapping.to(srcAcc, tgtAcc)`; for typed transforms,
-`Mapping.to(srcAcc, tgtAcc, forward, backward)`; for pre-built nested mappers, `Mapping.via(srcAcc, tgtAcc, mapper)`.
-Each row is keyed by the declaring class of its accessors via `SerializedLambda`, so a single row applies wherever the
-recursion lands on that type pair — top level or N levels deep.
-
-```java
-final Telescope<AccountBean, AccountRecord> bridge = Telescope.map(
-  AccountBean.class,
-  AccountRecord.class,
-  to(AccountBean::getName, AccountRecord::displayName), // rename
-  to(EventBean::getYear, EventRecord::year, Integer::toString, Integer::parseInt)
-); // typed transform
-```
-
-**Nested-collection bridges work automatically.** A record component `List<SubRecord>` whose POJO side is
-`List<SubPojo>` recurses without a special hop — the container `Iso` is lifted by `Iso.liftList` once the inner pair is
-resolved. Same for `Set`, `Map`-values, `Optional`, and arbitrarily-deep nesting:
-
-```java
-record OrderRecord(String sku, int qty) {}
-
-record CartRecord(String id, List<OrderRecord> orders) {}
-
-class OrderPojo {
-  /* getSku(), getQty() + ... */
-}
-
-class CartPojo {
-  /* getId(), getOrders() returns List<OrderPojo> */
-}
-
-final Telescope<CartPojo, CartRecord> cart = Telescope.map(CartPojo.class, CartRecord.class);
-// CartPojo ↔ CartRecord, with the List<OrderPojo> ↔ List<OrderRecord> hop handled automatically.
-```
+Renames (`Mapping.to(srcAcc, tgtAcc)`), typed transforms (`Mapping.to(srcAcc, tgtAcc, fwd, bwd)`), null-coalescing
+defaults (`Mapping.toOrElse` / `toOrElseGet`), by-name enum mapping (`Mapping.enumTo`), and pre-built nested mappers
+(`Mapping.via(srcAcc, tgtAcc, mapper)`) work the same way they do for records — see the rows under
+[Type conversion](#type-conversion).
 
 **`writeBean` — pin a POJO write strategy.** `Beans.autoWriter` picks a ladder: `builder()` → no-arg ctor + setters →
 no-arg ctor + reflective field injection → single public all-args ctor (when compiled with `-parameters` and ctor
@@ -1227,8 +1218,8 @@ The return type degrades to a terminal `Telescope<R, Target>` when the target is
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope-core:0.4.1")
-annotationProcessor("io.github.eschizoid:telescope-codegen:0.4.1")
+implementation("io.github.eschizoid:telescope-core:0.10.0")
+annotationProcessor("io.github.eschizoid:telescope-codegen:0.10.0")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
