@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -54,6 +55,69 @@ class MapperIntoTest {
 
     public void setQuantity(final int quantity) {
       this.quantity = quantity;
+    }
+  }
+
+  @Nested
+  @DisplayName("Two-phase apply — every read completes before any setter runs")
+  class StagedWriteAtomicity {
+
+    record SimpleSrc(String first, String second, String third) {}
+
+    static class CountedEntity {
+
+      private String first;
+      private String second;
+      private String third;
+      static final AtomicInteger setterFires = new AtomicInteger();
+
+      public CountedEntity() {}
+
+      public String getFirst() {
+        return first;
+      }
+
+      public void setFirst(final String first) {
+        setterFires.incrementAndGet();
+        this.first = first;
+      }
+
+      public String getSecond() {
+        return second;
+      }
+
+      public void setSecond(final String second) {
+        setterFires.incrementAndGet();
+        this.second = second;
+      }
+
+      public String getThird() {
+        return third;
+      }
+
+      public void setThird(final String third) {
+        setterFires.incrementAndGet();
+        this.third = third;
+      }
+    }
+
+    @Test
+    @DisplayName("6 setter fires: 3 from forward() + 3 from into() — every patch-table slot reaches its setter")
+    void stagedWritePattern() {
+      final var mapper = Telescope.mapper(SimpleSrc.class, CountedEntity.class);
+      final var entity = new CountedEntity();
+      CountedEntity.setterFires.set(0);
+
+      mapper.into(entity, new SimpleSrc("a", "b", "c"));
+
+      assertEquals(
+        6,
+        CountedEntity.setterFires.get(),
+        "3 from forward() + 3 from into() — every slot reaches its setter"
+      );
+      assertEquals("a", entity.getFirst());
+      assertEquals("b", entity.getSecond());
+      assertEquals("c", entity.getThird());
     }
   }
 

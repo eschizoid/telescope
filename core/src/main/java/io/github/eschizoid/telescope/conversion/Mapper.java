@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -272,8 +273,25 @@ public final class Mapper<A, B> {
       );
     }
     final B produced = forward(source);
-    for (final var name : targetRefl.names(targetClass)) {
-      Beans.writeBeanProperty(target, name, targetRefl.read(produced, name));
+    // Two-phase apply for atomicity AND scoping.
+    //
+    // Atomicity: stage every (name, value) read BEFORE any setter runs on target. If a stage-time
+    // read throws, target is untouched. If a write-time setter throws midway, the staging map is
+    // already fully populated; partial writes on a managed entity are at most the slot range that
+    // already drained, which is strictly smaller than the all-or-nothing on the raw-loop version.
+    //
+    // Scoping: iterate the mapper's patch-table keyset — the set of top-level target fields the
+    // engine actually produced values for — NOT every getter-derived property on target.getClass().
+    // Iterating all properties would (1) clobber unmapped pre-existing fields on the managed
+    // entity, defeating the "load-mutate-save" idiom; and (2) try to setX(...) on read-only
+    // computed getters (e.g. getFullName() derived from firstName + lastName), raising an IAE for
+    // a property the user never asked us to map.
+    final var staged = new LinkedHashMap<String, Object>(patchByTargetField.size());
+    for (final var name : patchByTargetField.keySet()) {
+      staged.put(name, targetRefl.read(produced, name));
+    }
+    for (final var e : staged.entrySet()) {
+      Beans.writeBeanProperty(target, e.getKey(), e.getValue());
     }
     return target;
   }
