@@ -216,6 +216,46 @@ public record Reflective(
     );
   }
 
+  /**
+   * Expose the positional reader array used inside {@link #structuralIsoArr(Class, Map, Function)}.
+   * Callers (typically {@code DeepMap} on the assembly hot path) can use this to bypass the
+   * source-side {@link Iso} wrapper entirely and read instance → array values inline, eliminating
+   * one virtual hop per call. Same substrate as {@link #structuralIsoArr}: holder-aware (uses
+   * {@link Lens#get} when {@code holderReaders} is non-null), records short-circuit to cached
+   * {@code RecordInfo.readers[]}, bean fallback captures the LMF reader via {@link #read}.
+   */
+  public Function<Object, Object>[] positionalReaders(
+    final Class<?> cls,
+    final Map<String, Lens<Object, Object>> holderReaders
+  ) {
+    return resolveReadersByPosition(cls, names(cls), holderReaders);
+  }
+
+  /**
+   * Expose the positional builder ({@code Object[arity] → T}) used inside {@link
+   * #structuralIsoArr}. Same shape as {@link #positionalReaders}: lets callers skip the Iso wrapper
+   * to invoke the canonical constructor (records — direct LMF-built {@code ctorFn}) or the
+   * named-construct path (beans — wrapped over an O(1) HashMap-indexed array lookup, no per-call
+   * name scan).
+   */
+  @SuppressWarnings("unchecked")
+  public <T> Function<Object[], T> positionalBuilder(
+    final Class<T> cls,
+    final Map<String, Lens<Object, Object>> holderReaders,
+    final Function<Function<String, Object>, Object> holderConstructor
+  ) {
+    if (cls.isRecord() && holderReaders == null && holderConstructor == null) {
+      final var ctorFn = Records.info(cls).ctorFn();
+      return arr -> (T) ctorFn.apply(arr);
+    }
+    final var componentNames = names(cls);
+    final var nameIndex = indexMap(componentNames);
+    if (holderConstructor != null) {
+      return arr -> (T) holderConstructor.apply(i -> arr[nameIndex.get(i)]);
+    }
+    return arr -> cls.cast(construct(cls, i -> arr[nameIndex.get(i)]));
+  }
+
   @SuppressWarnings("unchecked")
   private Function<Object, Object>[] resolveReadersByPosition(
     final Class<?> cls,
