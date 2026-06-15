@@ -407,33 +407,34 @@ directions:
 
 | Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope runtime (ns/op) |
 | ------ | ------------- | ----------------: | ------------------------: | ------------------------: |
-| flat   | bean → record |     3.333 ± 0.150 |             4.786 ± 0.014 |            124.04 ± 2.214 |
-| flat   | record → bean |     3.338 ± 0.040 |             5.843 ± 0.112 |            188.08 ± 3.071 |
-| nested | bean → record |     5.045 ± 0.466 |            10.077 ± 0.118 |            204.30 ± 3.011 |
-| nested | record → bean |     5.236 ± 0.092 |            10.344 ± 0.253 |            277.92 ± 3.782 |
-| deep   | bean → record |    52.207 ± 8.213 |            56.310 ± 1.073 |            802.04 ± 7.625 |
-| deep   | record → bean |   59.211 ± 18.957 |         91.666 ± 211.19 ¹ |           1172.88 ± 20.21 |
+| flat   | bean → record |     3.350 ± 0.021 |             4.863 ± 0.025 |            103.45 ± 1.277 |
+| flat   | record → bean |     3.368 ± 0.047 |             5.881 ± 0.055 |            170.27 ± 0.637 |
+| nested | bean → record |     5.165 ± 0.564 |            10.168 ± 0.150 |           165.98 ± 12.280 |
+| nested | record → bean |     5.241 ± 0.070 |            10.476 ± 0.087 |            225.20 ± 4.311 |
+| deep   | bean → record |     47.60 ± 0.293 |            57.565 ± 1.206 |            573.32 ± 3.146 |
+| deep   | record → bean |     53.37 ± 7.532 |            54.285 ± 1.353 |            880.62 ± 6.571 |
 
-¹ Wide error band on this one row — JIT didn't stabilise within the iteration budget. The other 17 rows are tight
-(±0.01–8 ns). Don't read fine-grained conclusions into this single cell.
+All 18 rows captured on a freshly-rebooted machine, no other workloads running. Tight error bands across the board
+(typically ±0.02–7 ns; one outlier at ±12 ns on nested runtime forward).
 
-Three tiers, codegen path. On flat, MapStruct hits 3.33 ns and telescope 4.79 ns — a 1.44× gap, 1.5 ns absolute. On
-nested, 5.05 vs 10.08 ns: 2.00× behind, 5.0 ns absolute. On deep, 52.21 vs 56.31 ns: 1.08× behind on forward — parity
-within the MapStruct error band. Once per-level work climbs past ~50 ns, the wrapper hop vanishes into the actual work.
+Three tiers, codegen path. On flat, MapStruct hits 3.35 ns and telescope 4.86 ns — a 1.45× gap, 1.5 ns absolute. On
+nested, 5.17 vs 10.17 ns: 1.97× behind, 5.0 ns absolute. On deep, 47.60 vs 57.57 ns: 1.21× behind on forward. Once
+per-level work climbs past ~50 ns, the wrapper hop vanishes into the actual work; on the backward direction at 53.37 vs
+54.29 ns the two are within each other's error bands.
 
 The flat-tier gap is the `Telescope` wrapper's single virtual hop into `BridgeFn.forward` — about 1.5 ns of constant
 overhead vs MapStruct's directly-inlined constructor call. On a 3 ns workload that's a noticeable surcharge. On a 50 ns
 workload it vanishes, which is what we see on the deep tier where element-by-element list conversion dominates.
 
-The runtime path closed substantially in this release. `Telescope.mapper(...)`'s structural intermediate moved from
-`LinkedHashMap<String, Object>` to position-indexed `Object[]`, eliminating per-call hash dispatch + 70-86% of the
-allocation pressure (Tier C). The same PR also short-circuited `Iso.identity()` dispatch on auto-mapped fields, dropped
-the bean forward branch from O(N²) `indexOf` to O(1) HashMap, and bound the cached LMF reader directly for
-holder-annotated records — three Tier-D wins layered on top. Cumulative drop **~60-70% on every runtime row** vs the
-pre-release baseline (e.g. flat bean → record: 340 → 124 ns/op). Relative gap to MapStruct: ~37× on flat, ~40× on
-nested, ~15× on deep — the deeper the tree, the more the per-level work dominates the constant overhead. Sub-microsecond
-on flat and nested, single-microsecond on deep. Allocation pressure is now low enough to fit comfortably in non-hot
-service code; codegen remains the recommendation on tight inner loops.
+The runtime path sits on a position-indexed `Object[]` structural intermediate — `DeepMap.assembleIso` builds a single
+fused `Iso<S, T>` that gathers directly from cached LMF-bound readers into the target array, no intermediate allocation.
+The cycle-safe shell at every nested type-pair hop bypasses its `ThreadLocal` + `IdentityHashMap` probe when the static
+type graph is acyclic (detected during `populateIso` via SCC analysis on the recursion stack); genuine instance cycles
+still get the full guard. Cumulative drop vs the unoptimized baseline: **~70-83%** across every row (e.g. flat bean →
+record: 340 → 103 ns/op; deep bean → record: 2024 → 573 ns/op). Relative gap to MapStruct: ~31× on flat, ~32× on nested,
+**~12× on deep** — the deeper the tree, the more the per-level work dominates the constant overhead. Sub-microsecond on
+flat and nested, single-microsecond on deep. Allocation pressure is low enough to fit comfortably in non-hot service
+code; codegen remains the recommendation on tight inner loops.
 
 If you're in a tight inner loop where 1 ns matters, pick MapStruct. For realistic deep workloads — nested records with
 list-of-records inside — the codegen rows are a tie and you're picking on capability. Sealed-narrow paradigm hop,
