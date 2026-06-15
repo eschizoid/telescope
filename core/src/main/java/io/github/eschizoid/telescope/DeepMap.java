@@ -89,7 +89,7 @@ public final class DeepMap {
     //
     // Backward direction still goes through the slow path so .patch / .backward semantics survive.
     // A future Tier-A pass can build the backward fast-path symmetrically.
-    if (steps.length == 0) {
+    if (steps.length == 0 && !Boolean.getBoolean("telescope.disableFastPath")) {
       // Try record-to-record fast-path first (cheaper allocation profile via canonical-ctor),
       // then bean-to-bean (no-arg ctor + cached setter dispatch). Mixed shapes (record↔bean)
       // still take the slow path; container / nested / cross-type cases also fall through.
