@@ -56,7 +56,7 @@ public final class Mapper<A, B> {
   // A user-supplied hook like `e -> e.normalised()` has no inverse — wrapping it as
   // `Iso.of(hook, identity)` would construct a fake Iso that silently violates the laws
   // `OpticLawsTest` pins. That's worse than admitting the hook isn't lattice-shaped. The Telescope-
-  // level equivalents (`Telescope.after/before`, PR #90) get away with the partial-Iso shape
+  // level equivalents (`Telescope.after/before`) get away with the partial-Iso shape
   // because Telescope is read-or-write through a Traversal — there's no single-value round-trip
   // through both legs. `Mapper.forward(a)` and `Mapper.backward(b)` ARE both surfaces of a single
   // contract, so the lattice-routed shape would break composition. The four hook fields below own
