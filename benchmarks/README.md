@@ -220,44 +220,53 @@ iteration). Three depth tiers, both directions, three engines per cell. All 18 r
 
 | Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope runtime (ns/op) |
 | ------ | ------------- | ----------------: | ------------------------: | ------------------------: |
-| flat   | bean → record |             3.333 |                     4.786 |                    124.04 |
-| flat   | record → bean |             3.338 |                     5.843 |                    188.08 |
-| nested | bean → record |             5.045 |                    10.077 |                    204.30 |
-| nested | record → bean |             5.236 |                    10.344 |                    277.92 |
-| deep   | bean → record |            52.207 |                    56.310 |                    802.04 |
-| deep   | record → bean |            59.211 |                  91.666 ¹ |                   1172.88 |
+| flat   | bean → record |             3.350 |                     4.863 |                    103.45 |
+| flat   | record → bean |             3.368 |                     5.881 |                    170.27 |
+| nested | bean → record |             5.165 |                    10.168 |                    165.98 |
+| nested | record → bean |             5.241 |                    10.476 |                    225.20 |
+| deep   | bean → record |            47.599 |                    57.565 |                    573.32 |
+| deep   | record → bean |            53.373 |                    54.285 |                    880.62 |
 
-¹ Wide error band on this one row (`deep record→bean codegen ±211 ns`). JIT didn't stabilise within the iteration
-budget. The other 17 rows are tight (±0.01–8 ns) — full ± table in the v1.0 release notes.
+All 18 rows captured together on a freshly-rebooted machine, no other workloads running. Tight error bands across the
+board (typically ±0.02–7 ns; one outlier at ±12 ns on nested runtime forward).
 
-All 18 rows captured together on a freshly-rebooted machine, no other workloads running. The runtime column reflects the
-cumulative impact of PR #118: Tier C (Object[] structural intermediate replacing LinkedHashMap) plus three Tier-D wins
-layered on inside the same PR — `Iso.identity()` cached singleton with reference-equal short-circuit in `remapIsoArr`,
-O(N²)→O(N) name dispatch on the bean forward branch, and direct LMF-reader binding for holder-annotated records.
+#### How the runtime path stays fast
+
+Two structural choices keep the runtime path cheap:
+
+- **Fused source-and-remap** in `DeepMap.assembleIso`: no source-side `Object[]` intermediate. The forward body gathers
+  directly from cached positional readers into the target `Object[]` per slot — one alloc + 5 array writes + 5 reads + 2
+  `Iso.then` virtual dispatches saved per call vs the naive three-Iso composition.
+- **Acyclic-pair shell bypass**: every nested type-pair hop would otherwise pay `ThreadLocal.get` +
+  `IdentityHashMap.put` + try/finally for cycle safety. Type pairs whose static graph has no path back to themselves
+  (detected during `populateIso` via SCC analysis on the recursion stack) get a plain Iso that skips the probe. Cyclic
+  SCCs still get the full guard.
+
+The acyclic-bypass alone reclaims ~15 ns per nested hop, compounding on the deep tier where the shell fires once per
+level walked.
 
 #### What the numbers say
 
-Three tiers, codegen path. On flat (3.33 vs 4.79 ns), telescope codegen runs 1.44× behind MapStruct — absolute gap ~1.5
-ns. On nested (5.05 vs 10.08 ns), 2.00× behind, ~5.0 ns absolute. On deep (52.21 vs 56.31 ns), 1.08× behind on forward —
-parity within the MapStruct error band. Once per-level work climbs past ~50 ns, the wrapper hop vanishes into the actual
-work.
+Three tiers, codegen path. On flat (3.35 vs 4.86 ns), telescope codegen runs 1.45× behind MapStruct — absolute gap ~1.5
+ns. On nested (5.17 vs 10.17 ns), 1.97× behind, ~5.0 ns absolute. On deep (47.60 vs 57.57 ns), 1.21× behind on forward;
+on the backward direction at 53.37 vs 54.29 ns the two are within each other's error bands.
 
 Why MapStruct wins on the small tiers. It emits one hand-templated method body per pair, fully monomorphic, and the JIT
 inlines the whole conversion into a single basic block. Telescope's `@Bridge` codegen emits the same shape — a direct
 constructor call — but wraps it in a `Telescope` for composability. The wrapper's `read` / `set` terminals are
 specialised on a `BridgeTelescope` subclass that holds the `BridgeFn` directly and dispatches in one virtual hop, but
-that hop still costs ~2 ns of constant overhead. On flat and nested the actual work is only 3–10 ns, so the overhead
+that hop still costs ~1.5 ns of constant overhead. On flat and nested the actual work is only 3–10 ns, so the overhead
 shows up. On deep, where element-by-element list conversion dominates and the workload climbs past 50 ns, that overhead
 vanishes.
 
-Runtime conversion (`Telescope.mapper(...)`) runs ~15–40× slower than MapStruct's generated bytecode after the PR #118
-Tier C + Tier-D wins — 37× on flat, 40× on nested, 15× on deep. The lens chain walks the record/bean spine at every
-level (cached LMF readers, not raw reflection), and per-call allocation is now 64–384 B/op (down from 776–1296 B/op).
+Runtime conversion (`Telescope.mapper(...)`) runs ~12–32× slower than MapStruct's generated bytecode — 31× on flat, 32×
+on nested, **12× on deep**. The lens chain walks the record/bean spine at every level (cached LMF readers, not raw
+reflection), and per-call allocation sits in the 64–384 B/op band (down from 776–1296 B/op on the unoptimized shape).
 Sub-microsecond on flat and nested, single-microsecond on deep. Reach for codegen on hot paths; the runtime path is for
 one-shot conversions and non-hot service code.
 
 A quick decision guide. If the problem is "convert this entity to this DTO and back, both directions known at build
-time, no nested-list iteration, just scalars," MapStruct's bytecode is still ~1.4× faster on the row (3.33 vs 4.79 ns).
+time, no nested-list iteration, just scalars," MapStruct's bytecode is still ~1.45× faster on the row (3.35 vs 4.86 ns).
 On realistic deep workloads — nested records with list-of-records inside — telescope codegen matches MapStruct.
 
 Where MapStruct stops being an option entirely: sealed-narrow paradigm hop, effectful update (`updateAsync`,
