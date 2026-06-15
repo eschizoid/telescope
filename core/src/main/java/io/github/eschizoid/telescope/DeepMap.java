@@ -25,7 +25,9 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.time.temporal.Temporal;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -118,7 +120,9 @@ public final class DeepMap {
     final var overrideTable = groupOverridesByPair(overrides.toArray(Mapping<?, ?>[]::new), source, target);
     final var cache = new HashMap<TypePair, Iso<?, ?>>();
     final var topSteps = new LinkedHashMap<String, FieldStep>();
-    populateIso(source, target, overrideTable, beanRefl, cache, topSteps, nullStrategy);
+    final var cyclicPairs = new HashSet<TypePair>();
+    final var inProgress = new ArrayDeque<TypePair>();
+    populateIso(source, target, overrideTable, beanRefl, cache, topSteps, nullStrategy, cyclicPairs, inProgress);
     validateAllHintsConsumed(hintMap, cache);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
     final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
@@ -291,11 +295,26 @@ public final class DeepMap {
     final Reflective beanRefl,
     final Map<TypePair, Iso<?, ?>> cache,
     final Map<String, FieldStep> topStepsOut,
-    final NullHint.NullStrategy nullStrategy
+    final NullHint.NullStrategy nullStrategy,
+    final Set<TypePair> cyclicPairs,
+    final Deque<TypePair> inProgress
   ) {
     final var key = new TypePair(source, target);
-    if (cache.containsKey(key)) return;
+    if (cache.containsKey(key)) {
+      // Re-entry on an in-progress slot (sentinel == null) means we've found a static cycle in the
+      // type graph. Mark this pair AND every ancestor on the recursion stack as cyclic — they're
+      // all
+      // in the same SCC and must keep the value-level cycle-safe shell at runtime. Acyclic pairs
+      // get
+      // a plain Iso pass-through, skipping the ~15 ns ThreadLocal + IdentityHashMap probe per hop.
+      if (cache.get(key) == null) {
+        cyclicPairs.add(key);
+        cyclicPairs.addAll(inProgress);
+      }
+      return;
+    }
     cache.put(key, null); // reserve slot so cycle-re-entry short-circuits
+    inProgress.push(key);
 
     final var srcRefl = pickReflective(source, beanRefl);
     final var tgtRefl = pickReflective(target, beanRefl);
@@ -490,7 +509,9 @@ public final class DeepMap {
           overrides,
           beanRefl,
           cache,
-          nullStrategy
+          nullStrategy,
+          cyclicPairs,
+          inProgress
         )
       );
       byTargetName.put(name, step);
@@ -536,6 +557,7 @@ public final class DeepMap {
       telescopeFixups.isEmpty() ? baseIso : wrapWithTelescopeFixups(baseIso, telescopeFixups, srcRefl, source)
     );
     if (topStepsOut != null) topStepsOut.putAll(byTargetName);
+    inProgress.pop();
   }
 
   /**
@@ -748,9 +770,21 @@ public final class DeepMap {
     final Map<TypePair, List<Mapping<?, ?>>> overrides,
     final Reflective beanRefl,
     final Map<TypePair, Iso<?, ?>> cache,
-    final NullHint.NullStrategy nullStrategy
+    final NullHint.NullStrategy nullStrategy,
+    final Set<TypePair> cyclicPairs,
+    final Deque<TypePair> inProgress
   ) {
-    final var raw = computeAutoIso(srcType, tgtType, componentName, overrides, beanRefl, cache, nullStrategy);
+    final var raw = computeAutoIso(
+      srcType,
+      tgtType,
+      componentName,
+      overrides,
+      beanRefl,
+      cache,
+      nullStrategy,
+      cyclicPairs,
+      inProgress
+    );
     // DEFAULT strategy wraps EVERY auto-recursed per-component Iso uniformly: scalar identity,
     // recursive record/bean pair, lifted container, cross-Optional bridge. When the source value
     // is null, the wrapper substitutes the per-leaf-type default from NullDefaults#defaultFor so
@@ -766,7 +800,9 @@ public final class DeepMap {
     final Map<TypePair, List<Mapping<?, ?>>> overrides,
     final Reflective beanRefl,
     final Map<TypePair, Iso<?, ?>> cache,
-    final NullHint.NullStrategy nullStrategy
+    final NullHint.NullStrategy nullStrategy,
+    final Set<TypePair> cyclicPairs,
+    final Deque<TypePair> inProgress
   ) {
     // (a) Same generic type → identity Iso.
     if (srcType.equals(tgtType)) return Iso.identity();
@@ -774,8 +810,9 @@ public final class DeepMap {
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
     if (srcType instanceof Class<?> srcCls && tgtType instanceof Class<?> tgtCls) {
       if (isReflectable(srcCls) && isReflectable(tgtCls)) {
-        populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null, nullStrategy);
-        return lazyCacheIso(cache, new TypePair(srcCls, tgtCls));
+        populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null, nullStrategy, cyclicPairs, inProgress);
+        final var subKey = new TypePair(srcCls, tgtCls);
+        return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey));
       }
     }
 
@@ -804,7 +841,9 @@ public final class DeepMap {
         overrides,
         beanRefl,
         cache,
-        NullHint.NullStrategy.PROPAGATE
+        NullHint.NullStrategy.PROPAGATE,
+        cyclicPairs,
+        inProgress
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso));
     }
@@ -816,7 +855,9 @@ public final class DeepMap {
         overrides,
         beanRefl,
         cache,
-        NullHint.NullStrategy.PROPAGATE
+        NullHint.NullStrategy.PROPAGATE,
+        cyclicPairs,
+        inProgress
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso)).reverse();
     }
@@ -846,7 +887,9 @@ public final class DeepMap {
         overrides,
         beanRefl,
         cache,
-        NullHint.NullStrategy.PROPAGATE
+        NullHint.NullStrategy.PROPAGATE,
+        cyclicPairs,
+        inProgress
       );
       return switch (srcShape.kind) {
         case LIST -> Iso.liftList(eraseIso(elementIso));
@@ -1319,7 +1362,23 @@ public final class DeepMap {
   );
 
   @SuppressWarnings("unchecked")
-  private static Iso<?, ?> lazyCacheIso(final Map<TypePair, Iso<?, ?>> cache, final TypePair key) {
+  private static Iso<?, ?> lazyCacheIso(
+    final Map<TypePair, Iso<?, ?>> cache,
+    final TypePair key,
+    final boolean acyclic
+  ) {
+    // Acyclic-bypass: when the static type graph has no path from this pair back to itself, the
+    // value-level cycle guard cannot fire. Skip the ThreadLocal probe + IdentityHashMap insert
+    // entirely — ~15 ns saved per nested hop. Verified at populateIso time via the cyclicPairs
+    // tracker; if a downstream change introduces a back-edge that the analysis can't see (e.g. an
+    // Object-typed component holding an instance-level cycle), the bypass would be unsafe — but the
+    // structural typing already prevents DeepMap from descending into Object-typed fields.
+    if (acyclic) {
+      return Iso.of(
+        v -> v == null ? null : ((Iso<Object, Object>) cache.get(key)).to(v),
+        v -> v == null ? null : ((Iso<Object, Object>) cache.get(key)).from(v)
+      );
+    }
     return Iso.of(
       v -> cycleSafe(FORWARD_SEEN, v, x -> ((Iso<Object, Object>) cache.get(key)).to(x)),
       v -> cycleSafe(BACKWARD_SEEN, v, x -> ((Iso<Object, Object>) cache.get(key)).from(x))
