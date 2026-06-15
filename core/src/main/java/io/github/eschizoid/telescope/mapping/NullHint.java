@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.mapping;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.internal.NullDefaults;
 import java.util.Objects;
 
 /**

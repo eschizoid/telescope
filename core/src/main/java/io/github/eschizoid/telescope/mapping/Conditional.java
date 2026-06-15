@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.mapping;
 
+import io.github.eschizoid.telescope.Telescope;
 import java.util.Objects;
 import java.util.function.Predicate;
 
