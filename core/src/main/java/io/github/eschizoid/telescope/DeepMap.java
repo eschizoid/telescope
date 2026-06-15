@@ -1120,6 +1120,35 @@ public final class DeepMap {
     final var srcBuilderFn = srcRefl.positionalBuilder(source, srcHolderReaders, srcHolderConstructor);
     final var slotMaps = buildSlotMaps(byTargetName, bySourceName, srcNames, tgtNames);
     final Iso<Object, Object> identity = Iso.identity();
+    // All-identity short-circuit: when every per-slot Iso is the identity sentinel (the dominant
+    // case for pure-auto same-name mappings), we can skip the per-slot ref-eq check + the
+    // conditional ternary entirely — the JIT can't always eliminate them since fwdIso[i] is a
+    // field of a captured array. Detected once at build time; emits a tighter Iso body that
+    // gathers directly from srcReaders without the Iso indirection. Saves ~1 ns per slot.
+    final var fwdAllIdentity = allIdentity(slotMaps.fwdIso(), identity);
+    final var bwdAllIdentity = allIdentity(slotMaps.bwdIso(), identity);
+    if (fwdAllIdentity && bwdAllIdentity) {
+      return Iso.of(
+        s -> {
+          if (s == null) return null;
+          final var tgtArr = new Object[slotMaps.tgtArity()];
+          for (var i = 0; i < slotMaps.tgtArity(); i++) {
+            final var sp = slotMaps.fwdSrcPos()[i];
+            tgtArr[i] = sp < 0 ? null : srcReaders[sp].apply(s);
+          }
+          return tgtBuilderFn.apply(tgtArr);
+        },
+        t -> {
+          if (t == null) return null;
+          final var srcArr = new Object[slotMaps.srcArity()];
+          for (var i = 0; i < slotMaps.srcArity(); i++) {
+            final var tp = slotMaps.bwdTgtPos()[i];
+            srcArr[i] = tp < 0 ? null : tgtReaders[tp].apply(t);
+          }
+          return srcBuilderFn.apply(srcArr);
+        }
+      );
+    }
     return Iso.of(
       s -> {
         if (s == null) return null;
@@ -1144,6 +1173,11 @@ public final class DeepMap {
         return srcBuilderFn.apply(srcArr);
       }
     );
+  }
+
+  private static boolean allIdentity(final Iso<Object, Object>[] isos, final Iso<Object, Object> identity) {
+    for (final var iso : isos) if (iso != identity) return false;
+    return true;
   }
 
   /**
