@@ -90,6 +90,25 @@ class OpticLawsTest {
       final var dto = new UserDto("Alice", 30);
       assertEquals(userIso.from(dto), reversed.to(dto));
     }
+
+    @Test
+    @DisplayName("identity() returns a cached singleton — reference-equal across call sites")
+    void identityIsSingleton() {
+      final Iso<String, String> a = Iso.identity();
+      final Iso<Integer, Integer> b = Iso.identity();
+      // Same instance after the unchecked cast — the singleton is type-erased.
+      assertTrue(a == (Object) b);
+    }
+
+    @Test
+    @DisplayName("identity() preserves values: to(x) == x and from(x) == x")
+    void identityPassesThrough() {
+      final Iso<String, String> id = Iso.identity();
+      assertEquals("anything", id.to("anything"));
+      assertEquals("anything", id.from("anything"));
+      // Reflexive on reverse: id.reverse() also passes through.
+      assertEquals("z", id.reverse().to("z"));
+    }
   }
 
   @Nested

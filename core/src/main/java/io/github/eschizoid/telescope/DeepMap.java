@@ -1104,7 +1104,7 @@ public final class DeepMap {
       final var step = byTargetName.get(tgtNames[i]);
       if (step == null) {
         fwdSrcPos[i] = -1;
-        fwdIso[i] = IDENTITY_OBJ_ISO;
+        fwdIso[i] = Iso.identity();
       } else {
         final var srcPos = step.sourceName == null ? null : srcIndex.get(step.sourceName);
         fwdSrcPos[i] = srcPos == null ? -1 : srcPos;
@@ -1117,19 +1117,26 @@ public final class DeepMap {
       final var step = bySourceName.get(srcNames[i]);
       if (step == null) {
         bwdTgtPos[i] = -1;
-        bwdIso[i] = IDENTITY_OBJ_ISO;
+        bwdIso[i] = Iso.identity();
       } else {
         final var tgtPos = step.targetName == null ? null : tgtIndex.get(step.targetName);
         bwdTgtPos[i] = tgtPos == null ? -1 : tgtPos;
         bwdIso[i] = (Iso<Object, Object>) step.iso;
       }
     }
+    // Cache the identity sentinel in a local so the reference-equality check JIT-inlines on the hot
+    // path. Auto-mapped same-typed fields hold this exact instance (see Iso.identity), so the
+    // short-circuit skips the virtual to/from dispatch on every pure-pass-through slot — the
+    // dominant case for flat conversions.
+    final Iso<Object, Object> identity = Iso.identity();
     return Iso.of(
       srcArr -> {
         final var out = new Object[tgtArity];
         for (var i = 0; i < tgtArity; i++) {
           final var sp = fwdSrcPos[i];
-          out[i] = fwdIso[i].to(sp < 0 ? null : srcArr[sp]);
+          final var v = sp < 0 ? null : srcArr[sp];
+          final var iso = fwdIso[i];
+          out[i] = iso == identity ? v : iso.to(v);
         }
         return out;
       },
@@ -1137,7 +1144,9 @@ public final class DeepMap {
         final var out = new Object[srcArity];
         for (var i = 0; i < srcArity; i++) {
           final var tp = bwdTgtPos[i];
-          out[i] = bwdIso[i].from(tp < 0 ? null : tgtArr[tp]);
+          final var v = tp < 0 ? null : tgtArr[tp];
+          final var iso = bwdIso[i];
+          out[i] = iso == identity ? v : iso.from(v);
         }
         return out;
       }
@@ -1149,8 +1158,6 @@ public final class DeepMap {
     for (var i = 0; i < names.length; i++) m.put(names[i], i);
     return m;
   }
-
-  private static final Iso<Object, Object> IDENTITY_OBJ_ISO = Iso.of(o -> o, o -> o);
 
   /**
    * Key + value remap between a source-keyed and a target-keyed structural map. Forward: for each
