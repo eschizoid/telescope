@@ -432,9 +432,18 @@ the runtime path is fine for one-shot conversions in tests or non-hot service co
 both beans), have the same name + same type per component, and every component is a flat scalar (primitive / primitive
 wrapper / `String` / `enum`), the engine bypasses structural-`Iso` composition entirely. A per-pair `Function<S, T>` is
 built once at `Telescope.mapper(...)` time via cached `LambdaMetafactory` readers + canonical-constructor spreader (or
-no-arg ctor + setter dispatch for beans). Measured: flat record → record drops from **~360 ns/op to ~44 ns/op** — from
-**~91× to ~11× MapStruct**. Mixed shape (record ↔ bean), containers, nested records still go through the slow path so
-deep-copy / lift / cycle semantics survive unchanged.
+no-arg ctor + setter dispatch for beans). Measured at 2-fork × 5-warmup × 10-iter × 1 s (force the slow path with
+`-Dtelescope.disableFastPath=true`):
+
+| Fixture (5 flat scalar fields) | Slow path (ns/op) | Fast path (ns/op) |    Δ |
+| ------------------------------ | ----------------: | ----------------: | ---: |
+| record → record                |      50.4 ± 6.6   |      44.0 ± 1.5   | ~12 % |
+
+Record-to-record was already cheap on the slow path because records have LMF-built readers + canonical-ctor spreader;
+the fast path saves the `LinkedHashMap` intermediate the structural `Iso` threads `name → value` through. **The 90× gap
+to MapStruct lives in the bean ↔ record / record ↔ bean rows (376 ns, 508 ns)** — bean getter/setter reflection +
+`LinkedHashMap` combined. Closing that gap is the next research target. Mixed shape, containers, nested records still
+take the slow path so deep-copy / lift / cycle semantics survive unchanged.
 
 If you're in a tight inner loop where 1 ns matters, pick MapStruct. For realistic deep workloads — nested records with
 list-of-records inside — the codegen rows are a tie and you're picking on capability. Sealed-narrow paradigm hop,

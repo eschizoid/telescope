@@ -230,30 +230,35 @@ iteration). Three depth tiers, both directions, three engines per cell. All 18 r
 The MapStruct and telescope-codegen columns were re-measured together on the same machine sitting. The telescope-runtime
 column is from an earlier run (the runtime dispatch path was untouched between the two batches).
 
-#### Runtime fast-path — record ↔ record (PR #117)
+#### Runtime fast-path — record ↔ record + bean ↔ bean (PR #117)
 
-When the source and target are both records with the same name + same type per component and all
-components are flat scalars (primitive / primitive wrapper / `String` / `enum`), the engine
-bypasses the structural `Iso` composition entirely. A per-pair `Function<S, T>` is built once at
-`Telescope.mapper(...)` time via cached `LambdaMetafactory` readers + canonical-constructor
-spreader; per-call dispatch is one virtual `Function#apply` followed by N inlined reader calls and
-the ctor.
+When the source and target are the same kind (both records or both beans) with the same name +
+same type per component and all components are flat scalars (primitive / primitive wrapper /
+`String` / `enum`), the engine bypasses the structural `Iso` composition entirely. A per-pair
+`Function<S, T>` is built once at `Telescope.mapper(...)` time via cached `LambdaMetafactory`
+readers + canonical-constructor spreader (or no-arg ctor + setter dispatch for beans); per-call
+dispatch is one virtual `Function#apply` followed by N inlined reader calls and the ctor.
 
-| Path                                       | ns/op | vs MapStruct |
-| ------------------------------------------ | ----: | -----------: |
-| Telescope runtime record → record          |    44 |       ~11×   |
-| Telescope runtime bean → record (slow)     |   413 |      ~103×   |
-| Telescope codegen (`@Bridge`) bean → record |   5.5 |       1.4×   |
-| MapStruct generated bean → record          |   4.0 |        1×    |
+**Measured at 2-fork × 5-warmup × 10-iter × 1s** (`-Dtelescope.disableFastPath=true` forces the
+slow path for the before measurement):
 
-**91× → 11× MapStruct on the record↔record path** — within the predicted "5–10×" band, just over.
-The bean ↔ record case still takes the slow path because of the mixed shape (records use canonical
-constructor; beans use no-arg ctor + setters — fast-path eligibility tightens deliberately so
-nested / container / cycle cases keep their existing deep-copy semantics).
+| Fixture (5 flat scalar fields) | Slow path (ns/op) | Fast path (ns/op) | Δ      |
+| ------------------------------ | ----------------: | ----------------: | -----: |
+| record → record                |      50.4 ± 6.6   |      44.0 ± 1.5   | ~12 %  |
+| bean → record (mixed shape)    |     375.9 ± 7.6   |       — ¹         |   —    |
+| record → bean (mixed shape)    |     507.9 ± 7.6   |       — ¹         |   —    |
 
-Bean ↔ bean (both POJOs, same shape, same flat-scalar rules) gets the same treatment via a sibling
-`Beans.fastPathForward` path. Mixed shape (record ↔ bean), container components, and nested
-records all fall through to the existing slow path.
+¹ Mixed shape — fast-path tightly requires both sides be the same kind. Records use the canonical
+constructor; beans use no-arg ctor + setters. Mixed-shape fast-path is a separate follow-up.
+
+**Honest framing.** Record-to-record was already fast on the slow path (50 ns) because records have
+cheap LMF readers + canonical-ctor spreader; the fast path saves the LinkedHashMap intermediate the
+structural Iso threads name→value through, hence the ~12 % gain. The 90× gap to MapStruct lives in
+the bean ↔ record / record ↔ bean rows (376 ns, 508 ns) — that's bean reflection dispatch + the
+LinkedHashMap intermediate combined. Closing that gap is the next research target.
+
+Container components, nested records, and any non-trivial `Mapping` rows all fall through to the
+existing slow path so deep-copy / lift / cycle semantics survive unchanged.
 
 #### What the numbers say
 
