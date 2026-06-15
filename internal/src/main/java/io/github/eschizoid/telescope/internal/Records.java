@@ -254,7 +254,10 @@ public final class Records {
     }
   }
 
-  private static RecordInfo info(final Class<?> cls) {
+  // Package-private — Reflective.structuralIsoArr needs direct access to the cached readers[] +
+  // ctorFn to build the per-pair fast Function<S, T> at composition time without a per-call
+  // name→index hash dispatch.
+  static RecordInfo info(final Class<?> cls) {
     return CACHE.get(cls);
   }
 
@@ -282,7 +285,7 @@ public final class Records {
    * and the JVM applies the same implicit boxed/primitive conversions a direct constructor
    * invocation would.
    */
-  private record RecordInfo(
+  record RecordInfo(
     RecordComponent[] components,
     Function<Object, Object>[] readers,
     Constructor<?> ctor,

@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.reflect.Type;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -141,6 +142,118 @@ public record Reflective(
    */
   public <T> Iso<Map<String, Object>, T> structuralIso(final Class<T> cls) {
     return structuralIso(cls, null, null);
+  }
+
+  /**
+   * Position-indexed structural Iso — the same mediation as {@link #structuralIso(Class)} but with
+   * {@code Object[]} as the intermediate instead of {@code Map<String, Object>}. Eliminates the
+   * per-call {@code LinkedHashMap} allocation + hash bucket puts/gets that dominate the runtime
+   * mapper's allocation profile (776 B/op on the flat 5-field bean→record benchmark).
+   *
+   * <p>The returned Iso's forward direction takes an {@code Object[]} whose slots are positioned in
+   * the same order as {@link #names(Class)}; each value flows into the canonical constructor
+   * (records) or the corresponding setter (beans) at its declared position. The backward direction
+   * reads each component / property by position via cached {@link Function} readers and returns a
+   * freshly allocated {@code Object[]}.
+   *
+   * <p>Per-call cost: one {@code Object[arity]} allocation per direction (typically scalar-
+   * replaceable when the call site is monomorphic) + N inlined virtual {@link Function#apply}
+   * dispatches through cached LMF-bound readers. No hashing, no map allocation.
+   *
+   * <p>Holder-aware: when {@code holderReaders} / {@code holderConstructor} are supplied, the
+   * backward branch reads via the holder's pre-baked {@link Lens} constants and the forward branch
+   * builds via the holder's bound {@code construct(Function<String, Object>)} method (which still
+   * costs a per-call name→value lookup; future work could add a positional holder shape).
+   */
+  public <T> Iso<Object[], T> structuralIsoArr(final Class<T> cls) {
+    return structuralIsoArr(cls, null, null);
+  }
+
+  /**
+   * Holder-aware overload of {@link #structuralIsoArr(Class)}. See {@link #structuralIso(Class,
+   * Map, Function)} for the holder contract.
+   */
+  @SuppressWarnings("unchecked")
+  public <T> Iso<Object[], T> structuralIsoArr(
+    final Class<T> cls,
+    final Map<String, Lens<Object, Object>> holderReaders,
+    final Function<Function<String, Object>, Object> holderConstructor
+  ) {
+    final var componentNames = names(cls);
+    final var arity = componentNames.length;
+    if (cls.isRecord() && holderReaders == null && holderConstructor == null) {
+      // Records fast path — Records.RecordInfo already exposes positional readers[] + ctorFn that
+      // takes Object[] directly. No name dispatch anywhere on the hot path.
+      final var info = Records.info(cls);
+      final var readers = info.readers();
+      final var ctorFn = info.ctorFn();
+      return Iso.of(
+        arr -> (T) ctorFn.apply(arr),
+        instance -> {
+          final var out = new Object[arity];
+          for (var i = 0; i < arity; i++) out[i] = readers[i].apply(instance);
+          return out;
+        }
+      );
+    }
+    // Bean (or hint-aware bean) path. Pre-resolve the positional reader array AND the name→index
+    // map once at composition time. Forward still goes through the existing construct path
+    // (Function<String, Object>) but with O(1) HashMap lookup instead of O(N) indexOf — kills the
+    // O(N²) per-call name dispatch that previously dominated the bean-target write hot path on
+    // every field of every flat conversion.
+    final Function<Object, Object>[] readersByPos = resolveReadersByPosition(cls, componentNames, holderReaders);
+    final var nameIndex = indexMap(componentNames);
+    return Iso.of(
+      arr -> {
+        if (holderConstructor != null) return cls.cast(holderConstructor.apply(i -> arr[nameIndex.get(i)]));
+        return cls.cast(construct(cls, i -> arr[nameIndex.get(i)]));
+      },
+      instance -> {
+        final var out = new Object[arity];
+        for (var i = 0; i < arity; i++) out[i] = readersByPos[i].apply(instance);
+        return out;
+      }
+    );
+  }
+
+  @SuppressWarnings("unchecked")
+  private Function<Object, Object>[] resolveReadersByPosition(
+    final Class<?> cls,
+    final String[] componentNames,
+    final Map<String, Lens<Object, Object>> holderReaders
+  ) {
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    final var arr = (Function<Object, Object>[]) new Function[componentNames.length];
+    // For records that fall through to this branch (holder present), short-circuit the wrapping
+    // `instance -> read(instance, capturedName)` lambda by binding the LMF-built positional reader
+    // from RecordInfo directly. Skips the per-call name→accessor dispatch.
+    final var recordReaders = cls.isRecord() ? Records.info(cls).readers() : null;
+    for (var i = 0; i < componentNames.length; i++) {
+      final var name = componentNames[i];
+      if (holderReaders != null) {
+        final var lens = holderReaders.get(name);
+        arr[i] = lens::get;
+      } else if (recordReaders != null) {
+        arr[i] = recordReaders[i];
+      } else {
+        // Bean fallback — captures the cached LMF Function via Beans.readProperty's substrate.
+        // One virtual Function#apply dispatch per call, into the LMF-built reader.
+        final var capturedName = name;
+        arr[i] = instance -> read(instance, capturedName);
+      }
+    }
+    return arr;
+  }
+
+  private static Map<String, Integer> indexMap(final String[] names) {
+    final var m = new HashMap<String, Integer>(names.length * 2);
+    for (var i = 0; i < names.length; i++) m.put(names[i], i);
+    return m;
+  }
+
+  private static int indexOf(final String[] names, final String name) {
+    for (var i = 0; i < names.length; i++) if (names[i].equals(name)) return i;
+    throw new IllegalArgumentException("No such field: " + name);
   }
 
   /**

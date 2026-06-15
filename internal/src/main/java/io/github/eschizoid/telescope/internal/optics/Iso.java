@@ -101,10 +101,20 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
     };
   }
 
-  /** Identity Iso — useful as the root for path composition. */
+  /**
+   * Identity Iso — useful as the root for path composition. Returns a cached singleton so call
+   * sites that hold onto the returned Iso (e.g. {@code DeepMap}'s per-slot {@code Iso[]} in
+   * structural remap) can reference-equal it to short-circuit the virtual {@code to}/{@code from}
+   * dispatch on the hot path. Auto-mapped same-typed fields end up holding this exact instance
+   * after construction, so the optimisation fires on the dominant case.
+   */
+  @SuppressWarnings({ "rawtypes", "unchecked" })
   static <X> Iso<X, X> identity() {
-    return of(x -> x, x -> x);
+    return (Iso<X, X>) IDENTITY;
   }
+
+  @SuppressWarnings("rawtypes")
+  Iso IDENTITY = of(x -> x, x -> x);
 
   /**
    * Forward-only coalescer — wraps an inner {@link Iso} so the forward direction substitutes {@code

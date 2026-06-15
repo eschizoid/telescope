@@ -54,4 +54,5 @@ jmh {
     // Optional per-iteration time overrides — `-Pjmh.timeOnIteration=2s -Pjmh.warmupTime=2s` for quick smoke runs.
     (project.findProperty("jmh.timeOnIteration") as String?)?.let { timeOnIteration = it }
     (project.findProperty("jmh.warmupTime") as String?)?.let { warmup = it }
+    (project.findProperty("jmh.profilers") as String?)?.let { profilers = it.split(",") }
 }
