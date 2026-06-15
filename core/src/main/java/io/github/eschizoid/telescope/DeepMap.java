@@ -1066,19 +1066,100 @@ public final class DeepMap {
     final var tgtNames = tgtRefl.names(target);
     final var tgtHolderReaders = Telescope.holderReadersFor(target, tgtNames);
     final var tgtHolderConstructor = Telescope.holderConstructorFor(target);
-    // Position-indexed structural intermediate: Object[arity] instead of LinkedHashMap. The hash
-    // bucket puts/gets dominated the runtime mapper's allocation profile (~776 B/op on the flat
-    // 5-field bean→record benchmark); arrays drop that to ~80 B/op and let the JIT scalar-replace
-    // monomorphic call sites entirely. Position semantics: slot i of `srcArr` corresponds to
-    // `srcRefl.names(source)[i]`; same for the target side. The remap step bridges the two layouts
-    // via precomputed int[] slot maps, one allocation per type-pair-load.
-    final Iso<S, Object[]> srcReader = srcRefl
-      .structuralIsoArr(source, srcHolderReaders, srcHolderConstructor)
-      .reverse();
-    final Iso<Object[], T> tgtBuilder = tgtRefl.structuralIsoArr(target, tgtHolderReaders, tgtHolderConstructor);
-    final Iso<Object[], Object[]> remap = remapIsoArr(byTargetName, bySourceName, srcNames, tgtNames);
-    return nullable(srcReader.then(remap).then(tgtBuilder));
+    // Fused-source-and-remap: bypass the source-side Object[] intermediate. The previous shape
+    // ran S → Object[srcArity] (srcReader) → Object[tgtArity] (remap) → T (tgtBuilder) — two
+    // intermediate arrays + three Iso.then virtual dispatches per call. The fused body inlines
+    // all three stages: target Object[tgtArity] alloc, then for each target slot pull the source
+    // value directly from srcReaders[fwdSrcPos[i]].apply(s) and apply the per-slot Iso. Saves one
+    // alloc + 5 array writes + 5 array reads + 2 virtual Iso.then hops per call. Identity-Iso
+    // short-circuit preserved against the cached singleton from Iso.identity().
+    final var srcReaders = srcRefl.positionalReaders(source, srcHolderReaders);
+    final var tgtReaders = tgtRefl.positionalReaders(target, tgtHolderReaders);
+    final var tgtBuilderFn = tgtRefl.positionalBuilder(target, tgtHolderReaders, tgtHolderConstructor);
+    final var srcBuilderFn = srcRefl.positionalBuilder(source, srcHolderReaders, srcHolderConstructor);
+    final var slotMaps = buildSlotMaps(byTargetName, bySourceName, srcNames, tgtNames);
+    final Iso<Object, Object> identity = Iso.identity();
+    return Iso.of(
+      s -> {
+        if (s == null) return null;
+        final var tgtArr = new Object[slotMaps.tgtArity()];
+        for (var i = 0; i < slotMaps.tgtArity(); i++) {
+          final var sp = slotMaps.fwdSrcPos()[i];
+          final var v = sp < 0 ? null : srcReaders[sp].apply(s);
+          final var iso = slotMaps.fwdIso()[i];
+          tgtArr[i] = iso == identity ? v : iso.to(v);
+        }
+        return tgtBuilderFn.apply(tgtArr);
+      },
+      t -> {
+        if (t == null) return null;
+        final var srcArr = new Object[slotMaps.srcArity()];
+        for (var i = 0; i < slotMaps.srcArity(); i++) {
+          final var tp = slotMaps.bwdTgtPos()[i];
+          final var v = tp < 0 ? null : tgtReaders[tp].apply(t);
+          final var iso = slotMaps.bwdIso()[i];
+          srcArr[i] = iso == identity ? v : iso.from(v);
+        }
+        return srcBuilderFn.apply(srcArr);
+      }
+    );
   }
+
+  /**
+   * Precomputes the source→target and target→source slot translation tables + per-slot Iso arrays
+   * once at type-pair build time. Sentinel slot {@code -1} for "no corresponding source/target
+   * field" (placeholder rows where {@code step.sourceName} or {@code step.targetName} is null) —
+   * the value defaults to {@code null}, matching the prior {@code Map.get(missingKey)} semantics.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static SlotMaps buildSlotMaps(
+    final Map<String, FieldStep> byTargetName,
+    final Map<String, FieldStep> bySourceName,
+    final String[] srcNames,
+    final String[] tgtNames
+  ) {
+    final var srcIndex = indexMap(srcNames);
+    final var tgtIndex = indexMap(tgtNames);
+    final var srcArity = srcNames.length;
+    final var tgtArity = tgtNames.length;
+    final var fwdSrcPos = new int[tgtArity];
+    final var fwdIso = (Iso<Object, Object>[]) new Iso[tgtArity];
+    final Iso<Object, Object> identity = Iso.identity();
+    for (var i = 0; i < tgtArity; i++) {
+      final var step = byTargetName.get(tgtNames[i]);
+      if (step == null) {
+        fwdSrcPos[i] = -1;
+        fwdIso[i] = identity;
+      } else {
+        final var srcPos = step.sourceName == null ? null : srcIndex.get(step.sourceName);
+        fwdSrcPos[i] = srcPos == null ? -1 : srcPos;
+        fwdIso[i] = (Iso<Object, Object>) step.iso;
+      }
+    }
+    final var bwdTgtPos = new int[srcArity];
+    final var bwdIso = (Iso<Object, Object>[]) new Iso[srcArity];
+    for (var i = 0; i < srcArity; i++) {
+      final var step = bySourceName.get(srcNames[i]);
+      if (step == null) {
+        bwdTgtPos[i] = -1;
+        bwdIso[i] = identity;
+      } else {
+        final var tgtPos = step.targetName == null ? null : tgtIndex.get(step.targetName);
+        bwdTgtPos[i] = tgtPos == null ? -1 : tgtPos;
+        bwdIso[i] = (Iso<Object, Object>) step.iso;
+      }
+    }
+    return new SlotMaps(srcArity, tgtArity, fwdSrcPos, fwdIso, bwdTgtPos, bwdIso);
+  }
+
+  private record SlotMaps(
+    int srcArity,
+    int tgtArity,
+    int[] fwdSrcPos,
+    Iso<Object, Object>[] fwdIso,
+    int[] bwdTgtPos,
+    Iso<Object, Object>[] bwdIso
+  ) {}
 
   /**
    * Position-indexed variant of {@link #remapIso}. Precomputes {@code int[]} slot maps and a
