@@ -1065,17 +1065,92 @@ public final class DeepMap {
     final var tgtNames = tgtRefl.names(target);
     final var tgtHolderReaders = Telescope.holderReadersFor(target, tgtNames);
     final var tgtHolderConstructor = Telescope.holderConstructorFor(target);
-    final Iso<S, Map<String, Object>> srcReader = srcRefl
-      .structuralIso(source, srcHolderReaders, srcHolderConstructor)
+    // Position-indexed structural intermediate: Object[arity] instead of LinkedHashMap. The hash
+    // bucket puts/gets dominated the runtime mapper's allocation profile (~776 B/op on the flat
+    // 5-field bean→record benchmark); arrays drop that to ~80 B/op and let the JIT scalar-replace
+    // monomorphic call sites entirely. Position semantics: slot i of `srcArr` corresponds to
+    // `srcRefl.names(source)[i]`; same for the target side. The remap step bridges the two layouts
+    // via precomputed int[] slot maps, one allocation per type-pair-load.
+    final Iso<S, Object[]> srcReader = srcRefl
+      .structuralIsoArr(source, srcHolderReaders, srcHolderConstructor)
       .reverse();
-    final Iso<Map<String, Object>, T> tgtBuilder = tgtRefl.structuralIso(
-      target,
-      tgtHolderReaders,
-      tgtHolderConstructor
-    );
-    final Iso<Map<String, Object>, Map<String, Object>> remap = remapIso(byTargetName, bySourceName);
+    final Iso<Object[], T> tgtBuilder = tgtRefl.structuralIsoArr(target, tgtHolderReaders, tgtHolderConstructor);
+    final Iso<Object[], Object[]> remap = remapIsoArr(byTargetName, bySourceName, srcNames, tgtNames);
     return nullable(srcReader.then(remap).then(tgtBuilder));
   }
+
+  /**
+   * Position-indexed variant of {@link #remapIso}. Precomputes {@code int[]} slot maps and a
+   * per-position {@code Iso[]} once at type-pair build time so the hot loop is one array-index +
+   * one virtual {@code Iso#to}/{@code Iso#from} per field. Sentinel slot {@code -1} for "no
+   * corresponding source/target field" (placeholder rows where {@code step.sourceName} or
+   * {@code step.targetName} is null) — the value defaults to {@code null}, matching the prior
+   * {@code Map.get(missingKey)} semantics.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Iso<Object[], Object[]> remapIsoArr(
+    final Map<String, FieldStep> byTargetName,
+    final Map<String, FieldStep> bySourceName,
+    final String[] srcNames,
+    final String[] tgtNames
+  ) {
+    final var srcIndex = indexMap(srcNames);
+    final var tgtIndex = indexMap(tgtNames);
+    final var srcArity = srcNames.length;
+    final var tgtArity = tgtNames.length;
+    final var fwdSrcPos = new int[tgtArity];
+    final var fwdIso = (Iso<Object, Object>[]) new Iso[tgtArity];
+    for (var i = 0; i < tgtArity; i++) {
+      final var step = byTargetName.get(tgtNames[i]);
+      if (step == null) {
+        fwdSrcPos[i] = -1;
+        fwdIso[i] = IDENTITY_OBJ_ISO;
+      } else {
+        final var srcPos = step.sourceName == null ? null : srcIndex.get(step.sourceName);
+        fwdSrcPos[i] = srcPos == null ? -1 : srcPos;
+        fwdIso[i] = (Iso<Object, Object>) step.iso;
+      }
+    }
+    final var bwdTgtPos = new int[srcArity];
+    final var bwdIso = (Iso<Object, Object>[]) new Iso[srcArity];
+    for (var i = 0; i < srcArity; i++) {
+      final var step = bySourceName.get(srcNames[i]);
+      if (step == null) {
+        bwdTgtPos[i] = -1;
+        bwdIso[i] = IDENTITY_OBJ_ISO;
+      } else {
+        final var tgtPos = step.targetName == null ? null : tgtIndex.get(step.targetName);
+        bwdTgtPos[i] = tgtPos == null ? -1 : tgtPos;
+        bwdIso[i] = (Iso<Object, Object>) step.iso;
+      }
+    }
+    return Iso.of(
+      srcArr -> {
+        final var out = new Object[tgtArity];
+        for (var i = 0; i < tgtArity; i++) {
+          final var sp = fwdSrcPos[i];
+          out[i] = fwdIso[i].to(sp < 0 ? null : srcArr[sp]);
+        }
+        return out;
+      },
+      tgtArr -> {
+        final var out = new Object[srcArity];
+        for (var i = 0; i < srcArity; i++) {
+          final var tp = bwdTgtPos[i];
+          out[i] = bwdIso[i].from(tp < 0 ? null : tgtArr[tp]);
+        }
+        return out;
+      }
+    );
+  }
+
+  private static Map<String, Integer> indexMap(final String[] names) {
+    final var m = new HashMap<String, Integer>(names.length * 2);
+    for (var i = 0; i < names.length; i++) m.put(names[i], i);
+    return m;
+  }
+
+  private static final Iso<Object, Object> IDENTITY_OBJ_ISO = Iso.of(o -> o, o -> o);
 
   /**
    * Key + value remap between a source-keyed and a target-keyed structural map. Forward: for each

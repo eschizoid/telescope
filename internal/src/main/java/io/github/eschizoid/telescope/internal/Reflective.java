@@ -144,6 +144,105 @@ public record Reflective(
   }
 
   /**
+   * Position-indexed structural Iso — the same mediation as {@link #structuralIso(Class)} but with
+   * {@code Object[]} as the intermediate instead of {@code Map<String, Object>}. Eliminates the
+   * per-call {@code LinkedHashMap} allocation + hash bucket puts/gets that dominate the runtime
+   * mapper's allocation profile (776 B/op on the flat 5-field bean→record benchmark).
+   *
+   * <p>The returned Iso's forward direction takes an {@code Object[]} whose slots are positioned
+   * in the same order as {@link #names(Class)}; each value flows into the canonical constructor
+   * (records) or the corresponding setter (beans) at its declared position. The backward
+   * direction reads each component / property by position via cached {@link Function} readers and
+   * returns a freshly allocated {@code Object[]}.
+   *
+   * <p>Per-call cost: one {@code Object[arity]} allocation per direction (typically scalar-
+   * replaceable when the call site is monomorphic) + N inlined virtual {@link Function#apply}
+   * dispatches through cached LMF-bound readers. No hashing, no map allocation.
+   *
+   * <p>Holder-aware: when {@code holderReaders} / {@code holderConstructor} are supplied, the
+   * backward branch reads via the holder's pre-baked {@link Lens} constants and the forward
+   * branch builds via the holder's bound {@code construct(Function<String, Object>)} method
+   * (which still costs a per-call name→value lookup; future work could add a positional holder
+   * shape).
+   */
+  public <T> Iso<Object[], T> structuralIsoArr(final Class<T> cls) {
+    return structuralIsoArr(cls, null, null);
+  }
+
+  /**
+   * Holder-aware overload of {@link #structuralIsoArr(Class)}. See {@link #structuralIso(Class,
+   * Map, Function)} for the holder contract.
+   */
+  @SuppressWarnings("unchecked")
+  public <T> Iso<Object[], T> structuralIsoArr(
+    final Class<T> cls,
+    final Map<String, Lens<Object, Object>> holderReaders,
+    final Function<Function<String, Object>, Object> holderConstructor
+  ) {
+    final var componentNames = names(cls);
+    final var arity = componentNames.length;
+    if (cls.isRecord() && holderReaders == null && holderConstructor == null) {
+      // Records fast path — Records.RecordInfo already exposes positional readers[] + ctorFn that
+      // takes Object[] directly. No name dispatch anywhere on the hot path.
+      final var info = Records.info(cls);
+      final var readers = info.readers();
+      final var ctorFn = info.ctorFn();
+      return Iso.of(
+        arr -> (T) ctorFn.apply(arr),
+        instance -> {
+          final var out = new Object[arity];
+          for (var i = 0; i < arity; i++) out[i] = readers[i].apply(instance);
+          return out;
+        }
+      );
+    }
+    // Bean (or hint-aware bean) path. Pre-resolve the positional reader array once at composition
+    // time; forward still goes through the existing construct path (Function<String, Object>) but
+    // wrapped over an array lookup so the hot path is one array index per slot, no hash lookup.
+    final Function<Object, Object>[] readersByPos = resolveReadersByPosition(cls, componentNames, holderReaders);
+    return Iso.of(
+      arr -> {
+        if (holderConstructor != null) return cls.cast(holderConstructor.apply(i -> arr[indexOf(componentNames, i)]));
+        return cls.cast(construct(cls, i -> arr[indexOf(componentNames, i)]));
+      },
+      instance -> {
+        final var out = new Object[arity];
+        for (var i = 0; i < arity; i++) out[i] = readersByPos[i].apply(instance);
+        return out;
+      }
+    );
+  }
+
+  @SuppressWarnings("unchecked")
+  private Function<Object, Object>[] resolveReadersByPosition(
+    final Class<?> cls,
+    final String[] componentNames,
+    final Map<String, Lens<Object, Object>> holderReaders
+  ) {
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    final var arr = (Function<Object, Object>[]) new Function[componentNames.length];
+    for (var i = 0; i < componentNames.length; i++) {
+      final var name = componentNames[i];
+      if (holderReaders != null) {
+        final var lens = holderReaders.get(name);
+        arr[i] = lens::get;
+      } else {
+        // Pre-compute the read function once per slot — for beans this captures GETTER_INVOKERS;
+        // for records this captures Records.read. Either way the per-call cost on apply() is one
+        // virtual Function#apply dispatch into the cached LMF-built reader.
+        final var capturedName = name;
+        arr[i] = instance -> read(instance, capturedName);
+      }
+    }
+    return arr;
+  }
+
+  private static int indexOf(final String[] names, final String name) {
+    for (var i = 0; i < names.length; i++) if (names[i].equals(name)) return i;
+    throw new IllegalArgumentException("No such field: " + name);
+  }
+
+  /**
    * Holder-aware overload of {@link #structuralIso(Class)}: when {@code holderReaders} / {@code
    * holderConstructor} are non-{@code null}, the returned Iso short-circuits the reflective read /
    * construct paths through the pre-resolved holder data. Both inputs are resolved by the caller in
