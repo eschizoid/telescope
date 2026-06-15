@@ -5,7 +5,7 @@ Drop-in Spring Boot 4 auto-config for [telescope](../README.md). Adds one bean t
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-spring-boot-starter:0.4.1")
+    implementation("io.github.eschizoid:telescope-spring-boot-starter:0.13.0")
 }
 ```
 
@@ -25,7 +25,7 @@ your `@Configuration` and they show up in the registry; the registry resolves th
 // Gradle (Spring Boot 4 BOM picks up Boot's version)
 dependencies {
     implementation(platform("org.springframework.boot:spring-boot-dependencies:4.0.1"))
-    implementation("io.github.eschizoid:telescope-spring-boot-starter:0.4.1")
+    implementation("io.github.eschizoid:telescope-spring-boot-starter:0.13.0")
 }
 ```
 
@@ -34,7 +34,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-spring-boot-starter</artifactId>
-  <version>0.4.1</version>
+  <version>0.13.0</version>
 </dependency>
 ```
 
