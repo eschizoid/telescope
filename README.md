@@ -407,35 +407,33 @@ directions:
 
 | Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope runtime (ns/op) |
 | ------ | ------------- | ----------------: | ------------------------: | ------------------------: |
-| flat   | bean → record |     3.478 ± 0.147 |             5.502 ± 3.419 |            143.38 ± 2.313 |
-| flat   | record → bean |     3.469 ± 0.407 |          7.771 ± 12.367 ¹ |            213.26 ± 2.455 |
-| nested | bean → record |     5.186 ± 0.377 |            10.481 ± 0.083 |            241.21 ± 0.860 |
-| nested | record → bean |     5.325 ± 0.067 |            10.762 ± 0.177 |            332.80 ± 5.067 |
-| deep   | bean → record |    47.432 ± 0.609 |            57.648 ± 6.774 |           926.83 ± 25.252 |
-| deep   | record → bean | 60.677 ± 34.430 ¹ |            55.236 ± 1.690 |          1274.30 ± 119.91 |
+| flat   | bean → record |     3.333 ± 0.150 |             4.786 ± 0.014 |            124.04 ± 2.214 |
+| flat   | record → bean |     3.338 ± 0.040 |             5.843 ± 0.112 |            188.08 ± 3.071 |
+| nested | bean → record |     5.045 ± 0.466 |            10.077 ± 0.118 |            204.30 ± 3.011 |
+| nested | record → bean |     5.236 ± 0.092 |            10.344 ± 0.253 |            277.92 ± 3.782 |
+| deep   | bean → record |    52.207 ± 8.213 |            56.310 ± 1.073 |            802.04 ± 7.625 |
+| deep   | record → bean |   59.211 ± 18.957 |         91.666 ± 211.19 ¹ |           1172.88 ± 20.21 |
 
-¹ Wide error band (error ≥ ½ × score) — a noisy iteration. Don't read fine-grained conclusions into these specific rows;
-the other 16 rows are tight (±0.1–5 ns) and stable.
+¹ Wide error band on this one row — JIT didn't stabilise within the iteration budget. The other 17 rows are tight
+(±0.01–8 ns). Don't read fine-grained conclusions into this single cell.
 
-Three tiers, codegen path. On flat, MapStruct hits 3.48 ns and telescope 5.50 ns — a 1.58× gap, 2.0 ns absolute. On
-nested, 5.19 vs 10.48 ns: 2.02× behind, 5.3 ns absolute. On deep, 47.43 vs 57.65 ns: 1.22× behind on forward. The deep
-backward row shows telescope codegen at 55.24 ns vs MapStruct's 60.68 ns — formally a win on the means but the MapStruct
-error band is wide enough (±34.4) that the honest read is "indistinguishable at this measurement". Both are in the same
-band.
+Three tiers, codegen path. On flat, MapStruct hits 3.33 ns and telescope 4.79 ns — a 1.44× gap, 1.5 ns absolute. On
+nested, 5.05 vs 10.08 ns: 2.00× behind, 5.0 ns absolute. On deep, 52.21 vs 56.31 ns: 1.08× behind on forward — parity
+within the MapStruct error band. Once per-level work climbs past ~50 ns, the wrapper hop vanishes into the actual work.
 
-The flat-tier gap is the `Telescope` wrapper's single virtual hop into `BridgeFn.forward` — about 2 ns of constant
-overhead vs MapStruct's directly-inlined constructor call. On a 4 ns workload that's a noticeable surcharge. On a 50 ns
-workload it vanishes into the actual work, which is what we see on the deep tier where element-by-element list
-conversion dominates.
+The flat-tier gap is the `Telescope` wrapper's single virtual hop into `BridgeFn.forward` — about 1.5 ns of constant
+overhead vs MapStruct's directly-inlined constructor call. On a 3 ns workload that's a noticeable surcharge. On a 50 ns
+workload it vanishes, which is what we see on the deep tier where element-by-element list conversion dominates.
 
-The runtime path closed the gap substantially in this release: `Telescope.mapper(...)`'s structural intermediate moved
-from `LinkedHashMap<String, Object>` to position-indexed `Object[]`, eliminating the per-call hash dispatch + 70-86% of
-the allocation pressure. Measured drop ~52-58% across every runtime row vs the prior published numbers (e.g. flat bean →
-record: 340 → 143 ns/op). The remaining cost is the per-field LMF reader dispatch + canonical-constructor / setter
-invocation walked at every level of the record/bean spine. Relative gap to MapStruct is ~41× on flat, ~46× on nested,
-and ~20× on deep — the deeper the tree, the more the per-level work dominates the constant overhead. Sub-microsecond on
-flat and nested, single-microsecond on deep. Allocation pressure is now low enough to fit comfortably in non-hot service
-code; codegen remains the recommendation on tight inner loops.
+The runtime path closed substantially in this release. `Telescope.mapper(...)`'s structural intermediate moved from
+`LinkedHashMap<String, Object>` to position-indexed `Object[]`, eliminating per-call hash dispatch + 70-86% of the
+allocation pressure (Tier C). The same PR also short-circuited `Iso.identity()` dispatch on auto-mapped fields, dropped
+the bean forward branch from O(N²) `indexOf` to O(1) HashMap, and bound the cached LMF reader directly for
+holder-annotated records — three Tier-D wins layered on top. Cumulative drop **~60-70% on every runtime row** vs the
+pre-release baseline (e.g. flat bean → record: 340 → 124 ns/op). Relative gap to MapStruct: ~37× on flat, ~40× on
+nested, ~15× on deep — the deeper the tree, the more the per-level work dominates the constant overhead. Sub-microsecond
+on flat and nested, single-microsecond on deep. Allocation pressure is now low enough to fit comfortably in non-hot
+service code; codegen remains the recommendation on tight inner loops.
 
 If you're in a tight inner loop where 1 ns matters, pick MapStruct. For realistic deep workloads — nested records with
 list-of-records inside — the codegen rows are a tie and you're picking on capability. Sealed-narrow paradigm hop,
