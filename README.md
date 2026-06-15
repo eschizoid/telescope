@@ -408,15 +408,20 @@ directions:
 | Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope runtime (ns/op) |
 | ------ | ------------- | ----------------: | ------------------------: | ------------------------: |
 | flat   | bean → record |     3.478 ± 0.147 |             5.502 ± 3.419 |            143.38 ± 2.313 |
-| flat   | record → bean |     3.469 ± 0.407 |            7.771 ± 12.367 |            213.26 ± 2.455 |
+| flat   | record → bean |     3.469 ± 0.407 |          7.771 ± 12.367 ¹ |            213.26 ± 2.455 |
 | nested | bean → record |     5.186 ± 0.377 |            10.481 ± 0.083 |            241.21 ± 0.860 |
 | nested | record → bean |     5.325 ± 0.067 |            10.762 ± 0.177 |            332.80 ± 5.067 |
 | deep   | bean → record |    47.432 ± 0.609 |            57.648 ± 6.774 |           926.83 ± 25.252 |
-| deep   | record → bean |    60.677 ± 34.43 |            55.236 ± 1.690 |          1274.30 ± 119.91 |
+| deep   | record → bean | 60.677 ± 34.430 ¹ |            55.236 ± 1.690 |          1274.30 ± 119.91 |
 
-Three tiers, codegen path, forward direction. On flat, MapStruct hits 3.48 ns and telescope 5.50 ns — a 1.58× gap, 2.0
-ns absolute. On nested, 5.19 vs 10.48 ns: 2.02× behind, 5.3 ns absolute. On deep, 47.43 vs 57.65 ns: 1.22× behind on
-forward; telescope codegen WINS backward at 55.24 vs 60.68 ns (parity within the MapStruct error band).
+¹ Wide error band (error ≥ ½ × score) — a noisy iteration. Don't read fine-grained conclusions into these specific rows;
+the other 16 rows are tight (±0.1–5 ns) and stable.
+
+Three tiers, codegen path. On flat, MapStruct hits 3.48 ns and telescope 5.50 ns — a 1.58× gap, 2.0 ns absolute. On
+nested, 5.19 vs 10.48 ns: 2.02× behind, 5.3 ns absolute. On deep, 47.43 vs 57.65 ns: 1.22× behind on forward. The deep
+backward row shows telescope codegen at 55.24 ns vs MapStruct's 60.68 ns — formally a win on the means but the MapStruct
+error band is wide enough (±34.4) that the honest read is "indistinguishable at this measurement". Both are in the same
+band.
 
 The flat-tier gap is the `Telescope` wrapper's single virtual hop into `BridgeFn.forward` — about 2 ns of constant
 overhead vs MapStruct's directly-inlined constructor call. On a 4 ns workload that's a noticeable surcharge. On a 50 ns

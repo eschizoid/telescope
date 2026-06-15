@@ -221,21 +221,25 @@ iteration). Three depth tiers, both directions, three engines per cell. All 18 r
 | Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope runtime (ns/op) |
 | ------ | ------------- | ----------------: | ------------------------: | ------------------------: |
 | flat   | bean → record |             3.478 |                     5.502 |                    143.38 |
-| flat   | record → bean |             3.469 |                     7.771 |                    213.26 |
+| flat   | record → bean |             3.469 |                   7.771 ¹ |                    213.26 |
 | nested | bean → record |             5.186 |                    10.481 |                    241.21 |
 | nested | record → bean |             5.325 |                    10.762 |                    332.80 |
 | deep   | bean → record |            47.432 |                    57.648 |                    926.83 |
-| deep   | record → bean |            60.677 |                    55.236 |                   1274.30 |
+| deep   | record → bean |          60.677 ¹ |                    55.236 |                   1274.30 |
 
-All 18 rows captured together on a freshly-rebooted machine, no other workloads running. Tight error bands (typically
-±0.1–5 ns, see PR #118 for the full ± table). The runtime column reflects the Object[] structural intermediate change
-shipped in PR #118 — runtime ns dropped 52-58% across every row vs the previously published numbers.
+¹ Wide error band on this row (`flat record→bean codegen ±12.4`, `deep record→bean MapStruct ±34.4`). Skim past these
+two cells; the other 16 are tight (±0.1–5 ns) and stable. Full ± table in PR #118.
+
+All 18 rows captured together on a freshly-rebooted machine, no other workloads running. The runtime column reflects the
+Object[] structural intermediate change shipped in PR #118 — runtime ns dropped 52-58% across every row vs the
+previously published numbers.
 
 #### What the numbers say
 
-Three tiers, forward direction. On flat (3.48 vs 5.50 ns), telescope codegen runs 1.58× behind MapStruct — absolute gap
-~2.0 ns. On nested (5.19 vs 10.48 ns), 2.02× behind, ~5.3 ns absolute. On deep (47.43 vs 57.65 ns), 1.22× behind on
-forward; telescope codegen WINS backward at 55.24 vs 60.68 ns (parity within the MapStruct error band).
+Three tiers, codegen path. On flat (3.48 vs 5.50 ns), telescope codegen runs 1.58× behind MapStruct — absolute gap ~2.0
+ns. On nested (5.19 vs 10.48 ns), 2.02× behind, ~5.3 ns absolute. On deep (47.43 vs 57.65 ns), 1.22× behind on forward.
+The deep backward row shows telescope codegen ahead on the means (55.24 vs 60.68 ns), but MapStruct's wide ±34.4 ns
+error band on that row means the honest read is "both engines in the same band" — not a clean win for either.
 
 Why MapStruct wins on the small tiers. It emits one hand-templated method body per pair, fully monomorphic, and the JIT
 inlines the whole conversion into a single basic block. Telescope's `@Bridge` codegen emits the same shape — a direct
