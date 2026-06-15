@@ -1083,9 +1083,9 @@ public final class DeepMap {
    * Position-indexed variant of {@link #remapIso}. Precomputes {@code int[]} slot maps and a
    * per-position {@code Iso[]} once at type-pair build time so the hot loop is one array-index +
    * one virtual {@code Iso#to}/{@code Iso#from} per field. Sentinel slot {@code -1} for "no
-   * corresponding source/target field" (placeholder rows where {@code step.sourceName} or
-   * {@code step.targetName} is null) — the value defaults to {@code null}, matching the prior
-   * {@code Map.get(missingKey)} semantics.
+   * corresponding source/target field" (placeholder rows where {@code step.sourceName} or {@code
+   * step.targetName} is null) — the value defaults to {@code null}, matching the prior {@code
+   * Map.get(missingKey)} semantics.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Iso<Object[], Object[]> remapIsoArr(

@@ -149,21 +149,20 @@ public record Reflective(
    * per-call {@code LinkedHashMap} allocation + hash bucket puts/gets that dominate the runtime
    * mapper's allocation profile (776 B/op on the flat 5-field bean→record benchmark).
    *
-   * <p>The returned Iso's forward direction takes an {@code Object[]} whose slots are positioned
-   * in the same order as {@link #names(Class)}; each value flows into the canonical constructor
-   * (records) or the corresponding setter (beans) at its declared position. The backward
-   * direction reads each component / property by position via cached {@link Function} readers and
-   * returns a freshly allocated {@code Object[]}.
+   * <p>The returned Iso's forward direction takes an {@code Object[]} whose slots are positioned in
+   * the same order as {@link #names(Class)}; each value flows into the canonical constructor
+   * (records) or the corresponding setter (beans) at its declared position. The backward direction
+   * reads each component / property by position via cached {@link Function} readers and returns a
+   * freshly allocated {@code Object[]}.
    *
    * <p>Per-call cost: one {@code Object[arity]} allocation per direction (typically scalar-
    * replaceable when the call site is monomorphic) + N inlined virtual {@link Function#apply}
    * dispatches through cached LMF-bound readers. No hashing, no map allocation.
    *
    * <p>Holder-aware: when {@code holderReaders} / {@code holderConstructor} are supplied, the
-   * backward branch reads via the holder's pre-baked {@link Lens} constants and the forward
-   * branch builds via the holder's bound {@code construct(Function<String, Object>)} method
-   * (which still costs a per-call name→value lookup; future work could add a positional holder
-   * shape).
+   * backward branch reads via the holder's pre-baked {@link Lens} constants and the forward branch
+   * builds via the holder's bound {@code construct(Function<String, Object>)} method (which still
+   * costs a per-call name→value lookup; future work could add a positional holder shape).
    */
   public <T> Iso<Object[], T> structuralIsoArr(final Class<T> cls) {
     return structuralIsoArr(cls, null, null);
