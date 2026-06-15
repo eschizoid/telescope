@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.reflect.Type;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.BiFunction;
@@ -195,14 +196,17 @@ public record Reflective(
         }
       );
     }
-    // Bean (or hint-aware bean) path. Pre-resolve the positional reader array once at composition
-    // time; forward still goes through the existing construct path (Function<String, Object>) but
-    // wrapped over an array lookup so the hot path is one array index per slot, no hash lookup.
+    // Bean (or hint-aware bean) path. Pre-resolve the positional reader array AND the name→index
+    // map once at composition time. Forward still goes through the existing construct path
+    // (Function<String, Object>) but with O(1) HashMap lookup instead of O(N) indexOf — kills the
+    // O(N²) per-call name dispatch that previously dominated the bean-target write hot path on
+    // every field of every flat conversion.
     final Function<Object, Object>[] readersByPos = resolveReadersByPosition(cls, componentNames, holderReaders);
+    final var nameIndex = indexMap(componentNames);
     return Iso.of(
       arr -> {
-        if (holderConstructor != null) return cls.cast(holderConstructor.apply(i -> arr[indexOf(componentNames, i)]));
-        return cls.cast(construct(cls, i -> arr[indexOf(componentNames, i)]));
+        if (holderConstructor != null) return cls.cast(holderConstructor.apply(i -> arr[nameIndex.get(i)]));
+        return cls.cast(construct(cls, i -> arr[nameIndex.get(i)]));
       },
       instance -> {
         final var out = new Object[arity];
@@ -220,20 +224,31 @@ public record Reflective(
   ) {
     @SuppressWarnings({ "unchecked", "rawtypes" })
     final var arr = (Function<Object, Object>[]) new Function[componentNames.length];
+    // For records that fall through to this branch (holder present), short-circuit the wrapping
+    // `instance -> read(instance, capturedName)` lambda by binding the LMF-built positional reader
+    // from RecordInfo directly. Skips the per-call name→accessor dispatch.
+    final var recordReaders = cls.isRecord() ? Records.info(cls).readers() : null;
     for (var i = 0; i < componentNames.length; i++) {
       final var name = componentNames[i];
       if (holderReaders != null) {
         final var lens = holderReaders.get(name);
         arr[i] = lens::get;
+      } else if (recordReaders != null) {
+        arr[i] = recordReaders[i];
       } else {
-        // Pre-compute the read function once per slot — for beans this captures GETTER_INVOKERS;
-        // for records this captures Records.read. Either way the per-call cost on apply() is one
-        // virtual Function#apply dispatch into the cached LMF-built reader.
+        // Bean fallback — captures the cached LMF Function via Beans.readProperty's substrate.
+        // One virtual Function#apply dispatch per call, into the LMF-built reader.
         final var capturedName = name;
         arr[i] = instance -> read(instance, capturedName);
       }
     }
     return arr;
+  }
+
+  private static Map<String, Integer> indexMap(final String[] names) {
+    final var m = new HashMap<String, Integer>(names.length * 2);
+    for (var i = 0; i < names.length; i++) m.put(names[i], i);
+    return m;
   }
 
   private static int indexOf(final String[] names, final String name) {
