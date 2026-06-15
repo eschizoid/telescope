@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.NullDefaults;
+import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.mapping.Compute;
@@ -1320,7 +1321,7 @@ public final class DeepMap {
       final var comps = type.getRecordComponents();
       final var byName = new HashMap<String, Object>(comps.length);
       for (final var comp : comps) byName.put(comp.getName(), recursiveDefault(comp.getType()));
-      return io.github.eschizoid.telescope.internal.Records.construct((Class) type, byName::get);
+      return Records.construct((Class) type, byName::get);
     }
     // Bean intermediate: try the public no-arg ctor first, falling back to the static builder()
     // pattern (Lombok @Builder, Immutables-style). Skip JDK scalars / containers entirely so the
