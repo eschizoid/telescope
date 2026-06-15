@@ -302,8 +302,10 @@ public final class DeepMap {
     final var key = new TypePair(source, target);
     if (cache.containsKey(key)) {
       // Re-entry on an in-progress slot (sentinel == null) means we've found a static cycle in the
-      // type graph. Mark this pair AND every ancestor on the recursion stack as cyclic — they're all
-      // in the same SCC and must keep the value-level cycle-safe shell at runtime. Acyclic pairs get
+      // type graph. Mark this pair AND every ancestor on the recursion stack as cyclic — they're
+      // all
+      // in the same SCC and must keep the value-level cycle-safe shell at runtime. Acyclic pairs
+      // get
       // a plain Iso pass-through, skipping the ~15 ns ThreadLocal + IdentityHashMap probe per hop.
       if (cache.get(key) == null) {
         cyclicPairs.add(key);
