@@ -40,7 +40,7 @@ classpath.)
 ```kotlin
 // Gradle
 dependencies {
-    implementation("io.github.eschizoid:telescope:0.4.1")
+    implementation("io.github.eschizoid:telescope-core:0.13.0")
 
     // Lombok itself
     compileOnly("org.projectlombok:lombok:1.18.42")
@@ -48,7 +48,7 @@ dependencies {
 
     // Telescope's Lombok-aware codegen — must come AFTER Lombok in the processor list so
     // Lombok's AST patches have fired when telescope reads the synthesized members.
-    annotationProcessor("io.github.eschizoid:telescope-lombok:0.4.1")
+    annotationProcessor("io.github.eschizoid:telescope-lombok:0.13.0")
 }
 ```
 
@@ -67,7 +67,7 @@ dependencies {
       <path>
         <groupId>io.github.eschizoid</groupId>
         <artifactId>telescope-lombok</artifactId>
-        <version>0.4.1</version>
+        <version>0.13.0</version>
       </path>
     </annotationProcessorPaths>
   </configuration>

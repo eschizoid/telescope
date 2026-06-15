@@ -23,7 +23,7 @@ Quarkus extension ship as separate artifacts.
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-  implementation("io.github.eschizoid:telescope-core:0.10.0")
+  implementation("io.github.eschizoid:telescope-core:0.13.0")
 }
 ```
 
@@ -32,7 +32,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>0.10.0</version>
+  <version>0.13.0</version>
 </dependency>
 ```
 
@@ -457,8 +457,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:0.10.0")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:0.10.0")
+    implementation("io.github.eschizoid:telescope-core:0.13.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:0.13.0")
 }
 ```
 
@@ -468,7 +468,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>0.10.0</version>
+  <version>0.13.0</version>
 </dependency>
 
 <build>
@@ -481,7 +481,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>0.10.0</version>
+            <version>0.13.0</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
@@ -1234,8 +1234,8 @@ The return type degrades to a terminal `Telescope<R, Target>` when the target is
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope-core:0.10.0")
-annotationProcessor("io.github.eschizoid:telescope-codegen:0.10.0")
+implementation("io.github.eschizoid:telescope-core:0.13.0")
+annotationProcessor("io.github.eschizoid:telescope-codegen:0.13.0")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
