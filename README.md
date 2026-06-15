@@ -423,12 +423,14 @@ overhead vs MapStruct's directly-inlined constructor call. On a 4 ns workload th
 workload it vanishes into the actual work, which is what we see on the deep tier where element-by-element list
 conversion dominates.
 
-The runtime path closed the gap substantially in this release: the structural intermediate moved from `LinkedHashMap` to
-position-indexed `Object[]`, eliminating the per-call hash dispatch + 70-86% of the allocation pressure. Measured drop
-~52-58% across every runtime row vs the prior published numbers (e.g. flat bean → record: 340 → 143 ns/op). It still
-runs 41× MapStruct on flat — `Telescope.from/to/using` walks the record/bean spine through cached LMF readers at every
-level — but allocation pressure is now low enough to fit comfortably in non-hot service code. Sub-microsecond on flat
-and nested, single-microsecond on deep. Codegen remains the recommendation on tight inner loops.
+The runtime path closed the gap substantially in this release: `Telescope.mapper(...)`'s structural intermediate moved
+from `LinkedHashMap<String, Object>` to position-indexed `Object[]`, eliminating the per-call hash dispatch + 70-86% of
+the allocation pressure. Measured drop ~52-58% across every runtime row vs the prior published numbers (e.g. flat bean →
+record: 340 → 143 ns/op). The remaining cost is the per-field LMF reader dispatch + canonical-constructor / setter
+invocation walked at every level of the record/bean spine. Relative gap to MapStruct is ~41× on flat, ~46× on nested,
+and ~20× on deep — the deeper the tree, the more the per-level work dominates the constant overhead. Sub-microsecond on
+flat and nested, single-microsecond on deep. Allocation pressure is now low enough to fit comfortably in non-hot service
+code; codegen remains the recommendation on tight inner loops.
 
 If you're in a tight inner loop where 1 ns matters, pick MapStruct. For realistic deep workloads — nested records with
 list-of-records inside — the codegen rows are a tie and you're picking on capability. Sealed-narrow paradigm hop,
