@@ -128,8 +128,8 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    * would conflate the user's deliberate {@code defaultValue} on the target with a previous {@code
    * null} on the source, losing meaningful values. The asymmetry is the feature, not a bug.
    *
-   * <p>Use the factory through the public {@link io.github.eschizoid.telescope.mapping.NullHint}
-   * surface — {@code DeepMap} wraps every auto-recursed per-field Iso with this when {@code
+   * <p>Use the factory through the public {@code NullHint} surface (in {@code :core}) — {@code
+   * DeepMap} wraps every auto-recursed per-field Iso with this when {@code
    * nullSourceValues(DEFAULT)} is selected. Not for general path composition; reach for {@link
    * #identity()} if you want a real Iso.
    *
