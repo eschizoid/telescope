@@ -617,9 +617,14 @@ public final class Beans {
 
   /**
    * The property name behind a getter method name: {@code getCity} &rarr; {@code city}, {@code
-   * isActive} &rarr; {@code active}. A name without a recognized prefix is returned unchanged.
+   * isActive} &rarr; {@code active}. A name without a recognized prefix is returned unchanged. A
+   * {@code null} input returns {@code null} so upstream auto-discovery paths that may not have a
+   * resolved method-name (e.g. {@code Telescope.BeanFieldOptics.lensFor()} on a lambda whose
+   * underlying {@code SerializedLambda} returns no {@code implMethodName}) can propagate the
+   * missing-name signal without crashing the mapper-construction phase.
    */
   public static String propertyOf(final String getterName) {
+    if (getterName == null) return null;
     if (getterName.length() > 3 && getterName.startsWith("get")) return decapitalize(getterName.substring(3));
     if (getterName.length() > 2 && getterName.startsWith("is")) return decapitalize(getterName.substring(2));
     return getterName;

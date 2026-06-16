@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -544,6 +545,17 @@ class BeansTest {
       assertEquals("active", Beans.propertyOf("isActive"));
       assertEquals("name", Beans.propertyOf("name")); // no prefix → returned as-is
       assertEquals("URL", Beans.propertyOf("getURL")); // two-caps rule preserved
+    }
+
+    @Test
+    @DisplayName("propertyOf(null) returns null instead of throwing NPE")
+    void propertyOfNullIsNullSafe() {
+      // Defensive guard for upstream callers (e.g. Telescope.BeanFieldOptics.lensFor() ->
+      // methodNameOf() -> propertyOf()) that may pass a null method-name on auto-discovery
+      // paths. Without this guard, any class with a boolean primitive field whose Lombok-
+      // generated isX() accessor reached propertyOf() through a null intermediate would NPE
+      // at Telescope.mapper(...) construction time.
+      assertNull(Beans.propertyOf(null));
     }
 
     @Test
