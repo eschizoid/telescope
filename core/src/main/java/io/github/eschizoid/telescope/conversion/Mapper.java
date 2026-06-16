@@ -179,6 +179,23 @@ public final class Mapper<A, B> {
   }
 
   /**
+   * Project this bidirectional mapper to a {@link ForwardMapper} that exposes only the forward
+   * direction. Useful when threading a bidirectional `Mapper` into a forward-only API surface (CDI
+   * bean wiring, Spring controllers, audit projections) without the call site needing the
+   * `backward()` half. Hooks installed via {@link #beforeForward}/{@link #afterForward} on this
+   * mapper are NOT carried over — the resulting `ForwardMapper` is a clean projection of the
+   * structural forward direction.
+   *
+   * <pre>{@code
+   * Mapper<UserEntity, UserDto> bidi = Telescope.mapper(UserEntity.class, UserDto.class, ...);
+   * ForwardMapper<UserEntity, UserDto> projector = bidi.toForwardMapper();
+   * }</pre>
+   */
+  public ForwardMapper<A, B> toForwardMapper() {
+    return ForwardMapper.create(this::forward, sourceClass, targetClass);
+  }
+
+  /**
    * Sparse update: overlay the non-null fields of {@code partial} (a partially-populated target)
    * onto {@code base}, leaving the rest of {@code base} untouched. Each present target field is run
    * back through its component {@link Iso}'s backward direction and used to override the matching

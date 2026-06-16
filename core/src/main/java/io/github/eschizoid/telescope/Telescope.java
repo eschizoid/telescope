@@ -1024,6 +1024,27 @@ public sealed class Telescope<
   }
 
   /**
+   * Project this Telescope as a {@link ForwardMapper} from the root type {@code S} to the focused
+   * type {@code A}, exposing the read direction. Useful when a {@code @Bridge}-generated Telescope
+   * constant needs to surface as a forward-only mapper bean (CDI, Spring controller, audit
+   * projection) without manually wrapping with {@link ForwardMapper#create}.
+   *
+   * <pre>{@code
+   * // @Bridge emits a Telescope<UserEntity, UserDto> constant
+   * Telescope<UserEntity, UserDto> bridge = UserEntityBridge.BRIDGE;
+   * ForwardMapper<UserEntity, UserDto> mapper = bridge.asForwardMapper(UserEntity.class, UserDto.class);
+   * }</pre>
+   *
+   * <p>The source / target classes are required because {@code Telescope<S, A>}'s type parameters
+   * are erased at runtime. They're stored on the produced {@link ForwardMapper} so downstream
+   * machinery (e.g. {@link io.github.eschizoid.telescope.quarkus.TelescopeMapperRegistry}) can key
+   * the mapper by the {@code (source, target)} pair.
+   */
+  public ForwardMapper<S, A> asForwardMapper(final Class<S> sourceClass, final Class<A> targetClass) {
+    return ForwardMapper.create(this::read, sourceClass, targetClass);
+  }
+
+  /**
    * All focused values, in traversal order.
    *
    * <pre>{@code
