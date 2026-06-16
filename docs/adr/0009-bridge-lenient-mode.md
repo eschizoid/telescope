@@ -63,11 +63,15 @@ safety must keep `lenient = false`.
   explicitly rejected), lenient mode only opts out of the "complete the match" check — same-name auto-matches and
   declared renames still go through their normal type-safety pipeline. A field that was matched correctly before
   `lenient = true` still matches correctly; the only change is that the absence of a match no longer fails compilation.
-- **Documentation must call out the round-trip-loss explicitly.** `lenient = true` users get a partial-Iso. Their
-  generated `BRIDGE.from(...)` will produce a source instance with the `Source`-side fields that have no `Target`
-  counterpart populated at `NullDefaults`. Adopters who rely on backward round-trip safety must NOT set `lenient`. The
-  `@Bridge` javadoc must spell this out next to the attribute declaration, and the BridgeProcessor must emit a matching
-  warning in the `<X>Bridge` class javadoc for any class compiled with `lenient = true`.
+- **Documentation must call out the round-trip-loss explicitly, by direction name.** `lenient = true` users get a
+  partial-Iso whose **`BRIDGE.from(target)` direction is the lossy one** — every `Source`-side field with no `Target`
+  counterpart comes back populated at `NullDefaults` (zero / empty-string / null), regardless of what the original
+  Source held. The forward direction (`BRIDGE.to(source)`) remains lossy-by-design in the well-understood small-DTO →
+  large-entity shape (unmatched Target fields take JLS defaults, which is the whole point). Adopters who rely on
+  backward round-trip safety must NOT set `lenient`. The `@Bridge` javadoc must spell this out next to the attribute
+  declaration AND name `BRIDGE.from(target)` as the partial direction; the BridgeProcessor must emit a matching warning
+  in the `<X>Bridge` class javadoc for any class compiled with `lenient = true`, again naming `BRIDGE.from(target)` as
+  the asymmetric side so the IDE warning is unambiguous.
 
 ## Alternatives considered
 
@@ -86,3 +90,11 @@ safety must keep `lenient = false`.
 - **Symmetric runtime API — add a `lenient = true` knob to `Telescope.mapper(Class, Class, ...)`.** Out of scope here
   (separate ADR moment); the runtime bidirectional `mapper(...)` keeping strict-by-default for round-trip safety is
   load-bearing semantics. `mapperForward(...)` already covers the lenient runtime case.
+
+## See also
+
+- [ADR-0007](0007-cross-module-bridge-carrier.md) — sibling v1.1+ enhancement, cross-module `@Bridge` carrier (companion
+  `@Bridge` surface)
+- [ADR-0008](0008-fromMap-untyped-source-factory.md) — sibling v1.1+ enhancement, untyped-source factory
+- [ADR-0002](0002-no-fuzzy-auto-mapping.md) — the no-fuzzy-matching guardrail that lenient mode
+  opts-out-of-but-doesn't-violate

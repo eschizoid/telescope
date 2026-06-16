@@ -74,6 +74,11 @@ silently ignored.
   its own per-type read shape, and pulling them into telescope as compile dependencies is the wrong direction. Adopters
   needing those wrap them: `JsonNode → Map<String, Object>` first (their framework already does this), then
   `Telescope.fromMap(...)`.
+- **Typed `Symbol<X>` marker keys (`extract(KEYS.bookingType, ...)` with a `Symbol<X>` table declared once).** Rejected.
+  The actual shape on the wire is string-keyed — JDBC `ResultSet#getColumns`, framework request-body parsers, and
+  message-bus payload decoders all produce `String → Object` maps. Forcing adopters to declare a typed `Symbol<X>` table
+  just to call the factory adds boilerplate without removing the underlying string-lookup step (the framework still
+  emits string keys). The runtime converter `Function<Object, X>` is the right type-recovery point.
 - **Reuse `Mapping.to(...)` with a `Map.Entry`-like source accessor.** Rejected. The source side has no compile-time
   type, so `SerializedLambda`-based field-name recovery doesn't work, and the row would have to invent a different shape
   for its source identifier. A separate `MapExtractStep` interface keeps the typed-row infrastructure (`Mapping`)
@@ -84,3 +89,10 @@ silently ignored.
 - **Do nothing — workaround works.** Rejected for the same reason as Enh 1 (cross-module `@Bridge`): the workaround
   works mechanically but throws away the compile-checked story for any mapper that touches an untyped boundary, and
   every adopter hitting this experiences the same loss in isolation.
+
+## See also
+
+- [ADR-0007](0007-cross-module-bridge-carrier.md) — sibling v1.1+ enhancement, cross-module `@Bridge` carrier
+- [ADR-0009](0009-bridge-lenient-mode.md) — sibling v1.1+ enhancement, codegen `@Bridge(lenient = true)`
+- [ADR-0004](0004-runtime-and-codegen-strategy-separate.md) — runtime-vs-codegen separation that pushes `fromMap` into
+  the runtime path first

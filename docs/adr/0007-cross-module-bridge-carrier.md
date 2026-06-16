@@ -58,7 +58,7 @@ cross-module setups.
 - **`as<Target>()` Path hop is only generated for the model-anchored form.** Carrier-anchored bridges don't have a
   source-class `<Source>Path<R>` to hang the hop off of, by design — the source class is annotation-free in the
   cross-module case. Adopters use the carrier's `<Carrier>Bridge.BRIDGE` constant directly via
-  `Telescope.from(...) .to(...).using(BRIDGE)` or `Telescope.of(Source.class).then(BRIDGE)`. Documented limitation;
+  `Telescope.from(...).to(...).using(BRIDGE)` or `Telescope.of(Source.class).then(BRIDGE)`. Documented limitation;
   symmetric with the reality that the source module can't see the carrier class either.
 
 ## Alternatives considered
@@ -78,3 +78,9 @@ cross-module setups.
 - **Do nothing — adopters can keep using the runtime path.** Rejected. The migration-feedback adopter flagged this as
   P1; the runtime path drops codegen's perf advantage; cross-module is a real shape MapStruct users routinely use, not
   an edge case.
+
+## See also
+
+- [ADR-0008](0008-fromMap-untyped-source-factory.md) — sibling v1.1+ enhancement, untyped-source factory
+- [ADR-0009](0009-bridge-lenient-mode.md) — sibling v1.1+ enhancement, codegen lenient mode for `@Bridge`
+- [ADR-0004](0004-runtime-and-codegen-strategy-separate.md) — strategy separation motivating the carrier form
