@@ -208,8 +208,8 @@ public @interface Bridge {
    *
    * <p>Designed for the small-DTO → large-entity pattern (e.g. mapping a 7-field DTO into a
    * 135-field entity whose 128 unmatched slots should stay at default). Without {@code lenient},
-   * each of those 128 slots would need an explicit {@link #drops()} or {@link
-   * io.github.eschizoid.telescope.annotations.Constant @Constant} entry to satisfy the bijection.
+   * each of those 128 slots would need an explicit {@link #drops()} or {@link Constant @Constant}
+   * entry to satisfy the bijection.
    *
    * <p><b>Round-trip-loss warning, by direction name.</b> {@code lenient = true} produces a
    * <em>partial-Iso</em>. The forward direction {@code BRIDGE.read(source)} is fine — unmatched
