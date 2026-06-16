@@ -99,14 +99,27 @@ public final class DeepMap {
   // ---------- Package-private entries (called from Telescope.map / Telescope.mapper) ----------
 
   static <A, B> Iso<A, B> resolve(final Class<A> source, final Class<B> target, final MapStep[] steps) {
-    return resolution(source, target, steps).iso;
+    return resolution(source, target, steps, false).iso;
   }
 
   static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {
-    final var r = resolution(source, target, steps);
+    // Bidirectional: strict bijection — unmatched fields on EITHER side throw at construction.
+    // Round-trip safety depends on every field having a same-name counterpart or an explicit row.
+    final var r = resolution(source, target, steps, false);
     // Go through Mapper.create (public, Function-typed) — same call works regardless of whether
     // Mapper sits in this package or moves to conversion/.
     return Mapper.create(r.iso::to, r.iso::from, source, target, r.patchTable);
+  }
+
+  /**
+   * Forward-only resolution: lenient by default. There's no {@code backward()} call to satisfy, so
+   * the bijection invariant doesn't apply — unmatched target fields silently receive JLS defaults,
+   * unmatched source fields are silently ignored. Matches MapStruct's default behaviour for every
+   * mapper and removes the "13 drops + 2 constants for a 3-field rename" friction adopters hit on a
+   * small-DTO ↔ large-entity migration shape.
+   */
+  static <A, B> Iso<A, B> resolveForward(final Class<A> source, final Class<B> target, final MapStep[] steps) {
+    return resolution(source, target, steps, true).iso;
   }
 
   // ---------- Resolution (shared by both public entries) ----------
@@ -115,7 +128,8 @@ public final class DeepMap {
   private static <A, B> Resolution<A, B> resolution(
     final Class<A> source,
     final Class<B> target,
-    final MapStep[] steps
+    final MapStep[] steps,
+    final boolean lenient
   ) {
     final var overrides = new ArrayList<Mapping<?, ?>>();
     final var hints = new ArrayList<WriteHint<?>>();
@@ -141,7 +155,18 @@ public final class DeepMap {
     final var topSteps = new LinkedHashMap<String, FieldStep>();
     final var cyclicPairs = new HashSet<TypePair>();
     final var inProgress = new ArrayDeque<TypePair>();
-    populateIso(source, target, overrideTable, beanRefl, cache, topSteps, nullStrategy, cyclicPairs, inProgress);
+    populateIso(
+      source,
+      target,
+      overrideTable,
+      beanRefl,
+      cache,
+      topSteps,
+      nullStrategy,
+      cyclicPairs,
+      inProgress,
+      lenient
+    );
     validateAllHintsConsumed(hintMap, cache);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
     final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
@@ -316,7 +341,8 @@ public final class DeepMap {
     final Map<String, FieldStep> topStepsOut,
     final NullHint.NullStrategy nullStrategy,
     final Set<TypePair> cyclicPairs,
-    final Deque<TypePair> inProgress
+    final Deque<TypePair> inProgress,
+    final boolean lenient
   ) {
     final var key = new TypePair(source, target);
     if (cache.containsKey(key)) {
@@ -501,7 +527,12 @@ public final class DeepMap {
           // TOP-LEVEL pair (`inProgress.size() == 1`) where the user explicitly asked for the
           // mapper; missing fields there ARE a configuration mistake worth surfacing.
           final var isNested = inProgress.size() > 1;
-          if (!telescopeFixups.isEmpty() || isNested) {
+          // `lenient` is set by `resolveForward` — forward-only mappers don't run `backward()`,
+          // so the bijection invariant doesn't apply and unmatched target fields silently take
+          // the JLS default rather than abort construction. Matches MapStruct's default behaviour
+          // and removes "13 drops + 2 constants for a 3-field rename" friction on small-DTO →
+          // large-entity migration shapes.
+          if (!telescopeFixups.isEmpty() || isNested || lenient) {
             // Telescope-row placeholder for a target field with no same-name source. Three cases,
             // type-driven:
             //   - field type is a record AND a telescope row claims it as a first hop: allocate a
@@ -565,10 +596,10 @@ public final class DeepMap {
           bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
           continue;
         }
-        // Same permissive mode as the target side: when telescope rows are present OR this is a
-        // nested auto-recursed pair, source fields with no consumer fall back to a NULLING
-        // placeholder rather than failing.
-        if (!telescopeFixups.isEmpty() || inProgress.size() > 1) {
+        // Same permissive mode as the target side: when telescope rows are present, this is a
+        // nested auto-recursed pair, OR the resolution is forward-only (lenient), source fields
+        // with no consumer fall back to a NULLING placeholder rather than failing.
+        if (!telescopeFixups.isEmpty() || inProgress.size() > 1 || lenient) {
           bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
           continue;
         }
@@ -893,7 +924,10 @@ public final class DeepMap {
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
     if (srcType instanceof Class<?> srcCls && tgtType instanceof Class<?> tgtCls) {
       if (isReflectable(srcCls) && isReflectable(tgtCls)) {
-        populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null, nullStrategy, cyclicPairs, inProgress);
+        // Nested recursion — `isNested` (inProgress.size() > 1) already triggers the lenient gate
+        // for unmatched fields regardless of the outer call's strictness. Pass `false` here so the
+        // lenient flag's meaning stays anchored to the user-facing top-level call (mapperForward).
+        populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null, nullStrategy, cyclicPairs, inProgress, false);
         final var subKey = new TypePair(srcCls, tgtCls);
         return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey));
       }

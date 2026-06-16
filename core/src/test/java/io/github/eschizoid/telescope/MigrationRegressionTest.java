@@ -1673,4 +1673,172 @@ class MigrationRegressionTest {
       assertEquals(true, ex.getMessage().contains("NoCtorList"), "names the offending class");
     }
   }
+
+  @Nested
+  @DisplayName("mapperForward is lenient by default — unmatched target → JLS default, unmatched source → ignored")
+  class MapperForwardLenientByDefault {
+
+    // Reproduces the adopter-reported "small DTO → large entity" friction shape: a 3-field source
+    // record mapping into a many-field bean target. Before Enh 9 this required N drops + M
+    // constants just to satisfy the strict bijection check; under the lenient default it just
+    // works.
+    record SmallDto(String id, String name, int quantity) {}
+
+    public static class LargeEntity {
+
+      // Same-name fields with the source.
+      private String id;
+      private String name;
+      private int quantity;
+      // Unmatched target fields — these should stay at JLS defaults under lenient mode.
+      private String createdBy;
+      private String updatedBy;
+      private boolean archived;
+      private int version;
+      private String tenant;
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      public int getQuantity() {
+        return quantity;
+      }
+
+      public void setQuantity(final int quantity) {
+        this.quantity = quantity;
+      }
+
+      public String getCreatedBy() {
+        return createdBy;
+      }
+
+      public void setCreatedBy(final String createdBy) {
+        this.createdBy = createdBy;
+      }
+
+      public String getUpdatedBy() {
+        return updatedBy;
+      }
+
+      public void setUpdatedBy(final String updatedBy) {
+        this.updatedBy = updatedBy;
+      }
+
+      public boolean isArchived() {
+        return archived;
+      }
+
+      public void setArchived(final boolean archived) {
+        this.archived = archived;
+      }
+
+      public int getVersion() {
+        return version;
+      }
+
+      public void setVersion(final int version) {
+        this.version = version;
+      }
+
+      public String getTenant() {
+        return tenant;
+      }
+
+      public void setTenant(final String tenant) {
+        this.tenant = tenant;
+      }
+    }
+
+    @Test
+    @DisplayName("forward-only mapper construction with unmatched target fields succeeds (no drops/constants)")
+    void mapperForwardConstructsWithoutDropsOrConstants() {
+      // Adopter pain reproduction: pre-fix this required 5 constant() rows for the unmatched
+      // target fields. Lenient default: it just works.
+      assertDoesNotThrow(() ->
+        Telescope.mapperForward(SmallDto.class, LargeEntity.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+      );
+    }
+
+    @Test
+    @DisplayName("forward(small) populates same-name fields; unmatched fields take JLS defaults")
+    void forwardPopulatesSameNameFieldsAndJlsDefaultsTheRest() {
+      final var mapper = Telescope.mapperForward(
+        SmallDto.class,
+        LargeEntity.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var tgt = mapper.forward(new SmallDto("o1", "alice", 42));
+      // Matched fields carry through.
+      assertEquals("o1", tgt.getId());
+      assertEquals("alice", tgt.getName());
+      assertEquals(42, tgt.getQuantity());
+      // Unmatched target fields take JLS defaults (null for reference, 0 for int, false for bool).
+      assertEquals(null, tgt.getCreatedBy());
+      assertEquals(null, tgt.getUpdatedBy());
+      assertEquals(false, tgt.isArchived());
+      assertEquals(0, tgt.getVersion());
+      assertEquals(null, tgt.getTenant());
+    }
+
+    record SourceWithExtras(String id, String name, String extraNote, String anotherExtra) {}
+
+    record TargetSmall(String id, String name) {}
+
+    @Test
+    @DisplayName("forward-only — unmatched source fields are silently ignored (no drop required)")
+    void unmatchedSourceFieldsAreIgnoredUnderLenient() {
+      // Pre-fix: this required drop(SourceWithExtras::extraNote) +
+      // drop(SourceWithExtras::anotherExtra).
+      final var mapper = Telescope.mapperForward(SourceWithExtras.class, TargetSmall.class);
+      final var tgt = mapper.forward(new SourceWithExtras("o1", "alice", "ignored", "also ignored"));
+      assertEquals("o1", tgt.id());
+      assertEquals("alice", tgt.name());
+    }
+
+    @Test
+    @DisplayName("bidirectional mapper() STILL enforces strict bijection — unmatched target throws")
+    void bidirectionalMapperStillStrict() {
+      // Round-trip safety: Telescope.mapper (bidirectional) must keep throwing on unmatched
+      // fields so callers know backward() won't silently lose data.
+      assertThrows(IllegalStateException.class, () ->
+        Telescope.mapper(SmallDto.class, LargeEntity.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+      );
+    }
+
+    @Test
+    @DisplayName("bidirectional mapper() STILL enforces strict bijection — unmatched source throws")
+    void bidirectionalMapperStrictOnUnmatchedSource() {
+      assertThrows(IllegalStateException.class, () -> Telescope.mapper(SourceWithExtras.class, TargetSmall.class));
+    }
+
+    @Test
+    @DisplayName("explicit rename rows still work — only unmatched fields are leniently defaulted")
+    void explicitRenameRowsStillFire() {
+      // Same-name id + an explicit rename `name → fullName`-equivalent via Mapping.to with
+      // different accessors. The unmatched (createdBy etc.) fields stay at default; the explicit
+      // rename fires normally.
+      final var mapper = Telescope.mapperForward(
+        SmallDto.class,
+        LargeEntity.class,
+        Mapping.to(SmallDto::name, LargeEntity::getName),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var tgt = mapper.forward(new SmallDto("o1", "alice", 42));
+      assertEquals("alice", tgt.getName());
+      assertEquals(null, tgt.getCreatedBy());
+    }
+  }
 }

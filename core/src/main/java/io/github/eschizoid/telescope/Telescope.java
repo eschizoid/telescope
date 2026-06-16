@@ -603,8 +603,12 @@ public sealed class Telescope<
     final Class<B> target,
     final MapStep... steps
   ) {
-    final var bidi = DeepMap.resolveMapper(source, target, steps);
-    return ForwardMapper.create(bidi::forward, source, target);
+    // Forward-only: lenient by default. Unmatched target fields silently take JLS defaults,
+    // unmatched source fields are silently ignored — no `drop()` / `constant()` rows required
+    // for the common "small DTO → large entity" migration shape. Matches MapStruct's default.
+    // Bidirectional `mapper(...)` keeps the strict bijection check.
+    final var iso = DeepMap.resolveForward(source, target, steps);
+    return ForwardMapper.create(iso::to, source, target);
   }
 
   /**
