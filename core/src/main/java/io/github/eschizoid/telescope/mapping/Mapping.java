@@ -147,6 +147,32 @@ public sealed interface Mapping<A, B>
   }
 
   /**
+   * Identical to {@link #forward(Accessor, Accessor, Function)} — a name-only alias that makes the
+   * unidirectionality explicit at the call site. Useful when static-imported alongside {@link
+   * #to(Accessor, Accessor)} where the bare name {@code forward} can collide with common variable
+   * names ({@code forward}, {@code forwardEvent}, etc.) and obscure that the row is one-way.
+   *
+   * <pre>{@code
+   * import static io.github.eschizoid.telescope.mapping.Mapping.to;
+   * import static io.github.eschizoid.telescope.mapping.Mapping.toOneWay;
+   *
+   * Telescope.mapperForward(UserEntity.class, UserDto.class,
+   *   to(UserEntity::id, UserDto::id),
+   *   toOneWay(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString));
+   * }</pre>
+   *
+   * <p>Behaviourally identical to {@link #forward(Accessor, Accessor, Function)}; pick whichever
+   * reads better at the call site.
+   */
+  static <A, B, X, Y> Mapping<A, B> toOneWay(
+    final Accessor<A, X> src,
+    final Accessor<B, Y> tgt,
+    final Function<? super X, ? extends Y> fn
+  ) {
+    return forward(src, tgt, fn);
+  }
+
+  /**
    * Enum correspondence by constant name. Maps each {@code SE} constant to the {@code TE} constant
    * of the same {@link Enum#name() name}; backward direction is symmetric. Closes MapStruct's
    * {@code @ValueMapping} gap for the common "status enums that line up by name" case without

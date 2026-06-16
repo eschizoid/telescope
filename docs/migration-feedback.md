@@ -845,12 +845,12 @@ Target ≥80% line coverage on `:internal`. Not a correctness defect — quality
 | #      | Description                                        | Priority | Status         |
 | ------ | -------------------------------------------------- | -------- | -------------- |
 | Enh 1  | Cross-module `@Bridge` carrier                     | High     | Open (v1.1+)   |
-| Enh 2  | `ForwardMapper.liftList()`                         | Medium   | Open (v1.1+)   |
-| Enh 3  | `Telescope.asForwardMapper()`                      | Low      | Open (v1.1+)   |
+| Enh 2  | `ForwardMapper.liftList()`                         | Medium   | Fixed (v1.0.2) |
+| Enh 3  | `Telescope.asForwardMapper()`                      | Low      | Fixed (v1.0.2) |
 | Enh 4  | Processor ordering docs + BridgeProcessor deferral | Medium   | Open (v1.1+)   |
 | Enh 5  | `Map` → POJO factory                               | Low      | Open (v1.1+)   |
 | Enh 6  | `@Bridge` lenient mode                             | High     | Open (v1.1+)   |
-| Enh 7  | `Sources.byClass()` generics                       | Low      | Open (v1.1+)   |
-| Enh 8  | `Mapping.forward()` naming                         | Low      | Open (v1.1+)   |
+| Enh 7  | `Sources.byClass()` generics                       | Low      | Fixed (v1.0.2) |
+| Enh 8  | `Mapping.forward()` naming                         | Low      | Fixed (v1.0.2) |
 | Enh 9  | `mapperForward()` lenient by default               | High     | Fixed (v1.0.2) |
 | Enh 10 | `:internal` test coverage hardening                | Medium   | Open (v1.0.2)  |
