@@ -468,7 +468,15 @@ public final class DeepMap {
       // Telescope<B, X> at runtime (generics erased), so we permit the gap instead of failing on
       // every nested write. Without any telescope row, the strict same-name check still fires.
       if (!srcNameSet.contains(name)) {
-        if (!telescopeFixups.isEmpty()) {
+        // Lenient on nested auto-recursed pairs (Bug 6): when the current call is recursed from
+        // computeAutoIso (inProgress has more than just the current pair on the stack), the user
+        // never explicitly configured this pair — it was visited because a parent field's
+        // genericType is reflectable. An unmatched target field there should stay at its JLS
+        // default rather than abort the top-level construction. Strictness is preserved at the
+        // TOP-LEVEL pair (`inProgress.size() == 1`) where the user explicitly asked for the
+        // mapper; missing fields there ARE a configuration mistake worth surfacing.
+        final var isNested = inProgress.size() > 1;
+        if (!telescopeFixups.isEmpty() || isNested) {
           // Telescope-row placeholder for a target field with no same-name source. Three cases,
           // type-driven:
           //   - field type is a record AND a telescope row claims it as a first hop: allocate a
@@ -531,9 +539,10 @@ public final class DeepMap {
         bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
         continue;
       }
-      // Same permissive mode as the target side: when telescope rows are present, source fields
-      // with no consumer fall back to a NULLING placeholder rather than failing.
-      if (!telescopeFixups.isEmpty()) {
+      // Same permissive mode as the target side: when telescope rows are present OR this is a
+      // nested auto-recursed pair (Bug 6), source fields with no consumer fall back to a NULLING
+      // placeholder rather than failing.
+      if (!telescopeFixups.isEmpty() || inProgress.size() > 1) {
         bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
         continue;
       }

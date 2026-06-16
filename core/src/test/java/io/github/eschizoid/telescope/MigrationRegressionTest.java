@@ -235,6 +235,123 @@ class MigrationRegressionTest {
   }
 
   @Nested
+  @DisplayName("Bug 6 — DeepMap strict bijection on nested auto-recursed types")
+  class Bug6NestedStrictBijection {
+
+    public static class ScoreResponse {
+
+      private int firstNameScore;
+      private int lastNameScore;
+
+      public int getFirstNameScore() {
+        return firstNameScore;
+      }
+
+      public void setFirstNameScore(final int v) {
+        this.firstNameScore = v;
+      }
+
+      public int getLastNameScore() {
+        return lastNameScore;
+      }
+
+      public void setLastNameScore(final int v) {
+        this.lastNameScore = v;
+      }
+    }
+
+    public static class ScoreResponseDto {
+
+      private int firstNameScore;
+      private int lastNameScore;
+      private String matchingStatus; // extra field, not on source
+
+      public int getFirstNameScore() {
+        return firstNameScore;
+      }
+
+      public void setFirstNameScore(final int v) {
+        this.firstNameScore = v;
+      }
+
+      public int getLastNameScore() {
+        return lastNameScore;
+      }
+
+      public void setLastNameScore(final int v) {
+        this.lastNameScore = v;
+      }
+
+      public String getMatchingStatus() {
+        return matchingStatus;
+      }
+
+      public void setMatchingStatus(final String v) {
+        this.matchingStatus = v;
+      }
+    }
+
+    public static class Parent {
+
+      private ScoreResponse scores;
+
+      public ScoreResponse getScores() {
+        return scores;
+      }
+
+      public void setScores(final ScoreResponse scores) {
+        this.scores = scores;
+      }
+    }
+
+    public static class ParentDto {
+
+      private ScoreResponseDto scores;
+
+      public ScoreResponseDto getScores() {
+        return scores;
+      }
+
+      public void setScores(final ScoreResponseDto scores) {
+        this.scores = scores;
+      }
+    }
+
+    @Test
+    @DisplayName("nested auto-recursed pair with asymmetric fields is lenient — top-level construction succeeds")
+    void nestedAsymmetricPairConstructsLeniently() {
+      // The adopter's exact scenario: top-level pair (Parent, ParentDto) auto-recurses into
+      // (ScoreResponse, ScoreResponseDto). The nested target has `matchingStatus` with no
+      // same-name source. Strict bijection on every recursed pair throws at construction time.
+      // After fix, nested pairs are lenient — unmatched target fields stay at JLS defaults,
+      // unmatched source fields are silently dropped. Only the TOP-LEVEL pair (here: Parent →
+      // ParentDto) enforces strictness.
+      final var mapper = Telescope.mapper(Parent.class, ParentDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var inner = new ScoreResponse();
+      inner.setFirstNameScore(80);
+      inner.setLastNameScore(90);
+      final var src = new Parent();
+      src.setScores(inner);
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(80, tgt.getScores().getFirstNameScore());
+      assertEquals(90, tgt.getScores().getLastNameScore());
+      // Nested target's unmatched field stays at the JLS default.
+      assertEquals(null, tgt.getScores().getMatchingStatus());
+    }
+
+    @Test
+    @DisplayName("top-level pair with asymmetric fields still throws — strictness preserved at the top")
+    void topLevelAsymmetricPairStillThrows() {
+      // Strictness at the top-level call (the user's explicit request) is preserved — the user
+      // asked for this pair and a missing field is a real configuration mistake. Only nested
+      // recursion auto-relaxes.
+      org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () ->
+        Telescope.mapper(ScoreResponse.class, ScoreResponseDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+      );
+    }
+  }
+
+  @Nested
   @DisplayName("Bug 5 — SettersWriter throws on getter-only properties")
   class Bug5GetterOnlyProperties {
 
