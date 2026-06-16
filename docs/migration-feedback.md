@@ -85,7 +85,6 @@ public static String propertyOf(final String getterName) {
 This allows the null to propagate gracefully (the null property is skipped by DeepMap).
 
 **File to fix:** `internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java` — `propertyOf()` method
-(line ~622)
 
 For explicit `to()` rows targeting boolean fields, use `fieldByName()`:
 
@@ -670,22 +669,41 @@ covers this for `mapperForward()` too
 
 ## Summary
 
-| #     | Type                                                            | Impact | Status       |
-| ----- | --------------------------------------------------------------- | ------ | ------------ |
-| Bug 1 | ClassCastException on unresolvable `@Bridge` target             | P1     | Needs fix    |
-| Bug 2 | LambdaIntrospection NPE on `is*` boolean accessors              | P0     | Needs fix    |
-| Bug 3 | No autoboxing between primitive ↔ wrapper types                 | P1     | Needs fix    |
-| Bug 4 | NPE on null intermediate objects in nested paths                | P1     | Needs fix    |
-| Bug 5 | SettersWriter throws on getter-only properties                  | P1     | Needs fix    |
-| Bug 6 | DeepMap strict bijection enforced on nested auto-recursed types | P1     | Needs fix    |
-| Bug 7 | LambdaMetafactory fails on classes extending JDK types          | P1     | Needs fix    |
-| Bug 8 | SettersWriter NPE when valueByName returns null for primitive   | P1     | Needs fix    |
-| 1     | Cross-module `@Bridge` carrier                                  | High   | Enhancement  |
-| 2     | `ForwardMapper.liftList()`                                      | Medium | Enhancement  |
-| 3     | `Telescope.asForwardMapper()`                                   | Low    | Convenience  |
-| 4     | Processor ordering docs + BridgeProcessor deferral              | Medium | Docs + Fix   |
-| 5     | `Map` → POJO factory                                            | Low    | Nice-to-have |
-| 6     | `@Bridge` lenient mode                                          | High   | Enhancement  |
-| 7     | `Sources.byClass()` generics                                    | Low    | API polish   |
-| 8     | `Mapping.forward()` naming                                      | Low    | Bikeshed     |
-| 9     | `mapperForward()` lenient by default                            | High   | Enhancement  |
+| #     | Type                                                            | Impact | Status         |
+| ----- | --------------------------------------------------------------- | ------ | -------------- |
+| Bug 1 | ClassCastException on unresolvable `@Bridge` target             | P1     | Fixed (v1.0.1) |
+| Bug 2 | LambdaIntrospection NPE on `is*` boolean accessors              | P0     | Fixed (v1.0.1) |
+| Bug 3 | No autoboxing between primitive ↔ wrapper types                 | P1     | Fixed (v1.0.1) |
+| Bug 4 | NPE on null intermediate objects in nested paths                | P1     | Fixed (v1.0.1) |
+| Bug 5 | SettersWriter throws on getter-only properties                  | P1     | Fixed (v1.0.1) |
+| Bug 6 | DeepMap strict bijection enforced on nested auto-recursed types | P1     | Fixed (v1.0.1) |
+| Bug 7 | LambdaMetafactory fails on classes extending JDK types          | P1     | Fixed (v1.0.1) |
+| Bug 8 | SettersWriter NPE when valueByName returns null for primitive   | P1     | Fixed (v1.0.1) |
+| 1     | Cross-module `@Bridge` carrier                                  | High   | Enhancement    |
+| 2     | `ForwardMapper.liftList()`                                      | Medium | Enhancement    |
+| 3     | `Telescope.asForwardMapper()`                                   | Low    | Convenience    |
+| 4     | Processor ordering docs + BridgeProcessor deferral              | Medium | Docs + Fix     |
+| 5     | `Map` → POJO factory                                            | Low    | Nice-to-have   |
+| 6     | `@Bridge` lenient mode                                          | High   | Enhancement    |
+| 7     | `Sources.byClass()` generics                                    | Low    | API polish     |
+| 8     | `Mapping.forward()` naming                                      | Low    | Bikeshed       |
+| 9     | `mapperForward()` lenient by default                            | High   | Enhancement    |
+
+---
+
+## Known limitation surfaced during round 6 review (post-fix)
+
+**Parameterised Collection / Map subtype pairs across DIFFERENT raw classes** still throw "incompatible source/target
+shapes" at mapper construction.
+
+Example: `Outer.items : List<Inner>` (parameterised source) ↔ `OuterDto.items : ArrayList<InnerDto>` (parameterised
+target with different concrete class). The Bug 7 fix handles the _raw-subtype-on-both-sides_ case
+(`ImageUrls extends ArrayList<X>` on both sides). It does not yet cover the case where one side uses an interface
+(`List<X>`) and the other a concrete implementation (`ArrayList<Y>`) or two different concrete implementations
+parameterised over different element types.
+
+Workaround for v1.0.1: use the same raw container type on both sides, or declare an explicit `Mapping.via(...)` row.
+
+v1.1 work: extend `ContainerShape.of` to accept parameterised types whose raw class is a SUBTYPE (not exact match) of
+`List` / `Set` / `Map` / `Optional`, and combine with the per-element Iso lift + target-concrete-class allocator so the
+lifted Iso writes into a fresh instance of the target's concrete class.

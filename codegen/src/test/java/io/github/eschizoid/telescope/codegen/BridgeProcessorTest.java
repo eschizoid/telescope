@@ -672,6 +672,33 @@ class BridgeProcessorTest {
         () -> "expected no-strategy diagnostic; saw " + compilation.errorMessages()
       );
     }
+
+    @Test
+    @DisplayName("@Bridge with an unresolvable target class emits a precise diagnostic instead of a ClassCastException")
+    void unresolvableTargetEmitsPreciseDiagnostic() {
+      // When the @Bridge target lives in a module the annotated compilation unit can't see,
+      // javac's AnnotationValue.getValue() returns the target FQN as a String rather than a
+      // TypeMirror. A naive `(TypeMirror) cast` would blow up the build with an unhelpful
+      // ClassCastException; the processor recognises the String fallback shape and surfaces a
+      // guidance message that names the missing target instead.
+      final var compilation = compile(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.does.not.Exist.class)
+          public record Src(String id) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "an unresolvable @Bridge target should fail");
+      assertTrue(
+        compilation.hasError("not resolvable from this compilation unit"),
+        () -> "expected unresolvable-target diagnostic; saw " + compilation.errorMessages()
+      );
+    }
   }
 
   @Nested

@@ -548,12 +548,22 @@ class BeansTest {
     }
 
     @Test
+    @DisplayName("readProperty(null, name) returns null instead of NPEing on persistentClassOf")
+    void readPropertyNullPojoIsNullSafe() {
+      // When a multi-hop telescope path reads through a null intermediate, the next lens hop
+      // calls Beans.readProperty(null, "..."). persistentClassOf(null) returns null, then
+      // ClassValue.get(null) would NPE. Short-circuit at the readProperty entry so the optic
+      // pipeline propagates the null gracefully through intermediate hops.
+      assertNull(Beans.readProperty(null, "anything"));
+    }
+
+    @Test
     @DisplayName("propertyOf(null) returns null instead of throwing NPE")
     void propertyOfNullIsNullSafe() {
-      // Belt-and-suspenders guard. The structural fix for Bug 2 lives in DeepMap.populateIso —
-      // the row-loop now peels nested-telescope sub-shapes (FromTelescopeTo / TelescopeToTelescope
-      // whose sourceField() returns null by design) before normalising. This guard ensures the
-      // public Beans surface stays null-safe in case any future caller forgets to peel.
+      // Defensive null-safety on the public Beans surface — nested-telescope sub-shapes
+      // (FromTelescopeTo / TelescopeToTelescope whose sourceField() returns null by design)
+      // are peeled in DeepMap.populateIso before normalising, but propertyOf is part of the
+      // public API and should not NPE when handed a null lambda probe.
       assertNull(Beans.propertyOf(null));
     }
 
@@ -631,10 +641,16 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("construct throws when a name has no matching declared field")
-    void fieldsUnknownNameThrows() {
+    @DisplayName("construct silently skips a name without a matching declared field (no-op)")
+    void fieldsMissingFieldIsSilentlySkipped() {
+      // Mirrors SettersWriter and BuilderWriter — the FIELDS strategy must not throw on a
+      // name without a matching field, otherwise three writer strategies on the same engine
+      // would carry three different contracts. The named slot stays at the JLS default; the
+      // value flowing through valueByName is dropped.
       final var writer = Beans.fieldsWriter(NoArgFields.class);
-      assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "ghost" }, n -> "x"));
+      final var pojo = writer.construct(new String[] { "ghost", "name" }, n -> n.equals("name") ? "alice" : "x");
+      assertNotNull(pojo);
+      assertEquals("alice", pojo.name);
     }
 
     @Test
@@ -685,10 +701,18 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("construct throws IllegalArgumentException for a name without a matching setter")
-    void settersMissingSetterThrows() {
+    @DisplayName("construct silently skips a name without a matching setter (no-op consumer)")
+    void settersMissingSetterIsSilentlySkipped() {
+      // Getter-only / computed / immutable target properties would otherwise throw
+      // IllegalArgumentException("no setter setX") at write time. MapStruct silently ignores
+      // unwritable target fields; we match by installing a no-op BiConsumer for missing
+      // setters. The property's underlying field stays at its JLS default (here:
+      // NoArgFields.name stays null, the source value "x" is dropped).
       final var writer = Beans.settersWriter(NoArgFields.class); // has fields but no setters
-      assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "name" }, n -> "x"));
+      final var pojo = writer.construct(new String[] { "name" }, n -> "x");
+      assertNotNull(pojo);
+      // The constructed instance has the JLS-default null for `name` (no setter fired).
+      assertNull(pojo.name);
     }
 
     @Test
@@ -758,10 +782,19 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("construct throws if no setter on the builder matches a given name")
-    void builderUnknownSetterThrows() {
+    @DisplayName("construct silently skips a name without a matching builder setter (no-op consumer)")
+    void builderMissingSetterIsSilentlySkipped() {
+      // Mirrors SettersWriter's silent-skip contract on the builder path. The `names` array
+      // fed to construct(...) is derived from the target's getter set (Beans.propertyNames),
+      // so a computed/read-only getter on the target POJO would surface here as a builder
+      // method that doesn't exist. Without alignment, two POJOs differing only by the presence
+      // of a `builder()` factory would have opposite mapping semantics on the same
+      // source/target pair. Silently skip the unmatched name, leaving the builder slot at its
+      // default.
       final var writer = Beans.builderWriter(WithBuilder.class);
-      assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "ghost" }, n -> "x"));
+      final var pojo = writer.construct(new String[] { "ghost", "name" }, n -> n.equals("name") ? "alice" : "x");
+      assertNotNull(pojo);
+      assertEquals("alice", pojo.getName());
     }
 
     @Test
