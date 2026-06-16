@@ -369,6 +369,15 @@ public final class Beans {
    * }</pre>
    */
   public static Object readProperty(final Object pojo, final String name) {
+    // Null-source short-circuit: multi-hop telescope paths (e.g.
+    // `Telescope.ofBean(Order.class).field(Order::getCustomer).field(Customer::getEmail)`) read
+    // each hop through this method. When an intermediate object is null at runtime
+    // (`order.getCustomer() == null`), the next hop arrives here with `pojo == null` and the
+    // pipeline needs the null to propagate gracefully — same shape as MapStruct's generated
+    // `if (source.getCustomer() != null) target.setEmail(source.getCustomer().getEmail())`
+    // null-guard. Without this short-circuit, `persistentClassOf(null)` returns null and
+    // `ClassValue.get(null)` NPEs.
+    if (pojo == null) return null;
     // Unwrap HibernateProxy (when present) so a LAZY-fetched entity routes through the
     // persistent class's cache entry, not a per-proxy-subclass one. See persistentClassOf.
     final var beanClass = persistentClassOf(pojo);

@@ -548,6 +548,16 @@ class BeansTest {
     }
 
     @Test
+    @DisplayName("readProperty(null, name) returns null instead of NPEing on persistentClassOf")
+    void readPropertyNullPojoIsNullSafe() {
+      // Bug 4: when a multi-hop telescope path reads through a null intermediate, the next lens
+      // hop calls Beans.readProperty(null, "..."). persistentClassOf(null) returns null, then
+      // ClassValue.get(null) NPEs. Short-circuit at the readProperty entry so the optic pipeline
+      // propagates the null gracefully through intermediate hops.
+      assertNull(Beans.readProperty(null, "anything"));
+    }
+
+    @Test
     @DisplayName("propertyOf(null) returns null instead of throwing NPE")
     void propertyOfNullIsNullSafe() {
       // Belt-and-suspenders guard. The structural fix for Bug 2 lives in DeepMap.populateIso —

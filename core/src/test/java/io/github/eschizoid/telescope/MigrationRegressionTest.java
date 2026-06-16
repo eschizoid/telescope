@@ -147,4 +147,90 @@ class MigrationRegressionTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("Bug 4 — NPE on null intermediate objects in nested telescope paths")
+  class Bug4NullIntermediateNpe {
+
+    public static class Order {
+
+      private Customer customer; // may be null
+
+      public Customer getCustomer() {
+        return customer;
+      }
+
+      public void setCustomer(final Customer customer) {
+        this.customer = customer;
+      }
+    }
+
+    public static class Customer {
+
+      private String email;
+
+      public String getEmail() {
+        return email;
+      }
+
+      public void setEmail(final String email) {
+        this.email = email;
+      }
+    }
+
+    public static class OrderDto {
+
+      private String customerEmail;
+
+      public String getCustomerEmail() {
+        return customerEmail;
+      }
+
+      public void setCustomerEmail(final String customerEmail) {
+        this.customerEmail = customerEmail;
+      }
+    }
+
+    @Test
+    @DisplayName("forward(order) on a source whose nested intermediate is null short-circuits to null instead of NPE")
+    void forwardWithNullIntermediateShortCircuitsToNull() {
+      // The adopter's exact scenario: a 2-hop nested source path order → customer → email, with
+      // order.customer == null at runtime. Before the fix, the second hop calls
+      // Beans.readProperty(null, "email") which delegates to persistentClassOf(null) → null,
+      // then ClassValue.get(null) NPEs. After the fix, readProperty short-circuits to null and
+      // the optic pipeline propagates the null through the rest of the chain.
+      final var mapper = Telescope.mapper(
+        Order.class,
+        OrderDto.class,
+        io.github.eschizoid.telescope.mapping.Mapping.to(
+          Telescope.ofBean(Order.class).field(Order::getCustomer).field(Customer::getEmail),
+          OrderDto::getCustomerEmail
+        ),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new Order(); // customer left null
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(null, tgt.getCustomerEmail());
+    }
+
+    @Test
+    @DisplayName("forward(order) on a populated nested intermediate still reads through the chain")
+    void forwardWithPopulatedIntermediateReadsThrough() {
+      final var mapper = Telescope.mapper(
+        Order.class,
+        OrderDto.class,
+        io.github.eschizoid.telescope.mapping.Mapping.to(
+          Telescope.ofBean(Order.class).field(Order::getCustomer).field(Customer::getEmail),
+          OrderDto::getCustomerEmail
+        ),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var customer = new Customer();
+      customer.setEmail("alice@example.com");
+      final var src = new Order();
+      src.setCustomer(customer);
+      final var tgt = mapper.forward(src);
+      assertEquals("alice@example.com", tgt.getCustomerEmail());
+    }
+  }
 }

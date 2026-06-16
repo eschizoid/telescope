@@ -987,7 +987,14 @@ public sealed class Telescope<
     if (optic instanceof final Affine<S, A> affine) {
       return affine.getOption(source).orElseThrow(Telescope::noValue);
     }
-    return optic.getAll(source).findFirst().orElseThrow(Telescope::noValue);
+    // Stream.findFirst() routes through Optional.of(element), which NPEs on null. A Traversal
+    // can legitimately surface null elements when an intermediate hop of a multi-hop bean path
+    // is null (see Bug 4: Beans.readProperty short-circuits to null, the traversal still
+    // produces a one-element [null] stream). Materialise to a List to preserve nulls and decide
+    // emptiness explicitly.
+    final var values = optic.getAll(source).toList();
+    if (values.isEmpty()) throw noValue();
+    return values.get(0);
   }
 
   private static NoSuchElementException noValue() {
