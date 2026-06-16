@@ -443,7 +443,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * declared source class, {@code null} if the attribute was left at its {@code Void.class} default
    * (i.e. model-anchored form), or a {@code String} FQN when the named class isn't resolvable from
    * this compilation unit (matching {@link #rawTargetValueFromMirror}'s shape so the
-   * unresolvable-class diagnostic is uniform). See ADR-0007.
+   * unresolvable-class diagnostic is uniform).
    */
   private Object rawSourceValueFromMirror(final AnnotationMirror am) {
     for (final var entry : am.getElementValues().entrySet()) {
