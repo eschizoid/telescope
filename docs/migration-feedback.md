@@ -751,10 +751,17 @@ the call site without requiring readers to check the import.
 
 ---
 
-### 9. `mapperForward()` should be lenient by default
+### 9. `mapperForward()` should be lenient by default — Fixed (v1.0.2)
 
-**Problem:** `Telescope.mapperForward()` runs the same strict bijection check as `Telescope.mapper()` — it throws at
-construction time if the target has properties with no same-name source property:
+**Resolution:** `DeepMap.resolveForward(...)` threads a `lenient=true` flag through `populateIso`. Both unmatched-field
+gates now fire under `lenient || isNested || telescope-fixups`. `Telescope.mapperForward(...)` routes through the new
+lenient path; `Telescope.mapper(...)` keeps the strict bijection check for round-trip safety. Pinned by the
+`MapperForwardLenientByDefault` nested test in `MigrationRegressionTest`. PR #138.
+
+---
+
+**Problem:** `Telescope.mapperForward()` ran the same strict bijection check as `Telescope.mapper()` — it threw at
+construction time if the target had properties with no same-name source property:
 
 ```
 IllegalState: Deep map DocumentT → IdentificationResponse: target property 'documentStatus'
@@ -835,15 +842,15 @@ Target ≥80% line coverage on `:internal`. Not a correctness defect — quality
 
 ## Summary — Enhancements
 
-| #      | Description                                        | Priority | Status        |
-| ------ | -------------------------------------------------- | -------- | ------------- |
-| Enh 1  | Cross-module `@Bridge` carrier                     | High     | Open (v1.1+)  |
-| Enh 2  | `ForwardMapper.liftList()`                         | Medium   | Open (v1.1+)  |
-| Enh 3  | `Telescope.asForwardMapper()`                      | Low      | Open (v1.1+)  |
-| Enh 4  | Processor ordering docs + BridgeProcessor deferral | Medium   | Open (v1.1+)  |
-| Enh 5  | `Map` → POJO factory                               | Low      | Open (v1.1+)  |
-| Enh 6  | `@Bridge` lenient mode                             | High     | Open (v1.1+)  |
-| Enh 7  | `Sources.byClass()` generics                       | Low      | Open (v1.1+)  |
-| Enh 8  | `Mapping.forward()` naming                         | Low      | Open (v1.1+)  |
-| Enh 9  | `mapperForward()` lenient by default               | High     | Open (v1.1+)  |
-| Enh 10 | `:internal` test coverage hardening                | Medium   | Open (v1.0.2) |
+| #      | Description                                        | Priority | Status         |
+| ------ | -------------------------------------------------- | -------- | -------------- |
+| Enh 1  | Cross-module `@Bridge` carrier                     | High     | Open (v1.1+)   |
+| Enh 2  | `ForwardMapper.liftList()`                         | Medium   | Open (v1.1+)   |
+| Enh 3  | `Telescope.asForwardMapper()`                      | Low      | Open (v1.1+)   |
+| Enh 4  | Processor ordering docs + BridgeProcessor deferral | Medium   | Open (v1.1+)   |
+| Enh 5  | `Map` → POJO factory                               | Low      | Open (v1.1+)   |
+| Enh 6  | `@Bridge` lenient mode                             | High     | Open (v1.1+)   |
+| Enh 7  | `Sources.byClass()` generics                       | Low      | Open (v1.1+)   |
+| Enh 8  | `Mapping.forward()` naming                         | Low      | Open (v1.1+)   |
+| Enh 9  | `mapperForward()` lenient by default               | High     | Fixed (v1.0.2) |
+| Enh 10 | `:internal` test coverage hardening                | Medium   | Open (v1.0.2)  |
