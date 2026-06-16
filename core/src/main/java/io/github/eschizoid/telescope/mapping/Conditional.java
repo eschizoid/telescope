@@ -99,7 +99,7 @@ public record Conditional<A, B>(Predicate<? super A> predicate, Mapping<A, B> in
       final var fieldSuffix = describeFieldClaim(inner);
       final var alternativeHint =
         inner instanceof ForwardOnlyTransformTo<?, ?, ?, ?>
-          ? "Mapping.forward(src, tgt, fn) rows cannot be predicate-gated externally — fold the " +
+          ? "Mapping.toOneWay(src, tgt, fn) rows cannot be predicate-gated externally — fold the " +
             "predicate into the forward function (return the source value or a default based on the " +
             "predicate)."
           : "For field-level predicate gating on flat accessors, use Mapping.toOrElse(src, tgt, " +

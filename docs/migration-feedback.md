@@ -138,12 +138,12 @@ This occurs when a boxed `Integer` source value is `null` and gets auto-unboxed 
 **Expected:** Automatic boxing/unboxing between primitive and wrapper types, matching the JavaBeans specification and
 MapStruct behavior. `null` boxed values should map to the primitive's JLS default (`0`, `false`, `'\0'`).
 
-**Workaround:** Add explicit `forward()` rows with manual boxing:
+**Workaround:** Add explicit `Mapping.toOneWay()` rows with manual boxing:
 
 ```java
-forward(Source::getCount, Target::getCount, i -> i != null ? (int) i : 0),
-forward(Telescope.ofBean(Source.class).fieldByName("active"),
-        Target::getActive, b -> (Boolean) b)
+toOneWay(Source::getCount, Target::getCount, i -> i != null ? (int) i : 0),
+toOneWay(Telescope.ofBean(Source.class).fieldByName("active"),
+         Target::getActive, b -> (Boolean) b)
 ```
 
 **Proposed fix:** DeepMap's shape-compatibility check should treat primitive/wrapper pairs as compatible and
@@ -725,7 +725,7 @@ This makes `@Bridge` practical for the common "small DTO → large entity" patte
 
 ---
 
-### 7. `Sources.byClass()` type safety
+### 7. `Sources.byClass()` type safety — Fixed (v1.0.2)
 
 **Problem:** `Sources.byClass(Class<T>)` returns `Object` requiring a cast:
 
@@ -733,32 +733,28 @@ This makes `@Bridge` practical for the common "small DTO → large entity" patte
 final var headers = (PolicyRequestHeaders) sources.byClass(PolicyRequestHeaders.class);
 ```
 
-**Proposed:** Return `T` directly with generic signature:
-
-```java
-public <T> T byClass(Class<T> type) { ... }
-```
+**Resolution:** `Sources.byClass(...)` now carries a `<T>` type parameter and returns `T` directly. Erasure makes the
+signature change binary-compatible — pre-existing call sites that explicitly cast `(PolicyRequestHeaders)` still compile
+and run. New call sites can drop the cast: `final PolicyRequestHeaders headers = sources.byClass(...)`. The lookup
+remains EXACT runtime-class match (pinned by `SourcesByClassGenericsTest#byClassExactRuntimeClassMatchOnly`); no
+`Class.isAssignableFrom` widening was added so the contract stays narrow. PR #140.
 
 ---
 
-### 8. `Mapping.forward()` naming
+### 8. `Mapping.forward()` naming — Fixed (v1.0.2)
 
 **Problem:** `Mapping.forward(src, tgt, fn)` is the forward-only row factory. But when static-imported alongside
 `Mapping.to()`, the name `forward` conflicts with common variable/method names and is less expressive than `to()`.
 
-**Consider:** `Mapping.toOneWay(src, tgt, fn)` or `Mapping.map(src, tgt, fn)` — makes the unidirectionality visible at
-the call site without requiring readers to check the import.
+**Resolution:** Renamed `Mapping.forward(...)` → `Mapping.toOneWay(...)` as a clean rename (no `@Deprecated` alias).
+`toOneWay` reads as the unidirectional sibling of `to(...)` — both factories produce a row keyed off a
+`(sourceAccessor, targetAccessor)` pair; `to` is bidirectional, `toOneWay` carries only a forward function. The
+call-site collision with local variables named `forward` / `forwardEvent` is gone, and the symmetry with `to(...)` aids
+discovery. The `ForwardOnlyTransformTo` sealed-permit record is unchanged; only the factory name flipped. PR #140.
 
 ---
 
 ### 9. `mapperForward()` should be lenient by default — Fixed (v1.0.2)
-
-**Resolution:** `DeepMap.resolveForward(...)` threads a `lenient=true` flag through `populateIso`. Both unmatched-field
-gates now fire under `lenient || isNested || telescope-fixups`. `Telescope.mapperForward(...)` routes through the new
-lenient path; `Telescope.mapper(...)` keeps the strict bijection check for round-trip safety. Pinned by the
-`MapperForwardLenientByDefault` nested test in `MigrationRegressionTest`. PR #138.
-
----
 
 **Problem:** `Telescope.mapperForward()` ran the same strict bijection check as `Telescope.mapper()` — it threw at
 construction time if the target had properties with no same-name source property:
@@ -769,27 +765,22 @@ has no same-name source property. Add a rename row to(sourceAccessor, targetAcce
 that maps to 'documentStatus'.
 ```
 
-This forces the caller to declare `constant(Target::getUnmatchedField, null)` for every unmatched target property and
-`drop(Source::getUnmatchedField)` for every unmatched source property — defeating the purpose of forward-only semantics.
+A `ForwardMapper<A, B>` is explicitly one-directional; the bijection invariant (round-trip losslessness) doesn't apply.
+Real-world impact: a 3-field rename between two beans with disjoint field sets required 13 `drop()` + 2 `constant()`
+rows just to satisfy the strict check — turning a 3-line mapper into a 20-line mapper. MapStruct's default for every
+generated mapper is silent JLS-default fill on the target plus silent ignore on the source.
 
-**Why it's wrong for forward-only:** A `ForwardMapper<A, B>` is explicitly one-directional. There's no `backward()`
-call, so the bijection invariant (round-trip losslessness) doesn't apply. Unmatched target fields should silently
-receive JLS defaults, and unmatched source fields should be silently ignored — that's what MapStruct does for every
-mapper.
+**Resolution:** `DeepMap.resolveForward(...)` threads a `lenient=true` flag through `populateIso`. Both unmatched-field
+gates now fire under `lenient || isNested || telescope-fixups`. `Telescope.mapperForward(...)` routes through the new
+lenient path; `Telescope.mapper(...)` keeps the strict bijection check for round-trip safety. Pinned by the
+`MapperForwardLenientByDefault` nested test in `MigrationRegressionTest`. PR #138.
 
-**Real-world impact:** A simple 3-field rename between `DocumentT` (39 fields) → `IdentificationResponse` (29 fields)
-required 13 `drop()` + 2 `constant()` rows just to satisfy the strict check — turning a 3-line mapper into a 20-line
-mapper.
-
-**Proposed fix:** `mapperForward()` should NOT enforce the strict bijection check. Unmatched source properties are
-ignored; unmatched target properties stay at their default values. Only `mapper()` (bidirectional) should enforce
-strictness.
-
-**Workaround:** Use `ForwardMapper.create(manualMappingFunction, Source.class, Target.class)` to bypass DeepMap
-entirely.
-
-**File to fix:** `core/src/main/java/io/github/eschizoid/telescope/DeepMap.java` — same `populateIso()` fix as Bug 6
-covers this for `mapperForward()` too
+**Interaction with Bug 6.** Bug 6 made NESTED auto-recursed pairs lenient regardless of the top-level call's strictness;
+Enh 9 makes TOP-LEVEL forward-only calls lenient. The two axes don't overlap: bidirectional `Telescope.mapper(...)`
+stays strict at the top level (Bug 6's nested leniency still applies on its recursive descent), and forward-only
+`Telescope.mapperForward(...)` is lenient at every level (top via `lenient=true`, nested via `isNested`). The recursive
+`populateIso` call passes `lenient=false` so the flag's meaning stays anchored to the user-facing top-level entry point.
+No double-leniency path is constructible.
 
 ---
 

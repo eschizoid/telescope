@@ -1076,7 +1076,7 @@ public final class DeepMap {
       final String fieldName = r.sourceField();
       final Function<Object, Object> throwingBackward = y -> {
         throw new UnsupportedOperationException(
-          "Mapping.forward is forward-only — backward direction is undefined for field '" +
+          "Mapping.toOneWay is forward-only — backward direction is undefined for field '" +
             fieldName +
             "'. Use Telescope.mapperForward(...) for a forward-only mapper, or Mapping.to(src, " +
             "tgt, forward, backward) for an explicit bidirectional row."

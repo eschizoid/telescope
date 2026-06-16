@@ -17,7 +17,9 @@ import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
+import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
+import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.runtime.instances.CompletableFutureK;
 import io.github.eschizoid.telescope.runtime.instances.EitherK;
 import io.github.eschizoid.telescope.runtime.instances.OptionalK;
@@ -543,7 +545,7 @@ public sealed class Telescope<
     return MapperBuilder.create(source, target);
   }
 
-  // Detect forward-only rows (`Mapping.forward(...)`) and steer the caller to mapperForward(...)
+  // Detect forward-only rows (`Mapping.toOneWay(...)`) and steer the caller to mapperForward(...)
   // so the partial-Iso shape doesn't silently corrupt downstream Mapper.backward / Mapper.patch
   // semantics. The check is O(steps.length); rows are typically <20 per mapper. Skips for
   // mapperForward callers which legitimately accept forward-only rows.
@@ -554,16 +556,16 @@ public sealed class Telescope<
     final String factoryName
   ) {
     for (final var step : steps) {
-      if (step instanceof io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo<?, ?, ?, ?> r) {
+      if (step instanceof ForwardOnlyTransformTo<?, ?, ?, ?> r) {
         throw new IllegalArgumentException(
           factoryName +
             "(" +
             source.getSimpleName() +
             ", " +
             target.getSimpleName() +
-            ", ...) cannot accept a Mapping.forward(...) row for field '" +
+            ", ...) cannot accept a Mapping.toOneWay(...) row for field '" +
             r.targetField() +
-            "' — forward(...) is forward-only and would silently corrupt Mapper.backward / Mapper.patch. " +
+            "' — Mapping.toOneWay(...) is forward-only and would silently corrupt Mapper.backward / Mapper.patch. " +
             "Use Telescope.mapperForward(" +
             source.getSimpleName() +
             ", " +
@@ -579,10 +581,9 @@ public sealed class Telescope<
    * Forward-only sibling of {@link #mapper(Class, Class, MapStep...)} — returns a {@link
    * ForwardMapper} whose backward direction is not present at the type level. Use when the
    * conversion is genuinely one-way (entity → DTO write-only, audit-log projection, normalisation
-   * pipeline) and rows include {@link io.github.eschizoid.telescope.mapping.Mapping#forward
-   * forward(...)} / {@link io.github.eschizoid.telescope.mapping.Mapping#constant constant(...)} /
-   * {@link io.github.eschizoid.telescope.mapping.Mapping#compute compute(...)} that make the
-   * backward direction meaningless.
+   * pipeline) and rows include {@link Mapping#toOneWay toOneWay(...)} / {@link Mapping#constant
+   * constant(...)} / {@link Mapping#compute compute(...)} that make the backward direction
+   * meaningless.
    *
    * <p>The compiler enforces the one-way contract — there is no {@code backward(...)} method on
    * {@link ForwardMapper} to call. MapStruct cannot express "this mapper is one-way" in its type
@@ -592,7 +593,7 @@ public sealed class Telescope<
    * ForwardMapper<UserEntity, UserDto> projector = Telescope.mapperForward(
    *     UserEntity.class, UserDto.class,
    *     to(UserEntity::id, UserDto::id),
-   *     into(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString),
+   *     toOneWay(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString),
    *     constant(UserDto::tenant, "production"));
    *
    * UserDto dto = projector.forward(entity);
@@ -918,15 +919,13 @@ public sealed class Telescope<
    * <p>Writes pass through unchanged — only the read side gets the hook. For symmetric write
    * transformation, see {@link #before(Function)}.
    *
-   * <p><b>Lattice note — one-sided shape.</b> The internal {@link
-   * io.github.eschizoid.telescope.internal.optics.Iso} composed here uses {@code hook} on the read
-   * side and identity on the write side, so the produced Iso does <em>not</em> satisfy the
-   * round-trip law ({@code from(to(a)) == a} only holds when {@code hook} is identity). Safe under
-   * {@code Lens.then(Iso)} composition — which routes reads and writes through separate legs and
-   * never round-trips a single value through both — but future contributors must not assume this is
-   * a lawful Iso in isolation. The same caveat applies to {@link #before(Function)}, {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#forward Mapping.forward}, and {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#toOrElse Mapping.toOrElse}.
+   * <p><b>Lattice note — one-sided shape.</b> The internal {@link Iso} composed here uses {@code
+   * hook} on the read side and identity on the write side, so the produced Iso does <em>not</em>
+   * satisfy the round-trip law ({@code from(to(a)) == a} only holds when {@code hook} is identity).
+   * Safe under {@code Lens.then(Iso)} composition — which routes reads and writes through separate
+   * legs and never round-trips a single value through both — but future contributors must not
+   * assume this is a lawful Iso in isolation. The same caveat applies to {@link #before(Function)},
+   * {@link Mapping#toOneWay Mapping.toOneWay}, and {@link Mapping#toOrElse Mapping.toOrElse}.
    *
    * <pre>{@code
    * Telescope.of(User.class).field(User::email).after(String::trim)
@@ -1051,6 +1050,15 @@ public sealed class Telescope<
    * are erased at runtime. They're stored on the produced {@link ForwardMapper} so downstream
    * machinery (e.g. {@link io.github.eschizoid.telescope.quarkus.TelescopeMapperRegistry}) can key
    * the mapper by the {@code (source, target)} pair.
+   *
+   * <p><b>Read semantics inherited from {@link #read}.</b> On a {@link Lens}-rooted Telescope the
+   * forward returns the single focused value. On an {@link Affine}-rooted Telescope (e.g. after
+   * {@code .as(...)} or {@code .whenPresent(...)}) the forward throws {@link
+   * NoSuchElementException} when the focused value is absent. On a {@link Traversal}-rooted
+   * Telescope (e.g. after {@code .each(...)} or {@code .filter(...)}) the forward returns the FIRST
+   * focused element and throws {@link NoSuchElementException} on an empty traversal. If you need
+   * null-safe semantics for an absent / empty case, prefer {@link #find} at the call site instead
+   * of going through this projection.
    */
   public ForwardMapper<S, A> asForwardMapper(final Class<S> sourceClass, final Class<A> targetClass) {
     return ForwardMapper.create(this::read, sourceClass, targetClass);

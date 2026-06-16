@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serial;
@@ -1209,22 +1210,14 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("ForwardMapper.forward(null) returns null")
     void forwardMapperNullReturnsNull() {
-      final var mapper = io.github.eschizoid.telescope.conversion.ForwardMapper.create(
-        (SrcRec s) -> new TgtRec(s.id(), s.name()),
-        SrcRec.class,
-        TgtRec.class
-      );
+      final var mapper = ForwardMapper.create((SrcRec s) -> new TgtRec(s.id(), s.name()), SrcRec.class, TgtRec.class);
       assertEquals(null, mapper.forward(null));
     }
 
     @Test
     @DisplayName("ForwardMapper.read(null) returns null — read is documented as an alias of forward")
     void forwardMapperReadNullReturnsNull() {
-      final var mapper = io.github.eschizoid.telescope.conversion.ForwardMapper.create(
-        (SrcRec s) -> new TgtRec(s.id(), s.name()),
-        SrcRec.class,
-        TgtRec.class
-      );
+      final var mapper = ForwardMapper.create((SrcRec s) -> new TgtRec(s.id(), s.name()), SrcRec.class, TgtRec.class);
       assertEquals(null, mapper.read(null));
       // Non-null parity: read and forward must produce the same output, otherwise a future
       // refactor that breaks the alias contract slips through unnoticed.
@@ -1937,6 +1930,90 @@ class MigrationRegressionTest {
       final var tgt = mapper.forward(src);
       assertEquals("alice@example.com", tgt.getCustomerEmail(), "telescope row fired");
       assertEquals(null, tgt.getOtherField(), "unmatched target field at JLS default");
+    }
+
+    // Bean-source coverage — the existing lenient tests use record sources. The leniency gate
+    // is symmetric (target-side at populateIso target loop; source-side at the symmetric source
+    // loop) and works on any Reflective shape, but pinning a bean source pin guards against a
+    // future refactor that accidentally couples leniency to record-only paths.
+    public static class SrcBean {
+
+      private String id;
+      private String name;
+      private String legacyField; // unmatched on target — should be silently ignored
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      public String getLegacyField() {
+        return legacyField;
+      }
+
+      public void setLegacyField(final String legacyField) {
+        this.legacyField = legacyField;
+      }
+    }
+
+    public static class TgtBean {
+
+      private String id;
+      private String name;
+      private String newField; // unmatched on source — JLS default
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      public String getNewField() {
+        return newField;
+      }
+
+      public void setNewField(final String newField) {
+        this.newField = newField;
+      }
+    }
+
+    @Test
+    @DisplayName("bean-source lenient — bean source + bean target with unmatched fields on both sides works")
+    void beanSourceLenientForwardConstructsAndFires() {
+      final var mapper = Telescope.mapperForward(
+        SrcBean.class,
+        TgtBean.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new SrcBean();
+      src.setId("o1");
+      src.setName("alice");
+      src.setLegacyField("ignored on target");
+      final var tgt = mapper.forward(src);
+      assertEquals("o1", tgt.getId(), "matched field carried through");
+      assertEquals("alice", tgt.getName(), "matched field carried through");
+      assertEquals(null, tgt.getNewField(), "unmatched target field at JLS default");
     }
   }
 }

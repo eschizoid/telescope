@@ -65,6 +65,12 @@ public interface Getter<S, A> extends Fold<S, A> {
    * Lift an element-level {@code Getter<X, Y>} into a {@code Set}-level {@code Getter<Set<X>,
    * Set<Y>>}. Element-wise read into a fresh {@link LinkedHashSet} (preserves forward-pass
    * iteration order). {@code null} sets round-trip to {@code null}.
+   *
+   * <p><b>Collapsing-equals caveat.</b> When the element {@code Getter} maps distinct {@code X}
+   * values to {@code Y} values that compare {@code equal} (e.g. a getter producing the same key for
+   * multiple distinct sources), the output {@code Set<Y>} silently drops duplicates — the element
+   * count of the lifted output can be strictly less than the input. Same trade-off as {@link
+   * Iso#liftSet}; use {@link #liftList} when element identity must survive.
    */
   static <X, Y> Getter<Set<X>, Set<Y>> liftSet(final Getter<X, Y> element) {
     return xs -> {

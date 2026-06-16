@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope;
 
-import static io.github.eschizoid.telescope.mapping.Mapping.forward;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.toOneWay;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -12,48 +12,48 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins {@code Mapping.forward(src, tgt, fn)} — the forward-only row that produces a {@code
+ * Pins {@code Mapping.toOneWay(src, tgt, fn)} — the forward-only row that produces a {@code
  * ForwardOnlyTransformTo} sealed permit. {@code Telescope.mapper(...)} REJECTS the row at the
  * factory boundary (compile-time-typed forward-only contract: the partial-Iso shape would silently
  * corrupt {@code Mapper.backward} / {@code Mapper.patch}). Callers must use {@code
- * Telescope.mapperForward(...)} to consume {@code forward(...)} rows.
+ * Telescope.mapperForward(...)} to consume {@code toOneWay(...)} rows.
  */
-class MappingForwardTest {
+class MappingToOneWayTest {
 
   record Entity(Instant createdAt, String label) {}
 
   record Dto(String createdAtIso, String label) {}
 
   @Nested
-  @DisplayName("Telescope.mapper(...) — REJECTS forward(...) rows at factory boundary")
+  @DisplayName("Telescope.mapper(...) — REJECTS toOneWay(...) rows at factory boundary")
   class Rejection {
 
     @Test
-    @DisplayName("calling Telescope.mapper with a Mapping.forward row throws IAE naming the field + escape hatch")
-    void mapperRejectsForward() {
+    @DisplayName("calling Telescope.mapper with a Mapping.toOneWay row throws IAE naming the field + escape hatch")
+    void mapperRejectsToOneWay() {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
-        Telescope.mapper(Entity.class, Dto.class, forward(Entity::createdAt, Dto::createdAtIso, Instant::toString))
+        Telescope.mapper(Entity.class, Dto.class, toOneWay(Entity::createdAt, Dto::createdAtIso, Instant::toString))
       );
       assertTrue(ex.getMessage().contains("Telescope.mapper"));
-      assertTrue(ex.getMessage().contains("Mapping.forward"));
+      assertTrue(ex.getMessage().contains("Mapping.toOneWay"));
       assertTrue(ex.getMessage().contains("createdAtIso"), () -> ex.getMessage());
       assertTrue(ex.getMessage().contains("mapperForward"));
     }
 
     @Test
-    @DisplayName("Telescope.map(...) also rejects forward(...) rows — closes the silent-corruption gap")
-    void mapAlsoRejectsForward() {
+    @DisplayName("Telescope.map(...) also rejects toOneWay(...) rows — closes the silent-corruption gap")
+    void mapAlsoRejectsToOneWay() {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
-        Telescope.map(Entity.class, Dto.class, forward(Entity::createdAt, Dto::createdAtIso, Instant::toString))
+        Telescope.map(Entity.class, Dto.class, toOneWay(Entity::createdAt, Dto::createdAtIso, Instant::toString))
       );
       assertTrue(ex.getMessage().contains("Telescope.map"));
-      assertTrue(ex.getMessage().contains("Mapping.forward"));
+      assertTrue(ex.getMessage().contains("Mapping.toOneWay"));
       assertTrue(ex.getMessage().contains("createdAtIso"));
     }
   }
 
   @Nested
-  @DisplayName("Telescope.mapperForward(...) — accepts forward(...) rows")
+  @DisplayName("Telescope.mapperForward(...) — accepts toOneWay(...) rows")
   class ForwardOnly {
 
     @Test
@@ -62,7 +62,7 @@ class MappingForwardTest {
       final var projector = Telescope.mapperForward(
         Entity.class,
         Dto.class,
-        forward(Entity::createdAt, Dto::createdAtIso, Instant::toString),
+        toOneWay(Entity::createdAt, Dto::createdAtIso, Instant::toString),
         to(Entity::label, Dto::label)
       );
 

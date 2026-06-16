@@ -455,13 +455,10 @@ class MappingWhenTest {
     @DisplayName("forward-only row rejected with hint pointing at fold-the-predicate-into-fn")
     void rejectsForwardOnlyTransformTo() {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
-        when(
-          (java.util.function.Predicate<Src>) s -> true,
-          io.github.eschizoid.telescope.mapping.Mapping.forward(Src::name, Dst::name, String::toUpperCase)
-        )
+        when((java.util.function.Predicate<Src>) s -> true, Mapping.toOneWay(Src::name, Dst::name, String::toUpperCase))
       );
       final var msg = ex.getMessage();
-      assertEquals(true, msg.contains("Mapping.forward"), "error names the forward-only construct");
+      assertEquals(true, msg.contains("Mapping.toOneWay"), "error names the forward-only construct");
       assertEquals(
         true,
         msg.contains("fold the predicate"),
