@@ -25,7 +25,7 @@ class MappingToOneWayTest {
   record Dto(String createdAtIso, String label) {}
 
   @Nested
-  @DisplayName("Telescope.mapper(...) — REJECTS forward(...) rows at factory boundary")
+  @DisplayName("Telescope.mapper(...) — REJECTS toOneWay(...) rows at factory boundary")
   class Rejection {
 
     @Test
@@ -41,7 +41,7 @@ class MappingToOneWayTest {
     }
 
     @Test
-    @DisplayName("Telescope.map(...) also rejects forward(...) rows — closes the silent-corruption gap")
+    @DisplayName("Telescope.map(...) also rejects toOneWay(...) rows — closes the silent-corruption gap")
     void mapAlsoRejectsForward() {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
         Telescope.map(Entity.class, Dto.class, toOneWay(Entity::createdAt, Dto::createdAtIso, Instant::toString))
@@ -53,7 +53,7 @@ class MappingToOneWayTest {
   }
 
   @Nested
-  @DisplayName("Telescope.mapperForward(...) — accepts forward(...) rows")
+  @DisplayName("Telescope.mapperForward(...) — accepts toOneWay(...) rows")
   class ForwardOnly {
 
     @Test

@@ -563,7 +563,7 @@ public sealed class Telescope<
             target.getSimpleName() +
             ", ...) cannot accept a Mapping.toOneWay(...) row for field '" +
             r.targetField() +
-            "' — forward(...) is forward-only and would silently corrupt Mapper.backward / Mapper.patch. " +
+            "' — Mapping.toOneWay(...) is forward-only and would silently corrupt Mapper.backward / Mapper.patch. " +
             "Use Telescope.mapperForward(" +
             source.getSimpleName() +
             ", " +
@@ -580,7 +580,7 @@ public sealed class Telescope<
    * ForwardMapper} whose backward direction is not present at the type level. Use when the
    * conversion is genuinely one-way (entity → DTO write-only, audit-log projection, normalisation
    * pipeline) and rows include {@link io.github.eschizoid.telescope.mapping.Mapping#toOneWay
-   * forward(...)} / {@link io.github.eschizoid.telescope.mapping.Mapping#constant constant(...)} /
+   * toOneWay(...)} / {@link io.github.eschizoid.telescope.mapping.Mapping#constant constant(...)} /
    * {@link io.github.eschizoid.telescope.mapping.Mapping#compute compute(...)} that make the
    * backward direction meaningless.
    *
@@ -1053,15 +1053,13 @@ public sealed class Telescope<
    * the mapper by the {@code (source, target)} pair.
    *
    * <p><b>Read semantics inherited from {@link #read}.</b> On a {@link Lens}-rooted Telescope the
-   * forward returns the single focused value. On a {@link
-   * io.github.eschizoid.telescope.internal.optics.Affine Affine}-rooted Telescope (e.g. after
+   * forward returns the single focused value. On an {@link Affine}-rooted Telescope (e.g. after
    * {@code .as(...)} or {@code .whenPresent(...)}) the forward throws {@link
-   * java.util.NoSuchElementException} when the focused value is absent. On a {@link
-   * io.github.eschizoid.telescope.internal.optics.Traversal Traversal}-rooted Telescope (e.g. after
-   * {@code .each(...)} or {@code .filter(...)}) the forward returns the FIRST focused element and
-   * throws {@link java.util.NoSuchElementException} on an empty traversal. If you need null-safe
-   * semantics for an absent / empty case, wrap the Telescope's read with {@link #find} at the call
-   * site instead of going through this projection.
+   * NoSuchElementException} when the focused value is absent. On a {@link Traversal}-rooted
+   * Telescope (e.g. after {@code .each(...)} or {@code .filter(...)}) the forward returns the FIRST
+   * focused element and throws {@link NoSuchElementException} on an empty traversal. If you need
+   * null-safe semantics for an absent / empty case, prefer {@link #find} at the call site instead
+   * of going through this projection.
    */
   public ForwardMapper<S, A> asForwardMapper(final Class<S> sourceClass, final Class<A> targetClass) {
     return ForwardMapper.create(this::read, sourceClass, targetClass);

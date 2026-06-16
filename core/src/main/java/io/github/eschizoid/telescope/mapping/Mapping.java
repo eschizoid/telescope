@@ -119,12 +119,15 @@ public sealed interface Mapping<A, B>
 
   /**
    * Forward-only typed-transform correspondence: same shape as {@link #to(Accessor, Accessor,
-   * Function, Function)} but the backward function is supplied automatically and throws {@link
-   * UnsupportedOperationException} at the row level if invoked. Use this for one-shot entity →
-   * DB-schema mappings whose backward direction is never called — saves the boilerplate of passing
-   * an unused inverse function, and the throw message names the field so the failure is
-   * self-diagnosing if a downstream user does call {@link
-   * io.github.eschizoid.telescope.conversion.Mapper#backward} on the resulting mapper.
+   * Function, Function)} but carries ONLY a forward function — there is no backward field. The
+   * factory boundary closes the partial-Iso gap: {@link
+   * io.github.eschizoid.telescope.Telescope#mapper(Class, Class, MapStep...) Telescope.mapper(...)}
+   * refuses to build a bidirectional {@link io.github.eschizoid.telescope.conversion.Mapper Mapper}
+   * when a {@code toOneWay} row is present and tells the caller to use {@link
+   * io.github.eschizoid.telescope.Telescope#mapperForward Telescope.mapperForward(...)} instead.
+   * Use this for one-shot entity → DB-schema mappings whose backward direction is never called —
+   * the compile-time-typed forward-only contract is checked at the factory, not deferred to a
+   * runtime throw.
    *
    * <pre>{@code
    * toOneWay(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString)

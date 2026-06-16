@@ -741,13 +741,16 @@ public <T> T byClass(Class<T> type) { ... }
 
 ---
 
-### 8. `Mapping.forward()` naming
+### 8. `Mapping.forward()` naming — Fixed (v1.0.2)
 
 **Problem:** `Mapping.forward(src, tgt, fn)` is the forward-only row factory. But when static-imported alongside
 `Mapping.to()`, the name `forward` conflicts with common variable/method names and is less expressive than `to()`.
 
-**Consider:** `Mapping.toOneWay(src, tgt, fn)` or `Mapping.map(src, tgt, fn)` — makes the unidirectionality visible at
-the call site without requiring readers to check the import.
+**Resolution:** Renamed `Mapping.forward(...)` → `Mapping.toOneWay(...)` as a clean rename (no `@Deprecated` alias).
+`toOneWay` reads as the unidirectional sibling of `to(...)` — both factories produce a row keyed off a
+`(sourceAccessor, targetAccessor)` pair; `to` is bidirectional, `toOneWay` carries only a forward function. The
+call-site collision with local variables named `forward` / `forwardEvent` is gone, and the symmetry with `to(...)` aids
+discovery. The `ForwardOnlyTransformTo` sealed-permit record is unchanged; only the factory name flipped.
 
 ---
 
