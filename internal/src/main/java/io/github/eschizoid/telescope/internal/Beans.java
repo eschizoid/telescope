@@ -420,9 +420,12 @@ public final class Beans {
         break;
       }
     }
-    if (setter == null) throw new IllegalArgumentException(
-      "writeBeanProperty(" + cls.getName() + ", '" + name + "'): no setter '" + set + "'"
-    );
+    // Bug 5 (round 3): align with SettersWriter — getter-only / computed / immutable properties
+    // are silently skipped. Without this `Mapper.into(target, source)` would throw on the same
+    // property pair that `Mapper.forward(source)` (via SettersWriter) silently skipped, producing
+    // an asymmetric same-mapper contract. MapStruct's `@MappingTarget` ignores unwritable target
+    // fields too; match.
+    if (setter == null) return (pojo, value) -> {};
     final var declaringClass = setter.getDeclaringClass();
     final var lookup = privateLookupOrThrow(declaringClass, cls, "setter");
     final var paramType = setter.getParameterTypes()[0];

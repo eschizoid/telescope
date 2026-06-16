@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -228,7 +229,7 @@ class MapperIntoTest {
   }
 
   @Nested
-  @DisplayName("Missing setter — clear error names the property")
+  @DisplayName("Missing setter — silently skipped to match SettersWriter / MapStruct @MappingTarget")
   class MissingSetter {
 
     record DtoOnly(String id, String missingOnEntity) {}
@@ -254,18 +255,16 @@ class MapperIntoTest {
     }
 
     @Test
-    @DisplayName("property without a setter throws IAE at mapper-build or into() time")
-    void missingSetterThrows() {
-      // Build-or-apply might surface the missing setter at either time depending on the autoWriter
-      // discovery path. Either way the failure is unambiguous to the user.
-      final var ex = assertThrows(RuntimeException.class, () -> {
-        final var mapper = Telescope.mapper(DtoOnly.class, EntityOnlyId.class);
-        mapper.into(new EntityOnlyId(), new DtoOnly("a", "b"));
-      });
-      // The error message comes from SettersWriter or writeBeanProperty — either path names the
-      // missing setter clearly. We just verify the exception is thrown with a message; the exact
-      // wording belongs to the underlying writer's error contract, not the into() contract.
-      assertNotNull(ex.getMessage(), "exception message present");
+    @DisplayName("property without a setter is silently skipped — matches SettersWriter (Bug 5)")
+    void missingSetterIsSilentlySkipped() {
+      // Bug 5 round-3: Mapper.into used to throw on a missing setter, while Mapper.forward via
+      // SettersWriter silently skipped — same mapper, asymmetric contract. Now both paths skip
+      // silently (matches MapStruct @MappingTarget behaviour). The setId() target is still
+      // written; the missingOnEntity target stays at its JLS default.
+      final var mapper = Telescope.mapper(DtoOnly.class, EntityOnlyId.class);
+      final var target = new EntityOnlyId();
+      assertDoesNotThrow(() -> mapper.into(target, new DtoOnly("a", "b")));
+      assertEquals("a", target.getId());
     }
   }
 
