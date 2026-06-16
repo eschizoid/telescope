@@ -30,6 +30,23 @@ jobs:
       - name: Build and test
         run: ./gradlew check --no-daemon --stacktrace
 
+      # Explicit cross-module javadoc verification on every PR — `check` already includes the
+      # per-module javadoc tasks, but gradle build caching can short-circuit them when sources
+      # haven't changed in a way the cache notices. `--rerun-tasks` forces a fresh javadoc compile
+      # so broken `{@link}` cross-references can't slip through to main. Catches the class of
+      # failure where a :core javadoc references a class in :quarkus / :spring-boot-starter that
+      # :core can't see (upward dep) — would have caught the v1.0.2 regression that this CI step
+      # was added in response to.
+      - name: Verify javadoc (cross-module link integrity)
+        run: |
+          ./gradlew --no-daemon --stacktrace --rerun-tasks \
+            :internal:javadoc \
+            :core:javadoc \
+            :codegen:javadoc \
+            :lombok:javadoc \
+            :quarkus:javadoc \
+            :spring-boot-starter:javadoc
+
       - name: Jacoco
         run: |
           ./gradlew :internal:jacocoTestReport \
