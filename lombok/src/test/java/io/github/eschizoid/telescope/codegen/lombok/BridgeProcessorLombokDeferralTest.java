@@ -9,6 +9,8 @@ import io.github.eschizoid.telescope.codegen.lombok.fixtures.BridgedDataUser;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.BridgedDataUserDto;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.BridgedGetterSetterUser;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.BridgedRecordTarget;
+import io.github.eschizoid.telescope.codegen.lombok.fixtures.PlainParentWithLombokChild;
+import io.github.eschizoid.telescope.codegen.lombok.fixtures.PlainParentWithLombokChildDto;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -115,6 +117,42 @@ class BridgeProcessorLombokDeferralTest {
       // just @Data/@Value/@Builder.
       assertEquals("u-99", ((BridgedRecordTarget) target).id());
       assertEquals("carol@example.com", ((BridgedRecordTarget) target).email());
+    }
+  }
+
+  @Nested
+  @DisplayName("Recursive sub-pair deferral — plain parent, Lombok child")
+  class RecursiveSubPairDeferral {
+
+    @Test
+    @DisplayName(
+      "plain @Bridge parent whose CHILD field is Lombok-annotated still recursively writes through patched accessors"
+    )
+    void plainParentLombokChildSubBridgeStillWorks() throws Exception {
+      // Failure mode this pins: the parent pair is eager (no Lombok on parent), so it drains in
+      // round 1. During the parent's emission, BridgeProcessor recursively discovers the sub-pair
+      // BridgedDataUser ↔ BridgedDataUserDto. Without the recursive Lombok-deferral fix, that
+      // sub-pair is pushed onto the eager queue and emitted in round 1 — when Lombok's AST patches
+      // haven't fired yet and `Elements.getAllMembers(BridgedDataUser)` returns the un-patched
+      // empty member list. The emitted sub-bridge's body has no field rows, every child.id /
+      // child.email read collapses to null, and the parent's forward returns a Dto whose child has
+      // null id/email. The assertion below would fail wholesale on that pre-fix processor.
+      final var bridge = lookupBridge("PlainParentWithLombokChildBridge");
+      final var child = new io.github.eschizoid.telescope.codegen.lombok.fixtures.BridgedDataUser(
+        "u-9",
+        "child@example.com"
+      );
+      final var parent = new PlainParentWithLombokChild("parent-1", child);
+
+      final var dto = (PlainParentWithLombokChildDto) bridge.read(parent);
+
+      assertEquals("parent-1", dto.id(), "top-level field of plain parent → plain target");
+      assertEquals(
+        "u-9",
+        dto.child().getId(),
+        "child field MUST round-trip through Lombok accessors — pins recursive deferral"
+      );
+      assertEquals("child@example.com", dto.child().getEmail(), "child email MUST round-trip");
     }
   }
 

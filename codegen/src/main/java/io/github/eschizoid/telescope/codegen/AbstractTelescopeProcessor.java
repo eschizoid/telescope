@@ -307,11 +307,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     "lombok.Builder",
     "lombok.Getter",
     "lombok.Setter",
+    "lombok.With",
     "lombok.RequiredArgsConstructor",
     "lombok.AllArgsConstructor",
     "lombok.NoArgsConstructor",
     "lombok.experimental.SuperBuilder",
-    "lombok.experimental.Accessors"
+    "lombok.experimental.Accessors",
+    "lombok.experimental.FieldDefaults"
   );
 
   protected boolean hasAnnotation(final Element element, final String annotationFqn) {
