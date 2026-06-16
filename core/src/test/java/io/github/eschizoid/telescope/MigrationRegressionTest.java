@@ -10,8 +10,12 @@ import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serial;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -1318,7 +1322,7 @@ class MigrationRegressionTest {
     public static class Outer {
 
       private List<Inner> items;
-      private java.util.Map<String, Inner> byId;
+      private Map<String, Inner> byId;
 
       public List<Inner> getItems() {
         return items;
@@ -1328,11 +1332,11 @@ class MigrationRegressionTest {
         this.items = items;
       }
 
-      public java.util.Map<String, Inner> getById() {
+      public Map<String, Inner> getById() {
         return byId;
       }
 
-      public void setById(final java.util.Map<String, Inner> byId) {
+      public void setById(final Map<String, Inner> byId) {
         this.byId = byId;
       }
     }
@@ -1340,7 +1344,7 @@ class MigrationRegressionTest {
     public static class OuterDto {
 
       private ArrayList<InnerDto> items;
-      private java.util.HashMap<String, InnerDto> byId;
+      private HashMap<String, InnerDto> byId;
 
       public ArrayList<InnerDto> getItems() {
         return items;
@@ -1350,11 +1354,11 @@ class MigrationRegressionTest {
         this.items = items;
       }
 
-      public java.util.HashMap<String, InnerDto> getById() {
+      public HashMap<String, InnerDto> getById() {
         return byId;
       }
 
-      public void setById(final java.util.HashMap<String, InnerDto> byId) {
+      public void setById(final HashMap<String, InnerDto> byId) {
         this.byId = byId;
       }
     }
@@ -1365,11 +1369,11 @@ class MigrationRegressionTest {
       final var mapper = Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
       final var src = new Outer();
       src.setItems(List.of(new Inner("a"), new Inner("b")));
-      src.setById(java.util.Map.of("k1", new Inner("v1")));
+      src.setById(Map.of("k1", new Inner("v1")));
 
       final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
       assertEquals(ArrayList.class, tgt.getItems().getClass());
-      assertEquals(java.util.HashMap.class, tgt.getById().getClass());
+      assertEquals(HashMap.class, tgt.getById().getClass());
       assertEquals("a", tgt.getItems().get(0).id());
       assertEquals("v1", tgt.getById().get("k1").id());
     }
@@ -1380,12 +1384,112 @@ class MigrationRegressionTest {
       final var mapper = Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
       final var dto = new OuterDto();
       dto.setItems(new ArrayList<>(List.of(new InnerDto("a"), new InnerDto("b"))));
-      dto.setById(new java.util.HashMap<>(java.util.Map.of("k1", new InnerDto("v1"))));
+      dto.setById(new HashMap<>(Map.of("k1", new InnerDto("v1"))));
 
       final var back = assertDoesNotThrow(() -> mapper.backward(dto));
       assertEquals(ArrayList.class, back.getItems().getClass());
       assertEquals("a", back.getItems().get(0).id());
       assertEquals("v1", back.getById().get("k1").id());
+    }
+
+    // Set-side coverage — pins the SET branch of liftSetIntoTargetRaw.
+    public static class HasSetInterface {
+
+      private Set<Inner> tags;
+
+      public Set<Inner> getTags() {
+        return tags;
+      }
+
+      public void setTags(final Set<Inner> tags) {
+        this.tags = tags;
+      }
+    }
+
+    public static class HasHashSetConcrete {
+
+      private HashSet<InnerDto> tags;
+
+      public HashSet<InnerDto> getTags() {
+        return tags;
+      }
+
+      public void setTags(final HashSet<InnerDto> tags) {
+        this.tags = tags;
+      }
+    }
+
+    @Test
+    @DisplayName("Set<Inner> ↔ HashSet<InnerDto> — Set branch picks up the target concrete class")
+    void setInterfaceToHashSetConcreteWorks() {
+      final var mapper = Telescope.mapper(
+        HasSetInterface.class,
+        HasHashSetConcrete.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new HasSetInterface();
+      src.setTags(Set.of(new Inner("a"), new Inner("b")));
+
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(HashSet.class, tgt.getTags().getClass());
+      assertEquals(2, tgt.getTags().size());
+    }
+
+    // User subclass — pins the intermediateAllocator success path (privateLookupIn works in
+    // the user's own package).
+    public static class MyList<E> extends ArrayList<E> {
+
+      @Serial
+      private static final long serialVersionUID = 1L;
+    }
+
+    public static class HasMyListSrc {
+
+      private MyList<Inner> items;
+
+      public MyList<Inner> getItems() {
+        return items;
+      }
+
+      public void setItems(final MyList<Inner> items) {
+        this.items = items;
+      }
+    }
+
+    public static class HasArrayListTgt {
+
+      private ArrayList<InnerDto> items;
+
+      public ArrayList<InnerDto> getItems() {
+        return items;
+      }
+
+      public void setItems(final ArrayList<InnerDto> items) {
+        this.items = items;
+      }
+    }
+
+    @Test
+    @DisplayName("user-defined List subclass ↔ ArrayList — allocator routes through intermediateAllocator")
+    void userListSubclassToArrayListWorks() {
+      final var mapper = Telescope.mapper(
+        HasMyListSrc.class,
+        HasArrayListTgt.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new HasMyListSrc();
+      final var srcList = new MyList<Inner>();
+      srcList.add(new Inner("a"));
+      src.setItems(srcList);
+
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(ArrayList.class, tgt.getItems().getClass());
+      assertEquals("a", tgt.getItems().get(0).id());
+
+      // Backward — target ArrayList round-trips back through the user subclass via
+      // intermediateAllocator(MyList.class).
+      final var back = assertDoesNotThrow(() -> mapper.backward(tgt));
+      assertEquals(MyList.class, back.getItems().getClass());
     }
   }
 }

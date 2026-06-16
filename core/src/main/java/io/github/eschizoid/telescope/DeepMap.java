@@ -29,6 +29,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Deque;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -39,19 +40,23 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.SortedSet;
+import java.util.Stack;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.Vector;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -1330,9 +1335,21 @@ public final class DeepMap {
     if (raw == LinkedList.class) return LinkedList::new;
     if (raw == ArrayDeque.class) return ArrayDeque::new;
     if (raw == Vector.class) return Vector::new;
+    if (raw == Stack.class) return Stack::new;
+    if (raw == PriorityQueue.class) return PriorityQueue::new;
+    if (raw == LinkedBlockingQueue.class) return LinkedBlockingQueue::new;
     if (raw == CopyOnWriteArrayList.class) return CopyOnWriteArrayList::new;
     final var alloc = Beans.intermediateAllocator(raw);
-    return alloc.get() != null ? alloc : ArrayList::new;
+    if (alloc.get() != null) return alloc;
+    // No usable allocator for a JDK java.base class we don't recognise. Falling back to ArrayList
+    // would silently write the wrong runtime class into the target field and CCE at the setter.
+    // Throw at plan-time with a precise diagnostic instead.
+    throw new IllegalStateException(
+      "Deep map: no allocator for List subtype " +
+        raw.getName() +
+        ". Add it to listAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
+        "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
+    );
   }
 
   private static Supplier<Object> setAllocatorFor(final Class<?> raw) {
@@ -1342,17 +1359,44 @@ public final class DeepMap {
     if (raw == ConcurrentSkipListSet.class) return ConcurrentSkipListSet::new;
     if (raw == CopyOnWriteArraySet.class) return CopyOnWriteArraySet::new;
     final var alloc = Beans.intermediateAllocator(raw);
-    return alloc.get() != null ? alloc : LinkedHashSet::new;
+    if (alloc.get() != null) return alloc;
+    throw new IllegalStateException(
+      "Deep map: no allocator for Set subtype " +
+        raw.getName() +
+        ". Add it to setAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
+        "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
+    );
   }
 
+  /**
+   * Map-side allocator. {@code IdentityHashMap} and {@code WeakHashMap} are accepted but carry
+   * different semantics from a plain {@code HashMap} ({@code IdentityHashMap} uses reference
+   * equality for keys, {@code WeakHashMap} GCs keys without strong references) — adopters needing
+   * preservation declare an explicit {@code Mapping.via(...)} row. {@code EnumMap} is rejected at
+   * plan-time because its no-arg constructor doesn't exist (it needs the {@code Class<K>} arg);
+   * adopters must use the codegen path or an explicit row.
+   */
   private static Supplier<Object> mapAllocatorFor(final Class<?> raw) {
     if (raw == Map.class || raw == HashMap.class) return HashMap::new;
     if (raw == LinkedHashMap.class) return LinkedHashMap::new;
     if (raw == TreeMap.class) return TreeMap::new;
     if (raw == ConcurrentHashMap.class) return ConcurrentHashMap::new;
     if (raw == ConcurrentSkipListMap.class) return ConcurrentSkipListMap::new;
+    if (raw == IdentityHashMap.class) return IdentityHashMap::new;
+    if (raw == WeakHashMap.class) return WeakHashMap::new;
+    if (raw == EnumMap.class) throw new IllegalStateException(
+      "Deep map: EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg " +
+        "constructor (it needs the Class<K> key class). Use the codegen path or supply an " +
+        "explicit `Mapping.via(...)` row that constructs the EnumMap with its key class."
+    );
     final var alloc = Beans.intermediateAllocator(raw);
-    return alloc.get() != null ? alloc : LinkedHashMap::new;
+    if (alloc.get() != null) return alloc;
+    throw new IllegalStateException(
+      "Deep map: no allocator for Map subtype " +
+        raw.getName() +
+        ". Add it to mapAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
+        "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
+    );
   }
 
   /**
