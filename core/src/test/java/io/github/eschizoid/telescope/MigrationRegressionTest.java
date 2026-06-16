@@ -1303,4 +1303,89 @@ class MigrationRegressionTest {
       assertEquals("bob", Telescope.of(User.class).<String>fieldByName("name").read(src));
     }
   }
+
+  @Nested
+  @DisplayName(
+    "Parameterised Collection / Map subtype pairs across DIFFERENT raw classes are " +
+      "lifted into the target's concrete class"
+  )
+  class ParameterisedContainerSubtypeLift {
+
+    record Inner(String id) {}
+
+    record InnerDto(String id) {}
+
+    public static class Outer {
+
+      private List<Inner> items;
+      private java.util.Map<String, Inner> byId;
+
+      public List<Inner> getItems() {
+        return items;
+      }
+
+      public void setItems(final List<Inner> items) {
+        this.items = items;
+      }
+
+      public java.util.Map<String, Inner> getById() {
+        return byId;
+      }
+
+      public void setById(final java.util.Map<String, Inner> byId) {
+        this.byId = byId;
+      }
+    }
+
+    public static class OuterDto {
+
+      private ArrayList<InnerDto> items;
+      private java.util.HashMap<String, InnerDto> byId;
+
+      public ArrayList<InnerDto> getItems() {
+        return items;
+      }
+
+      public void setItems(final ArrayList<InnerDto> items) {
+        this.items = items;
+      }
+
+      public java.util.HashMap<String, InnerDto> getById() {
+        return byId;
+      }
+
+      public void setById(final java.util.HashMap<String, InnerDto> byId) {
+        this.byId = byId;
+      }
+    }
+
+    @Test
+    @DisplayName("List<Inner> ↔ ArrayList<InnerDto> — common JPA-entity-to-DTO shape")
+    void listInterfaceToArrayListConcreteWorks() {
+      final var mapper = Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var src = new Outer();
+      src.setItems(List.of(new Inner("a"), new Inner("b")));
+      src.setById(java.util.Map.of("k1", new Inner("v1")));
+
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(ArrayList.class, tgt.getItems().getClass());
+      assertEquals(java.util.HashMap.class, tgt.getById().getClass());
+      assertEquals("a", tgt.getItems().get(0).id());
+      assertEquals("v1", tgt.getById().get("k1").id());
+    }
+
+    @Test
+    @DisplayName("backward — ArrayList target produces a List-side instance suitable for the List field")
+    void backwardProducesSourceCompatibleList() {
+      final var mapper = Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var dto = new OuterDto();
+      dto.setItems(new ArrayList<>(List.of(new InnerDto("a"), new InnerDto("b"))));
+      dto.setById(new java.util.HashMap<>(java.util.Map.of("k1", new InnerDto("v1"))));
+
+      final var back = assertDoesNotThrow(() -> mapper.backward(dto));
+      assertEquals(ArrayList.class, back.getItems().getClass());
+      assertEquals("a", back.getItems().get(0).id());
+      assertEquals("v1", back.getById().get("k1").id());
+    }
+  }
 }

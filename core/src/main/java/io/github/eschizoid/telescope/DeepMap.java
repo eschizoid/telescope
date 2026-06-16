@@ -33,6 +33,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -41,10 +43,18 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.UUID;
+import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 /**
  * Engine for {@link Telescope#map(Class, Class, MapStep...)} / {@link Telescope#mapper(Class,
@@ -960,9 +970,10 @@ public final class DeepMap {
         inProgress
       );
       return switch (srcShape.kind) {
-        case LIST -> Iso.liftList(eraseIso(elementIso));
-        case SET -> Iso.liftSet(eraseIso(elementIso));
-        case MAP_VALUES -> Iso.liftMapValues(eraseIso(elementIso));
+        case LIST -> liftListIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
+        case SET -> liftSetIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
+        case MAP_VALUES -> liftMapIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
+        // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
       };
     }
@@ -1092,9 +1103,10 @@ public final class DeepMap {
         );
       }
       return switch (srcShape.kind) {
-        case LIST -> Iso.liftList(eraseIso(elementIso));
-        case SET -> Iso.liftSet(eraseIso(elementIso));
-        case MAP_VALUES -> Iso.liftMapValues(eraseIso(elementIso));
+        case LIST -> liftListIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
+        case SET -> liftSetIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
+        case MAP_VALUES -> liftMapIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
+        // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
       };
     }
@@ -1215,6 +1227,132 @@ public final class DeepMap {
     // equal-but-distinct-reference keys); `WeakHashMap ↔ HashMap` (WeakHashMap GCs keys
     // without strong references).
     return SortedMap.class.isAssignableFrom(a) == SortedMap.class.isAssignableFrom(b);
+  }
+
+  /**
+   * List-level lift that writes into the target's concrete raw class. Element-wise forward /
+   * backward via the {@code elementIso}, allocating fresh source and target instances via {@link
+   * Beans#intermediateAllocator}. A {@code List<X> ↔ ArrayList<Y>} pair, or an {@code ArrayList<X>
+   * ↔ LinkedList<Y>} pair, produces a result whose runtime class matches the declared target raw
+   * class. Falls back to {@link ArrayList} for the raw {@link List} / {@link Collection} interface,
+   * where there's no concrete class to allocate.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Iso<?, ?> liftListIntoTargetRaw(
+    final Iso<Object, Object> elementIso,
+    final Class<?> srcRaw,
+    final Class<?> tgtRaw
+  ) {
+    final var srcAlloc = listAllocatorFor(srcRaw);
+    final var tgtAlloc = listAllocatorFor(tgtRaw);
+    return Iso.of(
+      src -> {
+        if (src == null) return null;
+        final var fresh = (Collection) tgtAlloc.get();
+        for (final var x : (Collection<?>) src) fresh.add(elementIso.to(x));
+        return fresh;
+      },
+      tgt -> {
+        if (tgt == null) return null;
+        final var fresh = (Collection) srcAlloc.get();
+        for (final var y : (Collection<?>) tgt) fresh.add(elementIso.from(y));
+        return fresh;
+      }
+    );
+  }
+
+  /**
+   * Set-level lift that writes into the target's concrete raw class. Mirror of {@link
+   * #liftListIntoTargetRaw} for Sets. Falls back to {@link LinkedHashSet} (preserving forward
+   * iteration order) when the raw class is the {@link Set} interface itself.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Iso<?, ?> liftSetIntoTargetRaw(
+    final Iso<Object, Object> elementIso,
+    final Class<?> srcRaw,
+    final Class<?> tgtRaw
+  ) {
+    final var srcAlloc = setAllocatorFor(srcRaw);
+    final var tgtAlloc = setAllocatorFor(tgtRaw);
+    return Iso.of(
+      src -> {
+        if (src == null) return null;
+        final var fresh = (Collection) tgtAlloc.get();
+        for (final var x : (Collection<?>) src) fresh.add(elementIso.to(x));
+        return fresh;
+      },
+      tgt -> {
+        if (tgt == null) return null;
+        final var fresh = (Collection) srcAlloc.get();
+        for (final var y : (Collection<?>) tgt) fresh.add(elementIso.from(y));
+        return fresh;
+      }
+    );
+  }
+
+  /**
+   * Map-level lift that writes into the target's concrete raw class. Mirror of {@link
+   * #liftListIntoTargetRaw} for Maps. Preserves source keys verbatim (matches {@link
+   * Iso#liftMapValues}); the calling site already ensured the key classes match. Falls back to
+   * {@link LinkedHashMap} when the raw class is the {@link Map} interface itself.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Iso<?, ?> liftMapIntoTargetRaw(
+    final Iso<Object, Object> elementIso,
+    final Class<?> srcRaw,
+    final Class<?> tgtRaw
+  ) {
+    final var srcAlloc = mapAllocatorFor(srcRaw);
+    final var tgtAlloc = mapAllocatorFor(tgtRaw);
+    return Iso.of(
+      src -> {
+        if (src == null) return null;
+        final var fresh = (Map) tgtAlloc.get();
+        for (final var e : ((Map<?, ?>) src).entrySet()) fresh.put(e.getKey(), elementIso.to(e.getValue()));
+        return fresh;
+      },
+      tgt -> {
+        if (tgt == null) return null;
+        final var fresh = (Map) srcAlloc.get();
+        for (final var e : ((Map<?, ?>) tgt).entrySet()) fresh.put(e.getKey(), elementIso.from(e.getValue()));
+        return fresh;
+      }
+    );
+  }
+
+  // JDK collection classes live in java.base — `Beans.intermediateAllocator` can't bind them
+  // via LambdaMetafactory's privateLookupIn (java.base doesn't grant private lookup to app code).
+  // Hard-code the common JDK Collection / Map raws so the allocator works for the standard
+  // shapes, and fall back to `intermediateAllocator` for user-defined subclasses (where LMF DOES
+  // work via the user's own package).
+  private static Supplier<Object> listAllocatorFor(final Class<?> raw) {
+    if (raw == List.class || raw == Collection.class || raw == ArrayList.class) return ArrayList::new;
+    if (raw == LinkedList.class) return LinkedList::new;
+    if (raw == ArrayDeque.class) return ArrayDeque::new;
+    if (raw == Vector.class) return Vector::new;
+    if (raw == CopyOnWriteArrayList.class) return CopyOnWriteArrayList::new;
+    final var alloc = Beans.intermediateAllocator(raw);
+    return alloc.get() != null ? alloc : ArrayList::new;
+  }
+
+  private static Supplier<Object> setAllocatorFor(final Class<?> raw) {
+    if (raw == Set.class || raw == LinkedHashSet.class) return LinkedHashSet::new;
+    if (raw == HashSet.class) return HashSet::new;
+    if (raw == TreeSet.class) return TreeSet::new;
+    if (raw == ConcurrentSkipListSet.class) return ConcurrentSkipListSet::new;
+    if (raw == CopyOnWriteArraySet.class) return CopyOnWriteArraySet::new;
+    final var alloc = Beans.intermediateAllocator(raw);
+    return alloc.get() != null ? alloc : LinkedHashSet::new;
+  }
+
+  private static Supplier<Object> mapAllocatorFor(final Class<?> raw) {
+    if (raw == Map.class || raw == HashMap.class) return HashMap::new;
+    if (raw == LinkedHashMap.class) return LinkedHashMap::new;
+    if (raw == TreeMap.class) return TreeMap::new;
+    if (raw == ConcurrentHashMap.class) return ConcurrentHashMap::new;
+    if (raw == ConcurrentSkipListMap.class) return ConcurrentSkipListMap::new;
+    final var alloc = Beans.intermediateAllocator(raw);
+    return alloc.get() != null ? alloc : LinkedHashMap::new;
   }
 
   /**
@@ -1752,7 +1890,7 @@ public final class DeepMap {
    * mapping a {@code Map<String, X>} to a {@code Map<Long, Y>} target would silently produce a
    * {@code Map<String, Y>} at runtime, which violates the target's declared key type.
    */
-  private record ContainerShape(Kind kind, Type elementType, Class<?> keyClass) {
+  private record ContainerShape(Kind kind, Type elementType, Class<?> keyClass, Class<?> rawClass) {
     enum Kind {
       LIST,
       SET,
@@ -1763,13 +1901,28 @@ public final class DeepMap {
     static ContainerShape of(final Type t) {
       if (!(t instanceof ParameterizedType pt)) return null;
       if (!(pt.getRawType() instanceof Class<?> raw)) return null;
-      if (raw == List.class) return new ContainerShape(Kind.LIST, pt.getActualTypeArguments()[0], null);
-      if (raw == Set.class) return new ContainerShape(Kind.SET, pt.getActualTypeArguments()[0], null);
-      if (raw == Optional.class) return new ContainerShape(Kind.OPTIONAL, pt.getActualTypeArguments()[0], null);
-      if (raw == Map.class) {
+      // Optional is final; no subtypes possible — keep exact-match.
+      if (raw == Optional.class) return new ContainerShape(Kind.OPTIONAL, pt.getActualTypeArguments()[0], null, raw);
+      // List / Set / Map: accept any subtype of the interface. The raw class is carried so the
+      // autoIso lift can allocate the target's concrete class (e.g. `List<X>` ↔ `ArrayList<Y>`
+      // — both shapes match LIST, but the lifted Iso has to write into a fresh ArrayList<Y>
+      // when the target field is `ArrayList<Y>`).
+      if (List.class.isAssignableFrom(raw)) return new ContainerShape(
+        Kind.LIST,
+        pt.getActualTypeArguments()[0],
+        null,
+        raw
+      );
+      if (Set.class.isAssignableFrom(raw)) return new ContainerShape(
+        Kind.SET,
+        pt.getActualTypeArguments()[0],
+        null,
+        raw
+      );
+      if (Map.class.isAssignableFrom(raw)) {
         final var keyArg = pt.getActualTypeArguments()[0];
         if (!(keyArg instanceof Class<?> keyCls)) return null;
-        return new ContainerShape(Kind.MAP_VALUES, pt.getActualTypeArguments()[1], keyCls);
+        return new ContainerShape(Kind.MAP_VALUES, pt.getActualTypeArguments()[1], keyCls, raw);
       }
       return null;
     }
