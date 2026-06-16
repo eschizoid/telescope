@@ -570,6 +570,13 @@ ordering / threading semantics within a kind (e.g. `LinkedHashMap → HashMap` r
 drops the concurrency contract) are silent — same trade-off as Bug 7's `sameKindMap`. Adopters needing strict
 preservation declare an explicit `Mapping.via(...)` row.
 
+**`EnumMap` targets are rejected at plan-time.** `EnumMap` has no no-arg constructor (it requires `Class<K>` to know the
+enum key class), and the auto-Iso lift can't recover the key class at allocation time. The mapper throws an
+`IllegalStateException` at construction with a precise diagnostic. Adopters using `EnumMap` target fields must use the
+codegen path (where the key class is captured at compile time) or an explicit `Mapping.via(...)` row that constructs the
+EnumMap with its key class. Same applies to any user-defined Collection/Map subclass without a public no-arg constructor
+— caught at plan-time with a class-named diagnostic, no silent surprise.
+
 ---
 
 ## Enhancement Requests
@@ -779,6 +786,29 @@ covers this for `mapperForward()` too
 
 ---
 
+### 10. `:internal` test coverage hardening (post-v1.0.1)
+
+**Source:** codecov report on the `:internal` module post-v1.0.1 release. Migration-feedback bugs that would have been
+caught earlier are pinned by end-to-end `MigrationRegressionTest`, but unit-level coverage on the substrate is thin —
+future refactors of the LMF cache, the writer strategies, or the reflection helpers have less protection than they
+should.
+
+**Priority targets** (by coverage gap × adoption pain on regression):
+
+- `internal/NullDefaults.java` — **0% covered** (20 lines). Zero unit pins on the JLS-default substitution table. Bug 8
+  - Bug 3's primitive-wrapper-and-null-guard work both depend on this; a future refactor that subtly broke
+    `NullDefaults` would surface only as an E2E miss.
+- `internal/Beans.java` — **60% covered** (157 lines missed of 472). The hottest path in the codebase; the writer
+  strategies (`SettersWriter`, `BuilderWriter`, `FieldsWriter`, `ConstructorWriter`) have partial coverage and the LMF
+  cache substrate is only exercised end-to-end.
+- `internal/Reflective.java` (57%), `internal/Records.java` (57%), `internal/MetadataHolderProbe.java` (54%) — the
+  reflection-helper layer. Per-method unit tests would pin invariants the structural-Iso assembly depends on.
+
+**Scope:** add `BeansTest` / `RecordsTest` / `NullDefaultsTest` / `MetadataHolderProbeTest` coverage for the gaps.
+Target ≥80% line coverage on `:internal`. Not a correctness defect — quality debt.
+
+---
+
 ## Additional Fixes Applied During Migration (already-fixed in v1.0.1 — recorded for traceability)
 
 | Fix                          | File                      | Description                                                                                          |
@@ -805,14 +835,15 @@ covers this for `mapperForward()` too
 
 ## Summary — Enhancements
 
-| #     | Description                                        | Priority | Status       |
-| ----- | -------------------------------------------------- | -------- | ------------ |
-| Enh 1 | Cross-module `@Bridge` carrier                     | High     | Open (v1.1+) |
-| Enh 2 | `ForwardMapper.liftList()`                         | Medium   | Open (v1.1+) |
-| Enh 3 | `Telescope.asForwardMapper()`                      | Low      | Open (v1.1+) |
-| Enh 4 | Processor ordering docs + BridgeProcessor deferral | Medium   | Open (v1.1+) |
-| Enh 5 | `Map` → POJO factory                               | Low      | Open (v1.1+) |
-| Enh 6 | `@Bridge` lenient mode                             | High     | Open (v1.1+) |
-| Enh 7 | `Sources.byClass()` generics                       | Low      | Open (v1.1+) |
-| Enh 8 | `Mapping.forward()` naming                         | Low      | Open (v1.1+) |
-| Enh 9 | `mapperForward()` lenient by default               | High     | Open (v1.1+) |
+| #      | Description                                        | Priority | Status        |
+| ------ | -------------------------------------------------- | -------- | ------------- |
+| Enh 1  | Cross-module `@Bridge` carrier                     | High     | Open (v1.1+)  |
+| Enh 2  | `ForwardMapper.liftList()`                         | Medium   | Open (v1.1+)  |
+| Enh 3  | `Telescope.asForwardMapper()`                      | Low      | Open (v1.1+)  |
+| Enh 4  | Processor ordering docs + BridgeProcessor deferral | Medium   | Open (v1.1+)  |
+| Enh 5  | `Map` → POJO factory                               | Low      | Open (v1.1+)  |
+| Enh 6  | `@Bridge` lenient mode                             | High     | Open (v1.1+)  |
+| Enh 7  | `Sources.byClass()` generics                       | Low      | Open (v1.1+)  |
+| Enh 8  | `Mapping.forward()` naming                         | Low      | Open (v1.1+)  |
+| Enh 9  | `mapperForward()` lenient by default               | High     | Open (v1.1+)  |
+| Enh 10 | `:internal` test coverage hardening                | Medium   | Open (v1.0.2) |
