@@ -315,183 +315,242 @@ public final class DeepMap {
     }
     cache.put(key, null); // reserve slot so cycle-re-entry short-circuits
     inProgress.push(key);
+    // The pop lives in finally (at the end of this method) so a thrown IllegalStateException —
+    // the strict-bijection guard at the top-level pair — doesn't corrupt the `inProgress` stack.
+    // `inProgress.size() > 1` is the lenient-nested gate; a leaked pre-pop frame would silently
+    // flip future top-level calls in the same cache into "nested" mode.
+    try {
+      final var srcRefl = pickReflective(source, beanRefl);
+      final var tgtRefl = pickReflective(target, beanRefl);
 
-    final var srcRefl = pickReflective(source, beanRefl);
-    final var tgtRefl = pickReflective(target, beanRefl);
+      final var byTargetName = new LinkedHashMap<String, FieldStep>();
+      final var bySourceName = new LinkedHashMap<String, FieldStep>();
+      // Strict claims: at most one SameTypedTo / TypedTransformTo / Via / Drop row per (src, tgt)
+      // field.
+      // Duplicates among these would be genuinely ambiguous, so they fail fast.
+      final var claimedTgt = new HashSet<String>();
+      final var claimedSrc = new HashSet<String>();
+      // Soft claims: telescope-based rows are post-fixups, not exclusive overrides — they mark a
+      // field as "consumed by a telescope read/write" so the strict source/target must-be-claimed
+      // pass below accepts it, but don't conflict with strict rows or with each other on the same
+      // field. Multiple Mapping.to(srcAcc, tgtTelescope) rows reading the same source field, or
+      // Mapping.to(srcAcc, tgtTelescope) co-existing with a Mapping.to(srcAcc, tgtAcc), are both
+      // OK.
+      final var telescopeReadsSrc = new HashSet<String>();
+      final var telescopeWritesTgt = new HashSet<String>();
+      final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
 
-    final var byTargetName = new LinkedHashMap<String, FieldStep>();
-    final var bySourceName = new LinkedHashMap<String, FieldStep>();
-    // Strict claims: at most one SameTypedTo / TypedTransformTo / Via / Drop row per (src, tgt)
-    // field.
-    // Duplicates among these would be genuinely ambiguous, so they fail fast.
-    final var claimedTgt = new HashSet<String>();
-    final var claimedSrc = new HashSet<String>();
-    // Soft claims: telescope-based rows are post-fixups, not exclusive overrides — they mark a
-    // field as "consumed by a telescope read/write" so the strict source/target must-be-claimed
-    // pass below accepts it, but don't conflict with strict rows or with each other on the same
-    // field. Multiple Mapping.to(srcAcc, tgtTelescope) rows reading the same source field, or
-    // Mapping.to(srcAcc, tgtTelescope) co-existing with a Mapping.to(srcAcc, tgtAcc), are both OK.
-    final var telescopeReadsSrc = new HashSet<String>();
-    final var telescopeWritesTgt = new HashSet<String>();
-    final var telescopeFixups = new ArrayList<Mapping<?, ?>>();
-
-    for (final var rawRow : overrides.getOrDefault(key, List.of())) {
-      // Conditional<A, B>(predicate, inner) wraps a telescope-based row. For soft-claim routing,
-      // peel to the inner — Conditional delegates sourceField/targetField/sourceClass/targetClass
-      // to inner already, so the metadata is identical, but the telescope-shape checks below need
-      // the concrete inner type. The Conditional itself (rawRow) goes into telescopeFixups so
-      // applyForward can evaluate the predicate before dispatching the inner's effect.
-      final Mapping<?, ?> row = (rawRow instanceof Conditional<?, ?> c) ? c.inner() : rawRow;
-      // Normalize raw method names per side — record::name stays "name", bean::getName becomes
-      // "name". `sourceField()` returns null on rows whose source is a nested telescope rather
-      // than a flat accessor (FromTelescopeTo, TelescopeToTelescope); those branches re-read the
-      // first hop name from the telescope below and don't consume srcField, so null here is safe.
-      final var rawSrcField = row.sourceField();
-      final var srcField = rawSrcField == null ? null : srcRefl.normalize(rawSrcField);
-      // TelescopeTo: flat source accessor → nested target telescope.
-      // Soft claim on the source field (from srcAcc) AND the target telescope's first hop name.
-      // Multiple rows sharing the same source field or top-level target field all compose.
-      if (row instanceof TelescopeTo<?, ?, ?> tRow) {
-        telescopeReadsSrc.add(srcField);
-        final var firstTgtHop = tRow.targetTelescope().firstHopName();
-        if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
-        telescopeFixups.add(rawRow);
-        continue;
-      }
-      // FromTelescopeTo: nested source telescope → flat target accessor — soft claim mirror.
-      // Soft claim on the target field (from tgtAcc) AND the source telescope's first hop name.
-      if (row instanceof FromTelescopeTo<?, ?, ?> fRow) {
-        telescopeWritesTgt.add(tgtRefl.normalize(row.targetField()));
-        final var firstSrcHop = fRow.sourceTelescope().firstHopName();
-        if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
-        telescopeFixups.add(rawRow);
-        continue;
-      }
-      // TelescopeToTelescope (covers both Kind.BROADCAST from Mapping.to and Kind.ZIP from
-      // Mapping.zip): both sides are nested telescopes. Recover the top-level src/tgt field names
-      // from each telescope's first hop so auto-recursion can build the top-level structure; the
-      // post-fixup then overlays the deep leaf (broadcast or positional, depending on kind).
-      if (row instanceof TelescopeToTelescope<?, ?, ?> ttRow) {
-        final var firstSrcHop = ttRow.sourceTelescope().firstHopName();
-        final var firstTgtHop = ttRow.targetTelescope().firstHopName();
-        if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
-        if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
-        telescopeFixups.add(rawRow);
-        continue;
-      }
-      // Constant / Compute rows are target-injection telescope fixups: claim the target
-      // telescope's first hop as written, register the row in telescopeFixups, and let the
-      // applyForward pass stamp value (Constant) or supplier.get() (Compute) at the location the
-      // telescope navigates to. The flat factories (constant(Accessor, X) / compute(Accessor,
-      // Supplier)) wrap the accessor in a single-hop telescope at construction time so this loop
-      // sees only one shape per kind — no separate flat handler. Backward direction is a no-op:
-      // these rows don't contribute to bySourceName, so the source rebuilder ignores the slot
-      // entirely on backward (same retraction semantics as Drop on the source side).
-      if (row instanceof Constant<?, ?, ?> cRow) {
-        final var firstTgtHop = cRow.targetTelescope().firstHopName();
-        if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
-        telescopeFixups.add(rawRow);
-        continue;
-      }
-      if (row instanceof Compute<?, ?, ?> cpRow) {
-        final var firstTgtHop = cpRow.targetTelescope().firstHopName();
-        if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
-        telescopeFixups.add(rawRow);
-        continue;
-      }
-      // Drop rows claim a source field with no target counterpart — they exist to satisfy the
-      // strict source-must-be-claimed pass below when one side carries fields the other doesn't.
-      if (row instanceof Drop<?, ?, ?>) {
-        if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
+      for (final var rawRow : overrides.getOrDefault(key, List.of())) {
+        // Conditional<A, B>(predicate, inner) wraps a telescope-based row. For soft-claim routing,
+        // peel to the inner — Conditional delegates sourceField/targetField/sourceClass/targetClass
+        // to inner already, so the metadata is identical, but the telescope-shape checks below need
+        // the concrete inner type. The Conditional itself (rawRow) goes into telescopeFixups so
+        // applyForward can evaluate the predicate before dispatching the inner's effect.
+        final Mapping<?, ?> row = (rawRow instanceof Conditional<?, ?> c) ? c.inner() : rawRow;
+        // Normalize raw method names per side — record::name stays "name", bean::getName becomes
+        // "name". `sourceField()` returns null on rows whose source is a nested telescope rather
+        // than a flat accessor (FromTelescopeTo, TelescopeToTelescope); those branches re-read the
+        // first hop name from the telescope below and don't consume srcField, so null here is safe.
+        final var rawSrcField = row.sourceField();
+        final var srcField = rawSrcField == null ? null : srcRefl.normalize(rawSrcField);
+        // TelescopeTo: flat source accessor → nested target telescope.
+        // Soft claim on the source field (from srcAcc) AND the target telescope's first hop name.
+        // Multiple rows sharing the same source field or top-level target field all compose.
+        if (row instanceof TelescopeTo<?, ?, ?> tRow) {
+          telescopeReadsSrc.add(srcField);
+          final var firstTgtHop = tRow.targetTelescope().firstHopName();
+          if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+          telescopeFixups.add(rawRow);
+          continue;
+        }
+        // FromTelescopeTo: nested source telescope → flat target accessor — soft claim mirror.
+        // Soft claim on the target field (from tgtAcc) AND the source telescope's first hop name.
+        if (row instanceof FromTelescopeTo<?, ?, ?> fRow) {
+          telescopeWritesTgt.add(tgtRefl.normalize(row.targetField()));
+          final var firstSrcHop = fRow.sourceTelescope().firstHopName();
+          if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
+          telescopeFixups.add(rawRow);
+          continue;
+        }
+        // TelescopeToTelescope (covers both Kind.BROADCAST from Mapping.to and Kind.ZIP from
+        // Mapping.zip): both sides are nested telescopes. Recover the top-level src/tgt field names
+        // from each telescope's first hop so auto-recursion can build the top-level structure; the
+        // post-fixup then overlays the deep leaf (broadcast or positional, depending on kind).
+        if (row instanceof TelescopeToTelescope<?, ?, ?> ttRow) {
+          final var firstSrcHop = ttRow.sourceTelescope().firstHopName();
+          final var firstTgtHop = ttRow.targetTelescope().firstHopName();
+          if (firstSrcHop != null) telescopeReadsSrc.add(srcRefl.normalize(firstSrcHop));
+          if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+          telescopeFixups.add(rawRow);
+          continue;
+        }
+        // Constant / Compute rows are target-injection telescope fixups: claim the target
+        // telescope's first hop as written, register the row in telescopeFixups, and let the
+        // applyForward pass stamp value (Constant) or supplier.get() (Compute) at the location the
+        // telescope navigates to. The flat factories (constant(Accessor, X) / compute(Accessor,
+        // Supplier)) wrap the accessor in a single-hop telescope at construction time so this loop
+        // sees only one shape per kind — no separate flat handler. Backward direction is a no-op:
+        // these rows don't contribute to bySourceName, so the source rebuilder ignores the slot
+        // entirely on backward (same retraction semantics as Drop on the source side).
+        if (row instanceof Constant<?, ?, ?> cRow) {
+          final var firstTgtHop = cRow.targetTelescope().firstHopName();
+          if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+          telescopeFixups.add(rawRow);
+          continue;
+        }
+        if (row instanceof Compute<?, ?, ?> cpRow) {
+          final var firstTgtHop = cpRow.targetTelescope().firstHopName();
+          if (firstTgtHop != null) telescopeWritesTgt.add(tgtRefl.normalize(firstTgtHop));
+          telescopeFixups.add(rawRow);
+          continue;
+        }
+        // Drop rows claim a source field with no target counterpart — they exist to satisfy the
+        // strict source-must-be-claimed pass below when one side carries fields the other doesn't.
+        if (row instanceof Drop<?, ?, ?>) {
+          if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
+            "Deep map " +
+              source.getSimpleName() +
+              " → " +
+              target.getSimpleName() +
+              ": duplicate override row for source field '" +
+              srcField +
+              "'. Each (source, target) type pair may declare at most one row per source field."
+          );
+          // Register a backward-only step under the source name so the source-reconstructor
+          // (assembleIso's bySourceName loop) produces a placeholder value (null) for the dropped
+          // field. The step is NOT registered under byTargetName, so the forward direction omits
+          // the source field from the target map entirely.
+          bySourceName.put(srcField, new FieldStep(srcField, null, NULLING_ISO));
+          continue;
+        }
+        final var tgtField = tgtRefl.normalize(row.targetField());
+        // Fail fast on duplicate target — two rows targeting the same target field would silently
+        // overwrite each other in byTargetName and could produce non-bijective forward/backward
+        // (each direction using a different correspondence).
+        if (!claimedTgt.add(tgtField)) throw new IllegalArgumentException(
           "Deep map " +
             source.getSimpleName() +
             " → " +
             target.getSimpleName() +
-            ": duplicate override row for source field '" +
-            srcField +
-            "'. Each (source, target) type pair may declare at most one row per source field."
+            ": duplicate override row for target field '" +
+            tgtField +
+            "'. Each (source, target) type pair may declare at most one row per target field."
         );
-        // Register a backward-only step under the source name so the source-reconstructor
-        // (assembleIso's bySourceName loop) produces a placeholder value (null) for the dropped
-        // field. The step is NOT registered under byTargetName, so the forward direction omits
-        // the source field from the target map entirely.
-        bySourceName.put(srcField, new FieldStep(srcField, null, NULLING_ISO));
-        continue;
+        // Same-source fan-out IS permitted: one source field feeding multiple target fields is a
+        // common enterprise pattern (e.g. `businessUnit → cretnUserId AND lastUpdtdUserId` on
+        // audit-column rebuilds). Forward direction broadcasts the source value to every target row
+        // correctly. Backward direction is non-bijective for the fan-out source field — the last
+        // registered row wins the `bySourceName` slot, so backward reconstructs that source field
+        // from one target's value. Round-trip equality holds when the user keeps fan-out targets in
+        // sync (typically same-typed copies of the same column), and the test pin makes the
+        // last-row-wins behaviour explicit so silent ambiguity is impossible.
+        claimedSrc.add(srcField);
+        final var tgtType = tgtRefl.genericType(target, tgtField);
+        final var rawRowIso = fieldIsoOf(row, srcRefl.genericType(source, srcField), tgtType);
+        // SameTypedTo rows are pure identity at the leaf — wrap with default-on-null when the
+        // mapper's null strategy is DEFAULT so an unset source field lands as the type default
+        // instead of null. Other field-iso rows (TypedTransformTo, ForwardOnlyTransformTo, Via)
+        // carry user-supplied forward functions and are explicitly NOT wrapped — the user already
+        // decided how their lambda handles null. This precedence rule lets toOrElse(...) (a
+        // TypedTransformTo) and explicit transforms win over the global hint without any extra
+        // marker on the row, which is the simplest "per-row beats per-mapper" semantics.
+        final var rowIso = (nullStrategy == NullHint.NullStrategy.DEFAULT && row instanceof SameTypedTo<?, ?, ?>)
+          ? wrapDefaultOnNull(rawRowIso, tgtType)
+          : rawRowIso;
+        final var step = new FieldStep(srcField, tgtField, rowIso);
+        byTargetName.put(tgtField, step);
+        bySourceName.put(srcField, step);
       }
-      final var tgtField = tgtRefl.normalize(row.targetField());
-      // Fail fast on duplicate target — two rows targeting the same target field would silently
-      // overwrite each other in byTargetName and could produce non-bijective forward/backward
-      // (each direction using a different correspondence).
-      if (!claimedTgt.add(tgtField)) throw new IllegalArgumentException(
-        "Deep map " +
-          source.getSimpleName() +
-          " → " +
-          target.getSimpleName() +
-          ": duplicate override row for target field '" +
-          tgtField +
-          "'. Each (source, target) type pair may declare at most one row per target field."
-      );
-      // Same-source fan-out IS permitted: one source field feeding multiple target fields is a
-      // common enterprise pattern (e.g. `businessUnit → cretnUserId AND lastUpdtdUserId` on
-      // audit-column rebuilds). Forward direction broadcasts the source value to every target row
-      // correctly. Backward direction is non-bijective for the fan-out source field — the last
-      // registered row wins the `bySourceName` slot, so backward reconstructs that source field
-      // from one target's value. Round-trip equality holds when the user keeps fan-out targets in
-      // sync (typically same-typed copies of the same column), and the test pin makes the
-      // last-row-wins behaviour explicit so silent ambiguity is impossible.
-      claimedSrc.add(srcField);
-      final var tgtType = tgtRefl.genericType(target, tgtField);
-      final var rawRowIso = fieldIsoOf(row, srcRefl.genericType(source, srcField), tgtType);
-      // SameTypedTo rows are pure identity at the leaf — wrap with default-on-null when the
-      // mapper's null strategy is DEFAULT so an unset source field lands as the type default
-      // instead of null. Other field-iso rows (TypedTransformTo, ForwardOnlyTransformTo, Via)
-      // carry user-supplied forward functions and are explicitly NOT wrapped — the user already
-      // decided how their lambda handles null. This precedence rule lets toOrElse(...) (a
-      // TypedTransformTo) and explicit transforms win over the global hint without any extra
-      // marker on the row, which is the simplest "per-row beats per-mapper" semantics.
-      final var rowIso = (nullStrategy == NullHint.NullStrategy.DEFAULT && row instanceof SameTypedTo<?, ?, ?>)
-        ? wrapDefaultOnNull(rawRowIso, tgtType)
-        : rawRowIso;
-      final var step = new FieldStep(srcField, tgtField, rowIso);
-      byTargetName.put(tgtField, step);
-      bySourceName.put(srcField, step);
-    }
 
-    final var srcNames = srcRefl.names(source);
-    final var srcNameSet = new HashSet<>(List.of(srcNames));
-    for (final var name : tgtRefl.names(target)) {
-      if (claimedTgt.contains(name)) continue;
-      // Telescope-row permissive mode: when ANY telescope row is registered for this pair, target
-      // fields with no same-name source get a NULLING_ISO placeholder. The post-fixup overlays it
-      // if a TelescopeToTelescope / FromTelescopeTo writes through that field; otherwise the field
-      // stays null. Telescope rows can't recover their top-level target field name from a
-      // Telescope<B, X> at runtime (generics erased), so we permit the gap instead of failing on
-      // every nested write. Without any telescope row, the strict same-name check still fires.
-      if (!srcNameSet.contains(name)) {
-        // Lenient on nested auto-recursed pairs (Bug 6): when the current call is recursed from
-        // computeAutoIso (inProgress has more than just the current pair on the stack), the user
-        // never explicitly configured this pair — it was visited because a parent field's
-        // genericType is reflectable. An unmatched target field there should stay at its JLS
-        // default rather than abort the top-level construction. Strictness is preserved at the
-        // TOP-LEVEL pair (`inProgress.size() == 1`) where the user explicitly asked for the
-        // mapper; missing fields there ARE a configuration mistake worth surfacing.
-        final var isNested = inProgress.size() > 1;
-        if (!telescopeFixups.isEmpty() || isNested) {
-          // Telescope-row placeholder for a target field with no same-name source. Three cases,
-          // type-driven:
-          //   - field type is a record AND a telescope row claims it as a first hop: allocate a
-          //     recursive default-tree instance so the post-fixup overlay
-          //     (`tgtTelescope.set(t, value)`) can descend into a non-null intermediate. Records
-          //     only for v1.0; beans need a no-arg ctor or builder which isn't always present —
-          //     deferred to v1.1.
-          //   - field type is a primitive: return the JLS default (0 / false / etc.) so canonical-
-          //     ctor reflection doesn't NPE unboxing a null Object.
-          //   - everything else: NULLING_ISO (null reference, unchanged behavior).
-          final var fieldType = rawClassOf(tgtRefl.genericType(target, name));
-          byTargetName.putIfAbsent(
-            name,
-            new FieldStep(null, name, placeholderIsoFor(fieldType, telescopeWritesTgt.contains(name)))
+      final var srcNames = srcRefl.names(source);
+      final var srcNameSet = new HashSet<>(List.of(srcNames));
+      for (final var name : tgtRefl.names(target)) {
+        if (claimedTgt.contains(name)) continue;
+        // Telescope-row permissive mode: when ANY telescope row is registered for this pair, target
+        // fields with no same-name source get a NULLING_ISO placeholder. The post-fixup overlays it
+        // if a TelescopeToTelescope / FromTelescopeTo writes through that field; otherwise the
+        // field
+        // stays null. Telescope rows can't recover their top-level target field name from a
+        // Telescope<B, X> at runtime (generics erased), so we permit the gap instead of failing on
+        // every nested write. Without any telescope row, the strict same-name check still fires.
+        if (!srcNameSet.contains(name)) {
+          // Lenient on nested auto-recursed pairs (Bug 6): when the current call is recursed from
+          // computeAutoIso (inProgress has more than just the current pair on the stack), the user
+          // never explicitly configured this pair — it was visited because a parent field's
+          // genericType is reflectable. An unmatched target field there should stay at its JLS
+          // default rather than abort the top-level construction. Strictness is preserved at the
+          // TOP-LEVEL pair (`inProgress.size() == 1`) where the user explicitly asked for the
+          // mapper; missing fields there ARE a configuration mistake worth surfacing.
+          final var isNested = inProgress.size() > 1;
+          if (!telescopeFixups.isEmpty() || isNested) {
+            // Telescope-row placeholder for a target field with no same-name source. Three cases,
+            // type-driven:
+            //   - field type is a record AND a telescope row claims it as a first hop: allocate a
+            //     recursive default-tree instance so the post-fixup overlay
+            //     (`tgtTelescope.set(t, value)`) can descend into a non-null intermediate. Records
+            //     only for v1.0; beans need a no-arg ctor or builder which isn't always present —
+            //     deferred to v1.1.
+            //   - field type is a primitive: return the JLS default (0 / false / etc.) so
+            // canonical-
+            //     ctor reflection doesn't NPE unboxing a null Object.
+            //   - everything else: NULLING_ISO (null reference, unchanged behavior).
+            final var fieldType = rawClassOf(tgtRefl.genericType(target, name));
+            byTargetName.putIfAbsent(
+              name,
+              new FieldStep(null, name, placeholderIsoFor(fieldType, telescopeWritesTgt.contains(name)))
+            );
+            continue;
+          }
+          throw new IllegalStateException(
+            "Deep map " +
+              source.getSimpleName() +
+              " → " +
+              target.getSimpleName() +
+              ": target " +
+              slot(tgtRefl) +
+              " '" +
+              name +
+              "' has no same-name source " +
+              slot(srcRefl) +
+              ". Add a rename row to(sourceAccessor, targetAccessor) that maps to '" +
+              name +
+              "'."
           );
+        }
+        final var step = new FieldStep(
+          name,
+          name,
+          autoIso(
+            srcRefl.genericType(source, name),
+            tgtRefl.genericType(target, name),
+            name,
+            overrides,
+            beanRefl,
+            cache,
+            nullStrategy,
+            cyclicPairs,
+            inProgress
+          )
+        );
+        byTargetName.put(name, step);
+        bySourceName.put(name, step);
+        claimedSrc.add(name);
+      }
+
+      for (final var name : srcNames) {
+        if (claimedSrc.contains(name)) continue;
+        // Telescope-read source without a same-name target consumer: register a NULLING_ISO
+        // backward-only placeholder so the source rebuilder produces null for this field; the
+        // backward post-fixup will fill the real value from the target telescope.
+        if (telescopeReadsSrc.contains(name)) {
+          bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
+          continue;
+        }
+        // Same permissive mode as the target side: when telescope rows are present OR this is a
+        // nested auto-recursed pair (Bug 6), source fields with no consumer fall back to a NULLING
+        // placeholder rather than failing.
+        if (!telescopeFixups.isEmpty() || inProgress.size() > 1) {
+          bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
           continue;
         }
         throw new IllegalStateException(
@@ -499,77 +558,27 @@ public final class DeepMap {
             source.getSimpleName() +
             " → " +
             target.getSimpleName() +
-            ": target " +
-            slot(tgtRefl) +
+            ": source " +
+            slot(srcRefl) +
             " '" +
             name +
-            "' has no same-name source " +
-            slot(srcRefl) +
-            ". Add a rename row to(sourceAccessor, targetAccessor) that maps to '" +
+            "' has no same-name target " +
+            slot(tgtRefl) +
+            ". Add a rename row to(sourceAccessor, targetAccessor) that consumes '" +
             name +
             "'."
         );
       }
-      final var step = new FieldStep(
-        name,
-        name,
-        autoIso(
-          srcRefl.genericType(source, name),
-          tgtRefl.genericType(target, name),
-          name,
-          overrides,
-          beanRefl,
-          cache,
-          nullStrategy,
-          cyclicPairs,
-          inProgress
-        )
-      );
-      byTargetName.put(name, step);
-      bySourceName.put(name, step);
-      claimedSrc.add(name);
-    }
 
-    for (final var name : srcNames) {
-      if (claimedSrc.contains(name)) continue;
-      // Telescope-read source without a same-name target consumer: register a NULLING_ISO
-      // backward-only placeholder so the source rebuilder produces null for this field; the
-      // backward post-fixup will fill the real value from the target telescope.
-      if (telescopeReadsSrc.contains(name)) {
-        bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
-        continue;
-      }
-      // Same permissive mode as the target side: when telescope rows are present OR this is a
-      // nested auto-recursed pair (Bug 6), source fields with no consumer fall back to a NULLING
-      // placeholder rather than failing.
-      if (!telescopeFixups.isEmpty() || inProgress.size() > 1) {
-        bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
-        continue;
-      }
-      throw new IllegalStateException(
-        "Deep map " +
-          source.getSimpleName() +
-          " → " +
-          target.getSimpleName() +
-          ": source " +
-          slot(srcRefl) +
-          " '" +
-          name +
-          "' has no same-name target " +
-          slot(tgtRefl) +
-          ". Add a rename row to(sourceAccessor, targetAccessor) that consumes '" +
-          name +
-          "'."
+      final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
+      cache.put(
+        key,
+        telescopeFixups.isEmpty() ? baseIso : wrapWithTelescopeFixups(baseIso, telescopeFixups, srcRefl, source)
       );
+      if (topStepsOut != null) topStepsOut.putAll(byTargetName);
+    } finally {
+      inProgress.pop();
     }
-
-    final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
-    cache.put(
-      key,
-      telescopeFixups.isEmpty() ? baseIso : wrapWithTelescopeFixups(baseIso, telescopeFixups, srcRefl, source)
-    );
-    if (topStepsOut != null) topStepsOut.putAll(byTargetName);
-    inProgress.pop();
   }
 
   /**
