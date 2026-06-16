@@ -30,7 +30,7 @@ class MappingToOneWayTest {
 
     @Test
     @DisplayName("calling Telescope.mapper with a Mapping.toOneWay row throws IAE naming the field + escape hatch")
-    void mapperRejectsForward() {
+    void mapperRejectsToOneWay() {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
         Telescope.mapper(Entity.class, Dto.class, toOneWay(Entity::createdAt, Dto::createdAtIso, Instant::toString))
       );
@@ -42,7 +42,7 @@ class MappingToOneWayTest {
 
     @Test
     @DisplayName("Telescope.map(...) also rejects toOneWay(...) rows — closes the silent-corruption gap")
-    void mapAlsoRejectsForward() {
+    void mapAlsoRejectsToOneWay() {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
         Telescope.map(Entity.class, Dto.class, toOneWay(Entity::createdAt, Dto::createdAtIso, Instant::toString))
       );

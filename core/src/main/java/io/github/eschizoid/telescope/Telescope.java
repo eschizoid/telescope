@@ -19,6 +19,7 @@ import io.github.eschizoid.telescope.internal.optics.Traversal;
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
 import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
+import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.runtime.instances.CompletableFutureK;
 import io.github.eschizoid.telescope.runtime.instances.EitherK;
 import io.github.eschizoid.telescope.runtime.instances.OptionalK;
@@ -580,10 +581,9 @@ public sealed class Telescope<
    * Forward-only sibling of {@link #mapper(Class, Class, MapStep...)} — returns a {@link
    * ForwardMapper} whose backward direction is not present at the type level. Use when the
    * conversion is genuinely one-way (entity → DTO write-only, audit-log projection, normalisation
-   * pipeline) and rows include {@link io.github.eschizoid.telescope.mapping.Mapping#toOneWay
-   * toOneWay(...)} / {@link io.github.eschizoid.telescope.mapping.Mapping#constant constant(...)} /
-   * {@link io.github.eschizoid.telescope.mapping.Mapping#compute compute(...)} that make the
-   * backward direction meaningless.
+   * pipeline) and rows include {@link Mapping#toOneWay toOneWay(...)} / {@link Mapping#constant
+   * constant(...)} / {@link Mapping#compute compute(...)} that make the backward direction
+   * meaningless.
    *
    * <p>The compiler enforces the one-way contract — there is no {@code backward(...)} method on
    * {@link ForwardMapper} to call. MapStruct cannot express "this mapper is one-way" in its type
@@ -593,7 +593,7 @@ public sealed class Telescope<
    * ForwardMapper<UserEntity, UserDto> projector = Telescope.mapperForward(
    *     UserEntity.class, UserDto.class,
    *     to(UserEntity::id, UserDto::id),
-   *     into(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString),
+   *     toOneWay(UserEntity::createdAt, UserDto::createdAtIso, Instant::toString),
    *     constant(UserDto::tenant, "production"));
    *
    * UserDto dto = projector.forward(entity);
@@ -926,8 +926,7 @@ public sealed class Telescope<
    * {@code Lens.then(Iso)} composition — which routes reads and writes through separate legs and
    * never round-trips a single value through both — but future contributors must not assume this is
    * a lawful Iso in isolation. The same caveat applies to {@link #before(Function)}, {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#toOneWay Mapping.toOneWay}, and {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#toOrElse Mapping.toOrElse}.
+   * Mapping#toOneWay Mapping.toOneWay}, and {@link Mapping#toOrElse Mapping.toOrElse}.
    *
    * <pre>{@code
    * Telescope.of(User.class).field(User::email).after(String::trim)
