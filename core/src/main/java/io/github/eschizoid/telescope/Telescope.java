@@ -771,7 +771,12 @@ public sealed class Telescope<
    * processor — it generates a typed {@code <X>Telescope<R>} navigator at build time.
    */
   public <B> Telescope<S, B> fieldByName(final String fieldName) {
-    final Lens<A, B> fieldLens = Records.fieldLens(fieldName);
+    // Dispatch on the carried fieldOptics — the same discriminator that .field(Accessor) uses.
+    // A Telescope built via `ofBean(...)` carries BeanFieldOptics; everything else carries
+    // RecordFieldOptics. Without this dispatch, fieldByName on a bean Telescope would build a
+    // Records.fieldLens that fails at call time because the focus type isn't a record.
+    final Lens<A, B> fieldLens =
+      fieldOptics == BeanFieldOptics.INSTANCE ? Beans.fieldLens(fieldName) : Records.fieldLens(fieldName);
     return new Telescope<>(optic.then(fieldLens), fieldOptics, chain);
   }
 

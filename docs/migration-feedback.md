@@ -448,7 +448,78 @@ Or wrap the `BiConsumer` to null-guard at the individual setter level.
 
 ---
 
-## Enhancement Requests
+### 9. `forward(null)` / `backward(null)` NPEs instead of returning null
+
+**Severity:** P1 — every adopter wiring a nullable upstream (REST controller pulling a possibly-null JSON body,
+Hibernate query returning `null` for a missing row, etc.) hits this on day one.
+
+**Reproduction:**
+
+```java
+final var mapper = Telescope.mapper(Order.class, OrderDto.class);
+
+final OrderDto dto = mapper.forward(null); // NPE in iso.to(null)
+```
+
+`Mapper.forward(A)` and `ForwardMapper.forward(A)` both call into `iso.to(...)` / `forward.get(...)` without
+short-circuiting on a null input. MapStruct's generated mappers always emit a top-of-method
+`if (source == null) return null;` — adopters expect the same.
+
+**Expected:** Null in, null out. Matches MapStruct's `@Mapping` default and the JPA "no row" idiom.
+
+**File to fix:** `core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java` (forward + backward) and
+`core/src/main/java/io/github/eschizoid/telescope/conversion/ForwardMapper.java` (forward).
+
+---
+
+### 10. `Telescope.fieldByName(String)` uses `Records.fieldLens()` unconditionally — broken for POJOs
+
+**Severity:** P1 — `fieldByName` is the documented runtime escape hatch (the README's "config-driven field paths"
+example). It's also the only string-keyed nav method on the public surface. Today it works only on records.
+
+**Reproduction:**
+
+```java
+class Order { private String id; public String getId() { return id; } public void setId(String id) { this.id = id; } }
+final var path = Telescope.ofBean(Order.class).<String>fieldByName("id");
+path.read(new Order()); // RuntimeException — Records.fieldLens probes a record class
+```
+
+**Root cause:** `Telescope.fieldByName(String)` builds a `Records.fieldLens(fieldName)` Lens regardless of whether the
+calling Telescope was constructed via `of(...)` (record) or `ofBean(...)` (POJO). The Telescope already carries a
+`fieldOptics` discriminator (`RecordFieldOptics.INSTANCE` vs `BeanFieldOptics.INSTANCE`) used by `.field(Accessor)` —
+`fieldByName(String)` needs the same dispatch.
+
+**Expected:** `fieldByName(String)` on a bean Telescope routes through a sibling `Beans.fieldLens(String)` that uses
+`readProperty(pojo, name)` for `get` and `autoWriter(pojo.getClass()).construct(...)` for `set` / `modify`. Deferred-
+class lookup mirrors the existing `Records.fieldLens(String)` design (the runtime class is probed at call time, not
+construction time).
+
+**File to fix:**
+
+- `internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java` — add a new `Beans.fieldLens(String)`
+  method modelled on `Records.fieldLens(String)`.
+- `core/src/main/java/io/github/eschizoid/telescope/Telescope.java` — dispatch in `fieldByName(String)` on the carried
+  `fieldOptics`.
+
+**Known caveat (lens-law gap for primitive properties):** the new `Beans.fieldLens(String)` writes through
+`autoWriter(source.getClass())` which routes through `SettersWriter`. `SettersWriter`'s primitive setter is null-guarded
+(Bug 8): if you call `lens.set(bean, null)` on a property whose setter takes a Java primitive (e.g. `int count`), the
+setter call is skipped and the field stays at the JLS default. Reading back yields `0` (auto-boxed), not `null`. This
+means the lens-law `get(set(s, null)) == null` does NOT hold for primitive properties.
+
+```java
+class Order { int count; public int getCount() { return count; } public void setCount(int c) { this.count = c; } }
+final var lens = Telescope.ofBean(Order.class).<Integer>fieldByName("count");
+final var order = new Order(); order.setCount(42);
+final var result = lens.update(order, c -> null);  // set(s, null) via the modify path
+lens.read(result);  // → 0, not null
+```
+
+The cure (drop the SettersWriter null-guard so the primitive setter NPEs on null) is worse than the gap, because it
+reintroduces Bug 8 and breaks the MapStruct-parity contract (`@Mapping` default is null → JLS-default substitution for
+primitive targets). **Workaround:** declare the property as a boxed wrapper (`Integer count` instead of `int count`) if
+your call site depends on a faithful null round-trip.
 
 ### 1. Cross-module `@Bridge` support (MapStruct parity)
 
@@ -655,39 +726,42 @@ covers this for `mapperForward()` too
 
 ---
 
-## Additional Fixes Applied During Migration (not listed as separate bugs)
+## Additional Fixes Applied During Migration (already-fixed in v1.0.1 — recorded for traceability)
 
-| Fix                           | File                                     | Description                                                                                                   |
-| ----------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `forward(null)` returns null  | `core/.../conversion/ForwardMapper.java` | Null input should return null, not NPE                                                                        |
-| `forward(null)` returns null  | `core/.../conversion/Mapper.java`        | Same                                                                                                          |
-| `fieldByName()` bean dispatch | `core/.../Telescope.java`                | `fieldByName()` used `Records.fieldLens()` unconditionally — should dispatch to `Beans.fieldLens()` for POJOs |
-| `Telescope.read()` null-safe  | `core/.../Telescope.java`                | `optic.getAll(source).findFirst()` NPEs on null elements in stream — use `toList().get(0)`                    |
-| `Beans.fieldLens(String)`     | `internal/.../Beans.java`                | New deferred bean lens for `fieldByName()` on POJOs (didn't exist)                                            |
+| Fix                          | File                      | Description                                                                                          |
+| ---------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `Telescope.read()` null-safe | `core/.../Telescope.java` | `optic.getAll(source).findFirst()` NPEs on null elements in a Traversal — now uses a stream iterator |
 
 ---
 
-## Summary
+## Summary — Bugs
 
-| #     | Type                                                            | Impact | Status         |
-| ----- | --------------------------------------------------------------- | ------ | -------------- |
-| Bug 1 | ClassCastException on unresolvable `@Bridge` target             | P1     | Fixed (v1.0.1) |
-| Bug 2 | LambdaIntrospection NPE on `is*` boolean accessors              | P0     | Fixed (v1.0.1) |
-| Bug 3 | No autoboxing between primitive ↔ wrapper types                 | P1     | Fixed (v1.0.1) |
-| Bug 4 | NPE on null intermediate objects in nested paths                | P1     | Fixed (v1.0.1) |
-| Bug 5 | SettersWriter throws on getter-only properties                  | P1     | Fixed (v1.0.1) |
-| Bug 6 | DeepMap strict bijection enforced on nested auto-recursed types | P1     | Fixed (v1.0.1) |
-| Bug 7 | LambdaMetafactory fails on classes extending JDK types          | P1     | Fixed (v1.0.1) |
-| Bug 8 | SettersWriter NPE when valueByName returns null for primitive   | P1     | Fixed (v1.0.1) |
-| 1     | Cross-module `@Bridge` carrier                                  | High   | Enhancement    |
-| 2     | `ForwardMapper.liftList()`                                      | Medium | Enhancement    |
-| 3     | `Telescope.asForwardMapper()`                                   | Low    | Convenience    |
-| 4     | Processor ordering docs + BridgeProcessor deferral              | Medium | Docs + Fix     |
-| 5     | `Map` → POJO factory                                            | Low    | Nice-to-have   |
-| 6     | `@Bridge` lenient mode                                          | High   | Enhancement    |
-| 7     | `Sources.byClass()` generics                                    | Low    | API polish     |
-| 8     | `Mapping.forward()` naming                                      | Low    | Bikeshed       |
-| 9     | `mapperForward()` lenient by default                            | High   | Enhancement    |
+| #      | Description                                                      | Severity | Status         |
+| ------ | ---------------------------------------------------------------- | -------- | -------------- |
+| Bug 1  | ClassCastException on unresolvable `@Bridge` target              | P1       | Fixed (v1.0.1) |
+| Bug 2  | LambdaIntrospection NPE on `is*` boolean accessors               | P0       | Fixed (v1.0.1) |
+| Bug 3  | No autoboxing between primitive ↔ wrapper types                  | P1       | Fixed (v1.0.1) |
+| Bug 4  | NPE on null intermediate objects in nested paths                 | P1       | Fixed (v1.0.1) |
+| Bug 5  | SettersWriter throws on getter-only properties                   | P1       | Fixed (v1.0.1) |
+| Bug 6  | DeepMap strict bijection enforced on nested auto-recursed types  | P1       | Fixed (v1.0.1) |
+| Bug 7  | LambdaMetafactory fails on classes extending JDK types           | P1       | Fixed (v1.0.1) |
+| Bug 8  | SettersWriter NPE when valueByName returns null for primitive    | P1       | Fixed (v1.0.1) |
+| Bug 9  | `forward(null)` / `backward(null)` NPE instead of returning null | P1       | Fixed (v1.0.1) |
+| Bug 10 | `fieldByName(String)` uses `Records.fieldLens()` for POJOs too   | P1       | Fixed (v1.0.1) |
+
+## Summary — Enhancements
+
+| #     | Description                                        | Priority | Status       |
+| ----- | -------------------------------------------------- | -------- | ------------ |
+| Enh 1 | Cross-module `@Bridge` carrier                     | High     | Open (v1.1+) |
+| Enh 2 | `ForwardMapper.liftList()`                         | Medium   | Open (v1.1+) |
+| Enh 3 | `Telescope.asForwardMapper()`                      | Low      | Open (v1.1+) |
+| Enh 4 | Processor ordering docs + BridgeProcessor deferral | Medium   | Open (v1.1+) |
+| Enh 5 | `Map` → POJO factory                               | Low      | Open (v1.1+) |
+| Enh 6 | `@Bridge` lenient mode                             | High     | Open (v1.1+) |
+| Enh 7 | `Sources.byClass()` generics                       | Low      | Open (v1.1+) |
+| Enh 8 | `Mapping.forward()` naming                         | Low      | Open (v1.1+) |
+| Enh 9 | `mapperForward()` lenient by default               | High     | Open (v1.1+) |
 
 ---
 

@@ -24,8 +24,8 @@ import org.junit.jupiter.api.Test;
 class MigrationRegressionTest {
 
   @Nested
-  @DisplayName("Bug 2 — boolean accessor NPE (P0 blocker)")
-  class Bug2BooleanAccessorNpe {
+  @DisplayName("Boolean accessor — mapper construction is null-safe through Beans.propertyOf")
+  class BooleanAccessorNpe {
 
     public static class Order {
 
@@ -137,7 +137,7 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("Mapping.to(srcTelescope, tgtAccessor) — nested source path — does not NPE at mapper construction")
     void nestedSourceTelescopeRowConstructsWithoutNpe() {
-      // The actual reproduction of Bug 2's reported NPE: `Mapping.to(srcTelescope, tgtAccessor)`
+      // Reproduces the reported NPE: `Mapping.to(srcTelescope, tgtAccessor)`
       // builds a FromTelescopeTo row whose `sourceField()` is null by design (the source is a
       // nested telescope, not a flat accessor). DeepMap.populateIso normalizes the source field
       // unconditionally before the FromTelescopeTo `instanceof` peel, so `Beans.normalize(null)`
@@ -157,8 +157,8 @@ class MigrationRegressionTest {
   }
 
   @Nested
-  @DisplayName("Bug 4 — NPE on null intermediate objects in nested telescope paths")
-  class Bug4NullIntermediateNpe {
+  @DisplayName("Null intermediate — multi-hop bean paths short-circuit instead of NPE")
+  class NullIntermediateNpe {
 
     public static class Order {
 
@@ -243,8 +243,8 @@ class MigrationRegressionTest {
   }
 
   @Nested
-  @DisplayName("Bug 6 — DeepMap strict bijection on nested auto-recursed types")
-  class Bug6NestedStrictBijection {
+  @DisplayName("Nested asymmetric pairs are lenient; top-level strictness preserved")
+  class NestedStrictBijection {
 
     public static class ScoreResponse {
 
@@ -360,8 +360,8 @@ class MigrationRegressionTest {
   }
 
   @Nested
-  @DisplayName("Bug 3 — primitive ↔ wrapper autoboxing")
-  class Bug3PrimitiveWrapperAutoboxing {
+  @DisplayName("Primitive ↔ wrapper auto-iso with JLS-default null guard")
+  class PrimitiveWrapperAutoboxing {
 
     public static class Source {
 
@@ -609,8 +609,8 @@ class MigrationRegressionTest {
   }
 
   @Nested
-  @DisplayName("Bug 7 — LMF fails on classes extending JDK collection types")
-  class Bug7JdkCollectionSubtypes {
+  @DisplayName("JDK collection subtypes — auto-iso copies elements instead of bean-recursing")
+  class JdkCollectionSubtypes {
 
     public static class ImageUrl {
 
@@ -872,14 +872,14 @@ class MigrationRegressionTest {
   }
 
   @Nested
-  @DisplayName("Bug 8 — SettersWriter NPE on null primitive value")
-  class Bug8PrimitiveSetterNullNpe {
+  @DisplayName("Primitive setter null-guard — null value substitutes the JLS default")
+  class PrimitiveSetterNullNpe {
 
     public static class Source {
 
       private String name;
 
-      // No `count` property — after Bug 6 lenient nested mode, valueByName returns null for the
+      // No `count` property — under nested-pair lenient mode, valueByName returns null for the
       // target's `count` field.
 
       public String getName() {
@@ -942,7 +942,8 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("forward(top) where nested target has primitive setter for an unmatched field uses JLS default")
     void primitiveSetterReceivesJlsDefaultOnNullValue() {
-      // After Bug 6 + Bug 5 fixes, a nested target property like `int count` whose source has
+      // With nested-leniency + getter-only silent-skip, a nested target property like `int count`
+      // whose source has
       // no matching `count` field receives `null` from valueByName. SettersWriter.construct used
       // to NPE when passing that null to `setCount(int)` (Integer-to-int unboxing on null).
       // Fix: null-guard primitive setters at construction time so primitives stay at their JLS
@@ -1046,11 +1047,11 @@ class MigrationRegressionTest {
   }
 
   @Nested
-  @DisplayName("Bug 5 — SettersWriter throws on getter-only properties")
-  class Bug5GetterOnlyProperties {
+  @DisplayName("Getter-only target properties — SettersWriter silently skips instead of throwing")
+  class GetterOnlyProperties {
 
     // Both Source and OrderResponse have a `processed` property so DeepMap's same-name bijection
-    // check (Bug 6) passes — we want to isolate Bug 5 (SettersWriter on the getter-only target).
+    // strict-bijection check passes — we want to isolate the SettersWriter getter-only path.
     public static class Source {
 
       private String name;
@@ -1113,6 +1114,193 @@ class MigrationRegressionTest {
       // The `processed` source value was discarded — target's getter-only field stays at the
       // primitive default. MapStruct would do the same.
       assertEquals(false, tgt.isProcessed());
+    }
+  }
+
+  @Nested
+  @DisplayName("Mapper.forward(null) / backward(null) returns null instead of NPE")
+  class MapperNullSafe {
+
+    record SrcRec(String id, String name) {}
+
+    record TgtRec(String id, String name) {}
+
+    public static class SrcBean {
+
+      private String id;
+      private String name;
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+    }
+
+    public static class TgtBean {
+
+      private String id;
+      private String name;
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+    }
+
+    @Test
+    @DisplayName("Mapper.forward(null) returns null (records)")
+    void mapperForwardNullReturnsNullRecords() {
+      final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class);
+      assertEquals(null, mapper.forward(null));
+    }
+
+    @Test
+    @DisplayName("Mapper.backward(null) returns null (records)")
+    void mapperBackwardNullReturnsNullRecords() {
+      final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class);
+      assertEquals(null, mapper.backward(null));
+    }
+
+    @Test
+    @DisplayName("Mapper.forward(null) returns null (beans)")
+    void mapperForwardNullReturnsNullBeans() {
+      final var mapper = Telescope.mapper(SrcBean.class, TgtBean.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      assertEquals(null, mapper.forward(null));
+    }
+
+    @Test
+    @DisplayName("Mapper.forward(non-null) still threads through hooks")
+    void hooksStillFireOnNonNullInput() {
+      final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class).afterForward(t ->
+        new TgtRec(t.id() + "-X", t.name())
+      );
+      final var src = new SrcRec("o1", "alice");
+      assertEquals("o1-X", mapper.forward(src).id());
+    }
+
+    @Test
+    @DisplayName("ForwardMapper.forward(null) returns null")
+    void forwardMapperNullReturnsNull() {
+      final var mapper = io.github.eschizoid.telescope.conversion.ForwardMapper.create(
+        (SrcRec s) -> new TgtRec(s.id(), s.name()),
+        SrcRec.class,
+        TgtRec.class
+      );
+      assertEquals(null, mapper.forward(null));
+    }
+
+    @Test
+    @DisplayName("ForwardMapper.read(null) returns null — read is documented as an alias of forward")
+    void forwardMapperReadNullReturnsNull() {
+      final var mapper = io.github.eschizoid.telescope.conversion.ForwardMapper.create(
+        (SrcRec s) -> new TgtRec(s.id(), s.name()),
+        SrcRec.class,
+        TgtRec.class
+      );
+      assertEquals(null, mapper.read(null));
+      // Non-null parity: read and forward must produce the same output, otherwise a future
+      // refactor that breaks the alias contract slips through unnoticed.
+      final var src = new SrcRec("o1", "alice");
+      assertEquals(mapper.forward(src), mapper.read(src));
+    }
+
+    @Test
+    @DisplayName("Mapper.forward — preForward returning null propagates as null (no NPE in iso.to)")
+    void preForwardReturningNullPropagatesAsNull() {
+      // A normalisation hook that maps a sentinel (empty id) to null must not crash the mapper.
+      final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class).beforeForward(s -> s.id().isEmpty() ? null : s);
+      assertEquals(null, mapper.forward(new SrcRec("", "alice")));
+    }
+
+    @Test
+    @DisplayName("Mapper.backward — preBackward returning null propagates as null (no NPE in iso.from)")
+    void preBackwardReturningNullPropagatesAsNull() {
+      // Symmetric pin for the backward path: without this, a future revert of the backward guard
+      // goes unnoticed because no other test exercises preBackward returning null.
+      final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class).beforeBackward(t -> t.id().isEmpty() ? null : t);
+      assertEquals(null, mapper.backward(new TgtRec("", "alice")));
+    }
+  }
+
+  @Nested
+  @DisplayName("Telescope.fieldByName(String) on a bean Telescope routes through Beans.fieldLens")
+  class FieldByNameBeanDispatch {
+
+    public static class Order {
+
+      private String id;
+      private String customerName;
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+
+      public String getCustomerName() {
+        return customerName;
+      }
+
+      public void setCustomerName(final String customerName) {
+        this.customerName = customerName;
+      }
+    }
+
+    @Test
+    @DisplayName("Telescope.ofBean(Order).fieldByName(\"id\").read(order) returns the property value")
+    void fieldByNameReadsBeanProperty() {
+      final var src = new Order();
+      src.setId("o-42");
+      src.setCustomerName("alice");
+      final var path = Telescope.ofBean(Order.class).<String>fieldByName("id");
+      assertEquals("o-42", path.read(src));
+    }
+
+    @Test
+    @DisplayName("Telescope.ofBean(Order).fieldByName(\"customerName\").update(order, fn) rebuilds via the auto-writer")
+    void fieldByNameUpdatesBeanPropertyViaAutoWriter() {
+      final var src = new Order();
+      src.setId("o-1");
+      src.setCustomerName("alice");
+      final var updated = Telescope.ofBean(Order.class)
+        .<String>fieldByName("customerName")
+        .update(src, String::toUpperCase);
+      assertEquals("ALICE", updated.getCustomerName());
+      // Off-path id is carried over via readProperty during the rebuild.
+      assertEquals("o-1", updated.getId());
+    }
+
+    record User(String name, int age) {}
+
+    @Test
+    @DisplayName("Records still dispatch through Records.fieldLens — backward-compat smoke")
+    void fieldByNameOnRecordStillWorks() {
+      final var src = new User("bob", 30);
+      assertEquals("bob", Telescope.of(User.class).<String>fieldByName("name").read(src));
     }
   }
 }
