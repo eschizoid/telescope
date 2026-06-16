@@ -468,30 +468,27 @@ class MigrationRegressionTest {
     }
 
     @Test
-    @DisplayName("auto-recursion through different Collection subtypes refuses to bean-decompose either side")
-    void differentCollectionSubtypesRefuseBeanRecursion() {
-      // With ImageUrls (source) vs ImageUrlsAlt (target), the same-type shortcut at
-      // autoIso line 803 doesn't fire. Without the isReflectable fix, the bean-recursion
-      // branch would try to scan getters on ImageUrls/ImageUrlsAlt, hit inherited
-      // ArrayList.isEmpty(), and LMF-fail. With the fix, both are non-reflectable so the
-      // pair falls out of the bean branch.
-      //
-      // Construction may legitimately fail later (different concrete types can't auto-map
-      // structurally), but it should NOT fail with an LMF-binding error against
-      // java.util.ArrayList. We assert the absence of that specific failure.
-      try {
-        Telescope.mapper(DocumentDataAlt.class, DocumentDataDtoAlt.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
-      } catch (final Throwable t) {
-        // Drill the cause chain — surface the LMF binding failure if it sneaks through.
-        Throwable c = t;
-        while (c != null) {
-          final var msg = c.getMessage();
-          if (msg != null && msg.contains("java.util.ArrayList")) {
-            throw new AssertionError("LMF binding tried to use ArrayList as caller: " + msg, t);
-          }
-          c = c.getCause();
-        }
-      }
+    @DisplayName("cross-Collection-subtype field copies elements via target's no-arg ctor + addAll")
+    void differentCollectionSubtypesAreCopiedViaAddAll() {
+      // ImageUrls vs ImageUrlsAlt — both extend ArrayList<ImageUrl>. The same-type shortcut at
+      // autoIso doesn't fire (different concrete classes). The fix routes this through
+      // `collectionCopyIso`: instantiate the target type via its no-arg ctor and addAll(source).
+      // End-to-end the mapper produces an ImageUrlsAlt instance carrying the source's elements.
+      final var mapper = Telescope.mapper(
+        DocumentDataAlt.class,
+        DocumentDataDtoAlt.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var urls = new ImageUrls();
+      final var u = new ImageUrl();
+      u.setUrl("https://example.com/a.png");
+      urls.add(u);
+      final var src = new DocumentDataAlt();
+      src.setImageUrls(urls);
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(ImageUrlsAlt.class, tgt.getImageUrls().getClass());
+      assertEquals(1, tgt.getImageUrls().size());
+      assertEquals("https://example.com/a.png", tgt.getImageUrls().get(0).getUrl());
     }
   }
 

@@ -829,6 +829,24 @@ public final class DeepMap {
     // (a) Same generic type → identity Iso.
     if (srcType.equals(tgtType)) return Iso.identity();
 
+    // (a.2) Collection / Map subtype pair (Bug 7). Common in legacy bean codebases: `class
+    //       ImageUrls extends ArrayList<ImageUrl>` and `class ImageUrlsBO extends
+    // ArrayList<ImageUrl>`
+    //       on opposite sides. Neither is identity (different concrete classes), neither is a
+    //       parameterised raw `List` / `Map` (so ContainerShape skips them), and trying to bean-
+    //       decompose would hit `MethodHandles.privateLookupIn(ArrayList.class)` rejection. Copy
+    //       elements via the target's no-arg constructor + `addAll` / `putAll`.
+    if (srcType instanceof Class<?> srcCC && tgtType instanceof Class<?> tgtCC) {
+      if (Collection.class.isAssignableFrom(srcCC) && Collection.class.isAssignableFrom(tgtCC)) {
+        final var iso = collectionCopyIso(srcCC, tgtCC);
+        if (iso != null) return iso;
+      }
+      if (Map.class.isAssignableFrom(srcCC) && Map.class.isAssignableFrom(tgtCC)) {
+        final var iso = mapCopyIso(srcCC, tgtCC);
+        if (iso != null) return iso;
+      }
+    }
+
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
     if (srcType instanceof Class<?> srcCls && tgtType instanceof Class<?> tgtCls) {
       if (isReflectable(srcCls) && isReflectable(tgtCls)) {
@@ -1076,6 +1094,76 @@ public final class DeepMap {
     return refl == Reflective.RECORDS ? "field" : "property";
   }
 
+  /**
+   * Bug 7 — Collection ↔ Collection element-copy Iso. The forward instantiates the target
+   * collection via its public no-arg constructor and {@code addAll}'s the source; backward is
+   * symmetric. Returns {@code null} when either side lacks a callable no-arg constructor, letting
+   * the caller fall through to the next branch (typically the shape-mismatch IAE).
+   *
+   * <p>No element-type recursion: this branch fires on raw, non-parameterised subtypes (e.g. {@code
+   * class ImageUrls extends ArrayList<ImageUrl>}), where the raw class itself carries no runtime
+   * generic info. Users whose element types differ across sides should declare an explicit row.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Iso<?, ?> collectionCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
+    if (!hasPublicNoArgCtor(srcCls) || !hasPublicNoArgCtor(tgtCls)) return null;
+    return Iso.of(
+      src -> {
+        if (src == null) return null;
+        final var fresh = (Collection) newInstance(tgtCls);
+        fresh.addAll((Collection<?>) src);
+        return fresh;
+      },
+      tgt -> {
+        if (tgt == null) return null;
+        final var fresh = (Collection) newInstance(srcCls);
+        fresh.addAll((Collection<?>) tgt);
+        return fresh;
+      }
+    );
+  }
+
+  /**
+   * Bug 7 — Map ↔ Map element-copy Iso. Mirror of {@link #collectionCopyIso} via {@code putAll}.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Iso<?, ?> mapCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
+    if (!hasPublicNoArgCtor(srcCls) || !hasPublicNoArgCtor(tgtCls)) return null;
+    return Iso.of(
+      src -> {
+        if (src == null) return null;
+        final var fresh = (Map) newInstance(tgtCls);
+        fresh.putAll((Map<?, ?>) src);
+        return fresh;
+      },
+      tgt -> {
+        if (tgt == null) return null;
+        final var fresh = (Map) newInstance(srcCls);
+        fresh.putAll((Map<?, ?>) tgt);
+        return fresh;
+      }
+    );
+  }
+
+  private static boolean hasPublicNoArgCtor(final Class<?> cls) {
+    if (cls.isInterface()) return false;
+    if (java.lang.reflect.Modifier.isAbstract(cls.getModifiers())) return false;
+    try {
+      cls.getConstructor();
+      return true;
+    } catch (final NoSuchMethodException e) {
+      return false;
+    }
+  }
+
+  private static Object newInstance(final Class<?> cls) {
+    try {
+      return cls.getConstructor().newInstance();
+    } catch (final ReflectiveOperationException e) {
+      throw new IllegalStateException("Failed to instantiate " + cls.getName() + " via no-arg constructor", e);
+    }
+  }
+
   /** A record or any non-scalar class — anything Reflective can drive. */
   private static boolean isReflectable(final Class<?> cls) {
     if (cls.isRecord()) return true;
@@ -1089,14 +1177,6 @@ public final class DeepMap {
     if (Number.class.isAssignableFrom(cls)) return false;
     if (cls == Boolean.class || cls == Character.class) return false;
     if (Temporal.class.isAssignableFrom(cls)) return false;
-    // Bug 7: classes that extend JDK Collection / Map (raw or generic subtypes) must NOT be
-    // bean-decomposed. Their inherited platform-module methods would be discovered as "getters"
-    // and the LMF binder would then fail with "Invalid caller: java.util.ArrayList" because
-    // java.base modules don't grant private lookup to application code. The container Iso path
-    // already handles concrete List / Set / Map / Optional via the ContainerShape detector; here
-    // we just stop subtypes from falling through to bean-recursion.
-    if (Collection.class.isAssignableFrom(cls)) return false;
-    if (Map.class.isAssignableFrom(cls)) return false;
     return !UUID.class.isAssignableFrom(cls);
   }
 
