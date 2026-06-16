@@ -43,7 +43,25 @@ java {
 tasks.withType<JavaCompile>().configureEach {
     options.release = 17
     options.encoding = "UTF-8"
-    options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-parameters"))
+    // --add-reads lets the strict module-info.java import from quarkus-arc + smallrye-config —
+    // both ship neither module-info.class nor Automatic-Module-Name, so without this the strict
+    // compile fails with `package io.quarkus.arc is not visible`. Compile-time only; consumers
+    // see a clean `requires io.github.eschizoid.telescope.quarkus;` surface.
+    options.compilerArgs.addAll(
+        listOf(
+            "-Xlint:all,-processing",
+            "-parameters",
+            "--add-reads",
+            "io.github.eschizoid.telescope.quarkus=ALL-UNNAMED",
+        ),
+    )
+}
+
+tasks.javadoc {
+    (options as StandardJavadocDocletOptions).addStringOption(
+        "-add-reads",
+        "io.github.eschizoid.telescope.quarkus=ALL-UNNAMED",
+    )
 }
 
 // Telescope-quarkus is consumable as a JPMS module via Automatic-Module-Name: downstream modules
