@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -544,6 +545,16 @@ class BeansTest {
       assertEquals("active", Beans.propertyOf("isActive"));
       assertEquals("name", Beans.propertyOf("name")); // no prefix → returned as-is
       assertEquals("URL", Beans.propertyOf("getURL")); // two-caps rule preserved
+    }
+
+    @Test
+    @DisplayName("propertyOf(null) returns null instead of throwing NPE")
+    void propertyOfNullIsNullSafe() {
+      // Belt-and-suspenders guard. The structural fix for Bug 2 lives in DeepMap.populateIso —
+      // the row-loop now peels nested-telescope sub-shapes (FromTelescopeTo / TelescopeToTelescope
+      // whose sourceField() returns null by design) before normalising. This guard ensures the
+      // public Beans surface stays null-safe in case any future caller forgets to peel.
+      assertNull(Beans.propertyOf(null));
     }
 
     @Test

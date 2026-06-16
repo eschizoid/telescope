@@ -617,9 +617,17 @@ public final class Beans {
 
   /**
    * The property name behind a getter method name: {@code getCity} &rarr; {@code city}, {@code
-   * isActive} &rarr; {@code active}. A name without a recognized prefix is returned unchanged.
+   * isActive} &rarr; {@code active}. A name without a recognized prefix is returned unchanged. A
+   * {@code null} input returns {@code null} — belt-and-suspenders against callers that read a row's
+   * source/target field name from a sealed {@code Mapping} variant whose nested-telescope
+   * sub-shapes return {@code null} for that field by design (e.g. {@code FromTelescopeTo
+   * .sourceField()} returns {@code null} because the source is a nested telescope rather than a
+   * flat accessor). The structural fix lives at the {@code DeepMap.populateIso} call site that
+   * peels those sub-shapes before normalising; this guard prevents the public {@code
+   * Beans.normalize}/{@code propertyOf} surface from NPE-ing if any future caller forgets to peel.
    */
   public static String propertyOf(final String getterName) {
+    if (getterName == null) return null;
     if (getterName.length() > 3 && getterName.startsWith("get")) return decapitalize(getterName.substring(3));
     if (getterName.length() > 2 && getterName.startsWith("is")) return decapitalize(getterName.substring(2));
     return getterName;
