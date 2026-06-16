@@ -1,5 +1,12 @@
 package io.github.eschizoid.telescope.internal.optics;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -37,5 +44,58 @@ public interface Getter<S, A> extends Fold<S, A> {
    */
   default <B> Getter<S, B> then(final Getter<A, B> next) {
     return s -> next.get(get(s));
+  }
+
+  /**
+   * Lift an element-level {@code Getter<X, Y>} into a {@code List}-level {@code Getter<List<X>,
+   * List<Y>>}. Element-wise read via the element Getter. {@code null} lists round-trip to {@code
+   * null} (mirrors the convention of {@link Iso#liftList}). Forward-only counterpart of {@link
+   * Iso#liftList} — used by {@code ForwardMapper#liftList} in the {@code conversion} package.
+   */
+  static <X, Y> Getter<List<X>, List<Y>> liftList(final Getter<X, Y> element) {
+    return xs -> {
+      if (xs == null) return null;
+      final var out = new ArrayList<Y>(xs.size());
+      for (final var x : xs) out.add(element.get(x));
+      return out;
+    };
+  }
+
+  /**
+   * Lift an element-level {@code Getter<X, Y>} into a {@code Set}-level {@code Getter<Set<X>,
+   * Set<Y>>}. Element-wise read into a fresh {@link LinkedHashSet} (preserves forward-pass
+   * iteration order). {@code null} sets round-trip to {@code null}.
+   */
+  static <X, Y> Getter<Set<X>, Set<Y>> liftSet(final Getter<X, Y> element) {
+    return xs -> {
+      if (xs == null) return null;
+      final var out = new LinkedHashSet<Y>(xs.size());
+      for (final var x : xs) out.add(element.get(x));
+      return out;
+    };
+  }
+
+  /**
+   * Lift an element-level {@code Getter<X, Y>} into an {@code Optional}-level {@code
+   * Getter<Optional<X>, Optional<Y>>}. {@code Optional.empty()} maps to {@code Optional.empty()}; a
+   * {@code null} reference (records/beans may legally hold null Optionals) maps to {@code null}.
+   */
+  @SuppressWarnings("OptionalAssignedToNull")
+  static <X, Y> Getter<Optional<X>, Optional<Y>> liftOptional(final Getter<X, Y> element) {
+    return ox -> ox == null ? null : ox.map(element::get);
+  }
+
+  /**
+   * Lift an element-level {@code Getter<X, Y>} into a {@code Map}-values-level {@code Getter<Map<K,
+   * X>, Map<K, Y>>}. Keys are preserved verbatim; only values flow through the element Getter.
+   * {@code null} maps round-trip to {@code null}.
+   */
+  static <K, X, Y> Getter<Map<K, X>, Map<K, Y>> liftMapValues(final Getter<X, Y> element) {
+    return xs -> {
+      if (xs == null) return null;
+      final var out = new LinkedHashMap<K, Y>(xs.size());
+      for (final var e : xs.entrySet()) out.put(e.getKey(), element.get(e.getValue()));
+      return out;
+    };
   }
 }

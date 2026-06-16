@@ -2,6 +2,10 @@ package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.optics.Getter;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -124,6 +128,42 @@ public final class ForwardMapper<A, B> {
     final Getter<A, B> prior = forward;
     final Getter<A, B> wrapped = a -> hook.apply(a, prior.get(a));
     return new ForwardMapper<>(wrapped, sourceClass, targetClass);
+  }
+
+  /**
+   * Lift this element-level forward mapper to a {@code ForwardMapper<List<A>, List<B>>}. Element-
+   * wise forward via the lattice's {@link Getter#liftList(Getter)} primitive. {@code null} lists
+   * round-trip to {@code null}. Forward-only counterpart of {@link Mapper#liftList()}.
+   *
+   * <pre>{@code
+   * ForwardMapper<Entity, Dto> elementToDto = Telescope.mapperForward(Entity.class, Dto.class, ...);
+   * ForwardMapper<List<Entity>, List<Dto>> listToList = elementToDto.liftList();
+   * }</pre>
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public ForwardMapper<List<A>, List<B>> liftList() {
+    return new ForwardMapper<>(Getter.liftList(forward), (Class) List.class, (Class) List.class);
+  }
+
+  /** Same as {@link #liftList()} but produces a {@code ForwardMapper<Set<A>, Set<B>>}. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public ForwardMapper<Set<A>, Set<B>> liftSet() {
+    return new ForwardMapper<>(Getter.liftSet(forward), (Class) Set.class, (Class) Set.class);
+  }
+
+  /** Same as {@link #liftList()} but produces a {@code ForwardMapper<Optional<A>, Optional<B>>}. */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public ForwardMapper<Optional<A>, Optional<B>> liftOptional() {
+    return new ForwardMapper<>(Getter.liftOptional(forward), (Class) Optional.class, (Class) Optional.class);
+  }
+
+  /**
+   * Same as {@link #liftList()} but produces a {@code ForwardMapper<Map<K, A>, Map<K, B>>}. Keys
+   * are preserved; only the values flow through {@link #forward}.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public <K> ForwardMapper<Map<K, A>, Map<K, B>> liftMapValues() {
+    return new ForwardMapper<>(Getter.liftMapValues(forward), (Class) Map.class, (Class) Map.class);
   }
 
   /** The mapper's source class. */
