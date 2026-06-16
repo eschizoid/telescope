@@ -550,11 +550,10 @@ class BeansTest {
     @Test
     @DisplayName("propertyOf(null) returns null instead of throwing NPE")
     void propertyOfNullIsNullSafe() {
-      // Defensive guard for upstream callers (e.g. Telescope.BeanFieldOptics.lensFor() ->
-      // methodNameOf() -> propertyOf()) that may pass a null method-name on auto-discovery
-      // paths. Without this guard, any class with a boolean primitive field whose Lombok-
-      // generated isX() accessor reached propertyOf() through a null intermediate would NPE
-      // at Telescope.mapper(...) construction time.
+      // Belt-and-suspenders guard. The structural fix for Bug 2 lives in DeepMap.populateIso —
+      // the row-loop now peels nested-telescope sub-shapes (FromTelescopeTo / TelescopeToTelescope
+      // whose sourceField() returns null by design) before normalising. This guard ensures the
+      // public Beans surface stays null-safe in case any future caller forgets to peel.
       assertNull(Beans.propertyOf(null));
     }
 

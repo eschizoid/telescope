@@ -64,10 +64,14 @@ Telescope.mapperForward(Order.class, OrderDto.class, writeBeans(SETTERS));
 NullPointerException: Cannot invoke "String.length()" because "getterName" is null
 ```
 
-**Root cause:** During DeepMap's auto-property-discovery, a code path calls `Beans.propertyOf(null)`. The null
-originates from somewhere in the `Telescope.BeanFieldOptics.lensFor()` → `methodNameOf()` → `Beans.propertyOf()` chain.
-`Beans.scanGetters()` itself handles `is*` correctly (line 584-589), but `propertyOf()` receives null from an upstream
-caller when boolean accessors are encountered during the mapping resolution phase.
+**Root cause (corrected after investigation):** The migration's "boolean accessor" attribution is a red herring —
+`LambdaIntrospection.methodNameOf` cannot return null (it either returns the method name or throws). The actual trigger
+is `DeepMap.populateIso` calling `srcRefl.normalize(row.sourceField())` unconditionally **before** the `instanceof` peel
+that handles nested-telescope row shapes (`FromTelescopeTo`, `TelescopeToTelescope`) whose `sourceField()` returns
+`null` by design. On a bean source side that `null` flows through `Beans.normalize` → `Beans.propertyOf(null)` and NPEs.
+
+The fix is at the `DeepMap.populateIso` call site: peel the telescope sub-shapes before normalising, or guard the
+normalize call with a null check. The defensive guard at `Beans.propertyOf` is kept as belt-and-suspenders.
 
 **Workaround:** Add a null guard at the top of `Beans.propertyOf()`:
 

@@ -86,5 +86,65 @@ class MigrationRegressionTest {
       assertEquals(true, tgt.isShipped());
       assertEquals("alice", tgt.getName());
     }
+
+    public static class OrderWithCustomer {
+
+      private Customer customer;
+
+      public Customer getCustomer() {
+        return customer;
+      }
+
+      public void setCustomer(final Customer customer) {
+        this.customer = customer;
+      }
+    }
+
+    public static class Customer {
+
+      private String email;
+
+      public String getEmail() {
+        return email;
+      }
+
+      public void setEmail(final String email) {
+        this.email = email;
+      }
+    }
+
+    public static class FlatOrderDto {
+
+      private String customerEmail;
+
+      public String getCustomerEmail() {
+        return customerEmail;
+      }
+
+      public void setCustomerEmail(final String customerEmail) {
+        this.customerEmail = customerEmail;
+      }
+    }
+
+    @Test
+    @DisplayName("Mapping.to(srcTelescope, tgtAccessor) — nested source path — does not NPE at mapper construction")
+    void nestedSourceTelescopeRowConstructsWithoutNpe() {
+      // The actual reproduction of Bug 2's reported NPE: `Mapping.to(srcTelescope, tgtAccessor)`
+      // builds a FromTelescopeTo row whose `sourceField()` is null by design (the source is a
+      // nested telescope, not a flat accessor). DeepMap.populateIso normalizes the source field
+      // unconditionally before the FromTelescopeTo `instanceof` peel, so `Beans.normalize(null)`
+      // → `Beans.propertyOf(null)` would NPE without the defensive guard.
+      assertDoesNotThrow(() ->
+        Telescope.mapper(
+          OrderWithCustomer.class,
+          FlatOrderDto.class,
+          io.github.eschizoid.telescope.mapping.Mapping.to(
+            Telescope.ofBean(OrderWithCustomer.class).field(OrderWithCustomer::getCustomer).field(Customer::getEmail),
+            FlatOrderDto::getCustomerEmail
+          ),
+          writeBeans(WriteHint.WriteStrategy.SETTERS)
+        )
+      );
+    }
   }
 }

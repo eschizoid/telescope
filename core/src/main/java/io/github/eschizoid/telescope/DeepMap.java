@@ -343,8 +343,11 @@ public final class DeepMap {
       // applyForward can evaluate the predicate before dispatching the inner's effect.
       final Mapping<?, ?> row = (rawRow instanceof Conditional<?, ?> c) ? c.inner() : rawRow;
       // Normalize raw method names per side — record::name stays "name", bean::getName becomes
-      // "name".
-      final var srcField = srcRefl.normalize(row.sourceField());
+      // "name". `sourceField()` returns null on rows whose source is a nested telescope rather
+      // than a flat accessor (FromTelescopeTo, TelescopeToTelescope); those branches re-read the
+      // first hop name from the telescope below and don't consume srcField, so null here is safe.
+      final var rawSrcField = row.sourceField();
+      final var srcField = rawSrcField == null ? null : srcRefl.normalize(rawSrcField);
       // TelescopeTo: flat source accessor → nested target telescope.
       // Soft claim on the source field (from srcAcc) AND the target telescope's first hop name.
       // Multiple rows sharing the same source field or top-level target field all compose.
