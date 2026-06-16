@@ -46,6 +46,16 @@ import javax.lang.model.util.ElementFilter;
  *
  * <p>Guards (each a compile error): the source must be a top-level record/class; the target must be
  * a top-level record/class; and the two must expose the same field names with a usable strategy.
+ *
+ * <p><b>Round-deferred emission for Lombok-annotated targets.</b> Lombok installs lazy AST visitors
+ * during processor init that patch class declarations on traversal. Those visitors may not have
+ * fired by round 1, so a processor that queries {@link
+ * javax.lang.model.util.Elements#getAllMembers} for a {@code @Data} class in round 1 may see the
+ * un-patched member list (no getters / setters / builder). When this processor detects that the
+ * source or target of a {@code @Bridge} pair carries any Lombok-synthesizing annotation (see {@link
+ * AbstractTelescopeProcessor#LOMBOK_SYNTHESIZING_ANNOTATIONS}), the pair is held back and emitted
+ * only when {@link RoundEnvironment#processingOver} is true — by then Lombok is guaranteed done
+ * patching. Pure record/POJO bridges keep the round-1 fast path with zero behavioural change.
  */
 @SupportedAnnotationTypes(
   { "io.github.eschizoid.telescope.annotations.Bridge", "io.github.eschizoid.telescope.annotations.Bridges" }
@@ -125,6 +135,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // *ByPair fields whose individual clear() calls were a maintenance hazard (forgetting one on a
   // new attribute = cross-round stale state).
   private final Map<TypePair, BridgeConfig> configsByPair = new HashMap<>();
+
+  // Pairs whose source or target carries a Lombok-synthesizing annotation. Their emission waits
+  // until processingOver() so Lombok's lazy AST patches have all fired. Their configs are held
+  // separately because configsByPair gets reset every round; deferredConfigs survives until the
+  // final drain.
+  private final Set<TypePair> deferredPairs = new LinkedHashSet<>();
+  private final Map<TypePair, BridgeConfig> deferredConfigs = new HashMap<>();
 
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
@@ -206,34 +223,61 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var writeStrategy = (rawWriteStrategy == null || "AUTO".equals(rawWriteStrategy))
           ? "AUTO"
           : rawWriteStrategy;
-        configsByPair.put(
-          pair,
-          new BridgeConfig(
-            drops,
-            renameSet.bySource(),
-            renameSet.fanoutExtras(),
-            transformSet.byField(),
-            transformSet.forwardOnlyFields(),
-            rawDefaults,
-            viaMappers,
-            writeStrategy,
-            constants,
-            computes,
-            transformSet.methodsByField()
-          )
+        final var builtConfig = new BridgeConfig(
+          drops,
+          renameSet.bySource(),
+          renameSet.fanoutExtras(),
+          transformSet.byField(),
+          transformSet.forwardOnlyFields(),
+          rawDefaults,
+          viaMappers,
+          writeStrategy,
+          constants,
+          computes,
+          transformSet.methodsByField()
         );
-        if (seen.add(pair)) pending.add(pair);
+        // Defer when source OR target carries a Lombok-synthesizing annotation: Lombok's lazy AST
+        // patches may not have fired yet, so member lookups via Elements.getAllMembers would return
+        // the un-patched view. processingOver() guarantees Lombok is done patching.
+        final var requiresDeferral =
+          !roundEnv.processingOver() && (carriesLombokTrigger(element) || carriesLombokTrigger(targetEl));
+        if (requiresDeferral) {
+          deferredPairs.add(pair);
+          deferredConfigs.put(pair, builtConfig);
+        } else {
+          configsByPair.put(pair, builtConfig);
+          if (seen.add(pair)) pending.add(pair);
+        }
       }
     }
-    // Drain the queue, generating bridges. Each generate(...) call may discover sub-pairs and add
-    // them to `pending` for recursive emission. The `seen` set guards against re-emission (cycle
-    // safety + multiple parent bridges sharing the same sub-pair).
+    // Drain the eager queue, generating bridges for pure record/POJO pairs. Each generate(...) call
+    // may discover sub-pairs and add them to `pending` for recursive emission. The `seen` set
+    // guards against re-emission (cycle safety + multiple parent bridges sharing the same
+    // sub-pair).
     while (!pending.isEmpty()) {
       final var pair = pending.poll();
       final var sourceEl = processingEnv.getElementUtils().getTypeElement(pair.sourceFq());
       final var targetEl = processingEnv.getElementUtils().getTypeElement(pair.targetFq());
       if (sourceEl == null || targetEl == null) continue;
       generate(sourceEl, targetEl, pending, seen, userDeclared);
+    }
+    // Drain deferred pairs on the final round — Lombok's AST patches are guaranteed to have fired
+    // by now. Merge the held configs into configsByPair so generate(...) can find them via the
+    // existing lookup path.
+    if (roundEnv.processingOver() && !deferredPairs.isEmpty()) {
+      configsByPair.putAll(deferredConfigs);
+      final Deque<TypePair> deferredPending = new ArrayDeque<>(deferredPairs);
+      final Set<TypePair> deferredSeen = new HashSet<>(deferredPairs);
+      final Set<TypePair> deferredUserDeclared = new HashSet<>(deferredPairs);
+      while (!deferredPending.isEmpty()) {
+        final var pair = deferredPending.poll();
+        final var sourceEl = processingEnv.getElementUtils().getTypeElement(pair.sourceFq());
+        final var targetEl = processingEnv.getElementUtils().getTypeElement(pair.targetFq());
+        if (sourceEl == null || targetEl == null) continue;
+        generate(sourceEl, targetEl, deferredPending, deferredSeen, deferredUserDeclared);
+      }
+      deferredPairs.clear();
+      deferredConfigs.clear();
     }
     return true;
   }

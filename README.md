@@ -498,6 +498,45 @@ Maven:
 </build>
 ```
 
+#### Annotation processor ordering with Lombok
+
+When both Lombok and `telescope-lombok` / `telescope-codegen` sit on the annotation processor path, list **Lombok
+first**. Maven respects the declaration order of `<annotationProcessorPaths>`; Gradle respects the order of
+`annotationProcessor(...)` calls:
+
+```xml
+<annotationProcessorPaths>
+  <path>
+    <groupId>org.projectlombok</groupId>
+    <artifactId>lombok</artifactId>
+    <version>1.18.30</version>
+  </path>
+  <path>
+    <groupId>io.github.eschizoid</groupId>
+    <artifactId>telescope-lombok</artifactId>
+    <version>1.0.1</version>
+  </path>
+</annotationProcessorPaths>
+```
+
+```kotlin
+dependencies {
+  annotationProcessor("org.projectlombok:lombok:1.18.30")
+  annotationProcessor("io.github.eschizoid:telescope-lombok:1.0.1")
+  annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.1")
+}
+```
+
+Both `BridgeProcessor` and `LombokFocusProcessor` round-defer emission to `processingOver()` when they detect that the
+host class (or its `@Bridge` target) carries a Lombok-synthesizing annotation, so the build is order-tolerant — but
+explicit ordering avoids relying on round-deferral and is the recommended posture. The Lombok-synthesizing trigger set
+includes `@Data`, `@Value`, `@Builder`, `@Getter`, `@Setter`, the three `*ArgsConstructor` variants, `@SuperBuilder`,
+and `@experimental.Accessors`.
+
+Symptoms of mis-ordering without round-deferral (now harmless thanks to the deferral fix, but worth recognizing on older
+versions): an emitted `<X>Bridge` whose `forward`/`backward` are no-ops, or a `@Data` class for which no `<X>Telescope`
+lands. Both mean the telescope processor ran before Lombok patched the host class.
+
 ### JPMS / modular consumers
 
 If your project has a `module-info.java`, add the `requires` and, for the runtime navigation path, an `opens` for the
