@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -831,13 +832,24 @@ public final class DeepMap {
 
     // (a.2) Collection / Map subtype pair (Bug 7). Common in legacy bean codebases: `class
     //       ImageUrls extends ArrayList<ImageUrl>` and `class ImageUrlsBO extends
-    // ArrayList<ImageUrl>`
-    //       on opposite sides. Neither is identity (different concrete classes), neither is a
-    //       parameterised raw `List` / `Map` (so ContainerShape skips them), and trying to bean-
-    //       decompose would hit `MethodHandles.privateLookupIn(ArrayList.class)` rejection. Copy
-    //       elements via the target's no-arg constructor + `addAll` / `putAll`.
+    //       ArrayList<ImageUrl>` on opposite sides. Neither is identity (different concrete
+    //       classes), neither is a parameterised raw `List` / `Map` (so ContainerShape skips
+    //       them), and trying to bean-decompose would hit
+    //       `MethodHandles.privateLookupIn(ArrayList.class)` rejection. Copy elements via the
+    //       target's no-arg constructor + `addAll` / `putAll`.
+    //
+    //       Collection side is gated on same kind (List↔List, Set↔Set, Queue↔Queue). Copying a
+    //       `LinkedList` into a `HashSet` would silently deduplicate; an `ArrayList` into a
+    //       `PriorityQueue` would silently reorder by natural ordering. Users who genuinely want
+    //       a kind change must declare an explicit `Mapping.via(...)` row.
+    //
+    //       Map side keeps the broad `Map`-assignable gate but iteration-order, comparator, and
+    //       thread-safety guarantees may shift when the concrete Map kinds differ (e.g.
+    //       `LinkedHashMap → TreeMap` reorders; `ConcurrentHashMap → HashMap` drops the
+    //       concurrency contract). The Iso copies entries verbatim — users with semantic
+    //       dependencies on the source's concrete type should declare an explicit row.
     if (srcType instanceof Class<?> srcCC && tgtType instanceof Class<?> tgtCC) {
-      if (Collection.class.isAssignableFrom(srcCC) && Collection.class.isAssignableFrom(tgtCC)) {
+      if (sameKindCollection(srcCC, tgtCC)) {
         final var iso = collectionCopyIso(srcCC, tgtCC);
         if (iso != null) return iso;
       }
@@ -1106,17 +1118,19 @@ public final class DeepMap {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Iso<?, ?> collectionCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
-    if (!hasPublicNoArgCtor(srcCls) || !hasPublicNoArgCtor(tgtCls)) return null;
+    final var srcAlloc = Beans.intermediateAllocator(srcCls);
+    final var tgtAlloc = Beans.intermediateAllocator(tgtCls);
+    if (srcAlloc.get() == null || tgtAlloc.get() == null) return null;
     return Iso.of(
       src -> {
         if (src == null) return null;
-        final var fresh = (Collection) newInstance(tgtCls);
+        final var fresh = (Collection) tgtAlloc.get();
         fresh.addAll((Collection<?>) src);
         return fresh;
       },
       tgt -> {
         if (tgt == null) return null;
-        final var fresh = (Collection) newInstance(srcCls);
+        final var fresh = (Collection) srcAlloc.get();
         fresh.addAll((Collection<?>) tgt);
         return fresh;
       }
@@ -1128,40 +1142,30 @@ public final class DeepMap {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Iso<?, ?> mapCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
-    if (!hasPublicNoArgCtor(srcCls) || !hasPublicNoArgCtor(tgtCls)) return null;
+    final var srcAlloc = Beans.intermediateAllocator(srcCls);
+    final var tgtAlloc = Beans.intermediateAllocator(tgtCls);
+    if (srcAlloc.get() == null || tgtAlloc.get() == null) return null;
     return Iso.of(
       src -> {
         if (src == null) return null;
-        final var fresh = (Map) newInstance(tgtCls);
+        final var fresh = (Map) tgtAlloc.get();
         fresh.putAll((Map<?, ?>) src);
         return fresh;
       },
       tgt -> {
         if (tgt == null) return null;
-        final var fresh = (Map) newInstance(srcCls);
+        final var fresh = (Map) srcAlloc.get();
         fresh.putAll((Map<?, ?>) tgt);
         return fresh;
       }
     );
   }
 
-  private static boolean hasPublicNoArgCtor(final Class<?> cls) {
-    if (cls.isInterface()) return false;
-    if (java.lang.reflect.Modifier.isAbstract(cls.getModifiers())) return false;
-    try {
-      cls.getConstructor();
-      return true;
-    } catch (final NoSuchMethodException e) {
-      return false;
-    }
-  }
-
-  private static Object newInstance(final Class<?> cls) {
-    try {
-      return cls.getConstructor().newInstance();
-    } catch (final ReflectiveOperationException e) {
-      throw new IllegalStateException("Failed to instantiate " + cls.getName() + " via no-arg constructor", e);
-    }
+  private static boolean sameKindCollection(final Class<?> a, final Class<?> b) {
+    if (!Collection.class.isAssignableFrom(a) || !Collection.class.isAssignableFrom(b)) return false;
+    if (List.class.isAssignableFrom(a) && List.class.isAssignableFrom(b)) return true;
+    if (Set.class.isAssignableFrom(a) && Set.class.isAssignableFrom(b)) return true;
+    return Queue.class.isAssignableFrom(a) && Queue.class.isAssignableFrom(b);
   }
 
   /** A record or any non-scalar class — anything Reflective can drive. */
