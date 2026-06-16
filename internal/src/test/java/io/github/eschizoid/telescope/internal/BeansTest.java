@@ -777,10 +777,19 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("construct throws if no setter on the builder matches a given name")
-    void builderUnknownSetterThrows() {
+    @DisplayName("construct silently skips a name without a matching builder setter (no-op consumer)")
+    void builderMissingSetterIsSilentlySkipped() {
+      // Bug 5 alignment for the builder path: BuilderWriter used to throw IAE on a name without
+      // a matching {name|setX|withX} method on the builder. The `names` array fed to
+      // construct(...) is derived from the target's getter set (Beans.propertyNames), so a
+      // computed/read-only getter on the target POJO would surface here. Asymmetric contract
+      // versus SettersWriter — two POJOs differing only by the presence of a `builder()` factory
+      // would have opposite mapping semantics on the same source/target pair. Align with
+      // SettersWriter: silently skip the unmatched name, leaving the builder slot at its default.
       final var writer = Beans.builderWriter(WithBuilder.class);
-      assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "ghost" }, n -> "x"));
+      final var pojo = writer.construct(new String[] { "ghost", "name" }, n -> n.equals("name") ? "alice" : "x");
+      assertNotNull(pojo);
+      assertEquals("alice", pojo.getName());
     }
 
     @Test

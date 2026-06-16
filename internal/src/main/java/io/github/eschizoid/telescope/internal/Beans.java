@@ -399,8 +399,11 @@ public final class Beans {
    * helper does NOT require a no-arg constructor on the target's class: the user supplies the
    * already-constructed target. Only the setters need to be public.
    *
-   * @throws IllegalArgumentException when {@code pojo.getClass()} exposes no public setter named
-   *     {@code "set<Capitalized name>"} taking exactly one argument
+   * <p>Properties without a public {@code setX} setter are silently skipped — matches both {@link
+   * SettersWriter} (used by {@code Mapper.forward}) and MapStruct's {@code @MappingTarget}
+   * semantics so a getter-only / computed / immutable target property never breaks an otherwise
+   * valid mapping.
+   *
    * @throws IllegalStateException via {@link MethodHandles#privateLookupIn} when the setter's
    *     declaring class lives in a closed-package module without an {@code opens} directive
    */
@@ -1257,14 +1260,15 @@ public final class Beans {
           break;
         }
       }
-      if (setter == null) throw new IllegalArgumentException(
-        "writeBean(" +
-          cls.getName() +
-          ", BUILDER): no single-argument builder method for '" +
-          name +
-          "' on " +
-          builderType.getName()
-      );
+      // Bug 5: align with SettersWriter and the static `writeBeanProperty` path — when a target
+      // property has no matching builder setter (getter-only on the target POJO, computed-only
+      // value, etc.), silently skip rather than throwing. The names array passed to
+      // `construct(...)` is derived from the target's getter set, not from a user-authored
+      // builder name list, so an asymmetric writer contract here would diverge from
+      // `Mapper.forward` (via SettersWriter) on POJOs that happen to expose a static
+      // `builder()` factory. Returning a BiConsumer no-op matches the dispatch path at
+      // `construct(...)` line 1218.
+      if (setter == null) return (BiConsumer<Object, Object>) (builder, value) -> {};
       // Inherited-accessor correctness: a builder type may extend another builder type whose
       // setters live in a different package / module. Pin the lookup, error message, and
       // instantiatedMethodType receiver to the setter's declaring class so a closed inheritor
