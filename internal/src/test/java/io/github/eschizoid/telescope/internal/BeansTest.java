@@ -695,10 +695,19 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("construct throws IllegalArgumentException for a name without a matching setter")
-    void settersMissingSetterThrows() {
+    @DisplayName("construct silently skips a name without a matching setter (no-op consumer)")
+    void settersMissingSetterIsSilentlySkipped() {
+      // Bug 5 from the migration feedback: SettersWriter used to throw
+      // IllegalArgumentException("no setter setX") on getter-only / computed / immutable target
+      // properties. MapStruct silently ignores unwritable target fields; telescope now matches
+      // by installing a no-op BiConsumer for missing setters. The property's underlying field
+      // stays at its JLS default (here: NoArgFields.name stays null, the source value "x" is
+      // dropped).
       final var writer = Beans.settersWriter(NoArgFields.class); // has fields but no setters
-      assertThrows(IllegalArgumentException.class, () -> writer.construct(new String[] { "name" }, n -> "x"));
+      final var pojo = writer.construct(new String[] { "name" }, n -> "x");
+      assertNotNull(pojo);
+      // The constructed instance has the JLS-default null for `name` (no setter fired).
+      assertNull(pojo.name);
     }
 
     @Test

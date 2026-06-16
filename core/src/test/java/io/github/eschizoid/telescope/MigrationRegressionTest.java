@@ -233,4 +233,75 @@ class MigrationRegressionTest {
       assertEquals("alice@example.com", tgt.getCustomerEmail());
     }
   }
+
+  @Nested
+  @DisplayName("Bug 5 — SettersWriter throws on getter-only properties")
+  class Bug5GetterOnlyProperties {
+
+    // Both Source and OrderResponse have a `processed` property so DeepMap's same-name bijection
+    // check (Bug 6) passes — we want to isolate Bug 5 (SettersWriter on the getter-only target).
+    public static class Source {
+
+      private String name;
+      private boolean processed;
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      public boolean isProcessed() {
+        return processed;
+      }
+
+      public void setProcessed(final boolean processed) {
+        this.processed = processed;
+      }
+    }
+
+    public static class OrderResponse {
+
+      private String name;
+      private boolean processed;
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      // Getter-only — no setProcessed() exists. Common shape for computed / derived properties
+      // (the field is populated by an internal hook, not by external callers).
+      public boolean isProcessed() {
+        return processed;
+      }
+    }
+
+    @Test
+    @DisplayName("forward(source) silently skips getter-only target properties — no throw")
+    void getterOnlyTargetPropertiesAreSilentlySkipped() {
+      // MapStruct silently ignores target fields whose setter is missing. Telescope used to throw
+      // IllegalArgumentException("no setter setX") at first forward() call. This pins the new
+      // no-op contract: forward() succeeds; the getter-only target property stays at its JLS
+      // default (false for boolean primitive).
+      final var mapper = Telescope.mapper(
+        Source.class,
+        OrderResponse.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new Source();
+      src.setName("alice");
+      src.setProcessed(true);
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals("alice", tgt.getName());
+      // The `processed` source value was discarded — target's getter-only field stays at the
+      // primitive default. MapStruct would do the same.
+      assertEquals(false, tgt.isProcessed());
+    }
+  }
 }

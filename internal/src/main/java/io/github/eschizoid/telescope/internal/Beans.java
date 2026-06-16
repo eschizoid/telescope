@@ -1455,9 +1455,12 @@ public final class Beans {
           break;
         }
       }
-      if (setter == null) throw new IllegalArgumentException(
-        "writeBean(" + cls.getName() + ", SETTERS): no setter '" + set + "'"
-      );
+      // Bug 5: getter-only properties (computed fields, immutable accessors, etc.) have no
+      // matching setX. Throwing here used to make `writeBean(SETTERS)` unusable on any class
+      // with a read-only property. MapStruct silently ignores unwritable target fields; match
+      // that by returning a no-op BiConsumer so the construct loop skips the property at write
+      // time. The property's underlying field stays at its JLS default (null/0/false).
+      if (setter == null) return (pojo, value) -> {};
       // Use the SETTER's declaring class — inherited setters live on a superclass / interface
       // whose package may be in a different module than `cls`. Pinning the lookup, the
       // instantiated receiver type, and the opens-error message to the declaring class keeps all
