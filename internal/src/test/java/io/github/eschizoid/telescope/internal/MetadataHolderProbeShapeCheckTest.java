@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.internal;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -47,7 +48,10 @@ class MetadataHolderProbeShapeCheckTest {
       final var result = holder.constructor().apply(values);
       assertSame(ProbedRecord.class, result.getClass(), "bound constructor must produce a ProbedRecord");
       final var rebuilt = (ProbedRecord) result;
-      assertSame("alice", rebuilt.name());
+      // assertEquals (not assertSame) — the name string flows through the Function and could be
+      // a different String instance after a future refactor. Only string equality is load-bearing.
+      assertEquals("alice", rebuilt.name());
+      assertEquals(42, rebuilt.age());
       // The construct(Function) shape mirrors the canonical-ctor call — every component flows
       // through the values function.
     }

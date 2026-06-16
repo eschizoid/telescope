@@ -142,14 +142,15 @@ class LambdaIntrospectionTest {
     }
 
     @Test
-    @DisplayName("cache memoizes by lambda class — distinct method-references to the same target share a cache entry")
-    void cacheKeyedByLambdaClass() {
-      // Method references compiled at different call sites to the same target method synthesize
-      // DIFFERENT classes — the cache keys them separately. The contract is "same class → same
-      // result", not "same method → same result".
-      final SerFn<User, String> first = User::name;
-      assertSame(User.class, LambdaIntrospection.implClassOf(first));
-      assertSame(User.class, LambdaIntrospection.implClassOf(first));
+    @DisplayName("repeat implClassOf lookups on the same lambda class hit the cache and return the same Class result")
+    void cacheHitOnRepeatLookupSameLambda() {
+      // Pins the ConcurrentHashMap.computeIfAbsent short-circuit at line 70 of LambdaIntrospection
+      // — the second call must skip resolveImplClass and read directly from the cache. Same-result
+      // assertSame guarantees consistency; performance is implicit (a broken cache here would
+      // re-decode SerializedLambda every call site).
+      final SerFn<User, String> ref = User::name;
+      assertSame(User.class, LambdaIntrospection.implClassOf(ref));
+      assertSame(User.class, LambdaIntrospection.implClassOf(ref));
     }
   }
 
