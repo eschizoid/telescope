@@ -3407,4 +3407,158 @@ class BridgeProcessorTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("@Bridge(lenient = true) — opt-out of strict bijection")
+  class LenientMode {
+
+    @Test
+    @DisplayName("small DTO → large entity: lenient skips bijection check, generated BRIDGE compiles")
+    void smallSrcLargeTarget() {
+      // Without lenient = true this would fail with "must expose the same field names (a
+      // bijection)"
+      // because Target has 5 fields that Source doesn't. The whole point of the lenient mode is to
+      // let this exact shape compile. Same scenario MapStruct handles by default for every mapper.
+      final var compilation = compile(
+        source(
+          "demo.SmallDto",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.LargeEntity.class, lenient = true)
+          public record SmallDto(String id, String email) {}
+          """
+        ),
+        source(
+          "demo.LargeEntity",
+          """
+          package demo;
+          public record LargeEntity(
+            String id, String email,
+            String middleName, int loyaltyPoints, boolean optedIn,
+            String region, java.util.List<String> tags
+          ) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "lenient should compile; saw " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.SmallDtoBridge");
+      assertNotNull(bridge, "expected SmallDtoBridge to be generated");
+      // Forward direction: matched fields written through; unmatched fields take JLS defaults.
+      // The generated rebuild line writes ALL target components; unmatched ones see the literal
+      // default value from defaultLiteralFor (e.g. `null` for String/List, `0` for int, `false`
+      // for boolean). Pin those literals so a future refactor that breaks the synthesis surfaces
+      // here.
+      assertTrue(
+        bridge.contains("s.id()") && bridge.contains("s.email()"),
+        () -> "forward should read matched source components; saw:\n" + bridge
+      );
+      assertTrue(
+        bridge.contains("null") && bridge.contains("0") && bridge.contains("false"),
+        () -> "forward should fill unmatched primitives + references with JLS defaults; saw:\n" + bridge
+      );
+    }
+
+    @Test
+    @DisplayName("large DTO → small entity: extra source fields silently dropped, no error")
+    void largeSrcSmallTarget() {
+      // Mirror image of the above: Source has fields with no Target counterpart. Without lenient,
+      // bijection check fails. With lenient, the extras are auto-dropped (silently ignored on
+      // forward, JLS-defaulted on backward — same as an explicit @Bridge(drops = {...})).
+      final var compilation = compile(
+        source(
+          "demo.LargeDto",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.SmallEntity.class, lenient = true)
+          public record LargeDto(
+            String id, String email,
+            String tracingId, long createdAtEpoch, String tenantHint
+          ) {}
+          """
+        ),
+        source(
+          "demo.SmallEntity",
+          """
+          package demo;
+          public record SmallEntity(String id, String email) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "lenient should compile; saw " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.LargeDtoBridge");
+      assertNotNull(bridge);
+      // Forward emits only id + email reads; tracingId / createdAtEpoch / tenantHint don't appear
+      // as source reads in the forward path (they're auto-drop'd).
+      assertTrue(
+        bridge.contains("s.id()") && bridge.contains("s.email()"),
+        () -> "forward should read matched source components; saw:\n" + bridge
+      );
+    }
+
+    @Test
+    @DisplayName("lenient = false (default) still enforces strict bijection — regression guard")
+    void defaultRemainsStrict() {
+      // Pin that the opt-in semantics hold: omitting `lenient` (or setting it to false) keeps the
+      // historical bijection error. A future refactor that silently flipped the default would
+      // change adopter semantics — this test would catch it immediately.
+      final var compilation = compile(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.Dst.class)
+          public record Src(String id, String email) {}
+          """
+        ),
+        source("demo.Dst", "package demo; public record Dst(String id, String email, String extra) {}")
+      );
+
+      assertFalse(compilation.success(), "default lenient = false must still enforce bijection");
+      assertTrue(
+        compilation.hasError("must expose the same field names"),
+        () -> "expected bijection diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("lenient + renames: renamed pair is honoured; remaining unmatched fields auto-filled")
+    void lenientPlusRenames() {
+      // Hybrid case: user declares one rename to bridge a deliberate name difference, but other
+      // unmatched fields take the lenient auto-fill path. The rename + auto-fill must not
+      // double-cover any field. If they did, downstream codegen would emit duplicate writes.
+      final var compilation = compile(
+        source(
+          "demo.SrcWithRename",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(value = demo.DstWithRename.class, lenient = true,
+            renames = { @Rename(source = "orderNumber", target = "referenceCode") })
+          public record SrcWithRename(String orderNumber, String memo) {}
+          """
+        ),
+        source(
+          "demo.DstWithRename",
+          """
+          package demo;
+          public record DstWithRename(String referenceCode, String memo, int totalCents) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "lenient + rename should compile; saw " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.SrcWithRenameBridge");
+      assertNotNull(bridge);
+      assertTrue(
+        bridge.contains("s.orderNumber()") && bridge.contains("s.memo()"),
+        () -> "forward should read both matched source components (renamed + auto-matched); saw:\n" + bridge
+      );
+    }
+  }
 }

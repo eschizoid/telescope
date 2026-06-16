@@ -198,4 +198,32 @@ public @interface Bridge {
    * strategy)} hint.
    */
   WriteStrategy writeStrategy() default WriteStrategy.AUTO;
+
+  /**
+   * Skip the strict-bijection check. When {@code lenient = true}, the processor emits writes only
+   * for the components named in {@link #renames()} / {@link #transforms()} plus same-name
+   * auto-matches that exist on both sides; unmatched target components take their JLS default (zero
+   * for primitives, empty for collections, {@code null} for references); unmatched source
+   * components are silently ignored.
+   *
+   * <p>Designed for the small-DTO → large-entity pattern (e.g. mapping a 7-field DTO into a
+   * 135-field entity whose 128 unmatched slots should stay at default). Without {@code lenient},
+   * each of those 128 slots would need an explicit {@link #drops()} or {@link
+   * io.github.eschizoid.telescope.annotations.Constant @Constant} entry to satisfy the bijection.
+   *
+   * <p><b>Round-trip-loss warning, by direction name.</b> {@code lenient = true} produces a
+   * <em>partial-Iso</em>. The forward direction {@code BRIDGE.read(source)} is fine — unmatched
+   * Target fields take JLS defaults, which is the whole point. The backward direction {@code
+   * BRIDGE.set(source, target)} is the lossy one: every {@code Source}-side field that has no
+   * {@code Target} counterpart comes back populated at the JLS default ({@code null} for
+   * references, zero / empty for primitives and collections), regardless of what the original
+   * Source held. Adopters who rely on backward round-trip safety must NOT set {@code lenient}. The
+   * generated {@code <X>Bridge} class javadoc carries a matching warning so the asymmetry is
+   * unambiguous in IDE auto-complete.
+   *
+   * <p>Same-name auto-matches and declared renames still go through their normal type-safety
+   * pipeline — {@code lenient} only removes the bijection-completeness check, never the per-pair
+   * type checks.
+   */
+  boolean lenient() default false;
 }
