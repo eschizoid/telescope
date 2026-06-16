@@ -1048,8 +1048,8 @@ public sealed class Telescope<
    *
    * <p>The source / target classes are required because {@code Telescope<S, A>}'s type parameters
    * are erased at runtime. They're stored on the produced {@link ForwardMapper} so downstream
-   * machinery (e.g. {@link io.github.eschizoid.telescope.quarkus.TelescopeMapperRegistry}) can key
-   * the mapper by the {@code (source, target)} pair.
+   * machinery (e.g. {@code TelescopeMapperRegistry} in the Quarkus / Spring Boot starter modules)
+   * can key the mapper by the {@code (source, target)} pair.
    *
    * <p><b>Read semantics inherited from {@link #read}.</b> On a {@link Lens}-rooted Telescope the
    * forward returns the single focused value. On an {@link Affine}-rooted Telescope (e.g. after

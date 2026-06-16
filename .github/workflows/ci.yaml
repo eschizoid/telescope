@@ -30,6 +30,16 @@ jobs:
       - name: Build and test
         run: ./gradlew check --no-daemon --stacktrace
 
+      - name: Verify javadoc (cross-module link integrity)
+        run: |
+          ./gradlew --no-daemon --stacktrace --rerun-tasks \
+            :internal:javadoc \
+            :core:javadoc \
+            :codegen:javadoc \
+            :lombok:javadoc \
+            :quarkus:javadoc \
+            :spring-boot-starter:javadoc
+
       - name: Jacoco
         run: |
           ./gradlew :internal:jacocoTestReport \
