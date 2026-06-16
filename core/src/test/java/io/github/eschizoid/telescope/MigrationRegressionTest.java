@@ -352,6 +352,104 @@ class MigrationRegressionTest {
   }
 
   @Nested
+  @DisplayName("Bug 3 — primitive ↔ wrapper autoboxing")
+  class Bug3PrimitiveWrapperAutoboxing {
+
+    public static class Source {
+
+      private boolean active; // primitive
+      private Integer count; // boxed
+      private String name;
+
+      public boolean isActive() {
+        return active;
+      }
+
+      public void setActive(final boolean v) {
+        this.active = v;
+      }
+
+      public Integer getCount() {
+        return count;
+      }
+
+      public void setCount(final Integer v) {
+        this.count = v;
+      }
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+    }
+
+    public static class Target {
+
+      private Boolean active; // boxed (source is primitive)
+      private int count; // primitive (source is boxed)
+      private String name;
+
+      public Boolean getActive() {
+        return active;
+      }
+
+      public void setActive(final Boolean v) {
+        this.active = v;
+      }
+
+      public int getCount() {
+        return count;
+      }
+
+      public void setCount(final int v) {
+        this.count = v;
+      }
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+    }
+
+    @Test
+    @DisplayName("auto-mapping handles primitive↔wrapper pairs (boolean↔Boolean, Integer↔int) without throwing")
+    void primitiveWrapperPairsAreAutoBoxed() {
+      // The adopter scenario: source has boolean primitive `active` and boxed `Integer count`;
+      // target inverts them. DeepMap used to reject the pair at populateIso with
+      // "incompatible source/target shapes — boolean vs java.lang.Boolean". MapStruct silently
+      // autoboxes / unboxes; telescope should match.
+      final var mapper = Telescope.mapper(Source.class, Target.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var src = new Source();
+      src.setActive(true);
+      src.setCount(42);
+      src.setName("alice");
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(Boolean.TRUE, tgt.getActive());
+      assertEquals(42, tgt.getCount());
+      assertEquals("alice", tgt.getName());
+    }
+
+    @Test
+    @DisplayName("null boxed source mapping to primitive target uses JLS default (no unboxing NPE)")
+    void nullBoxedToPrimitiveUsesJlsDefault() {
+      // Source.count is Integer null; target.count is int. The auto-iso must null-guard at the
+      // boxing leaf, otherwise we get NullPointerException on intValue().
+      final var mapper = Telescope.mapper(Source.class, Target.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var src = new Source();
+      src.setActive(false);
+      // count left null
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(0, tgt.getCount()); // JLS default for int
+    }
+  }
+
+  @Nested
   @DisplayName("Bug 7 — LMF fails on classes extending JDK collection types")
   class Bug7JdkCollectionSubtypes {
 

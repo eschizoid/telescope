@@ -830,6 +830,18 @@ public final class DeepMap {
     // (a) Same generic type → identity Iso.
     if (srcType.equals(tgtType)) return Iso.identity();
 
+    // (a.1) Primitive ↔ wrapper pair → autobox / unbox via JLS-default-safe Iso. Forward
+    // unboxes (null-safe — substitutes the primitive default to avoid NPE on the wrapper-to-
+    // primitive setter); backward boxes via the wrapper's static valueOf. Matches MapStruct's
+    // behaviour for these pairs (it silently autoboxes and uses 0/false/etc. for null).
+    if (
+      srcType instanceof Class<?> srcClsAB &&
+      tgtType instanceof Class<?> tgtClsAB &&
+      isPrimitiveWrapperPair(srcClsAB, tgtClsAB)
+    ) {
+      return primitiveWrapperIso(srcClsAB, tgtClsAB);
+    }
+
     // (a.2) Collection / Map subtype pair (Bug 7). Common in legacy bean codebases: `class
     //       ImageUrls extends ArrayList<ImageUrl>` and `class ImageUrlsBO extends
     //       ArrayList<ImageUrl>` on opposite sides. Neither is identity (different concrete
@@ -1108,9 +1120,10 @@ public final class DeepMap {
 
   /**
    * Bug 7 — Collection ↔ Collection element-copy Iso. The forward instantiates the target
-   * collection via its public no-arg constructor and {@code addAll}'s the source; backward is
-   * symmetric. Returns {@code null} when either side lacks a callable no-arg constructor, letting
-   * the caller fall through to the next branch (typically the shape-mismatch IAE).
+   * collection via {@link Beans#intermediateAllocator(Class)} (cached LMF-bound Supplier) and
+   * {@code addAll}'s the source; backward is symmetric. Returns {@code null} when either side
+   * has no usable allocator, letting the caller fall through to the next branch (typically the
+   * shape-mismatch IAE).
    *
    * <p>No element-type recursion: this branch fires on raw, non-parameterised subtypes (e.g. {@code
    * class ImageUrls extends ArrayList<ImageUrl>}), where the raw class itself carries no runtime
@@ -1166,6 +1179,40 @@ public final class DeepMap {
     if (List.class.isAssignableFrom(a) && List.class.isAssignableFrom(b)) return true;
     if (Set.class.isAssignableFrom(a) && Set.class.isAssignableFrom(b)) return true;
     return Queue.class.isAssignableFrom(a) && Queue.class.isAssignableFrom(b);
+  }
+
+  /**
+   * True when {@code src} and {@code tgt} are a primitive ↔ wrapper pair (in either direction)
+   * referring to the same underlying scalar — e.g. {@code int} / {@code Integer}, {@code boolean} /
+   * {@code Boolean}. Same-scalar same-side pairs (already covered by the identity branch) are not
+   * matched here.
+   */
+  private static boolean isPrimitiveWrapperPair(final Class<?> src, final Class<?> tgt) {
+    return (src.isPrimitive() && wrap(src) == tgt) || (tgt.isPrimitive() && wrap(tgt) == src);
+  }
+
+  /** Wrap a primitive to its boxed class; non-primitives are returned unchanged. */
+  private static Class<?> wrap(final Class<?> cls) {
+    if (cls == int.class) return Integer.class;
+    if (cls == long.class) return Long.class;
+    if (cls == double.class) return Double.class;
+    if (cls == float.class) return Float.class;
+    if (cls == boolean.class) return Boolean.class;
+    if (cls == short.class) return Short.class;
+    if (cls == byte.class) return Byte.class;
+    if (cls == char.class) return Character.class;
+    return cls;
+  }
+
+  /**
+   * Build the per-field Iso for a primitive ↔ wrapper pair. The Iso's {@code to} (forward)
+   * substitutes the primitive default when the source value is null, so a wrapper-to-primitive
+   * write never NPEs at the setter. {@code from} (backward) is symmetric.
+   */
+  private static Iso<Object, Object> primitiveWrapperIso(final Class<?> src, final Class<?> tgt) {
+    final var fwdDefault = tgt.isPrimitive() ? primitiveDefault(tgt) : null;
+    final var bwdDefault = src.isPrimitive() ? primitiveDefault(src) : null;
+    return Iso.of(v -> v == null ? fwdDefault : v, v -> v == null ? bwdDefault : v);
   }
 
   /** A record or any non-scalar class — anything Reflective can drive. */
