@@ -138,10 +138,7 @@ class BridgeProcessorLombokDeferralTest {
       // child.email read collapses to null, and the parent's forward returns a Dto whose child has
       // null id/email. The assertion below would fail wholesale on that pre-fix processor.
       final var bridge = lookupBridge("PlainParentWithLombokChildBridge");
-      final var child = new io.github.eschizoid.telescope.codegen.lombok.fixtures.BridgedDataUser(
-        "u-9",
-        "child@example.com"
-      );
+      final var child = new BridgedDataUser("u-9", "child@example.com");
       final var parent = new PlainParentWithLombokChild("parent-1", child);
 
       final var dto = (PlainParentWithLombokChildDto) bridge.read(parent);
