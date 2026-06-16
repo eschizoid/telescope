@@ -286,11 +286,65 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    */
   protected static final Set<String> LOMBOK_BEAN_ANNOTATIONS = Set.of("lombok.Data", "lombok.Value", "lombok.Builder");
 
-  private boolean hasAnnotation(final Element element, final String annotationFqn) {
+  /**
+   * Broader set of Lombok annotations that synthesize members readable by {@link
+   * javax.lang.model.util.Elements#getAllMembers}. Used by {@link #carriesLombokTrigger} to decide
+   * whether emission must be round-deferred (Lombok installs lazy AST visitors that may not have
+   * fired by round 1; querying member lists too early returns the un-patched view).
+   *
+   * <p>Superset of {@link #LOMBOK_BEAN_ANNOTATIONS}. The wider scope is intentional —
+   * {@code @Getter} on a class with explicit fields generates the same un-patched read symptom as
+   * {@code @Data}, and {@code @RequiredArgsConstructor} matters for the canonical-ctor rebuild
+   * path.
+   *
+   * <p>This is NOT the {@code LombokFocusProcessor} navigator-emission trigger set — that stays at
+   * {@link #LOMBOK_BEAN_ANNOTATIONS} (only {@code @Data} / {@code @Value} / {@code @Builder}
+   * indicate "navigate me as a bean"; {@code @Getter} alone on a field doesn't).
+   */
+  protected static final Set<String> LOMBOK_SYNTHESIZING_ANNOTATIONS = Set.of(
+    "lombok.Data",
+    "lombok.Value",
+    "lombok.Builder",
+    "lombok.Getter",
+    "lombok.Setter",
+    "lombok.With",
+    "lombok.RequiredArgsConstructor",
+    "lombok.AllArgsConstructor",
+    "lombok.NoArgsConstructor",
+    "lombok.experimental.SuperBuilder",
+    "lombok.experimental.Accessors",
+    "lombok.experimental.FieldDefaults"
+  );
+
+  protected boolean hasAnnotation(final Element element, final String annotationFqn) {
     final var anno = processingEnv.getElementUtils().getTypeElement(annotationFqn);
     if (anno == null) return false;
     for (final var am : element.getAnnotationMirrors()) {
       if (am.getAnnotationType().asElement().equals(anno)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * True when {@code element} (or any of its enclosed fields) carries any of {@link
+   * #LOMBOK_SYNTHESIZING_ANNOTATIONS}. Used by {@code BridgeProcessor} to decide whether emission
+   * must be round-deferred. Probed via string FQN, so a graceful {@code false} is returned when
+   * Lombok isn't on the consumer's classpath at all.
+   *
+   * <p>Checks the type itself AND its enclosed fields — {@code @Getter} / {@code @Setter} are
+   * frequently declared on individual fields rather than at the class level, and either form
+   * synthesizes accessors that won't be visible to {@code getAllMembers} until Lombok's AST patches
+   * have fired.
+   */
+  protected boolean carriesLombokTrigger(final Element element) {
+    for (final var fqn : LOMBOK_SYNTHESIZING_ANNOTATIONS) {
+      if (hasAnnotation(element, fqn)) return true;
+    }
+    for (final var enclosed : element.getEnclosedElements()) {
+      if (enclosed.getKind() != ElementKind.FIELD) continue;
+      for (final var fqn : LOMBOK_SYNTHESIZING_ANNOTATIONS) {
+        if (hasAnnotation(enclosed, fqn)) return true;
+      }
     }
     return false;
   }
