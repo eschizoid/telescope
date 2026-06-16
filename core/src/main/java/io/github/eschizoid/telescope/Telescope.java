@@ -1012,7 +1012,11 @@ public sealed class Telescope<
     if (optic instanceof final Affine<S, A> affine) {
       return affine.getOption(source);
     }
-    return optic.getAll(source).findFirst();
+    // Mirror of #read: Stream.findFirst() routes through Optional.of(element) and NPEs on null.
+    // A Traversal can surface null elements after Bug 4's readProperty short-circuit; materialise
+    // the values explicitly and use Optional.ofNullable to preserve the null-empty distinction.
+    final var values = optic.getAll(source).toList();
+    return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.get(0));
   }
 
   /**
