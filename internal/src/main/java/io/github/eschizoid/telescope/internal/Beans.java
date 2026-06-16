@@ -890,6 +890,13 @@ public final class Beans {
    * call time and rebuild the source's class with the focused property replaced. Subtype instances
    * are written back as their concrete runtime class, matching the lens-law expectation that {@code
    * set(s, get(s)).equals(s)} round-trips.
+   *
+   * <p><b>Primitive properties and {@code set(s, null)}:</b> when the focused property is a Java
+   * primitive (e.g. {@code int count}), {@code set(s, null)} substitutes the JLS default ({@code 0}
+   * / {@code false} / etc.) rather than throwing — the value flows through {@link SettersWriter}
+   * which null-guards primitive setters. This means the lens-law {@code set(s, null).get == null}
+   * does not hold for primitive properties (you get the JLS default back). Use a boxed wrapper type
+   * on the property if {@code null} round-trip matters.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public static <P, A> Lens<P, A> fieldLens(final String property) {

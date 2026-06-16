@@ -62,7 +62,7 @@ public final class ForwardMapper<A, B> {
 
   /** Alias of {@link #forward(Object)}. */
   public B read(final A a) {
-    return forward.get(a);
+    return forward(a);
   }
 
   /**

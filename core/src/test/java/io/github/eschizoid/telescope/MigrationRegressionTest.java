@@ -1210,6 +1210,25 @@ class MigrationRegressionTest {
       );
       assertEquals(null, mapper.forward(null));
     }
+
+    @Test
+    @DisplayName("ForwardMapper.read(null) returns null — read is documented as an alias of forward")
+    void forwardMapperReadNullReturnsNull() {
+      final var mapper = io.github.eschizoid.telescope.conversion.ForwardMapper.create(
+        (SrcRec s) -> new TgtRec(s.id(), s.name()),
+        SrcRec.class,
+        TgtRec.class
+      );
+      assertEquals(null, mapper.read(null));
+    }
+
+    @Test
+    @DisplayName("Mapper.forward — preForward returning null propagates as null (no NPE in iso.to)")
+    void preForwardReturningNullPropagatesAsNull() {
+      // A normalisation hook that maps a sentinel (empty id) to null must not crash the mapper.
+      final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class).beforeForward(s -> s.id().isEmpty() ? null : s);
+      assertEquals(null, mapper.forward(new SrcRec("", "alice")));
+    }
   }
 
   @Nested

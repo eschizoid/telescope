@@ -224,6 +224,9 @@ public final class Mapper<A, B> {
     // pre/postForward has a sensible meaning when no value flowed through.
     if (a == null) return null;
     final A a1 = preForward == null ? a : preForward.apply(a);
+    // Post-hook null guard: a preForward that returns null (e.g. a normalisation hook that maps
+    // sentinel-empty to null) must propagate as null, not NPE in iso.to(null).
+    if (a1 == null) return null;
     final B b = iso.to(a1);
     return postForward == null ? b : postForward.apply(a1, b);
   }
@@ -305,6 +308,7 @@ public final class Mapper<A, B> {
     // Null in, null out — symmetric with forward(). See the rationale on forward(Object) above.
     if (b == null) return null;
     final B b1 = preBackward == null ? b : preBackward.apply(b);
+    if (b1 == null) return null;
     final A a = iso.from(b1);
     return postBackward == null ? a : postBackward.apply(b1, a);
   }
