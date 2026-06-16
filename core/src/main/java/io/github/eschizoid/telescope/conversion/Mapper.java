@@ -182,13 +182,18 @@ public final class Mapper<A, B> {
    * Project this bidirectional mapper to a {@link ForwardMapper} that exposes only the forward
    * direction. Useful when threading a bidirectional `Mapper` into a forward-only API surface (CDI
    * bean wiring, Spring controllers, audit projections) without the call site needing the
-   * `backward()` half. Hooks installed via {@link #beforeForward}/{@link #afterForward} on this
-   * mapper are NOT carried over — the resulting `ForwardMapper` is a clean projection of the
-   * structural forward direction.
+   * `backward()` half.
+   *
+   * <p><b>Hooks are carried over.</b> The projection routes through {@code this::forward}, which
+   * runs the configured {@link #beforeForward}/{@link #afterForward} chain just like the
+   * bidirectional surface does. Mirrors {@link #asTelescope()} — a configured mapper would silently
+   * drop its hooks if the projection bypassed the chain.
    *
    * <pre>{@code
-   * Mapper<UserEntity, UserDto> bidi = Telescope.mapper(UserEntity.class, UserDto.class, ...);
+   * Mapper<UserEntity, UserDto> bidi = Telescope.mapper(UserEntity.class, UserDto.class, ...)
+   *     .afterForward(dto -> { dto.setStamp("audited"); return dto; });
    * ForwardMapper<UserEntity, UserDto> projector = bidi.toForwardMapper();
+   * // projector.forward(entity) runs the afterForward stamp, same as bidi.forward(entity).
    * }</pre>
    */
   public ForwardMapper<A, B> toForwardMapper() {

@@ -52,7 +52,7 @@ class ForwardMapperLiftsAndConversionsTest {
     @DisplayName("liftSet — element-wise forward over a Set; output is LinkedHashSet preserving forward-pass order")
     void liftSet() {
       final var lifted = Telescope.mapperForward(Entity.class, Dto.class).liftSet();
-      final var input = new java.util.LinkedHashSet<Entity>();
+      final var input = new LinkedHashSet<Entity>();
       input.add(new Entity("a", "alice@example.com"));
       input.add(new Entity("b", "bob@example.com"));
 
@@ -61,6 +61,16 @@ class ForwardMapperLiftsAndConversionsTest {
       assertEquals(LinkedHashSet.class, out.getClass());
 
       assertNull(lifted.forward(null));
+    }
+
+    @Test
+    @DisplayName("empty-container forward — empty List/Set/Map/Optional pass through correctly")
+    void emptyContainersForward() {
+      final var elem = Telescope.mapperForward(Entity.class, Dto.class);
+      assertEquals(0, elem.liftList().forward(List.of()).size());
+      assertEquals(0, elem.liftSet().forward(Set.of()).size());
+      assertEquals(Optional.empty(), elem.liftOptional().forward(Optional.empty()));
+      assertEquals(0, elem.<String>liftMapValues().forward(Map.of()).size());
     }
 
     @Test
@@ -113,6 +123,19 @@ class ForwardMapperLiftsAndConversionsTest {
       assertEquals(B.class, fm.targetClass());
       final var out = fm.forward(new A("o1"));
       assertEquals("o1", out.id());
+    }
+
+    @Test
+    @DisplayName(
+      "Mapper.toForwardMapper() carries over afterForward hooks (the projection routes through this::forward)"
+    )
+    void mapperToForwardMapperCarriesHooks() {
+      // Pin the javadoc contract: the projection delegates to Mapper.forward(A), which runs the
+      // configured hook chain. A future refactor that bypassed the chain (e.g. via iso::to) would
+      // silently drop the hooks — this test catches that.
+      final var bidi = Telescope.mapper(A.class, B.class).afterForward(b -> new B(b.id() + "-STAMPED"));
+      final var fm = bidi.toForwardMapper();
+      assertEquals("o1-STAMPED", fm.forward(new A("o1")).id(), "afterForward hook fired through the projection");
     }
 
     @Test
