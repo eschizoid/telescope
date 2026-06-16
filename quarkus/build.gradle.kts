@@ -46,6 +46,20 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-parameters"))
 }
 
+// Telescope-quarkus is consumable as a JPMS module via Automatic-Module-Name: downstream modules
+// can `requires io.github.eschizoid.telescope.quarkus;` in their own module-info.java without
+// telescope-quarkus carrying a strict module-info.java itself. The strict form is impractical here
+// because two transitive deps (quarkus-arc, smallrye-config) ship neither module-info.class nor
+// Automatic-Module-Name — the strict compile would either need the `extra-java-module-info`
+// plugin's `module()` declaration to synthesize a module-info for each one (build infra cost),
+// or invasive `--patch-module` flags. The manifest hint is the standard library-side answer for
+// "I sit on a non-modular transitive graph but still need to be JPMS-consumer-friendly."
+tasks.jar {
+    manifest {
+        attributes(mapOf("Automatic-Module-Name" to "io.github.eschizoid.telescope.quarkus"))
+    }
+}
+
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     testLogging {
