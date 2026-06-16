@@ -162,7 +162,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (bridges.size() > 1) multiTargetSources.add(sourceFq);
 
       for (final var bridgeAm : bridges) {
-        final var target = targetTypeFromMirror(bridgeAm);
+        final var rawValue = rawTargetValueFromMirror(bridgeAm);
+        // When the @Bridge target class lives in a module that the annotated element's
+        // compilation unit can't see, javac's AnnotationValue.getValue() returns the target FQN
+        // as a String instead of a TypeMirror. Surface a precise diagnostic instead of letting
+        // a downstream cast crash with an unhelpful ClassCastException.
+        if (rawValue instanceof String fqn) {
+          error(
+            element,
+            "@Bridge target '" +
+              fqn +
+              "' is not resolvable from this compilation unit — annotate the other side, " +
+              "or add the dependency."
+          );
+          continue;
+        }
+        final var target = rawValue instanceof TypeMirror tm ? tm : null;
         if (target == null || target.getKind() != TypeKind.DECLARED) {
           error(element, "@Bridge value must be a class, record, or sealed-interface type");
           continue;
@@ -244,9 +259,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return bridges;
   }
 
-  private TypeMirror targetTypeFromMirror(final AnnotationMirror am) {
+  /**
+   * Read the raw {@code value} entry from a {@code @Bridge} annotation mirror. Returns a {@link
+   * TypeMirror} when the target class is resolvable from the compilation unit, a {@link String}
+   * (the target FQN) when it isn't (the fallback shape javac uses for {@code Class<?>} annotation
+   * values it can't bind), or {@code null} when the annotation has no {@code value} attribute.
+   * Callers are responsible for dispatching on the returned shape — the String fallback fires when
+   * {@code @Bridge(SomeClass.class)} references a type in an unresolvable module.
+   */
+  private Object rawTargetValueFromMirror(final AnnotationMirror am) {
     for (final var entry : am.getElementValues().entrySet()) {
-      if (entry.getKey().getSimpleName().contentEquals("value")) return (TypeMirror) entry.getValue().getValue();
+      if (entry.getKey().getSimpleName().contentEquals("value")) return entry.getValue().getValue();
     }
     return null;
   }
@@ -1460,8 +1483,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var caseBridges = collectBridgeAnnotations(sourceCaseEl);
       TypeMirror caseTarget = null;
       for (final var bridgeAm : caseBridges) {
-        final var tm = targetTypeFromMirror(bridgeAm);
-        if (tm == null || tm.getKind() != TypeKind.DECLARED) continue;
+        final var raw = rawTargetValueFromMirror(bridgeAm);
+        if (!(raw instanceof TypeMirror tm) || tm.getKind() != TypeKind.DECLARED) continue;
         final var tEl = (TypeElement) ((DeclaredType) tm).asElement();
         if (targetPermitsFq.contains(tEl.getQualifiedName().toString())) {
           caseTarget = tm;
@@ -1480,7 +1503,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           );
         } else if (caseBridges.size() == 1) {
           // Single @Bridge whose target isn't in the sealed-target permits — name it explicitly.
-          final var only = targetTypeFromMirror(caseBridges.get(0));
+          final var only = rawTargetValueFromMirror(caseBridges.get(0));
           if (!(only instanceof DeclaredType decl)) continue;
           final var onlyEl = (TypeElement) decl.asElement();
           error(

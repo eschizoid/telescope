@@ -8,7 +8,9 @@ import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONS
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.FIELDS;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -1011,15 +1013,20 @@ class DeepMappingTest {
     }
 
     @Test
-    @DisplayName("one-arg drop on a nested-source class binds to top target — doesn't reach the nested pair")
+    @DisplayName(
+      "one-arg drop on a nested-source class binds to top target — nested pair leniently drops the unmapped field"
+    )
     void oneArgDropOnNestedSourceDoesNotReachNestedPair() {
-      // Without the explicit nested target, the top-level mapper still rejects the unmapped source
-      // because (CustomerRich, CustomerPartner) is the recursion's pair, not (CustomerRich,
-      // top-target).
-      final var ex = assertThrows(IllegalStateException.class, () ->
+      // Nested auto-recursed pairs are LENIENT — unmatched source fields are silently dropped,
+      // unmatched target fields stay at JLS defaults. The `drop(CustomerRich::tags)` row still
+      // binds to the top-level (ShipmentRich, ShipmentPartner) pair (not to the nested
+      // CustomerRich → CustomerPartner one), but the nested pair no longer throws on the
+      // unmatched `tags` source field — it just drops it silently. The top-level mapper
+      // constructs successfully.
+      final var mapper = assertDoesNotThrow(() ->
         Telescope.mapper(ShipmentRich.class, ShipmentPartner.class, drop(CustomerRich::tags))
       );
-      assertTrue(ex.getMessage().contains("tags"), ex.getMessage());
+      assertNotNull(mapper);
     }
   }
 }

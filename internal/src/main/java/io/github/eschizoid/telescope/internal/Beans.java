@@ -369,6 +369,15 @@ public final class Beans {
    * }</pre>
    */
   public static Object readProperty(final Object pojo, final String name) {
+    // Null-source short-circuit: multi-hop telescope paths (e.g.
+    // `Telescope.ofBean(Order.class).field(Order::getCustomer).field(Customer::getEmail)`) read
+    // each hop through this method. When an intermediate object is null at runtime
+    // (`order.getCustomer() == null`), the next hop arrives here with `pojo == null` and the
+    // pipeline needs the null to propagate gracefully — same shape as MapStruct's generated
+    // `if (source.getCustomer() != null) target.setEmail(source.getCustomer().getEmail())`
+    // null-guard. Without this short-circuit, `persistentClassOf(null)` returns null and
+    // `ClassValue.get(null)` NPEs.
+    if (pojo == null) return null;
     // Unwrap HibernateProxy (when present) so a LAZY-fetched entity routes through the
     // persistent class's cache entry, not a per-proxy-subclass one. See persistentClassOf.
     final var beanClass = persistentClassOf(pojo);
@@ -390,8 +399,11 @@ public final class Beans {
    * helper does NOT require a no-arg constructor on the target's class: the user supplies the
    * already-constructed target. Only the setters need to be public.
    *
-   * @throws IllegalArgumentException when {@code pojo.getClass()} exposes no public setter named
-   *     {@code "set<Capitalized name>"} taking exactly one argument
+   * <p>Properties without a public {@code setX} setter are silently skipped — matches both {@link
+   * SettersWriter} (used by {@code Mapper.forward}) and MapStruct's {@code @MappingTarget}
+   * semantics so a getter-only / computed / immutable target property never breaks an otherwise
+   * valid mapping.
+   *
    * @throws IllegalStateException via {@link MethodHandles#privateLookupIn} when the setter's
    *     declaring class lives in a closed-package module without an {@code opens} directive
    */
@@ -411,9 +423,11 @@ public final class Beans {
         break;
       }
     }
-    if (setter == null) throw new IllegalArgumentException(
-      "writeBeanProperty(" + cls.getName() + ", '" + name + "'): no setter '" + set + "'"
-    );
+    // Getter-only / computed / immutable properties are silently skipped — without this,
+    // Mapper.into(target, source) would throw on the same property pair that Mapper.forward
+    // (via SettersWriter) silently skipped, producing an asymmetric same-mapper contract.
+    // MapStruct's @MappingTarget ignores unwritable target fields too; match.
+    if (setter == null) return (pojo, value) -> {};
     final var declaringClass = setter.getDeclaringClass();
     final var lookup = privateLookupOrThrow(declaringClass, cls, "setter");
     final var paramType = setter.getParameterTypes()[0];
@@ -577,6 +591,17 @@ public final class Beans {
     final var map = new LinkedHashMap<String, Method>();
     for (final var m : cls.getMethods()) {
       if (m.getParameterCount() != 0 || m.getDeclaringClass() == Object.class) continue;
+      // Skip inherited methods declared in platform modules (java.*, jdk.*). A class extending
+      // ArrayList would otherwise surface `isEmpty()` → property `empty` and the LMF binder
+      // would then fail `privateLookupIn(ArrayList.class)` because `java.base` doesn't grant
+      // private lookup to application code. The primary gate lives in DeepMap (Collection/Map
+      // subtypes don't recurse at all); this scan-time skip is defence-in-depth for any future
+      // caller that touches a JDK-derived class directly.
+      final var declaringModule = m.getDeclaringClass().getModule();
+      if (declaringModule != null && declaringModule.isNamed()) {
+        final var moduleName = declaringModule.getName();
+        if (moduleName.startsWith("java.") || moduleName.startsWith("jdk.")) continue;
+      }
       final var n = m.getName();
       final String prop;
       if (n.length() > 3 && n.startsWith("get") && m.getReturnType() != void.class) {
@@ -951,9 +976,12 @@ public final class Beans {
       }
       for (final var name : names) {
         final var setter = setters.get(name);
-        if (setter == null) throw new IllegalArgumentException(
-          "writeBean(" + cls.getName() + ", FIELDS): no field '" + name + "'"
-        );
+        // Align with SettersWriter and BuilderWriter: silently skip a name that has no matching
+        // field. Without this the FIELDS strategy throws on the same input the other two writer
+        // strategies tolerate — two POJOs differing only by the presence of setters or a static
+        // builder() factory would have opposite mapping contracts on the same source/target
+        // pair. MapStruct's @MappingTarget ignores unwritable target fields too; match.
+        if (setter == null) continue;
         setter.accept(pojo, valueByName.apply(name));
       }
       return pojo;
@@ -997,7 +1025,16 @@ public final class Beans {
           .unreflectSetter(field)
           .asType(MethodType.methodType(void.class, Object.class, Object.class));
       } catch (final IllegalAccessException e) {
-        throw new RuntimeException("Failed to set field '" + field.getName() + "' on " + cls.getName(), e);
+        // Lookup.unreflectSetter rejects final fields with IAE regardless of setAccessible(true).
+        // Diagnose the most likely root cause so the adopter doesn't have to read the JDK source
+        // to figure out which of [final, JPMS-closed, missing opens] applies.
+        final var finalHint = Modifier.isFinal(field.getModifiers())
+          ? " — field is final; switch the writeBean hint to SETTERS or BUILDER, or remove final"
+          : "";
+        throw new RuntimeException(
+          "Failed to bind setter for field '" + field.getName() + "' on " + cls.getName() + finalHint,
+          e
+        );
       }
       return (pojo, value) -> {
         try {
@@ -1205,8 +1242,15 @@ public final class Beans {
         // builder pattern works either way (build() doesn't depend on setter return type).
         if (inv instanceof BiConsumer<?, ?>) {
           ((BiConsumer<Object, Object>) inv).accept(builder, value);
-        } else {
+        } else if (inv instanceof BiFunction<?, ?, ?>) {
           ((BiFunction<Object, Object, Object>) inv).apply(builder, value);
+        } else {
+          // buildSetterInvoker today returns one of {BiConsumer no-op, BiConsumer void setter,
+          // BiFunction fluent setter}. A future SAM shape would silently CCE on the BiFunction
+          // cast above — surface the contract violation explicitly so the regression is loud.
+          throw new IllegalStateException(
+            "BuilderWriter: unknown setter invoker SAM shape " + inv.getClass().getName() + " for '" + name + "'"
+          );
         }
       }
       return (P) buildFn.apply(builder);
@@ -1245,14 +1289,15 @@ public final class Beans {
           break;
         }
       }
-      if (setter == null) throw new IllegalArgumentException(
-        "writeBean(" +
-          cls.getName() +
-          ", BUILDER): no single-argument builder method for '" +
-          name +
-          "' on " +
-          builderType.getName()
-      );
+      // Align with SettersWriter and the static {@code writeBeanProperty} path — when a target
+      // property has no matching builder setter (getter-only on the target POJO, computed-only
+      // value, etc.), silently skip rather than throw. The names array passed to
+      // {@code construct(...)} is derived from the target's getter set, not from a user-
+      // authored builder name list, so an asymmetric writer contract here would diverge from
+      // {@code Mapper.forward} (via SettersWriter) on POJOs that happen to expose a static
+      // {@code builder()} factory. A BiConsumer no-op matches the dispatch path in
+      // {@code construct(...)}.
+      if (setter == null) return (BiConsumer<Object, Object>) (builder, value) -> {};
       // Inherited-accessor correctness: a builder type may extend another builder type whose
       // setters live in a different package / module. Pin the lookup, error message, and
       // instantiatedMethodType receiver to the setter's declaring class so a closed inheritor
@@ -1446,9 +1491,12 @@ public final class Beans {
           break;
         }
       }
-      if (setter == null) throw new IllegalArgumentException(
-        "writeBean(" + cls.getName() + ", SETTERS): no setter '" + set + "'"
-      );
+      // Getter-only properties (computed fields, immutable accessors, etc.) have no matching
+      // setX. Throwing here would make writeBean(SETTERS) unusable on any class with a read-
+      // only property. MapStruct silently ignores unwritable target fields; match that by
+      // returning a no-op BiConsumer so the construct loop skips the property at write time.
+      // The property's underlying field stays at its JLS default (null/0/false).
+      if (setter == null) return (pojo, value) -> {};
       // Use the SETTER's declaring class — inherited setters live on a superclass / interface
       // whose package may be in a different module than `cls`. Pinning the lookup, the
       // instantiated receiver type, and the opens-error message to the declaring class keeps all
@@ -1467,7 +1515,22 @@ public final class Beans {
           handle,
           MethodType.methodType(void.class, declaringClass, instantiatedParamType)
         );
-        return (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+        final var lmfSetter = (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+        // Defence-in-depth on the primitive-setter null guard. The LMF-built setter for a
+        // primitive parameter (e.g. setCount(int)) NPEs when invoked with null
+        // (Object → Integer → int unbox). DeepMap's placeholderIsoFor short-circuits unmatched
+        // primitive target fields to their JLS default before the value ever reaches here, so
+        // this guard is unreachable on the happy path — it's kept to lock the contract against
+        // future code paths that may legitimately deliver null to a primitive setter (e.g.
+        // autoboxing-relaxation work). When the parameter type is a primitive, skip on null so
+        // the field stays at its JLS default rather than crashing the construct call.
+        if (paramType.isPrimitive()) {
+          return (pojo, value) -> {
+            if (value == null) return;
+            lmfSetter.accept(pojo, value);
+          };
+        }
+        return lmfSetter;
       } catch (final Throwable t) {
         throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
       }
