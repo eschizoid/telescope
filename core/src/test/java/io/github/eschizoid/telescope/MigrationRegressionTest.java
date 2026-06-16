@@ -1220,6 +1220,10 @@ class MigrationRegressionTest {
         TgtRec.class
       );
       assertEquals(null, mapper.read(null));
+      // Non-null parity: read and forward must produce the same output, otherwise a future
+      // refactor that breaks the alias contract slips through unnoticed.
+      final var src = new SrcRec("o1", "alice");
+      assertEquals(mapper.forward(src), mapper.read(src));
     }
 
     @Test
@@ -1228,6 +1232,15 @@ class MigrationRegressionTest {
       // A normalisation hook that maps a sentinel (empty id) to null must not crash the mapper.
       final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class).beforeForward(s -> s.id().isEmpty() ? null : s);
       assertEquals(null, mapper.forward(new SrcRec("", "alice")));
+    }
+
+    @Test
+    @DisplayName("Mapper.backward — preBackward returning null propagates as null (no NPE in iso.from)")
+    void preBackwardReturningNullPropagatesAsNull() {
+      // Symmetric pin for the backward path: without this, a future revert of the backward guard
+      // goes unnoticed because no other test exercises preBackward returning null.
+      final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class).beforeBackward(t -> t.id().isEmpty() ? null : t);
+      assertEquals(null, mapper.backward(new TgtRec("", "alice")));
     }
   }
 

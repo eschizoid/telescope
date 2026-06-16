@@ -225,7 +225,9 @@ public final class Mapper<A, B> {
     if (a == null) return null;
     final A a1 = preForward == null ? a : preForward.apply(a);
     // Post-hook null guard: a preForward that returns null (e.g. a normalisation hook that maps
-    // sentinel-empty to null) must propagate as null, not NPE in iso.to(null).
+    // sentinel-empty to null) must propagate as null, not NPE in iso.to(null). postForward is
+    // intentionally NOT invoked on this path — matches the top-level null-input behaviour where
+    // both pre and post hooks are skipped.
     if (a1 == null) return null;
     final B b = iso.to(a1);
     return postForward == null ? b : postForward.apply(a1, b);

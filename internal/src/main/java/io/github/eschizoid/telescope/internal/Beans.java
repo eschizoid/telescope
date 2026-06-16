@@ -895,7 +895,8 @@ public final class Beans {
    * primitive (e.g. {@code int count}), {@code set(s, null)} substitutes the JLS default ({@code 0}
    * / {@code false} / etc.) rather than throwing — the value flows through {@link SettersWriter}
    * which null-guards primitive setters. This means the lens-law {@code set(s, null).get == null}
-   * does not hold for primitive properties (you get the JLS default back). Use a boxed wrapper type
+   * does not hold for primitive properties (you get the JLS default back). The same substitution
+   * applies to {@code modify(s, f)} when {@code f} returns {@code null}. Use a boxed wrapper type
    * on the property if {@code null} round-trip matters.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
