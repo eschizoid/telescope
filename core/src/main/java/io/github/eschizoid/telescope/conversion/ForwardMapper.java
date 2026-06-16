@@ -55,6 +55,8 @@ public final class ForwardMapper<A, B> {
 
   /** Forward conversion {@code A → B}. */
   public B forward(final A a) {
+    // Null in, null out — matches Mapper.forward's contract and MapStruct's generated null guard.
+    if (a == null) return null;
     return forward.get(a);
   }
 

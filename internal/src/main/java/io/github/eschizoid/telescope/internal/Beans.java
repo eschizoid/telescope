@@ -878,6 +878,44 @@ public final class Beans {
     };
   }
 
+  /**
+   * Class-deferred bean lens by property name — the bean-side mirror of {@code
+   * Records.fieldLens(String)}. The lens captures only the property name; both the getter and the
+   * writer are resolved against the SOURCE's runtime class on each call. Used by {@code
+   * Telescope.fieldByName(String)} on a bean Telescope, where the actual POJO class isn't known
+   * until call time (the path may have been constructed against a supertype).
+   *
+   * <p>{@code get} delegates to {@link #readProperty(Object, String)} which already short-circuits
+   * on a null source. {@code set} / {@code modify} resolve {@code autoWriter(source.getClass())} at
+   * call time and rebuild the source's class with the focused property replaced. Subtype instances
+   * are written back as their concrete runtime class, matching the lens-law expectation that {@code
+   * set(s, get(s)).equals(s)} round-trips.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  public static <P, A> Lens<P, A> fieldLens(final String property) {
+    return new Lens<>() {
+      @Override
+      public A get(final P source) {
+        return (A) readProperty(source, property);
+      }
+
+      @Override
+      public P set(final P source, final A value) {
+        if (source == null) return null;
+        final Class cls = source.getClass();
+        final var names = propertyNames(cls);
+        final var writer = (BeanWriter<P>) autoWriter(cls);
+        return writer.construct(names, n -> n.equals(property) ? value : readProperty(source, n));
+      }
+
+      @Override
+      public P modify(final P source, final Function<? super A, ? extends A> f) {
+        if (source == null) return null;
+        return set(source, f.apply(get(source)));
+      }
+    };
+  }
+
   private static boolean hasNoArgConstructor(final Class<?> cls) {
     try {
       cls.getDeclaredConstructor();
