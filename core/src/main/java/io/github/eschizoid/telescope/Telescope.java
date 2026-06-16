@@ -597,6 +597,14 @@ public sealed class Telescope<
    *
    * UserDto dto = projector.forward(entity);
    * }</pre>
+   *
+   * <p><b>Lenient by default.</b> Unmatched target properties take their JLS default ({@code null}
+   * for reference, {@code 0} for primitives, {@code false} for {@code boolean}); unmatched source
+   * properties are silently ignored. This matches MapStruct's generated-mapper default for every
+   * mapper and removes the "many drops + constants for a small rename" friction on the small-DTO →
+   * large-entity migration shape. Use the bidirectional {@link #mapper(Class, Class, MapStep...)}
+   * instead if you need the strict bijection check (which guards {@code backward()} against
+   * silently losing data).
    */
   public static <A, B> ForwardMapper<A, B> mapperForward(
     final Class<A> source,

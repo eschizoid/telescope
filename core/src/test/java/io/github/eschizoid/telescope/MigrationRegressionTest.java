@@ -1840,5 +1840,103 @@ class MigrationRegressionTest {
       assertEquals("alice", tgt.getName());
       assertEquals(null, tgt.getCreatedBy());
     }
+
+    @Test
+    @DisplayName(
+      "hook chain (afterForward) composes with lenient construction — stamped fields land on the leniently-built target"
+    )
+    void hookChainComposesWithLeniency() {
+      // Pins that the lenient-construction change doesn't break afterForward composition. The
+      // mapper is built leniently (unmatched fields default), then the hook stamps a derived
+      // field post-mapping. Both behaviours fire correctly together.
+      final var mapper = Telescope.mapperForward(
+        SmallDto.class,
+        LargeEntity.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      ).afterForward(e -> {
+        e.setCreatedBy("system");
+        return e;
+      });
+      final var tgt = mapper.forward(new SmallDto("o1", "alice", 42));
+      assertEquals("system", tgt.getCreatedBy(), "afterForward hook fired");
+      assertEquals(null, tgt.getUpdatedBy(), "other unmatched fields still at JLS default");
+      assertEquals("alice", tgt.getName(), "matched field carried through");
+    }
+
+    public static class HolderWithCustomer {
+
+      private InnerCustomer customer;
+
+      public InnerCustomer getCustomer() {
+        return customer;
+      }
+
+      public void setCustomer(final InnerCustomer customer) {
+        this.customer = customer;
+      }
+    }
+
+    public static class InnerCustomer {
+
+      private String email;
+
+      public String getEmail() {
+        return email;
+      }
+
+      public void setEmail(final String email) {
+        this.email = email;
+      }
+    }
+
+    public static class FlatTgt {
+
+      private String customerEmail;
+      private String otherField;
+
+      public String getCustomerEmail() {
+        return customerEmail;
+      }
+
+      public void setCustomerEmail(final String customerEmail) {
+        this.customerEmail = customerEmail;
+      }
+
+      public String getOtherField() {
+        return otherField;
+      }
+
+      public void setOtherField(final String otherField) {
+        this.otherField = otherField;
+      }
+    }
+
+    @Test
+    @DisplayName(
+      "Mapping.to(srcTelescope, tgtAccessor) composes with lenient — nested source row + unmatched target field"
+    )
+    void telescopeRowComposesWithLeniency() {
+      // A nested-source telescope row alongside an UNMATCHED target field. Pre-fix this needed a
+      // constant() for `otherField`. Under lenient default, `otherField` takes its JLS default
+      // while the explicit telescope-row binding still fires for `customerEmail`.
+      final var mapper = Telescope.mapperForward(
+        HolderWithCustomer.class,
+        FlatTgt.class,
+        Mapping.to(
+          Telescope.ofBean(HolderWithCustomer.class)
+            .field(HolderWithCustomer::getCustomer)
+            .field(InnerCustomer::getEmail),
+          FlatTgt::getCustomerEmail
+        ),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new HolderWithCustomer();
+      final var c = new InnerCustomer();
+      c.setEmail("alice@example.com");
+      src.setCustomer(c);
+      final var tgt = mapper.forward(src);
+      assertEquals("alice@example.com", tgt.getCustomerEmail(), "telescope row fired");
+      assertEquals(null, tgt.getOtherField(), "unmatched target field at JLS default");
+    }
   }
 }
