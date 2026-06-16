@@ -919,14 +919,13 @@ public sealed class Telescope<
    * <p>Writes pass through unchanged — only the read side gets the hook. For symmetric write
    * transformation, see {@link #before(Function)}.
    *
-   * <p><b>Lattice note — one-sided shape.</b> The internal {@link
-   * io.github.eschizoid.telescope.internal.optics.Iso} composed here uses {@code hook} on the read
-   * side and identity on the write side, so the produced Iso does <em>not</em> satisfy the
-   * round-trip law ({@code from(to(a)) == a} only holds when {@code hook} is identity). Safe under
-   * {@code Lens.then(Iso)} composition — which routes reads and writes through separate legs and
-   * never round-trips a single value through both — but future contributors must not assume this is
-   * a lawful Iso in isolation. The same caveat applies to {@link #before(Function)}, {@link
-   * Mapping#toOneWay Mapping.toOneWay}, and {@link Mapping#toOrElse Mapping.toOrElse}.
+   * <p><b>Lattice note — one-sided shape.</b> The internal {@link Iso} composed here uses {@code
+   * hook} on the read side and identity on the write side, so the produced Iso does <em>not</em>
+   * satisfy the round-trip law ({@code from(to(a)) == a} only holds when {@code hook} is identity).
+   * Safe under {@code Lens.then(Iso)} composition — which routes reads and writes through separate
+   * legs and never round-trips a single value through both — but future contributors must not
+   * assume this is a lawful Iso in isolation. The same caveat applies to {@link #before(Function)},
+   * {@link Mapping#toOneWay Mapping.toOneWay}, and {@link Mapping#toOrElse Mapping.toOrElse}.
    *
    * <pre>{@code
    * Telescope.of(User.class).field(User::email).after(String::trim)

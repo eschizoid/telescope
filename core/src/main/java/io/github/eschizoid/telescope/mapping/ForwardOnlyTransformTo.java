@@ -1,6 +1,8 @@
 package io.github.eschizoid.telescope.mapping;
 
+import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import java.util.function.Function;
 
@@ -11,12 +13,11 @@ import java.util.function.Function;
  *
  * <p>Routed by {@code DeepMap} to a forward-only post-fixup: the produced row-level {@code Iso} has
  * a throwing backward at the field site, AND {@code Telescope.mapper(...)} refuses to build a
- * bidirectional {@link io.github.eschizoid.telescope.conversion.Mapper Mapper} when this row is
- * present (it tells the caller to use {@link io.github.eschizoid.telescope.Telescope#mapperForward
- * Telescope.mapperForward} instead). The compile-time-typed forward-only contract surfaces at the
- * factory boundary rather than via a deferred runtime throw — closing the partial-Iso composition
- * concern that the original {@link TypedTransformTo} shape carried with its throwing-backward
- * field.
+ * bidirectional {@link Mapper} when this row is present (it tells the caller to use {@link
+ * Telescope#mapperForward Telescope.mapperForward} instead). The compile-time-typed forward-only
+ * contract surfaces at the factory boundary rather than via a deferred runtime throw — closing the
+ * partial-Iso composition concern that the original {@link TypedTransformTo} shape carried with its
+ * throwing-backward field.
  *
  * <p>Internal — users construct via {@link Mapping#toOneWay(Accessor, Accessor, Function)} and
  * never see this type at the call site.

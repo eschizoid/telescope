@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serial;
@@ -1209,22 +1210,14 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("ForwardMapper.forward(null) returns null")
     void forwardMapperNullReturnsNull() {
-      final var mapper = io.github.eschizoid.telescope.conversion.ForwardMapper.create(
-        (SrcRec s) -> new TgtRec(s.id(), s.name()),
-        SrcRec.class,
-        TgtRec.class
-      );
+      final var mapper = ForwardMapper.create((SrcRec s) -> new TgtRec(s.id(), s.name()), SrcRec.class, TgtRec.class);
       assertEquals(null, mapper.forward(null));
     }
 
     @Test
     @DisplayName("ForwardMapper.read(null) returns null — read is documented as an alias of forward")
     void forwardMapperReadNullReturnsNull() {
-      final var mapper = io.github.eschizoid.telescope.conversion.ForwardMapper.create(
-        (SrcRec s) -> new TgtRec(s.id(), s.name()),
-        SrcRec.class,
-        TgtRec.class
-      );
+      final var mapper = ForwardMapper.create((SrcRec s) -> new TgtRec(s.id(), s.name()), SrcRec.class, TgtRec.class);
       assertEquals(null, mapper.read(null));
       // Non-null parity: read and forward must produce the same output, otherwise a future
       // refactor that breaks the alias contract slips through unnoticed.

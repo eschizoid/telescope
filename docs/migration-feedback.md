@@ -138,12 +138,12 @@ This occurs when a boxed `Integer` source value is `null` and gets auto-unboxed 
 **Expected:** Automatic boxing/unboxing between primitive and wrapper types, matching the JavaBeans specification and
 MapStruct behavior. `null` boxed values should map to the primitive's JLS default (`0`, `false`, `'\0'`).
 
-**Workaround:** Add explicit `forward()` rows with manual boxing:
+**Workaround:** Add explicit `Mapping.toOneWay()` rows with manual boxing:
 
 ```java
-forward(Source::getCount, Target::getCount, i -> i != null ? (int) i : 0),
-forward(Telescope.ofBean(Source.class).fieldByName("active"),
-        Target::getActive, b -> (Boolean) b)
+toOneWay(Source::getCount, Target::getCount, i -> i != null ? (int) i : 0),
+toOneWay(Telescope.ofBean(Source.class).fieldByName("active"),
+         Target::getActive, b -> (Boolean) b)
 ```
 
 **Proposed fix:** DeepMap's shape-compatibility check should treat primitive/wrapper pairs as compatible and
@@ -750,7 +750,7 @@ remains EXACT runtime-class match (pinned by `SourcesByClassGenericsTest#byClass
 `toOneWay` reads as the unidirectional sibling of `to(...)` — both factories produce a row keyed off a
 `(sourceAccessor, targetAccessor)` pair; `to` is bidirectional, `toOneWay` carries only a forward function. The
 call-site collision with local variables named `forward` / `forwardEvent` is gone, and the symmetry with `to(...)` aids
-discovery. The `ForwardOnlyTransformTo` sealed-permit record is unchanged; only the factory name flipped.
+discovery. The `ForwardOnlyTransformTo` sealed-permit record is unchanged; only the factory name flipped. PR #140.
 
 ---
 
