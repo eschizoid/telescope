@@ -457,11 +457,11 @@ class MappingWhenTest {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
         when(
           (java.util.function.Predicate<Src>) s -> true,
-          io.github.eschizoid.telescope.mapping.Mapping.forward(Src::name, Dst::name, String::toUpperCase)
+          io.github.eschizoid.telescope.mapping.Mapping.toOneWay(Src::name, Dst::name, String::toUpperCase)
         )
       );
       final var msg = ex.getMessage();
-      assertEquals(true, msg.contains("Mapping.forward"), "error names the forward-only construct");
+      assertEquals(true, msg.contains("Mapping.toOneWay"), "error names the forward-only construct");
       assertEquals(
         true,
         msg.contains("fold the predicate"),

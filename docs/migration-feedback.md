@@ -758,6 +758,13 @@ gates now fire under `lenient || isNested || telescope-fixups`. `Telescope.mappe
 lenient path; `Telescope.mapper(...)` keeps the strict bijection check for round-trip safety. Pinned by the
 `MapperForwardLenientByDefault` nested test in `MigrationRegressionTest`. PR #138.
 
+**Interaction with Bug 6.** Bug 6 made NESTED auto-recursed pairs lenient regardless of the top-level call's strictness;
+Enh 9 makes TOP-LEVEL forward-only calls lenient. The two axes don't overlap: bidirectional `Telescope.mapper(...)`
+stays strict at the top level (Bug 6's nested leniency still applies on its recursive descent), and forward-only
+`Telescope.mapperForward(...)` is lenient at every level (top via `lenient=true`, nested via `isNested`). The recursive
+`populateIso` call passes `lenient=false` so the flag's meaning stays anchored to the user-facing top-level entry point.
+No double-leniency path is constructible.
+
 ---
 
 **Problem:** `Telescope.mapperForward()` ran the same strict bijection check as `Telescope.mapper()` — it threw at

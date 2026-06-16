@@ -43,7 +43,7 @@ import java.lang.annotation.RetentionPolicy;
  * {@code backward} as a stub (e.g. throwing {@link UnsupportedOperationException}); the generated
  * bridge never invokes it.
  *
- * <p>This mirrors the runtime {@code Mapping.forward(srcAcc, tgtAcc, fn)} factory — same forward-
+ * <p>This mirrors the runtime {@code Mapping.toOneWay(srcAcc, tgtAcc, fn)} factory — same forward-
  * only semantics, same "this slot's backward is undefined" contract.
  */
 @Retention(RetentionPolicy.SOURCE)
@@ -104,7 +104,7 @@ public @interface Transform {
    * Opt in to forward-only semantics: the generated bridge emits a zero-value fill in the backward
    * direction for this field, the same way {@code @Bridge(drops = ...)} fills dropped sources on
    * backward. The user's {@code BridgeFn#backward} is never invoked; implementations may stub it or
-   * throw. Mirrors the runtime {@code Mapping.forward(srcAcc, tgtAcc, fn)} factory.
+   * throw. Mirrors the runtime {@code Mapping.toOneWay(srcAcc, tgtAcc, fn)} factory.
    *
    * <p>The generated {@code patch(base, partial)} method also skips the backward read for this slot
    * and preserves {@code base.field()} unchanged — a forward-only transform has no defined inverse,

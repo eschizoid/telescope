@@ -543,7 +543,7 @@ public sealed class Telescope<
     return MapperBuilder.create(source, target);
   }
 
-  // Detect forward-only rows (`Mapping.forward(...)`) and steer the caller to mapperForward(...)
+  // Detect forward-only rows (`Mapping.toOneWay(...)`) and steer the caller to mapperForward(...)
   // so the partial-Iso shape doesn't silently corrupt downstream Mapper.backward / Mapper.patch
   // semantics. The check is O(steps.length); rows are typically <20 per mapper. Skips for
   // mapperForward callers which legitimately accept forward-only rows.
@@ -561,7 +561,7 @@ public sealed class Telescope<
             source.getSimpleName() +
             ", " +
             target.getSimpleName() +
-            ", ...) cannot accept a Mapping.forward(...) row for field '" +
+            ", ...) cannot accept a Mapping.toOneWay(...) row for field '" +
             r.targetField() +
             "' — forward(...) is forward-only and would silently corrupt Mapper.backward / Mapper.patch. " +
             "Use Telescope.mapperForward(" +
@@ -579,7 +579,7 @@ public sealed class Telescope<
    * Forward-only sibling of {@link #mapper(Class, Class, MapStep...)} — returns a {@link
    * ForwardMapper} whose backward direction is not present at the type level. Use when the
    * conversion is genuinely one-way (entity → DTO write-only, audit-log projection, normalisation
-   * pipeline) and rows include {@link io.github.eschizoid.telescope.mapping.Mapping#forward
+   * pipeline) and rows include {@link io.github.eschizoid.telescope.mapping.Mapping#toOneWay
    * forward(...)} / {@link io.github.eschizoid.telescope.mapping.Mapping#constant constant(...)} /
    * {@link io.github.eschizoid.telescope.mapping.Mapping#compute compute(...)} that make the
    * backward direction meaningless.
@@ -925,7 +925,7 @@ public sealed class Telescope<
    * {@code Lens.then(Iso)} composition — which routes reads and writes through separate legs and
    * never round-trips a single value through both — but future contributors must not assume this is
    * a lawful Iso in isolation. The same caveat applies to {@link #before(Function)}, {@link
-   * io.github.eschizoid.telescope.mapping.Mapping#forward Mapping.forward}, and {@link
+   * io.github.eschizoid.telescope.mapping.Mapping#toOneWay Mapping.toOneWay}, and {@link
    * io.github.eschizoid.telescope.mapping.Mapping#toOrElse Mapping.toOrElse}.
    *
    * <pre>{@code
@@ -1051,6 +1051,17 @@ public sealed class Telescope<
    * are erased at runtime. They're stored on the produced {@link ForwardMapper} so downstream
    * machinery (e.g. {@link io.github.eschizoid.telescope.quarkus.TelescopeMapperRegistry}) can key
    * the mapper by the {@code (source, target)} pair.
+   *
+   * <p><b>Read semantics inherited from {@link #read}.</b> On a {@link Lens}-rooted Telescope the
+   * forward returns the single focused value. On a {@link
+   * io.github.eschizoid.telescope.internal.optics.Affine Affine}-rooted Telescope (e.g. after
+   * {@code .as(...)} or {@code .whenPresent(...)}) the forward throws {@link
+   * java.util.NoSuchElementException} when the focused value is absent. On a {@link
+   * io.github.eschizoid.telescope.internal.optics.Traversal Traversal}-rooted Telescope (e.g. after
+   * {@code .each(...)} or {@code .filter(...)}) the forward returns the FIRST focused element and
+   * throws {@link java.util.NoSuchElementException} on an empty traversal. If you need null-safe
+   * semantics for an absent / empty case, wrap the Telescope's read with {@link #find} at the call
+   * site instead of going through this projection.
    */
   public ForwardMapper<S, A> asForwardMapper(final Class<S> sourceClass, final Class<A> targetClass) {
     return ForwardMapper.create(this::read, sourceClass, targetClass);

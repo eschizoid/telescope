@@ -51,4 +51,24 @@ class SourcesByClassGenericsTest {
     final Object obj = sources.byClass(raw);
     assertEquals(new Headers("t"), obj);
   }
+
+  // Subclass-key gotcha — the lookup is by EXACT runtime class. A user querying for a supertype
+  // Class against a bag containing a subclass-typed source gets null, not the subclass instance.
+  // This is documented behaviour (the bag keys by source.getClass()), but worth pinning so a
+  // future refactor that adds subtype-matching surfaces deliberately, not as a silent change.
+  static class Animal {}
+
+  static final class Dog extends Animal {}
+
+  @Test
+  @DisplayName("byClass(Supertype) against a subtype-stored source returns null — EXACT runtime class match")
+  void byClassExactRuntimeClassMatchOnly() {
+    final var sources = Sources.of(new Dog());
+    // Bag is keyed by Dog.class. Looking up by Animal.class doesn't walk the class hierarchy.
+    final Animal animal = sources.byClass(Animal.class);
+    assertNull(animal, "Supertype lookup against a subtype-stored source returns null");
+    // Direct lookup by the subtype class works as expected.
+    final Dog dog = sources.byClass(Dog.class);
+    assertEquals(new Dog().getClass(), dog.getClass());
+  }
 }

@@ -1,8 +1,8 @@
 package io.github.eschizoid.telescope;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.constant;
-import static io.github.eschizoid.telescope.mapping.Mapping.forward;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.toOneWay;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
@@ -35,7 +35,7 @@ class ForwardMapperTest {
       Entity.class,
       Dto.class,
       to(Entity::id, Dto::id),
-      forward(Entity::createdAt, Dto::createdAtIso, Instant::toString),
+      toOneWay(Entity::createdAt, Dto::createdAtIso, Instant::toString),
       to(Entity::firstName, Dto::fullName),
       constant(Dto::tenant, "production")
     );
@@ -55,7 +55,7 @@ class ForwardMapperTest {
       Entity.class,
       Dto.class,
       to(Entity::id, Dto::id),
-      forward(Entity::createdAt, Dto::createdAtIso, Instant::toString),
+      toOneWay(Entity::createdAt, Dto::createdAtIso, Instant::toString),
       to(Entity::firstName, Dto::fullName),
       constant(Dto::tenant, "x")
     );
@@ -73,7 +73,7 @@ class ForwardMapperTest {
       Entity.class,
       Dto.class,
       to(Entity::id, Dto::id),
-      forward(Entity::createdAt, Dto::createdAtIso, Instant::toString),
+      toOneWay(Entity::createdAt, Dto::createdAtIso, Instant::toString),
       to(Entity::firstName, Dto::fullName),
       constant(Dto::tenant, "p")
     );
@@ -97,7 +97,7 @@ class ForwardMapperTest {
       Entity.class,
       Dto.class,
       to(Entity::id, Dto::id),
-      forward(Entity::createdAt, Dto::createdAtIso, Instant::toString),
+      toOneWay(Entity::createdAt, Dto::createdAtIso, Instant::toString),
       to(Entity::firstName, Dto::fullName),
       constant(Dto::tenant, "x")
     );
