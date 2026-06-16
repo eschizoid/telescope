@@ -447,6 +447,157 @@ class MigrationRegressionTest {
       final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
       assertEquals(0, tgt.getCount()); // JLS default for int
     }
+
+    // Broader primitive coverage (long, double, char, short, byte, float) so a future refactor
+    // of the wrap()/primitiveDefault tables doesn't silently drop a primitive variant.
+
+    public static class WideSrc {
+
+      private long l;
+      private Double d;
+      private char c;
+      private Short sh;
+      private byte by;
+      private Float f;
+
+      public long getL() {
+        return l;
+      }
+
+      public void setL(final long l) {
+        this.l = l;
+      }
+
+      public Double getD() {
+        return d;
+      }
+
+      public void setD(final Double d) {
+        this.d = d;
+      }
+
+      public char getC() {
+        return c;
+      }
+
+      public void setC(final char c) {
+        this.c = c;
+      }
+
+      public Short getSh() {
+        return sh;
+      }
+
+      public void setSh(final Short sh) {
+        this.sh = sh;
+      }
+
+      public byte getBy() {
+        return by;
+      }
+
+      public void setBy(final byte by) {
+        this.by = by;
+      }
+
+      public Float getF() {
+        return f;
+      }
+
+      public void setF(final Float f) {
+        this.f = f;
+      }
+    }
+
+    public static class WideTgt {
+
+      private Long l; // primitive → boxed
+      private double d; // boxed → primitive
+      private Character c; // primitive → boxed
+      private short sh; // boxed → primitive
+      private Byte by; // primitive → boxed
+      private float f; // boxed → primitive
+
+      public Long getL() {
+        return l;
+      }
+
+      public void setL(final Long l) {
+        this.l = l;
+      }
+
+      public double getD() {
+        return d;
+      }
+
+      public void setD(final double d) {
+        this.d = d;
+      }
+
+      public Character getC() {
+        return c;
+      }
+
+      public void setC(final Character c) {
+        this.c = c;
+      }
+
+      public short getSh() {
+        return sh;
+      }
+
+      public void setSh(final short sh) {
+        this.sh = sh;
+      }
+
+      public Byte getBy() {
+        return by;
+      }
+
+      public void setBy(final Byte by) {
+        this.by = by;
+      }
+
+      public float getF() {
+        return f;
+      }
+
+      public void setF(final float f) {
+        this.f = f;
+      }
+    }
+
+    @Test
+    @DisplayName("all 6 remaining primitive ↔ wrapper pairs (long, double, char, short, byte, float) autobox")
+    void allPrimitiveVariantsAutoBox() {
+      final var mapper = Telescope.mapper(WideSrc.class, WideTgt.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var src = new WideSrc();
+      src.setL(99L);
+      src.setD(2.5);
+      src.setC('z');
+      src.setSh((short) 7);
+      src.setBy((byte) 3);
+      src.setF(1.5f);
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(Long.valueOf(99L), tgt.getL());
+      assertEquals(2.5, tgt.getD());
+      assertEquals(Character.valueOf('z'), tgt.getC());
+      assertEquals((short) 7, tgt.getSh());
+      assertEquals(Byte.valueOf((byte) 3), tgt.getBy());
+      assertEquals(1.5f, tgt.getF());
+    }
+
+    @Test
+    @DisplayName("null boxed source values to primitive targets use JLS defaults for every primitive variant")
+    void nullBoxedToPrimitiveDefaultsForEveryPrimitive() {
+      final var mapper = Telescope.mapper(WideSrc.class, WideTgt.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var src = new WideSrc();
+      // src.d, src.sh, src.f left null
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(0.0, tgt.getD());
+      assertEquals((short) 0, tgt.getSh());
+      assertEquals(0.0f, tgt.getF());
+    }
   }
 
   @Nested

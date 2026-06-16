@@ -1121,8 +1121,8 @@ public final class DeepMap {
   /**
    * Bug 7 — Collection ↔ Collection element-copy Iso. The forward instantiates the target
    * collection via {@link Beans#intermediateAllocator(Class)} (cached LMF-bound Supplier) and
-   * {@code addAll}'s the source; backward is symmetric. Returns {@code null} when either side
-   * has no usable allocator, letting the caller fall through to the next branch (typically the
+   * {@code addAll}'s the source; backward is symmetric. Returns {@code null} when either side has
+   * no usable allocator, letting the caller fall through to the next branch (typically the
    * shape-mismatch IAE).
    *
    * <p>No element-type recursion: this branch fires on raw, non-parameterised subtypes (e.g. {@code
