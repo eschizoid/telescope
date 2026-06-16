@@ -13,10 +13,10 @@ MapStruct sidesteps this by lifting the mapping declaration out of the model. Th
 file in a third "wiring" module that depends on both the source and target modules. The model classes stay
 annotation-free.
 
-Today, telescope adopters facing the constraint fall back to the runtime `Telescope.mapper(Source.class, Target.class,
-...)` factory — they lose the codegen path, accept the ~94× runtime-vs-codegen perf gap, and write the type-pair
-inline at every call site. The migration-feedback report from a 12-mapper MapStruct → telescope adopter flagged this as
-a P1 blocker for any non-trivial multi-module codebase.
+Today, telescope adopters facing the constraint fall back to the runtime
+`Telescope.mapper(Source.class, Target.class, ...)` factory — they lose the codegen path, accept the ~94×
+runtime-vs-codegen perf gap, and write the type-pair inline at every call site. The migration-feedback report from a
+12-mapper MapStruct → telescope adopter flagged this as a P1 blocker for any non-trivial multi-module codebase.
 
 ## Decision
 
@@ -42,9 +42,9 @@ cross-module setups.
 
 ## Consequences
 
-- **MapStruct parity unlocked for split-module codebases.** The carrier shape mirrors `@Mapper`'s placement
-  philosophy — declaration sits in a module that sees both sides, not on the model itself. Adopters porting from
-  MapStruct don't need to restructure their module graph.
+- **MapStruct parity unlocked for split-module codebases.** The carrier shape mirrors `@Mapper`'s placement philosophy —
+  declaration sits in a module that sees both sides, not on the model itself. Adopters porting from MapStruct don't need
+  to restructure their module graph.
 - **Codegen path stays the hot path even for cross-module pairs.** Today's fallback (runtime `Telescope.mapper(...)`)
   drops the ~94× perf advantage on the floor. The carrier form keeps codegen — same emitted `Iso<X, Y>` body, same
   `BRIDGE` constant, same JIT-inlinable dispatch.
@@ -57,9 +57,9 @@ cross-module setups.
   is otherwise unchanged.
 - **`as<Target>()` Path hop is only generated for the model-anchored form.** Carrier-anchored bridges don't have a
   source-class `<Source>Path<R>` to hang the hop off of, by design — the source class is annotation-free in the
-  cross-module case. Adopters use the carrier's `<Carrier>Bridge.BRIDGE` constant directly via `Telescope.from(...)
-  .to(...).using(BRIDGE)` or `Telescope.of(Source.class).then(BRIDGE)`. Documented limitation; symmetric with the reality
-  that the source module can't see the carrier class either.
+  cross-module case. Adopters use the carrier's `<Carrier>Bridge.BRIDGE` constant directly via
+  `Telescope.from(...) .to(...).using(BRIDGE)` or `Telescope.of(Source.class).then(BRIDGE)`. Documented limitation;
+  symmetric with the reality that the source module can't see the carrier class either.
 
 ## Alternatives considered
 
