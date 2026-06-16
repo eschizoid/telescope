@@ -1486,7 +1486,23 @@ public final class Beans {
           handle,
           MethodType.methodType(void.class, declaringClass, instantiatedParamType)
         );
-        return (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+        final var lmfSetter = (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+        // Bug 8: defence-in-depth. The LMF-built setter for a primitive parameter (e.g.
+        // setCount(int)) NPEs when invoked with `null` (Object → Integer → int unbox). In the
+        // current architecture, Bug 6's placeholderIsoFor short-circuits unmatched primitive
+        // target fields to their JLS default before the value ever reaches here — so this guard
+        // is unreachable on the happy path. It's kept to lock the contract against future code
+        // paths that may legitimately deliver null to a primitive setter (e.g. a forthcoming
+        // autoboxing relaxation in Bug 3 work). When the wrapped parameter type is a primitive
+        // wrapper, the underlying setter takes a primitive — skip on null so the field stays
+        // at its JLS default rather than crashing the construct call.
+        if (paramType.isPrimitive()) {
+          return (pojo, value) -> {
+            if (value == null) return;
+            lmfSetter.accept(pojo, value);
+          };
+        }
+        return lmfSetter;
       } catch (final Throwable t) {
         throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
       }

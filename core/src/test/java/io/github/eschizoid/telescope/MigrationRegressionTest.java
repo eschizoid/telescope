@@ -352,6 +352,180 @@ class MigrationRegressionTest {
   }
 
   @Nested
+  @DisplayName("Bug 8 — SettersWriter NPE on null primitive value")
+  class Bug8PrimitiveSetterNullNpe {
+
+    public static class Source {
+
+      private String name;
+
+      // No `count` property — after Bug 6 lenient nested mode, valueByName returns null for the
+      // target's `count` field.
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+    }
+
+    public static class Target {
+
+      private String name;
+      private int count; // primitive, will receive null from valueByName
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      public int getCount() {
+        return count;
+      }
+
+      public void setCount(final int count) {
+        this.count = count;
+      }
+    }
+
+    public static class TopSource {
+
+      private Source nested;
+
+      public Source getNested() {
+        return nested;
+      }
+
+      public void setNested(final Source nested) {
+        this.nested = nested;
+      }
+    }
+
+    public static class TopTarget {
+
+      private Target nested;
+
+      public Target getNested() {
+        return nested;
+      }
+
+      public void setNested(final Target nested) {
+        this.nested = nested;
+      }
+    }
+
+    @Test
+    @DisplayName("forward(top) where nested target has primitive setter for an unmatched field uses JLS default")
+    void primitiveSetterReceivesJlsDefaultOnNullValue() {
+      // After Bug 6 + Bug 5 fixes, a nested target property like `int count` whose source has
+      // no matching `count` field receives `null` from valueByName. SettersWriter.construct used
+      // to NPE when passing that null to `setCount(int)` (Integer-to-int unboxing on null).
+      // Fix: null-guard primitive setters at construction time so primitives stay at their JLS
+      // default (0 for int, false for boolean, etc.).
+      final var mapper = Telescope.mapper(
+        TopSource.class,
+        TopTarget.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new TopSource();
+      final var inner = new Source();
+      inner.setName("alice");
+      src.setNested(inner);
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals("alice", tgt.getNested().getName());
+      // Target's primitive int stays at JLS default 0 (source had no `count`).
+      assertEquals(0, tgt.getNested().getCount());
+    }
+
+    public static class FlatSource {
+
+      private String name;
+      private Integer count; // boxed; will hold null at runtime
+      private Boolean active; // boxed; will hold null at runtime
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      public Integer getCount() {
+        return count;
+      }
+
+      public void setCount(final Integer count) {
+        this.count = count;
+      }
+
+      public Boolean getActive() {
+        return active;
+      }
+
+      public void setActive(final Boolean active) {
+        this.active = active;
+      }
+    }
+
+    public static class FlatTarget {
+
+      private String name;
+      private Integer count; // matching: boxed → boxed (no autoboxing needed)
+      private Boolean active; // matching: boxed → boxed
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
+
+      public Integer getCount() {
+        return count;
+      }
+
+      public void setCount(final Integer count) {
+        this.count = count;
+      }
+
+      public Boolean getActive() {
+        return active;
+      }
+
+      public void setActive(final Boolean active) {
+        this.active = active;
+      }
+    }
+
+    @Test
+    @DisplayName("forward(src) with null boxed source values reaching matching boxed setters does not NPE")
+    void nullBoxedSourceReachesBoxedSetterWithoutNpe() {
+      // Even on matched-name boxed→boxed paths, the source value can legitimately be null and
+      // the target setter must accept null gracefully. Pins the contract that the construct
+      // loop doesn't choke on legitimately-null boxed values.
+      final var mapper = Telescope.mapper(
+        FlatSource.class,
+        FlatTarget.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new FlatSource();
+      src.setName("alice");
+      // count and active left null
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals("alice", tgt.getName());
+      assertEquals(null, tgt.getCount());
+      assertEquals(null, tgt.getActive());
+    }
+  }
+
+  @Nested
   @DisplayName("Bug 5 — SettersWriter throws on getter-only properties")
   class Bug5GetterOnlyProperties {
 
