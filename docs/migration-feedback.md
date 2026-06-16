@@ -521,6 +521,66 @@ reintroduces Bug 8 and breaks the MapStruct-parity contract (`@Mapping` default 
 primitive targets). **Workaround:** declare the property as a boxed wrapper (`Integer count` instead of `int count`) if
 your call site depends on a faithful null round-trip.
 
+---
+
+### 11. Parameterised Collection / Map subtype pairs across DIFFERENT raw classes are rejected
+
+**Severity:** P1 — the most common MapStruct migrator shape: a JPA entity declares `List<X>` (interface) and the DTO
+declares `ArrayList<Y>` (concrete impl), or vice versa. Hits adopters on day one of migration.
+
+**Reproduction:**
+
+```java
+class Outer {
+  private List<Inner> items;
+  public List<Inner> getItems() { return items; } public void setItems(List<Inner> items) { this.items = items; }
+}
+class OuterDto {
+  private ArrayList<InnerDto> items;
+  public ArrayList<InnerDto> getItems() { return items; } public void setItems(ArrayList<InnerDto> items) { this.items = items; }
+}
+record Inner(String id) {} record InnerDto(String id) {}
+
+Telescope.mapper(Outer.class, OuterDto.class, writeBeans(SETTERS));
+// IllegalStateException: Deep map: component 'items' has incompatible source/target shapes —
+// java.util.List<Inner> vs java.util.ArrayList<InnerDto>.
+```
+
+**Root cause:** `DeepMap.ContainerShape.of` only recognised exact-match raw classes (`raw == List.class`,
+`raw == Map.class`, etc.). For `ArrayList<Y>` the call returned null, so the autoIso container-match branch never fired
+— the throw at the end of `computeAutoIso` was the fallback. Bug 7 fixed the _raw-subtype-on-both-sides_ case
+(`class ImageUrls extends ArrayList<X>` on both sides via `collectionCopyIso`) but not the parameterised case.
+
+**Expected:** the parameterised subtype pair is recognised as a same-kind container, the element-iso is lifted into a
+target-concrete-class-aware allocator, and `forward()`/`backward()` produce instances of the declared raw class on each
+side. MapStruct's generated mappers do this with a simple for-loop.
+
+**Fix:**
+
+- `core/.../DeepMap.java` — `ContainerShape` extended to carry the raw class and accept any subtype of `List` / `Set` /
+  `Map` via `isAssignableFrom`. (Optional stays exact-match — it's final.)
+- `core/.../DeepMap.java` — new `liftListIntoTargetRaw` / `liftSetIntoTargetRaw` / `liftMapIntoTargetRaw` helpers that
+  allocate fresh instances of the target's concrete raw class via `Beans.intermediateAllocator`, with explicit fallbacks
+  for the common JDK Collection / Map types (`ArrayList`, `LinkedList`, `ArrayDeque`, `HashSet`, `LinkedHashSet`,
+  `TreeSet`, `HashMap`, `LinkedHashMap`, `TreeMap`, `ConcurrentHashMap`, etc.) since `LambdaMetafactory.privateLookupIn`
+  can't bind classes in `java.base`. User-defined subclasses go through `intermediateAllocator` as before.
+
+**Limitation by design:** the same-kind gate accepts any (List, List) / (Set, Set) / (Map, Map) pair, but mismatched
+ordering / threading semantics within a kind (e.g. `LinkedHashMap → HashMap` reorders, `ConcurrentHashMap → HashMap`
+drops the concurrency contract) are silent — same trade-off as Bug 7's `sameKindMap`. Adopters needing strict
+preservation declare an explicit `Mapping.via(...)` row.
+
+**`EnumMap` targets are rejected at plan-time.** `EnumMap` has no no-arg constructor (it requires `Class<K>` to know the
+enum key class), and the auto-Iso lift can't recover the key class at allocation time. The mapper throws an
+`IllegalStateException` at construction with a precise diagnostic. Adopters using `EnumMap` target fields must use the
+codegen path (where the key class is captured at compile time) or an explicit `Mapping.via(...)` row that constructs the
+EnumMap with its key class. Same applies to any user-defined Collection/Map subclass without a public no-arg constructor
+— caught at plan-time with a class-named diagnostic, no silent surprise.
+
+---
+
+## Enhancement Requests
+
 ### 1. Cross-module `@Bridge` support (MapStruct parity)
 
 **Problem:** `@Bridge` must live on the model class, which constrains it to types visible from that class's own Maven
@@ -726,6 +786,29 @@ covers this for `mapperForward()` too
 
 ---
 
+### 10. `:internal` test coverage hardening (post-v1.0.1)
+
+**Source:** codecov report on the `:internal` module post-v1.0.1 release. Migration-feedback bugs that would have been
+caught earlier are pinned by end-to-end `MigrationRegressionTest`, but unit-level coverage on the substrate is thin —
+future refactors of the LMF cache, the writer strategies, or the reflection helpers have less protection than they
+should.
+
+**Priority targets** (by coverage gap × adoption pain on regression):
+
+- `internal/NullDefaults.java` — **0% covered** (20 lines). Zero unit pins on the JLS-default substitution table. Bug 8
+  - Bug 3's primitive-wrapper-and-null-guard work both depend on this; a future refactor that subtly broke
+    `NullDefaults` would surface only as an E2E miss.
+- `internal/Beans.java` — **60% covered** (157 lines missed of 472). The hottest path in the codebase; the writer
+  strategies (`SettersWriter`, `BuilderWriter`, `FieldsWriter`, `ConstructorWriter`) have partial coverage and the LMF
+  cache substrate is only exercised end-to-end.
+- `internal/Reflective.java` (57%), `internal/Records.java` (57%), `internal/MetadataHolderProbe.java` (54%) — the
+  reflection-helper layer. Per-method unit tests would pin invariants the structural-Iso assembly depends on.
+
+**Scope:** add `BeansTest` / `RecordsTest` / `NullDefaultsTest` / `MetadataHolderProbeTest` coverage for the gaps.
+Target ≥80% line coverage on `:internal`. Not a correctness defect — quality debt.
+
+---
+
 ## Additional Fixes Applied During Migration (already-fixed in v1.0.1 — recorded for traceability)
 
 | Fix                          | File                      | Description                                                                                          |
@@ -748,36 +831,19 @@ covers this for `mapperForward()` too
 | Bug 8  | SettersWriter NPE when valueByName returns null for primitive    | P1       | Fixed (v1.0.1) |
 | Bug 9  | `forward(null)` / `backward(null)` NPE instead of returning null | P1       | Fixed (v1.0.1) |
 | Bug 10 | `fieldByName(String)` uses `Records.fieldLens()` for POJOs too   | P1       | Fixed (v1.0.1) |
+| Bug 11 | Parameterised Collection / Map subtype pairs across raw classes  | P1       | Fixed (v1.0.1) |
 
 ## Summary — Enhancements
 
-| #     | Description                                        | Priority | Status       |
-| ----- | -------------------------------------------------- | -------- | ------------ |
-| Enh 1 | Cross-module `@Bridge` carrier                     | High     | Open (v1.1+) |
-| Enh 2 | `ForwardMapper.liftList()`                         | Medium   | Open (v1.1+) |
-| Enh 3 | `Telescope.asForwardMapper()`                      | Low      | Open (v1.1+) |
-| Enh 4 | Processor ordering docs + BridgeProcessor deferral | Medium   | Open (v1.1+) |
-| Enh 5 | `Map` → POJO factory                               | Low      | Open (v1.1+) |
-| Enh 6 | `@Bridge` lenient mode                             | High     | Open (v1.1+) |
-| Enh 7 | `Sources.byClass()` generics                       | Low      | Open (v1.1+) |
-| Enh 8 | `Mapping.forward()` naming                         | Low      | Open (v1.1+) |
-| Enh 9 | `mapperForward()` lenient by default               | High     | Open (v1.1+) |
-
----
-
-## Known limitation surfaced during round 6 review (post-fix)
-
-**Parameterised Collection / Map subtype pairs across DIFFERENT raw classes** still throw "incompatible source/target
-shapes" at mapper construction.
-
-Example: `Outer.items : List<Inner>` (parameterised source) ↔ `OuterDto.items : ArrayList<InnerDto>` (parameterised
-target with different concrete class). The Bug 7 fix handles the _raw-subtype-on-both-sides_ case
-(`ImageUrls extends ArrayList<X>` on both sides). It does not yet cover the case where one side uses an interface
-(`List<X>`) and the other a concrete implementation (`ArrayList<Y>`) or two different concrete implementations
-parameterised over different element types.
-
-Workaround for v1.0.1: use the same raw container type on both sides, or declare an explicit `Mapping.via(...)` row.
-
-v1.1 work: extend `ContainerShape.of` to accept parameterised types whose raw class is a SUBTYPE (not exact match) of
-`List` / `Set` / `Map` / `Optional`, and combine with the per-element Iso lift + target-concrete-class allocator so the
-lifted Iso writes into a fresh instance of the target's concrete class.
+| #      | Description                                        | Priority | Status        |
+| ------ | -------------------------------------------------- | -------- | ------------- |
+| Enh 1  | Cross-module `@Bridge` carrier                     | High     | Open (v1.1+)  |
+| Enh 2  | `ForwardMapper.liftList()`                         | Medium   | Open (v1.1+)  |
+| Enh 3  | `Telescope.asForwardMapper()`                      | Low      | Open (v1.1+)  |
+| Enh 4  | Processor ordering docs + BridgeProcessor deferral | Medium   | Open (v1.1+)  |
+| Enh 5  | `Map` → POJO factory                               | Low      | Open (v1.1+)  |
+| Enh 6  | `@Bridge` lenient mode                             | High     | Open (v1.1+)  |
+| Enh 7  | `Sources.byClass()` generics                       | Low      | Open (v1.1+)  |
+| Enh 8  | `Mapping.forward()` naming                         | Low      | Open (v1.1+)  |
+| Enh 9  | `mapperForward()` lenient by default               | High     | Open (v1.1+)  |
+| Enh 10 | `:internal` test coverage hardening                | Medium   | Open (v1.0.2) |

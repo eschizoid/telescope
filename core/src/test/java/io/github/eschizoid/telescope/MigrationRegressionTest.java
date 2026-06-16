@@ -10,9 +10,15 @@ import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serial;
 import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.SynchronousQueue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -1301,6 +1307,370 @@ class MigrationRegressionTest {
     void fieldByNameOnRecordStillWorks() {
       final var src = new User("bob", 30);
       assertEquals("bob", Telescope.of(User.class).<String>fieldByName("name").read(src));
+    }
+  }
+
+  @Nested
+  @DisplayName(
+    "Parameterised Collection / Map subtype pairs across DIFFERENT raw classes are " +
+      "lifted into the target's concrete class"
+  )
+  class ParameterisedContainerSubtypeLift {
+
+    record Inner(String id) {}
+
+    record InnerDto(String id) {}
+
+    public static class Outer {
+
+      private List<Inner> items;
+      private Map<String, Inner> byId;
+
+      public List<Inner> getItems() {
+        return items;
+      }
+
+      public void setItems(final List<Inner> items) {
+        this.items = items;
+      }
+
+      public Map<String, Inner> getById() {
+        return byId;
+      }
+
+      public void setById(final Map<String, Inner> byId) {
+        this.byId = byId;
+      }
+    }
+
+    public static class OuterDto {
+
+      private ArrayList<InnerDto> items;
+      private HashMap<String, InnerDto> byId;
+
+      public ArrayList<InnerDto> getItems() {
+        return items;
+      }
+
+      public void setItems(final ArrayList<InnerDto> items) {
+        this.items = items;
+      }
+
+      public HashMap<String, InnerDto> getById() {
+        return byId;
+      }
+
+      public void setById(final HashMap<String, InnerDto> byId) {
+        this.byId = byId;
+      }
+    }
+
+    @Test
+    @DisplayName("List<Inner> ↔ ArrayList<InnerDto> — common JPA-entity-to-DTO shape")
+    void listInterfaceToArrayListConcreteWorks() {
+      final var mapper = Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var src = new Outer();
+      src.setItems(List.of(new Inner("a"), new Inner("b")));
+      src.setById(Map.of("k1", new Inner("v1")));
+
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(ArrayList.class, tgt.getItems().getClass());
+      assertEquals(HashMap.class, tgt.getById().getClass());
+      assertEquals("a", tgt.getItems().get(0).id());
+      assertEquals("v1", tgt.getById().get("k1").id());
+    }
+
+    @Test
+    @DisplayName("backward — ArrayList target produces a List-side instance suitable for the List field")
+    void backwardProducesSourceCompatibleList() {
+      final var mapper = Telescope.mapper(Outer.class, OuterDto.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      final var dto = new OuterDto();
+      dto.setItems(new ArrayList<>(List.of(new InnerDto("a"), new InnerDto("b"))));
+      dto.setById(new HashMap<>(Map.of("k1", new InnerDto("v1"))));
+
+      final var back = assertDoesNotThrow(() -> mapper.backward(dto));
+      assertEquals(ArrayList.class, back.getItems().getClass());
+      assertEquals("a", back.getItems().get(0).id());
+      assertEquals("v1", back.getById().get("k1").id());
+    }
+
+    // Set-side coverage — pins the SET branch of liftSetIntoTargetRaw.
+    public static class HasSetInterface {
+
+      private Set<Inner> tags;
+
+      public Set<Inner> getTags() {
+        return tags;
+      }
+
+      public void setTags(final Set<Inner> tags) {
+        this.tags = tags;
+      }
+    }
+
+    public static class HasHashSetConcrete {
+
+      private HashSet<InnerDto> tags;
+
+      public HashSet<InnerDto> getTags() {
+        return tags;
+      }
+
+      public void setTags(final HashSet<InnerDto> tags) {
+        this.tags = tags;
+      }
+    }
+
+    @Test
+    @DisplayName("Set<Inner> ↔ HashSet<InnerDto> — Set branch picks up the target concrete class")
+    void setInterfaceToHashSetConcreteWorks() {
+      final var mapper = Telescope.mapper(
+        HasSetInterface.class,
+        HasHashSetConcrete.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new HasSetInterface();
+      src.setTags(Set.of(new Inner("a"), new Inner("b")));
+
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(HashSet.class, tgt.getTags().getClass());
+      assertEquals(2, tgt.getTags().size());
+    }
+
+    // User subclass — pins the intermediateAllocator success path (privateLookupIn works in
+    // the user's own package).
+    public static class MyList<E> extends ArrayList<E> {
+
+      @Serial
+      private static final long serialVersionUID = 1L;
+    }
+
+    public static class HasMyListSrc {
+
+      private MyList<Inner> items;
+
+      public MyList<Inner> getItems() {
+        return items;
+      }
+
+      public void setItems(final MyList<Inner> items) {
+        this.items = items;
+      }
+    }
+
+    public static class HasArrayListTgt {
+
+      private ArrayList<InnerDto> items;
+
+      public ArrayList<InnerDto> getItems() {
+        return items;
+      }
+
+      public void setItems(final ArrayList<InnerDto> items) {
+        this.items = items;
+      }
+    }
+
+    @Test
+    @DisplayName("user-defined List subclass ↔ ArrayList — allocator routes through intermediateAllocator")
+    void userListSubclassToArrayListWorks() {
+      final var mapper = Telescope.mapper(
+        HasMyListSrc.class,
+        HasArrayListTgt.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new HasMyListSrc();
+      final var srcList = new MyList<Inner>();
+      srcList.add(new Inner("a"));
+      src.setItems(srcList);
+
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(ArrayList.class, tgt.getItems().getClass());
+      assertEquals("a", tgt.getItems().get(0).id());
+
+      // Backward — target ArrayList round-trips back through the user subclass via
+      // intermediateAllocator(MyList.class).
+      final var back = assertDoesNotThrow(() -> mapper.backward(tgt));
+      assertEquals(MyList.class, back.getItems().getClass());
+    }
+
+    // Map user-subclass: mirror of MyList<Inner> ↔ ArrayList pinning the Map-side
+    // intermediateAllocator success path.
+    public static class MyMap<K, V> extends HashMap<K, V> {
+
+      @Serial
+      private static final long serialVersionUID = 1L;
+    }
+
+    public static class HasMyMapSrc {
+
+      private MyMap<String, Inner> items;
+
+      public MyMap<String, Inner> getItems() {
+        return items;
+      }
+
+      public void setItems(final MyMap<String, Inner> items) {
+        this.items = items;
+      }
+    }
+
+    public static class HasHashMapTgt {
+
+      private HashMap<String, InnerDto> items;
+
+      public HashMap<String, InnerDto> getItems() {
+        return items;
+      }
+
+      public void setItems(final HashMap<String, InnerDto> items) {
+        this.items = items;
+      }
+    }
+
+    @Test
+    @DisplayName("user-defined Map subclass ↔ HashMap — Map intermediateAllocator success path")
+    void userMapSubclassToHashMapWorks() {
+      final var mapper = Telescope.mapper(
+        HasMyMapSrc.class,
+        HasHashMapTgt.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new HasMyMapSrc();
+      final var srcMap = new MyMap<String, Inner>();
+      srcMap.put("k1", new Inner("v1"));
+      src.setItems(srcMap);
+
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(HashMap.class, tgt.getItems().getClass());
+      assertEquals("v1", tgt.getItems().get("k1").id());
+
+      final var back = assertDoesNotThrow(() -> mapper.backward(tgt));
+      assertEquals(MyMap.class, back.getItems().getClass());
+    }
+
+    // EnumMap target — rejected at plan-time because EnumMap has no no-arg constructor.
+    enum Region {
+      US,
+      EU,
+    }
+
+    public static class HasEnumMapTgt {
+
+      private EnumMap<Region, InnerDto> byRegion;
+
+      public EnumMap<Region, InnerDto> getByRegion() {
+        return byRegion;
+      }
+
+      public void setByRegion(final EnumMap<Region, InnerDto> byRegion) {
+        this.byRegion = byRegion;
+      }
+    }
+
+    public static class HasMapByRegionSrc {
+
+      private Map<Region, Inner> byRegion;
+
+      public Map<Region, Inner> getByRegion() {
+        return byRegion;
+      }
+
+      public void setByRegion(final Map<Region, Inner> byRegion) {
+        this.byRegion = byRegion;
+      }
+    }
+
+    @Test
+    @DisplayName("EnumMap target throws plan-time IAE with codegen / via guidance")
+    void enumMapTargetThrowsPlanTime() {
+      final var ex = assertThrows(IllegalStateException.class, () ->
+        Telescope.mapper(HasMapByRegionSrc.class, HasEnumMapTgt.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+      );
+      assertEquals(true, ex.getMessage().contains("EnumMap"), "names the offending class");
+      assertEquals(true, ex.getMessage().contains("Mapping.via"), "cites the escape hatch");
+    }
+
+    // Unknown JDK collection class (SynchronousQueue is in java.base, has a no-arg ctor that
+    // throws-on-add — Beans.intermediateAllocator can't bind it via privateLookupIn either way,
+    // and there's no entry in listAllocatorFor's hard-coded table). The diagnostic-message
+    // contract for the unknown-JDK throw is pinned by this test.
+    public static class HasSyncQueueTgt {
+
+      private SynchronousQueue<InnerDto> items;
+
+      public SynchronousQueue<InnerDto> getItems() {
+        return items;
+      }
+
+      public void setItems(final SynchronousQueue<InnerDto> items) {
+        this.items = items;
+      }
+    }
+
+    public static class HasListSrcForUnknown {
+
+      private List<Inner> items;
+
+      public List<Inner> getItems() {
+        return items;
+      }
+
+      public void setItems(final List<Inner> items) {
+        this.items = items;
+      }
+    }
+
+    @Test
+    @DisplayName("unknown java.base Collection class throws plan-time IAE naming the class")
+    void unknownJdkCollectionClassThrowsPlanTime() {
+      // SynchronousQueue is List-assignable? No — it's a Queue. ContainerShape gates on
+      // List/Set/Map separately; SynchronousQueue is a Queue but NOT a List or Set, so the
+      // ContainerShape branch doesn't pick it up. The shape-mismatch IAE fires instead, which is
+      // the correct outcome — pin that contract.
+      final var ex = assertThrows(IllegalStateException.class, () ->
+        Telescope.mapper(HasListSrcForUnknown.class, HasSyncQueueTgt.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+      );
+      assertEquals(true, ex.getMessage().contains("shapes"), "shape mismatch diagnostic");
+    }
+
+    // User subclass WITHOUT a no-arg ctor — the negative side of userListSubclassToArrayListWorks.
+    // Beans.intermediateAllocator yields a null-supplier, so the new plan-time IAE fires.
+    public static class NoCtorList<E> extends ArrayList<E> {
+
+      @Serial
+      private static final long serialVersionUID = 1L;
+
+      // Only a ctor that takes an int — no no-arg ctor, no static builder() factory.
+      public NoCtorList(final int initialCapacity) {
+        super(initialCapacity);
+      }
+    }
+
+    public static class HasNoCtorListTgt {
+
+      private NoCtorList<InnerDto> items;
+
+      public NoCtorList<InnerDto> getItems() {
+        return items;
+      }
+
+      public void setItems(final NoCtorList<InnerDto> items) {
+        this.items = items;
+      }
+    }
+
+    @Test
+    @DisplayName("user List subclass without no-arg ctor throws plan-time IAE naming the class")
+    void userListSubclassWithoutNoArgCtorThrowsPlanTime() {
+      final var ex = assertThrows(IllegalStateException.class, () ->
+        Telescope.mapper(
+          HasListSrcForUnknown.class,
+          HasNoCtorListTgt.class,
+          writeBeans(WriteHint.WriteStrategy.SETTERS)
+        )
+      );
+      assertEquals(true, ex.getMessage().contains("NoCtorList"), "names the offending class");
     }
   }
 }
