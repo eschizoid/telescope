@@ -27,6 +27,7 @@ import java.lang.reflect.Type;
 import java.time.temporal.Temporal;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -1088,6 +1089,14 @@ public final class DeepMap {
     if (Number.class.isAssignableFrom(cls)) return false;
     if (cls == Boolean.class || cls == Character.class) return false;
     if (Temporal.class.isAssignableFrom(cls)) return false;
+    // Bug 7: classes that extend JDK Collection / Map (raw or generic subtypes) must NOT be
+    // bean-decomposed. Their inherited platform-module methods would be discovered as "getters"
+    // and the LMF binder would then fail with "Invalid caller: java.util.ArrayList" because
+    // java.base modules don't grant private lookup to application code. The container Iso path
+    // already handles concrete List / Set / Map / Optional via the ContainerShape detector; here
+    // we just stop subtypes from falling through to bean-recursion.
+    if (Collection.class.isAssignableFrom(cls)) return false;
+    if (Map.class.isAssignableFrom(cls)) return false;
     return !UUID.class.isAssignableFrom(cls);
   }
 

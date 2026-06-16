@@ -352,6 +352,150 @@ class MigrationRegressionTest {
   }
 
   @Nested
+  @DisplayName("Bug 7 — LMF fails on classes extending JDK collection types")
+  class Bug7JdkCollectionSubtypes {
+
+    public static class ImageUrl {
+
+      private String url;
+
+      public String getUrl() {
+        return url;
+      }
+
+      public void setUrl(final String url) {
+        this.url = url;
+      }
+    }
+
+    // Custom collection wrapper — common in legacy bean codebases. Extends ArrayList so it
+    // inherits a long tail of platform-module getters (isEmpty, getClass, etc.) that telescope
+    // used to try to LMF-bind, hitting java.base private-lookup rejection.
+    public static class ImageUrls extends java.util.ArrayList<ImageUrl> {
+
+      @java.io.Serial
+      private static final long serialVersionUID = 1L;
+    }
+
+    public static class DocumentData {
+
+      private ImageUrls imageUrls;
+
+      public ImageUrls getImageUrls() {
+        return imageUrls;
+      }
+
+      public void setImageUrls(final ImageUrls imageUrls) {
+        this.imageUrls = imageUrls;
+      }
+    }
+
+    public static class DocumentDataDto {
+
+      private ImageUrls imageUrls;
+
+      public ImageUrls getImageUrls() {
+        return imageUrls;
+      }
+
+      public void setImageUrls(final ImageUrls imageUrls) {
+        this.imageUrls = imageUrls;
+      }
+    }
+
+    @Test
+    @DisplayName(
+      "auto-recursion through a Collection subtype does NOT try to bean-decompose it (pass-through by reference)"
+    )
+    void collectionSubtypeIsPassThrough() {
+      // Adopter scenario: a bean graph contains a custom collection wrapper class extending
+      // ArrayList. Without the fix, DeepMap recurses into ImageUrls trying to bean-decompose
+      // it, discovers inherited `isEmpty()` etc. as "getters", then LMF-binds them — which
+      // fails with "Invalid caller: java.util.ArrayList" because java.base modules don't
+      // grant private lookup to application code. Fix: treat Collection/Map subtypes as
+      // scalars (pass-through by reference), and skip inherited platform-module methods in
+      // scanGetters as defence-in-depth.
+      final var mapper = Telescope.mapper(
+        DocumentData.class,
+        DocumentDataDto.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var urls = new ImageUrls();
+      final var u = new ImageUrl();
+      u.setUrl("https://example.com/a.png");
+      urls.add(u);
+      final var src = new DocumentData();
+      src.setImageUrls(urls);
+      final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
+      // Pass-through by reference: same ImageUrls instance, same element.
+      assertEquals(urls, tgt.getImageUrls());
+      assertEquals("https://example.com/a.png", tgt.getImageUrls().get(0).getUrl());
+    }
+
+    // Adversarial reproduction — same-type shortcut at autoIso line 803 hides Bug 7 when the
+    // field is identical on both sides. Force different types so DeepMap.computeAutoIso falls
+    // through to the bean-recursion branch where `isReflectable` decides whether to descend.
+    public static class ImageUrlsAlt extends java.util.ArrayList<ImageUrl> {
+
+      @java.io.Serial
+      private static final long serialVersionUID = 1L;
+    }
+
+    public static class DocumentDataAlt {
+
+      private ImageUrls imageUrls; // source type
+
+      public ImageUrls getImageUrls() {
+        return imageUrls;
+      }
+
+      public void setImageUrls(final ImageUrls imageUrls) {
+        this.imageUrls = imageUrls;
+      }
+    }
+
+    public static class DocumentDataDtoAlt {
+
+      private ImageUrlsAlt imageUrls; // target type — different subclass
+
+      public ImageUrlsAlt getImageUrls() {
+        return imageUrls;
+      }
+
+      public void setImageUrls(final ImageUrlsAlt imageUrls) {
+        this.imageUrls = imageUrls;
+      }
+    }
+
+    @Test
+    @DisplayName("auto-recursion through different Collection subtypes refuses to bean-decompose either side")
+    void differentCollectionSubtypesRefuseBeanRecursion() {
+      // With ImageUrls (source) vs ImageUrlsAlt (target), the same-type shortcut at
+      // autoIso line 803 doesn't fire. Without the isReflectable fix, the bean-recursion
+      // branch would try to scan getters on ImageUrls/ImageUrlsAlt, hit inherited
+      // ArrayList.isEmpty(), and LMF-fail. With the fix, both are non-reflectable so the
+      // pair falls out of the bean branch.
+      //
+      // Construction may legitimately fail later (different concrete types can't auto-map
+      // structurally), but it should NOT fail with an LMF-binding error against
+      // java.util.ArrayList. We assert the absence of that specific failure.
+      try {
+        Telescope.mapper(DocumentDataAlt.class, DocumentDataDtoAlt.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
+      } catch (final Throwable t) {
+        // Drill the cause chain — surface the LMF binding failure if it sneaks through.
+        Throwable c = t;
+        while (c != null) {
+          final var msg = c.getMessage();
+          if (msg != null && msg.contains("java.util.ArrayList")) {
+            throw new AssertionError("LMF binding tried to use ArrayList as caller: " + msg, t);
+          }
+          c = c.getCause();
+        }
+      }
+    }
+  }
+
+  @Nested
   @DisplayName("Bug 8 — SettersWriter NPE on null primitive value")
   class Bug8PrimitiveSetterNullNpe {
 

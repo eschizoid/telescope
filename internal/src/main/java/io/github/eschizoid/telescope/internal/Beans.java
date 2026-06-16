@@ -592,6 +592,16 @@ public final class Beans {
     final var map = new LinkedHashMap<String, Method>();
     for (final var m : cls.getMethods()) {
       if (m.getParameterCount() != 0 || m.getDeclaringClass() == Object.class) continue;
+      // Bug 7: skip inherited methods declared in platform modules (java.*, jdk.*). A class
+      // extending ArrayList would otherwise surface `isEmpty()` → property `empty` and the LMF
+      // binder would then fail `privateLookupIn(ArrayList.class)` because `java.base` doesn't
+      // grant private lookup to application code. The primary fix lives in
+      // DeepMap.isReflectable (Collection/Map subtypes don't recurse at all); this guard adds
+      // defence-in-depth for any future caller that scans a JDK-derived class directly.
+      final var declaringModule = m.getDeclaringClass().getModule();
+      if (
+        declaringModule != null && declaringModule.isNamed() && declaringModule.getName().startsWith("java.")
+      ) continue;
       final var n = m.getName();
       final String prop;
       if (n.length() > 3 && n.startsWith("get") && m.getReturnType() != void.class) {
