@@ -17,6 +17,7 @@ import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
+import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.runtime.instances.CompletableFutureK;
 import io.github.eschizoid.telescope.runtime.instances.EitherK;
@@ -554,7 +555,7 @@ public sealed class Telescope<
     final String factoryName
   ) {
     for (final var step : steps) {
-      if (step instanceof io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo<?, ?, ?, ?> r) {
+      if (step instanceof ForwardOnlyTransformTo<?, ?, ?, ?> r) {
         throw new IllegalArgumentException(
           factoryName +
             "(" +

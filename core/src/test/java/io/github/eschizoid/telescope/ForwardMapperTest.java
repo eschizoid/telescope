@@ -29,7 +29,7 @@ class ForwardMapperTest {
   record Dto(String id, String createdAtIso, String fullName, String tenant) {}
 
   @Test
-  @DisplayName("ForwardMapper assembles a typed forward-only result with forward / constant rows")
+  @DisplayName("ForwardMapper assembles a typed forward-only result with toOneWay / constant rows")
   void forwardOnlyProjector() {
     final ForwardMapper<Entity, Dto> projector = Telescope.mapperForward(
       Entity.class,

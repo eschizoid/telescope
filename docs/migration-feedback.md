@@ -725,7 +725,7 @@ This makes `@Bridge` practical for the common "small DTO → large entity" patte
 
 ---
 
-### 7. `Sources.byClass()` type safety
+### 7. `Sources.byClass()` type safety — Fixed (v1.0.2)
 
 **Problem:** `Sources.byClass(Class<T>)` returns `Object` requiring a cast:
 
@@ -733,11 +733,11 @@ This makes `@Bridge` practical for the common "small DTO → large entity" patte
 final var headers = (PolicyRequestHeaders) sources.byClass(PolicyRequestHeaders.class);
 ```
 
-**Proposed:** Return `T` directly with generic signature:
-
-```java
-public <T> T byClass(Class<T> type) { ... }
-```
+**Resolution:** `Sources.byClass(...)` now carries a `<T>` type parameter and returns `T` directly. Erasure makes the
+signature change binary-compatible — pre-existing call sites that explicitly cast `(PolicyRequestHeaders)` still compile
+and run. New call sites can drop the cast: `final PolicyRequestHeaders headers = sources.byClass(...)`. The lookup
+remains EXACT runtime-class match (pinned by `SourcesByClassGenericsTest#byClassExactRuntimeClassMatchOnly`); no
+`Class.isAssignableFrom` widening was added so the contract stays narrow. PR #140.
 
 ---
 
@@ -756,6 +756,20 @@ discovery. The `ForwardOnlyTransformTo` sealed-permit record is unchanged; only 
 
 ### 9. `mapperForward()` should be lenient by default — Fixed (v1.0.2)
 
+**Problem:** `Telescope.mapperForward()` ran the same strict bijection check as `Telescope.mapper()` — it threw at
+construction time if the target had properties with no same-name source property:
+
+```
+IllegalState: Deep map DocumentT → IdentificationResponse: target property 'documentStatus'
+has no same-name source property. Add a rename row to(sourceAccessor, targetAccessor)
+that maps to 'documentStatus'.
+```
+
+A `ForwardMapper<A, B>` is explicitly one-directional; the bijection invariant (round-trip losslessness) doesn't apply.
+Real-world impact: a 3-field rename between two beans with disjoint field sets required 13 `drop()` + 2 `constant()`
+rows just to satisfy the strict check — turning a 3-line mapper into a 20-line mapper. MapStruct's default for every
+generated mapper is silent JLS-default fill on the target plus silent ignore on the source.
+
 **Resolution:** `DeepMap.resolveForward(...)` threads a `lenient=true` flag through `populateIso`. Both unmatched-field
 gates now fire under `lenient || isNested || telescope-fixups`. `Telescope.mapperForward(...)` routes through the new
 lenient path; `Telescope.mapper(...)` keeps the strict bijection check for round-trip safety. Pinned by the
@@ -767,39 +781,6 @@ stays strict at the top level (Bug 6's nested leniency still applies on its recu
 `Telescope.mapperForward(...)` is lenient at every level (top via `lenient=true`, nested via `isNested`). The recursive
 `populateIso` call passes `lenient=false` so the flag's meaning stays anchored to the user-facing top-level entry point.
 No double-leniency path is constructible.
-
----
-
-**Problem:** `Telescope.mapperForward()` ran the same strict bijection check as `Telescope.mapper()` — it threw at
-construction time if the target had properties with no same-name source property:
-
-```
-IllegalState: Deep map DocumentT → IdentificationResponse: target property 'documentStatus'
-has no same-name source property. Add a rename row to(sourceAccessor, targetAccessor)
-that maps to 'documentStatus'.
-```
-
-This forces the caller to declare `constant(Target::getUnmatchedField, null)` for every unmatched target property and
-`drop(Source::getUnmatchedField)` for every unmatched source property — defeating the purpose of forward-only semantics.
-
-**Why it's wrong for forward-only:** A `ForwardMapper<A, B>` is explicitly one-directional. There's no `backward()`
-call, so the bijection invariant (round-trip losslessness) doesn't apply. Unmatched target fields should silently
-receive JLS defaults, and unmatched source fields should be silently ignored — that's what MapStruct does for every
-mapper.
-
-**Real-world impact:** A simple 3-field rename between `DocumentT` (39 fields) → `IdentificationResponse` (29 fields)
-required 13 `drop()` + 2 `constant()` rows just to satisfy the strict check — turning a 3-line mapper into a 20-line
-mapper.
-
-**Proposed fix:** `mapperForward()` should NOT enforce the strict bijection check. Unmatched source properties are
-ignored; unmatched target properties stay at their default values. Only `mapper()` (bidirectional) should enforce
-strictness.
-
-**Workaround:** Use `ForwardMapper.create(manualMappingFunction, Source.class, Target.class)` to bypass DeepMap
-entirely.
-
-**File to fix:** `core/src/main/java/io/github/eschizoid/telescope/DeepMap.java` — same `populateIso()` fix as Bug 6
-covers this for `mapperForward()` too
 
 ---
 

@@ -69,6 +69,6 @@ class SourcesByClassGenericsTest {
     assertNull(animal, "Supertype lookup against a subtype-stored source returns null");
     // Direct lookup by the subtype class works as expected.
     final Dog dog = sources.byClass(Dog.class);
-    assertEquals(new Dog().getClass(), dog.getClass());
+    assertEquals(Dog.class, dog.getClass());
   }
 }
