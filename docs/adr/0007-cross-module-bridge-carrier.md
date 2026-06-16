@@ -50,7 +50,7 @@ cross-module setups.
   `BRIDGE` constant, same JIT-inlinable dispatch.
 - **`@Rename` (and any future per-field directives) accept their own annotation array.** The migration-feedback proposal
   uses `renames = { @Rename(source="...", target="...") }`. The existing inline-on-source attribute set (`renames`,
-  `valueTransforms`, etc.) carries over verbatim — no new vocabulary to learn, same parser code.
+  `transforms`, etc.) carries over verbatim — no new vocabulary to learn, same parser code.
 - **`BridgeProcessor` gains a small dispatch fork.** `process(...)` needs one extra branch: if the annotated class
   carries a `source = ...` attribute → carrier path (read source + target from the annotation, emit
   `<Carrier>Bridge.BRIDGE` in the carrier's package); else → existing model-anchored path. The downstream emit pipeline
