@@ -106,9 +106,26 @@ public final class Sources {
   /**
    * Read the source whose runtime class is {@code sourceClass}, or {@code null} if no such source
    * is in the bag. Used by the engine to dispatch each row to its source.
+   *
+   * <p>Generic: the supplied {@code Class<T>} narrows the return type to {@code T}, eliminating the
+   * cast at the call site:
+   *
+   * <pre>{@code
+   * // Before (callers had to cast):
+   * final var headers = (PolicyRequestHeaders) sources.byClass(PolicyRequestHeaders.class);
+   *
+   * // After:
+   * final var headers = sources.byClass(PolicyRequestHeaders.class);
+   * }</pre>
+   *
+   * <p>Safety: the builder keys entries by {@code source.getClass()}, so the value stored under
+   * {@code Class<T>} is guaranteed to be an instance of {@code T}. The dispatch goes through {@link
+   * Class#cast} which throws {@link ClassCastException} only if that invariant is violated — which
+   * would indicate a builder bug, not a user mistake. The lookup is by EXACT runtime class (no
+   * subtype matching) — passing a supertype Class to look up a subclass-stored source returns null.
    */
-  public Object byClass(final Class<?> sourceClass) {
-    return bySrcClass.get(sourceClass);
+  public <T> T byClass(final Class<T> sourceClass) {
+    return sourceClass.cast(bySrcClass.get(sourceClass));
   }
 
   /** Fluent builder. */
