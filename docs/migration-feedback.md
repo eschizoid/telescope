@@ -502,9 +502,24 @@ construction time).
 - `core/src/main/java/io/github/eschizoid/telescope/Telescope.java` — dispatch in `fieldByName(String)` on the carried
   `fieldOptics`.
 
----
+**Known caveat (lens-law gap for primitive properties):** the new `Beans.fieldLens(String)` writes through
+`autoWriter(source.getClass())` which routes through `SettersWriter`. `SettersWriter`'s primitive setter is null-guarded
+(Bug 8): if you call `lens.set(bean, null)` on a property whose setter takes a Java primitive (e.g. `int count`), the
+setter call is skipped and the field stays at the JLS default. Reading back yields `0` (auto-boxed), not `null`. This
+means the lens-law `get(set(s, null)) == null` does NOT hold for primitive properties.
 
-## Enhancement Requests
+```java
+class Order { int count; public int getCount() { return count; } public void setCount(int c) { this.count = c; } }
+final var lens = Telescope.ofBean(Order.class).<Integer>fieldByName("count");
+final var order = new Order(); order.setCount(42);
+final var result = lens.update(order, c -> null);  // set(s, null) via the modify path
+lens.read(result);  // → 0, not null
+```
+
+The cure (drop the SettersWriter null-guard so the primitive setter NPEs on null) is worse than the gap, because it
+reintroduces Bug 8 and breaks the MapStruct-parity contract (`@Mapping` default is null → JLS-default substitution for
+primitive targets). **Workaround:** declare the property as a boxed wrapper (`Integer count` instead of `int count`) if
+your call site depends on a faithful null round-trip.
 
 ### 1. Cross-module `@Bridge` support (MapStruct parity)
 
