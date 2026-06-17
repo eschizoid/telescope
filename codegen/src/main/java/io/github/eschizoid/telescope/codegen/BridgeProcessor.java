@@ -119,7 +119,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // lives in this carrier's package and is named after the carrier — the source's package and
     // simple name are ignored for emission purposes. `null` means model-anchored form (the legacy
     // path: source class IS the annotated element, package + name derive from it).
-    String carrierFq
+    String carrierFq,
+    // @Bridge(lenient = true) — when set, the bijection check is skipped: unmatched target
+    // components take their JLS default in the forward direction; unmatched source components are
+    // silently ignored. Produces a partial-Iso whose backward (BRIDGE.set(source, target))
+    // direction is documented as lossy.
+    boolean lenient
   ) {
     static final BridgeConfig EMPTY = new BridgeConfig(
       Set.of(),
@@ -133,7 +138,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       Map.of(),
       Map.of(),
       Map.of(),
-      null
+      null,
+      false
     );
   }
 
@@ -313,6 +319,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var writeStrategy = (rawWriteStrategy == null || "AUTO".equals(rawWriteStrategy))
           ? "AUTO"
           : rawWriteStrategy;
+        final var lenient = lenientFromMirror(bridgeAm);
         final var builtConfig = new BridgeConfig(
           drops,
           renameSet.bySource(),
@@ -325,7 +332,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           constants,
           computes,
           transformSet.methodsByField(),
-          carrierEl != null ? carrierEl.getQualifiedName().toString() : null
+          carrierEl != null ? carrierEl.getQualifiedName().toString() : null,
+          lenient
         );
         // Defer when source OR target carries a Lombok-synthesizing annotation: Lombok's lazy AST
         // patches may not have fired yet, so member lookups via Elements.getAllMembers would return
@@ -485,6 +493,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
     return Set.of();
+  }
+
+  // Reads @Bridge(lenient = true). Default false preserves the historical strict-bijection
+  // semantics: every existing @Bridge user keeps the round-trip safety net unless they opt in.
+  private boolean lenientFromMirror(final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (entry.getKey().getSimpleName().contentEquals("lenient")) {
+        return (Boolean) entry.getValue().getValue();
+      }
+    }
+    return false;
   }
 
   // Result of parsing a @Bridge's renames list. `bySource` holds the first-declared target per
@@ -1071,6 +1090,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var writeStrategy = cfg.writeStrategy();
     final var rawConstants = cfg.constants();
     final var computes = cfg.computes();
+    final var lenient = cfg.lenient();
 
     // Validate every transform field is a real source field (drops would mask the validation).
     for (final var t : transforms.keySet()) {
@@ -1412,14 +1432,48 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       injectedTargetFields.add(fieldName);
     }
 
+    // @Bridge(lenient = true): auto-fill the mismatch on both sides so the bijection check below
+    // passes naturally without forcing the user to declare a drop or constant for every unmatched
+    // field. Source fields with no target counterpart → drops. Target fields with no source
+    // counterpart → synthesized JLS-default constants. Same-name matches and declared renames pass
+    // through unchanged. Produces a partial-Iso: see @Bridge#lenient javadoc for the round-trip
+    // warning. Mutates `drops`, `parsedConstants`, and `injectedTargetFields` so the downstream
+    // generation code sees a strict-shape config and needs no further plumbing.
+    final var effectiveDrops = lenient ? new LinkedHashSet<>(drops) : drops;
+    if (lenient) {
+      final var targetFieldNames = targetFields.stream().map(Field::name).collect(Collectors.toSet());
+      for (final var sf : sourceFields) {
+        if (effectiveDrops.contains(sf.name())) continue;
+        final var mappedTarget = renames.getOrDefault(sf.name(), sf.name());
+        if (!targetFieldNames.contains(mappedTarget)) {
+          effectiveDrops.add(sf.name());
+        }
+      }
+      final var sourceMappedTargets = new HashSet<String>();
+      for (final var sf : sourceFields) {
+        if (effectiveDrops.contains(sf.name())) continue;
+        sourceMappedTargets.add(renames.getOrDefault(sf.name(), sf.name()));
+        final var extras = renameFanouts.get(sf.name());
+        if (extras != null) sourceMappedTargets.addAll(extras);
+      }
+      for (final var tf : targetFields) {
+        final var name = tf.name();
+        if (
+          injectedTargetFields.contains(name) || renameTargetNames.contains(name) || sourceMappedTargets.contains(name)
+        ) continue;
+        parsedConstants.put(name, defaultLiteralFor(tf.type()));
+        injectedTargetFields.add(name);
+      }
+    }
+
     // Bijection check: apply forward renames on the source side, then compare to target names —
     // skipping target names covered by constants/computes (injected; no source counterpart needed).
     // Dropped sources are excluded from the check entirely.
-    final var nonDroppedSourceFields = drops.isEmpty()
+    final var nonDroppedSourceFields = effectiveDrops.isEmpty()
       ? sourceFields
       : sourceFields
           .stream()
-          .filter(f -> !drops.contains(f.name()))
+          .filter(f -> !effectiveDrops.contains(f.name()))
           .toList();
     if (
       !sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields)
@@ -1465,7 +1519,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // filled with something. Otherwise forward-rename the source name to find the matching target
     // field for the read.
     final Function<String, String> readBackward = sourceName -> {
-      if (drops.contains(sourceName)) return defaultLiteralFor(fieldByName(sourceFields, sourceName).type());
+      if (effectiveDrops.contains(sourceName)) return defaultLiteralFor(fieldByName(sourceFields, sourceName).type());
       if (forwardOnlyTransforms.contains(sourceName)) return defaultLiteralFor(
         fieldByName(sourceFields, sourceName).type()
       );
@@ -1499,7 +1553,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Function<String, String> readPatch = sourceName -> {
       final var sf = fieldByName(sourceFields, sourceName);
       final var baseRead = readExpr(source, "base", sf);
-      if (drops.contains(sourceName)) return baseRead;
+      if (effectiveDrops.contains(sourceName)) return baseRead;
       if (forwardOnlyTransforms.contains(sourceName)) return baseRead;
       final var tgtName = renames.getOrDefault(sourceName, sourceName);
       final var tf = fieldByName(targetFields, tgtName);
