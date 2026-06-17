@@ -1087,6 +1087,7 @@ public sealed class Telescope<
    */
   public A read(final S source) {
     if (optic instanceof final Lens<S, A> lens) {
+      if (source == null) throw noValue();
       return lens.get(source);
     }
     if (optic instanceof final Affine<S, A> affine) {
@@ -1112,6 +1113,7 @@ public sealed class Telescope<
    */
   public Optional<A> find(final S source) {
     if (optic instanceof final Lens<S, A> lens) {
+      if (source == null) return Optional.empty();
       return Optional.ofNullable(lens.get(source));
     }
     if (optic instanceof final Affine<S, A> affine) {

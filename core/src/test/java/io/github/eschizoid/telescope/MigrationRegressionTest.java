@@ -22,6 +22,8 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.SynchronousQueue;
@@ -2051,6 +2053,26 @@ class MigrationRegressionTest {
       // outer.inner left null on purpose
       final var dto = assertDoesNotThrow(() -> mapper.forward(outer));
       assertEquals(null, dto.getInnerName());
+    }
+
+    @Test
+    @DisplayName("atomic holder-constant Telescope.find(null) yields Optional.empty instead of NPE")
+    void atomicHolderConstantFindOnNullSourceIsEmpty() {
+      // Direct atomic access via a holder-constant Telescope is its own entry point — distinct
+      // from the composed multi-hop path covered above. The constant wraps an atomic Lens, so
+      // Telescope#find takes the Lens fast-path; without a null-source guard there, the captured
+      // method reference would dispatch on the null receiver and NPE.
+      final var pathToInner = Telescope.ofBean(NullIntermediateOuter.class).field(NullIntermediateOuter::getInner);
+      assertEquals(Optional.empty(), pathToInner.find(null));
+    }
+
+    @Test
+    @DisplayName("atomic holder-constant Telescope.read(null) throws NoSuchElementException, not NPE")
+    void atomicHolderConstantReadOnNullSourceThrowsNoValue() {
+      // Read's contract is to throw NoSuchElementException on a missing focus. Pre-fix the Lens
+      // fast-path NPE'd through the method-reference receiver before reaching the noValue() path.
+      final var pathToInner = Telescope.ofBean(NullIntermediateOuter.class).field(NullIntermediateOuter::getInner);
+      assertThrows(NoSuchElementException.class, () -> pathToInner.read(null));
     }
   }
 

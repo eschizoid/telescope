@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUser;
+import io.github.eschizoid.telescope.codegen.lombok.fixtures.DataAlertRequest;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUser;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.SameRoundConsumer;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.ValueBuilderUser;
@@ -231,6 +232,27 @@ class LombokFocusProcessorTest {
       final var built = (BuilderUser) constructMethod.invoke(null, values);
       assertEquals("B-1", built.getId());
       assertEquals("builder@example.com", built.getEmail());
+    }
+
+    @Test
+    @DisplayName("@Data POJO with primitive int: construct() substitutes JLS default on null entry, no NPE")
+    void dataHolderConstructNullPrimitive() throws Exception {
+      // Lombok @Data emits a primitive int setter for `attemptCount`. The codegen template must
+      // null-guard the unbox so a null entry in the values map substitutes 0 rather than NPEing
+      // through Integer.intValue() on the implicit cast.
+      final var holder = Class.forName(
+        "io.github.eschizoid.telescope.codegen.lombok.fixtures.DataAlertRequestFieldOptics"
+      );
+      final var constructMethod = holder.getDeclaredMethod("construct", Function.class);
+      final Function<String, Object> values = name ->
+        switch (name) {
+          case "attemptCount" -> null;
+          case "label" -> "warn";
+          default -> throw new IllegalArgumentException("Unexpected: " + name);
+        };
+      final var built = (DataAlertRequest) constructMethod.invoke(null, values);
+      assertEquals(0, built.getAttemptCount(), "primitive int substitutes JLS default on null entry");
+      assertEquals("warn", built.getLabel());
     }
   }
 
