@@ -579,7 +579,7 @@ EnumMap with its key class. Same applies to any user-defined Collection/Map subc
 
 ---
 
-### 12. `@BeanFocus` codegen: no null-guard on `Integer → int` in generated `construct()`
+### 12. `@BeanFocus` codegen: no null-guard on `Integer → int` in generated `construct()` — Fixed (v1.0.4)
 
 **Severity:** P1 — NPE at runtime when source has a nullable `Integer` field and target has a primitive `int`.
 
@@ -647,9 +647,17 @@ forward(GovtIdDBDataIndex::getDocUpldAtmpCnt, AlertRequest::getAttemptCount,
 `emitBeanConstruct(...)` template, lines 952–981. Detect primitive underlying types via the existing `Prop#type()` and
 emit the null-guarded form for those properties; non-primitive properties keep the simple cast.
 
+**Resolution:** `AbstractTelescopeProcessor#emitBeanConstruct` now routes every value-extract through a single
+`valueExprForProp(Prop)` helper. For primitive-typed properties the emitted form is
+`c.setX(values.apply("x") instanceof Integer __v ? __v : 0)` — the `instanceof` pattern null-guards the unbox and a
+companion `primitiveDefaultLiteral(TypeMirror)` table substitutes the right JLS-default literal for each of the eight
+primitive kinds. Reference-typed properties keep the plain cast form, since `null` is a legal argument to a
+reference-typed setter. Both rebuild strategies (no-arg ctor + setters; static `builder()` chain) take the guarded form
+uniformly, and `BeanFocusProcessor` + `LombokFocusProcessor` both benefit because they share the template.
+
 ---
 
-### 13. `@BeanFocus` generated `FieldOptics` NPEs on null intermediate objects
+### 13. `@BeanFocus` generated `FieldOptics` NPEs on null intermediate objects — Fixed (v1.0.4)
 
 **Severity:** P1 — NPE at runtime when navigating through a nullable nested object that has `@BeanFocus`.
 
@@ -718,6 +726,18 @@ path handle navigation.
 `writeMetadataHolderClass(...)` body that emits the `*FieldOptics.get(...)` method on the holder. Prepend
 `if (pojo == null) return null;` to the dispatch switch. `BeanFocusProcessor` and `LombokFocusProcessor` both route
 through this template, so the single template fix covers both.
+
+**Resolution:** Investigation showed the NPE wasn't in a literal `FieldOptics.get(Object, String)` method (no such
+method is emitted) — the failure surfaced at the runtime `Reflective#structuralIsoArr` reader path, which dispatches the
+holder's `Telescope.lens(MethodRef, …)` constants. The captured method reference NPEs on a `null` receiver. The fix
+lives one layer down at the lattice: `Lens#getAll(null)` now returns `Stream.empty()` (and `Lens#getOption(null)`
+returns `Optional.empty()`) instead of dispatching `get(null)`. The composed Lens-as-Traversal projection used by
+`Telescope#read` / `find` short-circuits cleanly on the null intermediate. `Telescope#find` / `read` also gained a
+matching null-source guard at the Lens fast-path so direct atomic holder-constant access
+(`OuterFieldOptics.inner.find(null)`) no longer NPEs through the method-reference receiver.
+`DeepMap#overrideTargetField` switched from `srcT.read(s)` to `srcT.find(s).orElse(null)` so the now-empty stream
+resolves to a `null` target value instead of throwing `NoSuchElementException`. Atomic `lens.get(null)` still NPEs when
+the user's getter does — strict-lens semantics for direct gets are unchanged.
 
 ---
 
@@ -958,21 +978,21 @@ PR #144.
 
 ## Summary — Bugs
 
-| #      | Description                                                           | Severity | Status                    |
-| ------ | --------------------------------------------------------------------- | -------- | ------------------------- |
-| Bug 1  | ClassCastException on unresolvable `@Bridge` target                   | P1       | Fixed (v1.0.1)            |
-| Bug 2  | LambdaIntrospection NPE on `is*` boolean accessors                    | P0       | Fixed (v1.0.1)            |
-| Bug 3  | No autoboxing between primitive ↔ wrapper types                       | P1       | Fixed (v1.0.1)            |
-| Bug 4  | NPE on null intermediate objects in nested paths                      | P1       | Fixed (v1.0.1)            |
-| Bug 5  | SettersWriter throws on getter-only properties                        | P1       | Fixed (v1.0.1)            |
-| Bug 6  | DeepMap strict bijection enforced on nested auto-recursed types       | P1       | Fixed (v1.0.1)            |
-| Bug 7  | LambdaMetafactory fails on classes extending JDK types                | P1       | Fixed (v1.0.1)            |
-| Bug 8  | SettersWriter NPE when valueByName returns null for primitive         | P1       | Fixed (v1.0.1)            |
-| Bug 9  | `forward(null)` / `backward(null)` NPE instead of returning null      | P1       | Fixed (v1.0.1)            |
-| Bug 10 | `fieldByName(String)` uses `Records.fieldLens()` for POJOs too        | P1       | Fixed (v1.0.1)            |
-| Bug 11 | Parameterised Collection / Map subtype pairs across raw classes       | P1       | Fixed (v1.0.1)            |
-| Bug 12 | `@BeanFocus` codegen `construct()` doesn't null-guard `Integer → int` | P1       | Reported (pending v1.0.4) |
-| Bug 13 | `@BeanFocus` generated `FieldOptics` NPEs on null intermediates       | P1       | Reported (pending v1.0.4) |
+| #      | Description                                                           | Severity | Status         |
+| ------ | --------------------------------------------------------------------- | -------- | -------------- |
+| Bug 1  | ClassCastException on unresolvable `@Bridge` target                   | P1       | Fixed (v1.0.1) |
+| Bug 2  | LambdaIntrospection NPE on `is*` boolean accessors                    | P0       | Fixed (v1.0.1) |
+| Bug 3  | No autoboxing between primitive ↔ wrapper types                       | P1       | Fixed (v1.0.1) |
+| Bug 4  | NPE on null intermediate objects in nested paths                      | P1       | Fixed (v1.0.1) |
+| Bug 5  | SettersWriter throws on getter-only properties                        | P1       | Fixed (v1.0.1) |
+| Bug 6  | DeepMap strict bijection enforced on nested auto-recursed types       | P1       | Fixed (v1.0.1) |
+| Bug 7  | LambdaMetafactory fails on classes extending JDK types                | P1       | Fixed (v1.0.1) |
+| Bug 8  | SettersWriter NPE when valueByName returns null for primitive         | P1       | Fixed (v1.0.1) |
+| Bug 9  | `forward(null)` / `backward(null)` NPE instead of returning null      | P1       | Fixed (v1.0.1) |
+| Bug 10 | `fieldByName(String)` uses `Records.fieldLens()` for POJOs too        | P1       | Fixed (v1.0.1) |
+| Bug 11 | Parameterised Collection / Map subtype pairs across raw classes       | P1       | Fixed (v1.0.1) |
+| Bug 12 | `@BeanFocus` codegen `construct()` doesn't null-guard `Integer → int` | P1       | Fixed (v1.0.4) |
+| Bug 13 | `@BeanFocus` generated `FieldOptics` NPEs on null intermediates       | P1       | Fixed (v1.0.4) |
 
 ## Summary — Enhancements
 
