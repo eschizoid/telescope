@@ -2068,11 +2068,13 @@ class MigrationRegressionTest {
 
       // Positive control: a real source with a populated value still flows through unchanged —
       // the null-source guard is gated on `source == null`, not on the result of get(source).
+      // assertSame (rather than assertEquals) pins reference-passthrough explicitly so a future
+      // defensive-copy optimisation would break this assertion as the behavioural change it is.
       final var populated = new NullIntermediateOuter();
       final var inner = new NullIntermediateInner();
       inner.setName("alice");
       populated.setInner(inner);
-      assertEquals(Optional.of(inner), pathToInner.find(populated));
+      assertSame(inner, pathToInner.find(populated).orElseThrow());
     }
 
     @Test
