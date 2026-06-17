@@ -1,6 +1,6 @@
 /**
- * Telescope code generator — annotation processors that emit {@code <Type>Focus} navigators and
- * {@code <Record>Bridge} classes at compile time.
+ * Telescope code generator — annotation processors that emit {@code <Type>Path<R>} navigators and
+ * {@code <Source>Bridge} classes at compile time.
  *
  * <p>The {@code io.github.eschizoid.telescope.codegen} package is exported so downstream processors
  * (e.g. {@code telescope-lombok}) can extend {@link

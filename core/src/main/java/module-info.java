@@ -22,10 +22,21 @@
  *   <li>{@link io.github.eschizoid.telescope.mapping} — the row-builder DSL that the deep-mapping
  *       factory accepts as varargs: {@link io.github.eschizoid.telescope.mapping.Mapping#to to},
  *       {@link io.github.eschizoid.telescope.mapping.Mapping#via via}, {@link
- *       io.github.eschizoid.telescope.mapping.Mapping#drop drop}, and {@link
- *       io.github.eschizoid.telescope.mapping.WriteHint#writeBean writeBean} / {@link
- *       io.github.eschizoid.telescope.mapping.WriteHint#writeBeans writeBeans} per-target / default
- *       write-strategy hints.
+ *       io.github.eschizoid.telescope.mapping.Mapping#drop drop}, {@link
+ *       io.github.eschizoid.telescope.mapping.Mapping#toOneWay toOneWay}, {@link
+ *       io.github.eschizoid.telescope.mapping.Mapping#constant constant}, {@link
+ *       io.github.eschizoid.telescope.mapping.Mapping#compute compute}, {@link
+ *       io.github.eschizoid.telescope.mapping.Mapping#when when}, {@link
+ *       io.github.eschizoid.telescope.mapping.Mapping#enumTo enumTo}, {@link
+ *       io.github.eschizoid.telescope.mapping.Mapping#toOrElse toOrElse}, {@link
+ *       io.github.eschizoid.telescope.mapping.Mapping#zip zip} (full set on {@link
+ *       io.github.eschizoid.telescope.mapping.Mapping}); sealed {@link
+ *       io.github.eschizoid.telescope.mapping.MapExtractStep} backing {@link
+ *       io.github.eschizoid.telescope.Telescope#fromMap} for untyped sources; {@link
+ *       io.github.eschizoid.telescope.mapping.MergeStep} backing {@link
+ *       io.github.eschizoid.telescope.Telescope#merge}; {@link
+ *       io.github.eschizoid.telescope.mapping.WriteHint} / {@link
+ *       io.github.eschizoid.telescope.mapping.NullHint} hints.
  *   <li>{@link io.github.eschizoid.telescope.effects} — {@link
  *       io.github.eschizoid.telescope.effects.Either} / {@link
  *       io.github.eschizoid.telescope.effects.Validated} sealed effect types backing {@code
@@ -33,7 +44,10 @@
  *   <li>{@link io.github.eschizoid.telescope.annotations} — compile-time markers for the codegen
  *       processors: {@code @Focus} (records), {@code @BeanFocus} (POJOs, also for Lombok-annotated
  *       classes via the {@code telescope-lombok} module), {@code @Bridge} (compile-checked
- *       cross-paradigm conversion).
+ *       cross-paradigm conversion — records or classes, model-anchored or carrier form, with {@code
+ *       lenient = true} for small-DTO → large-entity); per-field modifiers {@code @Rename} /
+ *       {@code @Transform} / {@code @Constant} / {@code @Compute} / {@code @Default} /
+ *       {@code @ViaMapper}.
  * </ul>
  *
  * <p>The {@code io.github.eschizoid.telescope.internal} packages are deliberately not exported.
@@ -41,9 +55,9 @@
  * {@code Traversal} / {@code Getter} / {@code Setter} / {@code Fold}), the HKT-emulation machinery
  * ({@code Kind} / {@code Applicative}) and per-effect witnesses ({@code OptionalK}, {@code
  * EitherK}, {@code ValidatedK}, {@code CompletableFutureK}), plus the reflection helpers ({@code
- * Records}, {@code Beans}, {@code Reflective}, {@code LambdaIntrospection}). Users never type these
- * names — the public API surfaces them as plain method calls on {@code Telescope} and {@code
- * Mapper}.
+ * Records}, {@code Beans}, {@code Reflective}, {@code LambdaIntrospection}, {@code
+ * MetadataHolderProbe}, {@code NullDefaults}). Users never type these names — the public API
+ * surfaces them as plain method calls on {@code Telescope} and {@code Mapper}.
  *
  * <p>Promoting any internal type to public API in a future version is one {@code exports} line
  * away; until then, encapsulation is enforced at the JPMS level.

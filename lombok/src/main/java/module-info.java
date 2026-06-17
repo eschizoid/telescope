@@ -2,7 +2,7 @@
  * Lombok integration for the telescope code generator. Hosts {@link
  * io.github.eschizoid.telescope.codegen.lombok.LombokFocusProcessor}, which extends {@code
  * AbstractTelescopeProcessor} from {@code io.github.eschizoid.telescope.codegen} to emit {@code
- * <Bean>Focus} navigators for Lombok-shaped POJOs ({@code @Data} / {@code @Value} /
+ * <Pojo>Path<R>} navigators for Lombok-shaped POJOs ({@code @Data} / {@code @Value} /
  * {@code @Builder}).
  *
  * <p>The processor is advertised via the {@link javax.annotation.processing.Processor} service —

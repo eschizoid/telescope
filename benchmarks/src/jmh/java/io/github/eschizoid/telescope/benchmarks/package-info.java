@@ -7,8 +7,8 @@
  * <ul>
  *   <li>{@link io.github.eschizoid.telescope.benchmarks.TelescopeBenchmark} — measures the three
  *       update paths against each other: reflective {@code .field(...)}, the reflection-free {@code
- *       Telescope.lens(getter, setter)} constant, and the generated {@code *Focus} / {@code
- *       *Bridge} constants emitted by the {@code :codegen} processor.
+ *       Telescope.lens(getter, setter)} constant, and the generated {@code <X>Path<R>} navigator /
+ *       {@code <X>Bridge.BRIDGE} constants emitted by the {@code :codegen} processor.
  *   <li>{@link io.github.eschizoid.telescope.benchmarks.BenchUserA} / {@link
  *       io.github.eschizoid.telescope.benchmarks.BenchUserB} — top-level POJO fixtures used by the
  *       generated-{@code @Bridge} benchmark (must be top-level because {@code @Bridge} generates a
