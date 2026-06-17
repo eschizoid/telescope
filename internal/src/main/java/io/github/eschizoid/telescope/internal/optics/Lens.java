@@ -58,7 +58,13 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
    * reference (which would NPE on the receiver). For a non-null source the strict {@code
    * Optional.of(get(source))} form is preserved — a Lens whose getter returns {@code null} on a
    * non-null source is a lens-law violation, and {@code Optional.of(null)} surfaces that directly
-   * instead of papering over it.
+   * instead of papering over it. A lens-as-Traversal projection ({@link #getAll}) tolerates the
+   * null result (via {@code Stream.of(null)}); the asymmetry is forced by {@code Optional}'s
+   * inability to hold {@code null}, not by design choice. Reach for an {@link Affine} or {@link
+   * Prism} when the focused {@code A} is genuinely nullable.
+   *
+   * @throws NullPointerException if {@code source} is non-null and {@code get(source)} returns
+   *     {@code null} (a lens-law violation surfacing through {@link Optional#of}).
    */
   @Override
   default Optional<A> getOption(final S source) {

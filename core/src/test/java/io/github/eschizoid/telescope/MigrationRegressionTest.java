@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.focus.NullIntermediateInner;
@@ -2064,15 +2065,33 @@ class MigrationRegressionTest {
       // method reference would dispatch on the null receiver and NPE.
       final var pathToInner = Telescope.ofBean(NullIntermediateOuter.class).field(NullIntermediateOuter::getInner);
       assertEquals(Optional.empty(), pathToInner.find(null));
+
+      // Positive control: a real source with a populated value still flows through unchanged —
+      // the null-source guard is gated on `source == null`, not on the result of get(source).
+      final var populated = new NullIntermediateOuter();
+      final var inner = new NullIntermediateInner();
+      inner.setName("alice");
+      populated.setInner(inner);
+      assertEquals(Optional.of(inner), pathToInner.find(populated));
     }
 
     @Test
-    @DisplayName("atomic holder-constant Telescope.read(null) throws NoSuchElementException, not NPE")
+    @DisplayName(
+      "atomic holder-constant Telescope.read(null) throws NoSuchElementException carrying the first-hop field name"
+    )
     void atomicHolderConstantReadOnNullSourceThrowsNoValue() {
       // Read's contract is to throw NoSuchElementException on a missing focus. Pre-fix the Lens
       // fast-path NPE'd through the method-reference receiver before reaching the noValue() path.
+      // The message MUST carry the first-hop field name so an adopter can trace which path read
+      // an empty value — a content-free "no value" would be a debuggability regression vs. the
+      // original NPE which at least pointed at the receiver class.
       final var pathToInner = Telescope.ofBean(NullIntermediateOuter.class).field(NullIntermediateOuter::getInner);
-      assertThrows(NoSuchElementException.class, () -> pathToInner.read(null));
+      final var thrown = assertThrows(NoSuchElementException.class, () -> pathToInner.read(null));
+      final var message = thrown.getMessage();
+      assertTrue(
+        message != null && message.contains("getInner"),
+        () -> "expected message to name the first-hop method 'getInner', got: " + message
+      );
     }
   }
 

@@ -1091,7 +1091,7 @@ public sealed class Telescope<
       return lens.get(source);
     }
     if (optic instanceof final Affine<S, A> affine) {
-      return affine.getOption(source).orElseThrow(Telescope::noValue);
+      return affine.getOption(source).orElseThrow(this::noValue);
     }
     // Stream.findFirst() routes through Optional.of(element), which NPEs on null. A Traversal
     // can legitimately surface null elements when an intermediate hop of a multi-hop bean path
@@ -1103,8 +1103,18 @@ public sealed class Telescope<
     return it.next();
   }
 
-  private static NoSuchElementException noValue() {
-    return new NoSuchElementException("Telescope has no value in this source");
+  /**
+   * Build a {@link NoSuchElementException} for the "no focused value" case, carrying the path's
+   * first-hop field name when one was captured. The field name gives an adopter the breadcrumb back
+   * to which Telescope they were reading; without it the message reads identically for every empty
+   * read across the codebase.
+   */
+  private NoSuchElementException noValue() {
+    return new NoSuchElementException(
+      firstHopName != null
+        ? "Telescope has no value in this source (path starts at field '" + firstHopName + "')"
+        : "Telescope has no value in this source"
+    );
   }
 
   /**
