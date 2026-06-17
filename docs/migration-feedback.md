@@ -681,10 +681,11 @@ receives `Map<String, Object>` from frameworks.
 import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
 
 ForwardMapper<Map<String, Object>, CaseListRequest> m = Telescope.fromMap(
-    CaseListRequest.class,
-    extract("bookingType", CaseListRequest::getBookingType, Object::toString),
-    extract("caseId",      CaseListRequest::getCaseId,      Object::toString),
-    extract("priority",    CaseListRequest::getPriority,    v -> Integer.parseInt(v.toString())));
+  CaseListRequest.class,
+  extract("bookingType", CaseListRequest::getBookingType, Object::toString),
+  extract("caseId", CaseListRequest::getCaseId, Object::toString),
+  extract("priority", CaseListRequest::getPriority, (v) -> Integer.parseInt(v.toString()))
+);
 ```
 
 Lenient by default: missing keys + unmatched target components take their `NullDefaults` value (`""` for `String`, `0`
@@ -716,11 +717,11 @@ synthesises JLS-default constants (via `defaultLiteralFor(TypeMirror)`) for targ
 The existing bijection check passes naturally against the auto-extended sets — no parallel codegen path. Renames and
 transforms still go through their normal type-safety pipeline.
 
-**Round-trip-loss warning, by direction name.** `lenient = true` produces a partial-Iso whose `BRIDGE.set(source,
-target)` direction is the lossy one — every `Source`-side field with no `Target` counterpart comes back at its JLS
-default regardless of what the original Source held. `BRIDGE.read(source)` (forward) is fine. Adopters who rely on
-backward round-trip safety must NOT set `lenient`. The `@Bridge#lenient` javadoc spells this out next to the attribute
-declaration, naming `BRIDGE.set(source, target)` explicitly so the asymmetry is unambiguous. ADR-0009.
+**Round-trip-loss warning, by direction name.** `lenient = true` produces a partial-Iso whose
+`BRIDGE.set(source, target)` direction is the lossy one — every `Source`-side field with no `Target` counterpart comes
+back at its JLS default regardless of what the original Source held. `BRIDGE.read(source)` (forward) is fine. Adopters
+who rely on backward round-trip safety must NOT set `lenient`. The `@Bridge#lenient` javadoc spells this out next to the
+attribute declaration, naming `BRIDGE.set(source, target)` explicitly so the asymmetry is unambiguous. ADR-0009.
 
 ---
 
@@ -833,13 +834,13 @@ PR #144.
 
 | #      | Description                                        | Priority | Status         |
 | ------ | -------------------------------------------------- | -------- | -------------- |
-| Enh 1  | Cross-module `@Bridge` carrier                     | High     | Fixed (v1.0.2)             |
-| Enh 2  | `ForwardMapper.liftList()`                         | Medium   | Fixed (v1.0.2)             |
-| Enh 3  | `Telescope.asForwardMapper()`                      | Low      | Fixed (v1.0.2)             |
-| Enh 4  | Processor ordering docs + BridgeProcessor deferral | Medium   | Fixed (v1.0.2)             |
-| Enh 5  | `Map` → POJO factory                               | Low      | Fixed (v1.0.2)             |
-| Enh 6  | `@Bridge` lenient mode                             | High     | Fixed (v1.0.2, PR #148)    |
-| Enh 7  | `Sources.byClass()` generics                       | Low      | Fixed (v1.0.2)             |
-| Enh 8  | `Mapping.forward()` naming                         | Low      | Fixed (v1.0.2)             |
-| Enh 9  | `mapperForward()` lenient by default               | High     | Fixed (v1.0.2)             |
-| Enh 10 | `:internal` test coverage hardening                | Medium   | Fixed (v1.0.2)             |
+| Enh 1  | Cross-module `@Bridge` carrier                     | High     | Fixed (v1.0.2) |
+| Enh 2  | `ForwardMapper.liftList()`                         | Medium   | Fixed (v1.0.2) |
+| Enh 3  | `Telescope.asForwardMapper()`                      | Low      | Fixed (v1.0.2) |
+| Enh 4  | Processor ordering docs + BridgeProcessor deferral | Medium   | Fixed (v1.0.2) |
+| Enh 5  | `Map` → POJO factory                               | Low      | Fixed (v1.0.2) |
+| Enh 6  | `@Bridge` lenient mode                             | High     | Fixed (v1.0.2) |
+| Enh 7  | `Sources.byClass()` generics                       | Low      | Fixed (v1.0.2) |
+| Enh 8  | `Mapping.forward()` naming                         | Low      | Fixed (v1.0.2) |
+| Enh 9  | `mapperForward()` lenient by default               | High     | Fixed (v1.0.2) |
+| Enh 10 | `:internal` test coverage hardening                | Medium   | Fixed (v1.0.2) |
