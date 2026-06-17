@@ -7,6 +7,11 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
+import io.github.eschizoid.telescope.focus.NullIntermediateInner;
+import io.github.eschizoid.telescope.focus.NullIntermediateOuter;
+import io.github.eschizoid.telescope.focus.NullIntermediateTargetDto;
+import io.github.eschizoid.telescope.focus.NullableIntegerSource;
+import io.github.eschizoid.telescope.focus.PrimitiveIntTarget;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serial;
@@ -2014,6 +2019,62 @@ class MigrationRegressionTest {
       assertEquals("o1", tgt.getId(), "matched field carried through");
       assertEquals("alice", tgt.getName(), "matched field carried through");
       assertEquals(null, tgt.getNewField(), "unmatched target field at JLS default");
+    }
+  }
+
+  @Nested
+  @DisplayName("Null intermediate through @BeanFocus codegen — holder-reader path short-circuits, no NPE")
+  class NullIntermediateNpeCodegenPath {
+
+    @Test
+    @DisplayName(
+      "forward(outer) on a @BeanFocus source whose nested @BeanFocus intermediate is null yields null instead of NPE"
+    )
+    void forwardWithNullIntermediateShortCircuitsToNull() {
+      // Sibling of NullIntermediateNpe — same scenario, but the source and the nested intermediate
+      // are both @BeanFocus-annotated. The runtime fix in Beans.readProperty didn't cover the
+      // codegen holder path: the generated *FieldOptics captures Outer::getInner / Inner::getName
+      // as method references and the composed Lens-as-Traversal dispatched get(null) into them,
+      // NPEing on the receiver. Fixed at Lens#getAll (Traversal projection) so a null source
+      // yields an empty stream rather than calling get(null).
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateOuter.class,
+        NullIntermediateTargetDto.class,
+        Mapping.to(
+          Telescope.ofBean(NullIntermediateOuter.class)
+            .field(NullIntermediateOuter::getInner)
+            .field(NullIntermediateInner::getName),
+          NullIntermediateTargetDto::getInnerName
+        )
+      );
+      final var outer = new NullIntermediateOuter();
+      // outer.inner left null on purpose
+      final var dto = assertDoesNotThrow(() -> mapper.forward(outer));
+      assertEquals(null, dto.getInnerName());
+    }
+  }
+
+  @Nested
+  @DisplayName("Primitive ↔ wrapper through @BeanFocus codegen — generated construct() JLS-default substitutes null")
+  class PrimitiveWrapperUnboxCodegenPath {
+
+    @Test
+    @DisplayName("forward(source) with null boxed Integer to @BeanFocus primitive int target uses JLS default")
+    void nullBoxedToPrimitiveUsesJlsDefault() {
+      // Sibling of PrimitiveWrapperAutoboxing#nullBoxedToPrimitiveUsesJlsDefault — same shape, but
+      // the target is @BeanFocus so the generated *FieldOptics.construct(Function) is the rebuild
+      // entry point. The template used to emit `c.setX((Integer) values.apply("x"))` which NPEs
+      // on the implicit Integer -> int unbox when the value is null. Fixed at the emitter so
+      // primitive-typed setters take the null-guarded form with the JLS default.
+      final var mapper = Telescope.mapperForward(
+        NullableIntegerSource.class,
+        PrimitiveIntTarget.class,
+        Mapping.to(NullableIntegerSource::getAttemptCount, PrimitiveIntTarget::getAttemptCount)
+      );
+      final var src = new NullableIntegerSource();
+      // src.attemptCount left null
+      final var dto = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(0, dto.getAttemptCount()); // JLS default for int
     }
   }
 }

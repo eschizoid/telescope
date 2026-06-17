@@ -588,7 +588,10 @@ class BeanFocusProcessorTest {
       // mirrored here verbatim.
       assertTrue(holder.contains("final var c = new Person();"), holder);
       assertTrue(holder.contains("c.setName((String) values.apply(\"name\"));"), holder);
-      assertTrue(holder.contains("c.setAge((Integer) values.apply(\"age\"));"), holder);
+      // Primitive setter takes the instanceof-pattern null-guard form so a null entry in `values`
+      // substitutes the JLS default (0 for int) instead of NPEing on the implicit Integer->int
+      // unbox.
+      assertTrue(holder.contains("c.setAge(values.apply(\"age\") instanceof Integer __v ? __v : 0);"), holder);
       assertTrue(holder.contains("return c;"), holder);
       // Imports + @SuppressWarnings present.
       assertTrue(holder.contains("import java.util.function.Function;"), holder);

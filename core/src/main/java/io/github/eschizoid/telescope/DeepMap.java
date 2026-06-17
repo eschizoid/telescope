@@ -828,7 +828,7 @@ public final class DeepMap {
     final var tgtClass = (Class<T>) t.getClass();
     final var tgtRefl = Reflective.of(tgtClass);
     final var tgtField = tgtRefl.normalize(r.targetField());
-    final var newValue = srcT.read(s);
+    final var newValue = srcT.find(s).orElse(null);
     return (T) tgtRefl.construct(tgtClass, name -> name.equals(tgtField) ? newValue : tgtRefl.read(t, name));
   }
 

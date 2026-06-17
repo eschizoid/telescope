@@ -54,11 +54,21 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
 
   @Override
   default Optional<A> getOption(final S source) {
-    return Optional.of(get(source));
+    if (source == null) return Optional.empty();
+    return Optional.ofNullable(get(source));
   }
 
+  /**
+   * Null-source projection: a Lens viewed as a Traversal yields an empty stream when the source is
+   * {@code null}, instead of dispatching {@code get(null)} through the captured method reference
+   * (which would NPE on the receiver). Lets multi-hop bean paths short-circuit on nullable
+   * intermediates the same way the runtime {@code Beans.readProperty} null-guard does. Atomic
+   * {@code .get(null)} still NPEs if the user's getter does — strict-lens semantics for direct gets
+   * are unchanged.
+   */
   @Override
   default Stream<A> getAll(final S source) {
+    if (source == null) return Stream.empty();
     return Stream.of(get(source));
   }
 
