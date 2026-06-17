@@ -114,7 +114,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // attribute — codegen emits a direct {@code UsingClass.methodName(value)} call instead of
     // instantiating a BridgeFn. Always implicitly forward-only; the source field also lands in
     // forwardOnlyTransforms when this map carries an entry for it.
-    Map<String, String> transformMethods
+    Map<String, String> transformMethods,
+    // Carrier-form emission override (ADR-0007 / Enh 1). When set, the generated bridge class
+    // lives in this carrier's package and is named after the carrier — the source's package and
+    // simple name are ignored for emission purposes. `null` means model-anchored form (the legacy
+    // path: source class IS the annotated element, package + name derive from it).
+    String carrierFq
   ) {
     static final BridgeConfig EMPTY = new BridgeConfig(
       Set.of(),
@@ -127,7 +132,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       "AUTO",
       Map.of(),
       Map.of(),
-      Map.of()
+      Map.of(),
+      null
     );
   }
 
@@ -182,35 +188,110 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         error(element, "@Bridge is only supported on top-level types");
         continue;
       }
-      final var sourceFq = ((TypeElement) element).getQualifiedName().toString();
       final var bridges = collectBridgeAnnotations(element);
       if (bridges.isEmpty()) continue;
-      if (bridges.size() > 1) multiTargetSources.add(sourceFq);
+
+      // Carrier-form detection runs once per element, BEFORE the per-Bridge loop, because the
+      // multi-target tracking (multiTargetSources) keys on the SOURCE FQN — and the source of a
+      // carrier-anchored Bridge is the `source = ...` attribute, not the element itself. The
+      // model-anchored form (the legacy path) treats the element as the source.
+      if (bridges.size() > 1) {
+        multiTargetSources.add(((TypeElement) element).getQualifiedName().toString());
+      }
 
       for (final var bridgeAm : bridges) {
-        final var rawValue = rawTargetValueFromMirror(bridgeAm);
-        // When the @Bridge target class lives in a module that the annotated element's
-        // compilation unit can't see, javac's AnnotationValue.getValue() returns the target FQN
-        // as a String instead of a TypeMirror. Surface a precise diagnostic instead of letting
-        // a downstream cast crash with an unhelpful ClassCastException.
-        if (rawValue instanceof String fqn) {
-          error(
-            element,
-            "@Bridge target '" +
-              fqn +
-              "' is not resolvable from this compilation unit — annotate the other side, " +
-              "or add the dependency."
-          );
-          continue;
+        // Carrier-form: `@Bridge(source = X.class, target = Y.class)` on a third class. The
+        // annotated element is the CARRIER (just a package anchor + name); X is the actual source
+        // and Y the actual target. Detect carrier form by checking whether `source = ...` is set
+        // to anything other than its `Void.class` default sentinel. ADR-0007.
+        final var rawSource = rawSourceValueFromMirror(bridgeAm);
+        final var rawCarrierTarget = rawCarrierTargetFromMirror(bridgeAm);
+        final var carrierForm = rawSource != null && !isVoidSentinel(rawSource);
+
+        final TypeElement carrierEl = carrierForm ? (TypeElement) element : null;
+        final TypeMirror sourceMirror;
+        final TypeMirror targetMirror;
+        if (carrierForm) {
+          if (rawSource instanceof String fqn) {
+            error(
+              element,
+              "@Bridge source '" +
+                fqn +
+                "' is not resolvable from this compilation unit — add the dependency, " +
+                "or move the carrier class to a module that sees the source type."
+            );
+            continue;
+          }
+          sourceMirror = rawSource instanceof TypeMirror sm ? sm : null;
+          if (sourceMirror == null || sourceMirror.getKind() != TypeKind.DECLARED) {
+            error(element, "@Bridge source must be a class, record, or sealed-interface type");
+            continue;
+          }
+          if (rawCarrierTarget == null || isVoidSentinel(rawCarrierTarget)) {
+            error(
+              element,
+              "@Bridge: source = ... requires target = ... on the same annotation (carrier form needs both sides)."
+            );
+            continue;
+          }
+          if (rawCarrierTarget instanceof String tfqn) {
+            error(
+              element,
+              "@Bridge target '" +
+                tfqn +
+                "' is not resolvable from this compilation unit — add the dependency, " +
+                "or move the carrier class to a module that sees the target type."
+            );
+            continue;
+          }
+          targetMirror = rawCarrierTarget instanceof TypeMirror ttm ? ttm : null;
+          if (targetMirror == null || targetMirror.getKind() != TypeKind.DECLARED) {
+            error(element, "@Bridge target must be a class, record, or sealed-interface type");
+            continue;
+          }
+        } else {
+          // Model-anchored form — the legacy path. The annotated element IS the source; the target
+          // comes from `value = ...`. If a user set neither `value` NOR `source/target`, surface a
+          // precise diagnostic instead of silently accepting an empty annotation.
+          final var rawValue = rawTargetValueFromMirror(bridgeAm);
+          if (rawValue == null || isVoidSentinel(rawValue)) {
+            error(
+              element,
+              "@Bridge requires either value = TargetClass.class (model-anchored form) or " +
+                "source = ... + target = ... (carrier form)."
+            );
+            continue;
+          }
+          if (rawValue instanceof String fqn) {
+            error(
+              element,
+              "@Bridge target '" +
+                fqn +
+                "' is not resolvable from this compilation unit — annotate the other side, " +
+                "or add the dependency."
+            );
+            continue;
+          }
+          targetMirror = rawValue instanceof TypeMirror tm ? tm : null;
+          if (targetMirror == null || targetMirror.getKind() != TypeKind.DECLARED) {
+            error(element, "@Bridge value must be a class, record, or sealed-interface type");
+            continue;
+          }
+          sourceMirror = ((TypeElement) element).asType();
         }
-        final var target = rawValue instanceof TypeMirror tm ? tm : null;
-        if (target == null || target.getKind() != TypeKind.DECLARED) {
-          error(element, "@Bridge value must be a class, record, or sealed-interface type");
-          continue;
-        }
-        final var targetEl = (TypeElement) ((DeclaredType) target).asElement();
+        final var sourceFq = carrierForm
+          ? ((TypeElement) ((DeclaredType) sourceMirror).asElement()).getQualifiedName().toString()
+          : ((TypeElement) element).getQualifiedName().toString();
+        final var targetEl = (TypeElement) ((DeclaredType) targetMirror).asElement();
         if (targetEl.getNestingKind() != NestingKind.TOP_LEVEL) {
           error(element, "@Bridge target must be a top-level type");
+          continue;
+        }
+        final TypeElement sourceEl = carrierForm
+          ? (TypeElement) ((DeclaredType) sourceMirror).asElement()
+          : (TypeElement) element;
+        if (sourceEl.getNestingKind() != NestingKind.TOP_LEVEL) {
+          error(element, "@Bridge source must be a top-level type");
           continue;
         }
         final var pair = new TypePair(sourceFq, targetEl.getQualifiedName().toString());
@@ -243,13 +324,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           writeStrategy,
           constants,
           computes,
-          transformSet.methodsByField()
+          transformSet.methodsByField(),
+          carrierEl != null ? carrierEl.getQualifiedName().toString() : null
         );
         // Defer when source OR target carries a Lombok-synthesizing annotation: Lombok's lazy AST
         // patches may not have fired yet, so member lookups via Elements.getAllMembers would return
-        // the un-patched view. processingOver() guarantees Lombok is done patching.
+        // the un-patched view. processingOver() guarantees Lombok is done patching. For carrier
+        // form, the actual source/target classes (NOT the carrier) are what carry the Lombok
+        // annotations, so check those.
         final var requiresDeferral =
-          !roundEnv.processingOver() && (carriesLombokTrigger(element) || carriesLombokTrigger(targetEl));
+          !roundEnv.processingOver() && (carriesLombokTrigger(sourceEl) || carriesLombokTrigger(targetEl));
         if (requiresDeferral) {
           deferredPairs.add(pair);
           deferredConfigs.put(pair, builtConfig);
@@ -352,6 +436,42 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (entry.getKey().getSimpleName().contentEquals("value")) return entry.getValue().getValue();
     }
     return null;
+  }
+
+  /**
+   * Read the {@code source = ...} carrier-form attribute. Returns the {@code TypeMirror} of the
+   * declared source class, {@code null} if the attribute was left at its {@code Void.class} default
+   * (i.e. model-anchored form), or a {@code String} FQN when the named class isn't resolvable from
+   * this compilation unit (matching {@link #rawTargetValueFromMirror}'s shape so the
+   * unresolvable-class diagnostic is uniform).
+   */
+  private Object rawSourceValueFromMirror(final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (entry.getKey().getSimpleName().contentEquals("source")) return entry.getValue().getValue();
+    }
+    return null;
+  }
+
+  /**
+   * Read the {@code target = ...} carrier-form attribute. Same shape semantics as {@link
+   * #rawSourceValueFromMirror}. Paired with {@code source = ...} on a carrier class; ignored when
+   * the model-anchored form is in use (the target comes from {@code value = ...} in that case).
+   */
+  private Object rawCarrierTargetFromMirror(final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      if (entry.getKey().getSimpleName().contentEquals("target")) return entry.getValue().getValue();
+    }
+    return null;
+  }
+
+  /**
+   * True when the type mirror is the {@code Void.class} sentinel used as the carrier-form default.
+   */
+  private boolean isVoidSentinel(final Object rawValue) {
+    if (!(rawValue instanceof TypeMirror tm)) return false;
+    if (tm.getKind() != TypeKind.DECLARED) return false;
+    final var el = ((DeclaredType) tm).asElement();
+    return el instanceof TypeElement te && te.getQualifiedName().contentEquals("java.lang.Void");
   }
 
   private Set<String> dropsFromMirror(final AnnotationMirror am) {
@@ -917,12 +1037,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       generateSealed(source, target, pending, seen, userDeclared);
       return;
     }
-    final var pkg = processingEnv.getElementUtils().getPackageOf(source).getQualifiedName().toString();
     final var sourceFq = source.getQualifiedName().toString();
     final var targetFq = target.getQualifiedName().toString();
     final var thisPair = new TypePair(sourceFq, targetFq);
+    final var cfgForEmission = configsByPair.getOrDefault(thisPair, BridgeConfig.EMPTY);
+    // Carrier-form (ADR-0007 / Enh 1): when @Bridge(source = X.class, target = Y.class) lives on a
+    // third "carrier" class, emission lands in the carrier's package under <Carrier>Bridge — NOT
+    // in the source's package. carrierFq is null for the legacy model-anchored form (annotation
+    // on the source class itself), in which case package + name derive from the source.
+    final var carrierEl =
+      cfgForEmission.carrierFq() == null
+        ? null
+        : processingEnv.getElementUtils().getTypeElement(cfgForEmission.carrierFq());
+    final var pkg =
+      carrierEl != null
+        ? processingEnv.getElementUtils().getPackageOf(carrierEl).getQualifiedName().toString()
+        : processingEnv.getElementUtils().getPackageOf(source).getQualifiedName().toString();
     final var useShortName = userDeclared.contains(thisPair) && !multiTargetSources.contains(sourceFq);
-    final var bridgeName = bridgeClassName(source, target, useShortName);
+    final var bridgeName =
+      carrierEl != null ? carrierEl.getSimpleName() + "Bridge" : bridgeClassName(source, target, useShortName);
     final var qualifiedBridge = pkg.isEmpty() ? bridgeName : pkg + "." + bridgeName;
 
     final var sourceFields = fieldsOf(source);
