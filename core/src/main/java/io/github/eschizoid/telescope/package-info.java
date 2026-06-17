@@ -11,10 +11,17 @@
  *
  * <ul>
  *   <li>{@link io.github.eschizoid.telescope.Telescope} — the DSL. Build a path by chaining {@code
- *       .field(...)} / {@code .each(...)} / {@code .as(...)} / {@code .filter(...)}, then read it
- *       ({@code read}, {@code find}, {@code toList}, {@code count}, {@code exists}) or write it
- *       ({@code set}, {@code update}, {@code updateAsync}, {@code updateOptional}, {@code
- *       updateEither}, {@code updateValidated}). Single type, no category-theory jargon.
+ *       .field(...)} / {@code .each(...)} / {@code .as(...)} / {@code .filter(...)} / {@code
+ *       .list(...)} / {@code .setField(...)} / {@code .mapField(...)} / {@code .optional(...)} /
+ *       {@code .withIndex()}, then read it ({@code read}, {@code find}, {@code toList}, {@code
+ *       toListIndexed}, {@code count}, {@code exists}) or write it ({@code set}, {@code update},
+ *       {@code updateIndexed}, {@code updateAsync}, {@code updateOptional}, {@code updateEither},
+ *       {@code updateValidated}). Multi-edit shapes: {@code Telescope.all(over(...))} declarative;
+ *       {@code .with(fn)} / {@code .apply(S)} inline. Mapping shapes: {@code Telescope.map(A, B,
+ *       ...)} bidirectional; {@code Telescope.mapper(...)} returning {@code Mapper}; {@code
+ *       Telescope.mapperForward(...)} returning {@code ForwardMapper} (lenient by default); {@code
+ *       Telescope.merge(...)} N-source assembly; {@code Telescope.fromMap(...)} untyped-source
+ *       factory. Single type, no category-theory jargon.
  *   <li>{@link io.github.eschizoid.telescope.effects.Either} — sealed sum type ({@code Left} /
  *       {@code Right}) shipped in-house so the effectful-update API has no Vavr or Arrow
  *       dependency. Used by {@link io.github.eschizoid.telescope.Telescope#updateEither}.
@@ -35,9 +42,12 @@
  *   <li>{@link io.github.eschizoid.telescope.conversion} — {@code Mapper}, {@code From}, {@code To}
  *       (bidirectional graph mapping + the {@code from / to / using} fluent factory).
  *   <li>{@link io.github.eschizoid.telescope.mapping} — the row-builder DSL ({@code Mapping},
- *       {@code MapStep}, {@code WriteHint}, {@code Via}, {@code Drop}, and friends) consumed by
- *       {@link io.github.eschizoid.telescope.Telescope#map(Class, Class,
- *       io.github.eschizoid.telescope.mapping.MapStep...)}.
+ *       {@code MapStep}, {@code MapExtractStep}, {@code MergeStep}, {@code WriteHint}, {@code
+ *       NullHint}, {@code Via}, {@code Drop}, and friends) consumed by {@link
+ *       io.github.eschizoid.telescope.Telescope#map(Class, Class,
+ *       io.github.eschizoid.telescope.mapping.MapStep...)}, {@link
+ *       io.github.eschizoid.telescope.Telescope#merge}, and {@link
+ *       io.github.eschizoid.telescope.Telescope#fromMap}.
  *   <li>{@link io.github.eschizoid.telescope.effects} — the {@code Either} / {@code Validated}
  *       sealed effect types described above.
  *   <li>{@link io.github.eschizoid.telescope.annotations} — {@code @Focus} / {@code @BeanFocus} /
@@ -64,15 +74,17 @@
  * io.github.eschizoid.telescope.mapping.MapStep...)} handles record↔record, POJO↔POJO, and any
  * cross-paradigm mix at any depth — the per-side {@code Reflective} is picked independently from
  * each class. The annotation {@link io.github.eschizoid.telescope.annotations.Bridge} is the
- * reflection-free, compile-checked counterpart (annotate the record to have the bridge generated
- * and validated at compile time). The {@link io.github.eschizoid.telescope.Telescope#from} / {@code
- * .to} / {@code .using} factory covers the simpler hand-written conversion case via an {@code Iso}.
+ * reflection-free, compile-checked counterpart (annotate a record or class, or a third carrier
+ * class with {@code source = X, target = Y}, to have the bridge generated and validated at compile
+ * time). The {@link io.github.eschizoid.telescope.Telescope#from} / {@code .to} / {@code .using}
+ * factory covers the simpler hand-written conversion case via an {@code Iso}.
  *
  * <h2>Codegen</h2>
  *
  * <p>The {@link io.github.eschizoid.telescope.annotations.Focus} annotation drives an annotation
- * processor that emits per-record optic constants at compile time, eliminating the per-field
- * reflection cost of {@code .field(...)} on hot paths. The generated values plug into the same
- * composition as the reflective path, so a {@code Telescope} built either way behaves identically.
+ * processor that emits per-record {@code <Record>Path<R>} navigators at compile time, eliminating
+ * the per-field reflection cost of {@code .field(...)} on hot paths. The generated values plug into
+ * the same composition as the reflective path, so a {@code Telescope} built either way behaves
+ * identically.
  */
 package io.github.eschizoid.telescope;

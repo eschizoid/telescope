@@ -17,10 +17,12 @@
  *   <li>{@code internal.optics.collections} — runtime dispatch for List / Set / Iterable / Map
  *       values / Optional traversal.
  *   <li>{@code internal} — reflection helpers ({@code Records}, {@code Beans}, {@code Reflective},
- *       {@code LambdaIntrospection}) and the codegen {@code MetadataHolderProbe}. The probe pulls
- *       the underlying optic from a holder-emitted {@code Telescope} constant via a static-init
- *       bridge (a {@code Function<Object, Object>} that {@code Telescope} registers at class-load
- *       time) so this module stays compile-time-independent of {@code :core}.
+ *       {@code LambdaIntrospection}, {@code NullDefaults}) and the codegen {@code
+ *       MetadataHolderProbe}. The probe looks up a sibling {@code <X>FieldOptics} metadata holder
+ *       per target class via a {@code ClassValue<Optional<HolderRef>>} cache — when present, the
+ *       runtime dispatch sites read the codegen-emitted {@code Telescope<X, FieldType>} constants
+ *       directly; when absent, they fall through to the LMF-backed reflective path. This module
+ *       stays compile-time-independent of {@code :core}.
  * </ul>
  *
  * <p>The per-effect {@code Applicative} witnesses ({@code CompletableFutureK}, {@code OptionalK},

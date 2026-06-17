@@ -11,6 +11,16 @@
  *       to map POJOs to records and back.
  *   <li>{@link io.github.eschizoid.telescope.internal.Reflective} — the uniform read/construct
  *       interface DeepMap drives, with implementations for records and beans.
+ *   <li>{@link io.github.eschizoid.telescope.internal.LambdaIntrospection} — {@code
+ *       SerializedLambda} decode that recovers method-reference metadata (impl method name +
+ *       declaring class) at runtime.
+ *   <li>{@link io.github.eschizoid.telescope.internal.MetadataHolderProbe} — {@code ClassValue}-
+ *       cached lookup for sibling {@code <X>FieldOptics} metadata holders emitted by {@code @Focus}
+ *       / {@code @BeanFocus} (ADR-0006 Phase B). When present, runtime navigation reads
+ *       codegen-emitted constants directly instead of going through the LMF reflective path.
+ *   <li>{@link io.github.eschizoid.telescope.internal.NullDefaults} — JLS-default substitution
+ *       table behind {@code NullHint.NullStrategy#DEFAULT} and the {@code mapperForward(...)} +
+ *       {@code @Bridge(lenient = true)} lenient-fill paths.
  * </ul>
  *
  * <p>The optic lattice and the HKT-emulation machinery live under {@code
