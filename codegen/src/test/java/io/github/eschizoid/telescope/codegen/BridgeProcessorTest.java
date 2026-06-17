@@ -3561,4 +3561,171 @@ class BridgeProcessorTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("@Bridge(source = X.class, target = Y.class) — carrier form for cross-module pairs")
+  class CarrierForm {
+
+    @Test
+    @DisplayName("carrier form: emitted bridge sits in the CARRIER's package, named after the carrier")
+    void carrierEmittedInCarrierPackage() {
+      // The whole point of carrier form (ADR-0007): when source and target live in modules with
+      // no compile-time visibility, the bridge declaration lives on a third "carrier" class in a
+      // module that sees both. The emitted <Carrier>Bridge MUST land in the carrier's package, not
+      // the source's — the source's module can't see the carrier and can't write into its package.
+      final var compilation = compile(
+        source("modela.UserEntity", "package modela; public record UserEntity(String id, String email) {}"),
+        source("modelb.UserDto", "package modelb; public record UserDto(String id, String email) {}"),
+        source(
+          "carrier.IdentificationBridgeDef",
+          """
+          package carrier;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(source = modela.UserEntity.class, target = modelb.UserDto.class)
+          public class IdentificationBridgeDef {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "carrier form should compile; saw " + compilation.errorMessages());
+      assertNotNull(
+        compilation.generated().get("carrier.IdentificationBridgeDefBridge"),
+        () -> "expected carrier.IdentificationBridgeDefBridge; saw " + compilation.generated().keySet()
+      );
+      assertNull(
+        compilation.generated().get("modela.UserEntityBridge"),
+        "carrier form must NOT emit a bridge into the source's package"
+      );
+      assertNull(
+        compilation.generated().get("modelb.UserDtoBridge"),
+        "carrier form must NOT emit a bridge into the target's package"
+      );
+      final var bridge = compilation.generated().get("carrier.IdentificationBridgeDefBridge");
+      assertTrue(
+        bridge.contains("package carrier;"),
+        () -> "emitted bridge should declare the carrier's package; saw:\n" + bridge
+      );
+      assertTrue(
+        bridge.contains("Telescope<modela.UserEntity, modelb.UserDto>"),
+        () -> "BRIDGE constant should be typed Telescope<Source, Target> referencing both modules; saw:\n" + bridge
+      );
+    }
+
+    @Test
+    @DisplayName("carrier form: forward + backward emit reads/writes against the right field accessors")
+    void carrierForwardBackwardWritesRealReads() {
+      // The carrier's class itself carries no fields — adopters worry that the processor might
+      // accidentally read from the empty carrier. This test pins that the emitted body reads from
+      // the actual SOURCE and writes to the actual TARGET, NOT from/to the carrier.
+      final var compilation = compile(
+        source("a.Src", "package a; public record Src(String id, String name) {}"),
+        source("b.Dst", "package b; public record Dst(String id, String name) {}"),
+        source(
+          "c.MyCarrier",
+          """
+          package c;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(source = a.Src.class, target = b.Dst.class)
+          public class MyCarrier {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "carrier form should compile; saw " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("c.MyCarrierBridge");
+      assertNotNull(bridge, "expected c.MyCarrierBridge");
+      assertTrue(
+        bridge.contains("s.id()") && bridge.contains("s.name()"),
+        () -> "forward should read source's id + name (NOT the carrier's); saw:\n" + bridge
+      );
+      assertTrue(
+        bridge.contains("t.id()") && bridge.contains("t.name()"),
+        () -> "backward should read target's id + name (NOT the carrier's); saw:\n" + bridge
+      );
+    }
+
+    @Test
+    @DisplayName("carrier form: source = ... without target = ... is a precise error")
+    void carrierMissingTargetIsError() {
+      final var compilation = compile(
+        source("a.Src", "package a; public record Src(String id) {}"),
+        source(
+          "c.HalfCarrier",
+          """
+          package c;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(source = a.Src.class)
+          public class HalfCarrier {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "source without target should fail");
+      assertTrue(
+        compilation.hasError("source = ... requires target = ..."),
+        () -> "expected precise diagnostic naming both attributes; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("carrier form: bare @Bridge (no value, no source) is a precise error — regression guard")
+    void bareBridgeIsError() {
+      // Now that value() defaults to Void.class to enable carrier form, the empty-annotation case
+      // must still surface a precise error. Without this guard, the historical "must name a class"
+      // semantics silently degrade to "compiles but does nothing useful". Regression guard.
+      final var compilation = compile(
+        source(
+          "demo.Bare",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge
+          public class Bare {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "bare @Bridge should fail");
+      assertTrue(
+        compilation.hasError("requires either value = TargetClass.class") ||
+          compilation.hasError("source = ... + target = ..."),
+        () -> "expected precise diagnostic naming both forms; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("carrier form: renames / drops apply identically to the model-anchored form")
+    void carrierRespectsRenamesAndDrops() {
+      // Every modifier (@Rename, drops, constants, transforms) must behave the same on the carrier
+      // form as on the model-anchored form. Pin one non-trivial combo so a future refactor that
+      // special-cased the carrier path can't silently lose modifier semantics.
+      final var compilation = compile(
+        source("a.SrcRD", "package a; public record SrcRD(String oldName, String stripMe, int value) {}"),
+        source("b.DstRD", "package b; public record DstRD(String newName, int value) {}"),
+        source(
+          "c.CarrierRD",
+          """
+          package c;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(source = a.SrcRD.class, target = b.DstRD.class,
+            drops = { "stripMe" },
+            renames = { @Rename(source = "oldName", target = "newName") })
+          public class CarrierRD {}
+          """
+        )
+      );
+
+      assertTrue(
+        compilation.success(),
+        () -> "carrier + renames + drops should compile; saw " + compilation.errorMessages()
+      );
+      final var bridge = compilation.generated().get("c.CarrierRDBridge");
+      assertNotNull(bridge);
+      assertTrue(
+        bridge.contains("s.oldName()") && bridge.contains("s.value()"),
+        () -> "forward should read renamed-source + kept fields; saw:\n" + bridge
+      );
+    }
+  }
 }
