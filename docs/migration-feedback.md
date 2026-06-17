@@ -581,7 +581,7 @@ EnumMap with its key class. Same applies to any user-defined Collection/Map subc
 
 ## Enhancement Requests
 
-### 1. Cross-module `@Bridge` support (MapStruct parity)
+### 1. Cross-module `@Bridge` support (MapStruct parity) — Fixed (v1.0.2)
 
 **Problem:** `@Bridge` must live on the model class, which constrains it to types visible from that class's own Maven
 module. When source and target live in different modules without a dependency path, the annotation can't be placed on
@@ -590,7 +590,8 @@ either side.
 **How MapStruct solves it:** The `@Mapper` interface is a standalone file in the consuming module (which depends on all
 needed modules). The model classes stay annotation-free.
 
-**Proposed solution:** Allow `@Bridge` on a "carrier" class that declares both source and target explicitly:
+**Resolution:** Added carrier-form `@Bridge` — when `source = ...` and `target = ...` are set, the annotation can sit on
+a third "carrier" class that lives in a module seeing both sides:
 
 ```java
 @Bridge(
@@ -601,8 +602,9 @@ needed modules). The model classes stay annotation-free.
 public class IdentificationBridgeDef {}
 ```
 
-This carrier lives in a module that sees both types. The processor emits `IdentificationBridgeDefBridge.BRIDGE` as the
-constant.
+`BridgeProcessor` emits `IdentificationBridgeDefBridge.BRIDGE` in the carrier's package (NOT the source's — the source's
+module can't see the carrier). `value()` now defaults to `Void.class` so carrier form can omit it; bare `@Bridge` still
+surfaces a precise error per a regression guard. Model-anchored form is unchanged. ADR-0007. PR #149.
 
 ---
 
@@ -649,58 +651,52 @@ ForwardMapper<A, B> fm = existingMapper.toForwardMapper();
 
 ---
 
-### 4. Annotation processor ordering documentation
+### 4. Annotation processor ordering documentation — Fixed (v1.0.2)
 
 **Problem:** When Lombok and telescope-lombok are both on the annotation processor path, processor ordering matters.
-`LombokFocusProcessor` correctly defers via `processingOver()`, but `BridgeProcessor` does NOT defer — it processes
-immediately and may see "known fields: []" on Lombok-generated targets.
+`LombokFocusProcessor` correctly defers via `processingOver()`, but `BridgeProcessor` did NOT defer — it processed
+immediately and saw "known fields: []" on Lombok-generated targets.
 
-**Current fix:** Explicit `annotationProcessorPaths` in Maven with Lombok listed first:
+**Resolution:**
 
-```xml
-<annotationProcessorPaths>
-  <path>
-    <groupId>org.projectlombok</groupId>
-    <artifactId>lombok</artifactId>
-    <version>1.18.30</version>
-  </path>
-  <path>
-    <groupId>io.github.eschizoid</groupId>
-    <artifactId>telescope-lombok</artifactId>
-    <version>1.0.0</version>
-  </path>
-</annotationProcessorPaths>
-```
-
-**Proposed:**
-
-1. Document this requirement in the README / Getting Started guide.
-2. Make `BridgeProcessor` also defer emission to `processingOver()` when it detects Lombok annotations on the source or
-   target (same strategy as `LombokFocusProcessor`).
+1. README now carries an "Annotation processor ordering with Lombok" sub-section: recommended Lombok-first ordering
+   posture, the broader `LOMBOK_SYNTHESIZING_ANNOTATIONS` trigger set, and symptoms of mis-ordering.
+2. `BridgeProcessor` now round-defers emission when source or target carries any Lombok-synthesizing annotation —
+   mirrors `LombokFocusProcessor`'s pattern. Trigger set is broader than `LOMBOK_BEAN_ANNOTATIONS`: also includes
+   `@Getter`, `@Setter`, the three `*ArgsConstructor` variants, `@SuperBuilder`, `@With`, `@experimental.Accessors`,
+   `@experimental.FieldDefaults`. The build is order-tolerant — explicit Lombok-first ordering is still recommended
+   posture but no longer required for correctness. PR #143.
 
 ---
 
-### 5. Untyped source mapping (`Map<String, Object>` → POJO)
+### 5. Untyped source mapping (`Map<String, Object>` → POJO) — Fixed (v1.0.2)
 
 **Problem:** No first-class support for mapping from untyped sources (raw Maps, JSON nodes). Common in legacy code that
 receives `Map<String, Object>` from frameworks.
 
-**Current workaround:** Target-side-only `Telescope.all(Edit.over(...))` pattern — still imperative on the extraction
-side.
-
-**Proposed:** A `Telescope.fromMap(Class<T> target, MapExtractStep...)` factory:
+**Resolution:** New sealed `MapExtractStep` interface + `Extract` permit + static `extract(...)` factory +
+`Telescope.fromMap(Class<T>, MapExtractStep...)` returning `ForwardMapper<Map<String, Object>, T>`:
 
 ```java
+import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
+
 ForwardMapper<Map<String, Object>, CaseListRequest> m = Telescope.fromMap(
   CaseListRequest.class,
-  extract("bookingType", CaseListRequest::getBookingType, Extractors::firstStringOrValue),
-  extract("caseId", CaseListRequest::getCaseId, Object::toString)
+  extract("bookingType", CaseListRequest::getBookingType, Object::toString),
+  extract("caseId", CaseListRequest::getCaseId, Object::toString),
+  extract("priority", CaseListRequest::getPriority, (v) -> Integer.parseInt(v.toString()))
 );
 ```
 
+Lenient by default: missing keys + unmatched target components take their `NullDefaults` value (`""` for `String`, `0`
+for numeric primitives, immutable empty singletons for collections, etc.). Extra map keys are silently ignored. Bean
+getters normalize through `Beans.propertyOf` (`X::getEmail` reaches the `email` property). Backward direction NOT
+generated by design. Routes through existing `Records.construct` / `Beans.autoWriter` substrate — no new internal
+machinery. ADR-0008. PR #150.
+
 ---
 
-### 6. `@Bridge` lenient mode — skip unmatched fields
+### 6. `@Bridge` lenient mode — skip unmatched fields — Fixed (v1.0.2, pending PR #148)
 
 **Problem:** `@Bridge` enforces strict bijection. If the target has 130 fields that the source doesn't provide, you'd
 need 130 `@Constant(field = "x", value = "null")` entries — completely impractical.
@@ -708,20 +704,24 @@ need 130 `@Constant(field = "x", value = "null")` entries — completely impract
 **Real-world pattern:** `CustomerCaseRequest` (7 fields) → `GovtIdDBData` (135 fields). Only 6 fields actually map; the
 other 129 should stay at JLS defaults.
 
-**Proposed:** A `lenient = true` flag on `@Bridge`:
+**Resolution:** New `lenient` attribute on `@Bridge` (default `false` preserves the historical strict-bijection
+contract):
 
 ```java
 @Bridge(value = GovtIdDBData.class, lenient = true,
-        renames = {@Rename(source = "referenceID", target = "entRefncId"), ...})
+        renames = {@Rename(source = "referenceID", target = "entRefncId")})
 ```
 
-When `lenient = true`:
+When `lenient = true`, `BridgeProcessor` auto-extends `drops` with source fields that have no target counterpart, and
+synthesises JLS-default constants (via `defaultLiteralFor(TypeMirror)`) for target fields with no source counterpart.
+The existing bijection check passes naturally against the auto-extended sets — no parallel codegen path. Renames and
+transforms still go through their normal type-safety pipeline.
 
-- Unmatched source fields are silently dropped (no `drops` required)
-- Unmatched target fields receive JLS defaults (no `constants` required)
-- Only explicitly declared renames/transforms are enforced
-
-This makes `@Bridge` practical for the common "small DTO → large entity" pattern.
+**Round-trip-loss warning, by direction name.** `lenient = true` produces a partial-Iso whose
+`BRIDGE.set(source, target)` direction is the lossy one — every `Source`-side field with no `Target` counterpart comes
+back at its JLS default regardless of what the original Source held. `BRIDGE.read(source)` (forward) is fine. Adopters
+who rely on backward round-trip safety must NOT set `lenient`. The `@Bridge#lenient` javadoc spells this out next to the
+attribute declaration, naming `BRIDGE.set(source, target)` explicitly so the asymmetry is unambiguous. ADR-0009.
 
 ---
 
@@ -784,26 +784,25 @@ No double-leniency path is constructible.
 
 ---
 
-### 10. `:internal` test coverage hardening (post-v1.0.1)
+### 10. `:internal` test coverage hardening — Fixed (v1.0.2)
 
 **Source:** codecov report on the `:internal` module post-v1.0.1 release. Migration-feedback bugs that would have been
-caught earlier are pinned by end-to-end `MigrationRegressionTest`, but unit-level coverage on the substrate is thin —
-future refactors of the LMF cache, the writer strategies, or the reflection helpers have less protection than they
+caught earlier are pinned by end-to-end `MigrationRegressionTest`, but unit-level coverage on the substrate was thin —
+future refactors of the LMF cache, the writer strategies, or the reflection helpers had less protection than they
 should.
 
-**Priority targets** (by coverage gap × adoption pain on regression):
+**Resolution:** Added meaningful unit tests across the highest-gap targets — every test pins a real contract or edge
+case (per the project's "meaningful tests over coverage-bait" rule):
 
-- `internal/NullDefaults.java` — **0% covered** (20 lines). Zero unit pins on the JLS-default substitution table. Bug 8
-  - Bug 3's primitive-wrapper-and-null-guard work both depend on this; a future refactor that subtly broke
-    `NullDefaults` would surface only as an E2E miss.
-- `internal/Beans.java` — **60% covered** (157 lines missed of 472). The hottest path in the codebase; the writer
-  strategies (`SettersWriter`, `BuilderWriter`, `FieldsWriter`, `ConstructorWriter`) have partial coverage and the LMF
-  cache substrate is only exercised end-to-end.
-- `internal/Reflective.java` (57%), `internal/Records.java` (57%), `internal/MetadataHolderProbe.java` (54%) — the
-  reflection-helper layer. Per-method unit tests would pin invariants the structural-Iso assembly depends on.
+- `NullDefaultsTest` (9 tests, ~100% instructions): JLS-default substitution table — primitive wrappers, enterprise
+  columns (`String`/`BigDecimal`/`BigInteger`), container singletons + immutability pins, deliberate-absence of
+  `Character`, `ParameterizedType` unwrap, catch-all behaviour for unknown leaf types.
+- `LambdaIntrospectionTest` (9 tests, ~86% instructions): `methodNameOf` / `implClassOf` recovery + cache identity +
+  inherited-getter limitation pin + lambda-rejection error wording.
+- `MetadataHolderProbeShapeCheckTest` (5 tests, ~89% instructions): bound-constructor end-to-end (Phase B's runtime
+  payoff) + 4 hand-rolled malformed-holder fixtures pinning the precise codegen-out-of-sync diagnostics.
 
-**Scope:** add `BeansTest` / `RecordsTest` / `NullDefaultsTest` / `MetadataHolderProbeTest` coverage for the gaps.
-Target ≥80% line coverage on `:internal`. Not a correctness defect — quality debt.
+PR #144.
 
 ---
 
@@ -835,13 +834,13 @@ Target ≥80% line coverage on `:internal`. Not a correctness defect — quality
 
 | #      | Description                                        | Priority | Status         |
 | ------ | -------------------------------------------------- | -------- | -------------- |
-| Enh 1  | Cross-module `@Bridge` carrier                     | High     | Open (v1.1+)   |
+| Enh 1  | Cross-module `@Bridge` carrier                     | High     | Fixed (v1.0.2) |
 | Enh 2  | `ForwardMapper.liftList()`                         | Medium   | Fixed (v1.0.2) |
 | Enh 3  | `Telescope.asForwardMapper()`                      | Low      | Fixed (v1.0.2) |
-| Enh 4  | Processor ordering docs + BridgeProcessor deferral | Medium   | Open (v1.1+)   |
-| Enh 5  | `Map` → POJO factory                               | Low      | Open (v1.1+)   |
-| Enh 6  | `@Bridge` lenient mode                             | High     | Open (v1.1+)   |
+| Enh 4  | Processor ordering docs + BridgeProcessor deferral | Medium   | Fixed (v1.0.2) |
+| Enh 5  | `Map` → POJO factory                               | Low      | Fixed (v1.0.2) |
+| Enh 6  | `@Bridge` lenient mode                             | High     | Fixed (v1.0.2) |
 | Enh 7  | `Sources.byClass()` generics                       | Low      | Fixed (v1.0.2) |
 | Enh 8  | `Mapping.forward()` naming                         | Low      | Fixed (v1.0.2) |
 | Enh 9  | `mapperForward()` lenient by default               | High     | Fixed (v1.0.2) |
-| Enh 10 | `:internal` test coverage hardening                | Medium   | Open (v1.0.2)  |
+| Enh 10 | `:internal` test coverage hardening                | Medium   | Fixed (v1.0.2) |
