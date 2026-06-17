@@ -3,9 +3,7 @@ package io.github.eschizoid.telescope.focus;
 import io.github.eschizoid.telescope.annotations.BeanFocus;
 
 /**
- * Nested {@code @BeanFocus} POJO that may appear as a {@code null} intermediate inside a multi-hop
- * telescope path — the captured {@code NullIntermediateInner::getName} method reference must not be
- * invoked on a {@code null} receiver.
+ * Nested {@code @BeanFocus} POJO used as the leaf of a path whose intermediate may be {@code null}.
  */
 @BeanFocus
 public class NullIntermediateInner {

@@ -53,18 +53,19 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
   }
 
   /**
-   * Null-source projection: a Lens viewed as an Affine yields {@link Optional#empty()} when the
-   * source is {@code null}, instead of dispatching {@code get(null)} through the captured method
-   * reference (which would NPE on the receiver). For a non-null source the strict {@code
-   * Optional.of(get(source))} form is preserved — a Lens whose getter returns {@code null} on a
-   * non-null source is a lens-law violation, and {@code Optional.of(null)} surfaces that directly
-   * instead of papering over it. A lens-as-Traversal projection ({@link #getAll}) tolerates the
-   * null result (via {@code Stream.of(null)}); the asymmetry is forced by {@code Optional}'s
-   * inability to hold {@code null}, not by design choice. Reach for an {@link Affine} or {@link
-   * Prism} when the focused {@code A} is genuinely nullable.
+   * Affine projection of this Lens: a {@code null} source yields {@link Optional#empty()} rather
+   * than dispatching {@code get(null)} through the captured method reference. For a non-null source
+   * the strict {@code Optional.of(get(source))} form is preserved — lens-law preservation requires
+   * that a Lens whose getter returns {@code null} on a non-null source surfaces the violation
+   * directly; {@code Optional.of} is the strict carrier and an NPE is the right signal. {@link
+   * #getAll} can carry the same {@code null} result inside a stream because streams accept {@code
+   * null} elements — that asymmetry is between the two carrier types, not between the two
+   * projections. When the focused {@code A} is genuinely nullable in source data, model that with
+   * an {@link Affine} or {@link Prism} instead of a Lens.
    *
    * @throws NullPointerException if {@code source} is non-null and {@code get(source)} returns
-   *     {@code null} (a lens-law violation surfacing through {@link Optional#of}).
+   *     {@code null}. In a composed read the NPE surfaces at whichever lens leaf first returns
+   *     {@code null} on a non-null input.
    */
   @Override
   default Optional<A> getOption(final S source) {
@@ -73,11 +74,15 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
   }
 
   /**
-   * Null-source projection: a Lens viewed as a Traversal yields an empty stream when the source is
-   * {@code null}, instead of dispatching {@code get(null)} through the captured method reference
-   * (which would NPE on the receiver). Lets multi-hop bean paths short-circuit on nullable
-   * intermediates inside composed reads. Atomic {@code .get(null)} still NPEs if the user's getter
-   * does — strict-lens semantics for direct gets are unchanged.
+   * Traversal projection of this Lens: a {@code null} source yields an empty stream rather than
+   * dispatching {@code get(null)} through the captured method reference. Lets multi-hop bean paths
+   * short-circuit on nullable intermediates inside composed reads. A non-null source whose getter
+   * legitimately returns {@code null} produces a one-element {@code Stream.of(null)} — {@code
+   * Stream} is the lenient carrier (cf. {@link #getOption} where {@link Optional} is strict).
+   * Downstream stream operators that route through {@link Optional#of} ({@link
+   * java.util.stream.Stream#findFirst}, for example) will NPE on that null element; callers that
+   * care about preserving the empty-vs-null distinction should drain via iterator. Direct {@code
+   * .get(null)} on the atomic Lens still NPEs.
    */
   @Override
   default Stream<A> getAll(final S source) {

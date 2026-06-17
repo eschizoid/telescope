@@ -5,11 +5,9 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * Lombok {@code @Data} POJO with both a primitive {@code int} and a reference {@code String} field.
- * The {@code attemptCount} primitive exercises the codegen {@code construct()} template's
- * null-guard fallback; the {@code label} reference field is the sibling control, asserting that a
- * reference-typed setter still takes the plain cast form alongside the guarded primitive on the
- * same construct invocation.
+ * Lombok {@code @Data} POJO pairing a primitive {@code int attemptCount} with a reference {@code
+ * String label}. The primitive field exercises null-to-primitive coercion; the reference field is
+ * the sibling control so a reference-typed setter is verified in the same rebuild.
  */
 @Data
 @NoArgsConstructor

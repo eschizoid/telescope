@@ -2034,12 +2034,10 @@ class MigrationRegressionTest {
       "forward(outer) on a @BeanFocus source whose nested @BeanFocus intermediate is null yields null instead of NPE"
     )
     void forwardWithNullIntermediateShortCircuitsToNull() {
-      // Sibling of NullIntermediateNpe — same scenario, but the source and the nested intermediate
-      // are both @BeanFocus-annotated. The runtime fix in Beans.readProperty didn't cover the
-      // codegen holder path: the generated *FieldOptics captures Outer::getInner / Inner::getName
-      // as method references and the composed Lens-as-Traversal dispatched get(null) into them,
-      // NPEing on the receiver. Fixed at Lens#getAll (Traversal projection) so a null source
-      // yields an empty stream rather than calling get(null).
+      // A composed @BeanFocus codegen path over a null nested intermediate must produce a null
+      // target value rather than NPE through a captured method reference's receiver. The atomic
+      // Lens stays strict on direct .get(null); the Traversal projection at Lens#getAll yields an
+      // empty stream so multi-hop reads short-circuit cleanly.
       final var mapper = Telescope.mapperForward(
         NullIntermediateOuter.class,
         NullIntermediateTargetDto.class,
@@ -2059,10 +2057,9 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("atomic holder-constant Telescope.find(null) yields Optional.empty instead of NPE")
     void atomicHolderConstantFindOnNullSourceIsEmpty() {
-      // Direct atomic access via a holder-constant Telescope is its own entry point — distinct
-      // from the composed multi-hop path covered above. The constant wraps an atomic Lens, so
-      // Telescope#find takes the Lens fast-path; without a null-source guard there, the captured
-      // method reference would dispatch on the null receiver and NPE.
+      // Direct atomic-Lens access (codegen holder constants are atomic Lens-backed Telescopes)
+      // takes the Lens fast-path in Telescope#find. On a null source it must return Optional.empty
+      // instead of dispatching the captured getter on a null receiver.
       final var pathToInner = Telescope.ofBean(NullIntermediateOuter.class).field(NullIntermediateOuter::getInner);
       assertEquals(Optional.empty(), pathToInner.find(null));
 
@@ -2082,11 +2079,9 @@ class MigrationRegressionTest {
       "atomic holder-constant Telescope.read(null) throws NoSuchElementException carrying the first-hop field name"
     )
     void atomicHolderConstantReadOnNullSourceThrowsNoValue() {
-      // Read's contract is to throw NoSuchElementException on a missing focus. Pre-fix the Lens
-      // fast-path NPE'd through the method-reference receiver before reaching the noValue() path.
-      // The message MUST carry the first-hop field name so an adopter can trace which path read
-      // an empty value — a content-free "no value" would be a debuggability regression vs. the
-      // original NPE which at least pointed at the receiver class.
+      // Telescope#read's contract is NoSuchElementException on a missing focus; null source on
+      // the atomic-Lens fast-path resolves to that empty-focus case. The exception message must
+      // name the first-hop method so callers can identify which Telescope produced it.
       final var pathToInner = Telescope.ofBean(NullIntermediateOuter.class).field(NullIntermediateOuter::getInner);
       final var thrown = assertThrows(NoSuchElementException.class, () -> pathToInner.read(null));
       final var message = thrown.getMessage();
@@ -2104,11 +2099,10 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("forward(source) with null boxed Integer to @BeanFocus primitive int target uses JLS default")
     void nullBoxedToPrimitiveUsesJlsDefault() {
-      // Sibling of PrimitiveWrapperAutoboxing#nullBoxedToPrimitiveUsesJlsDefault — same shape, but
-      // the target is @BeanFocus so the generated *FieldOptics.construct(Function) is the rebuild
-      // entry point. The template used to emit `c.setX((Integer) values.apply("x"))` which NPEs
-      // on the implicit Integer -> int unbox when the value is null. Fixed at the emitter so
-      // primitive-typed setters take the null-guarded form with the JLS default.
+      // When the target is @BeanFocus-annotated, the generated *FieldOptics.construct(Function) is
+      // the rebuild entry point. A null boxed-Integer source bound to a primitive-int setter must
+      // substitute the JLS default at the codegen emission layer; otherwise the implicit unbox
+      // NPEs on Integer.intValue. Counterpart of PrimitiveWrapperAutoboxing on the runtime path.
       final var mapper = Telescope.mapperForward(
         NullableIntegerSource.class,
         PrimitiveIntTarget.class,

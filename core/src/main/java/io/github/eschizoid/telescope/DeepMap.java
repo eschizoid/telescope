@@ -828,12 +828,10 @@ public final class DeepMap {
     final var tgtClass = (Class<T>) t.getClass();
     final var tgtRefl = Reflective.of(tgtClass);
     final var tgtField = tgtRefl.normalize(r.targetField());
-    // Use find().orElse(null) rather than read() so a multi-hop source path resolving to an empty
-    // focus — null intermediate in a chained bean read, or an Affine miss further down the path —
-    // substitutes a null target value instead of throwing NoSuchElementException out of the mapper.
-    // Lenient by design for forward mappers: rebuild proceeds and downstream JLS-default handling
-    // (NullDefaults for primitives, null-pass-through for refs) picks up where the missing source
-    // value left off.
+    // Lenient: when the source path resolves to an empty focus (null intermediate in a chained
+    // bean read, or an Affine miss further down the path), rebuild proceeds with null in the
+    // target field rather than aborting the mapper with NoSuchElementException. Downstream type-
+    // default handling — where configured — takes over from there.
     final var newValue = srcT.find(s).orElse(null);
     return (T) tgtRefl.construct(tgtClass, name -> name.equals(tgtField) ? newValue : tgtRefl.read(t, name));
   }

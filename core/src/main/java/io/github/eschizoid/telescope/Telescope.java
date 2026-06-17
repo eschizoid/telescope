@@ -1105,9 +1105,14 @@ public sealed class Telescope<
 
   /**
    * Build a {@link NoSuchElementException} for the "no focused value" case, carrying the path's
-   * first-hop field name when one was captured. The field name gives an adopter the breadcrumb back
-   * to which Telescope they were reading; without it the message reads identically for every empty
-   * read across the codebase.
+   * first-hop method name when one was captured. Naming the entry point lets a caller identify
+   * which {@code Telescope} produced the empty read; without it every empty-read exception is
+   * indistinguishable.
+   *
+   * <p>Capture is best-effort: {@link #fieldByName(String)} and the no-arg {@code each()} produce a
+   * {@code null} first hop, and the message falls back to the generic form. Direct-Iso entry points
+   * ({@link #from(Class)}) likewise carry no first hop until the first {@code .field(...)} is
+   * appended.
    */
   private NoSuchElementException noValue() {
     return new NoSuchElementException(

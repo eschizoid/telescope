@@ -642,9 +642,9 @@ class BeanFocusProcessorTest {
     @Test
     @DisplayName("builder() POJO with a primitive field: the chain takes the instanceof null-guard form")
     void builderPojoConstructWithPrimitiveField() {
-      // Mirrors the setter-strategy null-guard but on the builder fluent chain. The primitive int
-      // property must take the instanceof-pattern form even when the rebuild strategy is the
-      // static builder().
+      // Builder-strategy rebuild paths must apply the same primitive null-guard form as the
+      // setter-strategy paths — the static builder() chain emits one .x(...) call per property
+      // and each primitive arg takes the instanceof-pattern guard.
       final var compilation = compile(
         source(
           "demo.BuilderWithPrim",
