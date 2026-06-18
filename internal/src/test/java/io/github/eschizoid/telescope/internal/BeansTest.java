@@ -2,12 +2,14 @@ package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
@@ -1128,6 +1130,147 @@ class BeansTest {
       final var proxy = new ProxyShape();
       proxy.setName("alice");
       assertEquals("alice", Beans.readProperty(proxy, "name"));
+    }
+  }
+
+  @Nested
+  @DisplayName("writeBeanProperty — single-property write through cached LMF setter invoker")
+  class WriteBeanProperty {
+
+    @Test
+    @DisplayName("happy path: writes a reference-typed property and the getter reflects the new value")
+    void writesReferenceTypedProperty() {
+      final var pojo = new NoArgSetters();
+      Beans.writeBeanProperty(pojo, "name", "alice");
+      assertEquals("alice", pojo.getName());
+    }
+
+    @Test
+    @DisplayName("primitive-typed setter unboxes a boxed source value end-to-end through the LMF invoker")
+    void primitiveSetterUnboxesBoxedSource() {
+      // The cached invoker is built from a BiConsumer<Object, Object> SAM whose instantiated
+      // method type is (Cls, Integer) -> void. LMF generates the unbox bridge to setX(int) —
+      // this test exercises that bridge end-to-end via writeBeanProperty's public surface.
+      final var pojo = new NoArgSetters();
+      Beans.writeBeanProperty(pojo, "score", Integer.valueOf(42));
+      assertEquals(42, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("getter-only / no-setter property silently no-ops (matches MapStruct's @MappingTarget contract)")
+    void getterOnlyPropertyIsSilentNoOp() {
+      // Documented contract at Beans.buildSetterInvoker: a property with no setX(value) method
+      // gets a no-op BiConsumer rather than throwing — Mapper.into(target, source) would
+      // otherwise blow up on a property pair that Mapper.forward (via SettersWriter) silently
+      // skipped, producing an asymmetric same-mapper contract. NoArgFields has a `name` field
+      // and getter but no setter; writeBeanProperty must succeed silently and leave the field
+      // at its JLS default (here: null).
+      final var pojo = new NoArgFields();
+      Beans.writeBeanProperty(pojo, "name", "ignored");
+      assertNull(pojo.name);
+    }
+
+    @Test
+    @DisplayName("inherited setter: writeBeanProperty routes through the parent's declaring class for privateLookupIn")
+    void inheritedSetterRoutesThroughDeclaringClass() {
+      // ChildBean inherits setId(String) from ParentBean. The LMF invoker must resolve a Lookup
+      // against ParentBean (where setId is declared) rather than ChildBean — using the child's
+      // class would fail at privateLookupIn when the two live in modules with different opens
+      // directives. Pins the inheritance-correctness contract for the write path, mirroring the
+      // SettersWriter test of the same shape.
+      final var pojo = new ChildBean();
+      Beans.writeBeanProperty(pojo, "id", "parent-id");
+      assertEquals("parent-id", pojo.getId());
+    }
+
+    @Test
+    @DisplayName("subsequent writes for the same (class, property) reuse the cached invoker (hot path)")
+    void cachesInvokerAcrossWrites() {
+      // The cache lookup at Beans.writeBeanProperty:
+      //   SETTER_INVOKERS.get(cls).computeIfAbsent(name, n -> buildSetterInvoker(...))
+      // means the first write per (class, property) builds the LMF invoker and subsequent writes
+      // dispatch directly. Smoke-test the cache by writing twice and asserting the second write
+      // takes effect — a regression where the second call rebuilt from scratch would still pass,
+      // but a regression where the cache misbehaved (e.g. wrong cached value) would not.
+      final var pojo = new NoArgSetters();
+      Beans.writeBeanProperty(pojo, "name", "first");
+      Beans.writeBeanProperty(pojo, "name", "second");
+      assertEquals("second", pojo.getName());
+    }
+  }
+
+  @Nested
+  @DisplayName("fieldLens — class-deferred Lens<P, A> driving Telescope.fieldByName(String)")
+  class FieldLensByName {
+
+    @Test
+    @DisplayName("get reads the focused property from the source via readProperty's class-deferred dispatch")
+    void getReadsFromAnyMatchingSource() {
+      final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
+      final var pojo = new NoArgSetters();
+      pojo.setName("alice");
+      assertEquals("alice", nameLens.get(pojo));
+    }
+
+    @Test
+    @DisplayName("set rebuilds the POJO with the focused property replaced; off-path values are carried through")
+    void setReplacesFocusedPropertyAndCarriesOffPath() {
+      final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
+      final var src = new NoArgSetters();
+      src.setName("alice");
+      src.setScore(7);
+      final var rebuilt = nameLens.set(src, "bob");
+      assertEquals("bob", rebuilt.getName());
+      assertEquals(7, rebuilt.getScore(), "off-path score must round-trip untouched");
+    }
+
+    @Test
+    @DisplayName("set(null, value) returns null — the documented null-source guard")
+    void setOnNullSourceReturnsNull() {
+      final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
+      assertNull(nameLens.set(null, "ignored"));
+    }
+
+    @Test
+    @DisplayName("modify(null, fn) returns null without invoking the function on a null get result")
+    void modifyOnNullSourceReturnsNull() {
+      final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
+      assertNull(
+        nameLens.modify(null, v -> {
+          throw new AssertionError("function must not be invoked on null source");
+        })
+      );
+    }
+
+    @Test
+    @DisplayName("set on a subtype source rebuilds using the subtype's class (writer is resolved at call time)")
+    void setOnSubtypeRebuildsAsSubtype() {
+      // fieldLens is class-deferred: the writer is resolved against source.getClass() per call,
+      // not captured at lens build time. A ChildBean carrying both inherited and own properties
+      // rebuilds as ChildBean — same lens instance can be applied across the hierarchy.
+      final Lens<ParentBean, String> idLens = Beans.fieldLens("id");
+      final var child = new ChildBean();
+      child.setId("p");
+      child.setName("c");
+      final var rebuilt = idLens.set(child, "p2");
+      assertInstanceOf(ChildBean.class, rebuilt, "rebuilt instance must be the subtype, not the supertype");
+      assertEquals("p2", rebuilt.getId());
+      assertEquals("c", ((ChildBean) rebuilt).getName(), "off-path subtype property must carry through");
+    }
+
+    @Test
+    @DisplayName("set(s, null) on a primitive property substitutes the JLS default via SettersWriter's null-guard")
+    void setNullOnPrimitiveSubstitutesJlsDefault() {
+      // Documented contract on Beans.fieldLens: when the focused property is a Java primitive,
+      // set(s, null) substitutes the JLS default (0 for int) rather than throwing on the
+      // unbox — the value flows through SettersWriter which null-guards primitive setters.
+      // Lens law `set(s, null).get == null` does NOT hold here; user must use a boxed wrapper
+      // type if null round-trip matters.
+      final Lens<NoArgSetters, Integer> scoreLens = Beans.fieldLens("score");
+      final var src = new NoArgSetters();
+      src.setScore(5);
+      final var rebuilt = scoreLens.set(src, null);
+      assertEquals(0, rebuilt.getScore());
     }
   }
 }
