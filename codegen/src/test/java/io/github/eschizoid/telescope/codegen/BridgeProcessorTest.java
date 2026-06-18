@@ -3728,4 +3728,248 @@ class BridgeProcessorTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("writeStrategy — explicit hints succeed when the matching shape is present")
+  class ExplicitWriteStrategy {
+
+    @Test
+    @DisplayName("writeStrategy = CONSTRUCTOR succeeds on a POJO that also has a builder() — picks ctor, not builder")
+    void explicitConstructorWinsOverAvailableBuilder() {
+      // AUTO probes CONSTRUCTOR before BUILDER, so picking CONSTRUCTOR explicitly produces the
+      // same generated code on this fixture. The behavioural pin: if a future refactor swaps the
+      // AUTO probe order to prefer BUILDER, the explicit CONSTRUCTOR hint must still bind the
+      // constructor — the hint is the documented way to escape AUTO's default; falling through to
+      // BUILDER on an explicit CONSTRUCTOR hint would be a silent semantic regression.
+      final var compilation = compile(
+        source(
+          "demo.SrcEC",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.WriteStrategy;
+          @Bridge(value = demo.DstEC.class, writeStrategy = WriteStrategy.CONSTRUCTOR)
+          public record SrcEC(String id, int score) {}
+          """
+        ),
+        source(
+          "demo.DstEC",
+          """
+          package demo;
+          public class DstEC {
+            private final String id;
+            private final int score;
+            public DstEC(String id, int score) { this.id = id; this.score = score; }
+            public String getId() { return id; }
+            public int getScore() { return score; }
+            public static Builder builder() { return new Builder(); }
+            public static final class Builder {
+              private String id;
+              private int score;
+              public Builder id(String id) { this.id = id; return this; }
+              public Builder score(int score) { this.score = score; return this; }
+              public DstEC build() { return new DstEC(id, score); }
+            }
+          }
+          """
+        )
+      );
+
+      assertTrue(
+        compilation.success(),
+        () -> "explicit CONSTRUCTOR must bind the ctor; saw " + compilation.errorMessages()
+      );
+      final var bridge = compilation.generated().get("demo.SrcECBridge");
+      assertNotNull(bridge);
+      assertTrue(
+        bridge.contains("new demo.DstEC(s.id(), s.score())"),
+        () -> "forward must call the matched ctor directly; saw:\n" + bridge
+      );
+      assertFalse(
+        bridge.contains(".builder()"),
+        () -> "explicit CONSTRUCTOR must NOT fall through to BUILDER even when builder() exists; saw:\n" + bridge
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "writeStrategy = BUILDER fails with a per-field diagnostic when the builder lacks a method for one field"
+    )
+    void builderMissingPerFieldMethodRejected() {
+      // Real-world shape: a Lombok @Builder where one field's name was changed but the builder
+      // method wasn't regenerated (or a hand-written builder that forgot one fluent setter). The
+      // diagnostic must name the missing field AND the builder class so both ends of the
+      // mismatch are visible in one read.
+      final var compilation = compile(
+        source(
+          "demo.SrcMB",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.WriteStrategy;
+          @Bridge(value = demo.DstMB.class, writeStrategy = WriteStrategy.BUILDER)
+          public record SrcMB(String id, String email) {}
+          """
+        ),
+        source(
+          "demo.DstMB",
+          """
+          package demo;
+          public class DstMB {
+            private final String id;
+            private final String email;
+            private DstMB(String id, String email) { this.id = id; this.email = email; }
+            public String getId() { return id; }
+            public String getEmail() { return email; }
+            public static Builder builder() { return new Builder(); }
+            public static final class Builder {
+              private String id;
+              private String email;
+              public Builder id(String id) { this.id = id; return this; }
+              // No method for 'email' — pins the per-field rejection diagnostic.
+              public DstMB build() { return new DstMB(id, email); }
+            }
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "builder without a per-field setter must fail");
+      assertTrue(
+        compilation.hasError("no method for 'email'"),
+        () -> "expected per-field missing-method diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("Sealed roots — additional rejection diagnostics")
+  class SealedRejections {
+
+    @Test
+    @DisplayName(
+      "sealed source subtype carrying multiple @Bridges, none targeting the sealed-target permits, is rejected"
+    )
+    void multiBridgeSubtypeWithNoMatchingPermitRejected() {
+      // A subtype of a @Bridge'd sealed source can legitimately carry multiple @Bridge
+      // annotations (one for the sealed-dispatch target, others for unrelated DTOs). When NONE
+      // of those targets is in the sealed-target's permits list, the multi-target diagnostic
+      // (distinct from the single-target one) must fire. Pins the multi-target branch so a
+      // refactor of collectBridgeAnnotations can't silently fall into the single-target message.
+      final var compilation = compile(
+        source(
+          "a.SealedSrc",
+          """
+          package a;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(b.SealedDst.class)
+          public sealed interface SealedSrc permits SrcCase {}
+          """
+        ),
+        source(
+          "a.SrcCase",
+          """
+          package a;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(c.UnrelatedDtoA.class)
+          @Bridge(c.UnrelatedDtoB.class)
+          public record SrcCase(String id) implements SealedSrc {}
+          """
+        ),
+        source(
+          "b.SealedDst",
+          """
+          package b;
+          public sealed interface SealedDst permits DstCase {}
+          """
+        ),
+        source("b.DstCase", "package b; public record DstCase(String id) implements SealedDst {}"),
+        source("c.UnrelatedDtoA", "package c; public record UnrelatedDtoA(String id) {}"),
+        source("c.UnrelatedDtoB", "package c; public record UnrelatedDtoB(String id) {}")
+      );
+
+      assertFalse(compilation.success(), "multi-target subtype with no permit match must fail");
+      assertTrue(
+        compilation.hasError("multiple @Bridge targets, none of which is a permits of"),
+        () -> "expected multi-target rejection diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("sealed source with no permits clause is rejected before any subtype probe runs")
+    void sealedSourceWithEmptyPermitsRejected() {
+      // A sealed interface compiles even when its permits clause is implicit AND no subtype is
+      // declared in the same file. The dispatch generation needs at least one permit to emit a
+      // switch, so this guard fires before any other sealed analysis touches the type — pins the
+      // empty-permits branch independent of the multi-target / no-bridge subtype branches.
+      final var compilation = compile(
+        source(
+          "demo.EmptySealed",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.EmptySealedDst.class)
+          public sealed interface EmptySealed {}
+          """
+        ),
+        source(
+          "demo.EmptySealedDst",
+          "package demo; public sealed interface EmptySealedDst permits demo.EmptySealedDstCase {}"
+        ),
+        source(
+          "demo.EmptySealedDstCase",
+          "package demo; public record EmptySealedDstCase(String id) implements EmptySealedDst {}"
+        )
+      );
+
+      assertFalse(compilation.success(), "sealed source with no permits must fail");
+      assertTrue(
+        compilation.hasError("requires an explicit permits clause"),
+        () -> "expected explicit-permits diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("Carrier form — source/target top-level enforcement also covers the carrier path")
+  class CarrierTopLevelEnforcement {
+
+    @Test
+    @DisplayName(
+      "carrier form: source = NestedType.class is rejected with the same top-level diagnostic as the model-anchored form"
+    )
+    void carrierWithNestedSourceRejected() {
+      // The model-anchored nested-rejection test (`nestedIsRejected`) pins the target-side guard.
+      // The carrier form's source-side guard sits next to it and would silently regress if a
+      // refactor of the top-level check special-cased the carrier path. Pins the source-side
+      // top-level enforcement on the carrier path specifically.
+      final var compilation = compile(
+        source(
+          "demo.Outer",
+          """
+          package demo;
+          public class Outer {
+            public record InnerSrc(String id) {}
+          }
+          """
+        ),
+        source("demo.TopTarget", "package demo; public record TopTarget(String id) {}"),
+        source(
+          "demo.Carrier",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(source = demo.Outer.InnerSrc.class, target = demo.TopTarget.class)
+          public class Carrier {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "carrier with a nested source must fail");
+      assertTrue(
+        compilation.hasError("source must be a top-level type"),
+        () -> "expected top-level source diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+  }
 }

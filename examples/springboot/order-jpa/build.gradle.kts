@@ -1,6 +1,6 @@
 plugins {
     java
-    id("org.springframework.boot") version "4.0.1"
+    id("org.springframework.boot") version "4.1.0"
     id("io.spring.dependency-management") version "1.1.7"
 }
 
@@ -35,8 +35,8 @@ dependencies {
     // Lombok itself — compile-time for the @Data / @Builder / @Value AST patching, runtime not
     // needed (Lombok generates source-level code). The :lombok telescope module is a graceful
     // no-op when Lombok isn't on the classpath, so this dependency is what actually turns it on.
-    compileOnly("org.projectlombok:lombok:1.18.42")
-    annotationProcessor("org.projectlombok:lombok:1.18.42")
+    compileOnly("org.projectlombok:lombok:1.18.46")
+    annotationProcessor("org.projectlombok:lombok:1.18.46")
 
     // Spring Boot starters: web for the REST controllers, data-jpa for the repository abstraction,
     // and an H2 in-memory DB so the demo runs without external infra.

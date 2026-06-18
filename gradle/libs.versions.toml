@@ -5,12 +5,12 @@ googleJavaFormat = "1.28.0"
 prettier = "3.8.1"
 prettierPluginJava = "2.8.1"
 testcontainers = "2.0.5"
-slf4j = "2.0.16"
+slf4j = "2.0.18"
 jmh = "0.7.3"
 axion = "1.18.7"
 jreleaser = "1.19.0"
 jgit = "6.10.0.202406032230-r"
-lombok = "1.18.42"
+lombok = "1.18.46"
 
 [libraries]
 junitBom = { module = "org.junit:junit-bom", version.ref = "junit" }
