@@ -117,7 +117,7 @@ public final class Traversals {
    *
    * <p>Arrays are NOT supported — wrap as a List or Set if your model uses arrays.
    */
-  @SuppressWarnings({ "unchecked", "cast" })
+  @SuppressWarnings("unchecked")
   public static <C extends Iterable<E>, E> Traversal<C, E> eachIterable() {
     return new Traversal<>() {
       @Override
