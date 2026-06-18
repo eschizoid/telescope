@@ -11,7 +11,7 @@ buildscript {
         // incompatible with Gradle's configuration cache — it serializes a SourceSet field on the
         // task, which CC rejects. Replacing the plugin with a one-shot custom task keeps CC happy
         // and produces a bit-identical META-INF/jandex.idx.
-        classpath("io.smallrye:jandex:3.2.7")
+        classpath("io.smallrye:jandex:3.6.0")
     }
 }
 
@@ -141,7 +141,7 @@ tasks.withType<Javadoc>().configureEach {
     }
 }
 
-val quarkusVersion = "3.20.0"
+val quarkusVersion = "3.36.3"
 
 dependencies {
     api(project(":core"))
