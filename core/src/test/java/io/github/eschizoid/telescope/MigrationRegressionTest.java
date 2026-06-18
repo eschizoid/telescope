@@ -2309,9 +2309,8 @@ class MigrationRegressionTest {
     }
 
     /**
-     * Sibling target sharing the BridgeRecB shape but a different class identity. Used to verify
-     * the probe correctly rejects a single-target {@code @Bridge} whose declared target doesn't
-     * match the requested {@code mapperForward} target.
+     * Sibling target sharing the BridgeRecB shape but a different class identity — exercises the
+     * probe's target-mismatch rejection branch.
      */
     public record SiblingTarget(String id, int score) {}
   }

@@ -102,9 +102,9 @@ class BridgeHolderProbeTest {
     @Test
     @DisplayName("probeFor on a present holder caches the BridgeRef — repeated calls return the same instance")
     void repeatedProbeReturnsSameRef() {
-      // The cache is a ClassValue<ConcurrentHashMap>; both presence and Optional.empty are memoised
-      // per (source, target). A regression that rebuilt the BridgeRef on every call would still
-      // produce equivalent values, but breaks the identity check.
+      // Presence and absence must both be memoised per (source, target); assertSame pins the
+      // cached BridgeRef reference, distinguishing memoised hits from rebuilds that produce
+      // equivalent-but-fresh instances.
       final var first = BridgeHolderProbe.probeFor(CacheSrc.class, String.class);
       final var second = BridgeHolderProbe.probeFor(CacheSrc.class, String.class);
       assertTrue(first.isPresent());
@@ -126,6 +126,35 @@ class BridgeHolderProbeTest {
       final var second = BridgeHolderProbe.probeFor(CacheEmptySrc.class, String.class);
       assertTrue(first.isEmpty());
       assertSame(first, second, "absence Optional must be memoised, not re-computed");
+    }
+  }
+
+  @Nested
+  @DisplayName("Lookup order — long-form <Source>To<Target>Bridge is tried before short-form")
+  class LookupOrder {
+
+    public static final class LongFormSrc {}
+
+    public static final class LongFormSrcToStringBridge {
+
+      public static final String BRIDGE = "long-form-marker";
+    }
+
+    public static final class LongFormSrcBridge {
+
+      public static final String BRIDGE = "short-form-marker";
+    }
+
+    @Test
+    @DisplayName("when both long-form and short-form holders exist, the long-form value wins")
+    void longFormTakesPrecedence() {
+      // Pins the lookup-order contract documented on probe(): the long-form FQN is tried first
+      // so a source carrying multiple bridges resolves unambiguously to the one targeting the
+      // requested class. Without this test, swapping the two probes in probe() would still pass
+      // every other suite.
+      final var probed = BridgeHolderProbe.probeFor(LongFormSrc.class, String.class);
+      assertTrue(probed.isPresent(), "long-form holder must be discovered");
+      assertEquals("long-form-marker", probed.get().bridge(), "long-form value must win over short-form");
     }
   }
 }

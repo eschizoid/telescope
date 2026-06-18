@@ -617,14 +617,15 @@ public sealed class Telescope<
    * source} class has a sibling {@code <Source>Bridge.BRIDGE} (or {@code <Source>To<Target>Bridge.
    * BRIDGE}) constant emitted by the {@code @Bridge} annotation processor, the forward direction
    * routes through that bridge directly. The bridge's full configuration is surfaced in the result
-   * — {@code @Rename}, {@code @Transform}, {@code @Constant}, {@code @Compute}, {@code @Default},
-   * {@code drops}, and the {@code lenient} flag are all encoded inside the bridge and apply to
-   * every {@code mapperForward(source, target)} call. The annotation's defaults are NOT the same as
-   * this method's lenient-by-default — {@code @Bridge(lenient = false)} (the annotation's default)
-   * produces a strict bijection bridge, so the resulting mapper rejects mappings the row-free
-   * fallback would have accepted. To keep the row-free lenient-default-everything path, pass any
-   * explicit row (even a no-op {@code nullSourceValues(DEFAULT)}); per-field rows force the {@link
-   * DeepMap#resolveForward} path.
+   * — {@code @Rename} (including {@code forwardOnly} fan-out), {@code @Transform},
+   * {@code @Constant}, {@code @Compute}, {@code @Default}, {@code @ViaMapper}, {@code drops}, the
+   * {@code writeStrategy} ({@code AUTO/CTOR/BUILDER/SETTERS}), and the {@code lenient} flag are all
+   * encoded inside the bridge and apply to every {@code mapperForward(source, target)} call. The
+   * annotation's defaults are NOT the same as this method's lenient-by-default —
+   * {@code @Bridge(lenient = false)} (the annotation's default) produces a strict bijection bridge,
+   * so the resulting mapper rejects mappings the row-free fallback would have accepted. To keep the
+   * row-free lenient-default-everything path, pass any explicit row (even a no-op {@code
+   * nullSourceValues(DEFAULT)}); per-field rows force the {@link DeepMap#resolveForward} path.
    */
   public static <A, B> ForwardMapper<A, B> mapperForward(
     final Class<A> source,
@@ -637,10 +638,11 @@ public sealed class Telescope<
     // Bidirectional `mapper(...)` keeps the strict bijection check.
 
     // No per-field rows: probe for a sibling @Bridge-generated <Source>Bridge.BRIDGE constant.
-    // When present, route directly through it (the bridge already encodes any @Rename / lenient
-    // / @Transform / @Constant / @Compute / @Default / drops configuration from the @Bridge
-    // annotation). With rows present, the caller has opted into explicit configuration; skip
-    // the probe and run the rows through DeepMap as usual.
+    // When present, route directly through it (the bridge already encodes any @Rename (incl.
+    // forwardOnly fan-out) / @Transform / @Constant / @Compute / @Default / @ViaMapper / drops
+    // / writeStrategy / lenient configuration from the @Bridge annotation). With rows present,
+    // the caller has opted into explicit configuration; skip the probe and run the rows through
+    // DeepMap as usual.
     if (steps.length == 0) {
       final var probed = BridgeHolderProbe.probeFor(source, target);
       if (probed.isPresent()) {

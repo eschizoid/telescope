@@ -66,6 +66,11 @@ public final class BridgeHolderProbe {
    * {@link Class#forName} call. Malformed-holder exceptions (missing {@code BRIDGE} field, wrong
    * modifiers, inaccessible field) are NOT memoised — they re-throw on every call so codegen drift
    * surfaces consistently rather than hiding behind a cached failure.
+   *
+   * <p>The target-mismatch silent-skip (short-form holder present, wrong target) is also cached
+   * under the specific {@code (source, target)} pair — different target classes use independent
+   * cache entries, so memoising the wrong-target empty for one pair doesn't shadow a correct lookup
+   * for {@code (source, otherTarget)}.
    */
   public static Optional<BridgeRef> probeFor(final Class<?> sourceClass, final Class<?> targetClass) {
     return CACHE.get(sourceClass).computeIfAbsent(targetClass, t -> probe(sourceClass, t));
