@@ -52,13 +52,43 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
     return set(source, f.apply(get(source)));
   }
 
+  /**
+   * Affine projection of this Lens: a {@code null} source yields {@link Optional#empty()} rather
+   * than dispatching {@code get(null)} through the captured method reference. For a non-null source
+   * the strict {@code Optional.of(get(source))} form is preserved — lens-law preservation requires
+   * that a Lens whose getter returns {@code null} on a non-null source surfaces the violation
+   * directly; {@code Optional.of} is the strict carrier and an NPE is the right signal. {@link
+   * #getAll} can carry the same {@code null} result inside a stream because streams accept {@code
+   * null} elements — that asymmetry is between the two carrier types, not between the two
+   * projections. When the focused {@code A} is genuinely nullable in source data, model that with
+   * an {@link Affine} or {@link Prism} instead of a Lens.
+   *
+   * @throws NullPointerException if {@code source} is non-null and {@code get(source)} returns
+   *     {@code null}. In a composed read the NPE surfaces from the method-reference receiver
+   *     dispatch at whichever lens leaf first receives a {@code null} input — the carrier {@link
+   *     Optional#of} call itself is only reached when the very outermost {@code getOption} sees a
+   *     non-null source whose top-level getter returns {@code null}.
+   */
   @Override
   default Optional<A> getOption(final S source) {
+    if (source == null) return Optional.empty();
     return Optional.of(get(source));
   }
 
+  /**
+   * Traversal projection of this Lens: a {@code null} source yields an empty stream rather than
+   * dispatching {@code get(null)} through the captured method reference. Lets multi-hop bean paths
+   * short-circuit on nullable intermediates inside composed reads. A non-null source whose getter
+   * legitimately returns {@code null} produces a one-element {@code Stream.of(null)} — {@code
+   * Stream} is the lenient carrier (cf. {@link #getOption} where {@link Optional} is strict).
+   * Downstream stream operators that route through {@link Optional#of} ({@link
+   * java.util.stream.Stream#findFirst}, for example) will NPE on that null element; callers that
+   * care about preserving the empty-vs-null distinction should drain via iterator. Direct {@code
+   * .get(null)} on the atomic Lens still NPEs.
+   */
   @Override
   default Stream<A> getAll(final S source) {
+    if (source == null) return Stream.empty();
     return Stream.of(get(source));
   }
 

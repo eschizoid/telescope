@@ -588,7 +588,10 @@ class BeanFocusProcessorTest {
       // mirrored here verbatim.
       assertTrue(holder.contains("final var c = new Person();"), holder);
       assertTrue(holder.contains("c.setName((String) values.apply(\"name\"));"), holder);
-      assertTrue(holder.contains("c.setAge((Integer) values.apply(\"age\"));"), holder);
+      // Primitive setter takes the instanceof-pattern null-guard form so a null entry in `values`
+      // substitutes the JLS default (0 for int) instead of NPEing on the implicit Integer->int
+      // unbox.
+      assertTrue(holder.contains("c.setAge(values.apply(\"age\") instanceof Integer __v ? __v : 0);"), holder);
       assertTrue(holder.contains("return c;"), holder);
       // Imports + @SuppressWarnings present.
       assertTrue(holder.contains("import java.util.function.Function;"), holder);
@@ -634,6 +637,109 @@ class BeanFocusProcessorTest {
       assertTrue(holder.contains(".id((String) values.apply(\"id\"))"), holder);
       assertTrue(holder.contains(".email((String) values.apply(\"email\"))"), holder);
       assertTrue(holder.contains(".build();"), holder);
+    }
+
+    @Test
+    @DisplayName("builder() POJO with a primitive field: the chain takes the instanceof null-guard form")
+    void builderPojoConstructWithPrimitiveField() {
+      // Builder-strategy rebuild paths must apply the same primitive null-guard form as the
+      // setter-strategy paths — the static builder() chain emits one .x(...) call per property
+      // and each primitive arg takes the instanceof-pattern guard.
+      final var compilation = compile(
+        source(
+          "demo.BuilderWithPrim",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class BuilderWithPrim {
+            private final String label;
+            private final int attemptCount;
+            private BuilderWithPrim(String label, int attemptCount) {
+              this.label = label; this.attemptCount = attemptCount;
+            }
+            public String getLabel() { return label; }
+            public int getAttemptCount() { return attemptCount; }
+            public static Builder builder() { return new Builder(); }
+            public static final class Builder {
+              private String label;
+              private int attemptCount;
+              public Builder label(String label) { this.label = label; return this; }
+              public Builder attemptCount(int attemptCount) { this.attemptCount = attemptCount; return this; }
+              public BuilderWithPrim build() { return new BuilderWithPrim(label, attemptCount); }
+            }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BuilderWithPrimFieldOptics");
+      assertNotNull(holder, () -> "BuilderWithPrimFieldOptics not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains(".label((String) values.apply(\"label\"))"), holder);
+      assertTrue(
+        holder.contains(".attemptCount(values.apply(\"attemptCount\") instanceof Integer __v ? __v : 0)"),
+        holder
+      );
+    }
+
+    @Test
+    @DisplayName("All 8 primitive kinds emit the right JLS-default literal in the null-guard fallback")
+    void everyPrimitiveKindHasItsJlsDefaultLiteral() {
+      // Covers boolean / byte / short / int / long / char / float / double in one fixture so a
+      // refactor of the primitiveDefaultLiteral table can't silently break a kind. Char in
+      // particular needs the source literal '\0' to escape correctly through the codegen writer.
+      final var compilation = compile(
+        source(
+          "demo.AllPrim",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class AllPrim {
+            private boolean b;
+            private byte by;
+            private short s;
+            private int i;
+            private long l;
+            private char c;
+            private float f;
+            private double d;
+            public AllPrim() {}
+            public boolean isB() { return b; }
+            public byte getBy() { return by; }
+            public short getS() { return s; }
+            public int getI() { return i; }
+            public long getL() { return l; }
+            public char getC() { return c; }
+            public float getF() { return f; }
+            public double getD() { return d; }
+            public void setB(boolean v) { this.b = v; }
+            public void setBy(byte v) { this.by = v; }
+            public void setS(short v) { this.s = v; }
+            public void setI(int v) { this.i = v; }
+            public void setL(long v) { this.l = v; }
+            public void setC(char v) { this.c = v; }
+            public void setF(float v) { this.f = v; }
+            public void setD(double v) { this.d = v; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.AllPrimFieldOptics");
+      assertNotNull(holder, () -> "AllPrimFieldOptics not generated; saw " + compilation.generated().keySet());
+
+      assertTrue(holder.contains("c.setB(values.apply(\"b\") instanceof Boolean __v ? __v : false);"), holder);
+      assertTrue(holder.contains("c.setBy(values.apply(\"by\") instanceof Byte __v ? __v : (byte) 0);"), holder);
+      assertTrue(holder.contains("c.setS(values.apply(\"s\") instanceof Short __v ? __v : (short) 0);"), holder);
+      assertTrue(holder.contains("c.setI(values.apply(\"i\") instanceof Integer __v ? __v : 0);"), holder);
+      assertTrue(holder.contains("c.setL(values.apply(\"l\") instanceof Long __v ? __v : 0L);"), holder);
+      assertTrue(holder.contains("c.setC(values.apply(\"c\") instanceof Character __v ? __v : '\\0');"), holder);
+      assertTrue(holder.contains("c.setF(values.apply(\"f\") instanceof Float __v ? __v : 0.0f);"), holder);
+      assertTrue(holder.contains("c.setD(values.apply(\"d\") instanceof Double __v ? __v : 0.0d);"), holder);
     }
   }
 

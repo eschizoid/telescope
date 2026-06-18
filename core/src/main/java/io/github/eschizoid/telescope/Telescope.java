@@ -1087,10 +1087,11 @@ public sealed class Telescope<
    */
   public A read(final S source) {
     if (optic instanceof final Lens<S, A> lens) {
+      if (source == null) throw noValue();
       return lens.get(source);
     }
     if (optic instanceof final Affine<S, A> affine) {
-      return affine.getOption(source).orElseThrow(Telescope::noValue);
+      return affine.getOption(source).orElseThrow(this::noValue);
     }
     // Stream.findFirst() routes through Optional.of(element), which NPEs on null. A Traversal
     // can legitimately surface null elements when an intermediate hop of a multi-hop bean path
@@ -1102,8 +1103,23 @@ public sealed class Telescope<
     return it.next();
   }
 
-  private static NoSuchElementException noValue() {
-    return new NoSuchElementException("Telescope has no value in this source");
+  /**
+   * Build a {@link NoSuchElementException} for the "no focused value" case, carrying the path's
+   * first-hop method name when one was captured. Naming the entry point lets a caller identify
+   * which {@code Telescope} produced the empty read; without it every empty-read exception is
+   * indistinguishable.
+   *
+   * <p>Capture is best-effort: {@link #fieldByName(String)} and the no-arg {@code each()} produce a
+   * {@code null} first hop, and the message falls back to the generic form. Direct-Iso entry points
+   * ({@link #from(Class)}) likewise carry no first hop until the first {@code .field(...)} is
+   * appended.
+   */
+  private NoSuchElementException noValue() {
+    return new NoSuchElementException(
+      firstHopName != null
+        ? "Telescope has no value in this source (path starts at field '" + firstHopName + "')"
+        : "Telescope has no value in this source"
+    );
   }
 
   /**
@@ -1112,6 +1128,7 @@ public sealed class Telescope<
    */
   public Optional<A> find(final S source) {
     if (optic instanceof final Lens<S, A> lens) {
+      if (source == null) return Optional.empty();
       return Optional.ofNullable(lens.get(source));
     }
     if (optic instanceof final Affine<S, A> affine) {

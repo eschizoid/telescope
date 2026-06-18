@@ -828,7 +828,11 @@ public final class DeepMap {
     final var tgtClass = (Class<T>) t.getClass();
     final var tgtRefl = Reflective.of(tgtClass);
     final var tgtField = tgtRefl.normalize(r.targetField());
-    final var newValue = srcT.read(s);
+    // Lenient: when the source path resolves to an empty focus (null intermediate in a chained
+    // bean read, or an Affine miss further down the path), rebuild proceeds with null in the
+    // target field rather than aborting the mapper with NoSuchElementException. Downstream type-
+    // default handling — where configured — takes over from there.
+    final var newValue = srcT.find(s).orElse(null);
     return (T) tgtRefl.construct(tgtClass, name -> name.equals(tgtField) ? newValue : tgtRefl.read(t, name));
   }
 

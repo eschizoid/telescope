@@ -5,8 +5,16 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
+import io.github.eschizoid.telescope.focus.NullIntermediateInner;
+import io.github.eschizoid.telescope.focus.NullIntermediateOuter;
+import io.github.eschizoid.telescope.focus.NullIntermediateTargetDto;
+import io.github.eschizoid.telescope.focus.NullableIntegerSource;
+import io.github.eschizoid.telescope.focus.OptionalSourceBean;
+import io.github.eschizoid.telescope.focus.OptionalTargetBean;
+import io.github.eschizoid.telescope.focus.PrimitiveIntTarget;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serial;
@@ -17,6 +25,8 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.SynchronousQueue;
@@ -2014,6 +2024,121 @@ class MigrationRegressionTest {
       assertEquals("o1", tgt.getId(), "matched field carried through");
       assertEquals("alice", tgt.getName(), "matched field carried through");
       assertEquals(null, tgt.getNewField(), "unmatched target field at JLS default");
+    }
+  }
+
+  @Nested
+  @DisplayName("Null intermediate through @BeanFocus codegen — holder-reader path short-circuits, no NPE")
+  class NullIntermediateNpeCodegenPath {
+
+    @Test
+    @DisplayName(
+      "forward(outer) on a @BeanFocus source whose nested @BeanFocus intermediate is null yields null instead of NPE"
+    )
+    void forwardWithNullIntermediateShortCircuitsToNull() {
+      // A composed @BeanFocus codegen path over a null nested intermediate must produce a null
+      // target value rather than NPE through a captured method reference's receiver. The atomic
+      // Lens stays strict on direct .get(null); the Traversal projection at Lens#getAll yields an
+      // empty stream so multi-hop reads short-circuit cleanly.
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateOuter.class,
+        NullIntermediateTargetDto.class,
+        Mapping.to(
+          Telescope.ofBean(NullIntermediateOuter.class)
+            .field(NullIntermediateOuter::getInner)
+            .field(NullIntermediateInner::getName),
+          NullIntermediateTargetDto::getInnerName
+        )
+      );
+      final var outer = new NullIntermediateOuter();
+      // outer.inner left null on purpose
+      final var dto = assertDoesNotThrow(() -> mapper.forward(outer));
+      assertEquals(null, dto.getInnerName());
+    }
+
+    @Test
+    @DisplayName("atomic holder-constant Telescope.find(null) yields Optional.empty instead of NPE")
+    void atomicHolderConstantFindOnNullSourceIsEmpty() {
+      // Direct atomic-Lens access (codegen holder constants are atomic Lens-backed Telescopes)
+      // takes the Lens fast-path in Telescope#find. On a null source it must return Optional.empty
+      // instead of dispatching the captured getter on a null receiver.
+      final var pathToInner = Telescope.ofBean(NullIntermediateOuter.class).field(NullIntermediateOuter::getInner);
+      assertEquals(Optional.empty(), pathToInner.find(null));
+
+      // Positive control: a real source with a populated value still flows through unchanged —
+      // the null-source guard is gated on `source == null`, not on the result of get(source).
+      // assertSame (rather than assertEquals) pins reference-passthrough explicitly so a future
+      // defensive-copy optimisation would break this assertion as the behavioural change it is.
+      final var populated = new NullIntermediateOuter();
+      final var inner = new NullIntermediateInner();
+      inner.setName("alice");
+      populated.setInner(inner);
+      assertSame(inner, pathToInner.find(populated).orElseThrow());
+    }
+
+    @Test
+    @DisplayName(
+      "atomic holder-constant Telescope.read(null) throws NoSuchElementException carrying the first-hop field name"
+    )
+    void atomicHolderConstantReadOnNullSourceThrowsNoValue() {
+      // Telescope#read's contract is NoSuchElementException on a missing focus; null source on
+      // the atomic-Lens fast-path resolves to that empty-focus case. The exception message must
+      // name the first-hop method so callers can identify which Telescope produced it.
+      final var pathToInner = Telescope.ofBean(NullIntermediateOuter.class).field(NullIntermediateOuter::getInner);
+      final var thrown = assertThrows(NoSuchElementException.class, () -> pathToInner.read(null));
+      final var message = thrown.getMessage();
+      assertTrue(
+        message != null && message.contains("getInner"),
+        () -> "expected message to name the first-hop method 'getInner', got: " + message
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("Primitive ↔ wrapper through @BeanFocus codegen — generated construct() JLS-default substitutes null")
+  class PrimitiveWrapperUnboxCodegenPath {
+
+    @Test
+    @DisplayName("forward(source) with null boxed Integer to @BeanFocus primitive int target uses JLS default")
+    void nullBoxedToPrimitiveUsesJlsDefault() {
+      // When the target is @BeanFocus-annotated, the generated *FieldOptics.construct(Function) is
+      // the rebuild entry point. A null boxed-Integer source bound to a primitive-int setter must
+      // substitute the JLS default at the codegen emission layer; otherwise the implicit unbox
+      // NPEs on Integer.intValue. Counterpart of PrimitiveWrapperAutoboxing on the runtime path.
+      final var mapper = Telescope.mapperForward(
+        NullableIntegerSource.class,
+        PrimitiveIntTarget.class,
+        Mapping.to(NullableIntegerSource::getAttemptCount, PrimitiveIntTarget::getAttemptCount)
+      );
+      final var src = new NullableIntegerSource();
+      // src.attemptCount left null
+      final var dto = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(0, dto.getAttemptCount()); // JLS default for int
+    }
+  }
+
+  @Nested
+  @DisplayName("DeepMap#overrideTargetField is lenient on a missing source focus regardless of cause")
+  class OverrideTargetFieldLeniency {
+
+    @Test
+    @DisplayName("forward(src) over an Affine source path that misses (empty Optional) yields null in the target field")
+    void affineMissOnSourcePathSubstitutesNull() {
+      // The lenient overrideTargetField intent covers two cases: a null intermediate inside a
+      // chained bean read AND an Affine miss further down the path (e.g. .whenPresent over an
+      // Optional.empty, .as over a non-matching sealed variant). The null-intermediate arm is
+      // covered above; this test pins the Affine-miss arm against accidental regression to read().
+      final var mapper = Telescope.mapperForward(
+        OptionalSourceBean.class,
+        OptionalTargetBean.class,
+        Mapping.to(
+          Telescope.ofBean(OptionalSourceBean.class).whenPresent(OptionalSourceBean::getMaybeName),
+          OptionalTargetBean::getResolvedName
+        )
+      );
+      final var src = new OptionalSourceBean(); // maybeName left at Optional.empty()
+      final var dto = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(null, dto.getResolvedName());
     }
   }
 }
