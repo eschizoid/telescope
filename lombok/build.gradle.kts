@@ -57,10 +57,16 @@ dependencies {
 
     testImplementation(project(":core"))
     testImplementation(project(":codegen"))
+    testImplementation(testFixtures(project(":codegen")))
     testImplementation(platform(libs.junitBom))
     testImplementation(libs.junitJupiter)
     testRuntimeOnly(libs.junitPlatformLauncher)
-    testCompileOnly(libs.lombok)
+    // Lombok jar carries the @Data/@Value/@Builder annotation classes alongside the AST-patching
+    // processor. testImplementation puts the annotation classes on both the compile classpath (for
+    // the file-based fixtures in fixtures/) and the test runtime classpath (so the in-memory
+    // ProcessorHarness can resolve `lombok.Data` via `Elements#getTypeElement`). The Lombok
+    // processor itself only fires when listed under testAnnotationProcessor below.
+    testImplementation(libs.lombok)
     testAnnotationProcessor(libs.lombok)
     testAnnotationProcessor(project(":core"))
     testAnnotationProcessor(project(":codegen"))
