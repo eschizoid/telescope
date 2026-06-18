@@ -1459,8 +1459,8 @@ class BeansTest {
       // Each setter forces wrap() to map its primitive type to the matching wrapper class; the
       // SettersWriter then binds an LMF invoker whose instantiatedMethodType ends in that
       // wrapper. The metafactory generates the unbox bridge from Object to the primitive. The
-      // int and boolean arms of wrap are covered by existing WithPrimitives / NoArgSetters
-      // fixtures; this test exercises the six remaining primitives end-to-end.
+      // int setter arm of wrap is covered by NoArgSetters.setScore elsewhere in this suite; this
+      // test exercises the six remaining primitive setter variants end-to-end.
       final var writer = Beans.<AllPrimitives>settersWriter(AllPrimitives.class);
       final var names = new String[] { "longVal", "doubleVal", "floatVal", "byteVal", "shortVal", "charVal" };
       final Map<String, Object> values = Map.of(
