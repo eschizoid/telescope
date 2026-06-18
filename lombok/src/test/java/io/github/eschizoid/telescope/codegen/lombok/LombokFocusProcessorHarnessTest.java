@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.codegen.lombok;
 import static io.github.eschizoid.telescope.codegen.ProcessorHarness.compile;
 import static io.github.eschizoid.telescope.codegen.ProcessorHarness.source;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -134,11 +135,9 @@ class LombokFocusProcessorHarnessTest {
     @Test
     @DisplayName("@Value with no setters and no builder() is rejected with the no-write-strategy diagnostic")
     void bareValueIsRejectedAtEmit() {
-      // Pins the negative-case contract on the AbstractTelescopeProcessor emit path: a Lombok
-      // bean with all-final fields and no static builder() has no write strategy the processor
-      // can drive, and the emitter must reject with a precise diagnostic rather than producing
-      // a half-built navigator. Without this test the "reject" branch in emitBeanNavigator's
-      // write-strategy probe is unexercised in-process.
+      // A Lombok bean with all-final fields and no static builder() has no write strategy the
+      // emitter can drive — the processor must reject with a diagnostic that names the offending
+      // class, not silently produce a half-built navigator.
       final var compilation = compile(
         new LombokFocusProcessor(),
         source(
@@ -156,13 +155,14 @@ class LombokFocusProcessorHarnessTest {
         )
       );
 
+      assertFalse(compilation.success(), () -> "bare @Value must fail compilation with a rejection diagnostic");
       assertNull(
         compilation.generated().get("demo.BareValueTelescope"),
         () -> "bare @Value must NOT yield a navigator; saw " + compilation.generated().keySet()
       );
       assertTrue(
-        compilation.hasError("needs a static builder()"),
-        () -> "expected 'needs a static builder()' diagnostic; got: " + compilation.errorMessages()
+        compilation.hasError("demo.BareValue"),
+        () -> "diagnostic must name the offending class; got: " + compilation.errorMessages()
       );
     }
   }
@@ -193,10 +193,8 @@ class LombokFocusProcessorHarnessTest {
         )
       );
 
-      // Assert success() too: a regression that emitted a navigator and then tripped a downstream
-      // compile error would silently leave the generated() map empty, and the assertNull below
-      // would pass for the wrong reason. Requiring success() means the no-emit path is what's
-      // actually being exercised.
+      // Compilation must succeed AND no navigator emitted, so the empty generated map proves the
+      // kind-filter path was taken rather than a downstream compile error.
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       assertNull(
         compilation.generated().get("demo.NotAClassTelescope"),
