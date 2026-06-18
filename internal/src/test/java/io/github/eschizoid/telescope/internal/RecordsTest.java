@@ -2,7 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -223,8 +223,10 @@ class RecordsTest {
       // the same class must return the very same RecordInfo (LMF-built readers + ctorFn) instead
       // of rebuilding. A regression here would silently double the per-read overhead.
       assertSame(Records.info(User.class), Records.info(User.class));
-      // And the cache must hold one entry per class — a second class doesn't collide.
-      assertNotEquals(Records.info(User.class), Records.info(Account.class));
+      // And the cache must hold one entry per class — a second class doesn't collide. Reference
+      // identity (not structural equality) is the right pin: a cache-bleed regression where
+      // info(User) returned Account's entry would have the wrong reference, not the wrong value.
+      assertNotSame(Records.info(User.class), Records.info(Account.class));
     }
   }
 }

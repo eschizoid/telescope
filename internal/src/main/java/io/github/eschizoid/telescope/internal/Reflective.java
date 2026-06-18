@@ -73,9 +73,12 @@ public record Reflective(
    * (when non-null) and ultimately to {@link Beans#autoWriter}. Used by {@code DeepMap} when the
    * user supplies {@code writeBean(targetClass, strategy)} rows and/or a single {@code
    * writeBeans(strategy)} default — the per-class hint map is keyed on target class and provides a
-   * pre-instantiated {@link Beans.BeanWriter}; the default factory is consulted lazily on first
-   * encounter with each not-explicitly-hinted target, then cached, so a default-strategy
-   * incompatible with a particular target only throws when that target is actually constructed.
+   * pre-instantiated {@link Beans.BeanWriter}; the default factory is consulted on every
+   * not-explicitly-hinted call, so a default-strategy incompatible with a particular target only
+   * throws when that target is actually constructed. Per-class LMF reuse happens one layer down in
+   * {@link Beans#autoWriter} (and the underlying {@code SETTER_INVOKERS} / {@code GETTER_INVOKERS}
+   * caches) — this layer is intentionally stateless so a factory swap is observable on the next
+   * call.
    */
   public static Reflective beansWithHints(
     final Map<Class<?>, Beans.BeanWriter<?>> hints,
