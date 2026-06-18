@@ -8,6 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.beans.BridgePojoA;
+import io.github.eschizoid.telescope.beans.BridgePojoABridge;
+import io.github.eschizoid.telescope.beans.BridgePojoB;
+import io.github.eschizoid.telescope.beans.BridgeRecA;
+import io.github.eschizoid.telescope.beans.BridgeRecABridge;
+import io.github.eschizoid.telescope.beans.BridgeRecB;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.focus.NullIntermediateInner;
 import io.github.eschizoid.telescope.focus.NullIntermediateOuter;
@@ -2190,6 +2196,77 @@ class MigrationRegressionTest {
       final var src = new OptionalSourceBean(); // maybeName left at Optional.empty()
       final var dto = assertDoesNotThrow(() -> mapper.forward(src));
       assertNull(dto.getResolvedName());
+    }
+  }
+
+  @Nested
+  @DisplayName("Telescope.mapperForward auto-discovers a sibling @Bridge-generated bridge constant")
+  class MapperForwardAutoDiscoversBridge {
+
+    @Test
+    @DisplayName("record→record: mapperForward(A.class, B.class) with no rows routes through <A>Bridge.BRIDGE")
+    void recordToRecordRoutesThroughBridge() {
+      // BridgeRecA carries @Bridge(BridgeRecB.class); the codegen emits BridgeRecABridge.BRIDGE.
+      // mapperForward called with no per-field rows must produce the same output as invoking the
+      // bridge constant directly — closes the "mapping defined twice in @Bridge renames + to()
+      // rows"
+      // pain reported in adopter Round 3 feedback.
+      final var mapper = Telescope.mapperForward(BridgeRecA.class, BridgeRecB.class);
+      final var src = new BridgeRecA("u1", 10);
+      assertEquals(BridgeRecABridge.BRIDGE.read(src), mapper.forward(src));
+    }
+
+    @Test
+    @DisplayName("pojo→pojo: auto-discovery succeeds on a Lombok-style POJO pair")
+    void pojoToPojoRoutesThroughBridge() {
+      final var mapper = Telescope.mapperForward(BridgePojoA.class, BridgePojoB.class);
+      final var src = new BridgePojoA();
+      src.setId("p1");
+      src.setEmail("p1@example.com");
+
+      final var viaMapper = mapper.forward(src);
+      final var viaBridge = BridgePojoABridge.BRIDGE.read(src);
+      assertEquals(viaBridge.getId(), viaMapper.getId());
+      assertEquals(viaBridge.getEmail(), viaMapper.getEmail());
+    }
+
+    public static class PlainA {
+
+      private String id;
+
+      public PlainA() {}
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+    }
+
+    public static class PlainB {
+
+      private String id;
+
+      public PlainB() {}
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+    }
+
+    @Test
+    @DisplayName("plain POJO pair without @Bridge falls through to DeepMap.resolveForward")
+    void plainPairFallsThrough() {
+      final var mapper = Telescope.mapperForward(PlainA.class, PlainB.class);
+      final var src = new PlainA();
+      src.setId("x");
+      assertEquals("x", mapper.forward(src).getId());
     }
   }
 }

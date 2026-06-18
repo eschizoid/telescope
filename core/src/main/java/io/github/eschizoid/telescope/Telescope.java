@@ -8,6 +8,7 @@ import io.github.eschizoid.telescope.conversion.MapperBuilder;
 import io.github.eschizoid.telescope.effects.Either;
 import io.github.eschizoid.telescope.effects.Validated;
 import io.github.eschizoid.telescope.internal.Beans;
+import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import io.github.eschizoid.telescope.internal.NullDefaults;
@@ -621,6 +622,21 @@ public sealed class Telescope<
     // unmatched source fields are silently ignored — no `drop()` / `constant()` rows required
     // for the common "small DTO → large entity" migration shape. Matches MapStruct's default.
     // Bidirectional `mapper(...)` keeps the strict bijection check.
+
+    // Auto-discover a sibling @Bridge-generated <Source>Bridge.BRIDGE constant when the caller
+    // supplied no overrides. The bridge already encodes any @Rename / lenient / @Transform
+    // configuration from the @Bridge annotation, so adopters writing both @Bridge(renames = …)
+    // and matching to(…) rows no longer have to state the mapping twice. When per-field rows
+    // are supplied (steps.length > 0), the caller has opted into explicit configuration; skip
+    // the probe and run the rows through DeepMap as usual.
+    if (steps.length == 0) {
+      final var probed = BridgeHolderProbe.probeFor(source, target);
+      if (probed.isPresent()) {
+        @SuppressWarnings("unchecked")
+        final var bridge = (Telescope<A, B>) probed.get().bridge();
+        return ForwardMapper.create(bridge::read, source, target);
+      }
+    }
     final var iso = DeepMap.resolveForward(source, target, steps);
     return ForwardMapper.create(iso::to, source, target);
   }
