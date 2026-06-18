@@ -8,6 +8,7 @@ import io.github.eschizoid.telescope.conversion.MapperBuilder;
 import io.github.eschizoid.telescope.effects.Either;
 import io.github.eschizoid.telescope.effects.Validated;
 import io.github.eschizoid.telescope.internal.Beans;
+import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import io.github.eschizoid.telescope.internal.NullDefaults;
@@ -611,6 +612,20 @@ public sealed class Telescope<
    * large-entity migration shape. Use the bidirectional {@link #mapper(Class, Class, MapStep...)}
    * instead if you need the strict bijection check (which guards {@code backward()} against
    * silently losing data).
+   *
+   * <p><b>Auto-discovery from {@code @Bridge}.</b> When {@code steps} is empty AND the {@code
+   * source} class has a sibling {@code <Source>Bridge.BRIDGE} (or {@code <Source>To<Target>Bridge.
+   * BRIDGE}) constant emitted by the {@code @Bridge} annotation processor, the forward direction
+   * routes through that bridge directly. The bridge's full configuration is surfaced in the result
+   * — {@code @Rename} (including {@code forwardOnly} fan-out), {@code @Transform},
+   * {@code @Constant}, {@code @Compute}, {@code @Default}, {@code @ViaMapper}, {@code drops}, the
+   * {@code writeStrategy} ({@code AUTO/CTOR/BUILDER/SETTERS}), and the {@code lenient} flag are all
+   * encoded inside the bridge and apply to every {@code mapperForward(source, target)} call. The
+   * annotation's defaults are NOT the same as this method's lenient-by-default —
+   * {@code @Bridge(lenient = false)} (the annotation's default) produces a strict bijection bridge,
+   * so the resulting mapper rejects mappings the row-free fallback would have accepted. To keep the
+   * row-free lenient-default-everything path, pass any explicit row (even a no-op {@code
+   * nullSourceValues(DEFAULT)}); per-field rows force the {@link DeepMap#resolveForward} path.
    */
   public static <A, B> ForwardMapper<A, B> mapperForward(
     final Class<A> source,
@@ -621,6 +636,20 @@ public sealed class Telescope<
     // unmatched source fields are silently ignored — no `drop()` / `constant()` rows required
     // for the common "small DTO → large entity" migration shape. Matches MapStruct's default.
     // Bidirectional `mapper(...)` keeps the strict bijection check.
+
+    // No per-field rows: probe for a sibling @Bridge-generated <Source>Bridge.BRIDGE constant
+    // and route directly through it when present. See the javadoc's "Auto-discovery from
+    // @Bridge" paragraph for the full bridge-baked configuration surface. With rows present,
+    // the caller has opted into explicit configuration; skip the probe and run the rows
+    // through DeepMap as usual.
+    if (steps.length == 0) {
+      final var probed = BridgeHolderProbe.probeFor(source, target);
+      if (probed.isPresent()) {
+        @SuppressWarnings("unchecked")
+        final var bridge = (Telescope<A, B>) probed.get().bridge();
+        return ForwardMapper.create(bridge::read, source, target);
+      }
+    }
     final var iso = DeepMap.resolveForward(source, target, steps);
     return ForwardMapper.create(iso::to, source, target);
   }

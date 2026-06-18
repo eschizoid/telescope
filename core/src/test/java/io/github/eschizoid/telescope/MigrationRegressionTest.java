@@ -3,10 +3,17 @@ package io.github.eschizoid.telescope;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.beans.BridgePojoA;
+import io.github.eschizoid.telescope.beans.BridgePojoABridge;
+import io.github.eschizoid.telescope.beans.BridgePojoB;
+import io.github.eschizoid.telescope.beans.BridgeRecA;
+import io.github.eschizoid.telescope.beans.BridgeRecABridge;
+import io.github.eschizoid.telescope.beans.BridgeRecB;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.focus.NullIntermediateInner;
 import io.github.eschizoid.telescope.focus.NullIntermediateOuter;
@@ -2138,7 +2145,173 @@ class MigrationRegressionTest {
       );
       final var src = new OptionalSourceBean(); // maybeName left at Optional.empty()
       final var dto = assertDoesNotThrow(() -> mapper.forward(src));
-      assertEquals(null, dto.getResolvedName());
+      assertNull(dto.getResolvedName());
     }
+  }
+
+  @Nested
+  @DisplayName("DeepMap#applyForward TelescopeToTelescope path writes null on empty source focus")
+  class TelescopeToTelescopeForwardLeniency {
+
+    @Test
+    @DisplayName(
+      "to(srcTelescope, tgtTelescope) over a source whose nested intermediate is null yields null on the target field"
+    )
+    void telescopeToTelescopeRowOverNullIntermediateShortCircuitsToNull() {
+      // Forward mapping over a `to(srcTelescope, tgtTelescope)` row whose source path navigates
+      // through a null intermediate writes null to the target field instead of throwing
+      // NoSuchElementException — the lenient contract applies uniformly across the forward
+      // direction's source-read sites.
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateOuter.class,
+        NullIntermediateTargetDto.class,
+        Mapping.to(
+          Telescope.ofBean(NullIntermediateOuter.class)
+            .field(NullIntermediateOuter::getInner)
+            .field(NullIntermediateInner::getName),
+          Telescope.ofBean(NullIntermediateTargetDto.class).field(NullIntermediateTargetDto::getInnerName)
+        )
+      );
+      final var outer = new NullIntermediateOuter(); // outer.inner left null on purpose
+      final var dto = assertDoesNotThrow(() -> mapper.forward(outer));
+      assertNull(dto.getInnerName());
+    }
+
+    @Test
+    @DisplayName(
+      "to(srcTelescope, tgtTelescope) over a source Affine miss (.whenPresent on empty Optional) yields null on the target field"
+    )
+    void telescopeToTelescopeRowOverAffineMissShortCircuitsToNull() {
+      // Forward mapping over a `to(srcTelescope, tgtTelescope)` row whose source path is an
+      // Affine (.whenPresent over an Optional) that resolves to empty yields null on the target
+      // field — same lenient contract as the null-intermediate case, different empty-focus cause.
+      final var mapper = Telescope.mapperForward(
+        OptionalSourceBean.class,
+        OptionalTargetBean.class,
+        Mapping.to(
+          Telescope.ofBean(OptionalSourceBean.class).whenPresent(OptionalSourceBean::getMaybeName),
+          Telescope.ofBean(OptionalTargetBean.class).field(OptionalTargetBean::getResolvedName)
+        )
+      );
+      final var src = new OptionalSourceBean(); // maybeName left at Optional.empty()
+      final var dto = assertDoesNotThrow(() -> mapper.forward(src));
+      assertNull(dto.getResolvedName());
+    }
+  }
+
+  @Nested
+  @DisplayName("Telescope.mapperForward auto-discovers a sibling @Bridge-generated bridge constant")
+  class MapperForwardAutoDiscoversBridge {
+
+    @Test
+    @DisplayName("record→record: mapperForward(A.class, B.class) with no rows routes through <A>Bridge.BRIDGE")
+    void recordToRecordRoutesThroughBridge() {
+      // mapperForward called with no per-field rows must produce the same output as invoking the
+      // bridge constant directly — the routing has to be observably equivalent to a direct
+      // BridgeRecABridge.BRIDGE.read(src) call.
+      final var mapper = Telescope.mapperForward(BridgeRecA.class, BridgeRecB.class);
+      final var src = new BridgeRecA("u1", 10);
+      assertEquals(BridgeRecABridge.BRIDGE.read(src), mapper.forward(src));
+    }
+
+    @Test
+    @DisplayName("pojo→pojo: auto-discovery succeeds on a Lombok-style POJO pair")
+    void pojoToPojoRoutesThroughBridge() {
+      final var mapper = Telescope.mapperForward(BridgePojoA.class, BridgePojoB.class);
+      final var src = new BridgePojoA();
+      src.setId("p1");
+      src.setEmail("p1@example.com");
+
+      final var viaMapper = mapper.forward(src);
+      final var viaBridge = BridgePojoABridge.BRIDGE.read(src);
+      assertEquals(viaBridge.getId(), viaMapper.getId());
+      assertEquals(viaBridge.getEmail(), viaMapper.getEmail());
+    }
+
+    @Test
+    @DisplayName("plain POJO pair without @Bridge falls through to DeepMap.resolveForward")
+    void plainPairFallsThrough() {
+      final var mapper = Telescope.mapperForward(PlainA.class, PlainB.class);
+      final var src = new PlainA();
+      src.setId("x");
+      assertEquals("x", mapper.forward(src).getId());
+    }
+
+    @Test
+    @DisplayName(
+      "target mismatch: mapperForward(A, X) skips an A->B bridge when X != B (probe rejects, DeepMap takes over)"
+    )
+    void targetMismatchSilentlyFallsThrough() {
+      // BridgeRecA carries @Bridge(BridgeRecB.class) → BridgeRecABridge.BRIDGE is
+      // Telescope<BridgeRecA, BridgeRecB>. Calling mapperForward with a different target must NOT
+      // route through that bridge — the probe's ParameterizedType check rejects, mapperForward
+      // falls through to DeepMap, and the structural-iso build produces the requested target
+      // directly. Pins the BridgeHolderProbe bridgeTargetMatches false branch.
+      final var mapper = Telescope.mapperForward(BridgeRecA.class, SiblingTarget.class);
+      final var src = new BridgeRecA("u1", 10);
+      assertEquals(new SiblingTarget("u1", 10), mapper.forward(src));
+    }
+
+    @Test
+    @DisplayName(
+      "explicit per-field rows opt out of auto-discovery — the bridge is not consulted when steps are present"
+    )
+    void explicitRowsOptOutOfAutoDiscovery() {
+      // When the caller supplies any per-field row, mapperForward routes through DeepMap as the
+      // explicit-overrides escape hatch. Force a clearly-different output via a constant row that
+      // overrides the score field; the auto-discovered bridge would have produced score = 10.
+      final var src = new BridgeRecA("u1", 10);
+      final var explicit = Telescope.mapperForward(
+        BridgeRecA.class,
+        BridgeRecB.class,
+        Mapping.to(BridgeRecA::id, BridgeRecB::id),
+        Mapping.constant(BridgeRecB::score, 999)
+      );
+      final var dst = explicit.forward(src);
+      assertEquals("u1", dst.id());
+      assertEquals(
+        999,
+        dst.score(),
+        "explicit constant row must take precedence over the auto-discovered bridge value (10)"
+      );
+    }
+
+    // ---------- Fixtures local to this nested class ----------
+
+    public static class PlainA {
+
+      private String id;
+
+      public PlainA() {}
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+    }
+
+    public static class PlainB {
+
+      private String id;
+
+      public PlainB() {}
+
+      public String getId() {
+        return id;
+      }
+
+      public void setId(final String id) {
+        this.id = id;
+      }
+    }
+
+    /**
+     * Sibling target sharing the BridgeRecB shape but a different class identity — exercises the
+     * probe's target-mismatch rejection branch.
+     */
+    public record SiblingTarget(String id, int score) {}
   }
 }

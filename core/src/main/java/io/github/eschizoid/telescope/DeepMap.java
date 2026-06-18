@@ -742,7 +742,11 @@ public final class DeepMap {
           );
           t = tgtT.updateIndexed(t, (i, _ignored) -> values.get(i));
         } else {
-          t = tgtT.set(t, srcT.read(s));
+          // Lenient: when the source path resolves to an empty focus (null intermediate in a
+          // chained bean read, or an Affine miss further down the path), write null to the target
+          // field rather than throwing. Downstream type-default handling — where configured —
+          // takes over from there.
+          t = tgtT.set(t, srcT.find(s).orElse(null));
         }
       } else if (fx instanceof Constant<?, ?, ?> r) {
         final var tgtT = (Telescope<T, Object>) r.targetTelescope();

@@ -741,6 +741,72 @@ the user's getter does — strict-lens semantics for direct gets are unchanged.
 
 ---
 
+### 14. `DeepMap.applyForward()` missed the null-safety fix on the `TelescopeToTelescope` path — Fixed (v1.0.5)
+
+**Severity:** P1 — regression in 1.0.5 for any mapping that reads through a `to(Telescope, Telescope)` row over a source
+whose nested intermediate is `null`. Works on 1.0.4, crashes on 1.0.5 (post-Bug-13 fix).
+
+**Reproduction:**
+
+```java
+@Data
+public class Source {
+  private NestedData nestedData; // null in sparse test data
+}
+
+@Data
+public class NestedData {
+  private String value;
+}
+
+@Data
+public class Target {
+  private String flatValue;
+}
+
+Telescope.mapperForward(Source.class, Target.class,
+  to(Telescope.ofBean(Source.class).field(Source::getNestedData).field(NestedData::getValue),
+     Telescope.ofBean(Target.class).field(Target::getFlatValue)),
+  writeBeans(SETTERS));
+
+// When source.nestedData is null:
+mapper.forward(source);   // NoSuchElementException!
+```
+
+**Observed:**
+
+```
+java.util.NoSuchElementException: Telescope has no value in this source (path starts at field 'getNestedData')
+   at io.github.eschizoid.telescope.Telescope.noValue(Telescope.java:1121)
+   at io.github.eschizoid.telescope.Telescope.read(Telescope.java:1102)
+   at io.github.eschizoid.telescope.DeepMap.applyForward(DeepMap.java:745)
+```
+
+**Root cause:** Bug 13 (PR #154) fixed `DeepMap#overrideTargetField` at line 835 (the `FromTelescopeTo` row path) to use
+`srcT.find(s).orElse(null)`. The sibling site at line 745 (the `TelescopeToTelescope` forward-overlay path in
+`applyForward`) was missed — it still calls `srcT.read(s)`, which now surfaces the improved `firstHopName` diagnostic
+but still throws.
+
+**Codebase audit** (Round 3 feedback intake): swept `DeepMap.java` for every Telescope read site that participates in
+the forward direction. Found:
+
+- **Line 745** — `TelescopeToTelescope` BROADCAST forward overlay: ❌ unfixed, exact mirror of the line 835 pattern.
+- **Line 835** — `FromTelescopeTo` forward overlay: ✓ already fixed in PR #154.
+- **Line 779** — `TelescopeTo` backward overlay: safe (reads from target, not source).
+- **Line 807** — `TelescopeToTelescope` backward overlay: safe (reads from target, not source).
+
+Single missed site, no other latent bugs.
+
+**Fix:** Line 745 change from `t = tgtT.set(t, srcT.read(s));` to `t = tgtT.set(t, srcT.find(s).orElse(null));`,
+matching the line 835 form. One-line patch + a regression test in `MigrationRegressionTest` pinning the
+`to(Telescope, Telescope)` shape.
+
+**Resolution:** Applied the one-line fix at `DeepMap.java:745`. Both forward call sites now use the lenient
+`find().orElse(null)` form; the backward call sites stay strict because they read from the freshly-built target where a
+null intermediate is a real invariant violation. Regression test in `MigrationRegressionTest` pins the new contract.
+
+---
+
 ## Enhancement Requests
 
 ### 1. Cross-module `@Bridge` support (MapStruct parity) — Fixed (v1.0.2)
@@ -968,6 +1034,125 @@ PR #144.
 
 ---
 
+### 11. `Telescope.merge()` requires `@SuppressWarnings("unchecked")` at every call site — Verified (v1.0.5)
+
+**Source:** Round 3 adopter feedback (v1.0.5 intake).
+
+**Problem:** Every `Telescope.merge(target, MergeStep<T>...)` call site triggers Java's unchecked-warning on
+generic-array creation because the varargs slot is `MergeStep<T>...`. Adopters either silence the warning with
+`@SuppressWarnings("unchecked")` per call site or live with the warning. The original feedback proposed a parallel
+`Telescope.mergeBuilder(...)` API (`.from(...).build()...`) that sidesteps varargs entirely.
+
+**Adopter's proposed shape:**
+
+```java
+@SuppressWarnings("unchecked")
+private static final Mapper<Sources, ICRetailIDServiceRequest> MAPPER =
+    Telescope.merge(ICRetailIDServiceRequest.class,
+        from(IdentificationRequest::getDocumentMetaData, ...),
+        from(ICRetailIDServiceRequest::getRetailIDLoginRequest))
+        .afterForward(...);
+
+// Proposed builder alternative:
+private static final Mapper<Sources, ICRetailIDServiceRequest> MAPPER =
+    Telescope.mergeBuilder(ICRetailIDServiceRequest.class)
+        .from(IdentificationRequest::getDocumentMetaData, ...)
+        .from(ICRetailIDServiceRequest::getRetailIDLoginRequest)
+        .build()
+        .afterForward(...);
+```
+
+**Analysis (declined the proposed shape, accepted the underlying pain):** The pain is real, but a parallel builder API
+is the wrong fix. A `mergeBuilder(...)...build()` chain reads longer than the varargs form (extra `.build()` step, extra
+vocabulary to learn for a feature equivalent to the varargs one), and adding a second way to do the same thing is API
+bloat — exactly the kind of thing that hurts the world-class-ergonomics mantra it claims to advance. The real fix is
+`@SafeVarargs` on the existing `Telescope.merge` method: the implementation only iterates the array (no writes, no
+leaking the reference outside the method body), so `@SafeVarargs` is genuinely safe; applying it eliminates the
+unchecked warning at every call site without introducing a new API surface.
+
+**Resolution:** `Telescope.merge` carries both `@SafeVarargs` and `@SuppressWarnings("varargs")`; the parallel
+`Telescope.all(Edit<S>...)` entry point is similarly annotated. Adopter call sites invoking `Telescope.merge(...)`
+directly should not require their own `@SuppressWarnings("unchecked")`. If a warning still surfaces in the field, the
+most likely cause is a generic-varargs site elsewhere in the mapping pipeline (post-mapping hooks, sources builders,
+custom row factories) that lacks the annotation — file as a separate bug naming the offending entry point.
+
+The `mergeBuilder(...)` shape from the proposal is intentionally not added — the underlying warning concern is addressed
+at the library boundary, no parallel API needed.
+
+---
+
+### 12. `Telescope.fromMap()` should compose for nested map → sub-POJO extraction — Proposed (v1.0.6)
+
+**Source:** Round 3 adopter feedback (v1.0.5 intake).
+
+**Problem:** `Telescope.fromMap(Class<T>, MapExtractStep...)` only supports flat key-value extraction. When a
+`Map<String, Object>` carries a nested `Map<String, Object>` value that itself needs to be converted into a sub-POJO,
+adopters must write a manual static method as the converter — boilerplate that breaks the otherwise-declarative
+`extract(key, accessor, converter)` shape. Real use cases include DynamoDB AttributeValue maps and JSON payloads with
+nested objects.
+
+**Adopter's proposed shape:**
+
+```java
+extract("pageDetails", CaseListRequest::getPageDetails,
+    Telescope.fromMap(PageDetails.class,
+        extract("pageSize", PageDetails::getPageSize, obj -> (int) obj),
+        extract("exclusiveStartKey", PageDetails::getExclusiveStartKey, obj -> processKey(obj))))
+```
+
+**Analysis (worth doing, contingent on composition check):** Real use case, but the existing API surface may already
+compose cleanly with a single cast at the lambda boundary (`obj -> mapper.forward((Map<String, Object>) obj)`). If that
+composition works, the gap is small — the proposed `nested(...)` factory only saves the `(Map<String, Object>)` cast. If
+composition is genuinely blocked (e.g., the inner `extract` factories don't return the right shape for the outer
+converter slot), a `nested(Class<T>, MapExtractStep...)` factory that returns a `Function<Object, T>` (doing the cast
+internally) is justified. Half-day of investigation + delivery either way.
+
+**Status:** Deferred to v1.0.6 — investigate composition first.
+
+---
+
+### 13. `Telescope.mapperForward()` should auto-discover `@Bridge`-generated bridges — Proposed (v1.0.6)
+
+**Source:** Round 3 adopter feedback (v1.0.5 intake).
+
+**Problem:** `@Bridge(value = Target.class, renames = {...})` generates a `<Source>Bridge.BRIDGE` constant at compile
+time, but:
+
+1. The constant cannot be imported from source in the same module (deferred to `processingOver()` by design — the
+   round-deferred emission pattern).
+2. `Telescope.mapperForward()` does NOT auto-discover it — it builds its own mapper from `to()` rows.
+
+This means the mapping definition is duplicated: once in the `@Bridge` annotation (renames) and again in the
+`mapperForward()` call (`to()` rows). The MapStruct equivalent (`@Mapper`) auto-resolves; not having parity here is a
+real friction point.
+
+**Adopter's proposed shape:**
+
+```java
+@Bridge(value = GovtIdDBData.class, lenient = true, renames = {
+    @Rename(source = "referenceID", target = "entRefncId"),
+    @Rename(source = "businessUnit", target = "busUnitNm"),
+    @Rename(source = "caseId", target = "busCaseId")
+})
+public class CustomerCaseRequest { ... }
+
+// No to() rows needed — auto-discovers CustomerCaseRequestBridge.BRIDGE:
+@Bean
+public ForwardMapper<CustomerCaseRequest, GovtIdDBData> mapper() {
+    return Telescope.mapperForward(CustomerCaseRequest.class, GovtIdDBData.class, writeBeans(SETTERS));
+}
+```
+
+**Analysis (worth doing, high impact):** This is the only one of the three Round 3 enhancements that meaningfully moves
+the MapStruct-parity needle. The implementation can mirror the existing `MetadataHolderProbe` pattern that already
+discovers `@Focus` / `@BeanFocus` holders at runtime — `Telescope.mapperForward(A.class, B.class, ...)` probes the
+classpath for a sibling `<A>Bridge` constant via a `ClassValue<Optional<HolderRef>>` cache; when present, route the
+forward direction through `<A>Bridge.BRIDGE`. Explicit `to()` rows become per-field overrides on top of the bridge.
+
+**Status:** Targeted for v1.0.6 — substantial work, but well-shaped via the existing holder-probe substrate.
+
+---
+
 ## Additional Fixes Applied During Migration (already-fixed in v1.0.1 — recorded for traceability)
 
 | Fix                          | File                      | Description                                                                                          |
@@ -978,33 +1163,37 @@ PR #144.
 
 ## Summary — Bugs
 
-| #      | Description                                                           | Severity | Status         |
-| ------ | --------------------------------------------------------------------- | -------- | -------------- |
-| Bug 1  | ClassCastException on unresolvable `@Bridge` target                   | P1       | Fixed (v1.0.1) |
-| Bug 2  | LambdaIntrospection NPE on `is*` boolean accessors                    | P0       | Fixed (v1.0.1) |
-| Bug 3  | No autoboxing between primitive ↔ wrapper types                       | P1       | Fixed (v1.0.1) |
-| Bug 4  | NPE on null intermediate objects in nested paths                      | P1       | Fixed (v1.0.1) |
-| Bug 5  | SettersWriter throws on getter-only properties                        | P1       | Fixed (v1.0.1) |
-| Bug 6  | DeepMap strict bijection enforced on nested auto-recursed types       | P1       | Fixed (v1.0.1) |
-| Bug 7  | LambdaMetafactory fails on classes extending JDK types                | P1       | Fixed (v1.0.1) |
-| Bug 8  | SettersWriter NPE when valueByName returns null for primitive         | P1       | Fixed (v1.0.1) |
-| Bug 9  | `forward(null)` / `backward(null)` NPE instead of returning null      | P1       | Fixed (v1.0.1) |
-| Bug 10 | `fieldByName(String)` uses `Records.fieldLens()` for POJOs too        | P1       | Fixed (v1.0.1) |
-| Bug 11 | Parameterised Collection / Map subtype pairs across raw classes       | P1       | Fixed (v1.0.1) |
-| Bug 12 | `@BeanFocus` codegen `construct()` doesn't null-guard `Integer → int` | P1       | Fixed (v1.0.4) |
-| Bug 13 | `@BeanFocus` generated `FieldOptics` NPEs on null intermediates       | P1       | Fixed (v1.0.4) |
+| #      | Description                                                                  | Severity | Status         |
+| ------ | ---------------------------------------------------------------------------- | -------- | -------------- |
+| Bug 1  | ClassCastException on unresolvable `@Bridge` target                          | P1       | Fixed (v1.0.1) |
+| Bug 2  | LambdaIntrospection NPE on `is*` boolean accessors                           | P0       | Fixed (v1.0.1) |
+| Bug 3  | No autoboxing between primitive ↔ wrapper types                              | P1       | Fixed (v1.0.1) |
+| Bug 4  | NPE on null intermediate objects in nested paths                             | P1       | Fixed (v1.0.1) |
+| Bug 5  | SettersWriter throws on getter-only properties                               | P1       | Fixed (v1.0.1) |
+| Bug 6  | DeepMap strict bijection enforced on nested auto-recursed types              | P1       | Fixed (v1.0.1) |
+| Bug 7  | LambdaMetafactory fails on classes extending JDK types                       | P1       | Fixed (v1.0.1) |
+| Bug 8  | SettersWriter NPE when valueByName returns null for primitive                | P1       | Fixed (v1.0.1) |
+| Bug 9  | `forward(null)` / `backward(null)` NPE instead of returning null             | P1       | Fixed (v1.0.1) |
+| Bug 10 | `fieldByName(String)` uses `Records.fieldLens()` for POJOs too               | P1       | Fixed (v1.0.1) |
+| Bug 11 | Parameterised Collection / Map subtype pairs across raw classes              | P1       | Fixed (v1.0.1) |
+| Bug 12 | `@BeanFocus` codegen `construct()` doesn't null-guard `Integer → int`        | P1       | Fixed (v1.0.4) |
+| Bug 13 | `@BeanFocus` generated `FieldOptics` NPEs on null intermediates              | P1       | Fixed (v1.0.4) |
+| Bug 14 | `DeepMap.applyForward` missed null-safety fix on `TelescopeToTelescope` path | P1       | Fixed (v1.0.5) |
 
 ## Summary — Enhancements
 
-| #      | Description                                        | Priority | Status         |
-| ------ | -------------------------------------------------- | -------- | -------------- |
-| Enh 1  | Cross-module `@Bridge` carrier                     | High     | Fixed (v1.0.2) |
-| Enh 2  | `ForwardMapper.liftList()`                         | Medium   | Fixed (v1.0.2) |
-| Enh 3  | `Telescope.asForwardMapper()`                      | Low      | Fixed (v1.0.2) |
-| Enh 4  | Processor ordering docs + BridgeProcessor deferral | Medium   | Fixed (v1.0.2) |
-| Enh 5  | `Map` → POJO factory                               | Low      | Fixed (v1.0.2) |
-| Enh 6  | `@Bridge` lenient mode                             | High     | Fixed (v1.0.2) |
-| Enh 7  | `Sources.byClass()` generics                       | Low      | Fixed (v1.0.2) |
-| Enh 8  | `Mapping.forward()` naming                         | Low      | Fixed (v1.0.2) |
-| Enh 9  | `mapperForward()` lenient by default               | High     | Fixed (v1.0.2) |
-| Enh 10 | `:internal` test coverage hardening                | Medium   | Fixed (v1.0.2) |
+| #      | Description                                                             | Priority | Status            |
+| ------ | ----------------------------------------------------------------------- | -------- | ----------------- |
+| Enh 1  | Cross-module `@Bridge` carrier                                          | High     | Fixed (v1.0.2)    |
+| Enh 2  | `ForwardMapper.liftList()`                                              | Medium   | Fixed (v1.0.2)    |
+| Enh 3  | `Telescope.asForwardMapper()`                                           | Low      | Fixed (v1.0.2)    |
+| Enh 4  | Processor ordering docs + BridgeProcessor deferral                      | Medium   | Fixed (v1.0.2)    |
+| Enh 5  | `Map` → POJO factory                                                    | Low      | Fixed (v1.0.2)    |
+| Enh 6  | `@Bridge` lenient mode                                                  | High     | Fixed (v1.0.2)    |
+| Enh 7  | `Sources.byClass()` generics                                            | Low      | Fixed (v1.0.2)    |
+| Enh 8  | `Mapping.forward()` naming                                              | Low      | Fixed (v1.0.2)    |
+| Enh 9  | `mapperForward()` lenient by default                                    | High     | Fixed (v1.0.2)    |
+| Enh 10 | `:internal` test coverage hardening                                     | Medium   | Fixed (v1.0.2)    |
+| Enh 11 | `@SafeVarargs` on `Telescope.merge` (declined the `mergeBuilder` shape) | Low      | Verified (v1.0.5) |
+| Enh 12 | `Telescope.fromMap()` nested map → sub-POJO composition                 | Medium   | Proposed (v1.0.6) |
+| Enh 13 | `Telescope.mapperForward()` auto-discover `@Bridge`-generated bridges   | High     | Proposed (v1.0.6) |
