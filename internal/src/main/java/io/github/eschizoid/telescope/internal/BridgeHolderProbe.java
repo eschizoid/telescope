@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.internal;
 
+import java.lang.reflect.GenericArrayType;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.Optional;
@@ -16,18 +18,20 @@ import java.util.concurrent.ConcurrentHashMap;
  * (sourceClass, targetClass)} pair per classloader; subsequent {@code probeFor} calls return the
  * cached result.
  *
- * <p><b>Naming convention.</b> Two emission shapes are honoured:
+ * <p><b>Lookup order.</b> The probe checks two fully-qualified names against the source's
+ * classloader:
  *
  * <ul>
- *   <li>User-declared single-target {@code @Bridge(value = Target.class)} → short name {@code
- *       <Source>Bridge} in the source's package.
- *   <li>Multi-target / auto-discovered pairs → long form {@code <Source>To<Target>Bridge} in the
- *       source's package — disambiguates when one source carries several {@code @Bridge}
- *       annotations.
+ *   <li>{@code <Source>To<Target>Bridge} (long form, target-disambiguated) — tried first so a
+ *       source carrying multiple bridges resolves unambiguously to the one targeting the requested
+ *       class.
+ *   <li>{@code <Source>Bridge} (short form) — accepted only when its {@code BRIDGE} field's
+ *       parameterised target type matches the requested target class. The short-form name doesn't
+ *       carry the target identity, so the probe verifies it reflectively before accepting.
  * </ul>
  *
- * The probe checks both — long form first (deterministic for the requested target), short form
- * second with a parameterised-type check against the requested target class.
+ * The codegen-side contract for which shape gets emitted lives with the {@code @Bridge} annotation
+ * processor; this probe describes only the runtime lookup contract.
  *
  * <p>The {@code bridge} field on {@link BridgeRef} is typed as {@link Object} because the optic /
  * Telescope types live in {@code :core}; consumers in {@code :core} cast it back to {@code
@@ -56,28 +60,35 @@ public final class BridgeHolderProbe {
   /**
    * The {@code <Source>Bridge} (or {@code <Source>To<Target>Bridge}) sibling holder for the given
    * {@code (sourceClass, targetClass)} pair, or {@link Optional#empty()} if no such holder is on
-   * the classpath. Cached — both presence and absence are memoised, so repeated lookups don't
-   * repeat the {@link Class#forName} call.
+   * the classpath.
+   *
+   * <p>Presence and {@link Optional#empty()} are memoised so repeated lookups don't repeat the
+   * {@link Class#forName} call. Malformed-holder exceptions (missing {@code BRIDGE} field, wrong
+   * modifiers, inaccessible field) are NOT memoised — they re-throw on every call so codegen drift
+   * surfaces consistently rather than hiding behind a cached failure.
    */
   public static Optional<BridgeRef> probeFor(final Class<?> sourceClass, final Class<?> targetClass) {
     return CACHE.get(sourceClass).computeIfAbsent(targetClass, t -> probe(sourceClass, t));
   }
 
   private static Optional<BridgeRef> probe(final Class<?> sourceClass, final Class<?> targetClass) {
-    // Try the long-form name first — it's deterministic for the requested target and survives
-    // multi-target @Bridge declarations on the same source.
+    // Long-form name is target-disambiguated; try it first so multi-bridge sources resolve cleanly.
     final var longForm = sourceClass.getName() + "To" + targetClass.getSimpleName() + "Bridge";
     final var longProbe = loadBridgeClass(longForm, sourceClass.getClassLoader());
     if (longProbe.isPresent()) return Optional.of(readBridgeConstant(longProbe.get()));
 
-    // Fall back to the short-form name — only valid when the bridge's parameterised target type
-    // actually matches the requested target class, to avoid mis-routing
-    // mapperForward(A, OtherTarget) through an A->B bridge.
+    // Short-form name has no target identity baked into the FQN; verify the BRIDGE field's
+    // parameterised target type matches the requested target class to avoid mis-routing
+    // mapperForward(A, OtherTarget) through an A->B bridge. The target-match check returns
+    // false (silent skip) only when the BRIDGE field is structurally present with a wrong
+    // target — a missing or malformed field is left for readBridgeConstant to surface as a
+    // precise IllegalStateException.
     final var shortForm = sourceClass.getName() + "Bridge";
     final var shortProbe = loadBridgeClass(shortForm, sourceClass.getClassLoader());
     if (shortProbe.isEmpty()) return Optional.empty();
     final var bridgeClass = shortProbe.get();
-    if (!bridgeTargetMatches(bridgeClass, targetClass)) return Optional.empty();
+    final var match = bridgeTargetMatches(bridgeClass, targetClass);
+    if (match.isPresent() && !match.get()) return Optional.empty();
     return Optional.of(readBridgeConstant(bridgeClass));
   }
 
@@ -90,27 +101,55 @@ public final class BridgeHolderProbe {
   }
 
   /**
-   * Inspect the bridge class's {@code BRIDGE} field generic type and verify the second type
-   * argument matches {@code expectedTarget}. The codegen always emits {@code Telescope<Source,
-   * Target>}; reading the parameterised type's actual arguments lets us reject a short-form bridge
-   * whose target doesn't match the requested mapperForward target.
+   * Inspect the {@code BRIDGE} field's generic type and return whether its second type argument
+   * resolves to {@code expectedTarget}.
+   *
+   * <p>Returns:
+   *
+   * <ul>
+   *   <li>{@code Optional.of(true)} when the second argument equals {@code expectedTarget} as a
+   *       {@link Class}, the raw of a {@link ParameterizedType}, or the component of a {@link
+   *       GenericArrayType}.
+   *   <li>{@code Optional.of(false)} when the field is structurally present but the second argument
+   *       is some other class or type form — the bridge is real but its target doesn't match.
+   *   <li>{@link Optional#empty()} when the field is absent or its generic type isn't a {@link
+   *       ParameterizedType} — the holder is malformed and the caller should let {@link
+   *       #readBridgeConstant} surface the precise diagnostic rather than silently skip.
+   * </ul>
    */
-  private static boolean bridgeTargetMatches(final Class<?> bridgeClass, final Class<?> expectedTarget) {
+  private static Optional<Boolean> bridgeTargetMatches(final Class<?> bridgeClass, final Class<?> expectedTarget) {
     try {
       final var field = bridgeClass.getDeclaredField("BRIDGE");
       final Type generic = field.getGenericType();
-      if (!(generic instanceof ParameterizedType parameterized)) return false;
+      if (!(generic instanceof ParameterizedType parameterized)) return Optional.empty();
       final Type[] args = parameterized.getActualTypeArguments();
-      if (args.length < 2) return false;
-      return args[1] instanceof Class<?> argClass && argClass.equals(expectedTarget);
+      if (args.length < 2) return Optional.empty();
+      final Type arg = args[1];
+      if (arg instanceof Class<?> argClass) return Optional.of(argClass.equals(expectedTarget));
+      if (arg instanceof ParameterizedType inner && inner.getRawType() instanceof Class<?> rawClass) {
+        return Optional.of(rawClass.equals(expectedTarget));
+      }
+      if (arg instanceof GenericArrayType array && array.getGenericComponentType() instanceof Class<?> component) {
+        return Optional.of(component.equals(expectedTarget.getComponentType()));
+      }
+      return Optional.of(false);
     } catch (final NoSuchFieldException e) {
-      return false;
+      return Optional.empty();
     }
   }
 
   private static BridgeRef readBridgeConstant(final Class<?> bridgeClass) {
     try {
       final var field = bridgeClass.getDeclaredField("BRIDGE");
+      final var mods = field.getModifiers();
+      if (!Modifier.isPublic(mods) || !Modifier.isStatic(mods) || !Modifier.isFinal(mods)) {
+        throw new IllegalStateException(
+          "Bridge holder " +
+            bridgeClass.getName() +
+            " has a BRIDGE field but its shape is wrong (must be `public static final`). " +
+            "Re-run the @Bridge processor."
+        );
+      }
       final var value = field.get(null);
       if (value == null) throw new IllegalStateException(
         "Bridge holder " +

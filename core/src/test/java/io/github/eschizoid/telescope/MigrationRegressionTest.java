@@ -2206,11 +2206,9 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("record→record: mapperForward(A.class, B.class) with no rows routes through <A>Bridge.BRIDGE")
     void recordToRecordRoutesThroughBridge() {
-      // BridgeRecA carries @Bridge(BridgeRecB.class); the codegen emits BridgeRecABridge.BRIDGE.
       // mapperForward called with no per-field rows must produce the same output as invoking the
-      // bridge constant directly — closes the "mapping defined twice in @Bridge renames + to()
-      // rows"
-      // pain reported in adopter Round 3 feedback.
+      // bridge constant directly — the routing has to be observably equivalent to a direct
+      // BridgeRecABridge.BRIDGE.read(src) call.
       final var mapper = Telescope.mapperForward(BridgeRecA.class, BridgeRecB.class);
       final var src = new BridgeRecA("u1", 10);
       assertEquals(BridgeRecABridge.BRIDGE.read(src), mapper.forward(src));
@@ -2229,6 +2227,56 @@ class MigrationRegressionTest {
       assertEquals(viaBridge.getId(), viaMapper.getId());
       assertEquals(viaBridge.getEmail(), viaMapper.getEmail());
     }
+
+    @Test
+    @DisplayName("plain POJO pair without @Bridge falls through to DeepMap.resolveForward")
+    void plainPairFallsThrough() {
+      final var mapper = Telescope.mapperForward(PlainA.class, PlainB.class);
+      final var src = new PlainA();
+      src.setId("x");
+      assertEquals("x", mapper.forward(src).getId());
+    }
+
+    @Test
+    @DisplayName(
+      "target mismatch: mapperForward(A, X) skips an A->B bridge when X != B (probe rejects, DeepMap takes over)"
+    )
+    void targetMismatchSilentlyFallsThrough() {
+      // BridgeRecA carries @Bridge(BridgeRecB.class) → BridgeRecABridge.BRIDGE is
+      // Telescope<BridgeRecA, BridgeRecB>. Calling mapperForward with a different target must NOT
+      // route through that bridge — the probe's ParameterizedType check rejects, mapperForward
+      // falls through to DeepMap, and the structural-iso build produces the requested target
+      // directly. Pins the BridgeHolderProbe bridgeTargetMatches false branch.
+      final var mapper = Telescope.mapperForward(BridgeRecA.class, SiblingTarget.class);
+      final var src = new BridgeRecA("u1", 10);
+      assertEquals(new SiblingTarget("u1", 10), mapper.forward(src));
+    }
+
+    @Test
+    @DisplayName(
+      "explicit per-field rows opt out of auto-discovery — the bridge is not consulted when steps are present"
+    )
+    void explicitRowsOptOutOfAutoDiscovery() {
+      // When the caller supplies any per-field row, mapperForward routes through DeepMap as the
+      // explicit-overrides escape hatch. Force a clearly-different output via a constant row that
+      // overrides the score field; the auto-discovered bridge would have produced score = 10.
+      final var src = new BridgeRecA("u1", 10);
+      final var explicit = Telescope.mapperForward(
+        BridgeRecA.class,
+        BridgeRecB.class,
+        Mapping.to(BridgeRecA::id, BridgeRecB::id),
+        Mapping.constant(BridgeRecB::score, 999)
+      );
+      final var dst = explicit.forward(src);
+      assertEquals("u1", dst.id());
+      assertEquals(
+        999,
+        dst.score(),
+        "explicit constant row must take precedence over the auto-discovered bridge value (10)"
+      );
+    }
+
+    // ---------- Fixtures local to this nested class ----------
 
     public static class PlainA {
 
@@ -2260,13 +2308,11 @@ class MigrationRegressionTest {
       }
     }
 
-    @Test
-    @DisplayName("plain POJO pair without @Bridge falls through to DeepMap.resolveForward")
-    void plainPairFallsThrough() {
-      final var mapper = Telescope.mapperForward(PlainA.class, PlainB.class);
-      final var src = new PlainA();
-      src.setId("x");
-      assertEquals("x", mapper.forward(src).getId());
-    }
+    /**
+     * Sibling target sharing the BridgeRecB shape but a different class identity. Used to verify
+     * the probe correctly rejects a single-target {@code @Bridge} whose declared target doesn't
+     * match the requested {@code mapperForward} target.
+     */
+    public record SiblingTarget(String id, int score) {}
   }
 }
