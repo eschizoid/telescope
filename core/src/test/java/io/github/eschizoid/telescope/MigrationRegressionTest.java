@@ -2141,4 +2141,34 @@ class MigrationRegressionTest {
       assertEquals(null, dto.getResolvedName());
     }
   }
+
+  @Nested
+  @DisplayName("DeepMap#applyForward TelescopeToTelescope path matches the same null-intermediate leniency")
+  class TelescopeToTelescopeForwardLeniency {
+
+    @Test
+    @DisplayName(
+      "to(srcTelescope, tgtTelescope) over a source whose nested intermediate is null yields null on the target field"
+    )
+    void telescopeToTelescopeRowOverNullIntermediateShortCircuitsToNull() {
+      // The DeepMap forward path has two sibling call sites that read from a source telescope. The
+      // FromTelescopeTo arm (overrideTargetField) was made lenient earlier; this test pins the
+      // TelescopeToTelescope arm in applyForward, which previously kept the strict srcT.read(s)
+      // form and surfaced a NoSuchElementException when the source path navigated through a null
+      // nested bean field. Both arms now short-circuit to null in the target field.
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateOuter.class,
+        NullIntermediateTargetDto.class,
+        Mapping.to(
+          Telescope.ofBean(NullIntermediateOuter.class)
+            .field(NullIntermediateOuter::getInner)
+            .field(NullIntermediateInner::getName),
+          Telescope.ofBean(NullIntermediateTargetDto.class).field(NullIntermediateTargetDto::getInnerName)
+        )
+      );
+      final var outer = new NullIntermediateOuter(); // outer.inner left null on purpose
+      final var dto = assertDoesNotThrow(() -> mapper.forward(outer));
+      assertEquals(null, dto.getInnerName());
+    }
+  }
 }
