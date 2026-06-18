@@ -6,6 +6,11 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    ignore:
+      # Release toolchain is once-a-quarter and historically fragile across patch bumps; pin it.
+      - dependency-name: "org.jreleaser*"
+      - dependency-name: "pl.allegro.tech.build.axion-release*"
+      - dependency-name: "org.eclipse.jgit*"
     groups:
       quarkus:
         patterns:
@@ -28,9 +33,7 @@ updates:
       gradle-plugins:
         patterns:
           - "com.diffplug.spotless*"
-          - "pl.allegro.tech.build.axion-release*"
           - "me.champeau.jmh*"
-          - "org.jreleaser*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
