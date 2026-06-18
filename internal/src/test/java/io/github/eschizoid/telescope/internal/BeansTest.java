@@ -4,15 +4,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -483,6 +486,91 @@ class BeansTest {
       public BuilderWithVoidSetter build() {
         return new BuilderWithVoidSetter(id);
       }
+    }
+  }
+
+  // Fixture extending java.util.ArrayList: its inherited getters (size(), isEmpty(), ...) come from
+  // the java.base module. scanGetters must skip everything declared in java.*/jdk.* modules — both
+  // because privateLookupIn cannot reach into a sealed platform module, and because no caller
+  // wants
+  // their domain POJO surfaced as having an `empty` property because it extends Collection.
+  // No serialVersionUID: test-only fixture, never serialized. Extending ArrayList is load-bearing
+  // here (the whole point is to exercise the platform-module skip in scanGetters), so composing
+  // around it would defeat the test.
+  @SuppressWarnings("serial")
+  static final class ListBackedBean extends ArrayList<String> {
+
+    private String label;
+
+    public String getLabel() {
+      return label;
+    }
+
+    public void setLabel(final String label) {
+      this.label = label;
+    }
+  }
+
+  // Fixture pinning every primitive variant in Beans#wrap. Each setter forces SettersWriter to bind
+  // an LMF invoker whose instantiated method type ends in the matching wrapper class — the unbox
+  // bridge LMF generates is what `wrap` exists to enable.
+  static final class AllPrimitives {
+
+    private long longVal;
+    private double doubleVal;
+    private float floatVal;
+    private byte byteVal;
+    private short shortVal;
+    private char charVal;
+
+    public AllPrimitives() {}
+
+    public long getLongVal() {
+      return longVal;
+    }
+
+    public double getDoubleVal() {
+      return doubleVal;
+    }
+
+    public float getFloatVal() {
+      return floatVal;
+    }
+
+    public byte getByteVal() {
+      return byteVal;
+    }
+
+    public short getShortVal() {
+      return shortVal;
+    }
+
+    public char getCharVal() {
+      return charVal;
+    }
+
+    public void setLongVal(final long v) {
+      this.longVal = v;
+    }
+
+    public void setDoubleVal(final double v) {
+      this.doubleVal = v;
+    }
+
+    public void setFloatVal(final float v) {
+      this.floatVal = v;
+    }
+
+    public void setByteVal(final byte v) {
+      this.byteVal = v;
+    }
+
+    public void setShortVal(final short v) {
+      this.shortVal = v;
+    }
+
+    public void setCharVal(final char v) {
+      this.charVal = v;
     }
   }
 
@@ -1228,6 +1316,21 @@ class BeansTest {
     }
 
     @Test
+    @DisplayName("modify(non-null, fn) applies fn to the current value and rebuilds the POJO with the result")
+    void modifyOnNonNullSourceAppliesFnAndRebuilds() {
+      // The non-null branch of modify reads the current value through get, applies the function,
+      // and delegates to set for the rebuild. Off-path properties round-trip through the writer's
+      // standard rebuild path; the lens-law set/modify duality holds on reference-typed properties.
+      final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
+      final var src = new NoArgSetters();
+      src.setName("alice");
+      src.setScore(11);
+      final var rebuilt = nameLens.modify(src, String::toUpperCase);
+      assertEquals("ALICE", rebuilt.getName(), "modify must apply fn to the current value and write the result");
+      assertEquals(11, rebuilt.getScore(), "off-path score must round-trip untouched");
+    }
+
+    @Test
     @DisplayName("set on a subtype source rebuilds using the subtype's class (writer is resolved at call time)")
     void setOnSubtypeRebuildsAsSubtype() {
       // fieldLens is class-deferred: the writer is resolved against source.getClass() per call,
@@ -1256,6 +1359,131 @@ class BeansTest {
       src.setScore(5);
       final var rebuilt = scoreLens.set(src, null);
       assertEquals(0, rebuilt.getScore());
+    }
+  }
+
+  @Nested
+  @DisplayName("intermediateAllocator — DeepMap.recursiveDefault's per-class default-instance Supplier")
+  class IntermediateAllocator {
+
+    @Test
+    @DisplayName("class with a public no-arg ctor yields a fresh instance via the LMF-bound ctor Supplier")
+    void noArgCtorYieldsFreshInstance() {
+      final Supplier<Object> supplier = Beans.intermediateAllocator(NoArgFields.class);
+      final var built = supplier.get();
+      assertInstanceOf(NoArgFields.class, built);
+      assertNull(((NoArgFields) built).getName(), "fresh instance must hold ctor-default field values");
+      // Each call to get() must allocate a new instance — the supplier is not memoising state.
+      assertNotSame(built, supplier.get(), "supplier must allocate a fresh instance per get()");
+    }
+
+    @Test
+    @DisplayName("class lacking a public no-arg ctor but exposing static builder().build() yields a built instance")
+    void staticBuilderChainYieldsBuiltInstance() {
+      // WithBuilder's ctor is private — the no-arg attempt fails and falls through to the
+      // builder() lookup. The chained LMF Supplier composes builder() with build() and produces
+      // a default-built WithBuilder. Off-path values take the builder's own field defaults.
+      final Supplier<Object> supplier = Beans.intermediateAllocator(WithBuilder.class);
+      final var built = supplier.get();
+      assertInstanceOf(WithBuilder.class, built);
+      assertNull(((WithBuilder) built).getName(), "builder default for name (unset) is null");
+      assertEquals(0, ((WithBuilder) built).getScore(), "builder default for score (unset) is 0");
+    }
+
+    @Test
+    @DisplayName("class with neither a public no-arg ctor nor a static builder() yields a null supplier")
+    void neitherCtorNorBuilderYieldsNullSupplier() {
+      // NothingBuildable has a private all-args ctor and no builder() factory. Both probe arms
+      // fall through; the cached Supplier is `() -> null` rather than throwing — DeepMap reads
+      // null as "no intermediate available" and skips that branch of the default tree.
+      final Supplier<Object> supplier = Beans.intermediateAllocator(NothingBuildable.class);
+      assertNotNull(supplier, "the allocator Supplier itself must be cached even when it returns null");
+      assertNull(supplier.get(), "no-buildable class yields a null result, not a thrown exception");
+    }
+  }
+
+  @Nested
+  @DisplayName("Beans.lens — slow-path read fires when the source's runtime class differs from pojoClass")
+  class LensSubtypeSlowPath {
+
+    @Test
+    @DisplayName("set on a subtype instance reads off-path values through readProperty and rebuilds as pojoClass")
+    void setOnSubtypeUsesSlowPathReadAndRebuildsAsCapturedClass() {
+      // Lens<ParentBean, String> captures the writer + reader-map for ParentBean. When set is
+      // called with a ChildBean instance, source.getClass() != pojoClass, so the fast-path
+      // capturedReaders.get(name).apply(source) is bypassed in favour of readProperty(source,
+      // name) which routes through the GETTER_INVOKERS ClassValue keyed by the runtime class.
+      // The writer is the captured ParentBean writer, so the rebuild produces a ParentBean.
+      final Lens<ParentBean, String> idLens = Beans.lens(
+        ParentBean.class,
+        "id",
+        Beans.<ParentBean>settersWriter(ParentBean.class)
+      );
+      final var child = new ChildBean();
+      child.setId("inherited");
+      child.setName("child-only");
+      final var rebuilt = idLens.set(child, "updated");
+      assertEquals(ParentBean.class, rebuilt.getClass(), "rebuild uses the captured writer's class, not the source's");
+      assertEquals("updated", rebuilt.getId(), "focused property replaced through the slow-path-aware writer call");
+    }
+  }
+
+  @Nested
+  @DisplayName("scanGetters — inherited platform-module methods are skipped, not surfaced as properties")
+  class ScanGettersModuleSkip {
+
+    @Test
+    @DisplayName("a POJO extending java.util.ArrayList does not surface the inherited isEmpty/size as properties")
+    void platformInheritedAccessorsDoNotLeakAsProperties() {
+      // Defence-in-depth against any caller that touches a JDK-derived class directly. Without
+      // the java.*/jdk.* skip, propertyNames would include `empty` (from isEmpty) and downstream
+      // LMF binding via privateLookupIn(ArrayList.class) would fail because java.base does not
+      // grant private lookup to application code. The skip leaves only the POJO's own getter.
+      final var names = Beans.propertyNames(ListBackedBean.class);
+      final var collected = Arrays.asList(names);
+      assertTrue(collected.contains("label"), "the POJO's own getter must survive the scan");
+      assertFalse(collected.contains("empty"), "inherited isEmpty from java.util must be skipped");
+      assertFalse(collected.contains("class"), "Object.getClass() must remain skipped (declared by Object)");
+    }
+  }
+
+  @Nested
+  @DisplayName("SettersWriter — primitive-variant unbox bridges for every long/double/float/byte/short/char setter")
+  class PrimitiveSetterDispatch {
+
+    @Test
+    @DisplayName(
+      "long/double/float/byte/short/char setters each bind an LMF unbox bridge end-to-end through SettersWriter"
+    )
+    void sixPrimitiveVariantsRoundTripThroughSettersWriter() {
+      // Each setter forces wrap() to map its primitive type to the matching wrapper class; the
+      // SettersWriter then binds an LMF invoker whose instantiatedMethodType ends in that
+      // wrapper. The metafactory generates the unbox bridge from Object to the primitive. The
+      // int setter arm of wrap is covered by NoArgSetters.setScore elsewhere in this suite; this
+      // test exercises the six remaining primitive setter variants end-to-end.
+      final var writer = Beans.<AllPrimitives>settersWriter(AllPrimitives.class);
+      final var names = new String[] { "longVal", "doubleVal", "floatVal", "byteVal", "shortVal", "charVal" };
+      final Map<String, Object> values = Map.of(
+        "longVal",
+        Long.valueOf(9_223_372_036L),
+        "doubleVal",
+        Double.valueOf(3.14d),
+        "floatVal",
+        Float.valueOf(2.5f),
+        "byteVal",
+        Byte.valueOf((byte) 7),
+        "shortVal",
+        Short.valueOf((short) 1234),
+        "charVal",
+        Character.valueOf('Z')
+      );
+      final var built = writer.construct(names, values::get);
+      assertEquals(9_223_372_036L, built.getLongVal());
+      assertEquals(3.14d, built.getDoubleVal());
+      assertEquals(2.5f, built.getFloatVal());
+      assertEquals((byte) 7, built.getByteVal());
+      assertEquals((short) 1234, built.getShortVal());
+      assertEquals('Z', built.getCharVal());
     }
   }
 }
