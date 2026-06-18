@@ -150,8 +150,7 @@ class BridgeHolderProbeTest {
     void longFormTakesPrecedence() {
       // Pins the lookup-order contract documented on probe(): the long-form FQN is tried first
       // so a source carrying multiple bridges resolves unambiguously to the one targeting the
-      // requested class. Without this test, swapping the two probes in probe() would still pass
-      // every other suite.
+      // requested class.
       final var probed = BridgeHolderProbe.probeFor(LongFormSrc.class, String.class);
       assertTrue(probed.isPresent(), "long-form holder must be discovered");
       assertEquals("long-form-marker", probed.get().bridge(), "long-form value must win over short-form");

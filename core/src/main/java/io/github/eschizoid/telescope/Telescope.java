@@ -637,12 +637,11 @@ public sealed class Telescope<
     // for the common "small DTO → large entity" migration shape. Matches MapStruct's default.
     // Bidirectional `mapper(...)` keeps the strict bijection check.
 
-    // No per-field rows: probe for a sibling @Bridge-generated <Source>Bridge.BRIDGE constant.
-    // When present, route directly through it (the bridge already encodes any @Rename (incl.
-    // forwardOnly fan-out) / @Transform / @Constant / @Compute / @Default / @ViaMapper / drops
-    // / writeStrategy / lenient configuration from the @Bridge annotation). With rows present,
-    // the caller has opted into explicit configuration; skip the probe and run the rows through
-    // DeepMap as usual.
+    // No per-field rows: probe for a sibling @Bridge-generated <Source>Bridge.BRIDGE constant
+    // and route directly through it when present. See the javadoc's "Auto-discovery from
+    // @Bridge" paragraph for the full bridge-baked configuration surface. With rows present,
+    // the caller has opted into explicit configuration; skip the probe and run the rows
+    // through DeepMap as usual.
     if (steps.length == 0) {
       final var probed = BridgeHolderProbe.probeFor(source, target);
       if (probed.isPresent()) {
