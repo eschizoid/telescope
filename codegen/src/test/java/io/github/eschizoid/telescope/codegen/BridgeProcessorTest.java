@@ -3739,8 +3739,8 @@ class BridgeProcessorTest {
       // AUTO probes CONSTRUCTOR before BUILDER, so picking CONSTRUCTOR explicitly produces the
       // same generated code on this fixture. The behavioural pin: if a future refactor swaps the
       // AUTO probe order to prefer BUILDER, the explicit CONSTRUCTOR hint must still bind the
-      // constructor — adopters set the hint precisely to escape AUTO's default and rely on the
-      // explicit success path completing instead of falling through to BUILDER.
+      // constructor — the hint is the documented way to escape AUTO's default; falling through to
+      // BUILDER on an explicit CONSTRUCTOR hint would be a silent semantic regression.
       final var compilation = compile(
         source(
           "demo.SrcEC",
@@ -3796,10 +3796,10 @@ class BridgeProcessorTest {
       "writeStrategy = BUILDER fails with a per-field diagnostic when the builder lacks a method for one field"
     )
     void builderMissingPerFieldMethodRejected() {
-      // Real adopter shape: Lombok @Builder where one field's name was changed but the builder
+      // Real-world shape: a Lombok @Builder where one field's name was changed but the builder
       // method wasn't regenerated (or a hand-written builder that forgot one fluent setter). The
-      // diagnostic must name the missing field AND the builder class so the adopter can find
-      // both ends of the mismatch in one read.
+      // diagnostic must name the missing field AND the builder class so both ends of the
+      // mismatch are visible in one read.
       final var compilation = compile(
         source(
           "demo.SrcMB",

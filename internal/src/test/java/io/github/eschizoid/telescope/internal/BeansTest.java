@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -490,9 +491,12 @@ class BeansTest {
 
   // Fixture extending java.util.ArrayList: its inherited getters (size(), isEmpty(), ...) come from
   // the java.base module. scanGetters must skip everything declared in java.*/jdk.* modules — both
-  // because privateLookupIn cannot reach into a sealed platform module, and because no adopter
+  // because privateLookupIn cannot reach into a sealed platform module, and because no caller
   // wants
   // their domain POJO surfaced as having an `empty` property because it extends Collection.
+  // No serialVersionUID: test-only fixture, never serialized. Extending ArrayList is load-bearing
+  // here (the whole point is to exercise the platform-module skip in scanGetters), so composing
+  // around it would defeat the test.
   @SuppressWarnings("serial")
   static final class ListBackedBean extends ArrayList<String> {
 
@@ -1370,7 +1374,7 @@ class BeansTest {
       assertInstanceOf(NoArgFields.class, built);
       assertNull(((NoArgFields) built).getName(), "fresh instance must hold ctor-default field values");
       // Each call to get() must allocate a new instance — the supplier is not memoising state.
-      assertFalse(built == supplier.get(), "supplier must allocate a fresh instance per get()");
+      assertNotSame(built, supplier.get(), "supplier must allocate a fresh instance per get()");
     }
 
     @Test
@@ -1409,8 +1413,7 @@ class BeansTest {
       // called with a ChildBean instance, source.getClass() != pojoClass, so the fast-path
       // capturedReaders.get(name).apply(source) is bypassed in favour of readProperty(source,
       // name) which routes through the GETTER_INVOKERS ClassValue keyed by the runtime class.
-      // The writer is the captured ParentBean writer, so the rebuild produces a ParentBean —
-      // the Child-only `name` property is not carried because it isn't in ParentBean's names.
+      // The writer is the captured ParentBean writer, so the rebuild produces a ParentBean.
       final Lens<ParentBean, String> idLens = Beans.lens(
         ParentBean.class,
         "id",
@@ -1450,13 +1453,14 @@ class BeansTest {
 
     @Test
     @DisplayName(
-      "every primitive variant of Beans.wrap binds an LMF unbox bridge that round-trips through SettersWriter"
+      "long/double/float/byte/short/char setters each bind an LMF unbox bridge end-to-end through SettersWriter"
     )
-    void everyPrimitiveVariantRoundTripsThroughSettersWriter() {
+    void sixPrimitiveVariantsRoundTripThroughSettersWriter() {
       // Each setter forces wrap() to map its primitive type to the matching wrapper class; the
       // SettersWriter then binds an LMF invoker whose instantiatedMethodType ends in that
-      // wrapper. The metafactory generates the unbox bridge from Object to the primitive — this
-      // test exercises every arm of wrap end-to-end through the public construct path.
+      // wrapper. The metafactory generates the unbox bridge from Object to the primitive. The
+      // int and boolean arms of wrap are covered by existing WithPrimitives / NoArgSetters
+      // fixtures; this test exercises the six remaining primitives end-to-end.
       final var writer = Beans.<AllPrimitives>settersWriter(AllPrimitives.class);
       final var names = new String[] { "longVal", "doubleVal", "floatVal", "byteVal", "shortVal", "charVal" };
       final Map<String, Object> values = Map.of(
