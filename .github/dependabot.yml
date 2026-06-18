@@ -1,0 +1,44 @@
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      quarkus:
+        patterns:
+          - "io.quarkus*"
+          - "io.smallrye*"
+      spring:
+        patterns:
+          - "org.springframework*"
+      testing:
+        patterns:
+          - "org.junit*"
+          - "org.assertj*"
+          - "org.mockito*"
+      lombok:
+        patterns:
+          - "org.projectlombok*"
+      benchmarks:
+        patterns:
+          - "org.openjdk.jmh*"
+      gradle-plugins:
+        patterns:
+          - "com.diffplug.spotless*"
+          - "pl.allegro.tech.build.axion-release*"
+          - "me.champeau.jmh*"
+          - "org.jreleaser*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
