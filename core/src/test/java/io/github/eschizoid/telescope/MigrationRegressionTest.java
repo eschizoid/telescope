@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -2143,7 +2144,7 @@ class MigrationRegressionTest {
   }
 
   @Nested
-  @DisplayName("DeepMap#applyForward TelescopeToTelescope path matches the same null-intermediate leniency")
+  @DisplayName("DeepMap#applyForward TelescopeToTelescope path writes null on empty source focus")
   class TelescopeToTelescopeForwardLeniency {
 
     @Test
@@ -2151,11 +2152,10 @@ class MigrationRegressionTest {
       "to(srcTelescope, tgtTelescope) over a source whose nested intermediate is null yields null on the target field"
     )
     void telescopeToTelescopeRowOverNullIntermediateShortCircuitsToNull() {
-      // The DeepMap forward path has two sibling call sites that read from a source telescope. The
-      // FromTelescopeTo arm (overrideTargetField) was made lenient earlier; this test pins the
-      // TelescopeToTelescope arm in applyForward, which previously kept the strict srcT.read(s)
-      // form and surfaced a NoSuchElementException when the source path navigated through a null
-      // nested bean field. Both arms now short-circuit to null in the target field.
+      // Forward mapping over a `to(srcTelescope, tgtTelescope)` row whose source path navigates
+      // through a null intermediate writes null to the target field instead of throwing
+      // NoSuchElementException — the lenient contract applies uniformly across the forward
+      // direction's source-read sites.
       final var mapper = Telescope.mapperForward(
         NullIntermediateOuter.class,
         NullIntermediateTargetDto.class,
@@ -2168,7 +2168,28 @@ class MigrationRegressionTest {
       );
       final var outer = new NullIntermediateOuter(); // outer.inner left null on purpose
       final var dto = assertDoesNotThrow(() -> mapper.forward(outer));
-      assertEquals(null, dto.getInnerName());
+      assertNull(dto.getInnerName());
+    }
+
+    @Test
+    @DisplayName(
+      "to(srcTelescope, tgtTelescope) over a source Affine miss (.whenPresent on empty Optional) yields null on the target field"
+    )
+    void telescopeToTelescopeRowOverAffineMissShortCircuitsToNull() {
+      // Forward mapping over a `to(srcTelescope, tgtTelescope)` row whose source path is an
+      // Affine (.whenPresent over an Optional) that resolves to empty yields null on the target
+      // field — same lenient contract as the null-intermediate case, different empty-focus cause.
+      final var mapper = Telescope.mapperForward(
+        OptionalSourceBean.class,
+        OptionalTargetBean.class,
+        Mapping.to(
+          Telescope.ofBean(OptionalSourceBean.class).whenPresent(OptionalSourceBean::getMaybeName),
+          Telescope.ofBean(OptionalTargetBean.class).field(OptionalTargetBean::getResolvedName)
+        )
+      );
+      final var src = new OptionalSourceBean(); // maybeName left at Optional.empty()
+      final var dto = assertDoesNotThrow(() -> mapper.forward(src));
+      assertNull(dto.getResolvedName());
     }
   }
 }

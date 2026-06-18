@@ -1034,7 +1034,7 @@ PR #144.
 
 ---
 
-### 11. `Telescope.merge()` requires `@SuppressWarnings("unchecked")` at every call site — Fixed (v1.0.5)
+### 11. `Telescope.merge()` requires `@SuppressWarnings("unchecked")` at every call site — Verified (v1.0.5)
 
 **Source:** Round 3 adopter feedback (v1.0.5 intake).
 
@@ -1070,10 +1070,15 @@ bloat — exactly the kind of thing that hurts the world-class-ergonomics mantra
 leaking the reference outside the method body), so `@SafeVarargs` is genuinely safe; applying it eliminates the
 unchecked warning at every call site without introducing a new API surface.
 
-**Resolution:** Added `@SafeVarargs` to the `Telescope.merge` and `Telescope.mergeBuilder` (and any other
-generic-varargs entry points where the same applies). Adopters' existing `Telescope.merge(...)` call sites no longer
-require `@SuppressWarnings("unchecked")` — the warning is suppressed at the library boundary where it can be statically
-audited rather than per-caller. The `mergeBuilder(...)` shape from the proposal is intentionally not added.
+**Resolution:** Verified `@SafeVarargs` is already in place at the merge entry point — `Telescope.merge` carries both
+`@SafeVarargs` and `@SuppressWarnings("varargs")` from prior work; the parallel `Telescope.all(Edit<S>...)` entry point
+is similarly annotated. Adopter call sites invoking `Telescope.merge(...)` directly should not require their own
+`@SuppressWarnings("unchecked")`. If a warning still surfaces in the field, the most likely cause is a generic-varargs
+site elsewhere in the chain (an `afterForward`, a `Sources` builder, a custom row factory) that lacks the annotation —
+file as a separate bug naming the offending entry point.
+
+The `mergeBuilder(...)` shape from the proposal is intentionally not added — the underlying warning concern is addressed
+at the library boundary, no parallel API needed.
 
 ---
 
@@ -1190,6 +1195,6 @@ forward direction through `<A>Bridge.BRIDGE`. Explicit `to()` rows become per-fi
 | Enh 8  | `Mapping.forward()` naming                                              | Low      | Fixed (v1.0.2)    |
 | Enh 9  | `mapperForward()` lenient by default                                    | High     | Fixed (v1.0.2)    |
 | Enh 10 | `:internal` test coverage hardening                                     | Medium   | Fixed (v1.0.2)    |
-| Enh 11 | `@SafeVarargs` on `Telescope.merge` (declined the `mergeBuilder` shape) | Low      | Fixed (v1.0.5)    |
+| Enh 11 | `@SafeVarargs` on `Telescope.merge` (declined the `mergeBuilder` shape) | Low      | Verified (v1.0.5) |
 | Enh 12 | `Telescope.fromMap()` nested map → sub-POJO composition                 | Medium   | Proposed (v1.0.6) |
 | Enh 13 | `Telescope.mapperForward()` auto-discover `@Bridge`-generated bridges   | High     | Proposed (v1.0.6) |
