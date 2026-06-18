@@ -47,8 +47,8 @@ that chains the generated bridge constant.
 ```kotlin
 // Gradle
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:1.0.4")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.4")
+    implementation("io.github.eschizoid:telescope-core:1.0.5")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")
 }
 ```
 
@@ -57,7 +57,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.0.4</version>
+  <version>1.0.5</version>
 </dependency>
 <!-- annotationProcessorPaths on maven-compiler-plugin -->
 <plugin>
@@ -68,7 +68,7 @@ dependencies {
       <path>
         <groupId>io.github.eschizoid</groupId>
         <artifactId>telescope-codegen</artifactId>
-        <version>1.0.4</version>
+        <version>1.0.5</version>
       </path>
     </annotationProcessorPaths>
   </configuration>

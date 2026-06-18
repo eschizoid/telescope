@@ -23,7 +23,7 @@ Quarkus extension ship as separate artifacts.
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-  implementation("io.github.eschizoid:telescope-core:1.0.4")
+  implementation("io.github.eschizoid:telescope-core:1.0.5")
 }
 ```
 
@@ -32,7 +32,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.0.4</version>
+  <version>1.0.5</version>
 </dependency>
 ```
 
@@ -465,8 +465,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:1.0.4")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.4")
+    implementation("io.github.eschizoid:telescope-core:1.0.5")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")
 }
 ```
 
@@ -476,7 +476,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.0.4</version>
+  <version>1.0.5</version>
 </dependency>
 
 <build>
@@ -489,7 +489,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>1.0.4</version>
+            <version>1.0.5</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
@@ -514,7 +514,7 @@ first**. Maven respects the declaration order of `<annotationProcessorPaths>`; G
   <path>
     <groupId>io.github.eschizoid</groupId>
     <artifactId>telescope-lombok</artifactId>
-    <version>1.0.4</version>
+    <version>1.0.5</version>
   </path>
 </annotationProcessorPaths>
 ```
@@ -522,8 +522,8 @@ first**. Maven respects the declaration order of `<annotationProcessorPaths>`; G
 ```kotlin
 dependencies {
   annotationProcessor("org.projectlombok:lombok:1.18.30")
-  annotationProcessor("io.github.eschizoid:telescope-lombok:1.0.4")
-  annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.4")
+  annotationProcessor("io.github.eschizoid:telescope-lombok:1.0.5")
+  annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")
 }
 ```
 
@@ -1281,8 +1281,8 @@ The return type degrades to a terminal `Telescope<R, Target>` when the target is
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope-core:1.0.4")
-annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.4")
+implementation("io.github.eschizoid:telescope-core:1.0.5")
+annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
