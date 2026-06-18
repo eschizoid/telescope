@@ -1070,12 +1070,11 @@ bloat — exactly the kind of thing that hurts the world-class-ergonomics mantra
 leaking the reference outside the method body), so `@SafeVarargs` is genuinely safe; applying it eliminates the
 unchecked warning at every call site without introducing a new API surface.
 
-**Resolution:** Verified `@SafeVarargs` is already in place at the merge entry point — `Telescope.merge` carries both
-`@SafeVarargs` and `@SuppressWarnings("varargs")` from prior work; the parallel `Telescope.all(Edit<S>...)` entry point
-is similarly annotated. Adopter call sites invoking `Telescope.merge(...)` directly should not require their own
-`@SuppressWarnings("unchecked")`. If a warning still surfaces in the field, the most likely cause is a generic-varargs
-site elsewhere in the chain (an `afterForward`, a `Sources` builder, a custom row factory) that lacks the annotation —
-file as a separate bug naming the offending entry point.
+**Resolution:** `Telescope.merge` carries both `@SafeVarargs` and `@SuppressWarnings("varargs")`; the parallel
+`Telescope.all(Edit<S>...)` entry point is similarly annotated. Adopter call sites invoking `Telescope.merge(...)`
+directly should not require their own `@SuppressWarnings("unchecked")`. If a warning still surfaces in the field, the
+most likely cause is a generic-varargs site elsewhere in the mapping pipeline (post-mapping hooks, sources builders,
+custom row factories) that lacks the annotation — file as a separate bug naming the offending entry point.
 
 The `mergeBuilder(...)` shape from the proposal is intentionally not added — the underlying warning concern is addressed
 at the library boundary, no parallel API needed.

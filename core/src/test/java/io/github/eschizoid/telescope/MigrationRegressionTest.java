@@ -2139,7 +2139,7 @@ class MigrationRegressionTest {
       );
       final var src = new OptionalSourceBean(); // maybeName left at Optional.empty()
       final var dto = assertDoesNotThrow(() -> mapper.forward(src));
-      assertEquals(null, dto.getResolvedName());
+      assertNull(dto.getResolvedName());
     }
   }
 
