@@ -10,7 +10,7 @@ jmh = "0.7.3"
 axion = "1.18.7"
 jreleaser = "1.19.0"
 jgit = "6.10.0.202406032230-r"
-lombok = "1.18.42"
+lombok = "1.18.46"
 
 [libraries]
 junitBom = { module = "org.junit:junit-bom", version.ref = "junit" }
