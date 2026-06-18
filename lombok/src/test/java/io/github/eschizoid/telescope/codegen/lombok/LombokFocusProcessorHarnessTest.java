@@ -7,25 +7,28 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * Direct unit tests for {@link LombokFocusProcessor#process}. Drives the processor through the
- * in-memory {@code ProcessorHarness} from {@code :codegen} test fixtures so it runs inside the
- * JUnit JVM (where JaCoCo can instrument it) rather than inside Gradle's {@code compileTestJava}
- * pipeline (where the sibling {@link LombokFocusProcessorTest} verifies the emitted code but the
- * processor itself runs in the javac process, opaque to coverage).
+ * In-process tests for {@link LombokFocusProcessor#process}. Drives the processor through the
+ * in-memory {@code ProcessorHarness} so each invocation runs inside the JUnit JVM — directly
+ * exercising the {@code process} body's branches (pending-set accumulation, the {@code
+ * ElementKind.CLASS} gatekeeper, the {@code processingOver} last-resort emit) against synthetic
+ * source code we control. Complements the file-based {@link LombokFocusProcessorTest}, which
+ * compiles real Lombok-annotated fixtures through Gradle's pipeline to verify end-to-end
+ * emitted-code behaviour.
  *
  * <p>Lombok's AST-patching processor isn't on the harness — it can't be, per the round-deferred
- * gotcha documented on the processor. Instead each fixture supplies its Lombok annotation
- * <em>plus</em> the getters/setters/builder Lombok would normally synthesise. {@code
- * LombokFocusProcessor} only needs {@code lombok.Data} / {@code @Value} / {@code @Builder} to
- * resolve as a type element (Lombok is on the test classpath) and a readable bean shape from {@code
- * Elements#getAllMembers} — both are satisfied without Lombok firing.
+ * gotcha documented on the processor. Each fixture supplies its Lombok annotation <em>plus</em> the
+ * getters/setters/builder Lombok would normally synthesise. {@code LombokFocusProcessor} only needs
+ * {@code lombok.Data} / {@code @Value} / {@code @Builder} to resolve as a type element (Lombok is
+ * on the test classpath) and a readable bean shape from {@code Elements#getAllMembers} — both
+ * satisfied without Lombok firing.
  */
-class LombokFocusProcessorUnitTest {
+class LombokFocusProcessorHarnessTest {
 
   @Nested
   @DisplayName("Emits navigators for each Lombok bean trigger annotation")
@@ -91,7 +94,9 @@ class LombokFocusProcessorUnitTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      assertNotNull(compilation.generated().get("demo.ValuePojoTelescope"));
+      final var navigator = compilation.generated().get("demo.ValuePojoTelescope");
+      assertNotNull(navigator);
+      assertTrue(navigator.contains("id"), () -> "expected 'id' accessor; got: " + navigator);
     }
 
     @Test
@@ -121,7 +126,44 @@ class LombokFocusProcessorUnitTest {
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      assertNotNull(compilation.generated().get("demo.BuilderPojoTelescope"));
+      final var navigator = compilation.generated().get("demo.BuilderPojoTelescope");
+      assertNotNull(navigator);
+      assertTrue(navigator.contains("label"), () -> "expected 'label' accessor; got: " + navigator);
+    }
+
+    @Test
+    @DisplayName("@Value with no setters and no builder() is rejected with the no-write-strategy diagnostic")
+    void bareValueIsRejectedAtEmit() {
+      // Pins the negative-case contract on the AbstractTelescopeProcessor emit path: a Lombok
+      // bean with all-final fields and no static builder() has no write strategy the processor
+      // can drive, and the emitter must reject with a precise diagnostic rather than producing
+      // a half-built navigator. Without this test the "reject" branch in emitBeanNavigator's
+      // write-strategy probe is unexercised in-process.
+      final var compilation = compile(
+        new LombokFocusProcessor(),
+        source(
+          "demo.BareValue",
+          """
+          package demo;
+          import lombok.Value;
+          @Value
+          public class BareValue {
+            String id;
+            public BareValue(String id) { this.id = id; }
+            public String getId() { return id; }
+          }
+          """
+        )
+      );
+
+      assertNull(
+        compilation.generated().get("demo.BareValueTelescope"),
+        () -> "bare @Value must NOT yield a navigator; saw " + compilation.generated().keySet()
+      );
+      assertTrue(
+        compilation.hasError("needs a static builder()"),
+        () -> "expected 'needs a static builder()' diagnostic; got: " + compilation.errorMessages()
+      );
     }
   }
 
@@ -151,8 +193,11 @@ class LombokFocusProcessorUnitTest {
         )
       );
 
-      // Either the source compiles cleanly with no navigator emitted, or it fails compilation on
-      // its own merits — but the harness reports no demo.NotAClassTelescope either way.
+      // Assert success() too: a regression that emitted a navigator and then tripped a downstream
+      // compile error would silently leave the generated() map empty, and the assertNull below
+      // would pass for the wrong reason. Requiring success() means the no-emit path is what's
+      // actually being exercised.
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       assertNull(
         compilation.generated().get("demo.NotAClassTelescope"),
         () -> "interface must NOT yield a navigator; saw " + compilation.generated().keySet()
@@ -214,7 +259,7 @@ class LombokFocusProcessorUnitTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       assertEquals(
-        java.util.Map.of(),
+        Map.of(),
         compilation.generated(),
         () -> "no Lombok annotation → no navigator; saw " + compilation.generated().keySet()
       );
