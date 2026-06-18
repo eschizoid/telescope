@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal.optics;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Optional;
@@ -62,6 +63,39 @@ class OpticLawsTest {
       final var once = userName.set(ALICE, "Bob");
       final var twice = userName.set(once, "Carol");
       assertEquals(userName.set(ALICE, "Carol"), twice);
+    }
+
+    @Test
+    @DisplayName("getOption: null source yields Optional.empty, non-null source preserves Optional.of(get(s))")
+    void getOptionNullSourceIsEmpty() {
+      assertEquals(Optional.empty(), userName.getOption(null));
+      assertEquals(Optional.of("Alice"), userName.getOption(ALICE));
+    }
+
+    @Test
+    @DisplayName(
+      "getOption: non-null source whose getter returns null surfaces NPE through Optional.of (lens-law violation signal)"
+    )
+    void getOptionNullGetterResultThrowsNpe() {
+      // Strict-Optional carrier: a Lens whose getter returns null on a non-null source is a
+      // lens-law violation; Optional.of(null) is the documented diagnostic for that case. A
+      // future refactor wrapping with Optional.ofNullable would silently swallow the signal.
+      final var nullableLens = Focus.<User, String>lens(u -> null, (u, n) -> u);
+      assertThrows(NullPointerException.class, () -> nullableLens.getOption(ALICE));
+    }
+
+    @Test
+    @DisplayName(
+      "getAll: null source yields empty stream; non-null source whose getter returns null yields Stream.of(null) (lenient carrier)"
+    )
+    void getAllCarrierLeniency() {
+      assertEquals(0L, userName.getAll(null).count());
+      final var nullableLens = Focus.<User, String>lens(u -> null, (u, n) -> u);
+      // Stream tolerates null elements where Optional does not — the asymmetry is documented on
+      // Lens#getOption / Lens#getAll. Drain via iterator to preserve the null element explicitly.
+      final var it = nullableLens.getAll(ALICE).iterator();
+      assertTrue(it.hasNext());
+      assertEquals(null, it.next());
     }
   }
 

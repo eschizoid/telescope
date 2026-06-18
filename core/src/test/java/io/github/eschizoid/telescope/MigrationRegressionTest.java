@@ -12,6 +12,8 @@ import io.github.eschizoid.telescope.focus.NullIntermediateInner;
 import io.github.eschizoid.telescope.focus.NullIntermediateOuter;
 import io.github.eschizoid.telescope.focus.NullIntermediateTargetDto;
 import io.github.eschizoid.telescope.focus.NullableIntegerSource;
+import io.github.eschizoid.telescope.focus.OptionalSourceBean;
+import io.github.eschizoid.telescope.focus.OptionalTargetBean;
 import io.github.eschizoid.telescope.focus.PrimitiveIntTarget;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.WriteHint;
@@ -2112,6 +2114,31 @@ class MigrationRegressionTest {
       // src.attemptCount left null
       final var dto = assertDoesNotThrow(() -> mapper.forward(src));
       assertEquals(0, dto.getAttemptCount()); // JLS default for int
+    }
+  }
+
+  @Nested
+  @DisplayName("DeepMap#overrideTargetField is lenient on a missing source focus regardless of cause")
+  class OverrideTargetFieldLeniency {
+
+    @Test
+    @DisplayName("forward(src) over an Affine source path that misses (empty Optional) yields null in the target field")
+    void affineMissOnSourcePathSubstitutesNull() {
+      // The lenient overrideTargetField intent covers two cases: a null intermediate inside a
+      // chained bean read AND an Affine miss further down the path (e.g. .whenPresent over an
+      // Optional.empty, .as over a non-matching sealed variant). The null-intermediate arm is
+      // covered above; this test pins the Affine-miss arm against accidental regression to read().
+      final var mapper = Telescope.mapperForward(
+        OptionalSourceBean.class,
+        OptionalTargetBean.class,
+        Mapping.to(
+          Telescope.ofBean(OptionalSourceBean.class).whenPresent(OptionalSourceBean::getMaybeName),
+          OptionalTargetBean::getResolvedName
+        )
+      );
+      final var src = new OptionalSourceBean(); // maybeName left at Optional.empty()
+      final var dto = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(null, dto.getResolvedName());
     }
   }
 }
