@@ -1182,21 +1182,6 @@ class BeansTest {
       Beans.writeBeanProperty(pojo, "id", "parent-id");
       assertEquals("parent-id", pojo.getId());
     }
-
-    @Test
-    @DisplayName("subsequent writes for the same (class, property) reuse the cached invoker (hot path)")
-    void cachesInvokerAcrossWrites() {
-      // The cache lookup at Beans.writeBeanProperty:
-      //   SETTER_INVOKERS.get(cls).computeIfAbsent(name, n -> buildSetterInvoker(...))
-      // means the first write per (class, property) builds the LMF invoker and subsequent writes
-      // dispatch directly. Smoke-test the cache by writing twice and asserting the second write
-      // takes effect — a regression where the second call rebuilt from scratch would still pass,
-      // but a regression where the cache misbehaved (e.g. wrong cached value) would not.
-      final var pojo = new NoArgSetters();
-      Beans.writeBeanProperty(pojo, "name", "first");
-      Beans.writeBeanProperty(pojo, "name", "second");
-      assertEquals("second", pojo.getName());
-    }
   }
 
   @Nested

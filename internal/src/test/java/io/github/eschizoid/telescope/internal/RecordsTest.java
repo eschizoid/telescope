@@ -2,7 +2,9 @@ package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -215,16 +217,14 @@ class RecordsTest {
     }
 
     @Test
-    @DisplayName("repeated info() calls for the same class reuse the cached RecordInfo (no re-LMF-build)")
-    void infoCacheReusesAcrossCalls() {
-      // Smoke test: calling Records.read twice for different fields uses the same cached
-      // RecordInfo internally. A regression where the cache misfired (e.g. rebuilt per call)
-      // would still pass functionally — but a regression where the cache held stale info for
-      // a different class would fail this round-trip across two distinct record types in the
-      // same test.
-      assertEquals("alice", Records.read(new User("alice", 30), "name"));
-      assertEquals("acc-1", Records.read(new Account("acc-1", new User("alice", 30), List.of()), "id"));
-      assertEquals(30, Records.read(new User("bob", 30), "age"));
+    @DisplayName("info() returns the same RecordInfo instance across calls — per-class memoisation, no rebuild")
+    void infoCacheReturnsSameInstance() {
+      // The package-private info() method is the single cache entry point — calling it twice for
+      // the same class must return the very same RecordInfo (LMF-built readers + ctorFn) instead
+      // of rebuilding. A regression here would silently double the per-read overhead.
+      assertSame(Records.info(User.class), Records.info(User.class));
+      // And the cache must hold one entry per class — a second class doesn't collide.
+      assertNotEquals(Records.info(User.class), Records.info(Account.class));
     }
   }
 }

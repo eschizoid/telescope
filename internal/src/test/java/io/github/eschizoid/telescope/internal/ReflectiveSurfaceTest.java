@@ -10,6 +10,8 @@ import java.lang.reflect.ParameterizedType;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -151,13 +153,24 @@ class ReflectiveSurfaceTest {
   class HintAwareBean {
 
     @Test
-    @DisplayName("hint map drives the construct path: a SettersWriter hint produces a populated instance")
-    void hintWriterDrivesConstruct() {
-      // SettersWriter is a sealed-interface implementor so we can't use a lambda — but we can
-      // verify the hint took precedence over autoWriter by confirming the constructed instance
-      // is exactly the SimpleBean shape the hint produces.
-      final Map<Class<?>, Beans.BeanWriter<?>> hints = Map.of(SimpleBean.class, Beans.settersWriter(SimpleBean.class));
-      final var refl = Reflective.beansWithHints(hints, null);
+    @DisplayName(
+      "hint map is consulted before falling through to autoWriter — wrapping HashMap records the get() probe"
+    )
+    void hintMapIsConsultedBeforeAutoWriter() {
+      // The hint payload alone can't distinguish "hint fired" from "autoWriter happened to pick the
+      // same writer" — for SimpleBean both routes end at SettersWriter. Wrap the HashMap so we can
+      // observe the lookup directly: if the resolution path consults the hint map at all, our
+      // tracking get() runs and the sentinel flips.
+      final var consulted = new AtomicBoolean(false);
+      final var tracking = new HashMap<Class<?>, Beans.BeanWriter<?>>() {
+        @Override
+        public Beans.BeanWriter<?> get(final Object key) {
+          if (SimpleBean.class.equals(key)) consulted.set(true);
+          return super.get(key);
+        }
+      };
+      tracking.put(SimpleBean.class, Beans.settersWriter(SimpleBean.class));
+      final var refl = Reflective.beansWithHints(tracking, null);
 
       final var built = (SimpleBean) refl.construct(SimpleBean.class, name ->
         switch (name) {
@@ -167,24 +180,32 @@ class ReflectiveSurfaceTest {
         }
       );
 
+      assertTrue(consulted.get(), "hint map must be consulted before fallthrough to autoWriter");
       assertEquals("dave", built.getName());
       assertEquals(19, built.getAge());
     }
 
     @Test
-    @DisplayName("default factory fires for non-hinted classes when no hint is present (lazy resolution)")
-    void defaultFactoryFiresForUnhintedClasses() {
-      // Track factory-call count to prove the lazy path is reached — the factory must be invoked
-      // when no hint covers the class. (The lambda runs at first encounter; if the result is
-      // memoised internally the count stays at 1 across multiple construct() calls.)
+    @DisplayName(
+      "default factory is consulted on every construct() call for unhinted classes (no per-class memoisation today)"
+    )
+    void defaultFactoryFiresOncePerConstructCall() {
+      // Pins the actual (non-memoised) resolution behaviour at the constructBeanWithHints call
+      // site: each construct() pass for an unhinted target consults the default factory fresh.
+      // If a future refactor adds caching here, this test fires — the change should be a
+      // deliberate decision, not silent drift. (The Beans.autoWriter ladder underneath does
+      // memoise per class on its own, so per-call factory invocation doesn't rebuild LMF sites
+      // every time — the cost is just the factory function call.)
       final var factoryCalls = new int[] { 0 };
       final var refl = Reflective.beansWithHints(new HashMap<>(), cls -> {
         factoryCalls[0]++;
         return Beans.settersWriter(SimpleBean.class);
       });
 
-      refl.construct(SimpleBean.class, name -> name.equals("name") ? "x" : 1);
-      assertTrue(factoryCalls[0] >= 1, "factory must fire at least once for the unhinted class");
+      refl.construct(SimpleBean.class, name -> name.equals("name") ? "first" : 1);
+      refl.construct(SimpleBean.class, name -> name.equals("name") ? "second" : 2);
+
+      assertEquals(2, factoryCalls[0], "default factory fires once per construct() call for unhinted classes");
     }
   }
 
@@ -265,19 +286,24 @@ class ReflectiveSurfaceTest {
     void holderConstructorTakesPriorityOverReflectiveBuild() {
       // Stand-in for a codegen FieldOptics' bound construct(Function<String, Object>): if the
       // caller passes a non-null holderConstructor, positionalBuilder must invoke it instead of
-      // going through Reflective#construct. Pins the contract by routing the result through a
-      // sentinel record-builder lambda that's distinct from the canonical ctor's behaviour.
+      // going through Reflective#construct. Pins the contract two ways: the holder builds a
+      // SimpleUser whose values are distinct from what the canonical ctor would produce from
+      // the input array, AND a call counter inside the holder lambda must increment once per
+      // builder.apply — so a regression silently bypassing the holder would fail both assertions.
+      final var holderInvocations = new AtomicInteger(0);
       final Function<String, Object> sentinel = name ->
         switch (name) {
           case "name" -> "via-holder";
           case "age" -> 99;
           default -> null;
         };
-      final var builder = Reflective.RECORDS.<SimpleUser>positionalBuilder(SimpleUser.class, Map.of(), ignored ->
-        new SimpleUser((String) sentinel.apply("name"), (Integer) sentinel.apply("age"))
-      );
+      final var builder = Reflective.RECORDS.<SimpleUser>positionalBuilder(SimpleUser.class, Map.of(), ignored -> {
+        holderInvocations.incrementAndGet();
+        return new SimpleUser((String) sentinel.apply("name"), (Integer) sentinel.apply("age"));
+      });
       final SimpleUser built = builder.apply(new Object[] { "ignored", 0 });
       assertEquals(new SimpleUser("via-holder", 99), built);
+      assertEquals(1, holderInvocations.get(), "holderConstructor must have been invoked exactly once");
     }
   }
 }
