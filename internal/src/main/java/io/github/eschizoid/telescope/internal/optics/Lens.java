@@ -76,7 +76,7 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
    *       lookup but do NOT null-guard primitive parameters/fields/builder setters. A null off-path
    *       primitive surfaces as an NPE: {@code ConstructorWriter} / {@code FieldsWriter} wrap it
    *       with their "Failed to construct" / "Failed to set field" diagnostic; {@code
-   *       BuilderWriter} propagates it raw (intentional dispatch-time-symmetry — see {@code
+   *       BuilderWriter} propagates it raw (intentional dispatch-time symmetry — see {@code
    *       BuilderWriter#construct}). Either way the failure is loud, not silent. For null-tolerant
    *       N-hop writes pick the SETTERS strategy (the {@code autoWriter} default) or model the
    *       target with reference-typed fields.
