@@ -3,11 +3,13 @@ package io.github.eschizoid.telescope;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.annotations.BeanFocus;
 import io.github.eschizoid.telescope.beans.BridgePojoA;
 import io.github.eschizoid.telescope.beans.BridgePojoABridge;
 import io.github.eschizoid.telescope.beans.BridgePojoB;
@@ -21,7 +23,14 @@ import io.github.eschizoid.telescope.focus.NullIntermediateTargetDto;
 import io.github.eschizoid.telescope.focus.NullableIntegerSource;
 import io.github.eschizoid.telescope.focus.OptionalSourceBean;
 import io.github.eschizoid.telescope.focus.OptionalTargetBean;
+import io.github.eschizoid.telescope.focus.PlainChainLeaf;
+import io.github.eschizoid.telescope.focus.PlainChainMid;
+import io.github.eschizoid.telescope.focus.PlainChainOuter;
 import io.github.eschizoid.telescope.focus.PrimitiveIntTarget;
+import io.github.eschizoid.telescope.focus.WriteChainLeaf;
+import io.github.eschizoid.telescope.focus.WriteChainMid;
+import io.github.eschizoid.telescope.focus.WriteChainOuter;
+import io.github.eschizoid.telescope.focus.WriteChainRoot;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serial;
@@ -2097,6 +2106,133 @@ class MigrationRegressionTest {
       assertTrue(
         message != null && message.contains("getInner"),
         () -> "expected message to name the first-hop method 'getInner', got: " + message
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName(
+    "Null intermediate WRITE through @BeanFocus codegen — multi-hop target path auto-constructs nested intermediates"
+  )
+  class NullIntermediateWriteCodegenPath {
+
+    @Test
+    @DisplayName(
+      "mapperForward writing into a 3-hop @BeanFocus target path materialises every null nested intermediate so the leaf value is not lost"
+    )
+    void forwardIntoDeepNullNestedIntermediateAutoConstructsEveryHop() {
+      // mapperForward builds a fresh WriteChainOuter from scratch; both nested mid and leaf are
+      // null at construction time. The to(...) row claims a 3-hop write path outer.mid.leaf.value.
+      // Every nested intermediate must materialise so the leaf write lands — the descent must not
+      // NPE on a null intermediate and must not silently drop the leaf when the intermediate is
+      // beyond the first hop. The @BeanFocus codegen path is exercised here.
+      final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
+      final var tgtLeaf = Telescope.ofBean(WriteChainOuter.class)
+        .field(WriteChainOuter::getMid)
+        .field(WriteChainMid::getLeaf)
+        .field(WriteChainLeaf::getValue);
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateInner.class,
+        WriteChainOuter.class,
+        Mapping.to(srcLeaf, tgtLeaf),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new NullIntermediateInner();
+      src.setName("alice");
+      final var built = mapper.forward(src);
+      assertNotNull(built, "mapper.forward must return a built target, not null");
+      assertNotNull(built.getMid(), "first-hop intermediate must be auto-constructed");
+      assertNotNull(built.getMid().getLeaf(), "second-hop intermediate must be auto-constructed transitively");
+      assertEquals(
+        "alice",
+        built.getMid().getLeaf().getValue(),
+        "leaf value must round-trip through every auto-constructed intermediate"
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "mapperForward writing into a 4-hop @BeanFocus target path materialises every null intermediate — auto-construction is N-hop, not 3-hop"
+    )
+    void forwardIntoFourHopNullIntermediateAutoConstructsEveryHop() {
+      // Sanity guard: a depth-2 fix would happen to pass the 3-hop test if the inductive step
+      // covered only the second-to-leaf hop. Adding one more level of nesting (root.outer.mid.
+      // leaf.value) pins the N-hop generalisation — every captured-method-reference lens along
+      // the descent must tolerate a null source by allocating a fresh focus, with no maximum
+      // depth.
+      final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
+      final var tgtLeaf = Telescope.ofBean(WriteChainRoot.class)
+        .field(WriteChainRoot::getOuter)
+        .field(WriteChainOuter::getMid)
+        .field(WriteChainMid::getLeaf)
+        .field(WriteChainLeaf::getValue);
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateInner.class,
+        WriteChainRoot.class,
+        Mapping.to(srcLeaf, tgtLeaf),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new NullIntermediateInner();
+      src.setName("bob");
+      final var built = mapper.forward(src);
+      assertNotNull(built, "mapper.forward must return a built target");
+      assertNotNull(built.getOuter(), "root.outer must be auto-constructed");
+      assertNotNull(built.getOuter().getMid(), "root.outer.mid must be auto-constructed");
+      assertNotNull(built.getOuter().getMid().getLeaf(), "root.outer.mid.leaf must be auto-constructed");
+      assertEquals(
+        "bob",
+        built.getOuter().getMid().getLeaf().getValue(),
+        "leaf value must round-trip through all four auto-constructed intermediates"
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "mapperForward writing into a 3-hop UN-annotated POJO target path materialises every null intermediate via the reflective bean lens"
+    )
+    void forwardIntoPlainBeanChainAutoConstructsEveryHop() {
+      // Non-@BeanFocus shape: the lens for each hop is built by Beans.lens, not the codegen
+      // holder. Pins that the null-tolerant Lens.modify default applies on the reflective bean
+      // path too — auto-construction is uniform across the holder and non-holder paths. Each hop
+      // type has a no-arg ctor + reference-typed off-path fields, so autoWriter resolves to
+      // SettersWriter, the strategy whose construct path null-guards primitive fields and is the
+      // documented null-tolerant write path for multi-hop bean targets.
+      // Pre-condition guard: no @BeanFocus on any chain class, so MetadataHolderProbe finds no
+      // holder and BeanFieldOptics.lensFor falls through to Beans.lens — the reflective path
+      // this test exists to exercise. Future-proofs against a fixture being annotated by mistake.
+      assertNull(
+        PlainChainOuter.class.getAnnotation(BeanFocus.class),
+        "PlainChainOuter must remain un-annotated so this test routes through Beans.lens"
+      );
+      assertNull(
+        PlainChainMid.class.getAnnotation(BeanFocus.class),
+        "PlainChainMid must remain un-annotated so the mid hop also takes the Beans.lens path"
+      );
+      assertNull(
+        PlainChainLeaf.class.getAnnotation(BeanFocus.class),
+        "PlainChainLeaf must remain un-annotated so the leaf hop also takes the Beans.lens path"
+      );
+      final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
+      final var tgtLeaf = Telescope.ofBean(PlainChainOuter.class)
+        .field(PlainChainOuter::getMid)
+        .field(PlainChainMid::getLeaf)
+        .field(PlainChainLeaf::getValue);
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateInner.class,
+        PlainChainOuter.class,
+        Mapping.to(srcLeaf, tgtLeaf),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new NullIntermediateInner();
+      src.setName("carol");
+      final var built = mapper.forward(src);
+      assertNotNull(built, "mapper.forward must return a built target");
+      assertNotNull(built.getMid(), "first-hop intermediate must be auto-constructed");
+      assertNotNull(built.getMid().getLeaf(), "second-hop intermediate must be auto-constructed transitively");
+      assertEquals(
+        "carol",
+        built.getMid().getLeaf().getValue(),
+        "leaf value must round-trip through every auto-constructed intermediate on the reflective bean path"
       );
     }
   }
