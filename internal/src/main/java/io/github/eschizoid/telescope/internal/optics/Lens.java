@@ -47,9 +47,23 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
   @Override
   S set(S source, A value);
 
+  /**
+   * Null-source write semantics: {@code modify(null, f)} skips the strict {@code get(null)} call
+   * that would NPE through the captured method-reference receiver and instead invokes {@code
+   * f.apply(null)}, then writes the result through {@code set(null, value)}. This lets composed
+   * write paths descend through a null intermediate without crashing — the codegen-emitted
+   * holder-lens setter (and {@code Beans.lens} / {@code Records.fieldLens} setters) all rebuild a
+   * fresh focus when called with a null source, so the write chain reconstructs every nested hop
+   * the structural Iso never seeded. Strict direct {@code .get(null)} on the atomic Lens stays
+   * strict (consistent with {@link #getOption} which preserves the strict {@code Optional.of}
+   * carrier on non-null sources whose getter returns {@code null}). The asymmetry is intentional:
+   * reads of a missing intermediate should surface, writes through a missing intermediate should
+   * construct the path so the leaf value lands.
+   */
   @Override
   default S modify(final S source, final Function<? super A, ? extends A> f) {
-    return set(source, f.apply(get(source)));
+    final A current = source == null ? null : get(source);
+    return set(source, f.apply(current));
   }
 
   /**

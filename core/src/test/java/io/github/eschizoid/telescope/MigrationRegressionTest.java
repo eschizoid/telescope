@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -22,6 +23,10 @@ import io.github.eschizoid.telescope.focus.NullableIntegerSource;
 import io.github.eschizoid.telescope.focus.OptionalSourceBean;
 import io.github.eschizoid.telescope.focus.OptionalTargetBean;
 import io.github.eschizoid.telescope.focus.PrimitiveIntTarget;
+import io.github.eschizoid.telescope.focus.WriteChainLeaf;
+import io.github.eschizoid.telescope.focus.WriteChainMid;
+import io.github.eschizoid.telescope.focus.WriteChainOuter;
+import io.github.eschizoid.telescope.focus.WriteChainRoot;
 import io.github.eschizoid.telescope.mapping.Mapping;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.io.Serial;
@@ -2097,6 +2102,86 @@ class MigrationRegressionTest {
       assertTrue(
         message != null && message.contains("getInner"),
         () -> "expected message to name the first-hop method 'getInner', got: " + message
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName(
+    "Null intermediate WRITE through @BeanFocus codegen — multi-hop target path auto-constructs nested intermediates"
+  )
+  class NullIntermediateWriteCodegenPath {
+
+    @Test
+    @DisplayName(
+      "mapperForward writing into a 3-hop @BeanFocus target path materialises every null nested intermediate so the leaf value is not lost"
+    )
+    void forwardIntoDeepNullNestedIntermediateAutoConstructsEveryHop() {
+      // mapperForward builds a fresh WriteChainOuter from scratch; both nested mid and
+      // leaf are null at construction time. The to(...) row claims a 3-hop write path
+      // outer.mid.leaf.value. The non-holder structural-Iso path handles this by recursive
+      // populateIso descent that seeds a defaultAllocatorIso at every hop claimed transitively by
+      // telescope writes. The holder-backed path (triggered by @BeanFocus on every node in the
+      // chain) must preserve the same construction-seeding all the way down — not just at the
+      // first hop — so the descent does not NPE on Lens.modify and does not silently drop the
+      // leaf write.
+      final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
+      final var tgtLeaf = Telescope.ofBean(WriteChainOuter.class)
+        .field(WriteChainOuter::getMid)
+        .field(WriteChainMid::getLeaf)
+        .field(WriteChainLeaf::getValue);
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateInner.class,
+        WriteChainOuter.class,
+        Mapping.to(srcLeaf, tgtLeaf),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new NullIntermediateInner();
+      src.setName("alice");
+      final var built = mapper.forward(src);
+      assertNotNull(built, "mapper.forward must return a built target, not null");
+      assertNotNull(built.getMid(), "first-hop intermediate must be auto-constructed");
+      assertNotNull(built.getMid().getLeaf(), "second-hop intermediate must be auto-constructed transitively");
+      assertEquals(
+        "alice",
+        built.getMid().getLeaf().getValue(),
+        "leaf value must round-trip through every auto-constructed intermediate"
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "mapperForward writing into a 4-hop @BeanFocus target path materialises every null intermediate — auto-construction is N-hop, not 3-hop"
+    )
+    void forwardIntoFourHopNullIntermediateAutoConstructsEveryHop() {
+      // Sanity guard: a depth-2 fix would happen to pass the 3-hop test if the inductive step
+      // covered only the second-to-leaf hop. Adding one more level of nesting (root.outer.mid.
+      // leaf.value) pins the N-hop generalisation — every captured-method-reference lens along
+      // the descent must tolerate a null source by allocating a fresh focus, with no maximum
+      // depth.
+      final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
+      final var tgtLeaf = Telescope.ofBean(WriteChainRoot.class)
+        .field(WriteChainRoot::getOuter)
+        .field(WriteChainOuter::getMid)
+        .field(WriteChainMid::getLeaf)
+        .field(WriteChainLeaf::getValue);
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateInner.class,
+        WriteChainRoot.class,
+        Mapping.to(srcLeaf, tgtLeaf),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new NullIntermediateInner();
+      src.setName("bob");
+      final var built = mapper.forward(src);
+      assertNotNull(built, "mapper.forward must return a built target");
+      assertNotNull(built.getOuter(), "root.outer must be auto-constructed");
+      assertNotNull(built.getOuter().getMid(), "root.outer.mid must be auto-constructed");
+      assertNotNull(built.getOuter().getMid().getLeaf(), "root.outer.mid.leaf must be auto-constructed");
+      assertEquals(
+        "bob",
+        built.getOuter().getMid().getLeaf().getValue(),
+        "leaf value must round-trip through all four auto-constructed intermediates"
       );
     }
   }

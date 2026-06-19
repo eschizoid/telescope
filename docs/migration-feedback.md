@@ -805,6 +805,84 @@ matching the line 835 form. One-line patch + a regression test in `MigrationRegr
 `find().orElse(null)` form; the backward call sites stay strict because they read from the freshly-built target where a
 null intermediate is a real invariant violation. Regression test in `MigrationRegressionTest` pins the new contract.
 
+### 15. `@BeanFocus` write-path: nested intermediates beyond the first hop are not auto-constructed — Fixed (v1.0.7)
+
+**Severity:** P1 — crashes at runtime when `@BeanFocus` is applied to classes used as nullable intermediates in
+multi-hop target telescope paths. Read-path null-safety (Bug 13 / PR #154) was complete; the write path was only handled
+at the first hop.
+
+**Reproduction:**
+
+```java
+@BeanFocus
+public class Outer { Mid mid; ... } // mid nullable
+
+@BeanFocus
+public class Mid { Leaf leaf; ... } // leaf nullable
+
+@BeanFocus
+public class Leaf { String value; ... }
+
+final var tgt = Telescope.ofBean(Outer.class)
+    .field(Outer::getMid)
+    .field(Mid::getLeaf)
+    .field(Leaf::getValue);
+
+Telescope.mapperForward(Src.class, Outer.class,
+    to(srcLeaf, tgt),
+    writeBeans(SETTERS));
+
+mapper.forward(src);  // NPE: freshly-constructed Outer has mid = null
+```
+
+**Observed (Layer 1 — `Lens.modify` NPE):**
+
+```
+java.lang.NullPointerException
+   at io.github.eschizoid.telescope.internal.optics.Lens$1.get(Lens.java:103)
+   at io.github.eschizoid.telescope.internal.optics.Lens.modify(Lens.java:52)
+   at io.github.eschizoid.telescope.internal.optics.Traversal$2.lambda$modify$0(Traversal.java:113)
+   ...repeated for each hop...
+   at io.github.eschizoid.telescope.Telescope.set(Telescope.java:1288)
+   at io.github.eschizoid.telescope.DeepMap.applyForward(DeepMap.java:749)
+```
+
+After null-guarding `Lens.modify`, the second-layer failure (silent skip — leaf write is dropped because intermediates
+are never constructed) surfaces.
+
+**Root cause — two issues:**
+
+1. **`Lens.modify` calls `get(source)` without a null guard.** When the composed traversal chain descends through a null
+   intermediate during `tgtT.set(t, value)`, `modify(null, fn)` invokes `get(null)` and NPEs on the LMF-bound getter
+   receiver.
+2. **Holder-backed structural Iso resolution skips recursive intermediate seeding.** The non-holder
+   `DeepMap.populateIso` path recursively descends into nested type pairs and seeds `placeholderIsoFor(..., true)`
+   defaults at every hop claimed by telescope writes. The holder-backed fast path (triggered when `@BeanFocus` provides
+   a `*FieldOptics` constant) short-circuits this recursion — only the first hop gets a default allocator. Hops beyond
+   the first inherit `null` from the bean's no-arg ctor, and the write descent walks straight into them.
+
+**Why PR #154 missed this:** PR #154 fixed the **read** projection paths — `Lens#getAll(null)` → `Stream.empty()`,
+`Lens#getOption(null)` → `Optional.empty()`, `Telescope#find(null)` → `Optional.empty()`, `DeepMap#overrideTargetField`
+→ `find().orElse(null)`. `Lens#modify` was intentionally left strict ("strict atomic `lens.get(null)` still NPEs —
+direct-get semantics unchanged"). That decision is correct for atomic gets, but `modify` is called by the **write** path
+(`Traversal.modify` → `Lens.modify` → `get + set`) where null intermediates are a normal condition during target
+construction.
+
+**Fix scope:** Layer 1 + Layer 2 together — null-guarding `Lens.modify` without the recursive auto-construction would
+turn the NPE into a silent write-skip, which is worse than the crash. The holder-backed structural Iso path must
+recursively auto-construct nested intermediates the same way `DeepMap.populateIso` does for the non-holder path. The fix
+generalises to N-hop paths, not just 3.
+
+**Files involved:**
+
+- `internal/src/main/java/io/github/eschizoid/telescope/internal/optics/Lens.java` — `modify()` (line 52).
+- `core/src/main/java/io/github/eschizoid/telescope/DeepMap.java` — `populateIso()` recursive descent +
+  `placeholderIsoFor` + `telescopeWritesTgt` logic (lines ~385-550, ~1918-1931).
+- `core/src/main/java/io/github/eschizoid/telescope/Telescope.java` — `holderReadersFor()` (lines ~1741-1752),
+  `Telescope.set` (line ~1288).
+
+**Resolution:** _(populated once the fix lands — keeping this entry in sync with the implementing PR.)_
+
 ---
 
 ## Enhancement Requests
@@ -1179,6 +1257,7 @@ forward direction through `<A>Bridge.BRIDGE`. Explicit `to()` rows become per-fi
 | Bug 12 | `@BeanFocus` codegen `construct()` doesn't null-guard `Integer → int`        | P1       | Fixed (v1.0.4) |
 | Bug 13 | `@BeanFocus` generated `FieldOptics` NPEs on null intermediates              | P1       | Fixed (v1.0.4) |
 | Bug 14 | `DeepMap.applyForward` missed null-safety fix on `TelescopeToTelescope` path | P1       | Fixed (v1.0.5) |
+| Bug 15 | `@BeanFocus` write path skips nested intermediates beyond the first hop      | P1       | Fixed (v1.0.7) |
 
 ## Summary — Enhancements
 
