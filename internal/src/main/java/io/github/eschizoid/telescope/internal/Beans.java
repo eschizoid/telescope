@@ -857,10 +857,9 @@ public final class Beans {
         return writer.construct(names, n -> n.equals(property) ? value : readForRebuild(source, n));
       }
 
-      @Override
-      public P modify(final P source, final Function<? super A, ? extends A> f) {
-        return set(source, f.apply(get(source)));
-      }
+      // modify inherits the Lens default — the writer rebuilds a fresh pojo on null source
+      // (readForRebuild + readProperty both short-circuit to null), so the null-tolerant default
+      // applies cleanly here without a custom override.
 
       // Mirrors the get() fast-path for the off-path values the writer needs to copy over.
       // Off-path reads are called once per non-focused property per set/modify, so they benefit

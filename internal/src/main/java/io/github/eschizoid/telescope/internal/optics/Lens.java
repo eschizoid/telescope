@@ -50,15 +50,33 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
   /**
    * Null-source write semantics: {@code modify(null, f)} skips the strict {@code get(null)} call
    * that would NPE through the captured method-reference receiver and instead invokes {@code
-   * f.apply(null)}, then writes the result through {@code set(null, value)}. This lets composed
-   * write paths descend through a null intermediate without crashing — the codegen-emitted
-   * holder-lens setter (and {@code Beans.lens} / {@code Records.fieldLens} setters) all rebuild a
-   * fresh focus when called with a null source, so the write chain reconstructs every nested hop
-   * the structural Iso never seeded. Strict direct {@code .get(null)} on the atomic Lens stays
-   * strict (consistent with {@link #getOption} which preserves the strict {@code Optional.of}
-   * carrier on non-null sources whose getter returns {@code null}). The asymmetry is intentional:
-   * reads of a missing intermediate should surface, writes through a missing intermediate should
-   * construct the path so the leaf value lands.
+   * f.apply(null)} then delegates to {@code set(null, value)}. The end-to-end behaviour of {@code
+   * modify(null, f)} therefore reduces to the concrete lens's {@code set(null, value)} contract;
+   * this default does not itself fabricate a focus.
+   *
+   * <p>Behavior by lens shape:
+   *
+   * <ul>
+   *   <li>{@code @BeanFocus} codegen-emitted holder lens and {@code Beans.lens(Class, String,
+   *       BeanWriter)} — {@code set(null, value)} rebuilds a fresh focus (the writer's construct +
+   *       setter path tolerates a null source). Composed write paths through null intermediates
+   *       auto-construct every hop the structural Iso has not already seeded; this is the path the
+   *       bean-side multi-hop {@code mapperForward} writes rely on.
+   *   <li>{@code Records.fieldLens} (both string and class-aware overloads) — overrides {@code
+   *       modify} with an explicit {@code null}-source short-circuit returning {@code null}; this
+   *       default never runs and the null-source write surfaces as a missing-leaf result rather
+   *       than a fabricated record.
+   *   <li>{@code @Focus} canonical-ctor codegen lens — the generated setter reads sibling
+   *       components off the source ({@code (s, v) -> new R(v, s.other())}); {@code set(null,
+   *       value)} NPEs on the off-path read. Record write paths through a null intermediate
+   *       therefore still crash loudly at the missing hop, by design.
+   * </ul>
+   *
+   * <p>Strict direct {@code .get(null)} on the atomic Lens stays strict (consistent with {@link
+   * #getOption} which preserves the strict {@code Optional.of} carrier on non-null sources whose
+   * getter returns {@code null}). The asymmetry is intentional: reads of a missing intermediate
+   * should surface, writes through a missing intermediate should construct the path when the focus
+   * type's setter can support it.
    */
   @Override
   default S modify(final S source, final Function<? super A, ? extends A> f) {

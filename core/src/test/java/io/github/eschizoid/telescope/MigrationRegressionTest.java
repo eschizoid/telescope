@@ -22,6 +22,9 @@ import io.github.eschizoid.telescope.focus.NullIntermediateTargetDto;
 import io.github.eschizoid.telescope.focus.NullableIntegerSource;
 import io.github.eschizoid.telescope.focus.OptionalSourceBean;
 import io.github.eschizoid.telescope.focus.OptionalTargetBean;
+import io.github.eschizoid.telescope.focus.PlainChainLeaf;
+import io.github.eschizoid.telescope.focus.PlainChainMid;
+import io.github.eschizoid.telescope.focus.PlainChainOuter;
 import io.github.eschizoid.telescope.focus.PrimitiveIntTarget;
 import io.github.eschizoid.telescope.focus.WriteChainLeaf;
 import io.github.eschizoid.telescope.focus.WriteChainMid;
@@ -2117,14 +2120,11 @@ class MigrationRegressionTest {
       "mapperForward writing into a 3-hop @BeanFocus target path materialises every null nested intermediate so the leaf value is not lost"
     )
     void forwardIntoDeepNullNestedIntermediateAutoConstructsEveryHop() {
-      // mapperForward builds a fresh WriteChainOuter from scratch; both nested mid and
-      // leaf are null at construction time. The to(...) row claims a 3-hop write path
-      // outer.mid.leaf.value. The non-holder structural-Iso path handles this by recursive
-      // populateIso descent that seeds a defaultAllocatorIso at every hop claimed transitively by
-      // telescope writes. The holder-backed path (triggered by @BeanFocus on every node in the
-      // chain) must preserve the same construction-seeding all the way down — not just at the
-      // first hop — so the descent does not NPE on Lens.modify and does not silently drop the
-      // leaf write.
+      // mapperForward builds a fresh WriteChainOuter from scratch; both nested mid and leaf are
+      // null at construction time. The to(...) row claims a 3-hop write path outer.mid.leaf.value.
+      // Every nested intermediate must materialise so the leaf write lands — the descent must not
+      // NPE on a null intermediate and must not silently drop the leaf when the intermediate is
+      // beyond the first hop. The @BeanFocus codegen path is exercised here.
       final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
       final var tgtLeaf = Telescope.ofBean(WriteChainOuter.class)
         .field(WriteChainOuter::getMid)
@@ -2182,6 +2182,38 @@ class MigrationRegressionTest {
         "bob",
         built.getOuter().getMid().getLeaf().getValue(),
         "leaf value must round-trip through all four auto-constructed intermediates"
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "mapperForward writing into a 3-hop UN-annotated POJO target path materialises every null intermediate via the reflective bean lens"
+    )
+    void forwardIntoPlainBeanChainAutoConstructsEveryHop() {
+      // Non-@BeanFocus shape: the lens for each hop is built by Beans.lens, not the codegen
+      // holder. Pins that the null-tolerant Lens.modify default applies on the reflective bean
+      // path too — auto-construction is uniform across the holder and non-holder paths.
+      final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
+      final var tgtLeaf = Telescope.ofBean(PlainChainOuter.class)
+        .field(PlainChainOuter::getMid)
+        .field(PlainChainMid::getLeaf)
+        .field(PlainChainLeaf::getValue);
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateInner.class,
+        PlainChainOuter.class,
+        Mapping.to(srcLeaf, tgtLeaf),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new NullIntermediateInner();
+      src.setName("carol");
+      final var built = mapper.forward(src);
+      assertNotNull(built, "mapper.forward must return a built target");
+      assertNotNull(built.getMid(), "first-hop intermediate must be auto-constructed");
+      assertNotNull(built.getMid().getLeaf(), "second-hop intermediate must be auto-constructed transitively");
+      assertEquals(
+        "carol",
+        built.getMid().getLeaf().getValue(),
+        "leaf value must round-trip through every auto-constructed intermediate on the reflective bean path"
       );
     }
   }
