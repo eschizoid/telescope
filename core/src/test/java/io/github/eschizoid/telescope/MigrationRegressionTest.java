@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.annotations.BeanFocus;
 import io.github.eschizoid.telescope.beans.BridgePojoA;
 import io.github.eschizoid.telescope.beans.BridgePojoABridge;
 import io.github.eschizoid.telescope.beans.BridgePojoB;
@@ -2192,7 +2193,17 @@ class MigrationRegressionTest {
     void forwardIntoPlainBeanChainAutoConstructsEveryHop() {
       // Non-@BeanFocus shape: the lens for each hop is built by Beans.lens, not the codegen
       // holder. Pins that the null-tolerant Lens.modify default applies on the reflective bean
-      // path too — auto-construction is uniform across the holder and non-holder paths.
+      // path too — auto-construction is uniform across the holder and non-holder paths. Each hop
+      // type has a no-arg ctor + reference-typed off-path fields, so autoWriter resolves to
+      // SettersWriter, the strategy whose construct path null-guards primitive fields and is the
+      // documented null-tolerant write path for multi-hop bean targets.
+      // Pre-condition guard: no @BeanFocus on any chain class, so MetadataHolderProbe finds no
+      // holder and BeanFieldOptics.lensFor falls through to Beans.lens — the reflective path
+      // this test exists to exercise. Future-proofs against a fixture being annotated by mistake.
+      assertNull(
+        PlainChainOuter.class.getAnnotation(BeanFocus.class),
+        "PlainChainOuter must remain un-annotated so this test routes through Beans.lens"
+      );
       final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
       final var tgtLeaf = Telescope.ofBean(PlainChainOuter.class)
         .field(PlainChainOuter::getMid)

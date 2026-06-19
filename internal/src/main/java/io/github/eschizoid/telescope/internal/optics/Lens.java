@@ -57,11 +57,27 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
    * <p>Behavior by lens shape:
    *
    * <ul>
-   *   <li>{@code @BeanFocus} codegen-emitted holder lens and {@code Beans.lens(Class, String,
-   *       BeanWriter)} — {@code set(null, value)} rebuilds a fresh focus (the writer's construct +
-   *       setter path tolerates a null source). Composed write paths through null intermediates
-   *       auto-construct every hop the structural Iso has not already seeded; this is the path the
-   *       bean-side multi-hop {@code mapperForward} writes rely on.
+   *   <li>{@code Beans.lens(Class, String, BeanWriter)} backed by {@code SettersWriter} — {@code
+   *       set(null, value)} rebuilds a fresh focus. Off-path reads route through {@code
+   *       readForRebuild} → {@code readProperty}, both of which short-circuit on null source, so
+   *       the writer receives null for every off-path property and {@code SettersWriter}'s
+   *       construct path null-guards primitive setters with the JLS default. This is the reflective
+   *       bean path the multi-hop {@code mapperForward} writes rely on by default, regardless of
+   *       focus property count.
+   *   <li>{@code @BeanFocus} codegen-emitted holder lens — the generated setter reads off-path
+   *       properties off the source: {@code (p, v) -> { var c = new X(); c.setOther(p.getOther());
+   *       c.setTarget(v); return c; }}. {@code set(null, value)} works for a single-property focus
+   *       (no off-path read) but NPEs on {@code p.getOther()} for a multi-property focus.
+   *       Multi-property null intermediates still crash loudly through the codegen setter and are
+   *       out of scope for this default; the reflective fallback above covers the multi-property
+   *       case when {@code @BeanFocus} is not in play.
+   *   <li>{@code Beans.lens} backed by {@code ConstructorWriter} / {@code FieldsWriter} / {@code
+   *       BuilderWriter} — these strategies pass the focused value alongside the writer's per-name
+   *       lookup but do NOT null-guard primitive parameters/fields/builder setters. A null off-path
+   *       primitive surfaces an NPE wrapped with the strategy's "Failed to construct / set field /
+   *       build" diagnostic (loud, not silent). For null-tolerant N-hop writes pick the SETTERS
+   *       strategy (the {@code autoWriter} default) or model the target with reference-typed
+   *       fields.
    *   <li>{@code Records.fieldLens} (both string and class-aware overloads) — overrides {@code
    *       modify} with an explicit {@code null}-source short-circuit returning {@code null}; this
    *       default never runs and the null-source write surfaces as a missing-leaf result rather
