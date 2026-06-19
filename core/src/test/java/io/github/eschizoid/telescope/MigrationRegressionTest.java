@@ -2204,6 +2204,14 @@ class MigrationRegressionTest {
         PlainChainOuter.class.getAnnotation(BeanFocus.class),
         "PlainChainOuter must remain un-annotated so this test routes through Beans.lens"
       );
+      assertNull(
+        PlainChainMid.class.getAnnotation(BeanFocus.class),
+        "PlainChainMid must remain un-annotated so the mid hop also takes the Beans.lens path"
+      );
+      assertNull(
+        PlainChainLeaf.class.getAnnotation(BeanFocus.class),
+        "PlainChainLeaf must remain un-annotated so the leaf hop also takes the Beans.lens path"
+      );
       final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
       final var tgtLeaf = Telescope.ofBean(PlainChainOuter.class)
         .field(PlainChainOuter::getMid)
