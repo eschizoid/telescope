@@ -417,6 +417,12 @@ directions:
 All 18 rows captured on a freshly-rebooted machine, no other workloads running. Tight error bands across the board
 (typically ±0.02–7 ns; one outlier at ±12 ns on nested runtime forward).
 
+**Reproduce the table** on consistent hardware via the manual
+[`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action — Actions tab → `Benchmarks` → `Run workflow`, pick a
+branch, tune `warmup_iterations` / `measurement_iterations` / `time_on_iteration` / `forks` as needed. The job summary
+prints `results.txt` inline; the full results directory is attached as an artifact tagged `jmh-results-<sha>-<run-id>`
+so consecutive runs don't overwrite each other and a follow-up PR can baseline-diff against a known prior run.
+
 Three tiers, codegen path. On flat, MapStruct hits 3.35 ns and telescope 4.86 ns — a 1.45× gap, 1.5 ns absolute. On
 nested, 5.17 vs 10.17 ns: 1.97× behind, 5.0 ns absolute. On deep, 47.60 vs 57.57 ns: 1.21× behind on forward. Once
 per-level work climbs past ~50 ns, the wrapper hop vanishes into the actual work; on the backward direction at 53.37 vs

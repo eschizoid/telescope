@@ -104,11 +104,17 @@ three engines time the SAME work — only the conversion path varies.
 - `_telescope_runtime_*` establishes the upper bound on telescope when the consumer opts out of codegen entirely. The
   gap to `_telescope_codegen_*` is what `@Bridge` buys.
 
-**To run just this suite:**
+**To run just this suite locally:**
 
 ```
 ./gradlew :benchmarks:jmh -Pjmh.includes=MapStructComparisonBenchmark
 ```
+
+**To reproduce on CI hardware** (without burning your laptop's battery for 20 minutes): trigger the manual
+[`Benchmarks`](../.github/workflows/benchmarks.yaml) GitHub Action. Actions tab → `Benchmarks` → `Run workflow`, pick
+the branch (default branch dropdown), and tune the iteration / fork knobs. The job summary prints `results.txt` inline;
+the full `results/` directory is attached as an artifact named `jmh-results-<sha>-<run-id>` so consecutive runs don't
+overwrite each other and a follow-up PR can baseline-diff against a known prior run.
 
 ## Results
 
