@@ -18,9 +18,9 @@ import org.openjdk.jmh.infra.Blackhole;
  * ({@code @Bridge}) path on identical fixture shapes across three depth tiers and both directions
  * (bean → record forward, record → bean backward).
  *
- * <h2>What the 18 rows measure</h2>
+ * <h2>What the rows measure</h2>
  *
- * <p>Three depth tiers × two directions × three engines:
+ * <p>Three depth tiers × two directions × three engines, plus one static-forward row per tier:
  *
  * <ul>
  *   <li>{@code flat_*} — five scalar fields, no nesting.
@@ -116,6 +116,13 @@ public class MapStructComparisonBenchmark {
     bh.consume(McFlatBeanBridge.BRIDGE.read(flatBean));
   }
 
+  @Benchmark
+  public void flat_telescope_codegen_static_forward(final Blackhole bh) {
+    // Direct static call — same shape MapStruct's INSTANCE.toRec(...) compiles to. Isolates the
+    // codegen output quality from the Telescope lattice dispatch the BRIDGE.read(...) path pays.
+    bh.consume(McFlatBeanBridge.forward(flatBean));
+  }
+
   // ---------- Flat — backward (record → bean) ----------
 
   @Benchmark
@@ -150,6 +157,11 @@ public class MapStructComparisonBenchmark {
     bh.consume(McNestedBeanBridge.BRIDGE.read(nestedBean));
   }
 
+  @Benchmark
+  public void nested_telescope_codegen_static_forward(final Blackhole bh) {
+    bh.consume(McNestedBeanBridge.forward(nestedBean));
+  }
+
   // ---------- Nested — backward ----------
 
   @Benchmark
@@ -182,6 +194,11 @@ public class MapStructComparisonBenchmark {
   @Benchmark
   public void deep_telescope_codegen_forward(final Blackhole bh) {
     bh.consume(McCompanyBeanBridge.BRIDGE.read(deepBean));
+  }
+
+  @Benchmark
+  public void deep_telescope_codegen_static_forward(final Blackhole bh) {
+    bh.consume(McCompanyBeanBridge.forward(deepBean));
   }
 
   // ---------- Deep — backward ----------
