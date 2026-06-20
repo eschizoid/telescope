@@ -291,15 +291,16 @@ The runtime column above is the post-capture measurement (run on the optimized b
 columns are from the baseline run and are stable across both within error.
 
 A quick decision guide. If the problem is "convert this entity to this DTO and back, both directions known at build
-time, no nested-list iteration, just scalars," MapStruct's bytecode is still ~1.45× faster on the row (3.35 vs 4.86 ns).
-On realistic deep workloads — nested records with list-of-records inside — telescope codegen matches MapStruct.
+time, no nested-list iteration, just scalars," MapStruct's bytecode is ~1.5–1.6× faster on the row (3.11 vs 4.84 ns,
+~1.7 ns absolute). On realistic deep workloads — nested records with list-of-records inside — telescope codegen matches
+MapStruct.
 
 Where MapStruct stops being an option entirely: sealed-narrow paradigm hop, effectful update (`updateAsync`,
 `updateValidated`), JPA cycle handling, Hibernate `LAZY` proxy unwrap, deep navigation as a primitive. These are out of
 scope for a mapping-only model and demoed end-to-end in `examples/springboot/`. Capability wins, not perf wins, but
 they're the reason you'd pick telescope in the first place.
 
-Even the slowest telescope row — deep runtime backward at ~2.3 μs — is fine for typical request handling. One or a few
+Even the slowest telescope row — deep runtime backward at ~0.86 μs — is fine for typical request handling. One or a few
 conversions per request, not millions per second.
 
 One implementation note: the telescope `_codegen_backward` rows use `BRIDGE.set(placeholderBean, rec)`, which discards

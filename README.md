@@ -10,7 +10,7 @@ Works on Java records, POJOs, and Lombok `@Data` classes. Compile-time codegen i
 Quarkus extension ship as separate artifacts.
 
 **Coming from MapStruct? This is the upgrade.** MapStruct's architecture is a decade old — string-keyed `@Mapping`
-annotations, compile-time-only, one direction per interface, mapping and nothing else. Telescope does that same job at
+annotations, compile-time-only, one direction per interface, mapping, and nothing else. Telescope does that same job at
 the **same codegen speed** (a tie on the shape real services run — deep nesting with list traversals), but on a modern
 foundation: typed method references the compiler checks (a typo is a `javac` error, not a processor warning),
 bidirectional from a single declaration, runtime _or_ codegen. Then it keeps going where MapStruct structurally stops —
