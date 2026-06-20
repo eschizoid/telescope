@@ -279,10 +279,13 @@ public record Reflective(
       } else if (recordReaders != null) {
         arr[i] = recordReaders[i];
       } else {
-        // Bean fallback — captures the cached LMF Function via Beans.readProperty's substrate.
-        // One virtual Function#apply dispatch per call, into the LMF-built reader.
-        final var capturedName = name;
-        arr[i] = instance -> read(instance, capturedName);
+        // Bean fallback — bind the LMF reader Function for the declared class once at assembly
+        // time. The previous `instance -> read(instance, name)` shape re-resolved the reader on
+        // every call: persistentClassOf unwrap + GETTER_INVOKERS ClassValue probe + name→reader
+        // HashMap lookup, then the LMF dispatch. Capturing leaves only the single Function#apply
+        // dispatch on the hot path. The reader dispatches invokevirtual, so a subtype instance
+        // (incl. a Hibernate proxy overriding the getter) still reads correctly.
+        arr[i] = Beans.capturedReader(cls, name);
       }
     }
     return arr;

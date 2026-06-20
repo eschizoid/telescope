@@ -408,12 +408,12 @@ a dedicated runner — anyone can re-run them and check:
 
 | Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Ratio | Telescope runtime (ns/op) |
 | ------ | ------------- | ----------------: | ------------------------: | ----: | ------------------------: |
-| flat   | bean → record |     3.109 ± 0.061 |             4.844 ± 0.045 | 1.56× |            110.96 ± 0.460 |
-| flat   | record → bean |     3.199 ± 0.013 |             4.840 ± 0.025 | 1.51× |            150.68 ± 1.078 |
-| nested | bean → record |     4.223 ± 0.119 |             8.470 ± 0.058 | 2.01× |            147.05 ± 0.655 |
-| nested | record → bean |     5.221 ± 0.124 |             8.448 ± 0.067 | 1.62× |            214.68 ± 1.287 |
-| deep   | bean → record |     46.36 ± 0.240 |             53.41 ± 0.879 | 1.15× |            883.61 ± 3.264 |
-| deep   | record → bean |     46.21 ± 0.436 |             53.03 ± 0.292 | 1.15× |            882.58 ± 4.411 |
+| flat   | bean → record |     3.109 ± 0.061 |             4.844 ± 0.045 | 1.56× |             54.86 ± 0.169 |
+| flat   | record → bean |     3.199 ± 0.013 |             4.840 ± 0.025 | 1.51× |            154.86 ± 1.482 |
+| nested | bean → record |     4.223 ± 0.119 |             8.470 ± 0.058 | 2.01× |             86.81 ± 2.115 |
+| nested | record → bean |     5.221 ± 0.124 |             8.448 ± 0.067 | 1.62× |            217.86 ± 2.771 |
+| deep   | bean → record |     46.36 ± 0.240 |             53.41 ± 0.879 | 1.15× |            381.10 ± 8.800 |
+| deep   | record → bean |     46.21 ± 0.436 |             53.03 ± 0.292 | 1.15× |            859.65 ± 4.549 |
 
 Error bands are tight across every row (±0.01–0.9 ns) — the dedicated runner with no competing workload gives cleaner
 data than a laptop. **Reproduce the table**: Actions tab → `Benchmarks` → `Run workflow`, pick a branch, tune
@@ -435,13 +435,17 @@ than the lattice path — a JMH escape-analysis artifact that the clean CI hardw
 [`docs/perf-mapstruct-comparison.md`](docs/perf-mapstruct-comparison.md).)
 
 The runtime path sits on a position-indexed `Object[]` structural intermediate — `DeepMap.assembleIso` builds a single
-fused `Iso<S, T>` that gathers directly from cached LMF-bound readers into the target array, no intermediate allocation.
-The cycle-safe shell at every nested type-pair hop bypasses its `ThreadLocal` + `IdentityHashMap` probe when the static
-type graph is acyclic (detected during `populateIso` via SCC analysis on the recursion stack); genuine instance cycles
-still get the full guard. Relative gap to MapStruct on the CI run: ~36× on flat, ~35× on nested, **~19× on deep** — the
-deeper the tree, the more the per-level work dominates the constant reflective-dispatch overhead. Sub-microsecond on
-flat and nested, single-microsecond on deep. Allocation pressure is low enough to fit comfortably in non-hot service
-code; codegen remains the recommendation on tight inner loops.
+fused `Iso<S, T>` that gathers directly from cached readers into the target array. Source-side bean readers are bound
+once at mapper-assembly time (`Beans.capturedReader`), so the hot read is a single virtual `Function#apply` rather than
+a per-call `persistentClassOf` + `GETTER_INVOKERS` ClassValue probe + name→reader lookup. That capture roughly halves
+the forward (bean → record) direction: flat 111 → 55 ns, deep 884 → 381 ns. The cycle-safe shell at every nested
+type-pair hop bypasses its `ThreadLocal` + `IdentityHashMap` probe when the static type graph is acyclic (detected
+during `populateIso` via SCC analysis on the recursion stack); genuine instance cycles still get the full guard.
+Relative gap to MapStruct: **~17× flat / ~8× deep on the optimized forward direction**; the backward (record → bean)
+direction is still ~48× flat / ~18× deep because building a bean (allocate + N setter calls) is structurally heavier
+than a record's single canonical-constructor invoke — and the read side there is already optimal (record readers).
+Sub-microsecond on flat and nested, single-microsecond on deep. Allocation pressure is low enough to fit comfortably in
+non-hot service code; codegen remains the recommendation on tight inner loops.
 
 If you're in a tight inner loop where 1 ns matters, pick MapStruct. For realistic deep workloads — nested records with
 list-of-records inside — the codegen rows are a tie and you're picking on capability. Sealed-narrow paradigm hop,

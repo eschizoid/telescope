@@ -354,6 +354,31 @@ public final class Beans {
   }
 
   /**
+   * The raw cached LMF reader {@link Function} for {@code (beanClass, name)} — resolved once and
+   * returned directly, with no wrapping capture lambda (unlike {@link #getter}). Lets a hot
+   * positional-read loop (e.g. {@code Reflective.positionalReaders} on the {@code
+   * Telescope.mapper(...)} assembly path) bind the reader at build time and pay only one virtual
+   * {@code Function#apply} dispatch per call, instead of the per-call {@link #persistentClassOf}
+   * unwrap + {@link #GETTER_INVOKERS} {@link ClassValue} probe + name&rarr;reader {@code HashMap}
+   * lookup that {@link #readProperty(Object, String)} repeats on every read.
+   *
+   * <p>The reader dispatches {@code invokevirtual} on the getter, so a subtype instance — including
+   * a Hibernate proxy that overrides the accessor — still reads correctly even though the reader is
+   * bound to {@code beanClass}. The {@code persistentClassOf} unwrap that {@code readProperty}
+   * performs exists only to keep {@code GETTER_INVOKERS} from accumulating one cache entry per
+   * proxy subclass; binding the reader once for the declared class sidesteps that bloat entirely.
+   *
+   * <p>Throws {@link IllegalArgumentException} at build time if the named property has no getter.
+   */
+  public static Function<Object, Object> capturedReader(final Class<?> beanClass, final String name) {
+    final var reader = GETTER_INVOKERS.get(beanClass).get(name);
+    if (reader == null) throw new IllegalArgumentException(
+      "No getter for property '" + name + "' on " + beanClass.getName()
+    );
+    return reader;
+  }
+
+  /**
    * Read a bean property by name via its {@code getX()} / {@code isX()} accessor. Throws if no
    * getter matches {@code name}.
    *
