@@ -284,11 +284,11 @@ capability lists, vs-MapStruct callouts, and benchmark cross-links.
   typed optics: method-reference rows the compiler checks, bidirectional from one declaration, runtime _or_ codegen, and
   mapping is one capability among navigation, deep update, effectful update, and sealed dispatch. The codegen path runs
   at the **same performance class** — a tie at real-service depth (see [How it compares](#how-it-compares-to-mapstruct))
-  — over a strictly larger, more modern surface. It covers every common `@Mapping(...)` shape (same-name auto, renames,
+  — over a strictly larger, more modern surface. It covers every common `@Mapping(...)` shape — same-name auto, renames,
   typed transforms, nested mappers, flat → nested-path correspondences, eager literals, computed values, forward-only
   mappers, multi-source merge, by-name enum mapping, null-coalescing defaults, lifecycle hooks, Spring/Quarkus
-  autoconfig) plus the shapes MapStruct's architecture can't express. MapStruct still leads on raw maturity and a
-  handful of declarative features (inline `expression = "java(...)"` bodies, qualifier dispatch, full
+  autoconfig. And it reaches the shapes MapStruct's architecture can't express. MapStruct still leads on raw maturity
+  and a handful of declarative features (inline `expression = "java(...)"` bodies, qualifier dispatch, full
   `@SubclassMapping`, `@MappingTarget` update-in-place);
   [When MapStruct is the right pick](#when-mapstruct-is-the-right-pick) is honest about those. The
   [full row-by-row comparison](#how-it-compares-to-mapstruct) has the rest.
@@ -316,9 +316,9 @@ architecture stops. Two questions decide it — is it as fast, and what do you g
 #### First, the performance objection — settled
 
 **At the codegen level, telescope and MapStruct are the same performance class.** Both annotation processors emit direct
-constructor + accessor calls the JIT inlines into one tight basic block. On the shape real services run — deeply nested
-records with lists inside — they are a **tie**: 1.15×, about 7 ns on a 47 ns conversion. On a trivial flat 5-field
-struct MapStruct's hand-templated body is ~1.7 ns quicker (1.5×). At that scale you are choosing on **API and
+constructor and accessor calls the JIT inlines into one tight basic block. On the shape real services run — deeply
+nested records with lists inside — they are a **tie**: 1.15×, about 7 ns on a 47 ns conversion. On a trivial flat
+5-field struct MapStruct's hand-templated body is ~1.7 ns quicker (1.5×). At that scale you are choosing on **API and
 capability, not nanoseconds.**
 
 | Tier (codegen vs codegen)       | telescope vs MapStruct                                                           |
@@ -567,7 +567,7 @@ code. `telescope-codegen` is compile-time-only and isn't on the runtime module p
 
 **Codegen escape hatch.** The `@Focus` / `@BeanFocus` / `@Bridge` processors emit compile-time navigators that read
 components and call constructors / builders / setters directly — no `privateLookupIn`, no `LambdaMetafactory`, no
-`opens` requirement. If adding the `opens` is awkward (e.g. a downstream module you don't own), the codegen path
+`opens` requirement. If adding the `opens` is awkward (e.g., a downstream module you don't own), the codegen path
 sidesteps the JPMS constraint entirely. See
 [Compile-time, reflection-free navigation](#compile-time-reflection-free-navigation-focus--beanfocus).
 
@@ -969,7 +969,7 @@ Telescope.mapper(
 );
 ```
 
-The `via(...)` row works in two flavours: pass an **accessor-typed** mapper (e.g.
+The `via(...)` row works in two flavors: pass an **accessor-typed** mapper (e.g.,
 `Mapper<List<UserEntity>, List<UserDto>>`) and telescope uses it as-is, or pass an **element-typed** mapper
 (`Mapper<UserEntity, UserDto>`) and telescope detects the accessor's container shape (`List`, `Set`, `Optional`, `Map`
 values) and auto-lifts the mapper through it via `Iso.liftList` / `liftSet` / `liftOptional` / `liftMapValues`. One row
@@ -1007,7 +1007,7 @@ at every type pair the recursion encounters. The alternative is to navigate the 
 ### Convert — `Telescope.map` / `Telescope.mapper`
 
 The same factory described under [Type conversion](#type-conversion) handles POJO↔POJO and cross-paradigm record↔POJO
-pairs without ceremony — components match by name on either side (`Pojo::getX` / `RecordOrPojo::x` normalised to `x`),
+pairs without ceremony — components match by name on either side (`Pojo::getX` / `RecordOrPojo::x` normalized to `x`),
 nested POJOs recurse, and container hops auto-lift. The POJO mechanics this section covers are the bean-construction
 lever (`writeBean` / `writeBeans`) for when the auto-detect ladder can't pick a strategy.
 
@@ -1022,7 +1022,7 @@ class LegacyUser {
 
 record UserRecord(String id, String email, String name) {}
 
-// Same-name 1-liner — every getter/component lines up by normalised name.
+// Same-name 1-liner — every getter/component lines up by normalized name.
 final Telescope<LegacyUser, UserRecord> bridge = Telescope.map(LegacyUser.class, UserRecord.class);
 ```
 
@@ -1108,7 +1108,7 @@ Telescope.of(Page.class)
     .update(page, String::toLowerCase);
 ```
 
-For a worked end-to-end demo using every public Mapping / Mapper / Telescope row through a Spring Boot 4 + Hibernate +
+For a worked end-to-end demo using every public Mapping / Mapper / Telescope row through a Spring Boot 4, Hibernate, and
 Jackson REST pipeline, see [`examples/springboot/`](examples/springboot/).
 
 **`@Bridge` — reflection-free, compile-checked (any pair).** The codegen counterpart to `Telescope.map(...)`. Annotate
@@ -1193,7 +1193,7 @@ field-injection fallback) uses `setAccessible`, so under JPMS the POJO's package
 ## Compile-time, reflection-free navigation (`@Focus` / `@BeanFocus`)
 
 The reflection-based `Telescope.of(User.class).field(User::name)` path resolves the field name at runtime — fast enough
-for ordinary use (~100ns), but a typo or a rename surfaces as a runtime error, not a compile error. Annotate the types
+for ordinary use (~100 ns), but a typo or a rename surfaces as a runtime error, not a compile error. Annotate the types
 you navigate with `@Focus` (records) or `@BeanFocus` (POJOs) and add the processor to your build; for each annotated
 type the processor emits a sibling **fluent typed path navigator** that reads like the runtime DSL but is fully
 compile-checked and reflection-free.
@@ -1310,7 +1310,7 @@ UserBeanPath.of().email().update(user, String::toLowerCase);   // no reflection
 
 The same path that powers `.update(...)` lifts through four effects with one method change: **async**,
 **all-or-nothing**, **short-circuit**, and **error-accumulating**. Validate every email in a `Batch` and report all the
-bad ones in one call? Two lines. Run an HTTP normalisation call for every focused element with bounded concurrency? Pass
+bad ones in one call? Two lines. Run an HTTP normalization call for every focused element with bounded concurrency? Pass
 an `Executor`. The DSL writes the structural plumbing; you supply the per-element function.
 
 Pick the method by the function you have — the type system picks the applicative. Chaining stages of different effects
@@ -1331,7 +1331,8 @@ is handled by the bridge methods on `Either` / `Validated`; see [Chaining stages
 - Use **`updateEither`** when failures should _halt work_: parsers where a malformed root makes children meaningless,
   dependent stages, expensive per-element calls. Subsequent elements are never even called.
 - Use **`updateValidated`** when you want _every_ problem reported: form validation (show the user every wrong field at
-  once), batch quality reports, cheap predicates over many elements. Every element is processed; failures are collected.
+  once), batch quality reports, lightweight predicates over many elements. Every element is processed; failures are
+  collected.
 
 The difference is control flow, not just result shape. You can't recover short-circuit behavior by post-converting a
 Validated result, and you can't recover all-errors reporting from an Either that stopped after the first failure.
@@ -1391,8 +1392,8 @@ final Either<ParseError, Batch> result = ALL_EMAILS.updateEither(batch, EmailPar
 return result.fold(this::respondError, this::save);
 ```
 
-The first email that fails to parse wins; subsequent emails aren't even called. Use this when the first failure is
-enough — it's strictly cheaper than `updateValidated` because there's no accumulation.
+The first email that fails to parse wins; later emails aren't even called. Use this when the first failure is enough —
+it's strictly cheaper than `updateValidated` because there's no accumulation.
 
 **`updateOptional` — all-or-nothing.**
 
@@ -1504,12 +1505,12 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
    `each(Team::users)` works without a type witness — `Team::users` has compile-time type `Function<Team, List<User>>`
    and Java unifies `E = User`.
 4. **Reflection cost.** Field access uses `RecordComponent.getAccessor().invoke(...)` and the canonical constructor —
-   roughly ~100ns per reflective field access, vs ~10ns for a hand-written record copy; the reflection-free `lens` path
-   (`@Focus` codegen) sits in between. Fine for almost everything; matters for tight loops. See
+   roughly ~100 ns per reflective field access, vs ~10 ns for a hand-written record copy; the reflection-free `lens`
+   path (`@Focus` codegen) sits in between. Fine for almost everything; matters for tight loops. See
    [`benchmarks/`](benchmarks/README.md) for measured numbers.
 5. **Sibling-context updates close over the source.** A plain `update` lambda only sees the focused value. If you need
-   to read sibling fields (e.g. focus `LineItem::unitPrice` but want the sibling `sku` to call a price service), the
-   source is already in scope as the first argument — just reference it inside the lambda
+   to read sibling fields (e.g., focus `LineItem::unitPrice` but want the sibling `sku` to call a price service), the
+   source is already in scope as the first argument — reference it inside the lambda
    (`update(order, item -> … order.sku() …)`). Hoist the source to a local first if it's an expression.
 6. **One documented runtime-check point on the runtime DSL.** Every typed entry point (`.field(Accessor)`,
    `.each(Accessor)`, `.list(Accessor)` / `.set` / `.map` / `.optional` and their typed terminals,
@@ -1520,9 +1521,9 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
      can't verify the name exists or that the inferred type matches the actual field. Wrong name → runtime error.
 
    For zero runtime-check points, use the **`@Focus` / `@BeanFocus` / `@Bridge` annotation processors** — they generate
-   a typed `<X>Path<R>` navigator at compile time where every step is a typed method call.
+   a typed `<X>Path<R>` navigator at compile time, with every step a typed method call.
 
-7. **Versioning policy — semver.** Source + binary compatibility across minor versions; breaks only on majors.
+7. **Versioning policy — semver.** Source and binary compatibility across minor versions; breaks only on majors.
 
 ---
 
