@@ -1,0 +1,148 @@
+name: Benchmarks
+
+# Manual JMH runner. Not wired to PR or push triggers — benchmarks are slow
+# and noisy, and we run them only when someone wants a baseline or a head-to-head
+# diff. Trigger from the Actions tab; the result lands as a job summary +
+# downloadable artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_filter:
+        description: "JMH regex filter — class or method name. Default scopes to MapStruct head-to-head."
+        type: string
+        default: "MapStructComparisonBenchmark"
+        required: true
+      warmup_iterations:
+        description: "Warmup iterations. 3 is JMH's default; bump to 5 for noisy benchmarks."
+        type: string
+        default: "3"
+        required: true
+      measurement_iterations:
+        description: "Measurement iterations. 5 = balanced; 10+ for publication-quality numbers."
+        type: string
+        default: "5"
+        required: true
+      time_on_iteration:
+        description: "Time per measurement iteration. 3s is JMH default; 5s for tighter error bars."
+        type: string
+        default: "3s"
+        required: true
+      warmup_time:
+        description: "Time per warmup iteration. Match `time_on_iteration` unless you have a reason to differ."
+        type: string
+        default: "3s"
+        required: true
+      forks:
+        description: "Forks. 1 for fast runs; 3+ for publication-quality (averages out cold-JIT noise across forks)."
+        type: string
+        default: "1"
+        required: true
+      profilers:
+        description: "Optional JMH profilers, comma-separated. `gc` reports allocation rate; `stack` reports method stacks. Leave empty to skip."
+        type: string
+        default: ""
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  jmh:
+    runs-on: ubuntu-latest
+    # Benchmark runs scale with iteration count + fork count. Even with the
+    # conservative default (3 warmup + 5 iterations × 3s × 1 fork, ~25 benchmarks)
+    # we're looking at 15-20 min. Allow 2 hours to accommodate publication-quality
+    # parameter sweeps without the workflow timing out.
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          java-version: "25"
+          distribution: temurin
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Display run configuration
+        run: |
+          echo "## Benchmark run configuration" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Parameter | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| benchmark_filter | \`${{ inputs.benchmark_filter }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| warmup_iterations | ${{ inputs.warmup_iterations }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| measurement_iterations | ${{ inputs.measurement_iterations }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| time_on_iteration | ${{ inputs.time_on_iteration }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| warmup_time | ${{ inputs.warmup_time }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| forks | ${{ inputs.forks }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| profilers | \`${{ inputs.profilers }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Triggered by **${{ github.actor }}** on \`${{ github.ref_name }}\` (sha \`${{ github.sha }}\`)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run JMH
+        # `--no-configuration-cache` works around a long-standing JMH-plugin
+        # incompatibility with Gradle's configuration cache that surfaces as
+        # "cannot serialize Gradle script object references" on the
+        # :benchmarks:compileJmhJava task. The JMH plugin itself is fine; the
+        # cache annotations on the generated task are not.
+        run: |
+          ARGS=(
+            ":benchmarks:jmh"
+            "-Pjmh.includes=${{ inputs.benchmark_filter }}"
+            "-Pjmh.warmup=${{ inputs.warmup_iterations }}"
+            "-Pjmh.iterations=${{ inputs.measurement_iterations }}"
+            "-Pjmh.timeOnIteration=${{ inputs.time_on_iteration }}"
+            "-Pjmh.warmupTime=${{ inputs.warmup_time }}"
+            "-Pjmh.fork=${{ inputs.forks }}"
+            "--no-configuration-cache"
+            "--no-daemon"
+            "--stacktrace"
+          )
+          if [ -n "${{ inputs.profilers }}" ]; then
+            ARGS+=("-Pjmh.profilers=${{ inputs.profilers }}")
+          fi
+          ./gradlew "${ARGS[@]}"
+
+      - name: Publish results to job summary
+        if: ${{ !cancelled() }}
+        run: |
+          RESULTS_FILE="benchmarks/build/results/jmh/results.txt"
+          if [ ! -s "$RESULTS_FILE" ]; then
+            echo "::warning::No results file at $RESULTS_FILE — benchmarks may have failed or produced no rows."
+            exit 0
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat "$RESULTS_FILE" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload JMH results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          # Include sha + run id in the artifact name so consecutive runs
+          # don't overwrite each other and a follow-up PR can compare against
+          # a known baseline by downloading the matching artifact.
+          name: jmh-results-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            benchmarks/build/results/jmh/
+          retention-days: 30
+
+      - name: Upload reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: jmh-failure-reports-${{ github.run_id }}
+          path: |
+            benchmarks/build/reports/
+            build/reports/
+          retention-days: 7
