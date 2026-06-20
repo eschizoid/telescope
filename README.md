@@ -219,9 +219,9 @@ Need eager literals or per-call computed values stamped at the target — MapStr
 Telescope.mapper(Order.class, OrderDto.class,
   to(Order::id,                OrderDto::id),
   constant(OrderDto::tenant,   "production"),       // eager literal
-  compute (OrderDto::createdAt, Instant::now),      // fresh per call
-  compute (OrderDto::traceId,   UUID::randomUUID),
-  compute (OrderDto::metadata,  HashMap::new));     // fresh container per call
+  compute(OrderDto::createdAt, Instant::now),      // fresh per call
+  compute(OrderDto::traceId,   UUID::randomUUID),
+  compute(OrderDto::metadata,  HashMap::new));     // fresh container per call
 ```
 
 `constant` captures once at row construction; `compute` invokes the supplier each forward call (the right choice
