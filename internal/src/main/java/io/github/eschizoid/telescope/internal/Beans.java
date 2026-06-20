@@ -359,7 +359,7 @@ public final class Beans {
    * positional-read loop (e.g. {@code Reflective.positionalReaders} on the {@code
    * Telescope.mapper(...)} assembly path) bind the reader at build time and pay only one virtual
    * {@code Function#apply} dispatch per call, instead of the per-call {@link #persistentClassOf}
-   * unwrap + {@link #GETTER_INVOKERS} {@link ClassValue} probe + name&rarr;reader {@link HashMap}
+   * unwrap + {@link #GETTER_INVOKERS} {@link ClassValue} probe + name&rarr;reader {@code HashMap}
    * lookup that {@link #readProperty(Object, String)} repeats on every read.
    *
    * <p>The reader dispatches {@code invokevirtual} on the getter, so a subtype instance — including
