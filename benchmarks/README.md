@@ -256,9 +256,11 @@ level walked.
 
 #### What the numbers say
 
-Three tiers, codegen path. On flat (3.11 vs 4.84 ns), telescope codegen runs 1.56× behind MapStruct — absolute gap ~1.7
-ns. On nested (4.22 vs 8.47 ns), 2.01× behind, ~4.2 ns absolute. On deep (46.36 vs 53.41 ns), **1.15× behind on both
-directions** — the deeper the tree, the closer to parity.
+**Codegen-for-codegen, telescope and MapStruct are the same performance class — a tie at realistic depth.** Three tiers:
+on flat (3.11 vs 4.84 ns) telescope is 1.56× behind, ~1.7 ns absolute; on nested (4.22 vs 8.47 ns) 2.01×, ~4.2 ns; on
+deep (46.36 vs 53.41 ns) **1.15× — a tie, ~7 ns on a 47 ns op**, both directions. The deeper the tree, the closer to
+parity, because the constant wrapper overhead is fixed while the per-level conversion work grows. At the flat scale
+you're choosing on API and capability, not nanoseconds.
 
 The gap decomposes. The `static` column calls `<Source>Bridge.forward(s)` directly; on CI hardware it runs consistently
 ~0.3–0.7 ns faster than `BRIDGE.read(...)` (flat 4.55 vs 4.84, nested 8.10 vs 8.47, deep 52.68 vs 53.41). So the
@@ -267,12 +269,13 @@ sub-nanosecond surcharge, and the remaining ~1.4 ns on flat is the generated bod
 directly-inlined sequence. (An earlier Apple-Silicon local run reported the static path as _slower_ than the lattice
 path — a JMH escape-analysis artifact that the clean CI hardware dissolved.)
 
-Why MapStruct wins on the small tiers. It emits one hand-templated method body per pair, fully monomorphic, and the JIT
-inlines the whole conversion into a single basic block. Telescope's `@Bridge` codegen emits the same shape — a direct
-constructor call — but wraps it in a `Telescope` for composability. On flat and nested the actual work is only 4–8 ns,
-so the wrapper hop shows up. On deep, where element-by-element list conversion dominates and the workload climbs past 50
-ns, it vanishes into the noise. Adopters in a tight inner loop who don't need composition can call
-`<Source>Bridge.forward(s)` directly and shave the lattice hop.
+Where the flat-tier gap comes from. MapStruct emits one hand-templated method body per pair, fully monomorphic, and the
+JIT inlines the whole conversion into a single basic block. Telescope's `@Bridge` codegen emits the same shape — a
+direct constructor call — but wraps it in a `Telescope` for composability, so on a 4–8 ns flat/nested conversion the one
+lattice hop is visible. On deep, where element-by-element list conversion dominates and the workload climbs past 50 ns,
+it vanishes into the noise — hence the deep-tier tie. The ~1.7 ns flat surcharge buys you the composability MapStruct's
+sealed method bodies don't have; if you're in a tight inner loop that doesn't need it, call `<Source>Bridge.forward(s)`
+directly and shave the hop (the `static` column shows it lands ~0.3–0.7 ns under `BRIDGE.read`).
 
 Runtime conversion (`Telescope.mapper(...)`) on the forward (bean → record) direction binds the source-side bean readers
 once at assembly time (`Beans.capturedReader`), so the hot read is a single virtual `Function#apply` instead of a
