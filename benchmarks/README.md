@@ -38,7 +38,7 @@ POJO benchmarks walk an identical mutable-bean mirror. The conversion benchmarks
 
 These benchmarks isolate the dispatch path on `@Focus`-annotated types vs unannotated ones. Each axis has paired `_lmf`
 (no annotation, runtime reflective + LMF path) and `_holder` (sibling codegen-emitted `<X>FieldOptics` constants on the
-classpath, dispatch short-circuits through them) rows. Fixtures are structurally identical between the two flavours —
+classpath, dispatch short-circuits through them) rows. Fixtures are structurally identical between the two flavors —
 same field names, same field types, same 3-level tree — so the only difference at dispatch time is whether the codegen
 holder is present.
 
@@ -104,7 +104,7 @@ across all rows per tier, so the engines time the SAME work — only the convers
 - `_telescope_runtime_*` establishes the upper bound on telescope when the consumer opts out of codegen entirely. The
   gap to `_telescope_codegen_*` is what `@Bridge` buys.
 
-**To run just this suite locally:**
+**To run only this suite locally:**
 
 ```
 ./gradlew :benchmarks:jmh -Pjmh.includes=MapStructComparisonBenchmark
@@ -152,13 +152,13 @@ A tighter LMF-tier capture at **5 warmup + 10 measurement × 3 fork** (single-st
 
 The thing that surprised me here: at the single-step level, LMF and `Method.invoke` are basically the same speed.
 `Method.invoke` is even a touch faster on the bean getter and setter in this microbenchmark. HotSpot has been working on
-`Method.invoke` for years and the old "100-260 ns per call" reflection cost just isn't real anymore for trivial
-accessors after warmup.
+`Method.invoke` for years and the old "100-260 ns per call" reflection cost isn't real anymore for trivial accessors
+after warmup.
 
 So why bother with LMF at all? Not the per-call cost — the per-call cost is a wash. The win is that there's no
 `Object[]` allocated per call, no access check, and the JIT sees a regular functional-interface call site it can inline
 through composed lens chains. None of that shows up when you time one isolated read. It shows up when bigger workloads
-turn `Method.invoke` into an inlining barrier and the JIT gives up. Post-LMF, the hot path is just a SAM call.
+turn `Method.invoke` into an inlining barrier and the JIT gives up. Post-LMF, the hot path is a plain SAM call.
 
 ### Codegen-routed dispatch — annotated vs reflective fallback
 
@@ -241,7 +241,7 @@ data than a laptop. The `static` column calls the codegen-emitted `<Source>Bridg
 
 #### How the runtime path stays fast
 
-Two structural choices keep the runtime path cheap:
+Two structural choices keep the runtime path lean:
 
 - **Fused source-and-remap** in `DeepMap.assembleIso`: no source-side `Object[]` intermediate. The forward body gathers
   directly from cached positional readers into the target `Object[]` per slot — one alloc + 5 array writes + 5 reads + 2
@@ -291,7 +291,7 @@ The runtime column above is the post-capture measurement (run on the optimized b
 columns are from the baseline run and are stable across both within error.
 
 A quick decision guide. If the problem is "convert this entity to this DTO and back, both directions known at build
-time, no nested-list iteration, just scalars," MapStruct's bytecode is ~1.5–1.6× faster on the row (3.11 vs 4.84 ns,
+time, no nested-list iteration, only scalars," MapStruct's bytecode is ~1.5–1.6× faster on the row (3.11 vs 4.84 ns,
 ~1.7 ns absolute). On realistic deep workloads — nested records with list-of-records inside — telescope codegen matches
 MapStruct.
 
