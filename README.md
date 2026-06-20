@@ -271,8 +271,8 @@ capability lists, vs-MapStruct callouts, and benchmark cross-links.
 ## What it is _not_
 
 - **Not a MapStruct replacement, but the mapping surface is roughly at parity.** MapStruct emits one hand-tuned method
-  body per type pair and is still ~1.5–2× faster on flat-pair dispatch — about 1.8 ns absolute on a 5-field conversion.
-  On deeper workloads (nested records with list-of-records inside) the two engines match. See
+  body per type pair and is still ~1.5–2× faster on flat-pair dispatch — about 1.7 ns absolute on a 5-field conversion.
+  On deeper workloads (nested records with list-of-records inside) the codegen rows close to within 1.15×. See
   [Performance honesty](#performance-honesty).
 
   Telescope covers the common `@Mapping(...)` shapes — same-name auto, renames, typed transforms, nested mappers, flat →
@@ -301,24 +301,24 @@ integration. Telescope is an **optics DSL** where mapping is one capability amon
 update, and sealed-type narrowing. They overlap on the deep record↔record / bean↔record / bean↔bean band; the rest of
 each tool's surface doesn't.
 
-| Capability                                   | telescope                                                                                                                                          | MapStruct                                                  |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| **Bidirectional out of the box**             | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)`                                                | One direction per `@Mapper` interface; reverse is separate |
-| **Deep nested navigation + update**          | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                                                                   | Not in scope                                               |
-| **Effectful update**                         | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                                                                              | Not in scope                                               |
-| **Compile-time codegen**                     | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                                                                          | `@Mapper` interfaces                                       |
-| **Runtime path (no codegen required)**       | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later                                                            | Compile-time only                                          |
-| **Sealed types / pattern matching**          | `.as(Subtype.class)` narrows; the path stays type-safe                                                                                             | Not in scope                                               |
-| **Sealed-root dispatch**                     | `Match.of(...).when(Case.class, ...).exhaustive()` — compile-checked permit list, lattice-routed via `Prism.downcast()`                            | Not in scope                                               |
-| **Multi-source mappers (N → 1)**             | `Telescope.merge(Target.class, from(A::id, T::id), …)` returning `Mapper<Sources, T>` with a class-keyed `Sources` bag                             | Multi-source methods with `@Mapping(source = "param.x")`   |
-| **Forward-only mappers**                     | `Telescope.mapperForward(...)` returning typed `ForwardMapper<A, B>` — no `backward` method at the type level                                      | Write a separate `@Mapper` interface                       |
-| **Enum value mapping**                       | `Mapping.enumTo(src, tgt, SrcEnum.class, TgtEnum.class)` with build-time exhaustiveness                                                            | `@ValueMapping(source = "X", target = "Y")`                |
-| **Null-coalescing defaults**                 | `Mapping.toOrElse(src, tgt, default)` / `toOrElseGet(src, tgt, supplier)` (predicate-gated overload)                                               | `@Mapping(defaultValue = "...")` / `defaultExpression`     |
-| **Conditional / drop**                       | `Mapping.drop(src)` skips the field; predicate-gated `toOrElse(src, tgt, Predicate, default)` for value-conditional fallback                       | `@Mapping(condition = "...")`                              |
-| **`@BeforeMapping` / `@AfterMapping` hooks** | `Mapper.beforeForward(...)` / `afterForward(...)` / `beforeBackward(...)` / `afterBackward(...)` — chain composes left-to-right                    | Annotation-driven                                          |
-| **Spring / Quarkus / CDI integration**       | `telescope-spring-boot-starter` (Spring Boot 4 autoconfig + `Mapper<A, B>` bean registry) + `telescope-quarkus` (Arc extension, Jandex-discovered) | Native via `componentModel = "spring"` / `"jsr330"` / etc. |
-| **Maturity**                                 | 1.0 line; JMH-backed perf claims                                                                                                                   | Ten years; thousands of production deployments             |
-| **Dispatch perf — codegen vs codegen**       | 1.2–1.9× behind on flat/nested forward; **matches on the deep tier** — see Performance honesty below for the measured numbers                      | Direct bytecode, monomorphic call site                     |
+| Capability                                   | telescope                                                                                                                                                          | MapStruct                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| **Bidirectional out of the box**             | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)`                                                                | One direction per `@Mapper` interface; reverse is separate |
+| **Deep nested navigation + update**          | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                                                                                   | Not in scope                                               |
+| **Effectful update**                         | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                                                                                              | Not in scope                                               |
+| **Compile-time codegen**                     | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                                                                                          | `@Mapper` interfaces                                       |
+| **Runtime path (no codegen required)**       | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later                                                                            | Compile-time only                                          |
+| **Sealed types / pattern matching**          | `.as(Subtype.class)` narrows; the path stays type-safe                                                                                                             | Not in scope                                               |
+| **Sealed-root dispatch**                     | `Match.of(...).when(Case.class, ...).exhaustive()` — compile-checked permit list, lattice-routed via `Prism.downcast()`                                            | Not in scope                                               |
+| **Multi-source mappers (N → 1)**             | `Telescope.merge(Target.class, from(A::id, T::id), …)` returning `Mapper<Sources, T>` with a class-keyed `Sources` bag                                             | Multi-source methods with `@Mapping(source = "param.x")`   |
+| **Forward-only mappers**                     | `Telescope.mapperForward(...)` returning typed `ForwardMapper<A, B>` — no `backward` method at the type level                                                      | Write a separate `@Mapper` interface                       |
+| **Enum value mapping**                       | `Mapping.enumTo(src, tgt, SrcEnum.class, TgtEnum.class)` with build-time exhaustiveness                                                                            | `@ValueMapping(source = "X", target = "Y")`                |
+| **Null-coalescing defaults**                 | `Mapping.toOrElse(src, tgt, default)` / `toOrElseGet(src, tgt, supplier)` (predicate-gated overload)                                                               | `@Mapping(defaultValue = "...")` / `defaultExpression`     |
+| **Conditional / drop**                       | `Mapping.drop(src)` skips the field; predicate-gated `toOrElse(src, tgt, Predicate, default)` for value-conditional fallback                                       | `@Mapping(condition = "...")`                              |
+| **`@BeforeMapping` / `@AfterMapping` hooks** | `Mapper.beforeForward(...)` / `afterForward(...)` / `beforeBackward(...)` / `afterBackward(...)` — chain composes left-to-right                                    | Annotation-driven                                          |
+| **Spring / Quarkus / CDI integration**       | `telescope-spring-boot-starter` (Spring Boot 4 autoconfig + `Mapper<A, B>` bean registry) + `telescope-quarkus` (Arc extension, Jandex-discovered)                 | Native via `componentModel = "spring"` / `"jsr330"` / etc. |
+| **Maturity**                                 | 1.0 line; JMH-backed perf claims                                                                                                                                   | Ten years; thousands of production deployments             |
+| **Dispatch perf — codegen vs codegen**       | 1.15× behind on the deep tier, up to 2.01× on nested forward; **the deeper the tree, the closer to parity** — CI-reproducible numbers in Performance honesty below | Direct bytecode, monomorphic call site                     |
 
 #### Per-field source/target mapping — side by side
 
@@ -402,43 +402,44 @@ guarantee that everything you wrote against the source/target types compiles iff
 #### Performance honesty
 
 Apples-to-apples ([`MapStructComparisonBenchmark`](benchmarks/README.md#mapstruct-comparison-apples-to-apples), JDK 25,
-Apple Silicon, 3 warmup + 5 measurement × 1 fork) on identical fixture shapes across three depth tiers and both
-directions:
+GitHub Actions `ubuntu-latest`, 3 warmup + 5 measurement × 1 fork) on identical fixture shapes across three depth tiers
+and both directions. These rows are reproduced by the [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action on
+a dedicated runner — anyone can re-run them and check:
 
-| Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope runtime (ns/op) |
-| ------ | ------------- | ----------------: | ------------------------: | ------------------------: |
-| flat   | bean → record |     3.350 ± 0.021 |             4.863 ± 0.025 |            103.45 ± 1.277 |
-| flat   | record → bean |     3.368 ± 0.047 |             5.881 ± 0.055 |            170.27 ± 0.637 |
-| nested | bean → record |     5.165 ± 0.564 |            10.168 ± 0.150 |           165.98 ± 12.280 |
-| nested | record → bean |     5.241 ± 0.070 |            10.476 ± 0.087 |            225.20 ± 4.311 |
-| deep   | bean → record |     47.60 ± 0.293 |            57.565 ± 1.206 |            573.32 ± 3.146 |
-| deep   | record → bean |     53.37 ± 7.532 |            54.285 ± 1.353 |            880.62 ± 6.571 |
+| Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Ratio | Telescope runtime (ns/op) |
+| ------ | ------------- | ----------------: | ------------------------: | ----: | ------------------------: |
+| flat   | bean → record |     3.109 ± 0.061 |             4.844 ± 0.045 | 1.56× |            110.96 ± 0.460 |
+| flat   | record → bean |     3.199 ± 0.013 |             4.840 ± 0.025 | 1.51× |            150.68 ± 1.078 |
+| nested | bean → record |     4.223 ± 0.119 |             8.470 ± 0.058 | 2.01× |            147.05 ± 0.655 |
+| nested | record → bean |     5.221 ± 0.124 |             8.448 ± 0.067 | 1.62× |            214.68 ± 1.287 |
+| deep   | bean → record |     46.36 ± 0.240 |             53.41 ± 0.879 | 1.15× |            883.61 ± 3.264 |
+| deep   | record → bean |     46.21 ± 0.436 |             53.03 ± 0.292 | 1.15× |            882.58 ± 4.411 |
 
-All 18 rows captured on a freshly-rebooted machine, no other workloads running. Tight error bands across the board
-(typically ±0.02–7 ns; one outlier at ±12 ns on nested runtime forward).
+Error bands are tight across every row (±0.01–0.9 ns) — the dedicated runner with no competing workload gives cleaner
+data than a laptop. **Reproduce the table**: Actions tab → `Benchmarks` → `Run workflow`, pick a branch, tune
+`warmup_iterations` / `measurement_iterations` / `time_on_iteration` / `forks` as needed. The job summary prints
+`results.txt` inline; the full results directory is attached as an artifact tagged `jmh-results-<sha>-<run-id>` so
+consecutive runs don't overwrite each other and a follow-up PR can baseline-diff against a known prior run.
 
-**Reproduce the table** on consistent hardware via the manual
-[`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action — Actions tab → `Benchmarks` → `Run workflow`, pick a
-branch, tune `warmup_iterations` / `measurement_iterations` / `time_on_iteration` / `forks` as needed. The job summary
-prints `results.txt` inline; the full results directory is attached as an artifact tagged `jmh-results-<sha>-<run-id>`
-so consecutive runs don't overwrite each other and a follow-up PR can baseline-diff against a known prior run.
+Codegen path: telescope is **1.15× (deep) to 2.01× (nested forward) behind MapStruct** — and the deeper the tree, the
+closer to parity. On flat, MapStruct hits 3.11 ns and telescope 4.84 ns: 1.56× behind, 1.7 ns absolute. On the deep tier
+both directions converge to 1.15× — once per-level work climbs past ~50 ns, the constant wrapper overhead vanishes into
+the actual element-by-element list conversion that dominates.
 
-Three tiers, codegen path. On flat, MapStruct hits 3.35 ns and telescope 4.86 ns — a 1.45× gap, 1.5 ns absolute. On
-nested, 5.17 vs 10.17 ns: 1.97× behind, 5.0 ns absolute. On deep, 47.60 vs 57.57 ns: 1.21× behind on forward. Once
-per-level work climbs past ~50 ns, the wrapper hop vanishes into the actual work; on the backward direction at 53.37 vs
-54.29 ns the two are within each other's error bands.
-
-The flat-tier gap is the `Telescope` wrapper's single virtual hop into `BridgeFn.forward` — about 1.5 ns of constant
-overhead vs MapStruct's directly-inlined constructor call. On a 3 ns workload that's a noticeable surcharge. On a 50 ns
-workload it vanishes, which is what we see on the deep tier where element-by-element list conversion dominates.
+The gap decomposes cleanly. The same suite measures a `*_codegen_static_forward` row that calls the codegen-emitted
+`<Source>Bridge.forward(s)` static method directly, bypassing the `Telescope` lattice. On CI hardware it runs
+consistently ~0.3–0.7 ns faster than `BRIDGE.read(...)` (flat 4.55 vs 4.84, nested 8.10 vs 8.47, deep 52.68 vs 53.41) —
+so the lattice dispatch hop costs a sub-nanosecond surcharge, and the rest of the gap is the generated body's
+bean-getter reads vs MapStruct's directly-inlined sequence. (An earlier local run reported the static path as _slower_
+than the lattice path — a JMH escape-analysis artifact that the clean CI hardware dissolved. See
+[`docs/perf-mapstruct-comparison.md`](docs/perf-mapstruct-comparison.md).)
 
 The runtime path sits on a position-indexed `Object[]` structural intermediate — `DeepMap.assembleIso` builds a single
 fused `Iso<S, T>` that gathers directly from cached LMF-bound readers into the target array, no intermediate allocation.
 The cycle-safe shell at every nested type-pair hop bypasses its `ThreadLocal` + `IdentityHashMap` probe when the static
 type graph is acyclic (detected during `populateIso` via SCC analysis on the recursion stack); genuine instance cycles
-still get the full guard. Cumulative drop vs the unoptimized baseline: **~70-83%** across every row (e.g. flat bean →
-record: 340 → 103 ns/op; deep bean → record: 2024 → 573 ns/op). Relative gap to MapStruct: ~31× on flat, ~32× on nested,
-**~12× on deep** — the deeper the tree, the more the per-level work dominates the constant overhead. Sub-microsecond on
+still get the full guard. Relative gap to MapStruct on the CI run: ~36× on flat, ~35× on nested, **~19× on deep** — the
+deeper the tree, the more the per-level work dominates the constant reflective-dispatch overhead. Sub-microsecond on
 flat and nested, single-microsecond on deep. Allocation pressure is low enough to fit comfortably in non-hot service
 code; codegen remains the recommendation on tight inner loops.
 

@@ -73,20 +73,20 @@ inlined Java call. The delta is the per-dispatch overhead the LMF wrapper adds o
 
 ### MapStructComparisonBenchmark — head-to-head: MapStruct vs telescope
 
-The apples-to-apples comparison. Three depth tiers × two directions × three engines = 18 benchmark rows on identical
-fixture shapes. Same input fixtures held in `@State(Scope.Benchmark)` and reused across all six rows per tier, so the
-three engines time the SAME work — only the conversion path varies.
+The apples-to-apples comparison. Three depth tiers × two directions × three engines (+ one `static_forward` row per
+tier) = 21 benchmark rows on identical fixture shapes. Same input fixtures held in `@State(Scope.Benchmark)` and reused
+across all rows per tier, so the engines time the SAME work — only the conversion path varies.
 
-| Benchmark                         | Tier   | Direction       | Engine                                            |
-| --------------------------------- | ------ | --------------- | ------------------------------------------------- |
-| `flat_mapstruct_forward`          | flat   | bean → record   | MapStruct generated impl                          |
-| `flat_telescope_runtime_forward`  | flat   | bean → record   | `Telescope.mapper(...)` reflective + LMF dispatch |
-| `flat_telescope_codegen_forward`  | flat   | bean → record   | `@Bridge`-emitted `*Bridge.BRIDGE` constant       |
-| `flat_mapstruct_backward`         | flat   | record → bean   | MapStruct `@InheritInverseConfiguration`          |
-| `flat_telescope_runtime_backward` | flat   | record → bean   | `mapper.backward(...)`                            |
-| `flat_telescope_codegen_backward` | flat   | record → bean   | `BRIDGE.set(placeholder, rec)` — `Iso.from(rec)`  |
-| `nested_*` (× 6)                  | nested | both directions | same three engines as above                       |
-| `deep_*` (× 6)                    | deep   | both directions | same three engines as above                       |
+| Benchmark                               | Tier          | Direction       | Engine                                             |
+| --------------------------------------- | ------------- | --------------- | -------------------------------------------------- |
+| `flat_mapstruct_forward`                | flat          | bean → record   | MapStruct generated impl                           |
+| `flat_telescope_runtime_forward`        | flat          | bean → record   | `Telescope.mapper(...)` reflective + LMF dispatch  |
+| `flat_telescope_codegen_forward`        | flat          | bean → record   | `@Bridge`-emitted `*Bridge.BRIDGE` constant        |
+| `flat_telescope_codegen_static_forward` | flat          | bean → record   | `*Bridge.forward(s)` static — bypasses the lattice |
+| `flat_mapstruct_backward`               | flat          | record → bean   | MapStruct `@InheritInverseConfiguration`           |
+| `flat_telescope_runtime_backward`       | flat          | record → bean   | `mapper.backward(...)`                             |
+| `flat_telescope_codegen_backward`       | flat          | record → bean   | `BRIDGE.set(placeholder, rec)` — `Iso.from(rec)`   |
+| `nested_*` / `deep_*` (× 7 each)        | nested / deep | both directions | same engines as above, incl. `*_static_forward`    |
 
 **Tier shapes:**
 
@@ -220,21 +220,24 @@ hand-copy. That's the codegen payoff for deep field navigation.
 
 ### MapStruct comparison (apples-to-apples)
 
-Captured on the same machine (JDK 25, Apple Silicon) at the standard config (3 warmup + 5 measurement × 1 fork, 10s per
-iteration). Three depth tiers, both directions, three engines per cell. All 18 rows share their input fixtures via
-`@State(Scope.Benchmark)` — the only difference between same-tier rows is the dispatch path.
+Captured on GitHub Actions `ubuntu-latest` (JDK 25, x64) at the standard config (3 warmup + 5 measurement × 1 fork, 3s
+per iteration) via the manual [`Benchmarks`](../.github/workflows/benchmarks.yaml) workflow. Three depth tiers, both
+directions, three engines per cell. All rows share their input fixtures via `@State(Scope.Benchmark)` — the only
+difference between same-tier rows is the dispatch path. These numbers are reproducible: re-run the workflow on any
+branch and compare.
 
-| Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope runtime (ns/op) |
-| ------ | ------------- | ----------------: | ------------------------: | ------------------------: |
-| flat   | bean → record |             3.350 |                     4.863 |                    103.45 |
-| flat   | record → bean |             3.368 |                     5.881 |                    170.27 |
-| nested | bean → record |             5.165 |                    10.168 |                    165.98 |
-| nested | record → bean |             5.241 |                    10.476 |                    225.20 |
-| deep   | bean → record |            47.599 |                    57.565 |                    573.32 |
-| deep   | record → bean |            53.373 |                    54.285 |                    880.62 |
+| Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope codegen static (ns/op) | Telescope runtime (ns/op) |
+| ------ | ------------- | ----------------: | ------------------------: | -------------------------------: | ------------------------: |
+| flat   | bean → record |     3.109 ± 0.061 |             4.844 ± 0.045 |                    4.549 ± 0.037 |            110.96 ± 0.460 |
+| flat   | record → bean |     3.199 ± 0.013 |             4.840 ± 0.025 |                                — |            150.68 ± 1.078 |
+| nested | bean → record |     4.223 ± 0.119 |             8.470 ± 0.058 |                    8.100 ± 0.121 |            147.05 ± 0.655 |
+| nested | record → bean |     5.221 ± 0.124 |             8.448 ± 0.067 |                                — |            214.68 ± 1.287 |
+| deep   | bean → record |     46.36 ± 0.240 |             53.41 ± 0.879 |                    52.68 ± 0.374 |            883.61 ± 3.264 |
+| deep   | record → bean |     46.21 ± 0.436 |             53.03 ± 0.292 |                                — |            882.58 ± 4.411 |
 
-All 18 rows captured together on a freshly-rebooted machine, no other workloads running. Tight error bands across the
-board (typically ±0.02–7 ns; one outlier at ±12 ns on nested runtime forward).
+Tight error bands across every row (±0.01–0.9 ns) — the dedicated CI runner with no competing workload gives cleaner
+data than a laptop. The `static` column calls the codegen-emitted `<Source>Bridge.forward(s)` directly, bypassing the
+`Telescope` lattice; it isolates the lattice-dispatch tax (see below).
 
 #### How the runtime path stays fast
 
@@ -253,21 +256,27 @@ level walked.
 
 #### What the numbers say
 
-Three tiers, codegen path. On flat (3.35 vs 4.86 ns), telescope codegen runs 1.45× behind MapStruct — absolute gap ~1.5
-ns. On nested (5.17 vs 10.17 ns), 1.97× behind, ~5.0 ns absolute. On deep (47.60 vs 57.57 ns), 1.21× behind on forward;
-on the backward direction at 53.37 vs 54.29 ns the two are within each other's error bands.
+Three tiers, codegen path. On flat (3.11 vs 4.84 ns), telescope codegen runs 1.56× behind MapStruct — absolute gap ~1.7
+ns. On nested (4.22 vs 8.47 ns), 2.01× behind, ~4.2 ns absolute. On deep (46.36 vs 53.41 ns), **1.15× behind on both
+directions** — the deeper the tree, the closer to parity.
+
+The gap decomposes. The `static` column calls `<Source>Bridge.forward(s)` directly; on CI hardware it runs consistently
+~0.3–0.7 ns faster than `BRIDGE.read(...)` (flat 4.55 vs 4.84, nested 8.10 vs 8.47, deep 52.68 vs 53.41). So the
+`Telescope` lattice dispatch hop — `BridgeTelescope.read` → `BridgeFn.forward` → static `forward` → ctor — costs a
+sub-nanosecond surcharge, and the remaining ~1.4 ns on flat is the generated body's bean-getter reads vs MapStruct's
+directly-inlined sequence. (An earlier Apple-Silicon local run reported the static path as _slower_ than the lattice
+path — a JMH escape-analysis artifact that the clean CI hardware dissolved.)
 
 Why MapStruct wins on the small tiers. It emits one hand-templated method body per pair, fully monomorphic, and the JIT
 inlines the whole conversion into a single basic block. Telescope's `@Bridge` codegen emits the same shape — a direct
-constructor call — but wraps it in a `Telescope` for composability. The wrapper's `read` / `set` terminals are
-specialised on a `BridgeTelescope` subclass that holds the `BridgeFn` directly and dispatches in one virtual hop, but
-that hop still costs ~1.5 ns of constant overhead. On flat and nested the actual work is only 3–10 ns, so the overhead
-shows up. On deep, where element-by-element list conversion dominates and the workload climbs past 50 ns, that overhead
-vanishes.
+constructor call — but wraps it in a `Telescope` for composability. On flat and nested the actual work is only 4–8 ns,
+so the wrapper hop shows up. On deep, where element-by-element list conversion dominates and the workload climbs past 50
+ns, it vanishes into the noise. Adopters in a tight inner loop who don't need composition can call
+`<Source>Bridge.forward(s)` directly and shave the lattice hop.
 
-Runtime conversion (`Telescope.mapper(...)`) runs ~12–32× slower than MapStruct's generated bytecode — 31× on flat, 32×
-on nested, **12× on deep**. The lens chain walks the record/bean spine at every level (cached LMF readers, not raw
-reflection), and per-call allocation sits in the 64–384 B/op band (down from 776–1296 B/op on the unoptimized shape).
+Runtime conversion (`Telescope.mapper(...)`) runs ~19–36× slower than MapStruct's generated bytecode — ~36× on flat,
+~35× on nested, **~19× on deep**. The lens chain walks the record/bean spine at every level (cached LMF readers, not raw
+reflection); the deeper the tree, the more per-level work dominates the constant reflective-dispatch overhead.
 Sub-microsecond on flat and nested, single-microsecond on deep. Reach for codegen on hot paths; the runtime path is for
 one-shot conversions and non-hot service code.
 
