@@ -48,10 +48,12 @@ branch to reproduce.
 | deep   | bean → record | 46.36 ± 0.240 |                53.41 ± 0.879 |                        52.68 ± 0.374 | 1.15× |
 | deep   | record → bean | 46.21 ± 0.436 |                53.03 ± 0.292 |                                    — | 1.15× |
 
-Runtime path (same run, context only): flat fwd 110.96, nested fwd 147.05, deep fwd 883.61 ns/op — ~36× / ~35× / ~19× of
-MapStruct. The runtime path goes through a structural-Iso build per `Telescope.mapper(...)` call site and a reflective
-dispatch chain on every invocation. It's not in the dethrone-MapStruct lane; it's the convenience surface for "I don't
-want to write codegen for this one mapper" workflows.
+Runtime path forward (after the `Beans.capturedReader` assembly-time capture): flat fwd 54.86, nested fwd 86.81, deep
+fwd 381.10 ns/op — ~17× / ~20× / ~8× of MapStruct, roughly half the pre-capture cost (was 111 / 147 / 884). The backward
+direction stays higher (flat bwd 154.86, deep bwd 859.65) because building a bean (allocate + N setters) is structurally
+heavier than a record's canonical-ctor invoke and its read side was already optimal. The runtime path goes through a
+structural-Iso build per `Telescope.mapper(...)` call site and a reflective dispatch chain on every invocation; it's not
+in the dethrone-MapStruct lane, it's the convenience surface for "I don't want to write codegen for this one mapper".
 
 ## The static `forward` benchmark — artifact resolved on CI
 
