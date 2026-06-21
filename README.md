@@ -341,14 +341,15 @@ branch, tune the iteration / fork knobs; the run prints `results.txt` and attach
 #### Then, what you gain
 
 The table is mostly "telescope: yes / MapStruct: not in scope" — bidirectional from one definition, deep navigation,
-effectful update, sealed-root dispatch, multi-source merge, JPA cycles + Hibernate `LAZY` unwrap. That asymmetry, not
-nanoseconds, is the decision.
+effectful update, accumulating validation, sealed-root dispatch, multi-source merge, JPA cycles + Hibernate `LAZY`
+unwrap. That asymmetry, not nanoseconds, is the decision.
 
 | Capability                                   | telescope                                                                                                                                                           | MapStruct                                                  |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | **Bidirectional out of the box**             | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)`                                                                 | One direction per `@Mapper` interface; reverse is separate |
 | **Deep nested navigation + update**          | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                                                                                    | Not in scope                                               |
 | **Effectful update**                         | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                                                                                               | Not in scope                                               |
+| **Accumulating validation**                  | `Validated.combine(...)` / `combineAll(...)` builds the target only when every field passes, collecting _all_ failures in one pass                                  | Throw on first bad field, or hand-rolled `@AfterMapping`   |
 | **Compile-time codegen**                     | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                                                                                           | `@Mapper` interfaces                                       |
 | **Runtime path (no codegen required)**       | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later                                                                             | Compile-time only                                          |
 | **Sealed types / pattern matching**          | `.as(Subtype.class)` narrows; the path stays type-safe                                                                                                              | Not in scope                                               |
@@ -362,6 +363,31 @@ nanoseconds, is the decision.
 | **Spring / Quarkus / CDI integration**       | `telescope-spring-boot-starter` (Spring Boot 4 autoconfig + `Mapper<A, B>` bean registry) + `telescope-quarkus` (Arc extension, Jandex-discovered)                  | Native via `componentModel = "spring"` / `"jsr330"` / etc. |
 | **Maturity**                                 | 1.0 line; JMH-backed perf claims                                                                                                                                    | Ten years; thousands of production deployments             |
 | **Dispatch perf — codegen vs codegen**       | **Same performance class — a tie at realistic depth** (1.15× deep, 1.5× on a trivial flat struct); both emit direct JIT-inlined calls. CI-reproducible matrix below | Direct bytecode, monomorphic call site                     |
+
+#### Accumulating validation — what MapStruct can't say
+
+Mapping a stringly-typed input into a typed domain object usually means validating several fields at once. MapStruct
+maps field-by-field with no way to _collect_ failures — you throw on the first bad field or hand-roll an `@AfterMapping`
+accumulator. Telescope ships `Validated` as a first-class effect, so "build the target only if every field passes, and
+report all failures in one pass" is a primitive:
+
+```java
+// Bad email AND bad age surface together — not just the first.
+final Validated<String, Account> account = Validated.combine(
+  validateEmail(form.email()),
+  validateAge(form.ageText()),
+  Account::new
+);
+
+// → Invalid[email: missing '@' …, age: out of range: 200]
+
+// combineAll folds a batch into one result — every error from every offending row:
+final Validated<String, List<Account>> batch = Validated.combineAll(rows.stream().map(this::mapForm).toList());
+```
+
+`combine` accumulates (applicative); `Either` short-circuits on the first failure. For 3+ fields, chain `combine`.
+Runnable in
+[`ValidatedMappingDemo`](examples/library/src/main/java/io/github/eschizoid/telescope/examples/ValidatedMappingDemo.java).
 
 #### Per-field source/target mapping — side by side
 
