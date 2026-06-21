@@ -20,12 +20,13 @@ import org.openjdk.jmh.infra.Blackhole;
  * Scaling benchmark for effectful traversal updates. Each benchmark traverses a list of {@code N}
  * elements and rebuilds it through one effect, where {@code N} is swept across orders of magnitude.
  *
- * <p>The purpose is to expose the complexity class of {@code Traversal#modifyF}'s accumulator, not
- * to produce an absolute ns/op headline. The default {@code modifyF} folds results into a fresh
- * {@code ArrayList} copy per element ({@code O(n^2)} total copying); the pure {@code update} path
- * walks {@code modify} once ({@code O(n)}). Reading the result: divide each row's ns/op by its
- * {@code size} to get per-element cost. If that per-element number is flat across sizes the path is
- * linear; if it climbs roughly proportionally with {@code size} the path is quadratic.
+ * <p>The purpose is to guard the complexity class of {@code Traversal#modifyF}'s accumulator, not
+ * to produce an absolute ns/op headline. {@code modifyF} writes each element's effectful result
+ * into its own slot of a pre-sized {@code Object[]} ({@code O(n)} total); the pure {@code update}
+ * path walks {@code modify} once ({@code O(n)}). Reading the result: divide each row's ns/op by its
+ * {@code size} to get per-element cost. A flat per-element number across sizes confirms the path
+ * stays linear; a number that climbs roughly proportionally with {@code size} is the failure signal
+ * — a regression back to a per-element list-copy fold ({@code O(n^2)}).
  *
  * <p>The synchronous effects ({@code updateOptional}, {@code updateValidated}) are measured with
  * every element succeeding, so the whole traversal is processed — no short-circuit masks the fold
