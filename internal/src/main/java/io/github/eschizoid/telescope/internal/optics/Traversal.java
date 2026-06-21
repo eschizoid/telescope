@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.internal.optics;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -61,13 +60,22 @@ public interface Traversal<S, A> extends Fold<S, A>, Setter<S, A> {
    * short-circuiting, error accumulation, empty-propagation) live entirely in the {@link
    * Applicative} instance — this method is effect-agnostic.
    *
-   * <p>Default implementation handles the many-focus case via an iterator trick: collect all
-   * focused values, sequence the effectful results into one effectful list, then map the result
-   * back through {@link #modify} pulling new values from the list in order. Relies on the invariant
-   * that {@code modify} visits focused elements in the same order {@link #getAll} enumerates them —
-   * true for every implementor in this package.
+   * <p>Default implementation handles the many-focus case by sequencing into a pre-sized positional
+   * array: collect all focused values, then fold each element's effectful result into its own slot
+   * of a fixed {@code Object[]}, and finally map the completed array back through {@link #modify},
+   * walking a cursor in order. Each slot is written exactly once, so the accumulator is {@code
+   * O(n)} — no per-element list copy. Relies on the invariant that {@code modify} visits focused
+   * elements in the same order {@link #getAll} enumerates them — true for every implementor in this
+   * package.
    *
-   * <p>Single-focus optics override this for a more direct path that skips the list allocation.
+   * <p>The {@link Applicative#map2 map2} fold threads the effect (sequencing, short-circuiting,
+   * error accumulation, empty-propagation) while the per-element slot writes stay cheap. The fold's
+   * dependency chain ({@code acc[i]} derives from {@code acc[i-1]}) serializes the combine
+   * callbacks in index order even for parallel effects like {@code CompletableFuture}, so the
+   * shared array is written one slot at a time under a happens-before chain — the futures
+   * themselves still run concurrently; only the cheap slot assignment is linearized.
+   *
+   * <p>Single-focus optics override this for a more direct path that skips the array allocation.
    */
   default <F extends Kind.Witness> Kind<F, S> modifyF(
     final Applicative<F> applicative,
@@ -77,25 +85,29 @@ public interface Traversal<S, A> extends Fold<S, A>, Setter<S, A> {
     final List<A> allAs = getAll(source).toList();
     if (allAs.isEmpty()) return applicative.pure(source);
 
-    Kind<F, List<A>> sequenced = applicative.pure(new ArrayList<>());
-    for (final var a : allAs) {
+    final Object[] slots = new Object[allAs.size()];
+    Kind<F, Object[]> sequenced = applicative.pure(slots);
+    for (var i = 0; i < allAs.size(); i++) {
       // True short-circuit: skip fn invocation on remaining elements once the accumulator
       // is in a non-recoverable failed state (Either.Left, Optional.empty). For applicatives
       // that accumulate (Validated) or evaluate in parallel (CompletableFuture), isFailed
       // returns false and every element is processed.
       if (applicative.isFailed(sequenced)) break;
-      final Kind<F, A> fa = fn.apply(a);
-      sequenced = applicative.map2(sequenced, fa, (list, newA) -> {
-        final var copy = new ArrayList<A>(list.size() + 1);
-        copy.addAll(list);
-        copy.add(newA);
-        return copy;
+      final var slot = i;
+      final Kind<F, A> fa = fn.apply(allAs.get(i));
+      sequenced = applicative.map2(sequenced, fa, (arr, newA) -> {
+        arr[slot] = newA;
+        return arr;
       });
     }
 
-    return applicative.map(sequenced, newValues -> {
-      final var iter = newValues.iterator();
-      return modify(source, ignored -> iter.next());
+    return applicative.map(sequenced, arr -> {
+      final int[] cursor = { 0 };
+      return modify(source, ignored -> {
+        @SuppressWarnings("unchecked")
+        final A next = (A) arr[cursor[0]++];
+        return next;
+      });
     });
   }
 
