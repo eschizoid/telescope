@@ -339,7 +339,7 @@ class LombokFocusProcessorTest {
     assertEquals(Telescope.class, get.getReturnType());
   }
 
-  private static void assertReturnsTelescope(final Class<?> pathClass, final String name) throws Exception {
+  private static void assertReturnsTelescope(final Class<?> pathClass, final String name) {
     final Method m;
     try {
       m = pathClass.getDeclaredMethod(name);

@@ -35,7 +35,7 @@ final class Merge {
 
   private Merge() {}
 
-  @SuppressWarnings({ "unchecked", "rawtypes" })
+  @SuppressWarnings("unchecked")
   static <T> Mapper<Sources, T> build(final Class<T> target, final MergeStep<T>[] steps) {
     Objects.requireNonNull(target, "Telescope.merge: target class is null");
     final var targetRefl = Reflective.of(target);
@@ -78,7 +78,6 @@ final class Merge {
     return Mapper.create(forward, backward, Sources.class, target, Map.of());
   }
 
-  @SuppressWarnings({ "unchecked", "rawtypes" })
   private static void resolveStep(
     final MergeStep<?> step,
     final int index,

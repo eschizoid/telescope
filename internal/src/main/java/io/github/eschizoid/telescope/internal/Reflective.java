@@ -259,13 +259,12 @@ public record Reflective(
     return arr -> cls.cast(construct(cls, i -> arr[nameIndex.get(i)]));
   }
 
-  @SuppressWarnings("unchecked")
+  @SuppressWarnings({ "unchecked", "rawtypes" })
   private Function<Object, Object>[] resolveReadersByPosition(
     final Class<?> cls,
     final String[] componentNames,
     final Map<String, Lens<Object, Object>> holderReaders
   ) {
-    @SuppressWarnings({ "unchecked", "rawtypes" })
     final var arr = (Function<Object, Object>[]) new Function[componentNames.length];
     // For records that fall through to this branch (holder present), short-circuit the wrapping
     // `instance -> read(instance, capturedName)` lambda by binding the LMF-built positional reader
@@ -295,11 +294,6 @@ public record Reflective(
     final var m = new HashMap<String, Integer>(names.length * 2);
     for (var i = 0; i < names.length; i++) m.put(names[i], i);
     return m;
-  }
-
-  private static int indexOf(final String[] names, final String name) {
-    for (var i = 0; i < names.length; i++) if (names[i].equals(name)) return i;
-    throw new IllegalArgumentException("No such field: " + name);
   }
 
   /**

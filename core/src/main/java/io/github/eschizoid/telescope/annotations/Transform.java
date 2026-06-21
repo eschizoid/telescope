@@ -72,7 +72,6 @@ public @interface Transform {
    * recoverable from a forward method name). {@link #forwardOnly()} is implicitly true when {@code
    * method} is set.
    */
-  @SuppressWarnings("rawtypes")
   Class<?> using();
 
   /**

@@ -1258,7 +1258,6 @@ public final class Beans {
    */
   static final class BuilderWriter<P> implements BeanWriter<P> {
 
-    private final Class<P> cls;
     private final Class<?> builderType;
     private final Supplier<Object> builderSupplier;
     private final Function<Object, Object> buildFn;
@@ -1268,7 +1267,6 @@ public final class Beans {
     private final Map<String, Object> setterInvokers = new ConcurrentHashMap<>();
 
     BuilderWriter(final Class<P> cls) {
-      this.cls = cls;
       Method factory = null;
       try {
         final var candidate = cls.getMethod("builder");
