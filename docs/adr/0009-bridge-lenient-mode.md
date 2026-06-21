@@ -1,6 +1,6 @@
 # ADR-0009: `@Bridge(lenient = true)` for the small-DTO → large-entity pattern
 
-**Status:** Proposed (v1.1+ candidate) · **Date:** 2026-06-16
+**Status:** Accepted — shipped in #148 · **Date:** 2026-06-16 (accepted 2026-06-21)
 
 ## Context
 

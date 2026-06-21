@@ -123,6 +123,14 @@ public class MapStructComparisonBenchmark {
     bh.consume(McFlatBeanBridge.forward(flatBean));
   }
 
+  @Benchmark
+  public void flat_telescope_codegen_bridgefn_forward(final Blackhole bh) {
+    // The emitted BRIDGE_FN constant — one interface hop, the same dispatch shape as MapStruct's
+    // INSTANCE.toRec(...). The passable, composition-free value an adopter calls in a hot loop;
+    // should land between BRIDGE.read (lattice) and the static forward (zero-hop) floor.
+    bh.consume(McFlatBeanBridge.BRIDGE_FN.forward(flatBean));
+  }
+
   // ---------- Flat — backward (record → bean) ----------
 
   @Benchmark

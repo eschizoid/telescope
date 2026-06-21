@@ -1699,7 +1699,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("  }");
         out.println();
         out.println(
-          "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(new Fn());"
+          "  /** Directly-callable mapper value — one interface hop, MapStruct's {@code INSTANCE.toRec(s)} cost."
+        );
+        out.println(
+          "   * Call {@code BRIDGE_FN.forward(s)} / {@code .backward(t)} in a hot loop; use {@code BRIDGE} for the"
+        );
+        out.println("   * composable lattice value. */");
+        out.println("  public static final BridgeFn<" + sourceFq + ", " + targetFq + "> BRIDGE_FN = new Fn();");
+        out.println(
+          "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
         );
         emitContainerHelpers(out, fieldPlans, nonDroppedSourceFields, targetFields, renames);
       }
@@ -1909,7 +1917,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("  }");
         out.println();
         out.println(
-          "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(new Fn());"
+          "  /** Directly-callable mapper value — one interface hop, MapStruct's {@code INSTANCE.toRec(s)} cost."
+        );
+        out.println(
+          "   * Call {@code BRIDGE_FN.forward(s)} / {@code .backward(t)} in a hot loop; use {@code BRIDGE} for the"
+        );
+        out.println("   * composable lattice value. */");
+        out.println("  public static final BridgeFn<" + sourceFq + ", " + targetFq + "> BRIDGE_FN = new Fn();");
+        out.println(
+          "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
         );
       }
     );
