@@ -216,7 +216,7 @@ class ReflectiveSurfaceTest {
     @Test
     @DisplayName("record fast-path: no holder data → cached canonical-ctor function applies the array directly")
     void recordFastPathBindsCanonicalCtor() {
-      final var builder = Reflective.RECORDS.<SimpleUser>positionalBuilder(SimpleUser.class, null, null);
+      final var builder = Reflective.RECORDS.positionalBuilder(SimpleUser.class, null, null);
       assertNotNull(builder);
       final SimpleUser built = builder.apply(new Object[] { "eve", 24 });
       assertEquals(new SimpleUser("eve", 24), built);
@@ -226,7 +226,7 @@ class ReflectiveSurfaceTest {
     @DisplayName("bean fallback: no holder data → array-positional construct path resolves via autoWriter")
     void beanFallbackUsesAutoWriter() {
       final String[] names = Reflective.BEANS.names(SimpleBean.class);
-      final var builder = Reflective.BEANS.<SimpleBean>positionalBuilder(SimpleBean.class, null, null);
+      final var builder = Reflective.BEANS.positionalBuilder(SimpleBean.class, null, null);
       // Build a values array matched to the bean's name order so the rebuild can reverse-lookup.
       final var arr = new Object[names.length];
       for (var i = 0; i < names.length; i++) {
@@ -297,7 +297,7 @@ class ReflectiveSurfaceTest {
           case "age" -> 99;
           default -> null;
         };
-      final var builder = Reflective.RECORDS.<SimpleUser>positionalBuilder(SimpleUser.class, Map.of(), ignored -> {
+      final var builder = Reflective.RECORDS.positionalBuilder(SimpleUser.class, Map.of(), ignored -> {
         holderInvocations.incrementAndGet();
         return new SimpleUser((String) sentinel.apply("name"), (Integer) sentinel.apply("age"));
       });

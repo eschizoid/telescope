@@ -84,7 +84,7 @@ final class EffectfulUpdateDemo {
     System.out.println("[updateOptional] all present : " + allOk);
 
     final Optional<Team> someEmpty = names.updateOptional(team, n ->
-      n.equals("bob") ? Optional.<String>empty() : Optional.of(n.toUpperCase())
+      n.equals("bob") ? Optional.empty() : Optional.of(n.toUpperCase())
     );
     System.out.println("[updateOptional] empty on bob: " + someEmpty + " (short-circuited)");
   }

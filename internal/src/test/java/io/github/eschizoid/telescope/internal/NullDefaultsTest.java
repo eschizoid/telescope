@@ -166,7 +166,7 @@ class NullDefaultsTest {
 
     @Test
     @DisplayName("RecordComponent.getGenericType() returning a ParameterizedType still resolves via the raw class")
-    void parameterizedTypeUnwrapsToRawClass() throws Exception {
+    void parameterizedTypeUnwrapsToRawClass() {
       // Real consumer path: NullDefaults is called with `RecordComponent.getGenericType()` for
       // container fields, which is a ParameterizedType. The unwrap branch (line 65) must route the
       // raw class lookup. A regression that handled only Class arguments would silently return

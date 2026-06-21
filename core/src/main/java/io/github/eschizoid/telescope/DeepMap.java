@@ -657,7 +657,6 @@ public final class DeepMap {
    * <p>All reads / writes go through the lattice's public {@link io.github.eschizoid.telescope
    * .Telescope} surface — no new optic primitives, no Iso composition beyond the base.
    */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
   private static <S, T> Iso<S, T> wrapWithTelescopeFixups(
     final Iso<S, T> base,
     final List<Mapping<?, ?>> fixups,
@@ -670,7 +669,7 @@ public final class DeepMap {
     );
   }
 
-  @SuppressWarnings({ "unchecked", "rawtypes" })
+  @SuppressWarnings("unchecked")
   private static <S, T> T applyForward(final T initial, final S s, final List<Mapping<?, ?>> fixups) {
     T t = initial;
     for (final var rawFx : fixups) {
@@ -760,7 +759,7 @@ public final class DeepMap {
     return t;
   }
 
-  @SuppressWarnings({ "unchecked", "rawtypes" })
+  @SuppressWarnings("unchecked")
   private static <S, T> S applyBackward(
     final S baseS,
     final T t,
@@ -822,7 +821,7 @@ public final class DeepMap {
    * target side without knowing T's runtime class up-front (generics erased), so we use the target
    * Reflective via the cached structural iso the same way the source-side path does.
    */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
+  @SuppressWarnings("unchecked")
   private static <S, T> T overrideTargetField(
     final T t,
     final FromTelescopeTo<?, ?, ?> r,
@@ -1625,125 +1624,10 @@ public final class DeepMap {
     Iso<Object, Object>[] bwdIso
   ) {}
 
-  /**
-   * Position-indexed variant of {@link #remapIso}. Precomputes {@code int[]} slot maps and a
-   * per-position {@code Iso[]} once at type-pair build time so the hot loop is one array-index +
-   * one virtual {@code Iso#to}/{@code Iso#from} per field. Sentinel slot {@code -1} for "no
-   * corresponding source/target field" (placeholder rows where {@code step.sourceName} or {@code
-   * step.targetName} is null) — the value defaults to {@code null}, matching the prior {@code
-   * Map.get(missingKey)} semantics.
-   */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Iso<Object[], Object[]> remapIsoArr(
-    final Map<String, FieldStep> byTargetName,
-    final Map<String, FieldStep> bySourceName,
-    final String[] srcNames,
-    final String[] tgtNames
-  ) {
-    final var srcIndex = indexMap(srcNames);
-    final var tgtIndex = indexMap(tgtNames);
-    final var srcArity = srcNames.length;
-    final var tgtArity = tgtNames.length;
-    final var fwdSrcPos = new int[tgtArity];
-    final var fwdIso = (Iso<Object, Object>[]) new Iso[tgtArity];
-    for (var i = 0; i < tgtArity; i++) {
-      final var step = byTargetName.get(tgtNames[i]);
-      if (step == null) {
-        fwdSrcPos[i] = -1;
-        fwdIso[i] = Iso.identity();
-      } else {
-        final var srcPos = step.sourceName == null ? null : srcIndex.get(step.sourceName);
-        fwdSrcPos[i] = srcPos == null ? -1 : srcPos;
-        fwdIso[i] = (Iso<Object, Object>) step.iso;
-      }
-    }
-    final var bwdTgtPos = new int[srcArity];
-    final var bwdIso = (Iso<Object, Object>[]) new Iso[srcArity];
-    for (var i = 0; i < srcArity; i++) {
-      final var step = bySourceName.get(srcNames[i]);
-      if (step == null) {
-        bwdTgtPos[i] = -1;
-        bwdIso[i] = Iso.identity();
-      } else {
-        final var tgtPos = step.targetName == null ? null : tgtIndex.get(step.targetName);
-        bwdTgtPos[i] = tgtPos == null ? -1 : tgtPos;
-        bwdIso[i] = (Iso<Object, Object>) step.iso;
-      }
-    }
-    // Cache the identity sentinel in a local so the reference-equality check JIT-inlines on the hot
-    // path. Auto-mapped same-typed fields hold this exact instance (see Iso.identity), so the
-    // short-circuit skips the virtual to/from dispatch on every pure-pass-through slot — the
-    // dominant case for flat conversions.
-    final Iso<Object, Object> identity = Iso.identity();
-    return Iso.of(
-      srcArr -> {
-        final var out = new Object[tgtArity];
-        for (var i = 0; i < tgtArity; i++) {
-          final var sp = fwdSrcPos[i];
-          final var v = sp < 0 ? null : srcArr[sp];
-          final var iso = fwdIso[i];
-          out[i] = iso == identity ? v : iso.to(v);
-        }
-        return out;
-      },
-      tgtArr -> {
-        final var out = new Object[srcArity];
-        for (var i = 0; i < srcArity; i++) {
-          final var tp = bwdTgtPos[i];
-          final var v = tp < 0 ? null : tgtArr[tp];
-          final var iso = bwdIso[i];
-          out[i] = iso == identity ? v : iso.from(v);
-        }
-        return out;
-      }
-    );
-  }
-
   private static Map<String, Integer> indexMap(final String[] names) {
     final var m = new HashMap<String, Integer>(names.length * 2);
     for (var i = 0; i < names.length; i++) m.put(names[i], i);
     return m;
-  }
-
-  /**
-   * Key + value remap between a source-keyed and a target-keyed structural map. Forward: for each
-   * target name, look up the source name via the step table and apply the per-field {@code Iso}
-   * forward; key the result under the target name. Backward: mirror image, with per-field {@code
-   * Iso.from} and source-name keying.
-   */
-  @SuppressWarnings("unchecked")
-  private static Iso<Map<String, Object>, Map<String, Object>> remapIso(
-    final Map<String, FieldStep> byTargetName,
-    final Map<String, FieldStep> bySourceName
-  ) {
-    return Iso.of(
-      srcMap -> {
-        final var out = new LinkedHashMap<String, Object>();
-        for (final var entry : byTargetName.entrySet()) {
-          final var step = entry.getValue();
-          out.put(entry.getKey(), ((Iso<Object, Object>) step.iso).to(srcMap.get(step.sourceName)));
-        }
-        return out;
-      },
-      tgtMap -> {
-        final var out = new LinkedHashMap<String, Object>();
-        for (final var entry : bySourceName.entrySet()) {
-          final var step = entry.getValue();
-          out.put(entry.getKey(), ((Iso<Object, Object>) step.iso).from(tgtMap.get(step.targetName)));
-        }
-        return out;
-      }
-    );
-  }
-
-  /**
-   * Wrap an {@link Iso} so {@code null} on either side short-circuits to {@code null}. The
-   * structural-iso decomposition would otherwise NPE on {@code structuralIso(...).from(null)} (the
-   * read loop dereferences the instance); preserving the prior null-pass-through behavior at the
-   * outermost layer keeps DeepMap drop-in compatible with the prior {@code assembleIso}.
-   */
-  private static <A, B> Iso<A, B> nullable(final Iso<A, B> inner) {
-    return Iso.of(a -> a == null ? null : inner.to(a), b -> b == null ? null : inner.from(b));
   }
 
   // ---------- Cycle-safe cache reader ----------
@@ -1843,8 +1727,8 @@ public final class DeepMap {
 
   /**
    * Placeholder Iso used by {@code Mapping.drop(srcAccessor)}'s backward pass — both directions
-   * return {@code null}. Only ever invoked in the {@link #remapIso} backward loop for source-only
-   * fields that have no target counterpart; the forward direction skips the field entirely.
+   * return {@code null}. Only ever invoked on the backward pass for source-only fields that have no
+   * target counterpart; the forward direction skips the field entirely.
    */
   private static final Iso<Object, Object> NULLING_ISO = Iso.of(__ -> null, __ -> null);
 

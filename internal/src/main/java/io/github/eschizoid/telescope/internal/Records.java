@@ -211,7 +211,6 @@ public final class Records {
     return info.readers()[idx].apply(source);
   }
 
-  @SuppressWarnings("unchecked")
   private static <S> S updateField(final S source, final String fieldName, final Function<Object, Object> fn) {
     if (source == null) return null;
     final var cls = source.getClass();
