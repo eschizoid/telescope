@@ -31,6 +31,7 @@ val demos = listOf(
     "MultiEditDemo",
     "IndexedDemo",
     "EffectfulUpdateDemo",
+    "ValidatedMappingDemo",
     "ConversionDemo",
     "DeepMappingDemo",
     "CodegenDemo",
