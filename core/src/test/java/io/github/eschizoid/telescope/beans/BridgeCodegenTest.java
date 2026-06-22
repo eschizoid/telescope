@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.beans;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -83,5 +84,36 @@ class BridgeCodegenTest {
     final var back = BridgePojoABridge.BRIDGE.set(a, replacement);
     assertEquals("u2", back.getId());
     assertEquals("B@Y", back.getEmail());
+  }
+
+  @Test
+  @DisplayName("primitive ↔ wrapper fields: forward auto-boxes; backward unboxes a non-null wrapper")
+  void primitiveWrapperRoundTrip() {
+    final var src = new BridgePrimRec(true, 7, "n");
+
+    // forward: boolean → Boolean, int → Integer (auto-box, always safe).
+    final var bo = BridgePrimRecBridge.BRIDGE.read(src);
+    assertEquals(Boolean.TRUE, bo.locked());
+    assertEquals(Integer.valueOf(7), bo.count());
+    assertEquals("n", bo.name());
+
+    // backward: a non-null Boolean / Integer auto-unboxes back to the primitives.
+    final var back = BridgePrimRecBridge.BRIDGE.set(src, new BridgePrimRecBO(false, 9, "m"));
+    assertEquals(false, back.locked());
+    assertEquals(9, back.count());
+    assertEquals("m", back.name());
+  }
+
+  @Test
+  @DisplayName(
+    "primitive ↔ wrapper backward with a null wrapper unboxes to NPE (matches the runtime default null strategy)"
+  )
+  void primitiveWrapperBackwardNullUnboxThrows() {
+    // The generated backward read is a bare unbox, so a null wrapper NPEs — the same as the runtime
+    // DeepMap's default PROPAGATE strategy. Pinned so the behaviour is characterised, not silent.
+    final var src = new BridgePrimRec(true, 7, "n");
+    assertThrows(NullPointerException.class, () ->
+      BridgePrimRecBridge.BRIDGE.set(src, new BridgePrimRecBO(null, 9, "m"))
+    );
   }
 }

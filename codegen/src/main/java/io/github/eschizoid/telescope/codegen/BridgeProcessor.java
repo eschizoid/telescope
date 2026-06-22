@@ -161,7 +161,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // its own (it falls back to BridgeConfig.EMPTY, which is strict), so without this its bijection
   // check would fail when the nested target has extra fields — even though the lenient parent
   // intends those to default. generate() ORs this into the per-pair lenient flag so leniency
-  // propagates to every nesting level, matching the runtime mapperForward(...) behaviour.
+  // propagates to every nested field/container level, matching the runtime mapperForward(...)
+  // behaviour. Cleared in processingOver() so a reused processor instance starts clean.
+  //
+  // Sticky-wins resolution: a sub-bridge class is emitted once per type pair, so if the SAME pair
+  // is
+  // reached from both a lenient and a strict parent the single emitted sub-bridge is lenient for
+  // both. That is more permissive, never less, so it cannot lose data the strict parent would have
+  // kept; the trade is that a strict parent's nested mismatch no longer fails when a lenient
+  // sibling
+  // also references the pair. Splitting into per-parent sub-bridges would be the stricter (and much
+  // larger) alternative.
   private final Set<TypePair> lenientPairs = new HashSet<>();
 
   // Set true around the deferred drain in processingOver() so sub-pair discovery inside
@@ -400,6 +410,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (roundEnv.processingOver()) {
       multiTargetSources.clear();
       configsByPair.clear();
+      lenientPairs.clear();
     }
     return true;
   }
@@ -2082,9 +2093,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         continue;
       }
       // (1b) Primitive ↔ its boxed wrapper (boolean↔Boolean, int↔Integer, …) → identity. The
-      //      generated read auto-boxes on the forward direction and auto-unboxes on the backward
-      //      direction exactly as Java does, matching the runtime DeepMap's primitive/wrapper
-      //      handling. Neither side is a reflectable declared type, but no sub-bridge is needed.
+      //      generated read auto-boxes on the forward direction (always safe) and auto-unboxes on
+      //      the backward direction. A null wrapper unboxes to an NPE there — the same as the
+      //      runtime's default PROPAGATE null strategy; the runtime's opt-in null-defaulting
+      //      strategy has no codegen equivalent. Neither side is a reflectable declared type, but
+      // no
+      //      sub-bridge is needed.
       if (isPrimitiveWrapperPair(sf.type(), tf.type())) {
         plans.put(sf.name(), FieldPlan.identity());
         continue;
@@ -2491,7 +2505,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   // True when one of {a, b} is a primitive and the other is exactly its boxed wrapper (boolean ↔
   // Boolean, int ↔ Integer, …). Order-independent. Lets field-bridge planning treat such pairs as
-  // identity, matching the runtime DeepMap autobox/unbox behaviour.
+  // identity (forward auto-boxes, backward auto-unboxes).
   private boolean isPrimitiveWrapperPair(final TypeMirror a, final TypeMirror b) {
     return isBoxedOf(a, b) || isBoxedOf(b, a);
   }
