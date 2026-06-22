@@ -1,6 +1,6 @@
 # ADR-0008: `Telescope.fromMap(Class<T>, MapExtractStep...)` for untyped sources
 
-**Status:** Proposed (v1.1+ candidate) · **Date:** 2026-06-16
+**Status:** Accepted — shipped in #150 · **Date:** 2026-06-16 (accepted 2026-06-21)
 
 ## Context
 

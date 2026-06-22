@@ -20,7 +20,9 @@ import org.openjdk.jmh.infra.Blackhole;
  *
  * <h2>What the rows measure</h2>
  *
- * <p>Three depth tiers × two directions × three engines, plus one static-forward row per tier:
+ * <p>Three depth tiers × two directions × three engines, plus one static-forward row per tier and a
+ * {@code BRIDGE_FN.forward} row on the flat tier (the directly-callable one-interface-hop
+ * constant):
  *
  * <ul>
  *   <li>{@code flat_*} — five scalar fields, no nesting.
@@ -121,6 +123,14 @@ public class MapStructComparisonBenchmark {
     // Direct static call — same shape MapStruct's INSTANCE.toRec(...) compiles to. Isolates the
     // codegen output quality from the Telescope lattice dispatch the BRIDGE.read(...) path pays.
     bh.consume(McFlatBeanBridge.forward(flatBean));
+  }
+
+  @Benchmark
+  public void flat_telescope_codegen_bridgefn_forward(final Blackhole bh) {
+    // The emitted BRIDGE_FN constant — one interface hop, the same dispatch shape as MapStruct's
+    // INSTANCE.toRec(...). The passable, composition-free value an adopter calls in a hot loop;
+    // should land between BRIDGE.read (lattice) and the static forward (zero-hop) floor.
+    bh.consume(McFlatBeanBridge.BRIDGE_FN.forward(flatBean));
   }
 
   // ---------- Flat — backward (record → bean) ----------
