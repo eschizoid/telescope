@@ -1,7 +1,6 @@
 package io.github.eschizoid.telescope.beans;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -106,14 +105,32 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "primitive ↔ wrapper backward with a null wrapper unboxes to NPE (matches the runtime default null strategy)"
+    "primitive ↔ wrapper backward with a null wrapper null-defaults to the primitive's JLS default (parity with runtime primitiveWrapperIso)"
   )
-  void primitiveWrapperBackwardNullUnboxThrows() {
-    // The generated backward read is a bare unbox, so a null wrapper NPEs — the same as the runtime
-    // DeepMap's default PROPAGATE strategy. Pinned so the behaviour is characterised, not silent.
+  void primitiveWrapperBackwardNullUnboxDefaults() {
+    // A null wrapper on the backward (unbox) direction must coalesce to the primitive's JLS default
+    // (false / 0), not NPE — matching the runtime DeepMap primitiveWrapperIso, which null-defaults
+    // both directions of the box/unbox conversion.
     final var src = new BridgePrimRec(true, 7, "n");
-    assertThrows(NullPointerException.class, () ->
-      BridgePrimRecBridge.BRIDGE.set(src, new BridgePrimRecBO(null, 9, "m"))
-    );
+    final var back = BridgePrimRecBridge.BRIDGE.set(src, new BridgePrimRecBO(null, null, "m"));
+    assertEquals(false, back.locked());
+    assertEquals(0, back.count());
+    assertEquals("m", back.name());
+  }
+
+  @Test
+  @DisplayName(
+    "primitive ↔ wrapper forward with a null wrapper source null-defaults the primitive target (the other direction's wiring)"
+  )
+  void primitiveWrapperForwardNullDefaults() {
+    // Reverse orientation: wrapper source, primitive target — so the FORWARD (read) direction
+    // writes
+    // the primitive and must null-default a null wrapper source to false / 0, pinning the
+    // fwdNullDefault wiring at runtime (the backward test pins bwdNullDefault).
+    final var src = new BridgeWrapRec(null, null, "m");
+    final var bo = BridgeWrapRecBridge.BRIDGE.read(src);
+    assertEquals(false, bo.flag());
+    assertEquals(0, bo.num());
+    assertEquals("m", bo.name());
   }
 }

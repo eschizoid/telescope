@@ -3978,7 +3978,7 @@ class BridgeProcessorTest {
   }
 
   @Nested
-  @DisplayName("Primitive ↔ wrapper fields auto-bridge as identity (forward auto-box, backward unbox)")
+  @DisplayName("Primitive ↔ wrapper fields auto-bridge with box/unbox and backward null-default")
   class PrimitiveWrapperBridging {
 
     @Test
@@ -4006,8 +4006,8 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.SrcBridge");
       assertNotNull(generated, () -> "SrcBridge not generated; saw " + compilation.generated().keySet());
-      // The primitive/wrapper field is treated as identity: forward auto-boxes, backward
-      // auto-unboxes.
+      // The primitive/wrapper field is handled by the PRIM_WRAPPER plan: forward auto-boxes,
+      // backward unboxes and null-defaults to the primitive's JLS default.
       assertTrue(generated.contains("locked"), generated);
     }
 
