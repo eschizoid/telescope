@@ -95,10 +95,13 @@ class FocusProcessorTest {
       final var generated = compilation.generated().get("demo.PairTelescope");
       assertNotNull(generated, () -> "PairPath not generated; saw " + compilation.generated().keySet());
 
-      // For the 'left' navigator: (s, v) -> new Pair(v, s.right())
-      assertTrue(generated.contains("(s, v) -> new Pair(v, s.right())"), generated);
-      // For the 'right' navigator: (s, v) -> new Pair(s.left(), v)
-      assertTrue(generated.contains("(s, v) -> new Pair(s.left(), v)"), generated);
+      // Off-path component reads are null-guarded so the lens rebuilds a fresh record when it
+      // writes
+      // into a never-constructed nested intermediate; the focused component takes v unguarded.
+      // For the 'left' navigator: (s, v) -> new Pair(v, (s == null ? null : s.right()))
+      assertTrue(generated.contains("(s, v) -> new Pair(v, (s == null ? null : s.right()))"), generated);
+      // For the 'right' navigator: (s, v) -> new Pair((s == null ? null : s.left()), v)
+      assertTrue(generated.contains("(s, v) -> new Pair((s == null ? null : s.left()), v)"), generated);
     }
   }
 

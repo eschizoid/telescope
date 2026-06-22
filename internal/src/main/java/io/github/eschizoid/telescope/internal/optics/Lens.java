@@ -85,9 +85,11 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
    *       default never runs and the null-source write surfaces as a missing-leaf result rather
    *       than a fabricated record.
    *   <li>{@code @Focus} canonical-ctor codegen lens — the generated setter reads sibling
-   *       components off the source ({@code (s, v) -> new R(v, s.other())}); {@code set(null,
-   *       value)} NPEs on the off-path read. Record write paths through a null intermediate
-   *       therefore still crash loudly at the missing hop, by design.
+   *       components off the source, each null-guarded: {@code (s, v) -> new R(v, s == null ? null
+   *       : s.other())}. So {@code set(null, value)} rebuilds a fresh record at any nesting depth —
+   *       the focused component takes the incoming value and every off-path component falls to its
+   *       JLS default (null for references, 0/false for primitives), the same null-tolerant write
+   *       the {@code @BeanFocus} setter lens provides. A single-component record emits no guard.
    * </ul>
    *
    * <p>Strict direct {@code .get(null)} on the atomic Lens stays strict (consistent with {@link

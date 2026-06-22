@@ -1,6 +1,8 @@
 package io.github.eschizoid.telescope.focus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,5 +36,29 @@ class BeanFocusCodegenTest {
     final var updated = FocusBuilderBeanTelescope.of().email().update(bean, String::toLowerCase);
     assertEquals("a@x", updated.getEmail());
     assertEquals("u1", updated.getId());
+  }
+
+  @Test
+  @DisplayName(
+    "navigator write through an N-hop chain whose multi-property intermediate is null constructs every hop and defaults off-path properties"
+  )
+  void navigatorWriteThroughNullMultiPropertyIntermediate() {
+    // Pure codegen path: the generated <X>Telescope navigator (not the runtime ofBean().field()
+    // factory), driving Telescope.set through a composed lens chain rather than DeepMap. Writing
+    // the
+    // leaf into a freshly-built root — every intermediate null — must construct each hop through
+    // the
+    // null-tolerant generated lenses, including the multi-property address whose off-path
+    // countryName / zipCode default instead of NPE-ing.
+    final var built = MultiPropWriteOuterTelescope.of()
+      .mid()
+      .address()
+      .cityName()
+      .set(new MultiPropWriteOuter(), "navtown");
+    assertNotNull(built.getMid(), "hop-1 intermediate constructed");
+    assertNotNull(built.getMid().getAddress(), "null multi-property hop-2 intermediate constructed");
+    assertEquals("navtown", built.getMid().getAddress().getCityName(), "focused leaf written through the navigator");
+    assertNull(built.getMid().getAddress().getCountryName(), "off-path reference defaulted to null");
+    assertEquals(0, built.getMid().getAddress().getZipCode(), "off-path primitive defaulted to 0");
   }
 }

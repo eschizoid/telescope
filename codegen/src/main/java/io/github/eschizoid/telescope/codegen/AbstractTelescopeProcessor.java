@@ -1013,7 +1013,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * ""}, {@code List → List.of()}, etc.) live only in {@code NullDefaults}; the codegen path emits
    * a plain reference cast there and lets the runtime substitution kick in.
    */
-  private static Optional<String> primitiveDefaultLiteral(final TypeKind kind) {
+  protected static Optional<String> primitiveDefaultLiteral(final TypeKind kind) {
     return switch (kind) {
       case BOOLEAN -> Optional.of("false");
       case BYTE -> Optional.of("(byte) 0");
