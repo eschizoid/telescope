@@ -201,7 +201,18 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
       final var comp = components.get(i);
       final var compName = comp.getSimpleName().toString();
       final var castType = shortenStdImports(boxedType(comp.asType()));
-      out.print("(" + castType + ") values.apply(\"" + compName + "\")");
+      final var apply = "values.apply(\"" + compName + "\")";
+      // A primitive component null-guards with an instanceof-default so a null boxed value takes
+      // the
+      // JLS default instead of NPE-ing on the canonical-constructor unbox — same guard the bean
+      // construct emits via valueExprForProp. The pattern variable is named per-component because
+      // all
+      // arguments live in one `new R(...)` expression, so a shared name could collide.
+      final var pv = "__v_" + compName;
+      final var arg = primitiveDefaultLiteral(comp.asType().getKind())
+        .map(def -> apply + " instanceof " + castType + " " + pv + " ? " + pv + " : " + def)
+        .orElseGet(() -> "(" + castType + ") " + apply);
+      out.print(arg);
       if (i < components.size() - 1) out.print(", ");
     }
     out.println(");");

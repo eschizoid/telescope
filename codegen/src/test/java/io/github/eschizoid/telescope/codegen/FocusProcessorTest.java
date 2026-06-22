@@ -616,12 +616,15 @@ class FocusProcessorTest {
       // construct() signature: public static Person construct(final Function<String, Object>
       // values)
       assertTrue(holder.contains("public static Person construct(final Function<String, Object> values)"), holder);
-      // The body must call the canonical constructor with per-component casts pulled from
-      // values.apply(...). Primitives surface as their boxed equivalents (the auto-unbox happens
-      // implicitly at the canonical-ctor call site).
+      // The body must call the canonical constructor with per-component values pulled from
+      // values.apply(...). Reference components use a plain cast; primitive components null-guard
+      // with an instanceof-default so a null boxed value takes the JLS default instead of NPE-ing
+      // on
+      // the canonical-ctor unbox (per-component pattern variable to avoid collisions in the single
+      // `new R(...)` expression).
       assertTrue(holder.contains("return new Person("), holder);
       assertTrue(holder.contains("(String) values.apply(\"name\")"), holder);
-      assertTrue(holder.contains("(Integer) values.apply(\"age\")"), holder);
+      assertTrue(holder.contains("values.apply(\"age\") instanceof Integer __v_age ? __v_age : 0"), holder);
       // Function import has to be in the holder's import block — extra import collected by
       // emitMetadataHolder, alongside any java.util container imports.
       assertTrue(holder.contains("import java.util.function.Function;"), holder);

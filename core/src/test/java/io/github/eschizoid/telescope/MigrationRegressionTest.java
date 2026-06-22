@@ -34,6 +34,7 @@ import io.github.eschizoid.telescope.focus.OptionalTargetBean;
 import io.github.eschizoid.telescope.focus.PlainChainLeaf;
 import io.github.eschizoid.telescope.focus.PlainChainMid;
 import io.github.eschizoid.telescope.focus.PlainChainOuter;
+import io.github.eschizoid.telescope.focus.PrimitiveIntRecord;
 import io.github.eschizoid.telescope.focus.PrimitiveIntTarget;
 import io.github.eschizoid.telescope.focus.WriteChainLeaf;
 import io.github.eschizoid.telescope.focus.WriteChainMid;
@@ -2432,6 +2433,24 @@ class MigrationRegressionTest {
       // src.attemptCount left null
       final var dto = assertDoesNotThrow(() -> mapper.forward(src));
       assertEquals(0, dto.getAttemptCount()); // JLS default for int
+    }
+
+    @Test
+    @DisplayName("forward(source) with null boxed Integer to @Focus RECORD primitive int component uses JLS default")
+    void nullBoxedToPrimitiveRecordComponentUsesJlsDefault() {
+      // Record sibling of the bean case: the generated record holder's construct(Function) rebuilds
+      // via the canonical constructor, so a null boxed value bound to a primitive component must
+      // take the JLS default rather than NPE-ing on the implicit unbox. The bean construct guards
+      // this via valueExprForProp; the record construct must too.
+      final var mapper = Telescope.mapperForward(
+        NullableIntegerSource.class,
+        PrimitiveIntRecord.class,
+        Mapping.to(NullableIntegerSource::getAttemptCount, PrimitiveIntRecord::attemptCount)
+      );
+      final var src = new NullableIntegerSource();
+      // src.attemptCount left null
+      final var rec = assertDoesNotThrow(() -> mapper.forward(src));
+      assertEquals(0, rec.attemptCount()); // JLS default for int
     }
   }
 
