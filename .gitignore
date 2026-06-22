@@ -9,3 +9,6 @@ bin/
 .claude/
 .junie/
 /.token-savior-cache.json
+
+# Local-only adopter migration feedback log — kept out of the published repo.
+/docs/migration-feedback.md
