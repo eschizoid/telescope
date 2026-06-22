@@ -373,8 +373,16 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var user = compilation.generated().get("demo.UserBridge");
       assertNotNull(user);
-      assertTrue(user.contains("s.profile().map(ProfileToProfileDtoBridge::forward)"), user);
-      assertTrue(user.contains("t.profile().map(ProfileToProfileDtoBridge::backward)"), user);
+      // Both directions null-guard the Optional reference before .map(...), matching the runtime
+      // Iso.liftOptional (ox == null ? null : ox.map(...)).
+      assertTrue(
+        user.contains("(s.profile() == null ? null : s.profile().map(ProfileToProfileDtoBridge::forward))"),
+        user
+      );
+      assertTrue(
+        user.contains("(t.profile() == null ? null : t.profile().map(ProfileToProfileDtoBridge::backward))"),
+        user
+      );
     }
 
     @Test

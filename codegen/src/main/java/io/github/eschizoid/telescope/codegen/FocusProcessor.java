@@ -185,9 +185,10 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
   }
 
   // Emit a `public static <Record> construct(Function<String, Object> values)` that calls the
-  // canonical constructor directly with cast-pulled values — the runtime hybrid dispatch in
-  // MetadataHolderProbe / Reflective#structuralIso routes here, bypassing the reflective
-  // Records.construct path for annotated records.
+  // canonical constructor directly: a reference component is a plain cast, a primitive component is
+  // pulled through an instanceof-default null-guard (so a null boxed value takes the JLS default
+  // instead of NPE-ing on the unbox). The runtime hybrid dispatch in MetadataHolderProbe /
+  // Reflective#structuralIso routes here, bypassing the reflective Records.construct path.
   private void emitRecordConstruct(
     final PrintWriter out,
     final String recordName,

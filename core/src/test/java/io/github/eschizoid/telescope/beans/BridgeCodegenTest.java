@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -148,7 +149,7 @@ class BridgeCodegenTest {
     assertNull(dstForward.maybe(), "null Optional source bridges forward to null, not NPE");
 
     final var srcBackward = assertDoesNotThrow(() ->
-      OptSrcBridge.BRIDGE.set(new OptSrc(java.util.Optional.empty()), new OptDst(null))
+      OptSrcBridge.BRIDGE.set(new OptSrc(Optional.empty()), new OptDst(null))
     );
     assertNull(srcBackward.maybe(), "null Optional target bridges backward to null, not NPE");
   }
@@ -156,10 +157,27 @@ class BridgeCodegenTest {
   @Test
   @DisplayName("Optional bridge: a present Optional round-trips through the element sub-bridge")
   void optionalPresentRoundTrips() {
-    final var src = new OptSrc(java.util.Optional.of(new OptElem("x")));
+    final var src = new OptSrc(Optional.of(new OptElem("x")));
     final var dst = OptSrcBridge.BRIDGE.read(src);
-    assertEquals(java.util.Optional.of(new OptElemBO("x")), dst.maybe());
+    assertEquals(Optional.of(new OptElemBO("x")), dst.maybe());
     final var back = OptSrcBridge.BRIDGE.set(src, dst);
-    assertEquals(java.util.Optional.of(new OptElem("x")), back.maybe());
+    assertEquals(Optional.of(new OptElem("x")), back.maybe());
+  }
+
+  @Test
+  @DisplayName(
+    "nullable→Optional bridge: a null Optional target reference passes through backward as null instead of NPE"
+  )
+  void nullableToOptionalBackwardNullGuard() {
+    // NtoOSrc.maybe is a plain (nullable) OptElem; NtoODst.maybe is Optional<OptElemBO>. The
+    // backward
+    // (set) direction reads the TARGET Optional, so a null Optional reference there must not NPE on
+    // the generated .map(...) — exercising the NULLABLE_TO_OPTIONAL backward guard.
+    final var back = assertDoesNotThrow(() -> NtoOSrcBridge.BRIDGE.set(new NtoOSrc(null), new NtoODst(null)));
+    assertNull(back.maybe(), "null Optional target bridges backward to a null source field, not NPE");
+
+    // Forward and a present round-trip still work.
+    final var fwd = NtoOSrcBridge.BRIDGE.read(new NtoOSrc(new OptElem("y")));
+    assertEquals(Optional.of(new OptElemBO("y")), fwd.maybe());
   }
 }
