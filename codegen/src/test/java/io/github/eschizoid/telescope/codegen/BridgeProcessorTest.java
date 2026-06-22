@@ -3976,4 +3976,94 @@ class BridgeProcessorTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("Primitive ↔ wrapper fields auto-bridge as identity (codegen parity with runtime DeepMap)")
+  class PrimitiveWrapperBridging {
+
+    @Test
+    @DisplayName("a boolean field bridged to a Boolean field compiles and emits a bridge instead of erroring")
+    void primitiveToWrapperFieldAutoBridges() {
+      final var compilation = compile(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.Dst.class)
+          public record Src(boolean locked, String name) {}
+          """
+        ),
+        source(
+          "demo.Dst",
+          """
+          package demo;
+          public record Dst(Boolean locked, String name) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.SrcBridge");
+      assertNotNull(generated, () -> "SrcBridge not generated; saw " + compilation.generated().keySet());
+      // The primitive/wrapper field is treated as identity: forward auto-boxes, backward
+      // auto-unboxes.
+      assertTrue(generated.contains("locked"), generated);
+    }
+  }
+
+  @Nested
+  @DisplayName("@Bridge(lenient = true) propagates leniency into nested sub-pairs")
+  class LenientNestedPropagation {
+
+    @Test
+    @DisplayName(
+      "a lenient parent whose nested target sub-type has an extra field compiles (sub-pair inherits lenient)"
+    )
+    void lenientPropagatesIntoNestedSubPair() {
+      final var compilation = compile(
+        source(
+          "demo.Outer",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.OuterBO.class, lenient = true)
+          public record Outer(demo.Inner inner) {}
+          """
+        ),
+        source(
+          "demo.Inner",
+          """
+          package demo;
+          public record Inner(String a) {}
+          """
+        ),
+        source(
+          "demo.OuterBO",
+          """
+          package demo;
+          public record OuterBO(demo.InnerBO inner) {}
+          """
+        ),
+        source(
+          "demo.InnerBO",
+          """
+          package demo;
+          public record InnerBO(String a, String extra) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      assertNotNull(
+        compilation.generated().get("demo.OuterBridge"),
+        () -> "OuterBridge not generated; saw " + compilation.generated().keySet()
+      );
+      // The nested sub-bridge is emitted leniently: InnerBO's extra field has no source counterpart
+      // and is defaulted rather than failing the strict bijection. (Auto-recursed sub-pairs use the
+      // disambiguated <Source>To<Target>Bridge name.)
+      final var sub = compilation.generated().get("demo.InnerToInnerBOBridge");
+      assertNotNull(sub, () -> "Inner sub-bridge not generated; saw " + compilation.generated().keySet());
+    }
+  }
 }

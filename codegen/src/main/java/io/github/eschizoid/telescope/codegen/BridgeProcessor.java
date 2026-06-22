@@ -28,6 +28,7 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
@@ -155,6 +156,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // BridgeConfig.EMPTY at lookup time, same as the auto-recursed case in the eager path).
   private final Set<TypePair> deferredPairs = new LinkedHashSet<>();
   private final Map<TypePair, BridgeConfig> deferredConfigs = new HashMap<>();
+
+  // Sub-pairs that an enclosing lenient @Bridge referenced. A sub-pair carries no BridgeConfig of
+  // its own (it falls back to BridgeConfig.EMPTY, which is strict), so without this its bijection
+  // check would fail when the nested target has extra fields — even though the lenient parent
+  // intends those to default. generate() ORs this into the per-pair lenient flag so leniency
+  // propagates to every nesting level, matching the runtime mapperForward(...) behaviour.
+  private final Set<TypePair> lenientPairs = new HashSet<>();
 
   // Set true around the deferred drain in processingOver() so sub-pair discovery inside
   // generate(...) / generateSealed(...) / planFieldSubBridges(...) / planElementSubBridge(...)
@@ -1090,7 +1098,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var writeStrategy = cfg.writeStrategy();
     final var rawConstants = cfg.constants();
     final var computes = cfg.computes();
-    final var lenient = cfg.lenient();
+    // A pair is lenient if its own config says so, or if an enclosing lenient @Bridge referenced it
+    // as a sub-pair (leniency propagates down the nesting).
+    final var lenient = cfg.lenient() || lenientPairs.contains(thisPair);
 
     // Validate every transform field is a real source field (drops would mask the validation).
     for (final var t : transforms.keySet()) {
@@ -1494,7 +1504,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       viaMappers,
       pending,
       seen,
-      userDeclared
+      userDeclared,
+      lenient
     );
     if (fieldPlans == null) return;
 
@@ -2040,7 +2051,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Map<String, String> viaMappers,
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
-    final Set<TypePair> userDeclared
+    final Set<TypePair> userDeclared,
+    final boolean lenient
   ) {
     final var plans = new LinkedHashMap<String, FieldPlan>();
     for (final var sf : sourceFields) {
@@ -2066,6 +2078,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var tf = fieldByName(targetFields, renames.getOrDefault(sf.name(), sf.name()));
       // (1) Same type → identity. Covers same-typed containers too (List<X>↔List<X> is identity).
       if (isSameType(sf.type(), tf.type())) {
+        plans.put(sf.name(), FieldPlan.identity());
+        continue;
+      }
+      // (1b) Primitive ↔ its boxed wrapper (boolean↔Boolean, int↔Integer, …) → identity. The
+      //      generated read auto-boxes on the forward direction and auto-unboxes on the backward
+      //      direction exactly as Java does, matching the runtime DeepMap's primitive/wrapper
+      //      handling. Neither side is a reflectable declared type, but no sub-bridge is needed.
+      if (isPrimitiveWrapperPair(sf.type(), tf.type())) {
         plans.put(sf.name(), FieldPlan.identity());
         continue;
       }
@@ -2160,6 +2180,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           if (shouldDeferSubPair(subSourceEl, subTargetEl)) deferredPairs.add(subPair);
           else pending.add(subPair);
         }
+        // Leniency propagates: a lenient parent's nested sub-pair is itself lenient, so its
+        // bijection check is skipped and unmatched nested-target fields take JLS defaults.
+        if (lenient) lenientPairs.add(subPair);
         final var subBridgeName = bridgeClassName(subSourceEl, subTargetEl, userDeclared.contains(subPair));
         plans.put(sf.name(), FieldPlan.recurse(subBridgeName));
         continue;
@@ -2464,6 +2487,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private boolean isSameType(final TypeMirror a, final TypeMirror b) {
     return processingEnv.getTypeUtils().isSameType(a, b);
+  }
+
+  // True when one of {a, b} is a primitive and the other is exactly its boxed wrapper (boolean ↔
+  // Boolean, int ↔ Integer, …). Order-independent. Lets field-bridge planning treat such pairs as
+  // identity, matching the runtime DeepMap autobox/unbox behaviour.
+  private boolean isPrimitiveWrapperPair(final TypeMirror a, final TypeMirror b) {
+    return isBoxedOf(a, b) || isBoxedOf(b, a);
+  }
+
+  // True when `prim` is a primitive and `boxed` is exactly its boxed wrapper type.
+  private boolean isBoxedOf(final TypeMirror prim, final TypeMirror boxed) {
+    if (!prim.getKind().isPrimitive() || !(boxed instanceof DeclaredType)) return false;
+    final var types = processingEnv.getTypeUtils();
+    return types.isSameType(types.boxedClass((PrimitiveType) prim).asType(), boxed);
   }
 
   /** Whether the declared type is a record/class telescope can recurse into. */
