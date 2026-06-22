@@ -373,8 +373,16 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var user = compilation.generated().get("demo.UserBridge");
       assertNotNull(user);
-      assertTrue(user.contains("s.profile().map(ProfileToProfileDtoBridge::forward)"), user);
-      assertTrue(user.contains("t.profile().map(ProfileToProfileDtoBridge::backward)"), user);
+      // Both directions null-guard the Optional reference before .map(...), matching the runtime
+      // Iso.liftOptional (ox == null ? null : ox.map(...)).
+      assertTrue(
+        user.contains("(s.profile() == null ? null : s.profile().map(ProfileToProfileDtoBridge::forward))"),
+        user
+      );
+      assertTrue(
+        user.contains("(t.profile() == null ? null : t.profile().map(ProfileToProfileDtoBridge::backward))"),
+        user
+      );
     }
 
     @Test
@@ -467,9 +475,16 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var order = compilation.generated().get("demo.OrderBridge");
       assertNotNull(order);
-      // Forward: Optional<Address>.map(AddressBridge::forward).orElse(null)
-      assertTrue(order.contains("s.giftWrap().map(AddressToAddressEntityBridge::forward).orElse(null)"), order);
-      // Backward: Optional.ofNullable(...).map(AddressBridge::backward)
+      // Forward (OPTIONAL_TO_NULLABLE) reads the source Optional, so it null-guards the reference
+      // before .map(...), matching the runtime Iso.liftOptionalToNullable (ox == null ? null :
+      // ...).
+      assertTrue(
+        order.contains(
+          "(s.giftWrap() == null ? null : s.giftWrap().map(AddressToAddressEntityBridge::forward).orElse(null))"
+        ),
+        order
+      );
+      // Backward: Optional.ofNullable(...) is already null-safe on the plain target value.
       assertTrue(order.contains("import java.util.Optional;"), order);
       assertTrue(
         order.contains("Optional.ofNullable(t.giftWrap()).map(AddressToAddressEntityBridge::backward)"),
@@ -4139,6 +4154,54 @@ class BridgeProcessorTest {
       assertTrue(
         compilation.hasError("same field names"),
         () -> "expected a nested bijection diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "lenient propagates into a CONTAINER-ELEMENT sub-pair (List<Elem> whose element target has an extra field compiles)"
+    )
+    void lenientPropagatesIntoContainerElementSubPair() {
+      // The runtime treats every nested auto-recursed pair as lenient, including container element
+      // pairs. Codegen previously only propagated lenient into scalar sub-pairs; a List<Elem> whose
+      // element sub-bridge has a field mismatch must now also inherit the parent's leniency.
+      final var compilation = compile(
+        source(
+          "demo.LOuter",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.LOuterBO.class, lenient = true)
+          public record LOuter(java.util.List<demo.LElem> items) {}
+          """
+        ),
+        source(
+          "demo.LElem",
+          """
+          package demo;
+          public record LElem(String a) {}
+          """
+        ),
+        source(
+          "demo.LOuterBO",
+          """
+          package demo;
+          public record LOuterBO(java.util.List<demo.LElemBO> items) {}
+          """
+        ),
+        source(
+          "demo.LElemBO",
+          """
+          package demo;
+          public record LElemBO(String a, String extra) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      assertNotNull(
+        compilation.generated().get("demo.LElemToLElemBOBridge"),
+        () -> "element sub-bridge not generated; saw " + compilation.generated().keySet()
       );
     }
   }

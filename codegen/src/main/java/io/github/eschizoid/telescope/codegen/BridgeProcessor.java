@@ -2167,7 +2167,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           srcShape.kind(),
           pending,
           seen,
-          userDeclared
+          userDeclared,
+          lenient
         );
         if (subPlan == null) return null;
         plans.put(sf.name(), subPlan);
@@ -2185,7 +2186,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           FieldPlan.Kind.OPTIONAL_TO_NULLABLE,
           pending,
           seen,
-          userDeclared
+          userDeclared,
+          lenient
         );
         if (subPlan == null) return null;
         plans.put(sf.name(), subPlan);
@@ -2201,7 +2203,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           FieldPlan.Kind.NULLABLE_TO_OPTIONAL,
           pending,
           seen,
-          userDeclared
+          userDeclared,
+          lenient
         );
         if (subPlan == null) return null;
         plans.put(sf.name(), subPlan);
@@ -2269,7 +2272,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final FieldPlan.Kind kind,
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
-    final Set<TypePair> userDeclared
+    final Set<TypePair> userDeclared,
+    final boolean lenient
   ) {
     if (isSameType(srcElement, tgtElement)) {
       // Container kind matters (lift), but no sub-bridge — the element passes through. Use a
@@ -2293,6 +2297,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (shouldDeferSubPair(subSourceEl, subTargetEl)) deferredPairs.add(subPair);
         else pending.add(subPair);
       }
+      // Leniency propagates into the element pair too, matching the scalar sub-pair path.
+      if (lenient) lenientPairs.add(subPair);
       final var subBridgeName = bridgeClassName(subSourceEl, subTargetEl, userDeclared.contains(subPair));
       return FieldPlan.ofKind(kind, subBridgeName);
     }
@@ -2337,11 +2343,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case SET -> elementIdentity
         ? "(" + readExpr + " == null ? null : new LinkedHashSet<>(" + readExpr + "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
-      case OPTIONAL -> readExpr + ".map(" + fwdElement + ")";
+      case OPTIONAL -> "(" + readExpr + " == null ? null : " + readExpr + ".map(" + fwdElement + "))";
       case MAP_VALUES -> elementIdentity
         ? "(" + readExpr + " == null ? null : new LinkedHashMap<>(" + readExpr + "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
-      case OPTIONAL_TO_NULLABLE -> readExpr + ".map(" + fwdElement + ").orElse(null)";
+      case OPTIONAL_TO_NULLABLE -> "(" +
+      readExpr +
+      " == null ? null : " +
+      readExpr +
+      ".map(" +
+      fwdElement +
+      ").orElse(null))";
       case NULLABLE_TO_OPTIONAL -> "Optional.ofNullable(" + readExpr + ").map(" + fwdElement + ")";
       // Qualifier dispatch: emit a direct {@code UsingClass.methodName(value)} call. Otherwise
       // dispatch through the {@code __tx_<field>} BridgeFn singleton instance (legacy shape).
@@ -2367,13 +2379,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case SET -> elementIdentity
         ? "(" + readExpr + " == null ? null : new LinkedHashSet<>(" + readExpr + "))"
         : "__bwd_" + fieldName + "(" + readExpr + ")";
-      case OPTIONAL -> readExpr + ".map(" + bwdElement + ")";
+      case OPTIONAL -> "(" + readExpr + " == null ? null : " + readExpr + ".map(" + bwdElement + "))";
       case MAP_VALUES -> elementIdentity
         ? "(" + readExpr + " == null ? null : new LinkedHashMap<>(" + readExpr + "))"
         : "__bwd_" + fieldName + "(" + readExpr + ")";
       // For the cross-paradigm bridges, forward and backward are mirror images.
       case OPTIONAL_TO_NULLABLE -> "Optional.ofNullable(" + readExpr + ").map(" + bwdElement + ")";
-      case NULLABLE_TO_OPTIONAL -> readExpr + ".map(" + bwdElement + ").orElse(null)";
+      case NULLABLE_TO_OPTIONAL -> "(" +
+      readExpr +
+      " == null ? null : " +
+      readExpr +
+      ".map(" +
+      bwdElement +
+      ").orElse(null))";
       case TRANSFORM -> "__tx_" + fieldName + ".backward(" + readExpr + ")";
     };
   }
