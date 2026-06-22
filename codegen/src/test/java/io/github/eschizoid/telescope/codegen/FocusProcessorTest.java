@@ -81,27 +81,41 @@ class FocusProcessorTest {
     void setterRebuildsAllComponents() {
       final var compilation = compile(
         source(
-          "demo.Pair",
+          "demo.Combo",
           """
           package demo;
           import io.github.eschizoid.telescope.annotations.Focus;
           @Focus
-          public record Pair(String left, String right) {}
+          public record Combo(String label, int count, char grade) {}
           """
         )
       );
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
-      final var generated = compilation.generated().get("demo.PairTelescope");
-      assertNotNull(generated, () -> "PairPath not generated; saw " + compilation.generated().keySet());
+      final var generated = compilation.generated().get("demo.ComboTelescope");
+      assertNotNull(generated, () -> "ComboPath not generated; saw " + compilation.generated().keySet());
 
       // Off-path component reads are null-guarded so the lens rebuilds a fresh record when it
       // writes
-      // into a never-constructed nested intermediate; the focused component takes v unguarded.
-      // For the 'left' navigator: (s, v) -> new Pair(v, (s == null ? null : s.right()))
-      assertTrue(generated.contains("(s, v) -> new Pair(v, (s == null ? null : s.right()))"), generated);
-      // For the 'right' navigator: (s, v) -> new Pair((s == null ? null : s.left()), v)
-      assertTrue(generated.contains("(s, v) -> new Pair((s == null ? null : s.left()), v)"), generated);
+      // into a never-constructed nested intermediate; the focused component takes v unguarded. The
+      // off-path default is the component's JLS literal: null for the reference, 0 for the int, and
+      // the NUL char for the char — pinning that primitiveDefaultLiteral is spliced into the record
+      // canonical-ctor slot, not just the bean setter slot.
+      // 'label' navigator: (s, v) -> new Combo(v, <int default>, <char default>)
+      assertTrue(
+        generated.contains("(s, v) -> new Combo(v, (s == null ? 0 : s.count()), (s == null ? '\\0' : s.grade()))"),
+        generated
+      );
+      // 'count' navigator: (s, v) -> new Combo(<ref default>, v, <char default>)
+      assertTrue(
+        generated.contains("(s, v) -> new Combo((s == null ? null : s.label()), v, (s == null ? '\\0' : s.grade()))"),
+        generated
+      );
+      // 'grade' navigator: (s, v) -> new Combo(<ref default>, <int default>, v)
+      assertTrue(
+        generated.contains("(s, v) -> new Combo((s == null ? null : s.label()), (s == null ? 0 : s.count()), v)"),
+        generated
+      );
     }
   }
 
