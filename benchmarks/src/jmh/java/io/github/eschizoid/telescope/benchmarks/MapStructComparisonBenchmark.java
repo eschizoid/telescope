@@ -21,7 +21,8 @@ import org.openjdk.jmh.infra.Blackhole;
  * <h2>What the rows measure</h2>
  *
  * <p>Three depth tiers × two directions × three engines, plus one static-forward row per tier and a
- * {@code BRIDGE_FN.forward} row on the flat tier (the directly-callable one-interface-hop constant):
+ * {@code BRIDGE_FN.forward} row on the flat tier (the directly-callable one-interface-hop
+ * constant):
  *
  * <ul>
  *   <li>{@code flat_*} — five scalar fields, no nesting.
