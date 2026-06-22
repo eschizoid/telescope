@@ -5,10 +5,12 @@ import io.github.eschizoid.telescope.annotations.BeanFocus;
 /**
  * Multi-property {@code @BeanFocus} POJO (no-arg ctor + setters strategy) used as a nullable nested
  * intermediate on a write path. The focused property ({@link #cityName}) is what a write targets;
- * the off-path {@link #countryName} (reference) and {@link #zipCode} (primitive) are read from the
- * previous instance during the generated lens rebuild. When the intermediate is {@code null} those
- * off-path reads must not NPE — the reference stays at its JLS default ({@code null}) and the
- * primitive at its JLS default ({@code 0}).
+ * the four off-path properties are read from the previous instance during the generated lens
+ * rebuild and span every default kind under test: {@link #countryName} (reference, default {@code
+ * null}), {@link #zipCode} ({@code int}, default {@code 0}), {@link #active} ({@code boolean},
+ * default {@code false}), and {@link #grade} ({@code char}, default {@code '\0'}). When the
+ * intermediate is {@code null} those off-path reads must not NPE — each stays at its JLS default —
+ * which is what exercises the boolean and char arms of the generated primitive-default literal.
  */
 @BeanFocus
 public class MultiPropLeafAddress {
