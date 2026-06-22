@@ -2,9 +2,11 @@ package io.github.eschizoid.telescope.beans;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.Arrays;
+import java.util.LinkedList;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -193,5 +195,30 @@ class BridgeCodegenTest {
     assertEquals(2, dst.items().size());
     assertEquals(new OptElemBO("a"), dst.items().get(0));
     assertNull(dst.items().get(1), "null element bridges to null");
+  }
+
+  @Test
+  @DisplayName(
+    "concrete container subtype: a LinkedList<Y> target field is bridged element-wise and rebuilt as a LinkedList, not the default ArrayList (parity with the runtime container allocation table)"
+  )
+  void concreteListSubtypeRebuildsAsTargetClass() {
+    final var src = new ConcreteListSrc(Arrays.asList(new OptElem("a"), new OptElem("b")));
+    final var dst = ConcreteListSrcBridge.BRIDGE.read(src);
+    assertInstanceOf(LinkedList.class, dst.items(), "target's declared concrete class is preserved");
+    assertEquals(Arrays.asList(new OptElemBO("a"), new OptElemBO("b")), dst.items());
+
+    final var back = ConcreteListSrcBridge.BRIDGE.set(src, dst);
+    assertEquals(Arrays.asList(new OptElem("a"), new OptElem("b")), back.items());
+  }
+
+  @Test
+  @DisplayName(
+    "concrete container subtype with identity elements: a List<String> ↔ LinkedList<String> copies inline into the target's concrete class"
+  )
+  void concreteListSubtypeIdentityElementCopiesIntoTargetClass() {
+    final var src = new IdListSrc(Arrays.asList("x", "y"));
+    final var dst = IdListSrcBridge.BRIDGE.read(src);
+    assertInstanceOf(LinkedList.class, dst.tags(), "identity-element copy lands in the target's concrete class");
+    assertEquals(Arrays.asList("x", "y"), dst.tags());
   }
 }

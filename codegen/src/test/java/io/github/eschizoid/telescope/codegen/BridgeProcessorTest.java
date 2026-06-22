@@ -283,6 +283,57 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName(
+      "a field declared as a concrete List subtype (LinkedList<Y>) auto-lifts and the helper allocates that concrete class"
+    )
+    void concreteListSubtypeFieldAllocatesTargetClass() {
+      // The runtime ContainerShape accepts any List subtype via isAssignableFrom and allocates the
+      // target's concrete class; codegen must match — a field typed LinkedList<Y> should auto-lift
+      // (not error) and the forward helper should new LinkedList<Y>, not the default ArrayList.
+      final var compilation = compile(
+        source(
+          "demo.LLOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.List;
+          @Bridge(demo.LLOrderDto.class)
+          public record LLOrder(List<demo.LLItem> items) {}
+          """
+        ),
+        source(
+          "demo.LLItem",
+          """
+          package demo;
+          public record LLItem(String sku) {}
+          """
+        ),
+        source(
+          "demo.LLOrderDto",
+          """
+          package demo;
+          import java.util.LinkedList;
+          public record LLOrderDto(LinkedList<demo.LLItemDto> items) {}
+          """
+        ),
+        source(
+          "demo.LLItemDto",
+          """
+          package demo;
+          public record LLItemDto(String sku) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.LLOrderBridge");
+      assertNotNull(bridge);
+      // P5: the forward helper writes the target's concrete class (LinkedList), not the default
+      // ArrayList, and its return type is the target's declared concrete type.
+      assertTrue(bridge.contains("new LinkedList<demo.LLItemDto>"), bridge);
+    }
+
+    @Test
     @DisplayName("Set<X> ↔ Set<Y> auto-lifts via a for-loop helper into a pre-sized LinkedHashSet")
     void setContainerAutoLifts() {
       final var compilation = compile(

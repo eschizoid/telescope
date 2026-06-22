@@ -1635,7 +1635,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
 
-    final var imports = new TreeSet<>(importsFor(fieldPlans));
+    final var imports = new TreeSet<>(importsFor(fieldPlans, sourceFields, targetFields, renames));
     imports.add("io.github.eschizoid.telescope.conversion.BridgeFn");
     writeClass(
       qualifiedBridge,
@@ -2002,7 +2002,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // when that direction writes the wrapper side (which tolerates null). Mirrors the runtime
     // primitiveWrapperIso's fwdDefault / bwdDefault.
     String fwdNullDefault,
-    String bwdNullDefault
+    String bwdNullDefault,
+    // LIST/SET/MAP_VALUES only: the simple name of the concrete collection/map class to allocate
+    // for
+    // the forward (target) and backward (source) outputs, used by the inline identity-element
+    // copy
+    // in applyForward/applyBackward. Null for non-container kinds (the element-bridging helper
+    // path
+    // recomputes its allocation from the field types directly). Mirrors DeepMap's allocation
+    // table.
+    String fwdContainerImpl,
+    String bwdContainerImpl
   ) {
     enum Kind {
       IDENTITY,
@@ -2018,7 +2028,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
 
     static FieldPlan identity() {
-      return new FieldPlan(Kind.IDENTITY, null, null, null, null);
+      return new FieldPlan(Kind.IDENTITY, null, null, null, null, null, null);
+    }
+
+    // Attach the concrete-impl class names for a LIST/SET/MAP_VALUES plan — the classes the inline
+    // identity-element copy allocates for the forward (target) and backward (source) outputs.
+    FieldPlan withContainerImpls(final String fwdImpl, final String bwdImpl) {
+      return new FieldPlan(kind, subBridgeName, qualifierMethod, fwdNullDefault, bwdNullDefault, fwdImpl, bwdImpl);
     }
 
     // Primitive ↔ boxed wrapper. The direction that writes the primitive side null-coalesces a null
@@ -2026,15 +2042,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // (null is a legal wrapper value). Exactly one of the two defaults is non-null for any given
     // pair. Matches the runtime DeepMap.primitiveWrapperIso.
     static FieldPlan primWrapper(final String fwdNullDefault, final String bwdNullDefault) {
-      return new FieldPlan(Kind.PRIM_WRAPPER, null, null, fwdNullDefault, bwdNullDefault);
+      return new FieldPlan(Kind.PRIM_WRAPPER, null, null, fwdNullDefault, bwdNullDefault, null, null);
     }
 
     static FieldPlan recurse(final String subBridgeName) {
-      return new FieldPlan(Kind.RECURSE, Objects.requireNonNull(subBridgeName), null, null, null);
+      return new FieldPlan(Kind.RECURSE, Objects.requireNonNull(subBridgeName), null, null, null, null, null);
     }
 
     static FieldPlan ofKind(final Kind kind, final String subBridgeName) {
-      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null);
+      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null, null, null);
     }
 
     // Qualifier-dispatch TRANSFORM variant: the `using` class hosts a named static method, NOT a
@@ -2046,6 +2062,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         Objects.requireNonNull(usingClassFqn),
         Objects.requireNonNull(method),
         null,
+        null,
+        null,
         null
       );
     }
@@ -2056,24 +2074,82 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * non-Map shapes; the keyType on a Map is validated to match across the source/target pair so the
    * lift preserves keys identically.
    */
-  private record ContainerShape(FieldPlan.Kind kind, TypeMirror elementType, TypeMirror keyType) {
-    static ContainerShape of(final TypeMirror type) {
-      if (!(type instanceof DeclaredType dt)) return null;
-      final var el = dt.asElement();
-      if (!(el instanceof TypeElement te)) return null;
-      final var args = dt.getTypeArguments();
-      return switch (te.getQualifiedName().toString()) {
-        case "java.util.List" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.LIST, args.get(0), null) : null;
-        case "java.util.Set" -> args.size() == 1 ? new ContainerShape(FieldPlan.Kind.SET, args.get(0), null) : null;
-        case "java.util.Optional" -> args.size() == 1
-          ? new ContainerShape(FieldPlan.Kind.OPTIONAL, args.get(0), null)
-          : null;
-        case "java.util.Map" -> args.size() == 2
-          ? new ContainerShape(FieldPlan.Kind.MAP_VALUES, args.get(1), args.get(0))
-          : null;
-        default -> null;
-      };
+  private record ContainerShape(FieldPlan.Kind kind, TypeMirror elementType, TypeMirror keyType) {}
+
+  // The container shape of a type, accepting any List/Set/Map SUBTYPE (ArrayList, TreeSet,
+  // LinkedHashMap, …) — not just the exact interface — via erasure assignability, matching the
+  // runtime ContainerShape's isAssignableFrom check. Optional is final, so it stays an exact match.
+  // The declared type's type arguments give the element (and key) types; a raw subtype with no type
+  // arguments (e.g. `class Names extends ArrayList<String>`) is not handled here (returns null),
+  // same as before.
+  private ContainerShape containerShapeOf(final TypeMirror type) {
+    if (!(type instanceof DeclaredType dt)) return null;
+    final var args = dt.getTypeArguments();
+    if (assignableToRaw(type, "java.util.Optional")) {
+      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.OPTIONAL, args.get(0), null) : null;
     }
+    if (args.size() == 1 && assignableToRaw(type, "java.util.List")) {
+      return new ContainerShape(FieldPlan.Kind.LIST, args.get(0), null);
+    }
+    if (args.size() == 1 && assignableToRaw(type, "java.util.Set")) {
+      return new ContainerShape(FieldPlan.Kind.SET, args.get(0), null);
+    }
+    if (args.size() == 2 && assignableToRaw(type, "java.util.Map")) {
+      return new ContainerShape(FieldPlan.Kind.MAP_VALUES, args.get(1), args.get(0));
+    }
+    return null;
+  }
+
+  // True when `type`'s erasure is assignable to the raw interface named by `rawFqn`.
+  private boolean assignableToRaw(final TypeMirror type, final String rawFqn) {
+    final var types = processingEnv.getTypeUtils();
+    final var raw = processingEnv.getElementUtils().getTypeElement(rawFqn);
+    if (raw == null) return false;
+    return types.isAssignable(types.erasure(type), types.erasure(raw.asType()));
+  }
+
+  // FQN of a container's declared raw class (e.g. java.util.List, java.util.LinkedList) — the type
+  // a
+  // helper must declare as its return so the rebuild assigns it to the target field directly.
+  private static String containerRawFqn(final TypeMirror container) {
+    return ((TypeElement) ((DeclaredType) container).asElement()).getQualifiedName().toString();
+  }
+
+  // FQN of the concrete, instantiable class to allocate for a container field of the given declared
+  // type — the declared subtype itself when it is an instantiable class (ArrayList, TreeSet,
+  // LinkedHashMap, …), else the default impl for the interface family (List → ArrayList, Set →
+  // LinkedHashSet, Map → LinkedHashMap). Mirrors the runtime DeepMap allocation table.
+  private static String concreteImplFqn(final TypeMirror container, final FieldPlan.Kind kind) {
+    final var el = (TypeElement) ((DeclaredType) container).asElement();
+    if (el.getKind() == ElementKind.CLASS && !el.getModifiers().contains(Modifier.ABSTRACT)) {
+      return el.getQualifiedName().toString();
+    }
+    return switch (kind) {
+      case LIST -> "java.util.ArrayList";
+      case SET -> "java.util.LinkedHashSet";
+      case MAP_VALUES -> "java.util.LinkedHashMap";
+      default -> throw new IllegalStateException("not a collection/map kind: " + kind);
+    };
+  }
+
+  private static String simpleName(final String fqn) {
+    final var dot = fqn.lastIndexOf('.');
+    return dot < 0 ? fqn : fqn.substring(dot + 1);
+  }
+
+  // Whether the impl class exposes a capacity-presizing (int) constructor. The default impls do; an
+  // arbitrary concrete subtype (LinkedList, TreeSet, TreeMap, …) may not, so it is filled via the
+  // no-arg constructor instead.
+  private static boolean hasPresizeCtor(final String implFqn) {
+    return switch (implFqn) {
+      case
+        "java.util.ArrayList",
+        "java.util.HashSet",
+        "java.util.LinkedHashSet",
+        "java.util.HashMap",
+        "java.util.LinkedHashMap" -> true;
+      default -> false;
+    };
   }
 
   /**
@@ -2142,8 +2218,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       // (2) Container shape detection — both sides container of the same kind with element types
       //     that need their own sub-bridge. List/Set/Optional/Map values, key-equal Map.
-      final var srcShape = ContainerShape.of(sf.type());
-      final var tgtShape = ContainerShape.of(tf.type());
+      final var srcShape = containerShapeOf(sf.type());
+      final var tgtShape = containerShapeOf(tf.type());
       if (srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind()) {
         if (srcShape.kind() == FieldPlan.Kind.MAP_VALUES && !isSameType(srcShape.keyType(), tgtShape.keyType())) {
           error(
@@ -2175,7 +2251,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           lenient
         );
         if (subPlan == null) return null;
-        plans.put(sf.name(), subPlan);
+        // Attach the concrete-impl class the inline identity-element copy allocates: the target's
+        // class on forward, the source's on backward — so a field typed as a concrete subtype
+        // (LinkedList, TreeSet, …) is rebuilt as that class, not the default impl.
+        final var withImpls = switch (subPlan.kind()) {
+          case LIST, SET, MAP_VALUES -> subPlan.withContainerImpls(
+            simpleName(concreteImplFqn(tf.type(), subPlan.kind())),
+            simpleName(concreteImplFqn(sf.type(), subPlan.kind()))
+          );
+          default -> subPlan;
+        };
+        plans.put(sf.name(), withImpls);
         continue;
       }
       // (3) Cross-paradigm Optional↔nullable bridge — one side has Optional<X>, the other has
@@ -2342,14 +2428,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // dispatch site. When the element type is identity (same on both sides), a defensive copy is
       // sufficient and we emit it inline.
       case LIST -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new ArrayList<>(" + readExpr + "))"
+        ? "(" + readExpr + " == null ? null : new " + plan.fwdContainerImpl() + "<>(" + readExpr + "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
       case SET -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new LinkedHashSet<>(" + readExpr + "))"
+        ? "(" + readExpr + " == null ? null : new " + plan.fwdContainerImpl() + "<>(" + readExpr + "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL -> "(" + readExpr + " == null ? null : " + readExpr + ".map(" + fwdElement + "))";
       case MAP_VALUES -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new LinkedHashMap<>(" + readExpr + "))"
+        ? "(" + readExpr + " == null ? null : new " + plan.fwdContainerImpl() + "<>(" + readExpr + "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL_TO_NULLABLE -> "(" +
       readExpr +
@@ -2378,14 +2464,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         : "(" + readExpr + " == null ? " + plan.bwdNullDefault() + " : " + readExpr + ")";
       case RECURSE -> sub + ".backward(" + readExpr + ")";
       case LIST -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new ArrayList<>(" + readExpr + "))"
+        ? "(" + readExpr + " == null ? null : new " + plan.bwdContainerImpl() + "<>(" + readExpr + "))"
         : "__bwd_" + fieldName + "(" + readExpr + ")";
       case SET -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new LinkedHashSet<>(" + readExpr + "))"
+        ? "(" + readExpr + " == null ? null : new " + plan.bwdContainerImpl() + "<>(" + readExpr + "))"
         : "__bwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL -> "(" + readExpr + " == null ? null : " + readExpr + ".map(" + bwdElement + "))";
       case MAP_VALUES -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new LinkedHashMap<>(" + readExpr + "))"
+        ? "(" + readExpr + " == null ? null : new " + plan.bwdContainerImpl() + "<>(" + readExpr + "))"
         : "__bwd_" + fieldName + "(" + readExpr + ")";
       // For the cross-paradigm bridges, forward and backward are mirror images.
       case OPTIONAL_TO_NULLABLE -> "Optional.ofNullable(" + readExpr + ").map(" + bwdElement + ")";
@@ -2406,21 +2492,27 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * Set, String, Element, java.util.function.Consumer)} so the emitted file has clean imports
    * instead of FQNs in the body.
    */
-  private Set<String> importsFor(final Map<String, FieldPlan> fieldPlans) {
+  private Set<String> importsFor(
+    final Map<String, FieldPlan> fieldPlans,
+    final List<Field> sourceFields,
+    final List<Field> targetFields,
+    final Map<String, String> renames
+  ) {
     final var imports = new TreeSet<String>();
-    for (final var plan : fieldPlans.values()) {
+    for (final var entry : fieldPlans.entrySet()) {
+      final var plan = entry.getValue();
       switch (plan.kind()) {
-        case LIST -> {
-          imports.add("java.util.List");
-          imports.add("java.util.ArrayList");
-        }
-        case SET -> {
-          imports.add("java.util.Set");
-          imports.add("java.util.LinkedHashSet");
-        }
-        case MAP_VALUES -> {
-          imports.add("java.util.Map");
-          imports.add("java.util.LinkedHashMap");
+        // A container field needs both the declared raw of each side (the helper return / param
+        // types and the inline copy) and the concrete impl each side allocates. For the common
+        // interface-typed field this is {List, ArrayList} etc., unchanged; a concrete subtype adds
+        // its own class (LinkedList, TreeSet, …).
+        case LIST, SET, MAP_VALUES -> {
+          final var srcType = fieldByName(sourceFields, entry.getKey()).type();
+          final var tgtType = fieldByName(targetFields, renames.getOrDefault(entry.getKey(), entry.getKey())).type();
+          for (final var t : List.of(srcType, tgtType)) {
+            imports.add(containerRawFqn(t));
+            imports.add(concreteImplFqn(t, plan.kind()));
+          }
         }
         case OPTIONAL_TO_NULLABLE, NULLABLE_TO_OPTIONAL -> imports.add("java.util.Optional");
         default -> {
@@ -2479,10 +2571,27 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().get(0);
     final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().get(0);
+    final var returnRaw = simpleName(containerRawFqn(tgtContainer));
+    final var paramRaw = simpleName(containerRawFqn(srcContainer));
+    final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.LIST);
+    final var alloc =
+      "new " + simpleName(implFqn) + "<" + tgtElement + ">" + (hasPresizeCtor(implFqn) ? "(src.size())" : "()");
     out.println();
-    out.println("  private static List<" + tgtElement + "> " + name + "(final List<" + srcElement + "> src) {");
+    out.println(
+      "  private static " +
+        returnRaw +
+        "<" +
+        tgtElement +
+        "> " +
+        name +
+        "(final " +
+        paramRaw +
+        "<" +
+        srcElement +
+        "> src) {"
+    );
     out.println("    if (src == null) return null;");
-    out.println("    final var out = new ArrayList<" + tgtElement + ">(src.size());");
+    out.println("    final var out = " + alloc + ";");
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -2498,10 +2607,27 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().get(0);
     final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().get(0);
+    final var returnRaw = simpleName(containerRawFqn(tgtContainer));
+    final var paramRaw = simpleName(containerRawFqn(srcContainer));
+    final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.SET);
+    final var alloc =
+      "new " + simpleName(implFqn) + "<" + tgtElement + ">" + (hasPresizeCtor(implFqn) ? "(src.size())" : "()");
     out.println();
-    out.println("  private static Set<" + tgtElement + "> " + name + "(final Set<" + srcElement + "> src) {");
+    out.println(
+      "  private static " +
+        returnRaw +
+        "<" +
+        tgtElement +
+        "> " +
+        name +
+        "(final " +
+        paramRaw +
+        "<" +
+        srcElement +
+        "> src) {"
+    );
     out.println("    if (src == null) return null;");
-    out.println("    final var out = new LinkedHashSet<" + tgtElement + ">(src.size());");
+    out.println("    final var out = " + alloc + ";");
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -2520,22 +2646,38 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var keyType = srcArgs.get(0);
     final var srcValue = srcArgs.get(1);
     final var tgtValue = tgtArgs.get(1);
+    final var returnRaw = simpleName(containerRawFqn(tgtContainer));
+    final var paramRaw = simpleName(containerRawFqn(srcContainer));
+    final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES);
+    final var alloc =
+      "new " +
+      simpleName(implFqn) +
+      "<" +
+      keyType +
+      ", " +
+      tgtValue +
+      ">" +
+      (hasPresizeCtor(implFqn) ? "(src.size())" : "()");
     out.println();
     out.println(
-      "  private static Map<" +
+      "  private static " +
+        returnRaw +
+        "<" +
         keyType +
         ", " +
         tgtValue +
         "> " +
         name +
-        "(final Map<" +
+        "(final " +
+        paramRaw +
+        "<" +
         keyType +
         ", " +
         srcValue +
         "> src) {"
     );
     out.println("    if (src == null) return null;");
-    out.println("    final var out = new LinkedHashMap<" + keyType + ", " + tgtValue + ">(src.size());");
+    out.println("    final var out = " + alloc + ";");
     out.println(
       "    for (final var e : src.entrySet()) out.put(e.getKey(), " + subBridge + "." + direction + "(e.getValue()));"
     );
