@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -2284,6 +2285,40 @@ class MigrationRegressionTest {
         built.getMid().getAddress().getZipCode(),
         "off-path primitive property stays at its JLS default (0) when the intermediate was null"
       );
+      assertFalse(
+        built.getMid().getAddress().isActive(),
+        "off-path boolean property stays at its JLS default (false) when the intermediate was null"
+      );
+      assertEquals(
+        '\0',
+        built.getMid().getAddress().getGrade(),
+        "off-path char property stays at its JLS default (NUL) when the intermediate was null"
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "setting a focused property on a POPULATED multi-property @BeanFocus intermediate carries every off-path property forward — the guard's non-null arm does not default"
+    )
+    void setOnPopulatedMultiPropertyIntermediateCarriesOffPathForward() {
+      // The fix is a ternary; the null-intermediate tests only exercise the `p == null` arm. This
+      // pins the other arm: when the intermediate is already populated the generated lens reads
+      // every off-path property off the real previous instance and carries it forward unchanged,
+      // overwriting only the focused property. A regression that always took the default arm would
+      // silently wipe off-path data on every write and still pass all the null-intermediate tests.
+      final var path = Telescope.ofBean(MultiPropLeafAddress.class).field(MultiPropLeafAddress::getCityName);
+      final var existing = new MultiPropLeafAddress();
+      existing.setCityName("old");
+      existing.setCountryName("US");
+      existing.setZipCode(90210);
+      existing.setActive(true);
+      existing.setGrade('A');
+      final var updated = path.set(existing, "new");
+      assertEquals("new", updated.getCityName(), "focused property is overwritten with the new value");
+      assertEquals("US", updated.getCountryName(), "off-path reference is carried forward, not defaulted");
+      assertEquals(90210, updated.getZipCode(), "off-path primitive is carried forward, not defaulted");
+      assertTrue(updated.isActive(), "off-path boolean is carried forward, not defaulted");
+      assertEquals('A', updated.getGrade(), "off-path char is carried forward, not defaulted");
     }
 
     @Test

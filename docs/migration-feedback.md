@@ -953,7 +953,12 @@ incoming value, so single-property beans emit no guard and are unchanged. The gu
 but record write-through-a-null-intermediate stays strict by design (an immutable record cannot be partially
 constructed); that remains documented as intentional in `Lens.java` and is out of scope here.
 
-**Resolution:** _(populated once the fix lands — keeping this entry in sync with the implementing PR.)_
+**Resolution:** PR #183 — `AbstractTelescopeProcessor.beanRebuild` now routes every off-path read through a new
+`offPathRead(Prop)` helper that emits `(p == null ? <default> : p.getX())`, reusing `primitiveDefaultLiteral` so
+primitives default to their JLS literal and references to `null`. Both rebuild strategies (no-arg ctor + setters and
+static `builder()`) are covered. Regression tests pin the multi-property null intermediate at hops 2 and 3, the
+populated-intermediate carry-forward path, and primitive/reference defaults; the obsolete `Lens.modify` javadoc note was
+corrected.
 
 ---
 
@@ -1330,6 +1335,7 @@ forward direction through `<A>Bridge.BRIDGE`. Explicit `to()` rows become per-fi
 | Bug 13 | `@BeanFocus` generated `FieldOptics` NPEs on null intermediates              | P1       | Fixed (v1.0.4) |
 | Bug 14 | `DeepMap.applyForward` missed null-safety fix on `TelescopeToTelescope` path | P1       | Fixed (v1.0.5) |
 | Bug 15 | `@BeanFocus` write path skips nested intermediates beyond the first hop      | P1       | Fixed (v1.0.7) |
+| Bug 16 | `@BeanFocus` multi-property codegen setter NPEs on a null intermediate       | P1       | Fixed (v1.0.8) |
 
 ## Summary — Enhancements
 

@@ -105,6 +105,9 @@ class BeanFocusProcessorTest {
       assertTrue(generated.contains("new SetterPojo()"), generated);
       assertTrue(generated.contains("c.setId(v)"), generated);
       assertTrue(generated.contains("c.setEmail(v)"), generated);
+      // The off-path read is null-guarded so a null previous instance (writing into a
+      // never-constructed nested intermediate) defaults the sibling rather than NPE-ing.
+      assertTrue(generated.contains("c.setEmail((p == null ? null : p.getEmail()))"), generated);
       assertTrue(generated.contains("return c;"), generated);
     }
 

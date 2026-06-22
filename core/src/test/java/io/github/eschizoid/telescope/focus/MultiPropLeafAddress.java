@@ -16,6 +16,8 @@ public class MultiPropLeafAddress {
   private String cityName;
   private String countryName;
   private int zipCode;
+  private boolean active;
+  private char grade;
 
   public MultiPropLeafAddress() {}
 
@@ -41,5 +43,21 @@ public class MultiPropLeafAddress {
 
   public void setZipCode(final int zipCode) {
     this.zipCode = zipCode;
+  }
+
+  public boolean isActive() {
+    return active;
+  }
+
+  public void setActive(final boolean active) {
+    this.active = active;
+  }
+
+  public char getGrade() {
+    return grade;
+  }
+
+  public void setGrade(final char grade) {
+    this.grade = grade;
   }
 }
