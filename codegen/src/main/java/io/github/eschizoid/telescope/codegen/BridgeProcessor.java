@@ -2092,13 +2092,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         plans.put(sf.name(), FieldPlan.identity());
         continue;
       }
-      // (1b) Primitive ↔ its boxed wrapper (boolean↔Boolean, int↔Integer, …) → identity. The
-      //      generated read auto-boxes on the forward direction (always safe) and auto-unboxes on
-      //      the backward direction. A null wrapper unboxes to an NPE there — the same as the
-      //      runtime's default PROPAGATE null strategy; the runtime's opt-in null-defaulting
-      //      strategy has no codegen equivalent. Neither side is a reflectable declared type, but
-      // no
-      //      sub-bridge is needed.
+      // (1b) Primitive ↔ its boxed wrapper (boolean↔Boolean, int↔Integer, …) → identity, so no
+      //      sub-bridge is derived (the primitive isn't a declared type and the wrapper isn't
+      //      telescope-recursable). The generated read auto-boxes on the forward direction (always
+      //      safe) and auto-unboxes on the backward direction; a null wrapper unboxes to an NPE
+      //      there, the same as the runtime's default PROPAGATE null strategy (the runtime's opt-in
+      //      null-defaulting strategy has no codegen equivalent).
       if (isPrimitiveWrapperPair(sf.type(), tf.type())) {
         plans.put(sf.name(), FieldPlan.identity());
         continue;
