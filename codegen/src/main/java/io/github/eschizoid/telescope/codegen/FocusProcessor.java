@@ -277,7 +277,12 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
   private static final Set<String> FOCUS_ONLY = Set.of("io.github.eschizoid.telescope.annotations.Focus");
 
   // The canonical-constructor setter expression for a target component: (s, v) -> new Record(args)
-  // where each arg is `v` for the target component or `s.other()` for the others.
+  // where each arg is `v` for the target component or a null-guarded `s.other()` for the others.
+  // The null-guard lets the lens rebuild a fresh record when it writes into a never-constructed
+  // nested intermediate (a null write-target at any depth): the off-path component then takes its
+  // JLS default (null for references, 0/false/etc. for primitives) instead of NPE-ing on the read,
+  // matching the @BeanFocus setter rebuild. A single-component record emits no guard (no off-path
+  // read), and a populated previous record reads its off-path components through unchanged.
   private static String canonicalSetter(
     final String recordName,
     final List<? extends RecordComponentElement> components,
@@ -286,7 +291,12 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
     final var sb = new StringBuilder("(s, v) -> new " + recordName + "(");
     for (var i = 0; i < components.size(); i++) {
       final var name = components.get(i).getSimpleName().toString();
-      sb.append(name.equals(targetName) ? "v" : "s." + name + "()");
+      if (name.equals(targetName)) {
+        sb.append("v");
+      } else {
+        final var def = primitiveDefaultLiteral(components.get(i).asType().getKind()).orElse("null");
+        sb.append("(s == null ? ").append(def).append(" : s.").append(name).append("())");
+      }
       if (i < components.size() - 1) sb.append(", ");
     }
     return sb.append(")").toString();

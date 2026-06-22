@@ -1013,7 +1013,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * ""}, {@code List → List.of()}, etc.) live only in {@code NullDefaults}; the codegen path emits
    * a plain reference cast there and lets the runtime substitution kick in.
    */
-  private static Optional<String> primitiveDefaultLiteral(final TypeKind kind) {
+  protected static Optional<String> primitiveDefaultLiteral(final TypeKind kind) {
     return switch (kind) {
       case BOOLEAN -> Optional.of("false");
       case BYTE -> Optional.of("(byte) 0");
@@ -1201,17 +1201,33 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     if (useBuilder) {
       final var sb = new StringBuilder("(p, v) -> " + pojoName + ".builder()");
       for (var i = 0; i < all.size(); i++) {
-        final var arg = all.get(i).name().equals(target.name()) ? "v" : "p." + all.get(i).getter() + "()";
+        final var arg = all.get(i).name().equals(target.name()) ? "v" : offPathRead(all.get(i));
         sb.append(".").append(setters[i]).append("(").append(arg).append(")");
       }
       return sb.append(".build()").toString();
     }
     final var sb = new StringBuilder("(p, v) -> { final var c = new " + pojoName + "(); ");
     for (var i = 0; i < all.size(); i++) {
-      final var arg = all.get(i).name().equals(target.name()) ? "v" : "p." + all.get(i).getter() + "()";
+      final var arg = all.get(i).name().equals(target.name()) ? "v" : offPathRead(all.get(i));
       sb.append("c.").append(setters[i]).append("(").append(arg).append("); ");
     }
     return sb.append("return c; }").toString();
+  }
+
+  /**
+   * The "read one off-path property from the previous instance {@code p}" expression that carries
+   * an untouched property forward during a single-field lens rebuild. The previous instance is
+   * {@code null} whenever the lens writes into a nested intermediate that was never constructed (a
+   * null write-target at any depth), so the read is null-guarded: a reference property falls to
+   * {@code null} and a primitive to its JLS-default literal, exactly as the reflective {@code
+   * Beans.SettersWriter} rebuild leaves an off-path property when the source instance is null. The
+   * focused property is never routed here — it always takes the incoming value {@code v} — so a
+   * single-property bean emits no guard at all and its rebuild is unchanged. The guard makes every
+   * generated lens tolerate a null {@code p} independently, so it holds at arbitrary nesting depth.
+   */
+  private static String offPathRead(final Prop p) {
+    final var def = primitiveDefaultLiteral(p.type().getKind()).orElse("null");
+    return "(p == null ? " + def + " : p." + p.getter() + "())";
   }
 
   /**

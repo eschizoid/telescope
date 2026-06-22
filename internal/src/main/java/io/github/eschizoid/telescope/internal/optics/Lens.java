@@ -65,12 +65,12 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
    *       bean path the multi-hop {@code mapperForward} writes rely on by default, regardless of
    *       focus property count.
    *   <li>{@code @BeanFocus} codegen-emitted holder lens — the generated setter reads off-path
-   *       properties off the source: {@code (p, v) -> { final var c = new X();
-   *       c.setOther(p.getOther()); c.setTarget(v); return c; }}. {@code set(null, value)} works
-   *       for a single-property focus (no off-path read) but NPEs on {@code p.getOther()} for a
-   *       multi-property focus. Multi-property null intermediates still crash loudly through the
-   *       codegen setter and are out of scope for this default; the reflective fallback above
-   *       covers the multi-property case when {@code @BeanFocus} is not in play.
+   *       properties off the source, each null-guarded: {@code (p, v) -> { final var c = new X();
+   *       c.setTarget(v); c.setOther(p == null ? null : p.getOther()); return c; }}. So {@code
+   *       set(null, value)} rebuilds a fresh focus at any nesting depth: the focused property takes
+   *       the incoming value and every off-path property falls to its JLS default (null for
+   *       references, 0/false for primitives), matching the reflective {@code SettersWriter} path
+   *       above. A single-property focus emits no guard at all, having no off-path read.
    *   <li>{@code Beans.lens} backed by {@code ConstructorWriter} / {@code FieldsWriter} / {@code
    *       BuilderWriter} — these strategies pass the focused value alongside the writer's per-name
    *       lookup but do NOT null-guard primitive parameters/fields/builder setters. A null off-path
@@ -85,9 +85,11 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
    *       default never runs and the null-source write surfaces as a missing-leaf result rather
    *       than a fabricated record.
    *   <li>{@code @Focus} canonical-ctor codegen lens — the generated setter reads sibling
-   *       components off the source ({@code (s, v) -> new R(v, s.other())}); {@code set(null,
-   *       value)} NPEs on the off-path read. Record write paths through a null intermediate
-   *       therefore still crash loudly at the missing hop, by design.
+   *       components off the source, each null-guarded: {@code (s, v) -> new R(v, s == null ? null
+   *       : s.other())}. So {@code set(null, value)} rebuilds a fresh record at any nesting depth —
+   *       the focused component takes the incoming value and every off-path component falls to its
+   *       JLS default (null for references, 0/false for primitives), the same null-tolerant write
+   *       the {@code @BeanFocus} setter lens provides. A single-component record emits no guard.
    * </ul>
    *
    * <p>Strict direct {@code .get(null)} on the atomic Lens stays strict (consistent with {@link

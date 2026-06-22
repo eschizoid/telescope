@@ -1,6 +1,8 @@
 package io.github.eschizoid.telescope.focus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import io.github.eschizoid.telescope.effects.Either;
 import java.util.List;
@@ -188,6 +190,68 @@ class FocusCodegenTest {
         .updateIndexed(team, (i, p) -> new FocusPerson(p.name() + ":" + i, p.age(), p.address()));
       assertEquals("alice:0", bumped.members().get(0).name());
       assertEquals("bob:1", bumped.members().get(1).name());
+    }
+  }
+
+  @Nested
+  @DisplayName(
+    "Null intermediate WRITE through @Focus record codegen — multi-component intermediates rebuild from null"
+  )
+  class NullIntermediateRecordWrite {
+
+    @Test
+    @DisplayName(
+      "navigator write through a null multi-component @Focus intermediate constructs every hop and defaults off-path components"
+    )
+    void recordNavigatorWriteThroughNullMultiComponentIntermediate() {
+      // The record canonical-ctor rebuild reads off-path components off the previous record:
+      // (s, v) -> new MultiCompLeafRecord(v, s.countryName(), s.zipCode()). When the intermediate
+      // is a null write-target that previous record is null, so each off-path read must be
+      // null-guarded — reference to null, primitive to its JLS default — exactly like the bean
+      // path.
+      final var built = MultiCompOuterRecordTelescope.of()
+        .mid()
+        .address()
+        .cityName()
+        .set(new MultiCompOuterRecord(null), "rectown");
+      assertNotNull(built.mid(), "hop-1 record intermediate constructed");
+      assertNotNull(built.mid().address(), "null multi-component hop-2 record intermediate constructed");
+      assertEquals("rectown", built.mid().address().cityName(), "focused component written");
+      assertNull(built.mid().address().countryName(), "off-path reference component defaulted to null");
+      assertEquals(0, built.mid().address().zipCode(), "off-path primitive component defaulted to 0");
+    }
+
+    @Test
+    @DisplayName(
+      "record navigator write into a multi-component intermediate at hop 3 still defaults off-path components — N-hop"
+    )
+    void recordNavigatorWriteAtHopThreeIsNHopSafe() {
+      final var built = MultiCompDeepRootRecordTelescope.of()
+        .outer()
+        .mid()
+        .address()
+        .cityName()
+        .set(new MultiCompDeepRootRecord(null), "metropolis");
+      assertNotNull(built.outer(), "hop-1 record intermediate constructed");
+      assertNotNull(built.outer().mid(), "hop-2 record intermediate constructed");
+      assertNotNull(built.outer().mid().address(), "null multi-component hop-3 record intermediate constructed");
+      assertEquals("metropolis", built.outer().mid().address().cityName(), "focused component written at hop 3");
+      assertNull(built.outer().mid().address().countryName(), "off-path reference component defaulted at hop 3");
+      assertEquals(0, built.outer().mid().address().zipCode(), "off-path primitive component defaulted at hop 3");
+    }
+
+    @Test
+    @DisplayName(
+      "setting a component on a POPULATED multi-component @Focus record carries every off-path component forward — the guard's non-null arm"
+    )
+    void recordSetOnPopulatedIntermediateCarriesOffPathForward() {
+      // Pins the guard's other arm for records: a populated previous record must have its off-path
+      // components read and carried forward, overwriting only the focused component.
+      final var existing = new MultiCompLeafRecord("old", "US", 90210);
+      final var updated = MultiCompLeafRecordTelescope.of().cityName().set(existing, "new");
+      assertEquals("new", updated.cityName(), "focused component overwritten");
+      assertEquals("US", updated.countryName(), "off-path reference carried forward, not defaulted");
+      assertEquals(90210, updated.zipCode(), "off-path primitive carried forward, not defaulted");
     }
   }
 }

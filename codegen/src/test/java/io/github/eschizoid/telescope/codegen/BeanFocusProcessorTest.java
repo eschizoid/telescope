@@ -66,10 +66,12 @@ class BeanFocusProcessorTest {
       assertTrue(generated.contains("Telescope.lens(BuilderPojo::getId,"), generated);
       assertTrue(generated.contains("BuilderPojo.builder()"), generated);
       assertTrue(generated.contains(".build()"), generated);
-      // The focused property takes v; siblings are read back from p.
+      // The focused property takes v; siblings are read back from p, null-guarded so a null
+      // previous instance (the lens writing into a never-constructed nested intermediate) defaults
+      // the sibling instead of NPE-ing on the off-path read.
       assertTrue(generated.contains("id(v)"), generated);
       assertTrue(generated.contains("email(v)"), generated);
-      assertTrue(generated.contains("email(p.getEmail())"), generated);
+      assertTrue(generated.contains("email((p == null ? null : p.getEmail()))"), generated);
     }
 
     @Test
@@ -103,6 +105,9 @@ class BeanFocusProcessorTest {
       assertTrue(generated.contains("new SetterPojo()"), generated);
       assertTrue(generated.contains("c.setId(v)"), generated);
       assertTrue(generated.contains("c.setEmail(v)"), generated);
+      // The off-path read is null-guarded so a null previous instance (writing into a
+      // never-constructed nested intermediate) defaults the sibling rather than NPE-ing.
+      assertTrue(generated.contains("c.setEmail((p == null ? null : p.getEmail()))"), generated);
       assertTrue(generated.contains("return c;"), generated);
     }
 
