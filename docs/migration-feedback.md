@@ -885,6 +885,78 @@ generalises to N-hop paths, not just 3.
 
 ---
 
+### 16. `@BeanFocus` multi-property codegen setter NPEs on a null intermediate beyond the first hop — Fixed (v1.0.8)
+
+**Severity:** P1 — crashes at runtime when a **multi-property** `@BeanFocus` class is a nullable intermediate at hop 2
+or deeper in a write-through path. Sibling of Bug 15: the `Lens.modify` null-source fix (v1.0.7) landed correctly, but
+the generated per-field lens still reads off-path properties off a `null` previous instance.
+
+**Reproduction:**
+
+```java
+@BeanFocus
+public class Address {          // multi-property
+    String cityName;            // the write targets this
+    String countryName;         // off-path
+    int zipCode;                // off-path (primitive)
+}
+
+@BeanFocus public class Mid { Address address; }     // single-property hop-1 intermediate
+@BeanFocus public class Outer { Mid mid; }           // freshly built -> mid and address both null
+
+final var tgt = Telescope.ofBean(Outer.class)
+    .field(Outer::getMid)
+    .field(Mid::getAddress)
+    .field(Address::getCityName);
+
+Telescope.mapperForward(Src.class, Outer.class, to(srcLeaf, tgt), writeBeans(SETTERS));
+mapper.forward(src);            // NPE in the generated AddressFieldOptics.cityName lens
+```
+
+**Observed:**
+
+```
+java.lang.NullPointerException: Cannot invoke "Address.getCountryName()" because "p" is null
+   at AddressFieldOptics.lambda$static$0(AddressFieldOptics.java:12)
+   at io.github.eschizoid.telescope.internal.optics.Lens$1.set(Lens.java:158)
+   at io.github.eschizoid.telescope.internal.optics.Lens.modify(Lens.java:102)
+   at io.github.eschizoid.telescope.Telescope.set(Telescope.java:1288)
+   at io.github.eschizoid.telescope.DeepMap.applyForward(DeepMap.java:749)
+```
+
+**Root cause:** the codegen lens rebuild reads every off-path property off the previous instance to carry it forward:
+`(p, v) -> { var c = new Address(); c.setCityName(v); c.setCountryName(p.getCountryName()); ...; return c; }`. When the
+intermediate is a null write-target the previous instance `p` is null, so each off-path `p.getX()` NPEs. At hop 1 the
+Bug 15 seeding constructs a fresh non-null intermediate before the leaf lens runs, so the read never sees null — which
+is why a hop-2+ multi-property bean is required to trigger it.
+
+**Why Bugs 13 and 15 missed it:** every regression fixture for the null-intermediate write path was **single-property**
+(`Leaf { String value; }`). A single-property lens has no off-path read —
+`(p, v) -> { var c = new Leaf(); c.setValue(v); return c; }` — so it tolerates a null `p` regardless. The crash only
+manifests once a multi-property bean is reached through a null intermediate, a shape no fixture exercised.
+
+**Fix:** null-guard each off-path read in the generated lens, for both rebuild strategies (no-arg ctor + setters and
+static `builder()`): `c.setCountryName(p == null ? null : p.getCountryName())`, primitive off-path reads taking their
+JLS-default literal (`0` / `false`) instead of `null`. This matches the reflective `SettersWriter` rebuild, which
+already leaves off-path properties at their defaults when the source is null. The focused property always takes the
+incoming value, so single-property beans emit no guard and are unchanged. The guard is per-lens and gated only on
+`p == null`, so it holds at arbitrary nesting depth (N-hop, pinned by a hop-3 regression test).
+
+**Files involved:**
+
+- `codegen/src/main/java/io/github/eschizoid/telescope/codegen/AbstractTelescopeProcessor.java` — `beanRebuild()` (the
+  per-field lens emission) + new `offPathRead()` helper reusing `primitiveDefaultLiteral()`.
+- `internal/src/main/java/io/github/eschizoid/telescope/internal/optics/Lens.java` — `modify()` javadoc (the
+  "multi-property null intermediates still crash loudly … out of scope" note is now obsolete and corrected).
+
+**Note on records:** the `@Focus` canonical-ctor lens (`(s, v) -> new R(v, s.other())`) has the analogous off-path read,
+but record write-through-a-null-intermediate stays strict by design (an immutable record cannot be partially
+constructed); that remains documented as intentional in `Lens.java` and is out of scope here.
+
+**Resolution:** _(populated once the fix lands — keeping this entry in sync with the implementing PR.)_
+
+---
+
 ## Enhancement Requests
 
 ### 1. Cross-module `@Bridge` support (MapStruct parity) — Fixed (v1.0.2)

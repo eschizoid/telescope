@@ -17,6 +17,13 @@ import io.github.eschizoid.telescope.beans.BridgeRecA;
 import io.github.eschizoid.telescope.beans.BridgeRecABridge;
 import io.github.eschizoid.telescope.beans.BridgeRecB;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
+import io.github.eschizoid.telescope.focus.MultiPropBuilderLeaf;
+import io.github.eschizoid.telescope.focus.MultiPropBuilderMid;
+import io.github.eschizoid.telescope.focus.MultiPropBuilderOuter;
+import io.github.eschizoid.telescope.focus.MultiPropDeepRoot;
+import io.github.eschizoid.telescope.focus.MultiPropLeafAddress;
+import io.github.eschizoid.telescope.focus.MultiPropMid;
+import io.github.eschizoid.telescope.focus.MultiPropWriteOuter;
 import io.github.eschizoid.telescope.focus.NullIntermediateInner;
 import io.github.eschizoid.telescope.focus.NullIntermediateOuter;
 import io.github.eschizoid.telescope.focus.NullIntermediateTargetDto;
@@ -2233,6 +2240,139 @@ class MigrationRegressionTest {
         "carol",
         built.getMid().getLeaf().getValue(),
         "leaf value must round-trip through every auto-constructed intermediate on the reflective bean path"
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "mapperForward writing into a null MULTI-property @BeanFocus intermediate sets the focused property and leaves off-path properties at their JLS defaults, no NPE"
+    )
+    void forwardIntoNullMultiPropertyIntermediateDefaultsOffPathProperties() {
+      // The generated lens rebuild for a multi-property bean reads every off-path property from the
+      // previous instance to carry it forward. When the intermediate is a null write-target that
+      // previous instance is null, so each off-path read must be null-guarded: reference properties
+      // fall to null and primitive properties to their JLS default, matching the reflective
+      // SettersWriter path. Single-property intermediates never exercised this — they have no
+      // off-path reads — which is why this crash survived two earlier null-intermediate fixes.
+      final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
+      final var tgtLeaf = Telescope.ofBean(MultiPropWriteOuter.class)
+        .field(MultiPropWriteOuter::getMid)
+        .field(MultiPropMid::getAddress)
+        .field(MultiPropLeafAddress::getCityName);
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateInner.class,
+        MultiPropWriteOuter.class,
+        Mapping.to(srcLeaf, tgtLeaf),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new NullIntermediateInner();
+      src.setName("springfield");
+      final var built = assertDoesNotThrow(() -> mapper.forward(src));
+      assertNotNull(built.getMid(), "hop-1 intermediate must be auto-constructed");
+      assertNotNull(built.getMid().getAddress(), "null multi-property hop-2 intermediate must be auto-constructed");
+      assertEquals(
+        "springfield",
+        built.getMid().getAddress().getCityName(),
+        "focused property must round-trip through the rebuilt multi-property intermediate"
+      );
+      assertNull(
+        built.getMid().getAddress().getCountryName(),
+        "off-path reference property stays at its JLS default (null) when the intermediate was null"
+      );
+      assertEquals(
+        0,
+        built.getMid().getAddress().getZipCode(),
+        "off-path primitive property stays at its JLS default (0) when the intermediate was null"
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "mapperForward writing into a null MULTI-property builder-strategy @BeanFocus intermediate sets the focused property and defaults off-path properties, no NPE"
+    )
+    void forwardIntoNullMultiPropertyBuilderIntermediateDefaultsOffPathProperties() {
+      // Builder-strategy sibling of the setters case above: the generated rebuild is a single
+      // builder() chain, so the off-path reads live inside the fluent expression. The guard must
+      // apply there too — null intermediate, focused property carried on the value, off-path
+      // builder fields left at their builder defaults (null / 0).
+      final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
+      final var tgtLeaf = Telescope.ofBean(MultiPropBuilderOuter.class)
+        .field(MultiPropBuilderOuter::getMid)
+        .field(MultiPropBuilderMid::getLeaf)
+        .field(MultiPropBuilderLeaf::getLabel);
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateInner.class,
+        MultiPropBuilderOuter.class,
+        Mapping.to(srcLeaf, tgtLeaf),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new NullIntermediateInner();
+      src.setName("alpha");
+      final var built = assertDoesNotThrow(() -> mapper.forward(src));
+      assertNotNull(built.getMid(), "hop-1 intermediate must be auto-constructed");
+      assertNotNull(
+        built.getMid().getLeaf(),
+        "null multi-property builder hop-2 intermediate must be auto-constructed"
+      );
+      assertEquals(
+        "alpha",
+        built.getMid().getLeaf().getLabel(),
+        "focused property must round-trip via the builder rebuild"
+      );
+      assertNull(
+        built.getMid().getLeaf().getNote(),
+        "off-path reference property defaults to null when the intermediate was null"
+      );
+      assertEquals(
+        0,
+        built.getMid().getLeaf().getRank(),
+        "off-path primitive property defaults to 0 when the intermediate was null"
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "mapperForward writing into a MULTI-property @BeanFocus intermediate at hop 3 still defaults off-path properties — the off-path null-guard is N-hop"
+    )
+    void forwardIntoNullMultiPropertyIntermediateAtHopThreeIsNHopSafe() {
+      // The multi-property bean sits one level deeper (root.outer.mid.address.cityName), reached
+      // through two null single-property intermediates. The off-path null-guard is emitted per lens
+      // and gated only on `p == null`, so it cannot depend on nesting depth — this pins that
+      // generalisation against a future change that eagerly constructs only the first intermediate.
+      final var srcLeaf = Telescope.ofBean(NullIntermediateInner.class).field(NullIntermediateInner::getName);
+      final var tgtLeaf = Telescope.ofBean(MultiPropDeepRoot.class)
+        .field(MultiPropDeepRoot::getOuter)
+        .field(MultiPropWriteOuter::getMid)
+        .field(MultiPropMid::getAddress)
+        .field(MultiPropLeafAddress::getCityName);
+      final var mapper = Telescope.mapperForward(
+        NullIntermediateInner.class,
+        MultiPropDeepRoot.class,
+        Mapping.to(srcLeaf, tgtLeaf),
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
+      );
+      final var src = new NullIntermediateInner();
+      src.setName("metropolis");
+      final var built = assertDoesNotThrow(() -> mapper.forward(src));
+      assertNotNull(built.getOuter(), "hop-1 intermediate must be auto-constructed");
+      assertNotNull(built.getOuter().getMid(), "hop-2 intermediate must be auto-constructed");
+      assertNotNull(
+        built.getOuter().getMid().getAddress(),
+        "null multi-property hop-3 intermediate must be auto-constructed"
+      );
+      assertEquals(
+        "metropolis",
+        built.getOuter().getMid().getAddress().getCityName(),
+        "focused property must round-trip through the hop-3 multi-property rebuild"
+      );
+      assertNull(
+        built.getOuter().getMid().getAddress().getCountryName(),
+        "off-path reference property stays at its JLS default at hop 3"
+      );
+      assertEquals(
+        0,
+        built.getOuter().getMid().getAddress().getZipCode(),
+        "off-path primitive property stays at its JLS default at hop 3"
       );
     }
   }
