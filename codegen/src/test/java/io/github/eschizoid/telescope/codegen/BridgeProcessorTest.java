@@ -3976,4 +3976,170 @@ class BridgeProcessorTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("Primitive ↔ wrapper fields auto-bridge with box/unbox and backward null-default")
+  class PrimitiveWrapperBridging {
+
+    @Test
+    @DisplayName("a boolean field bridged to a Boolean field compiles and emits a bridge instead of erroring")
+    void primitiveToWrapperFieldAutoBridges() {
+      final var compilation = compile(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.Dst.class)
+          public record Src(boolean locked, String name) {}
+          """
+        ),
+        source(
+          "demo.Dst",
+          """
+          package demo;
+          public record Dst(Boolean locked, String name) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.SrcBridge");
+      assertNotNull(generated, () -> "SrcBridge not generated; saw " + compilation.generated().keySet());
+      // The primitive/wrapper field is handled by the PRIM_WRAPPER plan: forward auto-boxes,
+      // backward unboxes and null-defaults to the primitive's JLS default.
+      assertTrue(generated.contains("locked"), generated);
+    }
+
+    @Test
+    @DisplayName("the reverse order (Boolean source field, boolean target field) also auto-bridges")
+    void wrapperToPrimitiveFieldAutoBridges() {
+      // isPrimitiveWrapperPair is order-independent; the wrapper-on-source / primitive-on-target
+      // direction is a distinct code path and must compile too.
+      final var compilation = compile(
+        source(
+          "demo.WSrc",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.WDst.class)
+          public record WSrc(Integer count, String name) {}
+          """
+        ),
+        source(
+          "demo.WDst",
+          """
+          package demo;
+          public record WDst(int count, String name) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      assertNotNull(
+        compilation.generated().get("demo.WSrcBridge"),
+        () -> "WSrcBridge not generated; saw " + compilation.generated().keySet()
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("@Bridge(lenient = true) propagates leniency into nested sub-pairs")
+  class LenientNestedPropagation {
+
+    @Test
+    @DisplayName(
+      "a lenient parent whose nested target sub-type has an extra field compiles (sub-pair inherits lenient)"
+    )
+    void lenientPropagatesIntoNestedSubPair() {
+      final var compilation = compile(
+        source(
+          "demo.Outer",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.OuterBO.class, lenient = true)
+          public record Outer(demo.Inner inner) {}
+          """
+        ),
+        source(
+          "demo.Inner",
+          """
+          package demo;
+          public record Inner(String a) {}
+          """
+        ),
+        source(
+          "demo.OuterBO",
+          """
+          package demo;
+          public record OuterBO(demo.InnerBO inner) {}
+          """
+        ),
+        source(
+          "demo.InnerBO",
+          """
+          package demo;
+          public record InnerBO(String a, String extra) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      assertNotNull(
+        compilation.generated().get("demo.OuterBridge"),
+        () -> "OuterBridge not generated; saw " + compilation.generated().keySet()
+      );
+      // The nested sub-bridge is emitted leniently: InnerBO's extra field has no source counterpart
+      // and is defaulted rather than failing the strict bijection. (Auto-recursed sub-pairs use the
+      // disambiguated <Source>To<Target>Bridge name.)
+      final var sub = compilation.generated().get("demo.InnerToInnerBOBridge");
+      assertNotNull(sub, () -> "Inner sub-bridge not generated; saw " + compilation.generated().keySet());
+    }
+
+    @Test
+    @DisplayName("a NON-lenient parent with an extra nested-target field still fails the nested bijection")
+    void nonLenientNestedMismatchStillErrors() {
+      // Same shape as above but WITHOUT lenient — the nested sub-pair must still be held to the
+      // strict bijection, proving the propagation didn't make every nested pair lenient.
+      final var compilation = compile(
+        source(
+          "demo.SOuter",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.SOuterBO.class)
+          public record SOuter(demo.SInner inner) {}
+          """
+        ),
+        source(
+          "demo.SInner",
+          """
+          package demo;
+          public record SInner(String a) {}
+          """
+        ),
+        source(
+          "demo.SOuterBO",
+          """
+          package demo;
+          public record SOuterBO(demo.SInnerBO inner) {}
+          """
+        ),
+        source(
+          "demo.SInnerBO",
+          """
+          package demo;
+          public record SInnerBO(String a, String extra) {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "a strict nested mismatch must still fail compilation");
+      assertTrue(
+        compilation.hasError("same field names"),
+        () -> "expected a nested bijection diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+  }
 }

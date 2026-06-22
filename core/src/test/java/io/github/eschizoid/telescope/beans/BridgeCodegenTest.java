@@ -84,4 +84,53 @@ class BridgeCodegenTest {
     assertEquals("u2", back.getId());
     assertEquals("B@Y", back.getEmail());
   }
+
+  @Test
+  @DisplayName("primitive ↔ wrapper fields: forward auto-boxes; backward unboxes a non-null wrapper")
+  void primitiveWrapperRoundTrip() {
+    final var src = new BridgePrimRec(true, 7, "n");
+
+    // forward: boolean → Boolean, int → Integer (auto-box, always safe).
+    final var bo = BridgePrimRecBridge.BRIDGE.read(src);
+    assertEquals(Boolean.TRUE, bo.locked());
+    assertEquals(Integer.valueOf(7), bo.count());
+    assertEquals("n", bo.name());
+
+    // backward: a non-null Boolean / Integer auto-unboxes back to the primitives.
+    final var back = BridgePrimRecBridge.BRIDGE.set(src, new BridgePrimRecBO(false, 9, "m"));
+    assertEquals(false, back.locked());
+    assertEquals(9, back.count());
+    assertEquals("m", back.name());
+  }
+
+  @Test
+  @DisplayName(
+    "primitive ↔ wrapper backward with a null wrapper null-defaults to the primitive's JLS default (parity with runtime primitiveWrapperIso)"
+  )
+  void primitiveWrapperBackwardNullUnboxDefaults() {
+    // A null wrapper on the backward (unbox) direction must coalesce to the primitive's JLS default
+    // (false / 0), not NPE — matching the runtime DeepMap primitiveWrapperIso, which null-defaults
+    // both directions of the box/unbox conversion.
+    final var src = new BridgePrimRec(true, 7, "n");
+    final var back = BridgePrimRecBridge.BRIDGE.set(src, new BridgePrimRecBO(null, null, "m"));
+    assertEquals(false, back.locked());
+    assertEquals(0, back.count());
+    assertEquals("m", back.name());
+  }
+
+  @Test
+  @DisplayName(
+    "primitive ↔ wrapper forward with a null wrapper source null-defaults the primitive target (the other direction's wiring)"
+  )
+  void primitiveWrapperForwardNullDefaults() {
+    // Reverse orientation: wrapper source, primitive target — so the FORWARD (read) direction
+    // writes
+    // the primitive and must null-default a null wrapper source to false / 0, pinning the
+    // fwdNullDefault wiring at runtime (the backward test pins bwdNullDefault).
+    final var src = new BridgeWrapRec(null, null, "m");
+    final var bo = BridgeWrapRecBridge.BRIDGE.read(src);
+    assertEquals(false, bo.flag());
+    assertEquals(0, bo.num());
+    assertEquals("m", bo.name());
+  }
 }

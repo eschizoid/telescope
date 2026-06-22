@@ -28,6 +28,7 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
@@ -155,6 +156,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // BridgeConfig.EMPTY at lookup time, same as the auto-recursed case in the eager path).
   private final Set<TypePair> deferredPairs = new LinkedHashSet<>();
   private final Map<TypePair, BridgeConfig> deferredConfigs = new HashMap<>();
+
+  // Sub-pairs that an enclosing lenient @Bridge referenced. A sub-pair carries no BridgeConfig of
+  // its own (it falls back to BridgeConfig.EMPTY, which is strict), so without this its bijection
+  // check would fail when the nested target has extra fields — even though the lenient parent
+  // intends those to default. generate() ORs this into the per-pair lenient flag so leniency
+  // propagates to every nested field/container level, matching the runtime mapperForward(...)
+  // behaviour. Cleared in processingOver() so a reused processor instance starts clean.
+  //
+  // Sticky-wins resolution: a sub-bridge class is emitted once per type pair, so if the SAME pair
+  // is
+  // reached from both a lenient and a strict parent the single emitted sub-bridge is lenient for
+  // both. That is more permissive, never less, so it cannot lose data the strict parent would have
+  // kept; the trade is that a strict parent's nested mismatch no longer fails when a lenient
+  // sibling
+  // also references the pair. Splitting into per-parent sub-bridges would be the stricter (and much
+  // larger) alternative.
+  private final Set<TypePair> lenientPairs = new HashSet<>();
 
   // Set true around the deferred drain in processingOver() so sub-pair discovery inside
   // generate(...) / generateSealed(...) / planFieldSubBridges(...) / planElementSubBridge(...)
@@ -392,6 +410,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (roundEnv.processingOver()) {
       multiTargetSources.clear();
       configsByPair.clear();
+      lenientPairs.clear();
     }
     return true;
   }
@@ -1090,7 +1109,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var writeStrategy = cfg.writeStrategy();
     final var rawConstants = cfg.constants();
     final var computes = cfg.computes();
-    final var lenient = cfg.lenient();
+    // A pair is lenient if its own config says so, or if an enclosing lenient @Bridge referenced it
+    // as a sub-pair (leniency propagates down the nesting).
+    final var lenient = cfg.lenient() || lenientPairs.contains(thisPair);
 
     // Validate every transform field is a real source field (drops would mask the validation).
     for (final var t : transforms.keySet()) {
@@ -1494,7 +1515,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       viaMappers,
       pending,
       seen,
-      userDeclared
+      userDeclared,
+      lenient
     );
     if (fieldPlans == null) return;
 
@@ -1956,6 +1978,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    *
    * <ul>
    *   <li>{@code IDENTITY} — types match exactly; pass the value through unchanged.
+   *   <li>{@code PRIM_WRAPPER} — one side primitive, the other its boxed wrapper; auto box/unbox,
+   *       null-coalescing to the primitive's JLS default on the unbox direction.
    *   <li>{@code RECURSE} — scalar sub-pair with both sides reflectable; reference its
    *       forward/backward methods directly.
    *   <li>{@code LIST}, {@code SET}, {@code MAP_VALUES}, {@code OPTIONAL} — same-kind container on
@@ -1965,9 +1989,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    *   <li>{@code NULLABLE_TO_OPTIONAL} — mirror direction.
    * </ul>
    */
-  private record FieldPlan(Kind kind, String subBridgeName, String qualifierMethod) {
+  private record FieldPlan(
+    Kind kind,
+    String subBridgeName,
+    String qualifierMethod,
+    // PRIM_WRAPPER only: the JLS-default literal to coalesce a null read to, per direction, or
+    // null
+    // when that direction writes the wrapper side (which tolerates null). Mirrors the runtime
+    // primitiveWrapperIso's fwdDefault / bwdDefault.
+    String fwdNullDefault,
+    String bwdNullDefault
+  ) {
     enum Kind {
       IDENTITY,
+      PRIM_WRAPPER,
       RECURSE,
       LIST,
       SET,
@@ -1979,22 +2014,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
 
     static FieldPlan identity() {
-      return new FieldPlan(Kind.IDENTITY, null, null);
+      return new FieldPlan(Kind.IDENTITY, null, null, null, null);
+    }
+
+    // Primitive ↔ boxed wrapper. The direction that writes the primitive side null-coalesces a null
+    // read to that primitive's JLS default; the direction that writes the wrapper passes through
+    // (null is a legal wrapper value). Exactly one of the two defaults is non-null for any given
+    // pair. Matches the runtime DeepMap.primitiveWrapperIso.
+    static FieldPlan primWrapper(final String fwdNullDefault, final String bwdNullDefault) {
+      return new FieldPlan(Kind.PRIM_WRAPPER, null, null, fwdNullDefault, bwdNullDefault);
     }
 
     static FieldPlan recurse(final String subBridgeName) {
-      return new FieldPlan(Kind.RECURSE, Objects.requireNonNull(subBridgeName), null);
+      return new FieldPlan(Kind.RECURSE, Objects.requireNonNull(subBridgeName), null, null, null);
     }
 
     static FieldPlan ofKind(final Kind kind, final String subBridgeName) {
-      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null);
+      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null);
     }
 
     // Qualifier-dispatch TRANSFORM variant: the `using` class hosts a named static method, NOT a
     // BridgeFn implementor. Codegen emits a direct {@code UsingClass.methodName(value)} call and
     // does not declare a {@code __tx_<field>} singleton instance.
     static FieldPlan ofTransformQualified(final String usingClassFqn, final String method) {
-      return new FieldPlan(Kind.TRANSFORM, Objects.requireNonNull(usingClassFqn), Objects.requireNonNull(method));
+      return new FieldPlan(
+        Kind.TRANSFORM,
+        Objects.requireNonNull(usingClassFqn),
+        Objects.requireNonNull(method),
+        null,
+        null
+      );
     }
   }
 
@@ -2040,7 +2089,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Map<String, String> viaMappers,
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
-    final Set<TypePair> userDeclared
+    final Set<TypePair> userDeclared,
+    final boolean lenient
   ) {
     final var plans = new LinkedHashMap<String, FieldPlan>();
     for (final var sf : sourceFields) {
@@ -2067,6 +2117,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // (1) Same type → identity. Covers same-typed containers too (List<X>↔List<X> is identity).
       if (isSameType(sf.type(), tf.type())) {
         plans.put(sf.name(), FieldPlan.identity());
+        continue;
+      }
+      // (1b) Primitive ↔ its boxed wrapper (boolean↔Boolean, int↔Integer, …). No sub-bridge is
+      //      derived (the primitive isn't a declared type and the wrapper isn't
+      // telescope-recursable).
+      //      The read auto-boxes when it writes the wrapper side and auto-unboxes when it writes
+      // the
+      //      primitive side; on the unbox direction a null wrapper null-coalesces to that
+      // primitive's
+      //      JLS default instead of NPE-ing, mirroring the runtime DeepMap.primitiveWrapperIso.
+      //      forward writes the target, backward writes the source — so the default applies to
+      //      whichever of those is the primitive (primitiveDefaultLiteral is empty for the
+      // wrapper).
+      if (isPrimitiveWrapperPair(sf.type(), tf.type())) {
+        final var fwdNullDefault = primitiveDefaultLiteral(tf.type().getKind()).orElse(null);
+        final var bwdNullDefault = primitiveDefaultLiteral(sf.type().getKind()).orElse(null);
+        plans.put(sf.name(), FieldPlan.primWrapper(fwdNullDefault, bwdNullDefault));
         continue;
       }
       // (2) Container shape detection — both sides container of the same kind with element types
@@ -2160,6 +2227,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           if (shouldDeferSubPair(subSourceEl, subTargetEl)) deferredPairs.add(subPair);
           else pending.add(subPair);
         }
+        // Leniency propagates: a lenient parent's nested sub-pair is itself lenient, so its
+        // bijection check is skipped and unmatched nested-target fields take JLS defaults.
+        if (lenient) lenientPairs.add(subPair);
         final var subBridgeName = bridgeClassName(subSourceEl, subTargetEl, userDeclared.contains(subPair));
         plans.put(sf.name(), FieldPlan.recurse(subBridgeName));
         continue;
@@ -2252,6 +2322,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var fwdElement = elementIdentity ? "e -> e" : sub + "::forward";
     return switch (plan.kind()) {
       case IDENTITY -> readExpr;
+      case PRIM_WRAPPER -> plan.fwdNullDefault() == null
+        ? readExpr
+        : "(" + readExpr + " == null ? " + plan.fwdNullDefault() + " : " + readExpr + ")";
       case RECURSE -> sub + ".forward(" + readExpr + ")";
       // LIST/SET/MAP_VALUES: when the element type needs a sub-bridge, delegate to a private static
       // helper emitted alongside this method (see emitContainerHelpers below). The helper inlines a
@@ -2284,6 +2357,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var bwdElement = elementIdentity ? "e -> e" : sub + "::backward";
     return switch (plan.kind()) {
       case IDENTITY -> readExpr;
+      case PRIM_WRAPPER -> plan.bwdNullDefault() == null
+        ? readExpr
+        : "(" + readExpr + " == null ? " + plan.bwdNullDefault() + " : " + readExpr + ")";
       case RECURSE -> sub + ".backward(" + readExpr + ")";
       case LIST -> elementIdentity
         ? "(" + readExpr + " == null ? null : new ArrayList<>(" + readExpr + "))"
@@ -2464,6 +2540,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private boolean isSameType(final TypeMirror a, final TypeMirror b) {
     return processingEnv.getTypeUtils().isSameType(a, b);
+  }
+
+  // True when one of {a, b} is a primitive and the other is exactly its boxed wrapper (boolean ↔
+  // Boolean, int ↔ Integer, …). Order-independent. Lets field-bridge planning route such pairs
+  // through the PRIM_WRAPPER plan: the box direction passes through, the unbox direction
+  // null-defaults a null wrapper to the primitive's JLS default (parity with the runtime
+  // primitiveWrapperIso).
+  private boolean isPrimitiveWrapperPair(final TypeMirror a, final TypeMirror b) {
+    return isBoxedOf(a, b) || isBoxedOf(b, a);
+  }
+
+  // True when `prim` is a primitive and `boxed` is exactly its boxed wrapper type.
+  private boolean isBoxedOf(final TypeMirror prim, final TypeMirror boxed) {
+    if (!prim.getKind().isPrimitive() || !(boxed instanceof DeclaredType)) return false;
+    final var types = processingEnv.getTypeUtils();
+    return types.isSameType(types.boxedClass((PrimitiveType) prim).asType(), boxed);
   }
 
   /** Whether the declared type is a record/class telescope can recurse into. */
