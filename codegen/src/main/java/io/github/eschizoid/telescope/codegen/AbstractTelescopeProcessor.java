@@ -1201,14 +1201,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     if (useBuilder) {
       final var sb = new StringBuilder("(p, v) -> " + pojoName + ".builder()");
       for (var i = 0; i < all.size(); i++) {
-        final var arg = all.get(i).name().equals(target.name()) ? "v" : offPathRead(all.get(i));
+        final var arg = all.get(i).name().equals(target.name()) ? focusedArg(target) : offPathRead(all.get(i));
         sb.append(".").append(setters[i]).append("(").append(arg).append(")");
       }
       return sb.append(".build()").toString();
     }
     final var sb = new StringBuilder("(p, v) -> { final var c = new " + pojoName + "(); ");
     for (var i = 0; i < all.size(); i++) {
-      final var arg = all.get(i).name().equals(target.name()) ? "v" : offPathRead(all.get(i));
+      final var arg = all.get(i).name().equals(target.name()) ? focusedArg(target) : offPathRead(all.get(i));
       sb.append("c.").append(setters[i]).append("(").append(arg).append("); ");
     }
     return sb.append("return c; }").toString();
@@ -1228,6 +1228,19 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   private static String offPathRead(final Prop p) {
     final var def = primitiveDefaultLiteral(p.type().getKind()).orElse("null");
     return "(p == null ? " + def + " : p." + p.getter() + "())";
+  }
+
+  /**
+   * The "write the focused value into its setter" expression. The focused setter receives the
+   * incoming value {@code v}; for a primitive-typed setter a null {@code v} coalesces to the
+   * primitive's JLS default rather than NPE-ing on the implicit unbox — matching the runtime {@code
+   * SettersWriter}, which skips null on primitive setters so the field keeps its JLS default. A
+   * reference-typed setter passes {@code v} through (null is a legal reference value).
+   */
+  private static String focusedArg(final Prop target) {
+    return primitiveDefaultLiteral(target.type().getKind())
+      .map(def -> "(v == null ? " + def + " : v)")
+      .orElse("v");
   }
 
   /**

@@ -1686,10 +1686,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // shared one anonymous Iso class body across every bridge, going megamorphic on
         // Function::apply as more bridges were loaded.
         out.println("  public static " + targetFq + " forward(final " + sourceFq + " s) {");
+        // Null in -> null out, matching the runtime structural Iso. Also lets a null container
+        // element (subBridge.forward(null) in the container helpers) pass through as null.
+        out.println("    if (s == null) return null;");
         emitMethodBody(out, forwardBody);
         out.println("  }");
         out.println();
         out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
+        out.println("    if (t == null) return null;");
         emitMethodBody(out, backwardBody);
         out.println("  }");
         out.println();

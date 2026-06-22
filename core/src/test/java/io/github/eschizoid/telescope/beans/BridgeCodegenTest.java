@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.util.Arrays;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -179,5 +180,18 @@ class BridgeCodegenTest {
     // Forward and a present round-trip still work.
     final var fwd = NtoOSrcBridge.BRIDGE.read(new NtoOSrc(new OptElem("y")));
     assertEquals(Optional.of(new OptElemBO("y")), fwd.maybe());
+  }
+
+  @Test
+  @DisplayName(
+    "container bridge: a null element passes through as null instead of NPE (parity with the runtime element Iso)"
+  )
+  void containerNullElementPassesThrough() {
+    // A null element inside a bridged List must map to null, not NPE on subBridge.forward(null).
+    final var src = new ElemListSrc(Arrays.asList(new OptElem("a"), null));
+    final var dst = assertDoesNotThrow(() -> ElemListSrcBridge.BRIDGE.read(src));
+    assertEquals(2, dst.items().size());
+    assertEquals(new OptElemBO("a"), dst.items().get(0));
+    assertNull(dst.items().get(1), "null element bridges to null");
   }
 }
