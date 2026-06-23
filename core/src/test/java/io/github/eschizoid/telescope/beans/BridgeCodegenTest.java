@@ -6,8 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -195,6 +200,14 @@ class BridgeCodegenTest {
     assertEquals(2, dst.items().size());
     assertEquals(new OptElemBO("a"), dst.items().get(0));
     assertNull(dst.items().get(1), "null element bridges to null");
+
+    // The backward direction shares the same per-element guard: a null element survives set(...).
+    final var back = assertDoesNotThrow(() ->
+      ElemListSrcBridge.BRIDGE.set(src, new ElemListDst(Arrays.asList(new OptElemBO("a"), null)))
+    );
+    assertEquals(2, back.items().size());
+    assertEquals(new OptElem("a"), back.items().get(0));
+    assertNull(back.items().get(1), "null element bridges backward to null");
   }
 
   @Test
@@ -220,5 +233,42 @@ class BridgeCodegenTest {
     final var dst = IdListSrcBridge.BRIDGE.read(src);
     assertInstanceOf(LinkedList.class, dst.tags(), "identity-element copy lands in the target's concrete class");
     assertEquals(Arrays.asList("x", "y"), dst.tags());
+  }
+
+  @Test
+  @DisplayName(
+    "concrete Set subtype: a TreeSet<String> target is rebuilt as a TreeSet via the no-presize copy constructor"
+  )
+  void concreteSetSubtypeRebuildsAsTreeSet() {
+    final var src = new SetIdSrc(new TreeSet<>(Arrays.asList("b", "a", "c")));
+    final var dst = SetIdSrcBridge.BRIDGE.read(src);
+    assertInstanceOf(TreeSet.class, dst.tags(), "target's declared TreeSet class is preserved");
+    assertEquals(Arrays.asList("a", "b", "c"), List.copyOf(dst.tags()));
+  }
+
+  @Test
+  @DisplayName(
+    "concrete Map subtype: a TreeMap<String, Y> target bridges values element-wise and is rebuilt as a TreeMap"
+  )
+  void concreteMapSubtypeRebuildsAsTreeMap() {
+    final Map<String, OptElem> in = new LinkedHashMap<>();
+    in.put("k1", new OptElem("a"));
+    in.put("k2", new OptElem("b"));
+    final var dst = MapBrSrcBridge.BRIDGE.read(new MapBrSrc(in));
+    assertInstanceOf(TreeMap.class, dst.byKey(), "target's declared TreeMap class is preserved");
+    assertEquals(new OptElemBO("a"), dst.byKey().get("k1"));
+    assertEquals(new OptElemBO("b"), dst.byKey().get("k2"));
+  }
+
+  @Test
+  @DisplayName(
+    "backward concrete container: a LinkedList<String> source field is rebuilt as a LinkedList on the backward pass"
+  )
+  void backwardConcreteContainerRebuildsAsSourceClass() {
+    final var src = new BwdConcreteSrc(new LinkedList<>(Arrays.asList("x", "y")));
+    final var dst = BwdConcreteSrcBridge.BRIDGE.read(src);
+    final var back = BwdConcreteSrcBridge.BRIDGE.set(src, dst);
+    assertInstanceOf(LinkedList.class, back.tags(), "backward rebuild lands in the source's concrete class");
+    assertEquals(Arrays.asList("x", "y"), back.tags());
   }
 }
