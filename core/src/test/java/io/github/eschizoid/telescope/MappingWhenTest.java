@@ -5,9 +5,7 @@ import static io.github.eschizoid.telescope.mapping.Mapping.constant;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.when;
 import static io.github.eschizoid.telescope.mapping.Mapping.zip;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 
 import io.github.eschizoid.telescope.mapping.Mapping;
 import java.util.List;
@@ -441,9 +439,9 @@ class MappingWhenTest {
         when((java.util.function.Predicate<Src>) s -> true, to(Src::name, Dst::name))
       );
       final var msg = ex.getMessage();
-      assertEquals(true, msg.contains("toOrElse"), "error suggests the field-level alternative");
-      assertEquals(true, msg.contains("telescope-based"), "error names the supported shape");
-      assertEquals(true, msg.contains("SameTypedTo"), "error names the rejected kind");
+      assertTrue(msg.contains("toOrElse"), "error suggests the field-level alternative");
+      assertTrue(msg.contains("telescope-based"), "error names the supported shape");
+      assertTrue(msg.contains("SameTypedTo"), "error names the rejected kind");
       assertEquals(
         true,
         msg.contains("name → name"),
@@ -458,27 +456,24 @@ class MappingWhenTest {
         when((java.util.function.Predicate<Src>) s -> true, Mapping.toOneWay(Src::name, Dst::name, String::toUpperCase))
       );
       final var msg = ex.getMessage();
-      assertEquals(true, msg.contains("Mapping.toOneWay"), "error names the forward-only construct");
+      assertTrue(msg.contains("Mapping.toOneWay"), "error names the forward-only construct");
       assertEquals(
         true,
         msg.contains("fold the predicate"),
         "error suggests inlining the predicate into the forward function"
       );
-      assertEquals(true, msg.contains("ForwardOnlyTransformTo"), "error names the rejected kind");
+      assertTrue(msg.contains("ForwardOnlyTransformTo"), "error names the rejected kind");
     }
 
     @Test
     @DisplayName("nested Conditional rejected — combine via Predicate#and/or instead")
     void rejectsNestedConditional() {
       final var emailTel = Telescope.of(Dst.class).field(Dst::name);
-      final Mapping<Src, Dst> inner = when(
-        (java.util.function.Predicate<Src>) s -> s.name() != null,
-        to(Src::name, emailTel)
-      );
+      final Mapping<Src, Dst> inner = when(s -> s.name() != null, to(Src::name, emailTel));
       final var ex = assertThrows(IllegalArgumentException.class, () ->
         when((java.util.function.Predicate<Src>) s -> true, inner)
       );
-      assertEquals(true, ex.getMessage().contains("does not nest"), "error explains nesting is rejected");
+      assertTrue(ex.getMessage().contains("does not nest"), "error explains nesting is rejected");
     }
 
     @Test

@@ -1,18 +1,12 @@
 package io.github.eschizoid.telescope;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 import io.github.eschizoid.telescope.Telescope.ListTelescope;
 import io.github.eschizoid.telescope.Telescope.MapTelescope;
 import io.github.eschizoid.telescope.Telescope.OptionalTelescope;
 import io.github.eschizoid.telescope.Telescope.SetTelescope;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.*;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -101,7 +95,7 @@ class TypedContainerPathTest {
       final Telescope<TagSet, Set<Tag>> raw = Telescope.of(TagSet.class).field(TagSet::tags);
       final SetTelescope<TagSet, Tag> promoted = Telescope.asSet(raw);
       final var src = new TagSet("alice", new LinkedHashSet<>(List.of(new Tag("a"))));
-      assertEquals(Set.of(new Tag("a")), promoted.each().toList(src).stream().collect(Collectors.toSet()));
+      assertEquals(Set.of(new Tag("a")), new HashSet<>(promoted.each().toList(src)));
     }
   }
 
@@ -262,8 +256,8 @@ class TypedContainerPathTest {
     @DisplayName("null source passes through to null (preserved by the assembleIso null-wrap)")
     void nullPassThrough() {
       final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class);
-      assertTrue(mapper.read(null) == null);
-      assertTrue(mapper.backward(null) == null);
+      assertNull(mapper.read(null));
+      assertNull(mapper.backward(null));
     }
   }
 }

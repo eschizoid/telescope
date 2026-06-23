@@ -2,8 +2,7 @@ package io.github.eschizoid.telescope;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.zip;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 
 import io.github.eschizoid.telescope.mapping.Mapping;
 import java.util.List;
@@ -104,8 +103,8 @@ class TelescopeMappingTest {
       // .then(...). This must behave identically to
       // Telescope.of(B.class).field(B::inner).field(...)
       // when fed into Mapping.to — same routing, same forward / backward result.
-      final var codegenStyleTgt = Telescope.<B, Inner>lens(B::inner, (s, v) -> new B(s.label(), v)).then(
-        Telescope.<Inner, String>lens(Inner::code, (s, v) -> new Inner(v))
+      final var codegenStyleTgt = Telescope.lens(B::inner, (s, v) -> new B(s.label(), v)).then(
+        Telescope.lens(Inner::code, (s, v) -> new Inner(v))
       );
 
       final var mapper = Telescope.mapper(A.class, B.class, to(A::label, codegenStyleTgt));
@@ -118,8 +117,8 @@ class TelescopeMappingTest {
     @Test
     @DisplayName("codegen-style nested-source telescope works with Mapping.to(Telescope, Accessor)")
     void codegenStyleNestedSourceWorks() {
-      final var codegenStyleSrc = Telescope.<A, Inner>lens(A::inner, (s, v) -> new A(s.label(), v)).then(
-        Telescope.<Inner, String>lens(Inner::code, (s, v) -> new Inner(v))
+      final var codegenStyleSrc = Telescope.lens(A::inner, (s, v) -> new A(s.label(), v)).then(
+        Telescope.lens(Inner::code, (s, v) -> new Inner(v))
       );
 
       final var mapper = Telescope.mapper(A.class, B.class, to(codegenStyleSrc, B::label));
@@ -345,7 +344,7 @@ class TelescopeMappingTest {
       final var mapper = Telescope.mapper(
         SrcWrap.class,
         TgtWrap.class,
-        Mapping.<SrcWrap, TgtWrap, List<Item>, List<Item>>to(
+        Mapping.to(
           SrcWrap::items,
           TgtWrap::items,
           xs -> xs.stream().limit(2).toList(), // shrink to 2
@@ -360,7 +359,7 @@ class TelescopeMappingTest {
       final var ex = assertThrows(IllegalStateException.class, () ->
         mapper.forward(new SrcWrap("t", List.of(new Item("x"), new Item("y"), new Item("z"))))
       );
-      assertEquals(true, ex.getMessage().contains("cardinality must match"));
+      assertTrue(ex.getMessage().contains("cardinality must match"));
     }
   }
 }

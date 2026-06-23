@@ -1992,6 +1992,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    *       {@code Y}; bridge the element and unwrap on forward / wrap on backward.
    *   <li>{@code NULLABLE_TO_OPTIONAL} — mirror direction.
    * </ul>
+   *
+   * <p>This flat record now carries several components that are live only for a subset of {@link
+   * Kind}s (the container-impl and raw-container fields for LIST/SET/MAP_VALUES, the null-default
+   * fields for PRIM_WRAPPER, the qualifier for TRANSFORM) — the per-variant validity matrix lives
+   * in the field comments, not the type. That is acceptable for this private, single-file plan
+   * object, but it is the binding constraint now: do NOT add a further variant-specific component
+   * to this flat shape. The next container/variant feature should first convert this to a sealed
+   * hierarchy (a Container variant carrying kind/sub/impls/raw, separate PrimWrapper / Recurse /
+   * Transform / Identity variants) so the compiler enforces the matrix the comments currently
+   * describe.
    */
   private record FieldPlan(
     Kind kind,
@@ -2012,7 +2022,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // recomputes its allocation from the field types directly). Mirrors DeepMap's allocation
     // table.
     String fwdContainerImpl,
-    String bwdContainerImpl
+    String bwdContainerImpl,
+    // LIST/SET/MAP_VALUES only: true when the field is a raw (non-generic) Collection/Map subtype
+    // on
+    // at least one side (e.g. `class ImageUrls extends ArrayList<ImageUrl>`, or a generic
+    // interface
+    // paired with such a subtype). The element type lives in the supertype, the subtype is
+    // allocated
+    // via its no-arg constructor (subclasses don't inherit the JDK copy ctor), so these route to
+    // the
+    // self-contained raw helpers instead of the generic copy-ctor inline path.
+    boolean rawContainer
   ) {
     enum Kind {
       IDENTITY,
@@ -2028,13 +2048,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
 
     static FieldPlan identity() {
-      return new FieldPlan(Kind.IDENTITY, null, null, null, null, null, null);
+      return new FieldPlan(Kind.IDENTITY, null, null, null, null, null, null, false);
     }
 
     // Attach the concrete-impl class names for a LIST/SET/MAP_VALUES plan — the classes the inline
     // identity-element copy allocates for the forward (target) and backward (source) outputs.
     FieldPlan withContainerImpls(final String fwdImpl, final String bwdImpl) {
-      return new FieldPlan(kind, subBridgeName, qualifierMethod, fwdNullDefault, bwdNullDefault, fwdImpl, bwdImpl);
+      return new FieldPlan(
+        kind,
+        subBridgeName,
+        qualifierMethod,
+        fwdNullDefault,
+        bwdNullDefault,
+        fwdImpl,
+        bwdImpl,
+        false
+      );
+    }
+
+    // Mark a LIST/SET/MAP_VALUES plan as a raw (non-generic) Collection/Map subtype container, so
+    // applyForward/applyBackward route to the self-contained raw helpers (no-arg ctor + addAll /
+    // element loop) rather than the generic copy-ctor inline path.
+    static FieldPlan rawContainer(final Kind kind, final String subBridgeName) {
+      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null, null, null, true);
     }
 
     // Primitive ↔ boxed wrapper. The direction that writes the primitive side null-coalesces a null
@@ -2042,15 +2078,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // (null is a legal wrapper value). Exactly one of the two defaults is non-null for any given
     // pair. Matches the runtime DeepMap.primitiveWrapperIso.
     static FieldPlan primWrapper(final String fwdNullDefault, final String bwdNullDefault) {
-      return new FieldPlan(Kind.PRIM_WRAPPER, null, null, fwdNullDefault, bwdNullDefault, null, null);
+      return new FieldPlan(Kind.PRIM_WRAPPER, null, null, fwdNullDefault, bwdNullDefault, null, null, false);
     }
 
     static FieldPlan recurse(final String subBridgeName) {
-      return new FieldPlan(Kind.RECURSE, Objects.requireNonNull(subBridgeName), null, null, null, null, null);
+      return new FieldPlan(Kind.RECURSE, Objects.requireNonNull(subBridgeName), null, null, null, null, null, false);
     }
 
     static FieldPlan ofKind(final Kind kind, final String subBridgeName) {
-      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null, null, null);
+      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null, null, null, false);
     }
 
     // Qualifier-dispatch TRANSFORM variant: the `using` class hosts a named static method, NOT a
@@ -2064,7 +2100,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         null,
         null,
         null,
-        null
+        null,
+        false
       );
     }
   }
@@ -2098,6 +2135,55 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return new ContainerShape(FieldPlan.Kind.MAP_VALUES, args.get(1), args.get(0));
     }
     return null;
+  }
+
+  // The container shape of a RAW (non-generic) Collection/Map subtype — a field declared as `class
+  // ImageUrls extends ArrayList<ImageUrl>` whose own type-argument list is empty, so the element
+  // type lives in the supertype. Returns null for a generic container (handled by
+  // containerShapeOf),
+  // a raw use of a generic type with no concrete supertype element, or a non-container. Optional is
+  // final and cannot be subtyped, so it has no raw form.
+  private ContainerShape rawContainerShapeOf(final TypeMirror type) {
+    if (!(type instanceof DeclaredType dt) || !dt.getTypeArguments().isEmpty()) return null;
+    if (assignableToRaw(type, "java.util.List")) {
+      final var args = containerViewArgs(type, "java.util.List");
+      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.LIST, args.get(0), null) : null;
+    }
+    if (assignableToRaw(type, "java.util.Set")) {
+      final var args = containerViewArgs(type, "java.util.Set");
+      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.SET, args.get(0), null) : null;
+    }
+    if (assignableToRaw(type, "java.util.Map")) {
+      final var args = containerViewArgs(type, "java.util.Map");
+      return args.size() == 2 ? new ContainerShape(FieldPlan.Kind.MAP_VALUES, args.get(1), args.get(0)) : null;
+    }
+    return null;
+  }
+
+  // The type arguments of `type`'s view as the JDK container `rawFqn` (e.g. the `<ImageUrl>` of the
+  // `java.util.List` supertype of `class ImageUrls extends ArrayList<ImageUrl>`). Walks the
+  // supertype graph until it finds the declared supertype whose erasure is exactly `rawFqn` and
+  // carries concrete type arguments. Returns an empty list when there is no such concrete view
+  // (e.g. a raw use of a generic type, where the args are unresolved type variables).
+  private List<? extends TypeMirror> containerViewArgs(final TypeMirror type, final String rawFqn) {
+    final var types = processingEnv.getTypeUtils();
+    final var rawEl = processingEnv.getElementUtils().getTypeElement(rawFqn);
+    if (rawEl == null) return List.of();
+    final var rawErasure = types.erasure(rawEl.asType());
+    final Deque<TypeMirror> queue = new ArrayDeque<>();
+    final Set<String> seen = new HashSet<>();
+    queue.add(type);
+    while (!queue.isEmpty()) {
+      final var t = queue.poll();
+      if (t instanceof DeclaredType dt && dt.asElement() instanceof TypeElement te) {
+        if (!seen.add(te.getQualifiedName().toString())) continue;
+        if (types.isSameType(types.erasure(t), rawErasure) && !dt.getTypeArguments().isEmpty()) {
+          return dt.getTypeArguments();
+        }
+      }
+      queue.addAll(types.directSupertypes(t));
+    }
+    return List.of();
   }
 
   // True when `type`'s erasure is assignable to the raw interface named by `rawFqn`.
@@ -2268,6 +2354,70 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         plans.put(sf.name(), withImpls);
         continue;
       }
+      // (2-raw) Raw Collection/Map subtype container — at least one side is a non-generic subtype
+      //     (`class ImageUrls extends ArrayList<ImageUrl>`), possibly paired with a generic
+      //     container on the other. The element lives in the supertype; the subtype is allocated
+      // via
+      //     its no-arg ctor + element loop. Falls back to the generic shape when a side is already
+      // a
+      //     parameterized container (the mixed `List<X>` ↔ `Wrap` case).
+      final var srcRaw = srcShape != null ? srcShape : rawContainerShapeOf(sf.type());
+      final var tgtRaw = tgtShape != null ? tgtShape : rawContainerShapeOf(tf.type());
+      if (srcRaw != null && tgtRaw != null && srcRaw.kind() == tgtRaw.kind()) {
+        if (srcRaw.kind() == FieldPlan.Kind.MAP_VALUES && !isSameType(srcRaw.keyType(), tgtRaw.keyType())) {
+          error(
+            source,
+            "@Bridge " +
+              source.getSimpleName() +
+              " -> " +
+              target.getSimpleName() +
+              ": field '" +
+              sf.name() +
+              "' has incompatible Map key types — " +
+              srcRaw.keyType() +
+              " vs " +
+              tgtRaw.keyType() +
+              ". Map key types must match exactly; codegen preserves source keys."
+          );
+          return null;
+        }
+        // The raw helper allocates each side's concrete container via its no-arg constructor. A
+        // subtype that hides it (`class Wrap extends ArrayList<X> { Wrap(int cap) {} }`) would make
+        // the generated `new Wrap()` fail in the consumer's build with a raw javac error; reject it
+        // here with a telescope-authored diagnostic instead.
+        final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), srcRaw.kind());
+        if (badAlloc != null) {
+          error(
+            source,
+            "@Bridge " +
+              source.getSimpleName() +
+              " -> " +
+              target.getSimpleName() +
+              ": field '" +
+              sf.name() +
+              "' container type '" +
+              badAlloc +
+              "' has no public no-arg constructor — codegen allocates it directly. Add a no-arg " +
+              "constructor, or use the runtime mapper with an explicit row for this field."
+          );
+          return null;
+        }
+        final var subPlan = planElementSubBridge(
+          source,
+          target,
+          sf.name(),
+          srcRaw.elementType(),
+          tgtRaw.elementType(),
+          srcRaw.kind(),
+          pending,
+          seen,
+          userDeclared,
+          lenient
+        );
+        if (subPlan == null) return null;
+        plans.put(sf.name(), FieldPlan.rawContainer(subPlan.kind(), subPlan.subBridgeName()));
+        continue;
+      }
       // (3) Cross-paradigm Optional↔nullable bridge — one side has Optional<X>, the other has
       //     plain (possibly null) X. Element side must be reflectable to bridge.
       if (srcShape != null && srcShape.kind() == FieldPlan.Kind.OPTIONAL && tgtShape == null) {
@@ -2427,6 +2577,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   private String applyForward(final String fieldName, final FieldPlan plan, final String readExpr) {
+    // Raw Collection/Map subtype containers always route to their self-contained helper (no-arg
+    // ctor
+    // + addAll / element loop); the inline copy-ctor below is invalid for a non-generic subtype.
+    if (plan.rawContainer()) return "__fwd_" + fieldName + "(" + readExpr + ")";
     final var sub = plan.subBridgeName();
     final boolean elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(sub);
     final var fwdElement = elementIdentity ? "e -> e" : sub + "::forward";
@@ -2486,6 +2640,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   private String applyBackward(final String fieldName, final FieldPlan plan, final String readExpr) {
+    if (plan.rawContainer()) return "__bwd_" + fieldName + "(" + readExpr + ")";
     final var sub = plan.subBridgeName();
     final boolean elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(sub);
     final var bwdElement = elementIdentity ? "e -> e" : sub + "::backward";
@@ -2551,6 +2706,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var imports = new TreeSet<String>();
     for (final var entry : fieldPlans.entrySet()) {
       final var plan = entry.getValue();
+      // Raw-container helpers render every type by fully-qualified name, so they need no imports.
+      if (plan.rawContainer()) continue;
       switch (plan.kind()) {
         // A container field needs both the declared raw of each side (the helper return / param
         // types and the inline copy) and the concrete impl each side allocates. For the common
@@ -2589,9 +2746,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var entry : fieldPlans.entrySet()) {
       final var fieldName = entry.getKey();
       final var plan = entry.getValue();
-      if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) continue;
       final var srcType = fieldByName(sourceFields, fieldName).type();
       final var tgtType = fieldByName(targetFields, renames.getOrDefault(fieldName, fieldName)).type();
+      // Raw Collection/Map subtype containers get the self-contained helper even for identity
+      // elements (the inline copy-ctor path is invalid for a non-generic subtype).
+      if (plan.rawContainer()) {
+        emitRawContainerHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan, "forward");
+        emitRawContainerHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan, "backward");
+        continue;
+      }
+      if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) continue;
       switch (plan.kind()) {
         case LIST -> {
           emitListHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward");
@@ -2609,6 +2773,77 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
       }
     }
+  }
+
+  // Emit one direction of a raw Collection/Map subtype container helper. Every type is rendered
+  // fully-qualified (no imports needed). The output collection is allocated via its no-arg
+  // constructor (a Collection/Map subtype does not inherit the JDK copy constructor) and filled by
+  // addAll/putAll for an identity element or an element-bridging loop otherwise.
+  private void emitRawContainerHelper(
+    final PrintWriter out,
+    final String name,
+    final TypeMirror srcContainer,
+    final TypeMirror tgtContainer,
+    final FieldPlan plan,
+    final String direction
+  ) {
+    final var identity = IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName());
+    final var sub = plan.subBridgeName();
+    out.println();
+    out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
+    out.println("    if (src == null) return null;");
+    out.println("    final var out = " + rawAllocExpr(tgtContainer, plan.kind()) + ";");
+    if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
+      if (identity) {
+        out.println("    out.putAll(src);");
+      } else {
+        out.println(
+          "    for (final var e : src.entrySet()) out.put(e.getKey(), " + sub + "." + direction + "(e.getValue()));"
+        );
+      }
+    } else if (identity) {
+      out.println("    out.addAll(src);");
+    } else {
+      out.println("    for (final var x : src) out.add(" + sub + "." + direction + "(x));");
+    }
+    out.println("    return out;");
+    out.println("  }");
+  }
+
+  // The first of the two raw-container fields whose concrete allocation class lacks a public no-arg
+  // constructor (the generated `new <impl>()` would not compile), or null when both are
+  // allocatable.
+  // The JDK default impls (ArrayList / LinkedHashSet / HashMap) always qualify; only a user subtype
+  // can hide its no-arg ctor.
+  private String firstNonAllocatableContainer(
+    final TypeMirror srcContainer,
+    final TypeMirror tgtContainer,
+    final FieldPlan.Kind kind
+  ) {
+    for (final var container : List.of(srcContainer, tgtContainer)) {
+      final var implFqn = concreteImplFqn(container, kind);
+      final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
+      if (implEl != null && !hasPublicNoArgConstructor(implEl)) return implFqn;
+    }
+    return null;
+  }
+
+  // Allocation expression for a raw-container output: the target's concrete class (the subtype
+  // itself
+  // when instantiable, else the interface's default impl), with a diamond only when that class is
+  // generic. A non-generic subtype (`class ImageUrls extends ArrayList<ImageUrl>`) takes no type
+  // arguments; the default impl for a generic interface field takes the field's element args.
+  private String rawAllocExpr(final TypeMirror container, final FieldPlan.Kind kind) {
+    final var implFqn = concreteImplFqn(container, kind);
+    final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
+    final var generic = implEl != null && !implEl.getTypeParameters().isEmpty();
+    if (!generic) return "new " + implFqn + "()";
+    if (kind == FieldPlan.Kind.MAP_VALUES) {
+      final var args = containerViewArgs(container, "java.util.Map");
+      return "new " + implFqn + "<" + args.get(0) + ", " + args.get(1) + ">()";
+    }
+    final var args = containerViewArgs(container, kind == FieldPlan.Kind.SET ? "java.util.Set" : "java.util.List");
+    return "new " + implFqn + "<" + args.get(0) + ">()";
   }
 
   private void emitListHelper(
@@ -2780,12 +3015,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (kind != ElementKind.RECORD && kind != ElementKind.CLASS) return false;
     // Filter out boxed scalars / String / common JDK types we don't want to recurse into.
     final var fq = te.getQualifiedName().toString();
-    return (
-      !fq.startsWith("java.lang.") &&
-      !fq.startsWith("java.time.") &&
-      !fq.startsWith("java.util.") &&
-      !fq.startsWith("java.math.")
-    );
+    if (
+      fq.startsWith("java.lang.") ||
+      fq.startsWith("java.time.") ||
+      fq.startsWith("java.util.") ||
+      fq.startsWith("java.math.")
+    ) {
+      return false;
+    }
+    // A user-package subtype of a JDK Collection/Map (e.g. `class ImageUrls extends
+    // ArrayList<ImageUrl>`) clears the prefix filter but must NOT be bean-introspected: ArrayList's
+    // synthesized `isEmpty()` reads as a property `empty` with no `setEmpty`, producing a
+    // misleading
+    // "no setter for 'empty'" error. Same-kind subtype pairs are element-bridged by the (2-raw)
+    // container branch before reaching here; this exclusion is the backstop for the pairs that
+    // branch can't claim (a kind mismatch like List-subtype vs Set-subtype, or a Collection/Map
+    // subtype opposite a non-container), so they fall to the accurate "no auto-bridge could be
+    // derived" diagnostic instead of the bean-introspection crash.
+    return !assignableToRaw(dt, "java.util.Collection") && !assignableToRaw(dt, "java.util.Map");
   }
 
   // Read field `f` from `var`: `var.f()` for a record, `var.getF()` / `var.isF()` for a POJO.

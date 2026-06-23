@@ -1,11 +1,7 @@
 package io.github.eschizoid.telescope;
 
 import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -195,8 +191,8 @@ class TelescopeFromMapTest {
           extract("k2", CaseListRequest::bookingType, Object::toString)
         )
       );
-      assertEquals(true, ex.getMessage().contains("duplicate extract row"), () -> ex.getMessage());
-      assertEquals(true, ex.getMessage().contains("bookingType"), () -> ex.getMessage());
+      assertTrue(ex.getMessage().contains("duplicate extract row"), ex::getMessage);
+      assertTrue(ex.getMessage().contains("bookingType"), ex::getMessage);
     }
 
     @Test

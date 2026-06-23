@@ -4,6 +4,7 @@ import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -2659,5 +2660,46 @@ class MigrationRegressionTest {
      * probe's target-mismatch rejection branch.
      */
     public record SiblingTarget(String id, int score) {}
+  }
+
+  @Nested
+  @DisplayName("@Bridge codegen — custom collection-wrapper field")
+  class BridgeCustomCollectionWrapper {
+
+    @Test
+    @DisplayName(
+      "the full reported shape — bean parent, lenient, sibling rename, a custom ArrayList wrapper field with distinct elements — bridges end-to-end"
+    )
+    void adopterShapeBridgesEndToEnd() {
+      // Before the fix the @Bridge processor bean-introspected the custom collection wrapper and
+      // failed with "no setter for 'empty'". It now element-bridges the wrapper's contents while
+      // the
+      // lenient flag and the sibling rename apply alongside. This runs the generated codegen bridge
+      // —
+      // the reflection-free path the adopter used.
+      final var src = new CustomWrapperSource();
+      final var urls = new CustomWrapperSrcUrls();
+      urls.add(new CustomWrapperSrcUrl("a"));
+      urls.add(new CustomWrapperSrcUrl("b"));
+      src.setImageUrls(urls);
+      src.setIcVerificationExt("ext-1");
+
+      final var dst = CustomWrapperSourceBridge.BRIDGE.read(src);
+
+      // 1. The custom wrapper's elements are converted (not verbatim-copied) into a fresh target
+      //    wrapper of the declared subtype.
+      assertInstanceOf(CustomWrapperDstUrls.class, dst.getImageUrls(), "target's custom wrapper class is allocated");
+      assertEquals(List.of(new CustomWrapperDstUrl("a"), new CustomWrapperDstUrl("b")), dst.getImageUrls());
+      // 2. The sibling rename applied.
+      assertEquals("ext-1", dst.getVendorExtendedResult());
+      // 3. Leniency defaulted the unmatched target field instead of failing the bijection check.
+      assertNull(dst.getExtra());
+
+      // 4. Backward round-trips into a fresh source wrapper with the elements bridged back.
+      final var back = CustomWrapperSourceBridge.BRIDGE.set(src, dst);
+      assertInstanceOf(CustomWrapperSrcUrls.class, back.getImageUrls());
+      assertEquals(new CustomWrapperSrcUrl("a"), back.getImageUrls().get(0));
+      assertEquals("ext-1", back.getIcVerificationExt());
+    }
   }
 }

@@ -335,6 +335,458 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
+      "a user-defined raw collection-subtype field (class Wrap extends ArrayList<Elem>) element-bridges into a fresh target wrapper"
+    )
+    void rawCollectionSubtypeFieldElementBridges() {
+      // The adopter shape: a custom collection wrapper `class Wrap extends ArrayList<Elem>` whose
+      // own
+      // type-argument list is empty (the element lives in the supertype). The element pair is a
+      // distinct, bridgeable record pair (SrcElem -> DstElem), so the field must element-bridge
+      // into
+      // a fresh target wrapper allocated via its no-arg constructor (subclasses don't inherit
+      // ArrayList's copy constructor), not be bean-introspected.
+      final var compilation = compile(
+        source(
+          "demo.RawOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.RawOrderDto.class)
+          public record RawOrder(demo.SrcWrap items) {}
+          """
+        ),
+        source(
+          "demo.SrcWrap",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class SrcWrap extends ArrayList<demo.SrcElem> {}
+          """
+        ),
+        source(
+          "demo.SrcElem",
+          """
+          package demo;
+          public record SrcElem(String sku) {}
+          """
+        ),
+        source(
+          "demo.RawOrderDto",
+          """
+          package demo;
+          public record RawOrderDto(demo.DstWrap items) {}
+          """
+        ),
+        source(
+          "demo.DstWrap",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class DstWrap extends ArrayList<demo.DstElem> {}
+          """
+        ),
+        source(
+          "demo.DstElem",
+          """
+          package demo;
+          public record DstElem(String sku) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.RawOrderBridge");
+      assertNotNull(bridge);
+      // A sub-bridge is generated for the distinct element pair, and the forward copy allocates a
+      // fresh target wrapper via its no-arg ctor (raw type, no diamond — the subtype is
+      // non-generic).
+      assertNotNull(compilation.generated().get("demo.SrcElemToDstElemBridge"));
+      assertTrue(bridge.contains("new demo.DstWrap()"), bridge);
+      assertTrue(bridge.contains("SrcElemToDstElemBridge.forward(x)"), bridge);
+      // backward allocates a fresh source wrapper the same way.
+      assertTrue(bridge.contains("new demo.SrcWrap()"), bridge);
+      assertTrue(bridge.contains("SrcElemToDstElemBridge.backward(x)"), bridge);
+    }
+
+    @Test
+    @DisplayName("raw collection-subtype with identity elements copies via addAll into a fresh wrapper (no sub-bridge)")
+    void rawCollectionSubtypeIdentityElementCopiesViaAddAll() {
+      final var compilation = compile(
+        source(
+          "demo.IdOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.IdOrderDto.class)
+          public record IdOrder(demo.SrcTags tags) {}
+          """
+        ),
+        source(
+          "demo.SrcTags",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class SrcTags extends ArrayList<String> {}
+          """
+        ),
+        source(
+          "demo.IdOrderDto",
+          """
+          package demo;
+          public record IdOrderDto(demo.DstTags tags) {}
+          """
+        ),
+        source(
+          "demo.DstTags",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class DstTags extends ArrayList<String> {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.IdOrderBridge");
+      assertNotNull(bridge);
+      // Same element type → no sub-bridge, a verbatim addAll into a fresh target wrapper.
+      assertNull(compilation.generated().get("demo.StringToStringBridge"));
+      assertTrue(bridge.contains("new demo.DstTags()"), bridge);
+      assertTrue(bridge.contains("out.addAll(src)"), bridge);
+    }
+
+    @Test
+    @DisplayName("raw Set-subtype element-bridges into a fresh target set")
+    void rawSetSubtypeElementBridges() {
+      final var compilation = compile(
+        source(
+          "demo.SetOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.SetOrderDto.class)
+          public record SetOrder(demo.SrcSet items) {}
+          """
+        ),
+        source(
+          "demo.SrcSet",
+          """
+          package demo;
+          import java.util.HashSet;
+          public class SrcSet extends HashSet<demo.SElem> {}
+          """
+        ),
+        source("demo.SElem", "package demo; public record SElem(String v) {}"),
+        source(
+          "demo.SetOrderDto",
+          """
+          package demo;
+          public record SetOrderDto(demo.DstSet items) {}
+          """
+        ),
+        source(
+          "demo.DstSet",
+          """
+          package demo;
+          import java.util.HashSet;
+          public class DstSet extends HashSet<demo.DElem> {}
+          """
+        ),
+        source("demo.DElem", "package demo; public record DElem(String v) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.SetOrderBridge");
+      assertNotNull(bridge);
+      assertNotNull(compilation.generated().get("demo.SElemToDElemBridge"));
+      assertTrue(bridge.contains("new demo.DstSet()"), bridge);
+      assertTrue(bridge.contains("SElemToDElemBridge.forward(x)"), bridge);
+    }
+
+    @Test
+    @DisplayName("raw Map-subtype element-bridges values, preserves keys, into a fresh target map")
+    void rawMapSubtypeElementBridgesValues() {
+      final var compilation = compile(
+        source(
+          "demo.MapOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.MapOrderDto.class)
+          public record MapOrder(demo.SrcMeta meta) {}
+          """
+        ),
+        source(
+          "demo.SrcMeta",
+          """
+          package demo;
+          import java.util.HashMap;
+          public class SrcMeta extends HashMap<String, demo.MSElem> {}
+          """
+        ),
+        source("demo.MSElem", "package demo; public record MSElem(String v) {}"),
+        source(
+          "demo.MapOrderDto",
+          """
+          package demo;
+          public record MapOrderDto(demo.DstMeta meta) {}
+          """
+        ),
+        source(
+          "demo.DstMeta",
+          """
+          package demo;
+          import java.util.HashMap;
+          public class DstMeta extends HashMap<String, demo.MDElem> {}
+          """
+        ),
+        source("demo.MDElem", "package demo; public record MDElem(String v) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.MapOrderBridge");
+      assertNotNull(bridge);
+      assertNotNull(compilation.generated().get("demo.MSElemToMDElemBridge"));
+      assertTrue(bridge.contains("new demo.DstMeta()"), bridge);
+      assertTrue(bridge.contains("out.put(e.getKey(), MSElemToMDElemBridge.forward(e.getValue()))"), bridge);
+    }
+
+    @Test
+    @DisplayName("lenient propagates through the raw container branch to a non-bijection element pair")
+    void rawCollectionSubtypeLenientPropagatesToElement() {
+      // The adopter's reported shape carried lenient = true. Leniency must thread through the
+      // raw-container branch into the element sub-pair, so a non-bijection element pair (the target
+      // element has an extra field) compiles instead of failing the bijection check.
+      final var compilation = compile(
+        source(
+          "demo.LenOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(value = demo.LenOrderDto.class, lenient = true)
+          public record LenOrder(demo.LenSrcWrap items) {}
+          """
+        ),
+        source(
+          "demo.LenSrcWrap",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class LenSrcWrap extends ArrayList<demo.LenSrcElem> {}
+          """
+        ),
+        source("demo.LenSrcElem", "package demo; public record LenSrcElem(String a) {}"),
+        source(
+          "demo.LenOrderDto",
+          """
+          package demo;
+          public record LenOrderDto(demo.LenDstWrap items) {}
+          """
+        ),
+        source(
+          "demo.LenDstWrap",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class LenDstWrap extends ArrayList<demo.LenDstElem> {}
+          """
+        ),
+        source("demo.LenDstElem", "package demo; public record LenDstElem(String a, String extra) {}")
+      );
+
+      assertTrue(
+        compilation.success(),
+        () -> "lenient should propagate into the element pair: " + compilation.errorMessages()
+      );
+      assertNotNull(compilation.generated().get("demo.LenSrcElemToLenDstElemBridge"));
+    }
+
+    @Test
+    @DisplayName(
+      "mixed generic↔raw: List<X> ↔ raw ArrayList subtype element-bridges, backward allocates the interface default"
+    )
+    void mixedGenericAndRawCollectionElementBridges() {
+      final var compilation = compile(
+        source(
+          "demo.MixOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.List;
+          @Bridge(demo.MixOrderDto.class)
+          public record MixOrder(List<demo.MixSrc> items) {}
+          """
+        ),
+        source("demo.MixSrc", "package demo; public record MixSrc(String v) {}"),
+        source(
+          "demo.MixOrderDto",
+          """
+          package demo;
+          public record MixOrderDto(demo.MixWrap items) {}
+          """
+        ),
+        source(
+          "demo.MixWrap",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class MixWrap extends ArrayList<demo.MixDst> {}
+          """
+        ),
+        source("demo.MixDst", "package demo; public record MixDst(String v) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.MixOrderBridge");
+      assertNotNull(bridge);
+      assertNotNull(compilation.generated().get("demo.MixSrcToMixDstBridge"));
+      // forward allocates the concrete subtype; backward allocates the interface's default impl.
+      assertTrue(bridge.contains("new demo.MixWrap()"), bridge);
+      assertTrue(bridge.contains("new java.util.ArrayList<demo.MixSrc>()"), bridge);
+    }
+
+    @Test
+    @DisplayName("mixed generic↔raw Map: Map<K, V> ↔ raw HashMap subtype, backward allocates the two-arg default impl")
+    void mixedGenericAndRawMapElementBridges() {
+      final var compilation = compile(
+        source(
+          "demo.MMixOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.Map;
+          @Bridge(demo.MMixOrderDto.class)
+          public record MMixOrder(Map<String, demo.MMixSrc> meta) {}
+          """
+        ),
+        source("demo.MMixSrc", "package demo; public record MMixSrc(String v) {}"),
+        source(
+          "demo.MMixOrderDto",
+          """
+          package demo;
+          public record MMixOrderDto(demo.MMixWrap meta) {}
+          """
+        ),
+        source(
+          "demo.MMixWrap",
+          """
+          package demo;
+          import java.util.HashMap;
+          public class MMixWrap extends HashMap<String, demo.MMixDst> {}
+          """
+        ),
+        source("demo.MMixDst", "package demo; public record MMixDst(String v) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.MMixOrderBridge");
+      assertNotNull(bridge);
+      assertNotNull(compilation.generated().get("demo.MMixSrcToMMixDstBridge"));
+      // forward allocates the concrete subtype; backward allocates the Map interface's two-arg
+      // default.
+      assertTrue(bridge.contains("new demo.MMixWrap()"), bridge);
+      assertTrue(bridge.contains("new java.util.HashMap<java.lang.String, demo.MMixSrc>()"), bridge);
+    }
+
+    @Test
+    @DisplayName("a raw collection subtype with no public no-arg constructor is rejected with a telescope diagnostic")
+    void rawCollectionSubtypeWithoutNoArgCtorIsRejected() {
+      // The raw helper allocates `new Wrap()`; a subtype that hides the no-arg ctor would fail in
+      // the
+      // consumer's build with a raw javac error. The processor rejects it up front instead.
+      final var compilation = compile(
+        source(
+          "demo.CtorSrc",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.CtorDst.class)
+          public record CtorSrc(demo.CtorSrcWrap items) {}
+          """
+        ),
+        source(
+          "demo.CtorSrcWrap",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class CtorSrcWrap extends ArrayList<String> {}
+          """
+        ),
+        source(
+          "demo.CtorDst",
+          """
+          package demo;
+          public record CtorDst(demo.NoCtorWrap items) {}
+          """
+        ),
+        source(
+          "demo.NoCtorWrap",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class NoCtorWrap extends ArrayList<String> {
+            public NoCtorWrap(final int capacity) {
+              super(capacity);
+            }
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "a ctor-less container subtype should be rejected");
+      assertTrue(
+        compilation.hasError("no public no-arg constructor"),
+        () -> "expected the no-arg-ctor diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("raw Map-subtype pair with mismatched key types is an error")
+    void rawMapSubtypeKeyMismatchIsRejected() {
+      final var compilation = compile(
+        source(
+          "demo.KSrc",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.KDst.class)
+          public record KSrc(demo.KSrcMap meta) {}
+          """
+        ),
+        source(
+          "demo.KSrcMap",
+          """
+          package demo;
+          import java.util.HashMap;
+          public class KSrcMap extends HashMap<String, String> {}
+          """
+        ),
+        source(
+          "demo.KDst",
+          """
+          package demo;
+          public record KDst(demo.KDstMap meta) {}
+          """
+        ),
+        source(
+          "demo.KDstMap",
+          """
+          package demo;
+          import java.util.HashMap;
+          public class KDstMap extends HashMap<Integer, String> {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "a raw Map-subtype pair with mismatched keys should fail");
+      assertTrue(
+        compilation.hasError("Map key types must match exactly"),
+        () -> "expected the key-type diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName(
       "identity element, concrete List subtype: List<String> ↔ LinkedList<String> emits an inline copy into each side's concrete class"
     )
     void identityElementConcreteListEmitsInlineConcreteCopy() {
@@ -779,6 +1231,116 @@ class BridgeProcessorTest {
       assertTrue(
         compilation.hasError("@Bridge is only supported on top-level types"),
         () -> "expected top-level diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "a kind-mismatched Collection-subtype pair (List subtype vs Set subtype) is not bean-introspected — clean diagnostic, not 'no setter for empty'"
+    )
+    void kindMismatchedCollectionSubtypesAreNotBeanIntrospected() {
+      // Same-kind Collection/Map subtype pairs are element-bridged (see DeepRecursion). A
+      // kind-mismatched pair (List subtype vs Set subtype) cannot be — but both still clear the
+      // qualified-name prefix filter, so without the guard the planner would recurse into one as a
+      // bean and surface ArrayList's synthesized `isEmpty()` → property `empty` → no `setEmpty` →
+      // the
+      // misleading "no setter for 'empty'" error. The isReflectableDeclared exclusion makes it fall
+      // to the accurate "no auto-bridge" diagnostic instead.
+      final var compilation = compile(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.Dst.class)
+          public record Src(demo.SrcList items) {}
+          """
+        ),
+        source(
+          "demo.SrcList",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class SrcList extends ArrayList<String> {}
+          """
+        ),
+        source(
+          "demo.Dst",
+          """
+          package demo;
+          public record Dst(demo.DstSet items) {}
+          """
+        ),
+        source(
+          "demo.DstSet",
+          """
+          package demo;
+          import java.util.HashSet;
+          public class DstSet extends HashSet<String> {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "a kind-mismatched Collection-subtype pair should fail");
+      assertFalse(
+        compilation.hasError("no setter for 'empty'"),
+        () -> "must not leak the bean-introspection error; saw " + compilation.errorMessages()
+      );
+      assertTrue(
+        compilation.hasError("no auto-bridge could be derived"),
+        () -> "expected the clean no-auto-bridge diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("a kind-mismatched Map-subtype pair (Map subtype vs List subtype) is not bean-introspected either")
+    void kindMismatchedMapSubtypeIsNotBeanIntrospected() {
+      // Map subtype vs List subtype — kind mismatch, not element-bridgeable. Pins the
+      // `java.util.Map` clause of the isReflectableDeclared exclusion guarding the HashMap `empty`
+      // crash.
+      final var compilation = compile(
+        source(
+          "demo.MSrc",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.MDst.class)
+          public record MSrc(demo.SrcMap meta) {}
+          """
+        ),
+        source(
+          "demo.SrcMap",
+          """
+          package demo;
+          import java.util.HashMap;
+          public class SrcMap extends HashMap<String, String> {}
+          """
+        ),
+        source(
+          "demo.MDst",
+          """
+          package demo;
+          public record MDst(demo.DstList meta) {}
+          """
+        ),
+        source(
+          "demo.DstList",
+          """
+          package demo;
+          import java.util.ArrayList;
+          public class DstList extends ArrayList<String> {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "a kind-mismatched Map-subtype pair should fail");
+      assertFalse(
+        compilation.hasError("no setter for 'empty'"),
+        () -> "must not leak the bean-introspection error; saw " + compilation.errorMessages()
+      );
+      assertTrue(
+        compilation.hasError("no auto-bridge could be derived"),
+        () -> "expected the clean no-auto-bridge diagnostic; saw " + compilation.errorMessages()
       );
     }
 
@@ -3781,6 +4343,85 @@ class BridgeProcessorTest {
         bridge.contains("Telescope<modela.UserEntity, modelb.UserDto>"),
         () -> "BRIDGE constant should be typed Telescope<Source, Target> referencing both modules; saw:\n" + bridge
       );
+    }
+
+    @Test
+    @DisplayName("adopter shape: carrier + lenient + sibling @Rename + a raw collection-subtype field, all together")
+    void carrierLenientRenameWithRawCollectionField() {
+      // Faithful reproduction of the reported scenario: a carrier @Bridge with lenient = true and a
+      // @Rename on a scalar sibling, where the bean target also nests a custom collection wrapper
+      // (`class Wrap extends ArrayList<Elem>`). All four dimensions must coexist: the raw container
+      // field element-bridges, the rename applies, and leniency lets the extra target field
+      // default.
+      final var compilation = compile(
+        source(
+          "modela.DocDbDetails",
+          """
+          package modela;
+          public class DocDbDetails {
+            private modela.SrcUrls imageUrls;
+            private String icVerificationExt;
+            public modela.SrcUrls getImageUrls() { return imageUrls; }
+            public void setImageUrls(final modela.SrcUrls v) { this.imageUrls = v; }
+            public String getIcVerificationExt() { return icVerificationExt; }
+            public void setIcVerificationExt(final String v) { this.icVerificationExt = v; }
+          }
+          """
+        ),
+        source(
+          "modela.SrcUrls",
+          "package modela; import java.util.ArrayList; public class SrcUrls extends ArrayList<modela.SrcUrl> {}"
+        ),
+        source("modela.SrcUrl", "package modela; public record SrcUrl(String url) {}"),
+        source(
+          "modelb.DocBoDetails",
+          """
+          package modelb;
+          public class DocBoDetails {
+            private modelb.DstUrls imageUrls;
+            private String vendorExtendedResult;
+            private String extra;
+            public modelb.DstUrls getImageUrls() { return imageUrls; }
+            public void setImageUrls(final modelb.DstUrls v) { this.imageUrls = v; }
+            public String getVendorExtendedResult() { return vendorExtendedResult; }
+            public void setVendorExtendedResult(final String v) { this.vendorExtendedResult = v; }
+            public String getExtra() { return extra; }
+            public void setExtra(final String v) { this.extra = v; }
+          }
+          """
+        ),
+        source(
+          "modelb.DstUrls",
+          "package modelb; import java.util.ArrayList; public class DstUrls extends ArrayList<modelb.DstUrl> {}"
+        ),
+        source("modelb.DstUrl", "package modelb; public record DstUrl(String url) {}"),
+        source(
+          "carrier.IdentificationBridgeDef",
+          """
+          package carrier;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Rename;
+          @Bridge(
+            source = modela.DocDbDetails.class,
+            target = modelb.DocBoDetails.class,
+            lenient = true,
+            renames = { @Rename(source = "icVerificationExt", target = "vendorExtendedResult") })
+          public class IdentificationBridgeDef {}
+          """
+        )
+      );
+
+      assertTrue(
+        compilation.success(),
+        () -> "the adopter's full shape should compile; saw " + compilation.errorMessages()
+      );
+      final var bridge = compilation.generated().get("carrier.IdentificationBridgeDefBridge");
+      assertNotNull(bridge);
+      // The raw collection field element-bridges through a generated element sub-bridge...
+      assertNotNull(compilation.generated().get("modela.SrcUrlToDstUrlBridge"));
+      assertTrue(bridge.contains("new modelb.DstUrls()"), bridge);
+      // ...and the misleading bean-introspection error never appears.
+      assertFalse(compilation.hasError("no setter for 'empty'"), () -> compilation.errorMessages().toString());
     }
 
     @Test

@@ -83,7 +83,7 @@ class TelescopeLatticeHooksTest {
         .field(User::email)
         .before(String::toLowerCase);
 
-      final var normalize = Telescope.<Team>all(over(emailsNormalised, e -> "MIXED@X.COM"));
+      final var normalize = Telescope.all(over(emailsNormalised, e -> "MIXED@X.COM"));
       final var team = new Team("eng", List.of(new User("a@x"), new User("b@x")));
 
       assertEquals(
