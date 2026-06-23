@@ -2452,6 +2452,22 @@ class MigrationRegressionTest {
       final var rec = assertDoesNotThrow(() -> mapper.forward(src));
       assertEquals(0, rec.attemptCount()); // JLS default for int
     }
+
+    @Test
+    @DisplayName(
+      "setting a primitive @BeanFocus lens to null coalesces to the JLS default instead of NPE (parity with SettersWriter)"
+    )
+    void setPrimitiveBeanFocusLensToNullUsesJlsDefault() {
+      // The generated holder lens rebuild writes the focused value straight into the setter. For a
+      // primitive setter a null focus must coalesce to the JLS default rather than NPE on the
+      // implicit unbox — matching the runtime SettersWriter, which skips null on primitive setters
+      // so the field keeps its JLS default.
+      final var bean = new PrimitiveIntTarget();
+      bean.setAttemptCount(5);
+      final var path = Telescope.ofBean(PrimitiveIntTarget.class).field(PrimitiveIntTarget::getAttemptCount);
+      final var updated = assertDoesNotThrow(() -> path.set(bean, null));
+      assertEquals(0, updated.getAttemptCount());
+    }
   }
 
   @Nested

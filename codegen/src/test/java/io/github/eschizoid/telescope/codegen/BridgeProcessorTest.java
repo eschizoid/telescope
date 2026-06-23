@@ -283,6 +283,159 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName(
+      "a field declared as a concrete List subtype (LinkedList<Y>) auto-lifts and the helper allocates that concrete class"
+    )
+    void concreteListSubtypeFieldAllocatesTargetClass() {
+      // The runtime ContainerShape accepts any List subtype via isAssignableFrom and allocates the
+      // target's concrete class; codegen must match — a field typed LinkedList<Y> should auto-lift
+      // (not error) and the forward helper should new LinkedList<Y>, not the default ArrayList.
+      final var compilation = compile(
+        source(
+          "demo.LLOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.List;
+          @Bridge(demo.LLOrderDto.class)
+          public record LLOrder(List<demo.LLItem> items) {}
+          """
+        ),
+        source(
+          "demo.LLItem",
+          """
+          package demo;
+          public record LLItem(String sku) {}
+          """
+        ),
+        source(
+          "demo.LLOrderDto",
+          """
+          package demo;
+          import java.util.LinkedList;
+          public record LLOrderDto(LinkedList<demo.LLItemDto> items) {}
+          """
+        ),
+        source(
+          "demo.LLItemDto",
+          """
+          package demo;
+          public record LLItemDto(String sku) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.LLOrderBridge");
+      assertNotNull(bridge);
+      // The forward helper writes the target's concrete class (LinkedList), not the default
+      // ArrayList, and its return type is the target's declared concrete type.
+      assertTrue(bridge.contains("new LinkedList<demo.LLItemDto>"), bridge);
+    }
+
+    @Test
+    @DisplayName(
+      "identity element, concrete List subtype: List<String> ↔ LinkedList<String> emits an inline copy into each side's concrete class"
+    )
+    void identityElementConcreteListEmitsInlineConcreteCopy() {
+      final var compilation = compile(
+        source(
+          "demo.ILOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.List;
+          @Bridge(demo.ILOrderDto.class)
+          public record ILOrder(List<String> tags) {}
+          """
+        ),
+        source(
+          "demo.ILOrderDto",
+          """
+          package demo;
+          import java.util.LinkedList;
+          public record ILOrderDto(LinkedList<String> tags) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.ILOrderBridge");
+      assertNotNull(bridge);
+      // Identity element → no helper; an inline copy into the target's LinkedList (forward) and the
+      // source's default ArrayList (backward).
+      assertTrue(bridge.contains("new LinkedList<>("), bridge);
+      assertTrue(bridge.contains("new ArrayList<>("), bridge);
+    }
+
+    @Test
+    @DisplayName(
+      "identity element, concrete Set subtype: Set<String> ↔ TreeSet<String> emits an inline copy into each side's concrete class"
+    )
+    void identityElementConcreteSetEmitsInlineConcreteCopy() {
+      final var compilation = compile(
+        source(
+          "demo.ISOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.Set;
+          @Bridge(demo.ISOrderDto.class)
+          public record ISOrder(Set<String> tags) {}
+          """
+        ),
+        source(
+          "demo.ISOrderDto",
+          """
+          package demo;
+          import java.util.TreeSet;
+          public record ISOrderDto(TreeSet<String> tags) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.ISOrderBridge");
+      assertNotNull(bridge);
+      assertTrue(bridge.contains("new TreeSet<>("), bridge);
+      assertTrue(bridge.contains("new LinkedHashSet<>("), bridge);
+    }
+
+    @Test
+    @DisplayName(
+      "identity value, concrete Map subtype: Map<String, String> ↔ TreeMap<String, String> emits an inline copy into each side's concrete class"
+    )
+    void identityValueConcreteMapEmitsInlineConcreteCopy() {
+      final var compilation = compile(
+        source(
+          "demo.IMOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.Map;
+          @Bridge(demo.IMOrderDto.class)
+          public record IMOrder(Map<String, String> byKey) {}
+          """
+        ),
+        source(
+          "demo.IMOrderDto",
+          """
+          package demo;
+          import java.util.TreeMap;
+          public record IMOrderDto(TreeMap<String, String> byKey) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.IMOrderBridge");
+      assertNotNull(bridge);
+      // Forward into the target TreeMap; backward into the source's default HashMap.
+      assertTrue(bridge.contains("new TreeMap<>("), bridge);
+      assertTrue(bridge.contains("new HashMap<>("), bridge);
+    }
+
+    @Test
     @DisplayName("Set<X> ↔ Set<Y> auto-lifts via a for-loop helper into a pre-sized LinkedHashSet")
     void setContainerAutoLifts() {
       final var compilation = compile(
@@ -428,9 +581,9 @@ class BridgeProcessorTest {
       assertNotNull(cart);
       assertTrue(cart.contains("__fwd_items(s.items())"), cart);
       assertTrue(cart.contains("__bwd_items(t.items())"), cart);
-      assertTrue(cart.contains("import java.util.LinkedHashMap;"), cart);
+      assertTrue(cart.contains("import java.util.HashMap;"), cart);
       assertTrue(cart.contains("import java.util.Map;"), cart);
-      assertTrue(cart.contains("new LinkedHashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
+      assertTrue(cart.contains("new HashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.forward(e.getValue())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.backward(e.getValue())"), cart);
     }

@@ -2,9 +2,20 @@ package io.github.eschizoid.telescope.beans;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import io.github.eschizoid.telescope.Telescope;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
+import java.util.TreeSet;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -179,5 +190,113 @@ class BridgeCodegenTest {
     // Forward and a present round-trip still work.
     final var fwd = NtoOSrcBridge.BRIDGE.read(new NtoOSrc(new OptElem("y")));
     assertEquals(Optional.of(new OptElemBO("y")), fwd.maybe());
+  }
+
+  @Test
+  @DisplayName(
+    "container bridge: a null element passes through as null instead of NPE (parity with the runtime element Iso)"
+  )
+  void containerNullElementPassesThrough() {
+    // A null element inside a bridged List must map to null, not NPE on subBridge.forward(null).
+    final var src = new ElemListSrc(Arrays.asList(new OptElem("a"), null));
+    final var dst = assertDoesNotThrow(() -> ElemListSrcBridge.BRIDGE.read(src));
+    assertEquals(2, dst.items().size());
+    assertEquals(new OptElemBO("a"), dst.items().get(0));
+    assertNull(dst.items().get(1), "null element bridges to null");
+
+    // The backward direction shares the same per-element guard: a null element survives set(...).
+    final var back = assertDoesNotThrow(() ->
+      ElemListSrcBridge.BRIDGE.set(src, new ElemListDst(Arrays.asList(new OptElemBO("a"), null)))
+    );
+    assertEquals(2, back.items().size());
+    assertEquals(new OptElem("a"), back.items().get(0));
+    assertNull(back.items().get(1), "null element bridges backward to null");
+  }
+
+  @Test
+  @DisplayName(
+    "concrete container subtype: a LinkedList<Y> target field is bridged element-wise and rebuilt as a LinkedList, not the default ArrayList (parity with the runtime container allocation table)"
+  )
+  void concreteListSubtypeRebuildsAsTargetClass() {
+    final var src = new ConcreteListSrc(Arrays.asList(new OptElem("a"), new OptElem("b")));
+    final var dst = ConcreteListSrcBridge.BRIDGE.read(src);
+    assertInstanceOf(LinkedList.class, dst.items(), "target's declared concrete class is preserved");
+    assertEquals(Arrays.asList(new OptElemBO("a"), new OptElemBO("b")), dst.items());
+
+    final var back = ConcreteListSrcBridge.BRIDGE.set(src, dst);
+    assertEquals(Arrays.asList(new OptElem("a"), new OptElem("b")), back.items());
+  }
+
+  @Test
+  @DisplayName(
+    "concrete container subtype with identity elements: a List<String> ↔ LinkedList<String> copies inline into the target's concrete class"
+  )
+  void concreteListSubtypeIdentityElementCopiesIntoTargetClass() {
+    final var src = new IdListSrc(Arrays.asList("x", "y"));
+    final var dst = IdListSrcBridge.BRIDGE.read(src);
+    assertInstanceOf(LinkedList.class, dst.tags(), "identity-element copy lands in the target's concrete class");
+    assertEquals(Arrays.asList("x", "y"), dst.tags());
+  }
+
+  @Test
+  @DisplayName(
+    "concrete Set subtype: a TreeSet<String> target is rebuilt as a TreeSet via the no-presize copy constructor"
+  )
+  void concreteSetSubtypeRebuildsAsTreeSet() {
+    // Seed an insertion-ordered (unsorted) source so the [a, b, c] result proves the TreeSet's sort
+    // is active, independent of the instanceof check.
+    final var src = new SetIdSrc(new LinkedHashSet<>(Arrays.asList("b", "a", "c")));
+    final var dst = SetIdSrcBridge.BRIDGE.read(src);
+    assertInstanceOf(TreeSet.class, dst.tags(), "target's declared TreeSet class is preserved");
+    assertEquals(Arrays.asList("a", "b", "c"), List.copyOf(dst.tags()));
+  }
+
+  @Test
+  @DisplayName(
+    "concrete Map subtype: a TreeMap<String, Y> target bridges values element-wise and is rebuilt as a TreeMap"
+  )
+  void concreteMapSubtypeRebuildsAsTreeMap() {
+    final Map<String, OptElem> in = new LinkedHashMap<>();
+    in.put("k1", new OptElem("a"));
+    in.put("k2", new OptElem("b"));
+    final var dst = MapBrSrcBridge.BRIDGE.read(new MapBrSrc(in));
+    assertInstanceOf(TreeMap.class, dst.byKey(), "target's declared TreeMap class is preserved");
+    assertEquals(new OptElemBO("a"), dst.byKey().get("k1"));
+    assertEquals(new OptElemBO("b"), dst.byKey().get("k2"));
+  }
+
+  @Test
+  @DisplayName(
+    "backward concrete container: a LinkedList<String> source field is rebuilt as a LinkedList on the backward pass"
+  )
+  void backwardConcreteContainerRebuildsAsSourceClass() {
+    final var src = new BwdConcreteSrc(new LinkedList<>(Arrays.asList("x", "y")));
+    final var dst = BwdConcreteSrcBridge.BRIDGE.read(src);
+    final var back = BwdConcreteSrcBridge.BRIDGE.set(src, dst);
+    assertInstanceOf(LinkedList.class, back.tags(), "backward rebuild lands in the source's concrete class");
+    assertEquals(Arrays.asList("x", "y"), back.tags());
+  }
+
+  @Test
+  @DisplayName(
+    "bare Map<K,V> default: codegen and the runtime reflective mapper allocate the SAME concrete class (HashMap) — cross-strategy parity on the interface-family default"
+  )
+  void bareMapDefaultMatchesRuntimeConcreteClass() {
+    final Map<String, OptElem> in = new LinkedHashMap<>();
+    in.put("k", new OptElem("a"));
+
+    // Same record pair, two strategies: the codegen @Bridge and the runtime reflective deep-map.
+    final var viaCodegen = BareMapSrcBridge.BRIDGE.read(new BareMapSrc(in));
+    final var viaRuntime = Telescope.mapper(BareMapSrc.class, BareMapDst.class).forward(new BareMapSrc(in));
+
+    // Both must land on the runtime allocator's bare-Map default (HashMap), or an adopter switching
+    // strategies gets a different runtime class for the same field — the seam this audit closes.
+    assertEquals(HashMap.class, viaCodegen.byKey().getClass(), "codegen allocates the runtime default impl");
+    assertEquals(
+      viaRuntime.byKey().getClass(),
+      viaCodegen.byKey().getClass(),
+      "codegen and runtime allocate the same concrete class"
+    );
+    assertEquals(new OptElemBO("a"), viaCodegen.byKey().get("k"));
   }
 }
