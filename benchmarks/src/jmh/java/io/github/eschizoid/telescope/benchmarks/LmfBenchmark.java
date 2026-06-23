@@ -2,6 +2,9 @@ package io.github.eschizoid.telescope.benchmarks;
 
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Records;
+import java.lang.invoke.LambdaMetafactory;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
@@ -88,6 +91,17 @@ public class LmfBenchmark {
     }
   }
 
+  /**
+   * Eight-component record for the megamorphic dispatch rows. Each accessor (v0..v7) yields a
+   * distinct LMF-built {@code Function} synthetic class, so cycling them through one {@code
+   * apply()} call site drives that site megamorphic — the shape a deep-copy traversal over many
+   * distinct lens types actually produces, vs the single-class monomorphic best case the rows above
+   * measure.
+   */
+  public record Wide(String v0, String v1, String v2, String v3, String v4, String v5, String v6, String v7) {}
+
+  private static final int FANOUT = 8;
+
   private BenchRecord record;
   private BenchPojo pojo;
 
@@ -112,6 +126,19 @@ public class LmfBenchmark {
   private static final String[] NAME_ONLY = new String[] { "name" };
   private static final Function<String, Object> NAME_LOOKUP = n -> "updated";
 
+  // Megamorphic dispatch fixtures: FANOUT distinct captured Functions (one per Wide accessor — each
+  // a distinct LMF synthetic class) and the matching pre-resolved Methods, all reading the same
+  // Wide
+  // instance. "Captured" means resolved once in @Setup — no per-call cache lookup — so these
+  // isolate
+  // pure dispatch (unlike the *_lmf rows above, which go through Records.read / Beans.readProperty
+  // and pay a per-call string->Function map lookup the *_methodInvoke rows don't).
+  private Function<Object, Object>[] megaFns;
+  private Method[] megaMethods;
+  private Object megaTarget;
+  private int idx;
+
+  @SuppressWarnings("unchecked")
   @Setup
   public void setup() throws Exception {
     record = new BenchRecord("u1", "Alice", 30);
@@ -134,6 +161,44 @@ public class LmfBenchmark {
     beanGetName.setAccessible(true);
     beanSetName = BenchPojo.class.getMethod("setName", String.class);
     beanSetName.setAccessible(true);
+
+    // Build FANOUT distinct captured Functions (one per Wide accessor) + matching Methods.
+    final var lookup = MethodHandles.lookup();
+    final var wide = new Wide("0", "1", "2", "3", "4", "5", "6", "7");
+    final var comps = Wide.class.getRecordComponents();
+    megaTarget = wide;
+    megaFns = new Function[FANOUT];
+    megaMethods = new Method[FANOUT];
+    for (int i = 0; i < FANOUT; i++) {
+      final var accessor = comps[i].getAccessor();
+      accessor.setAccessible(true);
+      megaMethods[i] = accessor;
+      megaFns[i] = buildAccessorFunction(lookup, accessor);
+    }
+  }
+
+  // Build a captured Function<Object, Object> over a record accessor via LambdaMetafactory — the
+  // same dispatch primitive Beans/Records cache internally, materialised here so the megamorphic
+  // benchmark can hold N distinct synthetic classes and cycle them through one call site.
+  @SuppressWarnings("unchecked")
+  private static Function<Object, Object> buildAccessorFunction(
+    final MethodHandles.Lookup lookup,
+    final Method accessor
+  ) {
+    try {
+      final var handle = lookup.unreflect(accessor);
+      final var callSite = LambdaMetafactory.metafactory(
+        lookup,
+        "apply",
+        MethodType.methodType(Function.class),
+        MethodType.methodType(Object.class, Object.class),
+        handle,
+        MethodType.methodType(accessor.getReturnType(), accessor.getDeclaringClass())
+      );
+      return (Function<Object, Object>) callSite.getTarget().invoke();
+    } catch (final Throwable t) {
+      throw new RuntimeException("Failed to build accessor Function for " + accessor, t);
+    }
   }
 
   // ---- Phase 1 — record component LMF reader vs hand-rolled accessor --------------------------
@@ -230,5 +295,45 @@ public class LmfBenchmark {
     final var p = new BenchPojo();
     beanSetName.invoke(p, SINGLE_NAME_ARG);
     bh.consume(p);
+  }
+
+  // ---- Captured dispatch: monomorphic vs megamorphic, LMF vs Method.invoke ----------------------
+  // The rows above conflate the per-call cache lookup with dispatch, and only ever hit one
+  // synthetic
+  // class (monomorphic — the JIT's best case). These resolve the accessor once (as the optics do)
+  // and isolate the call-site shape: index 0 fixed (monomorphic) vs cycling FANOUT distinct classes
+  // through one site (megamorphic). The megamorphic LMF row is the closest proxy for a deep-copy
+  // traversal dispatching many distinct lens Functions through a shared apply() site.
+
+  /**
+   * Captured LMF Function, monomorphic call site (always class 0) — the fair dispatch-only LMF
+   * read.
+   */
+  @Benchmark
+  public void capturedRead_lmf_monomorphic(final Blackhole bh) {
+    bh.consume(megaFns[0].apply(megaTarget));
+  }
+
+  /** Captured LMF Functions, megamorphic call site (FANOUT distinct synthetic classes cycled). */
+  @Benchmark
+  public void capturedRead_lmf_megamorphic(final Blackhole bh) {
+    idx = (idx + 1) & (FANOUT - 1);
+    bh.consume(megaFns[idx].apply(megaTarget));
+  }
+
+  /** Pre-resolved Method.invoke, monomorphic — fair dispatch-only reflection baseline. */
+  @Benchmark
+  public void capturedRead_methodInvoke_monomorphic(final Blackhole bh) throws Exception {
+    bh.consume(megaMethods[0].invoke(megaTarget, EMPTY_ARGS));
+  }
+
+  /**
+   * Pre-resolved Method.invoke, megamorphic — FANOUT distinct Methods cycled through one invoke
+   * site.
+   */
+  @Benchmark
+  public void capturedRead_methodInvoke_megamorphic(final Blackhole bh) throws Exception {
+    idx = (idx + 1) & (FANOUT - 1);
+    bh.consume(megaMethods[idx].invoke(megaTarget, EMPTY_ARGS));
   }
 }
