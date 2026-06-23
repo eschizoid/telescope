@@ -328,7 +328,7 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.LLOrderBridge");
       assertNotNull(bridge);
-      // P5: the forward helper writes the target's concrete class (LinkedList), not the default
+      // The forward helper writes the target's concrete class (LinkedList), not the default
       // ArrayList, and its return type is the target's declared concrete type.
       assertTrue(bridge.contains("new LinkedList<demo.LLItemDto>"), bridge);
     }
@@ -479,9 +479,9 @@ class BridgeProcessorTest {
       assertNotNull(cart);
       assertTrue(cart.contains("__fwd_items(s.items())"), cart);
       assertTrue(cart.contains("__bwd_items(t.items())"), cart);
-      assertTrue(cart.contains("import java.util.LinkedHashMap;"), cart);
+      assertTrue(cart.contains("import java.util.HashMap;"), cart);
       assertTrue(cart.contains("import java.util.Map;"), cart);
-      assertTrue(cart.contains("new LinkedHashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
+      assertTrue(cart.contains("new HashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.forward(e.getValue())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.backward(e.getValue())"), cart);
     }

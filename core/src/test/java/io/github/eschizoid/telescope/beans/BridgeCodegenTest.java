@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import io.github.eschizoid.telescope.Telescope;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
@@ -273,5 +275,28 @@ class BridgeCodegenTest {
     final var back = BwdConcreteSrcBridge.BRIDGE.set(src, dst);
     assertInstanceOf(LinkedList.class, back.tags(), "backward rebuild lands in the source's concrete class");
     assertEquals(Arrays.asList("x", "y"), back.tags());
+  }
+
+  @Test
+  @DisplayName(
+    "bare Map<K,V> default: codegen and the runtime reflective mapper allocate the SAME concrete class (HashMap) — cross-strategy parity on the interface-family default"
+  )
+  void bareMapDefaultMatchesRuntimeConcreteClass() {
+    final Map<String, OptElem> in = new LinkedHashMap<>();
+    in.put("k", new OptElem("a"));
+
+    // Same record pair, two strategies: the codegen @Bridge and the runtime reflective deep-map.
+    final var viaCodegen = BareMapSrcBridge.BRIDGE.read(new BareMapSrc(in));
+    final var viaRuntime = Telescope.mapper(BareMapSrc.class, BareMapDst.class).forward(new BareMapSrc(in));
+
+    // Both must land on the runtime allocator's bare-Map default (HashMap), or an adopter switching
+    // strategies gets a different runtime class for the same field — the seam this audit closes.
+    assertEquals(HashMap.class, viaCodegen.byKey().getClass(), "codegen allocates the runtime default impl");
+    assertEquals(
+      viaRuntime.byKey().getClass(),
+      viaCodegen.byKey().getClass(),
+      "codegen and runtime allocate the same concrete class"
+    );
+    assertEquals(new OptElemBO("a"), viaCodegen.byKey().get("k"));
   }
 }

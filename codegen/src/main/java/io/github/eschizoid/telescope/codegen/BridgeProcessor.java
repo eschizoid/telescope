@@ -2117,8 +2117,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   // FQN of the concrete, instantiable class to allocate for a container field of the given declared
   // type — the declared subtype itself when it is an instantiable class (ArrayList, TreeSet,
-  // LinkedHashMap, …), else the default impl for the interface family (List → ArrayList, Set →
-  // LinkedHashSet, Map → LinkedHashMap). Mirrors the runtime DeepMap allocation table.
+  // TreeMap, …), else the default impl for the interface family. The interface-family defaults
+  // match
+  // the runtime DeepMap allocators for the bare interface raws: List → ArrayList
+  // (listAllocatorFor),
+  // Set → LinkedHashSet (setAllocatorFor), Map → HashMap (mapAllocatorFor), so codegen and the
+  // reflective path produce the same runtime class for an interface-typed field.
   private static String concreteImplFqn(final TypeMirror container, final FieldPlan.Kind kind) {
     final var el = (TypeElement) ((DeclaredType) container).asElement();
     if (el.getKind() == ElementKind.CLASS && !el.getModifiers().contains(Modifier.ABSTRACT)) {
@@ -2127,7 +2131,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return switch (kind) {
       case LIST -> "java.util.ArrayList";
       case SET -> "java.util.LinkedHashSet";
-      case MAP_VALUES -> "java.util.LinkedHashMap";
+      case MAP_VALUES -> "java.util.HashMap";
       default -> throw new IllegalStateException("not a collection/map kind: " + kind);
     };
   }
@@ -2412,6 +2416,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** Sentinel sub-bridge name meaning "the element passes through unchanged". */
   private static final String IDENTITY_ELEMENT_SENTINEL = "__IDENTITY__";
 
+  // The concrete-impl class the inline identity-element copy allocates. Non-null for any
+  // LIST/SET/MAP_VALUES plan (attached at planning via withContainerImpls); this guard turns a
+  // future
+  // desync — a container plan reaching emit without its impls — into a loud processor failure
+  // rather
+  // than emitting `new null<>(...)`.
+  private static String requireImpl(final String impl, final String fieldName) {
+    return Objects.requireNonNull(impl, "container impl not attached for field '" + fieldName + "'");
+  }
+
   private String applyForward(final String fieldName, final FieldPlan plan, final String readExpr) {
     final var sub = plan.subBridgeName();
     final boolean elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(sub);
@@ -2428,14 +2442,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // dispatch site. When the element type is identity (same on both sides), a defensive copy is
       // sufficient and we emit it inline.
       case LIST -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new " + plan.fwdContainerImpl() + "<>(" + readExpr + "))"
+        ? "(" +
+          readExpr +
+          " == null ? null : new " +
+          requireImpl(plan.fwdContainerImpl(), fieldName) +
+          "<>(" +
+          readExpr +
+          "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
       case SET -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new " + plan.fwdContainerImpl() + "<>(" + readExpr + "))"
+        ? "(" +
+          readExpr +
+          " == null ? null : new " +
+          requireImpl(plan.fwdContainerImpl(), fieldName) +
+          "<>(" +
+          readExpr +
+          "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL -> "(" + readExpr + " == null ? null : " + readExpr + ".map(" + fwdElement + "))";
       case MAP_VALUES -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new " + plan.fwdContainerImpl() + "<>(" + readExpr + "))"
+        ? "(" +
+          readExpr +
+          " == null ? null : new " +
+          requireImpl(plan.fwdContainerImpl(), fieldName) +
+          "<>(" +
+          readExpr +
+          "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL_TO_NULLABLE -> "(" +
       readExpr +
@@ -2464,14 +2496,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         : "(" + readExpr + " == null ? " + plan.bwdNullDefault() + " : " + readExpr + ")";
       case RECURSE -> sub + ".backward(" + readExpr + ")";
       case LIST -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new " + plan.bwdContainerImpl() + "<>(" + readExpr + "))"
+        ? "(" +
+          readExpr +
+          " == null ? null : new " +
+          requireImpl(plan.bwdContainerImpl(), fieldName) +
+          "<>(" +
+          readExpr +
+          "))"
         : "__bwd_" + fieldName + "(" + readExpr + ")";
       case SET -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new " + plan.bwdContainerImpl() + "<>(" + readExpr + "))"
+        ? "(" +
+          readExpr +
+          " == null ? null : new " +
+          requireImpl(plan.bwdContainerImpl(), fieldName) +
+          "<>(" +
+          readExpr +
+          "))"
         : "__bwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL -> "(" + readExpr + " == null ? null : " + readExpr + ".map(" + bwdElement + "))";
       case MAP_VALUES -> elementIdentity
-        ? "(" + readExpr + " == null ? null : new " + plan.bwdContainerImpl() + "<>(" + readExpr + "))"
+        ? "(" +
+          readExpr +
+          " == null ? null : new " +
+          requireImpl(plan.bwdContainerImpl(), fieldName) +
+          "<>(" +
+          readExpr +
+          "))"
         : "__bwd_" + fieldName + "(" + readExpr + ")";
       // For the cross-paradigm bridges, forward and backward are mirror images.
       case OPTIONAL_TO_NULLABLE -> "Optional.ofNullable(" + readExpr + ").map(" + bwdElement + ")";
