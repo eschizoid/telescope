@@ -1340,7 +1340,8 @@ public final class DeepMap {
    * Map-level lift that writes into the target's concrete raw class. Mirror of {@link
    * #liftListIntoTargetRaw} for Maps. Preserves source keys verbatim (matches {@link
    * Iso#liftMapValues}); the calling site already ensured the key classes match. Falls back to
-   * {@link LinkedHashMap} when the raw class is the {@link Map} interface itself.
+   * {@link HashMap} when the raw class is the {@link Map} interface itself (see {@link
+   * #mapAllocatorFor}).
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Iso<?, ?> liftMapIntoTargetRaw(
