@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -240,7 +241,9 @@ class BridgeCodegenTest {
     "concrete Set subtype: a TreeSet<String> target is rebuilt as a TreeSet via the no-presize copy constructor"
   )
   void concreteSetSubtypeRebuildsAsTreeSet() {
-    final var src = new SetIdSrc(new TreeSet<>(Arrays.asList("b", "a", "c")));
+    // Seed an insertion-ordered (unsorted) source so the [a, b, c] result proves the TreeSet's sort
+    // is active, independent of the instanceof check.
+    final var src = new SetIdSrc(new LinkedHashSet<>(Arrays.asList("b", "a", "c")));
     final var dst = SetIdSrcBridge.BRIDGE.read(src);
     assertInstanceOf(TreeSet.class, dst.tags(), "target's declared TreeSet class is preserved");
     assertEquals(Arrays.asList("a", "b", "c"), List.copyOf(dst.tags()));
