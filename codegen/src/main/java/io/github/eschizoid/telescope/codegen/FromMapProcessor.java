@@ -1,0 +1,387 @@
+package io.github.eschizoid.telescope.codegen;
+
+import java.io.PrintWriter;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+import javax.annotation.processing.RoundEnvironment;
+import javax.annotation.processing.SupportedAnnotationTypes;
+import javax.annotation.processing.SupportedSourceVersion;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+
+/**
+ * Emits a reflection-free {@code <X>FromMap} converter for each {@code @FromMap} record or bean: a
+ * {@code static X fromMap(Map<String, Object>)} that rebuilds the target (record canonical
+ * constructor, or bean builder / no-arg-ctor + setters) with the map values coerced inline, plus a
+ * {@code FROM_MAP} {@code ForwardMapper} constant. No {@code SerializedLambda}, no reflection — the
+ * generated code is GraalVM native-image clean.
+ */
+@SupportedAnnotationTypes("io.github.eschizoid.telescope.annotations.FromMap")
+@SupportedSourceVersion(SourceVersion.RELEASE_17)
+public final class FromMapProcessor extends AbstractTelescopeProcessor {
+
+  private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.FromMap";
+
+  // Reference types a raw map plausibly carries as themselves, so a direct cast is justified.
+  private static final Set<String> CAST_AS_IS = Set.of(
+    "java.lang.String",
+    "java.lang.Object",
+    "java.lang.CharSequence"
+  );
+
+  // JDK value types that arrive as a String in an untyped map, mapped to the factory that rebuilds
+  // them from that String — a named static method, or the String constructor.
+  private static final Coercion.Factory PARSE = new Coercion.Factory.Static("parse");
+  private static final Coercion.Factory CTOR = new Coercion.Factory.Ctor();
+  private static final Map<String, Coercion.Factory> JDK_STRING_FACTORIES = Map.ofEntries(
+    Map.entry("java.time.Instant", PARSE),
+    Map.entry("java.time.LocalDate", PARSE),
+    Map.entry("java.time.LocalDateTime", PARSE),
+    Map.entry("java.time.LocalTime", PARSE),
+    Map.entry("java.time.OffsetDateTime", PARSE),
+    Map.entry("java.time.ZonedDateTime", PARSE),
+    Map.entry("java.time.Duration", PARSE),
+    Map.entry("java.time.Period", PARSE),
+    Map.entry("java.util.UUID", new Coercion.Factory.Static("fromString")),
+    Map.entry("java.math.BigDecimal", CTOR),
+    Map.entry("java.math.BigInteger", CTOR),
+    Map.entry("java.net.URI", new Coercion.Factory.Static("create")),
+    Map.entry("java.util.Currency", new Coercion.Factory.Static("getInstance")),
+    Map.entry("java.util.Locale", new Coercion.Factory.Static("forLanguageTag")),
+    Map.entry("java.util.regex.Pattern", new Coercion.Factory.Static("compile"))
+  );
+
+  // @FromMap targets carrying a Lombok trigger are deferred to processingOver(): in round 1 Lombok
+  // hasn't synthesized the getters/setters yet, so beanProperties() would see "no readable
+  // properties". By the final round Lombok is done patching. Cleared after the drain so a reused
+  // processor instance starts clean.
+  private final Set<TypeElement> pending = new LinkedHashSet<>();
+
+  /** Public no-arg constructor for {@code ServiceLoader} discovery by the Java compiler. */
+  public FromMapProcessor() {
+    super();
+  }
+
+  @Override
+  public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
+    final var anno = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
+    if (anno == null) return false;
+    for (final var element : roundEnv.getElementsAnnotatedWith(anno)) {
+      if (!roundEnv.processingOver() && carriesLombokTrigger(element)) pending.add((TypeElement) element);
+      else generate(element);
+    }
+    if (roundEnv.processingOver()) {
+      pending.forEach(this::generate);
+      pending.clear();
+    }
+    return true;
+  }
+
+  private void generate(final Element element) {
+    if (element.getKind() == ElementKind.RECORD) generateForRecord((TypeElement) element);
+    else if (element.getKind() == ElementKind.CLASS) generateForBean((TypeElement) element);
+    else error(element, "@FromMap is only supported on records and classes");
+  }
+
+  private void generateForRecord(final TypeElement record) {
+    final var name = record.getSimpleName().toString();
+    final var components = record.getRecordComponents();
+    final var coercions = components
+      .stream()
+      .map(c -> resolveCoercion(c.asType()))
+      .toList();
+    var coercible = true;
+    for (var i = 0; i < components.size(); i++) {
+      final var reason = coercions.get(i).firstUnsupported();
+      if (reason.isPresent()) {
+        error(components.get(i), "@FromMap: " + reason.get());
+        coercible = false;
+      }
+    }
+    if (!coercible) return;
+    final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
+    final var imports = coercions
+      .stream()
+      .flatMap(c -> c.imports().stream())
+      .collect(Collectors.toSet());
+
+    emitConverter(record, unchecked, imports, out -> {
+      final var args = IntStream.range(0, components.size())
+        .mapToObj(i -> coercions.get(i).emit("map.get(\"" + components.get(i).getSimpleName() + "\")", 0))
+        .collect(Collectors.joining(", "));
+      out.println("    return new " + name + "(" + args + ");");
+    });
+  }
+
+  private void generateForBean(final TypeElement pojo) {
+    final var name = pojo.getSimpleName().toString();
+    final var props = beanProperties(pojo);
+    if (props.isEmpty()) {
+      error(pojo, "@FromMap: " + pojo.getQualifiedName() + " has no readable properties (getX()/isX())");
+      return;
+    }
+    final var builder = staticBuilderMethod(pojo);
+    final var builderType =
+      builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED
+        ? (TypeElement) ((DeclaredType) builder.getReturnType()).asElement()
+        : null;
+    final var useBuilder = builderType != null && hasBuildMethod(builderType);
+    if (!useBuilder && !hasPublicNoArgConstructor(pojo)) {
+      error(
+        pojo,
+        "@FromMap: " +
+          pojo.getQualifiedName() +
+          " needs a static builder() or a public no-arg constructor with setters (field injection isn't " +
+          "available to generated code — use Telescope.ofBean for the runtime path)"
+      );
+      return;
+    }
+    final var setters = new String[props.size()];
+    for (var i = 0; i < props.size(); i++) {
+      setters[i] = useBuilder ? builderSetter(builderType, props.get(i).name()) : setterName(pojo, props.get(i).name());
+      if (setters[i] == null) {
+        error(
+          pojo,
+          "@FromMap: no " +
+            (useBuilder ? "builder method" : "setter") +
+            " for property '" +
+            props.get(i).name() +
+            "' on " +
+            pojo.getQualifiedName()
+        );
+        return;
+      }
+    }
+    final var coercions = props
+      .stream()
+      .map(p -> resolveCoercion(p.type()))
+      .toList();
+    var coercible = true;
+    for (var i = 0; i < props.size(); i++) {
+      final var reason = coercions.get(i).firstUnsupported();
+      if (reason.isPresent()) {
+        error(pojo, "@FromMap: property '" + props.get(i).name() + "' — " + reason.get());
+        coercible = false;
+      }
+    }
+    if (!coercible) return;
+    final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
+    final var imports = coercions
+      .stream()
+      .flatMap(c -> c.imports().stream())
+      .collect(Collectors.toSet());
+
+    emitConverter(pojo, unchecked, imports, out -> {
+      if (useBuilder) {
+        out.print("    return " + name + ".builder()");
+        for (var i = 0; i < props.size(); i++) {
+          out.print("." + setters[i] + "(" + valueOf(coercions.get(i), props.get(i).name()) + ")");
+        }
+        out.println(".build();");
+      } else {
+        out.println("    final var bean = new " + name + "();");
+        for (var i = 0; i < props.size(); i++) {
+          out.println("    bean." + setters[i] + "(" + valueOf(coercions.get(i), props.get(i).name()) + ");");
+        }
+        out.println("    return bean;");
+      }
+    });
+  }
+
+  /** The coerced value expression for a property whose map key is its name. */
+  private static String valueOf(final Coercion coercion, final String key) {
+    return coercion.emit("map.get(\"" + key + "\")", 0);
+  }
+
+  /**
+   * Emit the shared {@code <X>FromMap} class shell — the fromMap method (body supplied) and
+   * FROM_MAP constant.
+   */
+  private void emitConverter(
+    final TypeElement type,
+    final boolean unchecked,
+    final Set<String> coercionImports,
+    final Consumer<PrintWriter> body
+  ) {
+    final var pkg = processingEnv.getElementUtils().getPackageOf(type).getQualifiedName().toString();
+    final var name = type.getSimpleName().toString();
+    final var holder = name + "FromMap";
+    final var qualified = pkg.isEmpty() ? holder : pkg + "." + holder;
+
+    final Set<String> imports = new LinkedHashSet<>();
+    imports.add("java.util.Map");
+    imports.add("io.github.eschizoid.telescope.conversion.ForwardMapper");
+    imports.addAll(coercionImports);
+    // The converter lives in the target's own package — no self-import needed for sibling
+    // converters.
+    imports.removeIf(fqn -> fqn.equals(pkg + "." + Coercion.simple(fqn)));
+
+    final var javadoc = "Generated by telescope-codegen for @FromMap " + name + ".";
+    writeClass(qualified, holder, imports, javadoc, type, out -> {
+      if (unchecked) out.println("  @SuppressWarnings(\"unchecked\")");
+      out.println("  public static " + name + " fromMap(final Map<String, Object> map) {");
+      out.println("    if (map == null) return null;");
+      body.accept(out);
+      out.println("  }");
+      out.println();
+      // Map.class is a raw Class<Map>; create wants Class<Map<String, Object>> — same unchecked
+      // bridge the runtime Telescope.fromMap makes.
+      out.println("  @SuppressWarnings(\"unchecked\")");
+      out.println("  public static final ForwardMapper<Map<String, Object>, " + name + "> FROM_MAP =");
+      out.println("      ForwardMapper.create(" + holder + "::fromMap, Map.class, " + name + ".class);");
+    });
+  }
+
+  /** Map a target field type to the expression strategy that coerces a raw map value into it. */
+  private Coercion resolveCoercion(final TypeMirror type) {
+    return switch (type.getKind()) {
+      case INT -> new Coercion.Parse("intValue", "Integer.parseInt", "0");
+      case LONG -> new Coercion.Parse("longValue", "Long.parseLong", "0L");
+      case DOUBLE -> new Coercion.Parse("doubleValue", "Double.parseDouble", "0.0d");
+      case FLOAT -> new Coercion.Parse("floatValue", "Float.parseFloat", "0.0f");
+      case SHORT -> new Coercion.Parse("shortValue", "Short.parseShort", "(short) 0");
+      case BYTE -> new Coercion.Parse("byteValue", "Byte.parseByte", "(byte) 0");
+      case BOOLEAN -> new Coercion.BoolParse("false");
+      case CHAR -> new Coercion.CharParse("'\\0'");
+      case DECLARED -> declaredCoercion((DeclaredType) type);
+      default -> new Coercion.Unsupported(
+        type + " can't be coerced from a Map (type variable / array / unsupported kind)"
+      );
+    };
+  }
+
+  /**
+   * Coercion for a boxed wrapper field (parse like its primitive, but null stays null), or null.
+   */
+  private Coercion boxedWrapperCoercion(final String fqn) {
+    return switch (fqn) {
+      case "java.lang.Integer" -> new Coercion.Parse("intValue", "Integer.parseInt", "null");
+      case "java.lang.Long" -> new Coercion.Parse("longValue", "Long.parseLong", "null");
+      case "java.lang.Double" -> new Coercion.Parse("doubleValue", "Double.parseDouble", "null");
+      case "java.lang.Float" -> new Coercion.Parse("floatValue", "Float.parseFloat", "null");
+      case "java.lang.Short" -> new Coercion.Parse("shortValue", "Short.parseShort", "null");
+      case "java.lang.Byte" -> new Coercion.Parse("byteValue", "Byte.parseByte", "null");
+      case "java.lang.Boolean" -> new Coercion.BoolParse("null");
+      case "java.lang.Character" -> new Coercion.CharParse("null");
+      default -> null;
+    };
+  }
+
+  /**
+   * Coercion for a declared (reference) type: boxed wrapper, enum, nested @FromMap, List/Set/Map
+   * container, else a cast.
+   */
+  private Coercion declaredCoercion(final DeclaredType type) {
+    final var element = type.asElement();
+    final var boxed = boxedWrapperCoercion(boxedType(type));
+    if (boxed != null) return boxed;
+    if (element.getKind() == ElementKind.ENUM) return new Coercion.EnumOf(boxedType(type));
+    if (hasAnnotation(element, ANNOTATION)) return new Coercion.Nested(boxedType(type) + "FromMap");
+    final var listElement = singleArgOf(type, "java.util.List");
+    if (listElement != null) {
+      return new Coercion.Listed(renderType(listElement), resolveCoercion(listElement));
+    }
+    final var setElement = singleArgOf(type, "java.util.Set");
+    if (setElement != null) {
+      return new Coercion.Setted(renderType(setElement), resolveCoercion(setElement));
+    }
+    final var optElement = singleArgOf(type, "java.util.Optional");
+    if (optElement != null) return new Coercion.OptionalOf(resolveCoercion(optElement));
+    if (isErasure(type, "java.util.Map") && type.getTypeArguments().size() == 2) {
+      final var args = type.getTypeArguments();
+      return new Coercion.MapValues(
+        renderType(args.get(0)),
+        renderType(args.get(1)),
+        resolveCoercion(args.get(0)),
+        resolveCoercion(args.get(1))
+      );
+    }
+    final var fqn = boxedType(type);
+    // A collection/map SUBTYPE (ArrayList, TreeSet, HashMap, …) — codegen can't allocate the
+    // concrete target; require the interface so the lift is well-defined.
+    if (assignableToRaw(type, "java.util.Collection") || assignableToRaw(type, "java.util.Map")) {
+      return new Coercion.Unsupported(
+        fqn + " is a collection subtype — declare the field as List/Set/Map/Optional so @FromMap can build it"
+      );
+    }
+    // Reference types a map plausibly holds as-is — cast and trust the map.
+    if (CAST_AS_IS.contains(fqn)) return new Coercion.Cast(fqn);
+    // A JDK value type with a known String factory (Instant, UUID, BigDecimal, LocalDate, …) —
+    // build
+    // it from the String form it arrives in.
+    final var factory = JDK_STRING_FACTORIES.get(fqn);
+    if (factory != null) return new Coercion.StringFactory(fqn, factory);
+    // An unrecognized JDK type can't be built from a Map value — refuse rather than emit a cast
+    // that
+    // would CCE at runtime and defeat the "if it compiles, it runs" guard.
+    if (fqn.startsWith("java.") || fqn.startsWith("javax.")) {
+      return new Coercion.Unsupported(
+        fqn +
+          " can't be built from a Map value by @FromMap — use the runtime Telescope.fromMap with a " +
+          "custom extract(key, accessor, converter)"
+      );
+    }
+    // A user type that isn't @FromMap would arrive as a nested Map and CCE — require the
+    // annotation.
+    return new Coercion.Unsupported(
+      fqn + " is a nested object but isn't @FromMap — annotate " + fqn + " with @FromMap"
+    );
+  }
+
+  /** Whether {@code type} is assignable to the raw type named {@code rawFqn}. */
+  private boolean assignableToRaw(final DeclaredType type, final String rawFqn) {
+    final var types = processingEnv.getTypeUtils();
+    final var raw = processingEnv.getElementUtils().getTypeElement(rawFqn);
+    return raw != null && types.isAssignable(types.erasure(type), types.erasure(raw.asType()));
+  }
+
+  /**
+   * Render a type as a simple-name source string ({@code Map<String, List<Address>>}), collecting
+   * the FQNs to import. Used for the explicit type witnesses on the generated container collectors.
+   */
+  private Coercion.RenderedType renderType(final TypeMirror type) {
+    if (type.getKind() != TypeKind.DECLARED) return new Coercion.RenderedType(
+      Coercion.simple(boxedType(type)),
+      Set.of()
+    );
+    final var declared = (DeclaredType) type;
+    final var raw = ((TypeElement) declared.asElement()).getQualifiedName().toString();
+    final var imports = new HashSet<>(Coercion.importing(raw));
+    final var args = declared.getTypeArguments();
+    if (args.isEmpty()) return new Coercion.RenderedType(Coercion.simple(raw), imports);
+    final var rendered = new StringBuilder();
+    for (final var arg : args) {
+      final var part = renderType(arg);
+      if (rendered.length() > 0) rendered.append(", ");
+      rendered.append(part.source());
+      imports.addAll(part.imports());
+    }
+    return new Coercion.RenderedType(Coercion.simple(raw) + "<" + rendered + ">", imports);
+  }
+
+  /**
+   * The sole type argument of {@code type} when its erasure is exactly {@code rawFqn}, else null.
+   */
+  private TypeMirror singleArgOf(final DeclaredType type, final String rawFqn) {
+    if (!isErasure(type, rawFqn)) return null;
+    final var args = type.getTypeArguments();
+    return args.size() == 1 ? args.get(0) : null;
+  }
+
+  /** Whether {@code type}'s erasure is exactly the raw type named {@code rawFqn}. */
+  private boolean isErasure(final DeclaredType type, final String rawFqn) {
+    final var types = processingEnv.getTypeUtils();
+    final var raw = processingEnv.getElementUtils().getTypeElement(rawFqn);
+    return raw != null && types.isSameType(types.erasure(type), types.erasure(raw.asType()));
+  }
+}

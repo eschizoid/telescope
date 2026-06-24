@@ -19,5 +19,6 @@ module io.github.eschizoid.telescope.codegen {
     with
       io.github.eschizoid.telescope.codegen.FocusProcessor,
       io.github.eschizoid.telescope.codegen.BeanFocusProcessor,
-      io.github.eschizoid.telescope.codegen.BridgeProcessor;
+      io.github.eschizoid.telescope.codegen.BridgeProcessor,
+      io.github.eschizoid.telescope.codegen.FromMapProcessor;
 }

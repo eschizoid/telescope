@@ -51,10 +51,11 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   protected record Prop(String name, String getter, TypeMirror type) {}
 
   /**
-   * Emit a generated {@code public final} class: the package declaration, the single {@code
-   * io.github.eschizoid.telescope.Telescope} import, a one-line javadoc, and a private constructor,
-   * then {@code body} writes the members, then the closing brace. The package is derived from
-   * {@code qualifiedName}. An {@link IOException} is reported as a compile error on {@code origin}.
+   * Emit a generated {@code public final} class whose body references {@code Telescope}: the
+   * package declaration, the {@code io.github.eschizoid.telescope.Telescope} import, a one-line
+   * javadoc, and a private constructor, then {@code body} writes the members, then the closing
+   * brace. The package is derived from {@code qualifiedName}. An {@link IOException} is reported as
+   * a compile error on {@code origin}.
    */
   protected void writeClass(
     final String qualifiedName,
@@ -63,19 +64,20 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final Element origin,
     final Consumer<PrintWriter> body
   ) {
-    writeClass(qualifiedName, simpleName, Set.of(), javadoc, origin, body);
+    writeClass(qualifiedName, simpleName, Set.of("io.github.eschizoid.telescope.Telescope"), javadoc, origin, body);
   }
 
   /**
-   * Same as {@link #writeClass(String, String, String, Element, Consumer)} but emits {@code
-   * extraImports} alongside the default {@code Telescope} import. Use this from a processor that
-   * needs additional {@code java.util.*} types in the body (e.g. {@code List}, {@code ArrayList})
-   * and would rather write simple names than FQNs.
+   * Same as {@link #writeClass(String, String, String, Element, Consumer)} but emits exactly the
+   * given {@code imports} — no implicit {@code Telescope}. A generator whose body references {@code
+   * Telescope} must include it in {@code imports}; one that doesn't (e.g. a {@code ForwardMapper}
+   * converter) omits it and gets no dead import. Use simple names in the body and list their FQNs
+   * here.
    */
   protected void writeClass(
     final String qualifiedName,
     final String simpleName,
-    final Set<String> extraImports,
+    final Set<String> imports,
     final String javadoc,
     final Element origin,
     final Consumer<PrintWriter> body
@@ -89,8 +91,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
           out.println("package " + pkg + ";");
           out.println();
         }
-        out.println("import io.github.eschizoid.telescope.Telescope;");
-        final var sorted = new TreeSet<>(extraImports);
+        final var sorted = new TreeSet<>(imports);
         for (final var imp : sorted) out.println("import " + imp + ";");
         out.println();
         out.println("/** " + javadoc + " */");
