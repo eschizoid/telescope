@@ -5,9 +5,7 @@ import static io.github.eschizoid.telescope.mapping.Mapping.toOrElse;
 import static io.github.eschizoid.telescope.mapping.NullHint.NullStrategy.DEFAULT;
 import static io.github.eschizoid.telescope.mapping.NullHint.NullStrategy.PROPAGATE;
 import static io.github.eschizoid.telescope.mapping.NullHint.nullSourceValues;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import java.util.Map;
@@ -204,7 +202,7 @@ class NullStrategyTest {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
         Telescope.mapper(Src.class, Dst.class, nullSourceValues(DEFAULT), nullSourceValues(PROPAGATE))
       );
-      assertEquals(true, ex.getMessage().contains("Duplicate nullSourceValues"));
+      assertTrue(ex.getMessage().contains("Duplicate nullSourceValues"));
     }
   }
 

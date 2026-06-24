@@ -279,6 +279,85 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
+    "raw collection-subtype field (class Wrap extends ArrayList<Elem>) element-bridges end-to-end into a fresh target wrapper"
+  )
+  void rawCollectionSubtypeBridgesEndToEnd() {
+    // The adopter's shape: a custom ArrayList wrapper whose distinct element record needs bridging.
+    // Proves the generated raw-container helper actually runs — converts each element through the
+    // sub-bridge and lands them in a freshly-allocated target wrapper (no-arg ctor + add).
+    final var src = new RawColSrcWrap();
+    src.add(new RawColSrcElem("a"));
+    src.add(new RawColSrcElem("b"));
+
+    final var dst = RawColParentBridge.BRIDGE.read(new RawColParent(src));
+    assertInstanceOf(RawColDstWrap.class, dst.items(), "target's custom wrapper class is allocated");
+    assertEquals(2, dst.items().size());
+    assertEquals(new RawColDstElem("a"), dst.items().get(0));
+    assertEquals(new RawColDstElem("b"), dst.items().get(1));
+
+    // Backward round-trips into a fresh source wrapper.
+    final var back = RawColParentBridge.BRIDGE.set(new RawColParent(src), dst);
+    assertInstanceOf(RawColSrcWrap.class, back.items());
+    assertEquals(new RawColSrcElem("a"), back.items().get(0));
+  }
+
+  @Test
+  @DisplayName(
+    "raw collection-subtype field on a BEAN parent (setter rebuild) element-bridges end-to-end — the adopter's @Data shape"
+  )
+  void rawCollectionSubtypeOnBeanParentBridgesEndToEnd() {
+    // The adopter's parent was a @Data bean, not a record: the rebuild routes the raw helper's
+    // output
+    // through the target's setter (out.setItems(__fwd_items(...))) rather than a constructor arg.
+    // Proves the raw container helper composes with the bean (no-arg ctor + setters) rebuild path.
+    final var srcItems = new RawColSrcWrap();
+    srcItems.add(new RawColSrcElem("a"));
+    final var src = new RawColBeanSrc();
+    src.setItems(srcItems);
+
+    final var dst = RawColBeanSrcBridge.BRIDGE.read(src);
+    assertInstanceOf(RawColDstWrap.class, dst.getItems());
+    assertEquals(new RawColDstElem("a"), dst.getItems().get(0));
+  }
+
+  @Test
+  @DisplayName(
+    "raw Map-subtype field (class Wrap extends HashMap<K, Elem>) element-bridges values, preserves keys, end-to-end"
+  )
+  void rawMapSubtypeBridgesEndToEnd() {
+    // Distinct emit path from the List case: entrySet/put + a two-type-arg allocation. Proves the
+    // generated raw-map helper runs — bridges each value through the sub-bridge, keeps keys, into a
+    // freshly-allocated target wrapper.
+    final var src = new RawMapSrcWrap();
+    src.put("k1", new RawColSrcElem("a"));
+    src.put("k2", new RawColSrcElem("b"));
+
+    final var dst = RawMapParentBridge.BRIDGE.read(new RawMapParent(src));
+    assertInstanceOf(RawMapDstWrap.class, dst.byKey(), "target's custom map wrapper class is allocated");
+    assertEquals(new RawColDstElem("a"), dst.byKey().get("k1"));
+    assertEquals(new RawColDstElem("b"), dst.byKey().get("k2"));
+
+    final var back = RawMapParentBridge.BRIDGE.set(new RawMapParent(src), dst);
+    assertInstanceOf(RawMapSrcWrap.class, back.byKey());
+    assertEquals(new RawColSrcElem("a"), back.byKey().get("k1"));
+  }
+
+  @Test
+  @DisplayName("raw collection-subtype with identity elements copies verbatim end-to-end (addAll path)")
+  void rawCollectionSubtypeIdentityElementCopiesEndToEnd() {
+    // The identity-element branch (out.addAll(src), no sub-bridge) — a distinct emit path the
+    // distinct-element e2e never executes. Same element type on both sides.
+    final var src = new IdTagsSrc();
+    src.add("x");
+    src.add("y");
+
+    final var dst = IdTagsParentBridge.BRIDGE.read(new IdTagsParent(src));
+    assertInstanceOf(IdTagsDst.class, dst.tags());
+    assertEquals(Arrays.asList("x", "y"), dst.tags());
+  }
+
+  @Test
+  @DisplayName(
     "bare Map<K,V> default: codegen and the runtime reflective mapper allocate the SAME concrete class (HashMap) — cross-strategy parity on the interface-family default"
   )
   void bareMapDefaultMatchesRuntimeConcreteClass() {

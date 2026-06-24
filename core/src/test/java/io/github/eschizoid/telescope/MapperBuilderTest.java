@@ -2,9 +2,7 @@ package io.github.eschizoid.telescope;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.constant;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 
 import io.github.eschizoid.telescope.mapping.MapStep;
 import org.junit.jupiter.api.DisplayName;
@@ -193,7 +191,7 @@ class MapperBuilderTest {
       };
 
       final var ex = assertThrows(NullPointerException.class, () -> builder.inherit(withNullSlot));
-      assertEquals(true, ex.getMessage().contains("rows[1]"), "NPE message names the failing index");
+      assertTrue(ex.getMessage().contains("rows[1]"), "NPE message names the failing index");
     }
 
     @Test
@@ -204,7 +202,7 @@ class MapperBuilderTest {
       final var ex = assertThrows(NullPointerException.class, () ->
         builder.add(to(Entity::createdAt, Dto::createdAt), null)
       );
-      assertEquals(true, ex.getMessage().contains("rows[1]"), "NPE message names the failing index");
+      assertTrue(ex.getMessage().contains("rows[1]"), "NPE message names the failing index");
     }
 
     @Test
