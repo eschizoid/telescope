@@ -10,6 +10,7 @@ import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
@@ -29,6 +30,12 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
 
   private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.FromMap";
 
+  // @FromMap targets carrying a Lombok trigger are deferred to processingOver(): in round 1 Lombok
+  // hasn't synthesized the getters/setters yet, so beanProperties() would see "no readable
+  // properties". By the final round Lombok is done patching. Cleared after the drain so a reused
+  // processor instance starts clean.
+  private final Set<TypeElement> pending = new LinkedHashSet<>();
+
   /** Public no-arg constructor for {@code ServiceLoader} discovery by the Java compiler. */
   public FromMapProcessor() {
     super();
@@ -39,15 +46,27 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final var anno = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
     if (anno == null) return false;
     for (final var element : roundEnv.getElementsAnnotatedWith(anno)) {
-      if (element.getKind() == ElementKind.RECORD) {
-        generateForRecord((TypeElement) element);
-      } else if (element.getKind() == ElementKind.CLASS) {
-        generateForBean((TypeElement) element);
+      if (!roundEnv.processingOver() && carriesLombokTrigger(element)) {
+        pending.add((TypeElement) element);
       } else {
-        error(element, "@FromMap is only supported on records and classes");
+        generate(element);
       }
     }
+    if (roundEnv.processingOver()) {
+      pending.forEach(this::generate);
+      pending.clear();
+    }
     return true;
+  }
+
+  private void generate(final Element element) {
+    if (element.getKind() == ElementKind.RECORD) {
+      generateForRecord((TypeElement) element);
+    } else if (element.getKind() == ElementKind.CLASS) {
+      generateForBean((TypeElement) element);
+    } else {
+      error(element, "@FromMap is only supported on records and classes");
+    }
   }
 
   private void generateForRecord(final TypeElement record) {
