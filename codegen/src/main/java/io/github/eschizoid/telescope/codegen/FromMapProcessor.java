@@ -57,6 +57,15 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       .stream()
       .map(c -> resolveCoercion(c.asType()))
       .toList();
+    var coercible = true;
+    for (var i = 0; i < components.size(); i++) {
+      final var reason = coercions.get(i).firstUnsupported();
+      if (reason.isPresent()) {
+        error(components.get(i), "@FromMap: " + reason.get());
+        coercible = false;
+      }
+    }
+    if (!coercible) return;
     final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
 
     emitConverter(record, unchecked, out -> {
@@ -110,6 +119,15 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       .stream()
       .map(p -> resolveCoercion(p.type()))
       .toList();
+    var coercible = true;
+    for (var i = 0; i < props.size(); i++) {
+      final var reason = coercions.get(i).firstUnsupported();
+      if (reason.isPresent()) {
+        error(pojo, "@FromMap: property '" + props.get(i).name() + "' — " + reason.get());
+        coercible = false;
+      }
+    }
+    if (!coercible) return;
     final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
 
     emitConverter(pojo, unchecked, out -> {
@@ -176,7 +194,9 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       case BOOLEAN -> new Coercion.BoolParse("false");
       case CHAR -> new Coercion.CharParse("'\\0'");
       case DECLARED -> declaredCoercion((DeclaredType) type);
-      default -> new Coercion.Cast(boxedType(type));
+      default -> new Coercion.Unsupported(
+        type + " can't be coerced from a Map (type variable / array / unsupported kind)"
+      );
     };
   }
 
@@ -217,7 +237,28 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       final var args = type.getTypeArguments();
       return new Coercion.MapValues(resolveCoercion(args.get(0)), resolveCoercion(args.get(1)));
     }
-    return new Coercion.Cast(boxedType(type));
+    final var fqn = boxedType(type);
+    // A collection/map SUBTYPE (ArrayList, TreeSet, HashMap, …) — codegen can't allocate the
+    // concrete target; require the interface so the lift is well-defined.
+    if (assignableToRaw(type, "java.util.Collection") || assignableToRaw(type, "java.util.Map")) {
+      return new Coercion.Unsupported(
+        fqn + " is a collection subtype — declare the field as List/Set/Map/Optional so @FromMap can build it"
+      );
+    }
+    // JDK scalar reference types (String, Object, Instant, UUID, …) — cast and trust the map.
+    if (fqn.startsWith("java.") || fqn.startsWith("javax.")) return new Coercion.Cast(fqn);
+    // A user type that isn't @FromMap would arrive as a nested Map and CCE — require the
+    // annotation.
+    return new Coercion.Unsupported(
+      fqn + " is a nested object but isn't @FromMap — annotate " + fqn + " with @FromMap"
+    );
+  }
+
+  /** Whether {@code type} is assignable to the raw type named {@code rawFqn}. */
+  private boolean assignableToRaw(final DeclaredType type, final String rawFqn) {
+    final var types = processingEnv.getTypeUtils();
+    final var raw = processingEnv.getElementUtils().getTypeElement(rawFqn);
+    return raw != null && types.isAssignable(types.erasure(type), types.erasure(raw.asType()));
   }
 
   /**

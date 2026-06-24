@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.codegen;
 
 import static io.github.eschizoid.telescope.codegen.ProcessorHarness.source;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -194,6 +195,48 @@ class FromMapProcessorTest {
       assertNotNull(generated, () -> "RegistryFromMap not generated; saw " + compilation.generated().keySet());
       assertTrue(generated.contains("entrySet()"), generated);
       assertTrue(generated.contains("demo.AddressFromMap.fromMap("), generated);
+    }
+  }
+
+  @Nested
+  @DisplayName("Rejections — fail at compile, not at runtime")
+  class Rejections {
+
+    @Test
+    @DisplayName("a nested object field whose type isn't @FromMap is a compile error, not a runtime CCE")
+    void nonFromMapNestedFieldRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.FromMap;
+          @FromMap
+          public record Order(demo.Customer customer) {}
+          """
+        ),
+        source("demo.Customer", "package demo; public record Customer(String name) {}")
+      );
+      assertFalse(compilation.success(), "a non-@FromMap nested object must be rejected");
+      assertTrue(compilation.hasError("isn't @FromMap"), () -> compilation.errorMessages().toString());
+    }
+
+    @Test
+    @DisplayName("a collection subtype field (ArrayList<X>) is rejected — declare the interface")
+    void collectionSubtypeRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Holder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.FromMap;
+          @FromMap
+          public record Holder(java.util.ArrayList<String> items) {}
+          """
+        )
+      );
+      assertFalse(compilation.success(), "a collection subtype must be rejected");
+      assertTrue(compilation.hasError("collection subtype"), () -> compilation.errorMessages().toString());
     }
   }
 

@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.codegen;
 
+import java.util.Optional;
+
 /**
  * A per-field coercion from a raw {@code Map} value expression to the target field's type, emitted
  * as a Java expression. The processor resolves each field's declared type (and any {@code @Extract}
@@ -21,7 +23,8 @@ sealed interface Coercion
     Coercion.Listed,
     Coercion.Setted,
     Coercion.MapValues,
-    Coercion.OptionalOf
+    Coercion.OptionalOf,
+    Coercion.Unsupported
 {
   /**
    * Emit a Java expression converting {@code raw} (an {@code Object}-typed expression) to the field
@@ -35,6 +38,15 @@ sealed interface Coercion
    */
   default boolean unchecked() {
     return false;
+  }
+
+  /**
+   * The first {@link Unsupported} reason in this coercion tree (containers delegate to their
+   * element/value), or empty when the field is coercible. The processor turns a present reason into
+   * a compile error instead of emitting code that would {@code ClassCastException} at runtime.
+   */
+  default Optional<String> firstUnsupported() {
+    return Optional.empty();
   }
 
   /**
@@ -198,6 +210,11 @@ sealed interface Coercion
     public boolean unchecked() {
       return element.unchecked();
     }
+
+    @Override
+    public Optional<String> firstUnsupported() {
+      return element.firstUnsupported();
+    }
   }
 
   /** {@code Set<E>} target: stream each element through the element coercion into a fresh set. */
@@ -224,6 +241,11 @@ sealed interface Coercion
     public boolean unchecked() {
       return element.unchecked();
     }
+
+    @Override
+    public Optional<String> firstUnsupported() {
+      return element.firstUnsupported();
+    }
   }
 
   /**
@@ -239,6 +261,11 @@ sealed interface Coercion
     @Override
     public boolean unchecked() {
       return element.unchecked();
+    }
+
+    @Override
+    public Optional<String> firstUnsupported() {
+      return element.firstUnsupported();
     }
   }
 
@@ -276,6 +303,28 @@ sealed interface Coercion
     @Override
     public boolean unchecked() {
       return true;
+    }
+
+    @Override
+    public Optional<String> firstUnsupported() {
+      return key.firstUnsupported().or(value::firstUnsupported);
+    }
+  }
+
+  /**
+   * A field type {@code @FromMap} can't coerce (a nested object that isn't {@code @FromMap}, a
+   * collection subtype, a type variable). Never emitted — the processor reports {@link #reason} as
+   * a compile error and skips the converter, upholding "if it compiles, it runs".
+   */
+  record Unsupported(String reason) implements Coercion {
+    @Override
+    public String emit(final String raw, final int depth) {
+      throw new IllegalStateException("Unsupported coercion must not be emitted: " + reason);
+    }
+
+    @Override
+    public Optional<String> firstUnsupported() {
+      return Optional.of(reason);
     }
   }
 }
