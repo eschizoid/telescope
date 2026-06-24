@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.conversion.BridgeFn;
+import io.github.eschizoid.telescope.conversion.BridgeRegistry;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
@@ -647,6 +648,17 @@ public sealed class Telescope<
       if (probed.isPresent()) {
         @SuppressWarnings("unchecked")
         final var bridge = (Telescope<A, B>) probed.get().bridge();
+        return ForwardMapper.create(bridge::read, source, target);
+      }
+      // The name-derived probe above only reaches a sibling <Source>Bridge in the source's package.
+      // A carrier-form @Bridge lives in the carrier's package, so fall back to the package-agnostic
+      // registry before the lenient same-name default — otherwise a declared carrier bridge (and
+      // its
+      // renames) would be silently dropped.
+      final var registered = BridgeRegistry.find(source, target, source.getClassLoader());
+      if (registered.isPresent()) {
+        @SuppressWarnings("unchecked")
+        final var bridge = (Telescope<A, B>) registered.get();
         return ForwardMapper.create(bridge::read, source, target);
       }
     }

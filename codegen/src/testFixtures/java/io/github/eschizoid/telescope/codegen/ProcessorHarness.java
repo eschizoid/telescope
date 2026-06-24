@@ -13,6 +13,7 @@ import java.util.Map;
 import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
+import javax.tools.FileObject;
 import javax.tools.ForwardingJavaFileManager;
 import javax.tools.JavaCompiler;
 import javax.tools.JavaFileManager;
@@ -69,7 +70,12 @@ public final class ProcessorHarness {
     task.setProcessors(List.copyOf(processors));
 
     final boolean success = task.call();
-    return new Compilation(success, diagnostics.getDiagnostics(), capturing.generatedSources());
+    return new Compilation(
+      success,
+      diagnostics.getDiagnostics(),
+      capturing.generatedSources(),
+      capturing.generatedResources()
+    );
   }
 
   public static JavaFileObject source(final String fqcn, final String code) {
@@ -82,7 +88,8 @@ public final class ProcessorHarness {
   public record Compilation(
     boolean success,
     List<Diagnostic<? extends JavaFileObject>> diagnostics,
-    Map<String, String> generated
+    Map<String, String> generated,
+    Map<String, String> resources
   ) {
     public List<Diagnostic<? extends JavaFileObject>> errors() {
       final var out = new ArrayList<Diagnostic<? extends JavaFileObject>>();
@@ -131,6 +138,7 @@ public final class ProcessorHarness {
   private static final class CapturingFileManager extends ForwardingJavaFileManager<JavaFileManager> {
 
     private final Map<String, CapturedSource> captured = new LinkedHashMap<>();
+    private final Map<String, CapturedResource> capturedResources = new LinkedHashMap<>();
 
     CapturingFileManager(final JavaFileManager delegate) {
       super(delegate);
@@ -141,7 +149,7 @@ public final class ProcessorHarness {
       final Location location,
       final String className,
       final JavaFileObject.Kind kind,
-      final javax.tools.FileObject sibling
+      final FileObject sibling
     ) throws IOException {
       if (location == StandardLocation.SOURCE_OUTPUT && kind == JavaFileObject.Kind.SOURCE) {
         final var sourceFile = new CapturedSource(className);
@@ -151,10 +159,55 @@ public final class ProcessorHarness {
       return super.getJavaFileForOutput(location, className, kind, sibling);
     }
 
+    // Capture resource outputs (e.g. META-INF/services registrations) in memory too, so they're
+    // assertable and — critically — never escape to disk in the working tree under -proc:only.
+    @Override
+    public FileObject getFileForOutput(
+      final Location location,
+      final String packageName,
+      final String relativeName,
+      final FileObject sibling
+    ) {
+      final var key = packageName.isEmpty() ? relativeName : packageName.replace('.', '/') + "/" + relativeName;
+      final var resource = new CapturedResource(key);
+      capturedResources.put(key, resource);
+      return resource;
+    }
+
     Map<String, String> generatedSources() {
       final var out = new LinkedHashMap<String, String>();
       captured.forEach((name, file) -> out.put(name, file.text()));
       return out;
+    }
+
+    Map<String, String> generatedResources() {
+      final var out = new LinkedHashMap<String, String>();
+      capturedResources.forEach((name, file) -> out.put(name, file.text()));
+      return out;
+    }
+  }
+
+  /** In-memory sink for a single generated resource (e.g. a {@code META-INF/services} file). */
+  private static final class CapturedResource extends SimpleJavaFileObject {
+
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+
+    CapturedResource(final String path) {
+      super(URI.create("mem:///" + path), Kind.OTHER);
+    }
+
+    @Override
+    public OutputStream openOutputStream() {
+      return bytes;
+    }
+
+    @Override
+    public CharSequence getCharContent(final boolean ignoreEncodingErrors) {
+      return text();
+    }
+
+    String text() {
+      return bytes.toString(StandardCharsets.UTF_8);
     }
   }
 
