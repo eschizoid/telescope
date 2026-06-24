@@ -20,9 +20,13 @@ import java.lang.annotation.Target;
  * native-image clean by construction.
  *
  * <p>The map key for each field is the field name, and the value is coerced to the field's type by
- * the standard rules: {@code String} as-is, {@code String}/{@code Number} to a primitive, a {@code
- * String} enum name to the enum, a nested {@code Map} to a nested {@code @FromMap} type, and {@code
- * List}/{@code Set}/{@code Map} element-mapped. An absent key takes the field's JLS default.
+ * the standard rules: {@code String} as-is, {@code String}/{@code Number} to a primitive or
+ * wrapper, a {@code String} enum name to the enum, a {@code String}-carried JDK value type ({@code
+ * Instant}, {@code UUID}, {@code BigDecimal}, {@code LocalDate}, …) via its String factory, a
+ * nested {@code Map} to a nested {@code @FromMap} type, and {@code List}/{@code Set}/{@code
+ * Map}/{@code Optional} element-mapped. An absent key takes the field's JLS default. A field type
+ * that can't be coerced (a non-{@code @FromMap} nested object, a collection subtype) is a compile
+ * error, not a runtime failure.
  *
  * <pre>{@code
  * @FromMap

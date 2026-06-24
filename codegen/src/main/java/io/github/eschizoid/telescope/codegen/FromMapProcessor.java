@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.codegen;
 
 import java.io.PrintWriter;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -30,6 +31,33 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
 
   private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.FromMap";
 
+  // Reference types a raw map plausibly carries as themselves, so a direct cast is justified.
+  private static final Set<String> CAST_AS_IS = Set.of(
+    "java.lang.String",
+    "java.lang.Object",
+    "java.lang.CharSequence"
+  );
+
+  // JDK value types that arrive as a String in an untyped map, with the factory that rebuilds them.
+  // Generated form: `raw instanceof T t ? t : raw == null ? null : <factory>(String.valueOf(raw))`.
+  private static final Map<String, String> JDK_STRING_FACTORIES = Map.ofEntries(
+    Map.entry("java.time.Instant", "java.time.Instant.parse"),
+    Map.entry("java.time.LocalDate", "java.time.LocalDate.parse"),
+    Map.entry("java.time.LocalDateTime", "java.time.LocalDateTime.parse"),
+    Map.entry("java.time.LocalTime", "java.time.LocalTime.parse"),
+    Map.entry("java.time.OffsetDateTime", "java.time.OffsetDateTime.parse"),
+    Map.entry("java.time.ZonedDateTime", "java.time.ZonedDateTime.parse"),
+    Map.entry("java.time.Duration", "java.time.Duration.parse"),
+    Map.entry("java.time.Period", "java.time.Period.parse"),
+    Map.entry("java.util.UUID", "java.util.UUID.fromString"),
+    Map.entry("java.math.BigDecimal", "new java.math.BigDecimal"),
+    Map.entry("java.math.BigInteger", "new java.math.BigInteger"),
+    Map.entry("java.net.URI", "java.net.URI.create"),
+    Map.entry("java.util.Currency", "java.util.Currency.getInstance"),
+    Map.entry("java.util.Locale", "java.util.Locale.forLanguageTag"),
+    Map.entry("java.util.regex.Pattern", "java.util.regex.Pattern.compile")
+  );
+
   // @FromMap targets carrying a Lombok trigger are deferred to processingOver(): in round 1 Lombok
   // hasn't synthesized the getters/setters yet, so beanProperties() would see "no readable
   // properties". By the final round Lombok is done patching. Cleared after the drain so a reused
@@ -46,11 +74,8 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final var anno = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
     if (anno == null) return false;
     for (final var element : roundEnv.getElementsAnnotatedWith(anno)) {
-      if (!roundEnv.processingOver() && carriesLombokTrigger(element)) {
-        pending.add((TypeElement) element);
-      } else {
-        generate(element);
-      }
+      if (!roundEnv.processingOver() && carriesLombokTrigger(element)) pending.add((TypeElement) element);
+      else generate(element);
     }
     if (roundEnv.processingOver()) {
       pending.forEach(this::generate);
@@ -60,13 +85,9 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
   }
 
   private void generate(final Element element) {
-    if (element.getKind() == ElementKind.RECORD) {
-      generateForRecord((TypeElement) element);
-    } else if (element.getKind() == ElementKind.CLASS) {
-      generateForBean((TypeElement) element);
-    } else {
-      error(element, "@FromMap is only supported on records and classes");
-    }
+    if (element.getKind() == ElementKind.RECORD) generateForRecord((TypeElement) element);
+    else if (element.getKind() == ElementKind.CLASS) generateForBean((TypeElement) element);
+    else error(element, "@FromMap is only supported on records and classes");
   }
 
   private void generateForRecord(final TypeElement record) {
@@ -264,8 +285,23 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
         fqn + " is a collection subtype — declare the field as List/Set/Map/Optional so @FromMap can build it"
       );
     }
-    // JDK scalar reference types (String, Object, Instant, UUID, …) — cast and trust the map.
-    if (fqn.startsWith("java.") || fqn.startsWith("javax.")) return new Coercion.Cast(fqn);
+    // Reference types a map plausibly holds as-is — cast and trust the map.
+    if (CAST_AS_IS.contains(fqn)) return new Coercion.Cast(fqn);
+    // A JDK value type with a known String factory (Instant, UUID, BigDecimal, LocalDate, …) —
+    // build
+    // it from the String form it arrives in.
+    final var factory = JDK_STRING_FACTORIES.get(fqn);
+    if (factory != null) return new Coercion.StringFactory(fqn, factory);
+    // An unrecognized JDK type can't be built from a Map value — refuse rather than emit a cast
+    // that
+    // would CCE at runtime and defeat the "if it compiles, it runs" guard.
+    if (fqn.startsWith("java.") || fqn.startsWith("javax.")) {
+      return new Coercion.Unsupported(
+        fqn +
+          " can't be built from a Map value by @FromMap — use the runtime Telescope.fromMap with a " +
+          "custom extract(key, accessor, converter)"
+      );
+    }
     // A user type that isn't @FromMap would arrive as a nested Map and CCE — require the
     // annotation.
     return new Coercion.Unsupported(

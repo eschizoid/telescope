@@ -4,10 +4,10 @@ import java.util.Optional;
 
 /**
  * A per-field coercion from a raw {@code Map} value expression to the target field's type, emitted
- * as a Java expression. The processor resolves each field's declared type (and any {@code @Extract}
- * override) to one of these, then asks it to {@link #emit(String, int)} the conversion around the
- * raw {@code map.get("key")} expression. Sealed so each strategy is a distinct, independently
- * testable shape; container strategies compose recursively over their element coercion.
+ * as a Java expression. The processor resolves each field's declared type to one of these, then
+ * asks it to {@link #emit(String, int)} the conversion around the raw {@code map.get("key")}
+ * expression. Sealed so each strategy is a distinct, independently testable shape; container
+ * strategies compose recursively over their element coercion.
  *
  * <p>{@code depth} disambiguates generated local/pattern variable names so nested containers (e.g.
  * {@code List<List<X>>}) don't shadow each other's lambda parameters.
@@ -24,6 +24,7 @@ sealed interface Coercion
     Coercion.Setted,
     Coercion.MapValues,
     Coercion.OptionalOf,
+    Coercion.StringFactory,
     Coercion.Unsupported
 {
   /**
@@ -62,7 +63,8 @@ sealed interface Coercion
 
   /**
    * {@code String}/{@code Number} to a primitive: take the {@code Number} directly when present,
-   * else parse a {@code String}, else fall back to the primitive's JLS default for an absent key.
+   * else fall back to the primitive's JLS default when the key is absent, else parse the {@code
+   * String} form.
    */
   record Parse(String narrowMethod, String parseMethod, String defaultLiteral) implements Coercion {
     @Override
@@ -308,6 +310,34 @@ sealed interface Coercion
     @Override
     public Optional<String> firstUnsupported() {
       return key.firstUnsupported().or(value::firstUnsupported);
+    }
+  }
+
+  /**
+   * A JDK value type with a well-known String factory ({@code Instant.parse}, {@code
+   * UUID.fromString}, {@code new BigDecimal}, …): take an existing instance directly, else build it
+   * from the value's {@code String} form — the shape these arrive in from an untyped map.
+   */
+  record StringFactory(String typeName, String factory) implements Coercion {
+    @Override
+    public String emit(final String raw, final int depth) {
+      final var v = "__sf" + depth;
+      return (
+        raw +
+        " instanceof " +
+        typeName +
+        " " +
+        v +
+        " ? " +
+        v +
+        " : " +
+        raw +
+        " == null ? null : " +
+        factory +
+        "(String.valueOf(" +
+        raw +
+        "))"
+      );
     }
   }
 

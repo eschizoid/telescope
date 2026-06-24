@@ -222,6 +222,24 @@ class FromMapProcessorTest {
     }
 
     @Test
+    @DisplayName("an unrecognized JDK type with no String factory is rejected with guidance")
+    void unknownJdkTypeRejected() {
+      final var compilation = compile(
+        source(
+          "demo.Doc",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.FromMap;
+          @FromMap
+          public record Doc(java.io.File path) {}
+          """
+        )
+      );
+      assertFalse(compilation.success(), "a JDK type with no String factory must be rejected, not cast");
+      assertTrue(compilation.hasError("can't be built from a Map value"), () -> compilation.errorMessages().toString());
+    }
+
+    @Test
     @DisplayName("a collection subtype field (ArrayList<X>) is rejected — declare the interface")
     void collectionSubtypeRejected() {
       final var compilation = compile(

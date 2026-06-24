@@ -125,6 +125,27 @@ class FromMapCodegenTest {
   }
 
   @Test
+  @DisplayName("JDK value types (Instant/UUID/BigDecimal/LocalDate) parse from their String forms")
+  void jdkValueTypesParseFromStrings() {
+    final var r = FmJdkFromMap.fromMap(
+      Map.of(
+        "ts",
+        "2026-06-24T00:00:00Z",
+        "id",
+        "123e4567-e89b-12d3-a456-426614174000",
+        "amount",
+        "19.99",
+        "day",
+        "2026-06-24"
+      )
+    );
+    assertEquals(java.time.Instant.parse("2026-06-24T00:00:00Z"), r.ts());
+    assertEquals(java.util.UUID.fromString("123e4567-e89b-12d3-a456-426614174000"), r.id());
+    assertEquals(new java.math.BigDecimal("19.99"), r.amount());
+    assertEquals(java.time.LocalDate.parse("2026-06-24"), r.day());
+  }
+
+  @Test
   @DisplayName("bean: rebuilds via no-arg constructor + setters")
   void beanViaSetters() {
     final var bean = FmBeanFromMap.fromMap(Map.of("label", "widget", "count", 7));
