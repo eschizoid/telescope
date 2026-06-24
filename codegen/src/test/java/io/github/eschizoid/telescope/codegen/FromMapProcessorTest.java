@@ -76,8 +76,8 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.AccountFromMap");
       assertNotNull(generated, () -> "AccountFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("demo.Role.valueOf(String.valueOf(map.get(\"role\")))"), generated);
-      assertTrue(generated.contains("instanceof demo.Role"), generated);
+      assertTrue(generated.contains("Role.valueOf(String.valueOf(map.get(\"role\")))"), generated);
+      assertTrue(generated.contains("instanceof Role"), generated);
     }
 
     @Test
@@ -108,7 +108,7 @@ class FromMapProcessorTest {
       final var generated = compilation.generated().get("demo.ProfileFromMap");
       assertNotNull(generated, () -> "ProfileFromMap not generated; saw " + compilation.generated().keySet());
       // The nested input object recurses through the nested type's own generated converter.
-      assertTrue(generated.contains("demo.AddressFromMap.fromMap("), generated);
+      assertTrue(generated.contains("AddressFromMap.fromMap("), generated);
     }
 
     @Test
@@ -141,7 +141,7 @@ class FromMapProcessorTest {
       assertNotNull(generated, () -> "TeamFromMap not generated; saw " + compilation.generated().keySet());
       // Each element streamed through the element type's own generated converter.
       assertTrue(generated.contains(".stream()"), generated);
-      assertTrue(generated.contains("demo.MemberFromMap.fromMap("), generated);
+      assertTrue(generated.contains("MemberFromMap.fromMap("), generated);
     }
 
     @Test
@@ -162,7 +162,7 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.LabelsFromMap");
       assertNotNull(generated, () -> "LabelsFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("instanceof java.util.Set<?>"), generated);
+      assertTrue(generated.contains("instanceof Set<?>"), generated);
       assertTrue(generated.contains("toSet()"), generated);
     }
 
@@ -194,7 +194,7 @@ class FromMapProcessorTest {
       final var generated = compilation.generated().get("demo.RegistryFromMap");
       assertNotNull(generated, () -> "RegistryFromMap not generated; saw " + compilation.generated().keySet());
       assertTrue(generated.contains("entrySet()"), generated);
-      assertTrue(generated.contains("demo.AddressFromMap.fromMap("), generated);
+      assertTrue(generated.contains("AddressFromMap.fromMap("), generated);
     }
   }
 

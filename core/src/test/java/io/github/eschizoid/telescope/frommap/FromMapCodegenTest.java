@@ -146,6 +146,28 @@ class FromMapCodegenTest {
   }
 
   @Test
+  @DisplayName("deeply nested containers: Map<String, List<@FromMap>> and List<Map<String, String>> compose")
+  void deeplyNestedContainers() {
+    final var r = FmNestedFromMap.fromMap(
+      Map.of(
+        "byTeam",
+        Map.of("alpha", List.of(Map.of("city", "NYC", "zip", "10001"), Map.of("city", "LA", "zip", "90001"))),
+        "rows",
+        List.of(Map.of("k", "v"), Map.of("x", "y")),
+        "maybe",
+        List.of(Map.of("city", "SF", "zip", "94107"))
+      )
+    );
+    // Map<String, List<FmAddress>> — value list element-bridged through AddressFromMap.
+    assertEquals(List.of(new FmAddress("NYC", "10001"), new FmAddress("LA", "90001")), r.byTeam().get("alpha"));
+    // List<Map<String, String>> — element maps coerced.
+    assertEquals("v", r.rows().get(0).get("k"));
+    assertEquals("y", r.rows().get(1).get("x"));
+    // Optional<List<FmAddress>> — element list bridged inside the Optional.
+    assertEquals(Optional.of(List.of(new FmAddress("SF", "94107"))), r.maybe());
+  }
+
+  @Test
   @DisplayName("bean: rebuilds via no-arg constructor + setters")
   void beanViaSetters() {
     final var bean = FmBeanFromMap.fromMap(Map.of("label", "widget", "count", 7));

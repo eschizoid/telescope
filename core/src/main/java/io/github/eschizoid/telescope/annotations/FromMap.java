@@ -28,6 +28,11 @@ import java.lang.annotation.Target;
  * that can't be coerced (a non-{@code @FromMap} nested object, a collection subtype) is a compile
  * error, not a runtime failure.
  *
+ * <p>Coercion is lenient, matching the runtime {@code fromMap}: a wrong-shaped value for a
+ * container field yields an empty collection, only {@code "true"} is truthy for a boolean, a
+ * multi-character String for a {@code char} takes the first character, and a non-numeric String for
+ * a numeric field throws {@code NumberFormatException}.
+ *
  * <pre>{@code
  * @FromMap
  * record User(String name, int age, Role role, Address address) {}

@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.codegen;
 
 import java.io.PrintWriter;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
@@ -38,24 +39,24 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     "java.lang.CharSequence"
   );
 
-  // JDK value types that arrive as a String in an untyped map, with the factory that rebuilds them.
-  // Generated form: `raw instanceof T t ? t : raw == null ? null : <factory>(String.valueOf(raw))`.
+  // JDK value types that arrive as a String in an untyped map, mapped to the String factory that
+  // rebuilds them — a static method name, or "new" for a String constructor.
   private static final Map<String, String> JDK_STRING_FACTORIES = Map.ofEntries(
-    Map.entry("java.time.Instant", "java.time.Instant.parse"),
-    Map.entry("java.time.LocalDate", "java.time.LocalDate.parse"),
-    Map.entry("java.time.LocalDateTime", "java.time.LocalDateTime.parse"),
-    Map.entry("java.time.LocalTime", "java.time.LocalTime.parse"),
-    Map.entry("java.time.OffsetDateTime", "java.time.OffsetDateTime.parse"),
-    Map.entry("java.time.ZonedDateTime", "java.time.ZonedDateTime.parse"),
-    Map.entry("java.time.Duration", "java.time.Duration.parse"),
-    Map.entry("java.time.Period", "java.time.Period.parse"),
-    Map.entry("java.util.UUID", "java.util.UUID.fromString"),
-    Map.entry("java.math.BigDecimal", "new java.math.BigDecimal"),
-    Map.entry("java.math.BigInteger", "new java.math.BigInteger"),
-    Map.entry("java.net.URI", "java.net.URI.create"),
-    Map.entry("java.util.Currency", "java.util.Currency.getInstance"),
-    Map.entry("java.util.Locale", "java.util.Locale.forLanguageTag"),
-    Map.entry("java.util.regex.Pattern", "java.util.regex.Pattern.compile")
+    Map.entry("java.time.Instant", "parse"),
+    Map.entry("java.time.LocalDate", "parse"),
+    Map.entry("java.time.LocalDateTime", "parse"),
+    Map.entry("java.time.LocalTime", "parse"),
+    Map.entry("java.time.OffsetDateTime", "parse"),
+    Map.entry("java.time.ZonedDateTime", "parse"),
+    Map.entry("java.time.Duration", "parse"),
+    Map.entry("java.time.Period", "parse"),
+    Map.entry("java.util.UUID", "fromString"),
+    Map.entry("java.math.BigDecimal", "new"),
+    Map.entry("java.math.BigInteger", "new"),
+    Map.entry("java.net.URI", "create"),
+    Map.entry("java.util.Currency", "getInstance"),
+    Map.entry("java.util.Locale", "forLanguageTag"),
+    Map.entry("java.util.regex.Pattern", "compile")
   );
 
   // @FromMap targets carrying a Lombok trigger are deferred to processingOver(): in round 1 Lombok
@@ -107,8 +108,12 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     }
     if (!coercible) return;
     final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
+    final var imports = coercions
+      .stream()
+      .flatMap(c -> c.imports().stream())
+      .collect(Collectors.toSet());
 
-    emitConverter(record, unchecked, out -> {
+    emitConverter(record, unchecked, imports, out -> {
       final var args = IntStream.range(0, components.size())
         .mapToObj(i -> coercions.get(i).emit("map.get(\"" + components.get(i).getSimpleName() + "\")", 0))
         .collect(Collectors.joining(", "));
@@ -169,8 +174,12 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     }
     if (!coercible) return;
     final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
+    final var imports = coercions
+      .stream()
+      .flatMap(c -> c.imports().stream())
+      .collect(Collectors.toSet());
 
-    emitConverter(pojo, unchecked, out -> {
+    emitConverter(pojo, unchecked, imports, out -> {
       if (useBuilder) {
         out.print("    return " + name + ".builder()");
         for (var i = 0; i < props.size(); i++) {
@@ -196,7 +205,12 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
    * Emit the shared {@code <X>FromMap} class shell — the fromMap method (body supplied) and
    * FROM_MAP constant.
    */
-  private void emitConverter(final TypeElement type, final boolean unchecked, final Consumer<PrintWriter> body) {
+  private void emitConverter(
+    final TypeElement type,
+    final boolean unchecked,
+    final Set<String> coercionImports,
+    final Consumer<PrintWriter> body
+  ) {
     final var pkg = processingEnv.getElementUtils().getPackageOf(type).getQualifiedName().toString();
     final var name = type.getSimpleName().toString();
     final var holder = name + "FromMap";
@@ -205,6 +219,10 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final Set<String> imports = new LinkedHashSet<>();
     imports.add("java.util.Map");
     imports.add("io.github.eschizoid.telescope.conversion.ForwardMapper");
+    imports.addAll(coercionImports);
+    // The converter lives in the target's own package — no self-import needed for sibling
+    // converters.
+    imports.removeIf(fqn -> fqn.equals(pkg + "." + Coercion.simple(fqn)));
 
     final var javadoc = "Generated by telescope-codegen for @FromMap " + name + ".";
     writeClass(qualified, holder, imports, javadoc, type, out -> {
@@ -268,14 +286,29 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     if (element.getKind() == ElementKind.ENUM) return new Coercion.EnumOf(boxedType(type));
     if (hasAnnotation(element, ANNOTATION)) return new Coercion.Nested(boxedType(type) + "FromMap");
     final var listElement = singleArgOf(type, "java.util.List");
-    if (listElement != null) return new Coercion.Listed(resolveCoercion(listElement));
+    if (listElement != null) {
+      final var imports = new HashSet<String>();
+      return new Coercion.Listed(renderType(listElement, imports), resolveCoercion(listElement), imports);
+    }
     final var setElement = singleArgOf(type, "java.util.Set");
-    if (setElement != null) return new Coercion.Setted(resolveCoercion(setElement));
+    if (setElement != null) {
+      final var imports = new HashSet<String>();
+      return new Coercion.Setted(renderType(setElement, imports), resolveCoercion(setElement), imports);
+    }
     final var optElement = singleArgOf(type, "java.util.Optional");
     if (optElement != null) return new Coercion.OptionalOf(resolveCoercion(optElement));
     if (isErasure(type, "java.util.Map") && type.getTypeArguments().size() == 2) {
       final var args = type.getTypeArguments();
-      return new Coercion.MapValues(resolveCoercion(args.get(0)), resolveCoercion(args.get(1)));
+      final var imports = new HashSet<String>();
+      final var keyType = renderType(args.get(0), imports);
+      final var valueType = renderType(args.get(1), imports);
+      return new Coercion.MapValues(
+        keyType,
+        valueType,
+        resolveCoercion(args.get(0)),
+        resolveCoercion(args.get(1)),
+        imports
+      );
     }
     final var fqn = boxedType(type);
     // A collection/map SUBTYPE (ArrayList, TreeSet, HashMap, …) — codegen can't allocate the
@@ -314,6 +347,24 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final var types = processingEnv.getTypeUtils();
     final var raw = processingEnv.getElementUtils().getTypeElement(rawFqn);
     return raw != null && types.isAssignable(types.erasure(type), types.erasure(raw.asType()));
+  }
+
+  /**
+   * Render a type as a simple-name source string ({@code Map<String, List<Address>>}), collecting
+   * the FQNs to import. Used for the explicit type witnesses on the generated container collectors.
+   */
+  private String renderType(final TypeMirror type, final Set<String> imports) {
+    if (type.getKind() != TypeKind.DECLARED) return Coercion.simple(boxedType(type));
+    final var declared = (DeclaredType) type;
+    final var raw = ((TypeElement) declared.asElement()).getQualifiedName().toString();
+    imports.addAll(Coercion.importing(raw));
+    final var args = declared.getTypeArguments();
+    if (args.isEmpty()) return Coercion.simple(raw);
+    final var rendered = args
+      .stream()
+      .map(a -> renderType(a, imports))
+      .collect(Collectors.joining(", "));
+    return Coercion.simple(raw) + "<" + rendered + ">";
   }
 
   /**
