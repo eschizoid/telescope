@@ -36,7 +36,7 @@ class MappingToOneWayTest {
       );
       assertTrue(ex.getMessage().contains("Telescope.mapper"));
       assertTrue(ex.getMessage().contains("Mapping.toOneWay"));
-      assertTrue(ex.getMessage().contains("createdAtIso"), () -> ex.getMessage());
+      assertTrue(ex.getMessage().contains("createdAtIso"), ex::getMessage);
       assertTrue(ex.getMessage().contains("mapperForward"));
     }
 

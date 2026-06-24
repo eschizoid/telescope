@@ -90,9 +90,9 @@ class MappingEnumToTest {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
         enumTo(UserEntity::status, UserDtoMissing::status, EntityStatus.class, DtoStatusMissingClosed.class)
       );
-      assertTrue(ex.getMessage().contains("CLOSED"), () -> ex.getMessage());
-      assertTrue(ex.getMessage().contains("missing on target"), () -> ex.getMessage());
-      assertTrue(ex.getMessage().contains("DtoStatusMissingClosed"), () -> ex.getMessage());
+      assertTrue(ex.getMessage().contains("CLOSED"), ex::getMessage);
+      assertTrue(ex.getMessage().contains("missing on target"), ex::getMessage);
+      assertTrue(ex.getMessage().contains("DtoStatusMissingClosed"), ex::getMessage);
     }
 
     @Test
@@ -101,9 +101,9 @@ class MappingEnumToTest {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
         enumTo(UserEntity::status, UserDtoExtra::status, EntityStatus.class, DtoStatusExtraPending.class)
       );
-      assertTrue(ex.getMessage().contains("PENDING"), () -> ex.getMessage());
-      assertTrue(ex.getMessage().contains("missing on source"), () -> ex.getMessage());
-      assertTrue(ex.getMessage().contains("EntityStatus"), () -> ex.getMessage());
+      assertTrue(ex.getMessage().contains("PENDING"), ex::getMessage);
+      assertTrue(ex.getMessage().contains("missing on source"), ex::getMessage);
+      assertTrue(ex.getMessage().contains("EntityStatus"), ex::getMessage);
     }
 
     @Test

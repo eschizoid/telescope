@@ -134,7 +134,7 @@ class MigrationRegressionTest {
       src.setShipped(true);
       src.setName("alice");
       final var tgt = mapper.forward(src);
-      assertEquals(true, tgt.isShipped());
+      assertTrue(tgt.isShipped());
       assertEquals("alice", tgt.getName());
     }
 
@@ -261,7 +261,7 @@ class MigrationRegressionTest {
       );
       final var src = new Order(); // customer left null
       final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
-      assertEquals(null, tgt.getCustomerEmail());
+      assertNull(tgt.getCustomerEmail());
     }
 
     @Test
@@ -387,7 +387,7 @@ class MigrationRegressionTest {
       assertEquals(80, tgt.getScores().getFirstNameScore());
       assertEquals(90, tgt.getScores().getLastNameScore());
       // Nested target's unmatched field stays at the JLS default.
-      assertEquals(null, tgt.getScores().getMatchingStatus());
+      assertNull(tgt.getScores().getMatchingStatus());
     }
 
     @Test
@@ -1084,8 +1084,8 @@ class MigrationRegressionTest {
       // count and active left null
       final var tgt = assertDoesNotThrow(() -> mapper.forward(src));
       assertEquals("alice", tgt.getName());
-      assertEquals(null, tgt.getCount());
-      assertEquals(null, tgt.getActive());
+      assertNull(tgt.getCount());
+      assertNull(tgt.getActive());
     }
   }
 
@@ -1156,7 +1156,7 @@ class MigrationRegressionTest {
       assertEquals("alice", tgt.getName());
       // The `processed` source value was discarded — target's getter-only field stays at the
       // primitive default. MapStruct would do the same.
-      assertEquals(false, tgt.isProcessed());
+      assertFalse(tgt.isProcessed());
     }
   }
 
@@ -1216,21 +1216,21 @@ class MigrationRegressionTest {
     @DisplayName("Mapper.forward(null) returns null (records)")
     void mapperForwardNullReturnsNullRecords() {
       final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class);
-      assertEquals(null, mapper.forward(null));
+      assertNull(mapper.forward(null));
     }
 
     @Test
     @DisplayName("Mapper.backward(null) returns null (records)")
     void mapperBackwardNullReturnsNullRecords() {
       final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class);
-      assertEquals(null, mapper.backward(null));
+      assertNull(mapper.backward(null));
     }
 
     @Test
     @DisplayName("Mapper.forward(null) returns null (beans)")
     void mapperForwardNullReturnsNullBeans() {
       final var mapper = Telescope.mapper(SrcBean.class, TgtBean.class, writeBeans(WriteHint.WriteStrategy.SETTERS));
-      assertEquals(null, mapper.forward(null));
+      assertNull(mapper.forward(null));
     }
 
     @Test
@@ -1247,14 +1247,14 @@ class MigrationRegressionTest {
     @DisplayName("ForwardMapper.forward(null) returns null")
     void forwardMapperNullReturnsNull() {
       final var mapper = ForwardMapper.create((SrcRec s) -> new TgtRec(s.id(), s.name()), SrcRec.class, TgtRec.class);
-      assertEquals(null, mapper.forward(null));
+      assertNull(mapper.forward(null));
     }
 
     @Test
     @DisplayName("ForwardMapper.read(null) returns null — read is documented as an alias of forward")
     void forwardMapperReadNullReturnsNull() {
       final var mapper = ForwardMapper.create((SrcRec s) -> new TgtRec(s.id(), s.name()), SrcRec.class, TgtRec.class);
-      assertEquals(null, mapper.read(null));
+      assertNull(mapper.read(null));
       // Non-null parity: read and forward must produce the same output, otherwise a future
       // refactor that breaks the alias contract slips through unnoticed.
       final var src = new SrcRec("o1", "alice");
@@ -1266,7 +1266,7 @@ class MigrationRegressionTest {
     void preForwardReturningNullPropagatesAsNull() {
       // A normalisation hook that maps a sentinel (empty id) to null must not crash the mapper.
       final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class).beforeForward(s -> s.id().isEmpty() ? null : s);
-      assertEquals(null, mapper.forward(new SrcRec("", "alice")));
+      assertNull(mapper.forward(new SrcRec("", "alice")));
     }
 
     @Test
@@ -1275,7 +1275,7 @@ class MigrationRegressionTest {
       // Symmetric pin for the backward path: without this, a future revert of the backward guard
       // goes unnoticed because no other test exercises preBackward returning null.
       final var mapper = Telescope.mapper(SrcRec.class, TgtRec.class).beforeBackward(t -> t.id().isEmpty() ? null : t);
-      assertEquals(null, mapper.backward(new TgtRec("", "alice")));
+      assertNull(mapper.backward(new TgtRec("", "alice")));
     }
   }
 
@@ -1616,8 +1616,8 @@ class MigrationRegressionTest {
       final var ex = assertThrows(IllegalStateException.class, () ->
         Telescope.mapper(HasMapByRegionSrc.class, HasEnumMapTgt.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
       );
-      assertEquals(true, ex.getMessage().contains("EnumMap"), "names the offending class");
-      assertEquals(true, ex.getMessage().contains("Mapping.via"), "cites the escape hatch");
+      assertTrue(ex.getMessage().contains("EnumMap"), "names the offending class");
+      assertTrue(ex.getMessage().contains("Mapping.via"), "cites the escape hatch");
     }
 
     // Unknown JDK collection class (SynchronousQueue is in java.base, has a no-arg ctor that
@@ -1660,7 +1660,7 @@ class MigrationRegressionTest {
       final var ex = assertThrows(IllegalStateException.class, () ->
         Telescope.mapper(HasListSrcForUnknown.class, HasSyncQueueTgt.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
       );
-      assertEquals(true, ex.getMessage().contains("shapes"), "shape mismatch diagnostic");
+      assertTrue(ex.getMessage().contains("shapes"), "shape mismatch diagnostic");
     }
 
     // User subclass WITHOUT a no-arg ctor — the negative side of userListSubclassToArrayListWorks.
@@ -1699,7 +1699,7 @@ class MigrationRegressionTest {
           writeBeans(WriteHint.WriteStrategy.SETTERS)
         )
       );
-      assertEquals(true, ex.getMessage().contains("NoCtorList"), "names the offending class");
+      assertTrue(ex.getMessage().contains("NoCtorList"), "names the offending class");
     }
   }
 
@@ -1815,11 +1815,11 @@ class MigrationRegressionTest {
       assertEquals("alice", tgt.getName());
       assertEquals(42, tgt.getQuantity());
       // Unmatched target fields take JLS defaults (null for reference, 0 for int, false for bool).
-      assertEquals(null, tgt.getCreatedBy());
-      assertEquals(null, tgt.getUpdatedBy());
-      assertEquals(false, tgt.isArchived());
+      assertNull(tgt.getCreatedBy());
+      assertNull(tgt.getUpdatedBy());
+      assertFalse(tgt.isArchived());
       assertEquals(0, tgt.getVersion());
-      assertEquals(null, tgt.getTenant());
+      assertNull(tgt.getTenant());
     }
 
     record SourceWithExtras(String id, String name, String extraNote, String anotherExtra) {}
@@ -1867,7 +1867,7 @@ class MigrationRegressionTest {
       );
       final var tgt = mapper.forward(new SmallDto("o1", "alice", 42));
       assertEquals("alice", tgt.getName());
-      assertEquals(null, tgt.getCreatedBy());
+      assertNull(tgt.getCreatedBy());
     }
 
     @Test
@@ -1888,7 +1888,7 @@ class MigrationRegressionTest {
       });
       final var tgt = mapper.forward(new SmallDto("o1", "alice", 42));
       assertEquals("system", tgt.getCreatedBy(), "afterForward hook fired");
-      assertEquals(null, tgt.getUpdatedBy(), "other unmatched fields still at JLS default");
+      assertNull(tgt.getUpdatedBy(), "other unmatched fields still at JLS default");
       assertEquals("alice", tgt.getName(), "matched field carried through");
     }
 
@@ -1965,7 +1965,7 @@ class MigrationRegressionTest {
       src.setCustomer(c);
       final var tgt = mapper.forward(src);
       assertEquals("alice@example.com", tgt.getCustomerEmail(), "telescope row fired");
-      assertEquals(null, tgt.getOtherField(), "unmatched target field at JLS default");
+      assertNull(tgt.getOtherField(), "unmatched target field at JLS default");
     }
 
     // Bean-source coverage — the existing lenient tests use record sources. The leniency gate
@@ -2049,7 +2049,7 @@ class MigrationRegressionTest {
       final var tgt = mapper.forward(src);
       assertEquals("o1", tgt.getId(), "matched field carried through");
       assertEquals("alice", tgt.getName(), "matched field carried through");
-      assertEquals(null, tgt.getNewField(), "unmatched target field at JLS default");
+      assertNull(tgt.getNewField(), "unmatched target field at JLS default");
     }
   }
 
@@ -2079,7 +2079,7 @@ class MigrationRegressionTest {
       final var outer = new NullIntermediateOuter();
       // outer.inner left null on purpose
       final var dto = assertDoesNotThrow(() -> mapper.forward(outer));
-      assertEquals(null, dto.getInnerName());
+      assertNull(dto.getInnerName());
     }
 
     @Test

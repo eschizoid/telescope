@@ -4,6 +4,7 @@ import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -88,7 +89,7 @@ class MapperPostHooksTest {
       final Mapper<Entity, Dto> withHook = base.afterForward(d -> new Dto(d.id(), d.fullName(), 99L));
 
       assertNotSame(base, withHook);
-      assertEquals(null, base.forward(new Entity("e-1", "A", null, null)).updatedAtMillis());
+      assertNull(base.forward(new Entity("e-1", "A", null, null)).updatedAtMillis());
       assertEquals(99L, withHook.forward(new Entity("e-1", "A", null, null)).updatedAtMillis());
     }
 

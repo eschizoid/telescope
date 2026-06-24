@@ -312,7 +312,7 @@ class SealedEffectsBranchTest {
     void isFailedBothCases() {
       final var app = EitherK.<String>forLeft();
       assertTrue(app.isFailed(EitherK.box(Either.<String, Integer>left("bad"))));
-      assertFalse(app.isFailed(EitherK.box(Either.<String, Integer>right(1))));
+      assertFalse(app.isFailed(EitherK.box(Either.right(1))));
     }
 
     @Test

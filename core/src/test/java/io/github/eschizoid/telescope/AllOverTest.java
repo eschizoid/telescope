@@ -185,7 +185,7 @@ class AllOverTest {
     @DisplayName("null direct value short-circuits to identity — source returned unchanged")
     void directNullIsIdentity() {
       final var company = sample();
-      final var out = Telescope.all(Edit.<Company, String>overIfPresent(DEPT_NAMES, null)).apply(company);
+      final var out = Telescope.all(Edit.overIfPresent(DEPT_NAMES, null)).apply(company);
       assertSame(company, out);
     }
 
@@ -236,7 +236,7 @@ class AllOverTest {
     void sparsePatchCompositionLandsOnlyPresentSlots() {
       final var company = sample();
       final var out = Telescope.all(
-        Edit.<Company, String>overIfPresent(DEPT_NAMES, null),
+        Edit.overIfPresent(DEPT_NAMES, null),
         Edit.overIfPresent(TEAM_NAMES, "Renamed"),
         Edit.<Company, String, String>overIfPresent(USER_NAMES, null, String::toUpperCase),
         Edit.mapIfPresent(EMAILS, "!", (bang, email) -> email + bang)

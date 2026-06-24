@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
@@ -204,8 +205,8 @@ class MapperIntoTest {
 
       final var ex = assertThrows(UnsupportedOperationException.class, () -> mapper.into(existing, new DtoRec("new")));
 
-      assertEquals(true, ex.getMessage().contains("records are immutable"), "message explains the constraint");
-      assertEquals(true, ex.getMessage().contains("Mapper.forward"), "message suggests the alternative");
+      assertTrue(ex.getMessage().contains("records are immutable"), "message explains the constraint");
+      assertTrue(ex.getMessage().contains("Mapper.forward"), "message suggests the alternative");
     }
   }
 

@@ -99,8 +99,8 @@ class MappingWhenTest {
       final var lowPrio = new Order("ORD-1", new Address("Chicago", "US"), 1);
       final var highPrio = new Order("ORD-2", new Address("Chicago", "US"), 99);
 
-      assertEquals(false, mapper.forward(lowPrio).expediteFlag(), "low priority → stamp skipped");
-      assertEquals(true, mapper.forward(highPrio).expediteFlag(), "high priority → stamped");
+      assertFalse(mapper.forward(lowPrio).expediteFlag(), "low priority → stamp skipped");
+      assertTrue(mapper.forward(highPrio).expediteFlag(), "high priority → stamped");
     }
   }
 
@@ -385,13 +385,13 @@ class MappingWhenTest {
 
       final var ex = assertThrows(IllegalStateException.class, () -> mapper.forward(new Src(null)));
       final var msg = ex.getMessage();
-      assertEquals(true, msg.contains("Mapping.when"), "message names the construct");
-      assertEquals(true, msg.contains("Constant"), "message names the inner kind");
+      assertTrue(msg.contains("Mapping.when"), "message names the construct");
+      assertTrue(msg.contains("Constant"), "message names the inner kind");
       // The failure class name (NullPointerException) MUST appear even when the predicate's NPE
       // carries a null message — otherwise the user sees "Predicate failure: null" and learns
       // nothing actionable. This pins the decoration improvement.
-      assertEquals(true, msg.contains("NullPointerException"), "message names the failure class");
-      assertEquals(true, ex.getCause() instanceof NullPointerException, "original predicate cause preserved");
+      assertTrue(msg.contains("NullPointerException"), "message names the failure class");
+      assertTrue(ex.getCause() instanceof NullPointerException, "original predicate cause preserved");
     }
   }
 
@@ -407,7 +407,7 @@ class MappingWhenTest {
     @DisplayName("Conditional.sourceClass / targetClass / sourceField / targetField all null")
     void pinsTopLevelOnly() {
       final var nameTel = Telescope.of(Dst.class).field(Dst::name);
-      final var conditional = when((java.util.function.Predicate<Src>) s -> true, to(Src::name, nameTel));
+      final var conditional = when(s -> true, to(Src::name, nameTel));
 
       // Pin the documented contract — every supported inner row is telescope-based, so the
       // Conditional always pins to the outer (topSource, topTarget) pair via null-class routing.
@@ -435,9 +435,7 @@ class MappingWhenTest {
     @Test
     @DisplayName("field-iso row (plain to(srcAcc, tgtAcc)) rejected with clear error pointing at toOrElse")
     void rejectsFieldIsoInner() {
-      final var ex = assertThrows(IllegalArgumentException.class, () ->
-        when((java.util.function.Predicate<Src>) s -> true, to(Src::name, Dst::name))
-      );
+      final var ex = assertThrows(IllegalArgumentException.class, () -> when(s -> true, to(Src::name, Dst::name)));
       final var msg = ex.getMessage();
       assertTrue(msg.contains("toOrElse"), "error suggests the field-level alternative");
       assertTrue(msg.contains("telescope-based"), "error names the supported shape");
@@ -453,7 +451,7 @@ class MappingWhenTest {
     @DisplayName("forward-only row rejected with hint pointing at fold-the-predicate-into-fn")
     void rejectsForwardOnlyTransformTo() {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
-        when((java.util.function.Predicate<Src>) s -> true, Mapping.toOneWay(Src::name, Dst::name, String::toUpperCase))
+        when(s -> true, Mapping.toOneWay(Src::name, Dst::name, String::toUpperCase))
       );
       final var msg = ex.getMessage();
       assertTrue(msg.contains("Mapping.toOneWay"), "error names the forward-only construct");

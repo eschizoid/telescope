@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -69,7 +70,7 @@ class MappingIntermediateAllocationTest {
       assertEquals("Brooklyn", out.address().city());
       // Primitive default; default for non-claimed reference fields is null.
       assertEquals(0, out.age());
-      assertEquals(null, out.address().zip());
+      assertNull(out.address().zip());
     }
   }
 
@@ -267,7 +268,7 @@ class MappingIntermediateAllocationTest {
       final var out = mapper.forward(new Slim("Brooklyn"));
       assertNotNull(out.getAddress(), "bean intermediate AddressBean should be allocated from its no-arg ctor");
       assertEquals("Brooklyn", out.getAddress().getCity());
-      assertEquals(null, out.getAddress().getZip());
+      assertNull(out.getAddress().getZip());
     }
   }
 }

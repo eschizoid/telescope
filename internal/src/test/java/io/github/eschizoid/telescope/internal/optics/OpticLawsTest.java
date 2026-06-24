@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal.optics;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -95,7 +96,7 @@ class OpticLawsTest {
       // Lens#getOption / Lens#getAll. Drain via iterator to preserve the null element explicitly.
       final var it = nullableLens.getAll(ALICE).iterator();
       assertTrue(it.hasNext());
-      assertEquals(null, it.next());
+      assertNull(it.next());
     }
   }
 
