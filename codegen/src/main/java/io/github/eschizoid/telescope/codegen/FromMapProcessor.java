@@ -170,17 +170,41 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       case INT -> new Coercion.Parse("intValue", "Integer.parseInt", "0");
       case LONG -> new Coercion.Parse("longValue", "Long.parseLong", "0L");
       case DOUBLE -> new Coercion.Parse("doubleValue", "Double.parseDouble", "0.0d");
+      case FLOAT -> new Coercion.Parse("floatValue", "Float.parseFloat", "0.0f");
+      case SHORT -> new Coercion.Parse("shortValue", "Short.parseShort", "(short) 0");
+      case BYTE -> new Coercion.Parse("byteValue", "Byte.parseByte", "(byte) 0");
+      case BOOLEAN -> new Coercion.BoolParse("false");
+      case CHAR -> new Coercion.CharParse("'\\0'");
       case DECLARED -> declaredCoercion((DeclaredType) type);
       default -> new Coercion.Cast(boxedType(type));
     };
   }
 
   /**
-   * Coercion for a declared (reference) type: enum, nested @FromMap, List/Set/Map container, else a
-   * cast.
+   * Coercion for a boxed wrapper field (parse like its primitive, but null stays null), or null.
+   */
+  private Coercion boxedWrapperCoercion(final String fqn) {
+    return switch (fqn) {
+      case "java.lang.Integer" -> new Coercion.Parse("intValue", "Integer.parseInt", "null");
+      case "java.lang.Long" -> new Coercion.Parse("longValue", "Long.parseLong", "null");
+      case "java.lang.Double" -> new Coercion.Parse("doubleValue", "Double.parseDouble", "null");
+      case "java.lang.Float" -> new Coercion.Parse("floatValue", "Float.parseFloat", "null");
+      case "java.lang.Short" -> new Coercion.Parse("shortValue", "Short.parseShort", "null");
+      case "java.lang.Byte" -> new Coercion.Parse("byteValue", "Byte.parseByte", "null");
+      case "java.lang.Boolean" -> new Coercion.BoolParse("null");
+      case "java.lang.Character" -> new Coercion.CharParse("null");
+      default -> null;
+    };
+  }
+
+  /**
+   * Coercion for a declared (reference) type: boxed wrapper, enum, nested @FromMap, List/Set/Map
+   * container, else a cast.
    */
   private Coercion declaredCoercion(final DeclaredType type) {
     final var element = type.asElement();
+    final var boxed = boxedWrapperCoercion(boxedType(type));
+    if (boxed != null) return boxed;
     if (element.getKind() == ElementKind.ENUM) return new Coercion.EnumOf(boxedType(type));
     if (hasAnnotation(element, ANNOTATION)) return new Coercion.Nested(boxedType(type) + "FromMap");
     final var listElement = singleArgOf(type, "java.util.List");

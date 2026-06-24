@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.frommap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -57,6 +58,44 @@ class FromMapCodegenTest {
     assertEquals(0, team.size()); // absent int → 0
     assertNull(team.role()); // absent reference → null
     assertTrue(team.sites().isEmpty()); // absent List → empty
+  }
+
+  @Test
+  @DisplayName("every primitive parses from a String; boxed wrappers parse too; absent keys default")
+  void scalarsParseFromStrings() {
+    final var full = FmScalarsFromMap.fromMap(
+      Map.of(
+        "active",
+        "true",
+        "ratio",
+        "1.5",
+        "small",
+        "7",
+        "tiny",
+        "3",
+        "letter",
+        "X",
+        "boxedInt",
+        "42",
+        "boxedBool",
+        "false"
+      )
+    );
+    assertTrue(full.active());
+    assertEquals(1.5f, full.ratio());
+    assertEquals((short) 7, full.small());
+    assertEquals((byte) 3, full.tiny());
+    assertEquals('X', full.letter());
+    assertEquals(Integer.valueOf(42), full.boxedInt());
+    assertEquals(Boolean.FALSE, full.boxedBool());
+
+    // Absent keys: primitives take JLS defaults (no NPE on unbox), boxed wrappers stay null.
+    final var bare = FmScalarsFromMap.fromMap(Map.of());
+    assertFalse(bare.active());
+    assertEquals(0.0f, bare.ratio());
+    assertEquals('\0', bare.letter());
+    assertNull(bare.boxedInt());
+    assertNull(bare.boxedBool());
   }
 
   @Test

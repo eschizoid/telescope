@@ -14,6 +14,8 @@ sealed interface Coercion
   permits
     Coercion.Cast,
     Coercion.Parse,
+    Coercion.BoolParse,
+    Coercion.CharParse,
     Coercion.EnumOf,
     Coercion.Nested,
     Coercion.Listed,
@@ -70,6 +72,60 @@ sealed interface Coercion
         "(String.valueOf(" +
         raw +
         "))"
+      );
+    }
+  }
+
+  /**
+   * {@code boolean}/{@code Boolean} target: take an existing {@code Boolean} directly, else parse a
+   * {@code String}, else the default ({@code false} for the primitive, {@code null} for the
+   * wrapper).
+   */
+  record BoolParse(String defaultLiteral) implements Coercion {
+    @Override
+    public String emit(final String raw, final int depth) {
+      final var v = "__b" + depth;
+      return (
+        raw +
+        " instanceof Boolean " +
+        v +
+        " ? " +
+        v +
+        " : " +
+        raw +
+        " == null ? " +
+        defaultLiteral +
+        " : Boolean.parseBoolean(String.valueOf(" +
+        raw +
+        "))"
+      );
+    }
+  }
+
+  /**
+   * {@code char}/{@code Character} target: take an existing {@code Character} directly, else the
+   * first char of the {@code String} form, else the default ({@code '\0'} primitive / {@code null}
+   * wrapper).
+   */
+  record CharParse(String defaultLiteral) implements Coercion {
+    @Override
+    public String emit(final String raw, final int depth) {
+      final var v = "__c" + depth;
+      return (
+        raw +
+        " instanceof Character " +
+        v +
+        " ? " +
+        v +
+        " : " +
+        raw +
+        " == null || String.valueOf(" +
+        raw +
+        ").isEmpty() ? " +
+        defaultLiteral +
+        " : String.valueOf(" +
+        raw +
+        ").charAt(0)"
       );
     }
   }
