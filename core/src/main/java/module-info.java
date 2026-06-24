@@ -70,4 +70,8 @@ module io.github.eschizoid.telescope {
   exports io.github.eschizoid.telescope.conversion;
   exports io.github.eschizoid.telescope.effects;
   exports io.github.eschizoid.telescope.mapping;
+
+  // Carrier-form @Bridge converters register themselves through this SPI so mapperForward can
+  // discover them by (source, target) regardless of the package they were emitted in.
+  uses io.github.eschizoid.telescope.conversion.BridgeProvider;
 }

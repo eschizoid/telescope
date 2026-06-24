@@ -1,0 +1,5 @@
+io.github.eschizoid.telescope.conversion.RegistryFixtures$Provider
+io.github.eschizoid.telescope.conversion.RegistryFixtures$NullBridgeProvider
+io.github.eschizoid.telescope.conversion.RegistryFixtures$DupProviderA
+io.github.eschizoid.telescope.conversion.RegistryFixtures$DupProviderB
+io.github.eschizoid.telescope.conversion.RegistryFixtures$RenamingProvider

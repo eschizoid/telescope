@@ -4346,6 +4346,89 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("carrier form: emits a BridgeProvider + META-INF/services so it's discoverable by (source, target)")
+    void carrierEmitsServiceLoaderProvider() {
+      // A carrier bridge lives in the carrier's package, which the source-keyed runtime probe can't
+      // reach. The processor registers it as a ServiceLoader provider so mapperForward discovers it
+      // by (source, target). This pins the provider class + the services registration.
+      final var compilation = compile(
+        source("modela.UserEntity", "package modela; public record UserEntity(String id, String email) {}"),
+        source("modelb.UserDto", "package modelb; public record UserDto(String id, String email) {}"),
+        source(
+          "carrier.IdentificationBridgeDef",
+          """
+          package carrier;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(source = modela.UserEntity.class, target = modelb.UserDto.class)
+          public class IdentificationBridgeDef {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "carrier form should compile; saw " + compilation.errorMessages());
+      final var provider = compilation.generated().get("carrier.IdentificationBridgeDefBridgeProvider");
+      assertNotNull(
+        provider,
+        () -> "expected a carrier.IdentificationBridgeDefBridgeProvider; saw " + compilation.generated().keySet()
+      );
+      assertTrue(
+        provider.contains("implements BridgeProvider"),
+        () -> "provider must implement BridgeProvider; saw:\n" + provider
+      );
+      assertTrue(provider.contains("return UserEntity.class;"), () -> "provider sourceType; saw:\n" + provider);
+      assertTrue(provider.contains("return UserDto.class;"), () -> "provider targetType; saw:\n" + provider);
+      assertTrue(
+        provider.contains("return IdentificationBridgeDefBridge.BRIDGE;"),
+        () -> "provider must hand back the bridge constant; saw:\n" + provider
+      );
+
+      final var services = compilation
+        .resources()
+        .get("META-INF/services/io.github.eschizoid.telescope.conversion.BridgeProvider");
+      assertNotNull(
+        services,
+        () -> "expected a BridgeProvider services file; saw resources " + compilation.resources().keySet()
+      );
+      assertTrue(
+        services.contains("carrier.IdentificationBridgeDefBridgeProvider"),
+        () -> "services file must list the provider; saw:\n" + services
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "model-anchored form emits no provider/services — it's already name-discoverable in the source's package"
+    )
+    void modelAnchoredEmitsNoProvider() {
+      final var compilation = compile(
+        source("demo.AnchoredDto", "package demo; public record AnchoredDto(String id) {}"),
+        source(
+          "demo.Anchored",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.AnchoredDto.class)
+          public record Anchored(String id) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "model-anchored form should compile; saw " + compilation.errorMessages());
+      assertTrue(
+        compilation
+          .generated()
+          .keySet()
+          .stream()
+          .noneMatch(n -> n.endsWith("Provider")),
+        () -> "model-anchored form must not emit a provider; saw " + compilation.generated().keySet()
+      );
+      assertTrue(
+        compilation.resources().isEmpty(),
+        () -> "model-anchored form must not register a services file; saw " + compilation.resources().keySet()
+      );
+    }
+
+    @Test
     @DisplayName("adopter shape: carrier + lenient + sibling @Rename + a raw collection-subtype field, all together")
     void carrierLenientRenameWithRawCollectionField() {
       // Faithful reproduction of the reported scenario: a carrier @Bridge with lenient = true and a
