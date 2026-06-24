@@ -68,6 +68,15 @@ sealed interface Coercion
     return dot < 0 ? fqn : fqn.substring(dot + 1);
   }
 
+  /**
+   * A generated local/pattern variable name, scoped by {@code depth} so nested containers don't
+   * shadow each other. The {@code __} prefix (avoiding any user identifier) lives here, in one
+   * place, rather than inlined per permit.
+   */
+  static String gensym(final String tag, final int depth) {
+    return "__" + tag + depth;
+  }
+
   /** Import set for a type — empty for {@code java.lang} (auto-imported), else the single FQN. */
   static Set<String> importing(final String fqn) {
     return fqn.startsWith("java.lang.") ? Set.of() : Set.of(fqn);
@@ -78,6 +87,40 @@ sealed interface Coercion
     final var all = new HashSet<>(own);
     all.addAll(child.imports());
     return all;
+  }
+
+  /**
+   * A type rendered to its simple-name source form ({@code Map<String, Address>}) together with the
+   * FQNs that form needs imported. Kept as one value so the rendered string and its imports can't
+   * drift apart — the container coercions thread it straight through to their type witnesses.
+   */
+  record RenderedType(String source, Set<String> imports) {}
+
+  /**
+   * How a JDK value type is rebuilt from its {@code String} form: a named static factory ({@code
+   * Instant.parse}, {@code UUID.fromString}, …) or the {@code String} constructor ({@code new
+   * BigDecimal(...)}). A sealed pair so {@link StringFactory} dispatches on the type, not a magic
+   * string.
+   */
+  sealed interface Factory permits Factory.Static, Factory.Ctor {
+    /** The build expression for {@code type} from the {@code String}-form {@code arg}. */
+    String build(String type, String arg);
+
+    /** Build via {@code Type.method(String)}. */
+    record Static(String method) implements Factory {
+      @Override
+      public String build(final String type, final String arg) {
+        return type + "." + method + "(" + arg + ")";
+      }
+    }
+
+    /** Build via {@code new Type(String)}. */
+    record Ctor() implements Factory {
+      @Override
+      public String build(final String type, final String arg) {
+        return "new " + type + "(" + arg + ")";
+      }
+    }
   }
 
   /**
@@ -104,7 +147,7 @@ sealed interface Coercion
   record Parse(String narrowMethod, String parseMethod, String defaultLiteral) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      final var v = "__n" + depth;
+      final var v = gensym("n", depth);
       return (
         raw +
         " instanceof Number " +
@@ -134,7 +177,7 @@ sealed interface Coercion
   record BoolParse(String defaultLiteral) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      final var v = "__b" + depth;
+      final var v = gensym("b", depth);
       return (
         raw +
         " instanceof Boolean " +
@@ -159,12 +202,13 @@ sealed interface Coercion
   record CharParse(String defaultLiteral) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
+      final var v = gensym("c", depth);
       return (
         raw +
-        " instanceof Character __c" +
-        depth +
-        " ? __c" +
-        depth +
+        " instanceof Character " +
+        v +
+        " ? " +
+        v +
         " : " +
         raw +
         " == null || String.valueOf(" +
@@ -186,7 +230,7 @@ sealed interface Coercion
     @Override
     public String emit(final String raw, final int depth) {
       final var type = simple(fqn);
-      final var v = "__e" + depth;
+      final var v = gensym("e", depth);
       return (
         raw +
         " instanceof " +
@@ -216,16 +260,12 @@ sealed interface Coercion
    * UUID.fromString}, {@code new BigDecimal}, …): take an existing instance directly, else build it
    * from the value's {@code String} form — the shape these arrive in from an untyped map.
    */
-  record StringFactory(String fqn, String factory) implements Coercion {
+  record StringFactory(String fqn, Factory factory) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
       final var type = simple(fqn);
-      // factory is either a static method ("parse"/"fromString"/…) or "new" for a String
-      // constructor.
-      final var build = "new".equals(factory)
-        ? "new " + type + "(String.valueOf(" + raw + "))"
-        : type + "." + factory + "(String.valueOf(" + raw + "))";
-      final var v = "__sf" + depth;
+      final var build = factory.build(type, "String.valueOf(" + raw + ")");
+      final var v = gensym("sf", depth);
       return raw + " instanceof " + type + " " + v + " ? " + v + " : " + raw + " == null ? null : " + build;
     }
 
@@ -257,11 +297,11 @@ sealed interface Coercion
   }
 
   /** {@code List<E>} target: stream each element through the element coercion into a fresh list. */
-  record Listed(String elementType, Coercion element, Set<String> typeImports) implements Coercion {
+  record Listed(RenderedType elementType, Coercion element) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      final var list = "__l" + depth;
-      final var el = "__el" + depth;
+      final var list = gensym("l", depth);
+      final var el = gensym("el", depth);
       return (
         raw +
         " instanceof List<?> " +
@@ -273,7 +313,7 @@ sealed interface Coercion
         " -> " +
         element.emit(el, depth + 1) +
         ").collect(Collectors.toList()) : List.<" +
-        elementType +
+        elementType.source() +
         ">of()"
       );
     }
@@ -281,7 +321,7 @@ sealed interface Coercion
     @Override
     public Set<String> imports() {
       final var all = with(Set.of("java.util.List", "java.util.stream.Collectors"), element);
-      all.addAll(typeImports);
+      all.addAll(elementType.imports());
       return all;
     }
 
@@ -297,11 +337,11 @@ sealed interface Coercion
   }
 
   /** {@code Set<E>} target: stream each element through the element coercion into a fresh set. */
-  record Setted(String elementType, Coercion element, Set<String> typeImports) implements Coercion {
+  record Setted(RenderedType elementType, Coercion element) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      final var set = "__s" + depth;
-      final var el = "__el" + depth;
+      final var set = gensym("s", depth);
+      final var el = gensym("el", depth);
       return (
         raw +
         " instanceof Set<?> " +
@@ -313,7 +353,7 @@ sealed interface Coercion
         " -> " +
         element.emit(el, depth + 1) +
         ").collect(Collectors.toSet()) : Set.<" +
-        elementType +
+        elementType.source() +
         ">of()"
       );
     }
@@ -321,7 +361,7 @@ sealed interface Coercion
     @Override
     public Set<String> imports() {
       final var all = with(Set.of("java.util.Set", "java.util.stream.Collectors"), element);
-      all.addAll(typeImports);
+      all.addAll(elementType.imports());
       return all;
     }
 
@@ -367,19 +407,13 @@ sealed interface Coercion
    * put-accumulating collect (not {@code Collectors.toMap}) so a {@code null} value doesn't throw —
    * matching the lenient spirit of {@code fromMap}.
    */
-  record MapValues(
-    String keyType,
-    String valueType,
-    Coercion key,
-    Coercion value,
-    Set<String> typeImports
-  ) implements Coercion {
+  record MapValues(RenderedType keyType, RenderedType valueType, Coercion key, Coercion value) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      final var map = "__m" + depth;
-      final var acc = "__acc" + depth;
-      final var entry = "__et" + depth;
-      final var mapType = "Map<" + keyType + ", " + valueType + ">";
+      final var map = gensym("m", depth);
+      final var acc = gensym("acc", depth);
+      final var entry = gensym("et", depth);
+      final var mapType = "Map<" + keyType.source() + ", " + valueType.source() + ">";
       // Explicit <Map<K,V>> witness so the 3-arg collect types even when nested inside another
       // container (javac can't otherwise infer the accumulator's element types there).
       return (
@@ -401,9 +435,9 @@ sealed interface Coercion
         ", " +
         value.emit(entry + ".getValue()", depth + 1) +
         "), Map::putAll) : Map.<" +
-        keyType +
+        keyType.source() +
         ", " +
-        valueType +
+        valueType.source() +
         ">of()"
       );
     }
@@ -411,7 +445,8 @@ sealed interface Coercion
     @Override
     public Set<String> imports() {
       final var all = new HashSet<>(Set.of("java.util.Map", "java.util.LinkedHashMap"));
-      all.addAll(typeImports);
+      all.addAll(keyType.imports());
+      all.addAll(valueType.imports());
       all.addAll(key.imports());
       all.addAll(value.imports());
       return all;

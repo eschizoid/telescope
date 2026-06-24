@@ -39,24 +39,26 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     "java.lang.CharSequence"
   );
 
-  // JDK value types that arrive as a String in an untyped map, mapped to the String factory that
-  // rebuilds them — a static method name, or "new" for a String constructor.
-  private static final Map<String, String> JDK_STRING_FACTORIES = Map.ofEntries(
-    Map.entry("java.time.Instant", "parse"),
-    Map.entry("java.time.LocalDate", "parse"),
-    Map.entry("java.time.LocalDateTime", "parse"),
-    Map.entry("java.time.LocalTime", "parse"),
-    Map.entry("java.time.OffsetDateTime", "parse"),
-    Map.entry("java.time.ZonedDateTime", "parse"),
-    Map.entry("java.time.Duration", "parse"),
-    Map.entry("java.time.Period", "parse"),
-    Map.entry("java.util.UUID", "fromString"),
-    Map.entry("java.math.BigDecimal", "new"),
-    Map.entry("java.math.BigInteger", "new"),
-    Map.entry("java.net.URI", "create"),
-    Map.entry("java.util.Currency", "getInstance"),
-    Map.entry("java.util.Locale", "forLanguageTag"),
-    Map.entry("java.util.regex.Pattern", "compile")
+  // JDK value types that arrive as a String in an untyped map, mapped to the factory that rebuilds
+  // them from that String — a named static method, or the String constructor.
+  private static final Coercion.Factory PARSE = new Coercion.Factory.Static("parse");
+  private static final Coercion.Factory CTOR = new Coercion.Factory.Ctor();
+  private static final Map<String, Coercion.Factory> JDK_STRING_FACTORIES = Map.ofEntries(
+    Map.entry("java.time.Instant", PARSE),
+    Map.entry("java.time.LocalDate", PARSE),
+    Map.entry("java.time.LocalDateTime", PARSE),
+    Map.entry("java.time.LocalTime", PARSE),
+    Map.entry("java.time.OffsetDateTime", PARSE),
+    Map.entry("java.time.ZonedDateTime", PARSE),
+    Map.entry("java.time.Duration", PARSE),
+    Map.entry("java.time.Period", PARSE),
+    Map.entry("java.util.UUID", new Coercion.Factory.Static("fromString")),
+    Map.entry("java.math.BigDecimal", CTOR),
+    Map.entry("java.math.BigInteger", CTOR),
+    Map.entry("java.net.URI", new Coercion.Factory.Static("create")),
+    Map.entry("java.util.Currency", new Coercion.Factory.Static("getInstance")),
+    Map.entry("java.util.Locale", new Coercion.Factory.Static("forLanguageTag")),
+    Map.entry("java.util.regex.Pattern", new Coercion.Factory.Static("compile"))
   );
 
   // @FromMap targets carrying a Lombok trigger are deferred to processingOver(): in round 1 Lombok
@@ -287,27 +289,21 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     if (hasAnnotation(element, ANNOTATION)) return new Coercion.Nested(boxedType(type) + "FromMap");
     final var listElement = singleArgOf(type, "java.util.List");
     if (listElement != null) {
-      final var imports = new HashSet<String>();
-      return new Coercion.Listed(renderType(listElement, imports), resolveCoercion(listElement), imports);
+      return new Coercion.Listed(renderType(listElement), resolveCoercion(listElement));
     }
     final var setElement = singleArgOf(type, "java.util.Set");
     if (setElement != null) {
-      final var imports = new HashSet<String>();
-      return new Coercion.Setted(renderType(setElement, imports), resolveCoercion(setElement), imports);
+      return new Coercion.Setted(renderType(setElement), resolveCoercion(setElement));
     }
     final var optElement = singleArgOf(type, "java.util.Optional");
     if (optElement != null) return new Coercion.OptionalOf(resolveCoercion(optElement));
     if (isErasure(type, "java.util.Map") && type.getTypeArguments().size() == 2) {
       final var args = type.getTypeArguments();
-      final var imports = new HashSet<String>();
-      final var keyType = renderType(args.get(0), imports);
-      final var valueType = renderType(args.get(1), imports);
       return new Coercion.MapValues(
-        keyType,
-        valueType,
+        renderType(args.get(0)),
+        renderType(args.get(1)),
         resolveCoercion(args.get(0)),
-        resolveCoercion(args.get(1)),
-        imports
+        resolveCoercion(args.get(1))
       );
     }
     final var fqn = boxedType(type);
@@ -353,18 +349,24 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
    * Render a type as a simple-name source string ({@code Map<String, List<Address>>}), collecting
    * the FQNs to import. Used for the explicit type witnesses on the generated container collectors.
    */
-  private String renderType(final TypeMirror type, final Set<String> imports) {
-    if (type.getKind() != TypeKind.DECLARED) return Coercion.simple(boxedType(type));
+  private Coercion.RenderedType renderType(final TypeMirror type) {
+    if (type.getKind() != TypeKind.DECLARED) return new Coercion.RenderedType(
+      Coercion.simple(boxedType(type)),
+      Set.of()
+    );
     final var declared = (DeclaredType) type;
     final var raw = ((TypeElement) declared.asElement()).getQualifiedName().toString();
-    imports.addAll(Coercion.importing(raw));
+    final var imports = new HashSet<>(Coercion.importing(raw));
     final var args = declared.getTypeArguments();
-    if (args.isEmpty()) return Coercion.simple(raw);
-    final var rendered = args
-      .stream()
-      .map(a -> renderType(a, imports))
-      .collect(Collectors.joining(", "));
-    return Coercion.simple(raw) + "<" + rendered + ">";
+    if (args.isEmpty()) return new Coercion.RenderedType(Coercion.simple(raw), imports);
+    final var rendered = new StringBuilder();
+    for (final var arg : args) {
+      final var part = renderType(arg);
+      if (rendered.length() > 0) rendered.append(", ");
+      rendered.append(part.source());
+      imports.addAll(part.imports());
+    }
+    return new Coercion.RenderedType(Coercion.simple(raw) + "<" + rendered + ">", imports);
   }
 
   /**

@@ -1636,6 +1636,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
 
     final var imports = new TreeSet<>(importsFor(fieldPlans, sourceFields, targetFields, renames));
+    imports.add("io.github.eschizoid.telescope.Telescope");
     imports.add("io.github.eschizoid.telescope.conversion.BridgeFn");
     writeClass(
       qualifiedBridge,
@@ -1864,6 +1865,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       qualifiedBridge,
       bridgeName,
       Set.of(
+        "io.github.eschizoid.telescope.Telescope",
         "io.github.eschizoid.telescope.conversion.BridgeFn",
         "io.github.eschizoid.telescope.conversion.Match",
         "java.util.function.Function"
