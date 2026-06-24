@@ -19,11 +19,10 @@ import java.lang.annotation.Target;
  * image), the generated form embeds the field names at compile time and uses no reflection — it is
  * native-image clean by construction.
  *
- * <p>By convention the map key for each field is the field name, and the value is coerced to the
- * field's type by the standard rules: {@code String} as-is, {@code String}/{@code Number} to a
- * primitive, a {@code String} enum name to the enum, a nested {@code Map} to a nested
- * {@code @FromMap} type, and a {@code List} element-mapped. Override a key or supply a custom
- * converter with {@link Extract}.
+ * <p>The map key for each field is the field name, and the value is coerced to the field's type by
+ * the standard rules: {@code String} as-is, {@code String}/{@code Number} to a primitive, a {@code
+ * String} enum name to the enum, a nested {@code Map} to a nested {@code @FromMap} type, and {@code
+ * List}/{@code Set}/{@code Map} element-mapped. An absent key takes the field's JLS default.
  *
  * <pre>{@code
  * @FromMap
