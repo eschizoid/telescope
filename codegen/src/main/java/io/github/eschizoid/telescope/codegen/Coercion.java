@@ -20,7 +20,8 @@ sealed interface Coercion
     Coercion.Nested,
     Coercion.Listed,
     Coercion.Setted,
-    Coercion.MapValues
+    Coercion.MapValues,
+    Coercion.OptionalOf
 {
   /**
    * Emit a Java expression converting {@code raw} (an {@code Object}-typed expression) to the field
@@ -225,11 +226,32 @@ sealed interface Coercion
     }
   }
 
-  /** {@code Map<K, V>} target: coerce each value through the value coercion, preserving keys. */
-  record MapValues(String keyType, Coercion value) implements Coercion {
+  /**
+   * {@code Optional<E>} target: wrap the (null-coalescing) element coercion in {@code
+   * Optional.ofNullable}.
+   */
+  record OptionalOf(Coercion element) implements Coercion {
+    @Override
+    public String emit(final String raw, final int depth) {
+      return "java.util.Optional.ofNullable(" + element.emit(raw, depth) + ")";
+    }
+
+    @Override
+    public boolean unchecked() {
+      return element.unchecked();
+    }
+  }
+
+  /**
+   * {@code Map<K, V>} target: coerce both key and value through their coercions into a fresh {@code
+   * LinkedHashMap}. Uses a put-accumulating collect (not {@code Collectors.toMap}) so a {@code
+   * null} value doesn't throw — matching the lenient spirit of {@code fromMap}.
+   */
+  record MapValues(Coercion key, Coercion value) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
       final var map = "__m" + depth;
+      final var acc = "__acc" + depth;
       final var entry = "__et" + depth;
       return (
         raw +
@@ -237,17 +259,17 @@ sealed interface Coercion
         map +
         " ? " +
         map +
-        ".entrySet().stream().collect(java.util.stream.Collectors.toMap(" +
+        ".entrySet().stream().collect(java.util.LinkedHashMap::new, (" +
+        acc +
+        ", " +
         entry +
-        " -> (" +
-        keyType +
-        ") " +
-        entry +
-        ".getKey(), " +
-        entry +
-        " -> " +
+        ") -> " +
+        acc +
+        ".put(" +
+        key.emit(entry + ".getKey()", depth + 1) +
+        ", " +
         value.emit(entry + ".getValue()", depth + 1) +
-        ")) : java.util.Map.of()"
+        "), java.util.LinkedHashMap::putAll) : java.util.Map.of()"
       );
     }
 

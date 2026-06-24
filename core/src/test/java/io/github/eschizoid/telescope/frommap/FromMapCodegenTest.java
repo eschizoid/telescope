@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -96,6 +97,31 @@ class FromMapCodegenTest {
     assertEquals('\0', bare.letter());
     assertNull(bare.boxedInt());
     assertNull(bare.boxedBool());
+  }
+
+  @Test
+  @DisplayName("Optional field wraps the coerced element; Map coerces non-String keys")
+  void optionalAndMapKeyCoercions() {
+    final var present = FmExtrasFromMap.fromMap(
+      Map.of("maybeHq", Map.of("city", "NYC", "zip", "10001"), "byCode", Map.of(1, "a"), "notes", Map.of("k", "v"))
+    );
+    assertEquals(Optional.of(new FmAddress("NYC", "10001")), present.maybeHq());
+    assertEquals("a", present.byCode().get(1)); // Integer key coerced through the key coercion
+    assertEquals("v", present.notes().get("k"));
+
+    final var absent = FmExtrasFromMap.fromMap(Map.of());
+    assertEquals(Optional.empty(), absent.maybeHq()); // absent Optional → empty, not null
+  }
+
+  @Test
+  @DisplayName("Map with a null value doesn't throw (lenient accumulation, not Collectors.toMap)")
+  void mapToleratesNullValue() {
+    final var notes = new java.util.HashMap<String, Object>();
+    notes.put("k", null);
+    final var source = new java.util.HashMap<String, Object>();
+    source.put("notes", notes);
+    final var result = FmExtrasFromMap.fromMap(source); // would NPE under Collectors.toMap
+    assertNull(result.notes().get("k"));
   }
 
   @Test

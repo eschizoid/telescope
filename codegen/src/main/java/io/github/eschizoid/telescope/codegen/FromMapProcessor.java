@@ -211,9 +211,11 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     if (listElement != null) return new Coercion.Listed(resolveCoercion(listElement));
     final var setElement = singleArgOf(type, "java.util.Set");
     if (setElement != null) return new Coercion.Setted(resolveCoercion(setElement));
+    final var optElement = singleArgOf(type, "java.util.Optional");
+    if (optElement != null) return new Coercion.OptionalOf(resolveCoercion(optElement));
     if (isErasure(type, "java.util.Map") && type.getTypeArguments().size() == 2) {
       final var args = type.getTypeArguments();
-      return new Coercion.MapValues(boxedType(args.get(0)), resolveCoercion(args.get(1)));
+      return new Coercion.MapValues(resolveCoercion(args.get(0)), resolveCoercion(args.get(1)));
     }
     return new Coercion.Cast(boxedType(type));
   }
