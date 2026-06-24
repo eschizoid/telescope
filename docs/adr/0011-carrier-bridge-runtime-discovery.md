@@ -17,7 +17,7 @@ Two features shipped independently and were never connected:
 The two disagree on both the name (`<Carrier>Bridge` vs `<Source>[To<Target>]Bridge`) and the package (carrier's vs
 source's). So a carrier-form bridge consumed via zero-row `mapperForward` was never found: the probe missed, and
 `mapperForward` — lenient by default — silently fell through to same-name mapping, dropping the carrier's `@Rename`s. A
-renamed field came back null with no error. Recorded as Bug 20 in the migration-feedback log.
+renamed field came back null with no error.
 
 A name-only fix (rename the carrier bridge to the long-form convention) doesn't work: the probe still does
 `Class.forName` in the source's package, and ADR-0007 forbids emitting the carrier bridge there. A source-package-keyed

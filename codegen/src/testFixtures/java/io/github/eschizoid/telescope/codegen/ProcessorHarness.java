@@ -13,6 +13,7 @@ import java.util.Map;
 import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
+import javax.tools.FileObject;
 import javax.tools.ForwardingJavaFileManager;
 import javax.tools.JavaCompiler;
 import javax.tools.JavaFileManager;
@@ -148,7 +149,7 @@ public final class ProcessorHarness {
       final Location location,
       final String className,
       final JavaFileObject.Kind kind,
-      final javax.tools.FileObject sibling
+      final FileObject sibling
     ) throws IOException {
       if (location == StandardLocation.SOURCE_OUTPUT && kind == JavaFileObject.Kind.SOURCE) {
         final var sourceFile = new CapturedSource(className);
@@ -161,11 +162,11 @@ public final class ProcessorHarness {
     // Capture resource outputs (e.g. META-INF/services registrations) in memory too, so they're
     // assertable and — critically — never escape to disk in the working tree under -proc:only.
     @Override
-    public javax.tools.FileObject getFileForOutput(
+    public FileObject getFileForOutput(
       final Location location,
       final String packageName,
       final String relativeName,
-      final javax.tools.FileObject sibling
+      final FileObject sibling
     ) {
       final var key = packageName.isEmpty() ? relativeName : packageName.replace('.', '/') + "/" + relativeName;
       final var resource = new CapturedResource(key);

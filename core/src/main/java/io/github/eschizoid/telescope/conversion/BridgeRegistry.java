@@ -29,8 +29,14 @@ public final class BridgeRegistry {
    *     than one provider claims the pair
    */
   public static Optional<Object> find(final Class<?> source, final Class<?> target, final ClassLoader loader) {
+    // A bootstrap/JDK source type reports a null loader; ServiceLoader.load(svc, null) would search
+    // only the bootstrap loader and miss the app-registered provider. Fall back to a loader that
+    // can
+    // see it. (Unreachable for a real carrier source — always an app-loaded record/POJO — but
+    // cheap.)
+    final var effective = loader != null ? loader : BridgeRegistry.class.getClassLoader();
     Object match = null;
-    for (final BridgeProvider provider : ServiceLoader.load(BridgeProvider.class, loader)) {
+    for (final BridgeProvider provider : ServiceLoader.load(BridgeProvider.class, effective)) {
       if (provider.sourceType() != source || provider.targetType() != target) continue;
       if (match != null) {
         throw new IllegalStateException(
