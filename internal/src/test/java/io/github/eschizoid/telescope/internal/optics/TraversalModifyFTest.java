@@ -67,7 +67,7 @@ class TraversalModifyFTest {
   @DisplayName("Validated accumulates every focus error (no short-circuit)")
   void validatedAccumulatesEveryFocusError() {
     final var result = ValidatedK.unbox(
-      EACH.modifyF(ValidatedK.<String>forError(), List.of(1, 2, 3, 4), a -> {
+      EACH.modifyF(ValidatedK.forError(), List.of(1, 2, 3, 4), a -> {
         final Validated<String, Integer> v = a % 2 == 0 ? Validated.valid(a) : Validated.invalid("odd: " + a);
         return ValidatedK.box(v);
       })

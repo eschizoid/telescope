@@ -867,7 +867,7 @@ class DeepMappingTest {
       final var src = new HasOptional("alice", Optional.empty());
       final var dst = mapper.forward(src);
       assertEquals("alice", dst.name());
-      assertEquals(null, dst.nickname());
+      assertNull(dst.nickname());
       assertEquals(src, mapper.backward(dst));
     }
 

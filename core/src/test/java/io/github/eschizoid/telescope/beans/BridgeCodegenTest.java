@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.beans;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
@@ -112,7 +113,7 @@ class BridgeCodegenTest {
 
     // backward: a non-null Boolean / Integer auto-unboxes back to the primitives.
     final var back = BridgePrimRecBridge.BRIDGE.set(src, new BridgePrimRecBO(false, 9, "m"));
-    assertEquals(false, back.locked());
+    assertFalse(back.locked());
     assertEquals(9, back.count());
     assertEquals("m", back.name());
   }
@@ -127,7 +128,7 @@ class BridgeCodegenTest {
     // both directions of the box/unbox conversion.
     final var src = new BridgePrimRec(true, 7, "n");
     final var back = BridgePrimRecBridge.BRIDGE.set(src, new BridgePrimRecBO(null, null, "m"));
-    assertEquals(false, back.locked());
+    assertFalse(back.locked());
     assertEquals(0, back.count());
     assertEquals("m", back.name());
   }
@@ -143,7 +144,7 @@ class BridgeCodegenTest {
     // fwdNullDefault wiring at runtime (the backward test pins bwdNullDefault).
     final var src = new BridgeWrapRec(null, null, "m");
     final var bo = BridgeWrapRecBridge.BRIDGE.read(src);
-    assertEquals(false, bo.flag());
+    assertFalse(bo.flag());
     assertEquals(0, bo.num());
     assertEquals("m", bo.name());
   }

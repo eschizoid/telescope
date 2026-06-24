@@ -2115,8 +2115,8 @@ class BridgeProcessorTest {
         bridge.contains("new demo.Audit(t.id(), null)"),
         () -> "expected backward zero-fill for forwardOnly transform slot, saw: " + bridge
       );
-      assertTrue(
-        !bridge.contains("__tx_createdAt.backward"),
+      assertFalse(
+        bridge.contains("__tx_createdAt.backward"),
         () -> "backward must NOT invoke BridgeFn.backward for forwardOnly transform, saw: " + bridge
       );
     }
@@ -2169,12 +2169,12 @@ class BridgeProcessorTest {
       assertNotNull(bridge, () -> "UserEntityBridge missing; saw " + compilation.generated().keySet());
 
       // NO __tx_ singleton — qualifier dispatch calls the static method directly.
-      assertTrue(
-        !bridge.contains("__tx_expiresAt"),
+      assertFalse(
+        bridge.contains("__tx_expiresAt"),
         () -> "qualifier dispatch must NOT emit __tx_ field; saw: " + bridge
       );
-      assertTrue(
-        !bridge.contains("new demo.DateHelpers()"),
+      assertFalse(
+        bridge.contains("new demo.DateHelpers()"),
         () -> "qualifier dispatch must NOT instantiate the helper class; saw: " + bridge
       );
 
@@ -2260,14 +2260,14 @@ class BridgeProcessorTest {
       assertTrue(bridge.contains("__tx_price.backward(t.price())"), bridge);
 
       // Qualifier dispatch: no __tx_createdAt, direct method call
-      assertTrue(
-        !bridge.contains("__tx_createdAt"),
+      assertFalse(
+        bridge.contains("__tx_createdAt"),
         () -> "qualifier field MUST NOT have a __tx_ singleton; saw: " + bridge
       );
       assertTrue(bridge.contains("demo.Helpers.asIso(s.createdAt())"), bridge);
       // Forward-only on qualifier slot — backward zero-fills the createdAt slot
-      assertTrue(
-        !bridge.contains("Helpers.asIso(t.createdAt())"),
+      assertFalse(
+        bridge.contains("Helpers.asIso(t.createdAt())"),
         () -> "backward must NOT call qualifier method; saw: " + bridge
       );
     }
@@ -3154,12 +3154,12 @@ class BridgeProcessorTest {
         bridge.contains("new demo.User(") && bridge.contains("partial.age()"),
         () -> "expected primitive int age always patched from partial, saw: " + bridge
       );
-      assertTrue(
-        !bridge.contains("partial.age() != null"),
+      assertFalse(
+        bridge.contains("partial.age() != null"),
         () -> "primitive int age must NOT be null-gated, saw: " + bridge
       );
-      assertTrue(
-        !bridge.contains("__pp_age"),
+      assertFalse(
+        bridge.contains("__pp_age"),
         () -> "primitive int age must NOT have a __pp_ local (no double-eval concern), saw: " + bridge
       );
     }
@@ -3288,8 +3288,8 @@ class BridgeProcessorTest {
       );
       // P5-SLD: case mismatch is a no-op (return base), NOT a backward type-switch.
       assertTrue(bridge.contains("return base; // P5-SLD"), () -> "expected no-op mismatch fallback, saw: " + bridge);
-      assertTrue(
-        !bridge.contains("return BACKWARD.apply(partial)"),
+      assertFalse(
+        bridge.contains("return BACKWARD.apply(partial)"),
         () -> "case mismatch must NOT silently type-switch via BACKWARD, saw: " + bridge
       );
     }
@@ -3439,8 +3439,8 @@ class BridgeProcessorTest {
         () -> "expected patch to read createdAt from base (forward-only), saw: " + bridge
       );
       // Must NOT invoke __tx_createdAt.backward(...) anywhere in patch body.
-      assertTrue(
-        !bridge.contains("__tx_createdAt.backward"),
+      assertFalse(
+        bridge.contains("__tx_createdAt.backward"),
         () -> "patch must NOT call BridgeFn.backward for forward-only transform, saw: " + bridge
       );
     }
@@ -3524,7 +3524,7 @@ class BridgeProcessorTest {
         bridge.contains("final var out = new demo.PB()") && bridge.contains("out.setId(s.getId())"),
         () -> "expected SETTERS shape on forward, saw: " + bridge
       );
-      assertTrue(!bridge.contains("demo.PB.builder()"), () -> "should not call builder() when SETTERS forced");
+      assertFalse(bridge.contains("demo.PB.builder()"), () -> "should not call builder() when SETTERS forced");
     }
 
     @Test

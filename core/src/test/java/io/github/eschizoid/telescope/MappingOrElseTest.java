@@ -107,7 +107,7 @@ class MappingOrElseTest {
       final var mapper = Telescope.mapper(
         Wide.class,
         Wide.class,
-        toOrElse(Wide::items, Wide::items, List.<Integer>of(99), List::isEmpty)
+        toOrElse(Wide::items, Wide::items, List.of(99), List::isEmpty)
       );
 
       assertEquals(List.of(99), mapper.forward(new Wide("US", List.of())).items());

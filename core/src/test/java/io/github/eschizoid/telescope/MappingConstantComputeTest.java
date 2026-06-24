@@ -5,6 +5,7 @@ import static io.github.eschizoid.telescope.mapping.Mapping.constant;
 import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
@@ -140,7 +141,7 @@ class MappingConstantComputeTest {
 
       final var t1 = mapper.forward(new Src("a", "A"));
       final var t2 = mapper.forward(new Src("a", "A"));
-      assertEquals(false, t1.traceId().equals(t2.traceId()), "UUID::randomUUID should produce distinct values");
+      assertFalse(t1.traceId().equals(t2.traceId()), "UUID::randomUUID should produce distinct values");
     }
 
     @Test

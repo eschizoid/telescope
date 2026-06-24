@@ -75,7 +75,7 @@ class RecordsTest {
     @DisplayName("with on a non-record source throws IllegalArgumentException")
     void withOnNonRecordThrows() {
       final var ex = assertThrows(IllegalArgumentException.class, () -> Records.with(new NotARecord(), "x", 1));
-      assertTrue(ex.getMessage().contains("Not a record"), () -> ex.getMessage());
+      assertTrue(ex.getMessage().contains("Not a record"), ex::getMessage);
     }
 
     @Test
@@ -83,7 +83,7 @@ class RecordsTest {
     void withUnknownComponentThrows() {
       final var src = new User("alice", 30);
       final var ex = assertThrows(IllegalArgumentException.class, () -> Records.with(src, "ghost", 1));
-      assertTrue(ex.getMessage().contains("ghost"), () -> ex.getMessage());
+      assertTrue(ex.getMessage().contains("ghost"), ex::getMessage);
     }
 
     @Test
@@ -213,7 +213,7 @@ class RecordsTest {
       // info() is package-private; reach it via the public surface to keep the test through the
       // contract. componentNames is the simplest entry point that exercises info() directly.
       final var ex = assertThrows(IllegalArgumentException.class, () -> Records.componentNames(NotARecord.class));
-      assertTrue(ex.getMessage().contains("Not a record"), () -> ex.getMessage());
+      assertTrue(ex.getMessage().contains("Not a record"), ex::getMessage);
     }
 
     @Test

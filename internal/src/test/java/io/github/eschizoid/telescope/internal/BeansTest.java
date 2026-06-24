@@ -704,7 +704,7 @@ class BeansTest {
       child.setName("only-on-child");
       assertEquals("inherited-id", Beans.readProperty(child, "id"));
       assertEquals("only-on-child", Beans.readProperty(child, "name"));
-      assertEquals("inherited-id", Beans.<ChildBean>getter(ChildBean.class, "id").get(child));
+      assertEquals("inherited-id", Beans.getter(ChildBean.class, "id").get(child));
     }
   }
 
@@ -764,7 +764,7 @@ class BeansTest {
       assertEquals(7, pojo.getI());
       assertEquals(42L, pojo.getL());
       assertEquals(3.14, pojo.getD());
-      assertEquals(true, pojo.isB());
+      assertTrue(pojo.isB());
     }
   }
 
@@ -995,7 +995,7 @@ class BeansTest {
       assertEquals(5, pojo.getI());
       assertEquals(99L, pojo.getL());
       assertEquals(2.5, pojo.getD());
-      assertEquals(true, pojo.isB());
+      assertTrue(pojo.isB());
     }
   }
 
@@ -1189,7 +1189,7 @@ class BeansTest {
     @Test
     @DisplayName("falls through to getClass() when the value is null")
     void nullSafe() {
-      assertEquals(null, Beans.persistentClassOf(null));
+      assertNull(Beans.persistentClassOf(null));
     }
 
     @Test
@@ -1414,11 +1414,7 @@ class BeansTest {
       // capturedReaders.get(name).apply(source) is bypassed in favour of readProperty(source,
       // name) which routes through the GETTER_INVOKERS ClassValue keyed by the runtime class.
       // The writer is the captured ParentBean writer, so the rebuild produces a ParentBean.
-      final Lens<ParentBean, String> idLens = Beans.lens(
-        ParentBean.class,
-        "id",
-        Beans.<ParentBean>settersWriter(ParentBean.class)
-      );
+      final Lens<ParentBean, String> idLens = Beans.lens(ParentBean.class, "id", Beans.settersWriter(ParentBean.class));
       final var child = new ChildBean();
       child.setId("inherited");
       child.setName("child-only");
@@ -1461,7 +1457,7 @@ class BeansTest {
       // wrapper. The metafactory generates the unbox bridge from Object to the primitive. The
       // int setter arm of wrap is covered by NoArgSetters.setScore elsewhere in this suite; this
       // test exercises the six remaining primitive setter variants end-to-end.
-      final var writer = Beans.<AllPrimitives>settersWriter(AllPrimitives.class);
+      final var writer = Beans.settersWriter(AllPrimitives.class);
       final var names = new String[] { "longVal", "doubleVal", "floatVal", "byteVal", "shortVal", "charVal" };
       final Map<String, Object> values = Map.of(
         "longVal",
