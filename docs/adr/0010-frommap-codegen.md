@@ -40,8 +40,10 @@ Load-bearing design points:
   forward-only (no faithful inverse), so the correct lattice member is `Getter` (the read-only weakening), which
   `ForwardMapper` wraps. The generated converter lives in the consumer's package, which JPMS does not let see
   `internal.optics.*` (qualified-exported to `:core` only) — so the direct rebuild body is _forced_, not a shortcut, and
-  the public `ForwardMapper` constant is the maximal reachable lattice surface. This mirrors how `@Bridge` exposes
-  `Telescope.bridge(...)` with a direct rebuild body (ADR-0006).
+  the public `ForwardMapper` constant is the maximal reachable lattice surface. This follows how `@Bridge` surfaces a
+  public lattice constant over a direct rebuild body (ADR-0006); `@Bridge` emits a bidirectional `Telescope<A, B>`
+  because a bridge has a faithful inverse, whereas Map→POJO does not, so `@FromMap` emits the forward-only
+  `ForwardMapper`.
 
 - **Uncoercible fields are compile errors, not runtime failures.** A nested object whose type isn't `@FromMap`, a
   collection subtype (`ArrayList<X>`), a type variable, or an unrecognized JDK type carry no defensible cast, so the
