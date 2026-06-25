@@ -2725,7 +2725,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var imports = new TreeSet<String>();
     for (final var entry : fieldPlans.entrySet()) {
       final var plan = entry.getValue();
-      // Raw-container helpers render every type by fully-qualified name, so they need no imports.
+      // A field plan that references a sub-bridge by simple name resolves for free when the
+      // sub-bridge is emitted in this bridge's own package (the common single-package case). When
+      // it
+      // isn't — a cross-package sub-pair, e.g. a DB-entity field bridged to a same-simple-name BO
+      // type in another package — the simple name is unresolvable; import the sub-bridge's FQN.
+      // This
+      // applies to raw-container plans too (their helper also calls the sub-bridge by simple name),
+      // so it runs before the raw-container short-circuit below.
+      final var subImport = crossPackageSubBridgeImport(
+        plan,
+        fieldByName(sourceFields, entry.getKey()).type(),
+        parentPkg
+      );
+      if (subImport != null) imports.add(subImport);
+      // Raw-container helpers render every container/element TYPE by fully-qualified name, so they
+      // need no container-type imports (only the sub-bridge import handled above).
       if (plan.rawContainer()) continue;
       switch (plan.kind()) {
         // A container field needs both the declared raw of each side (the helper return / param
@@ -2744,17 +2759,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         default -> {
         }
       }
-      // A field plan that references a sub-bridge by simple name resolves for free when the
-      // sub-bridge is emitted in this bridge's own package (the common single-package case). When
-      // it
-      // isn't — a cross-package sub-pair, e.g. a DB-entity field bridged to a same-simple-name BO
-      // type in another package — the simple name is unresolvable; import the sub-bridge's FQN.
-      final var subImport = crossPackageSubBridgeImport(
-        plan,
-        fieldByName(sourceFields, entry.getKey()).type(),
-        parentPkg
-      );
-      if (subImport != null) imports.add(subImport);
     }
     return imports;
   }
@@ -2776,8 +2780,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var subElement = switch (plan.kind()) {
       case RECURSE, NULLABLE_TO_OPTIONAL -> srcFieldType;
       case LIST, SET, MAP_VALUES, OPTIONAL, OPTIONAL_TO_NULLABLE -> {
+        // A raw Collection/Map subtype field (`class CxDocs extends ArrayList<CxDoc>`) carries
+        // its
+        // element in the supertype, so containerShapeOf returns null — fall back to the raw
+        // shape,
+        // mirroring how planFields derives the element for the same field.
         final var shape = containerShapeOf(srcFieldType);
-        yield shape != null ? shape.elementType() : null;
+        yield shape != null
+          ? shape.elementType()
+          : rawContainerShapeOf(srcFieldType) != null
+            ? rawContainerShapeOf(srcFieldType).elementType()
+            : null;
       }
       default -> null;
     };
