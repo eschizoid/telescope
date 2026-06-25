@@ -15,8 +15,8 @@ import org.junit.jupiter.api.Test;
 class BidirMapperTypedTransformTest {
 
   @Test
-  @DisplayName("forward applies the explicit String→Integer transform before the Integer setter")
-  void forwardAppliesTypedTransform() {
+  @DisplayName("the explicit String↔Integer transform applies on both the forward and backward setters")
+  void transformAppliesBothDirections() {
     final var mapper = Telescope.mapperBuilder(GovtIndex.class, IdDetails.class)
       .add(
         Mapping.to(
@@ -29,7 +29,7 @@ class BidirMapperTypedTransformTest {
       .build();
 
     final var out = mapper.forward(new GovtIndex("42"));
-
     assertEquals(Integer.valueOf(42), out.getSorId());
+    assertEquals("42", mapper.backward(out).getSorId());
   }
 }

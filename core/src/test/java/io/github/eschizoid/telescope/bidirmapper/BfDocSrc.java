@@ -3,7 +3,8 @@ package io.github.eschizoid.telescope.bidirmapper;
 import io.github.eschizoid.telescope.annotations.BeanFocus;
 
 /**
- * @BeanFocus source: routes the mapper construct through generated FieldOptics.
+ * Source annotated with {@code @BeanFocus}: routes the mapper construct through generated
+ * FieldOptics.
  */
 @BeanFocus
 public class BfDocSrc {

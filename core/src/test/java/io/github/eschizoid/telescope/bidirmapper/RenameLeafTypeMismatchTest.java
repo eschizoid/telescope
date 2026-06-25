@@ -40,10 +40,13 @@ class RenameLeafTypeMismatchTest {
         .build()
     );
     assertTrue(ex.getMessage().contains("incompatible source/target shapes"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("docUpdateAttempts"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("numberOfAttempts"), ex.getMessage());
+    assertTrue(ex.getMessage().contains("to(src, tgt, forward, backward)"), ex.getMessage());
   }
 
   @Test
-  @DisplayName("the documented fix — 4-arg to(src, tgt, forward, backward) — maps the renamed field correctly")
+  @DisplayName("the documented fix — 4-arg to(src, tgt, forward, backward) — round-trips the renamed field both ways")
   void fourArgTransformIsTheFix() {
     final var mapper = Telescope.mapperBuilder(DocSrc.class, DocTgt.class)
       .add(
@@ -56,6 +59,8 @@ class RenameLeafTypeMismatchTest {
       )
       .build();
 
-    assertEquals("5", mapper.forward(new DocSrc(5)).getNumberOfAttempts());
+    final var forward = mapper.forward(new DocSrc(5));
+    assertEquals("5", forward.getNumberOfAttempts());
+    assertEquals(Integer.valueOf(5), mapper.backward(forward).getDocUpdateAttempts());
   }
 }
