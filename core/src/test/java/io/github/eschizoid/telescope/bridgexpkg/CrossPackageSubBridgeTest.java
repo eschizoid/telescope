@@ -4,8 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.github.eschizoid.telescope.bridgexpkg.dbm.CxDoc;
 import io.github.eschizoid.telescope.bridgexpkg.dbm.CxDocList;
+import io.github.eschizoid.telescope.bridgexpkg.dbm.CxListSource;
+import io.github.eschizoid.telescope.bridgexpkg.dbm.CxMapSource;
+import io.github.eschizoid.telescope.bridgexpkg.dbm.CxOptSource;
 import io.github.eschizoid.telescope.bridgexpkg.dbm.CxRawSource;
 import io.github.eschizoid.telescope.bridgexpkg.dbm.CxSource;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -41,5 +47,41 @@ class CrossPackageSubBridgeTest {
 
     assertEquals("d-2", tgt.docs().get(0).docId(), "raw-container element bridges across packages");
     assertEquals("raw", tgt.name());
+  }
+
+  @Test
+  @DisplayName(
+    "a generic List<X> whose element is a cross-package sub-bridge imports and bridges — the adopter's List shape"
+  )
+  void genericListCrossPackageElementResolves() {
+    final var src = new CxListSource(List.of(new CxDoc("d-3"), new CxDoc("d-4")), "list");
+
+    final var tgt = CxListBridgeDefBridge.BRIDGE.read(src);
+
+    assertEquals("d-3", tgt.docs().get(0).docId(), "first generic-List element bridges across packages");
+    assertEquals("d-4", tgt.docs().get(1).docId(), "second generic-List element bridges across packages");
+    assertEquals("list", tgt.name());
+  }
+
+  @Test
+  @DisplayName("a Map<K, X> whose value is a cross-package sub-bridge imports and bridges")
+  void mapValueCrossPackageElementResolves() {
+    final var src = new CxMapSource(Map.of("a", new CxDoc("d-5")), "map");
+
+    final var tgt = CxMapBridgeDefBridge.BRIDGE.read(src);
+
+    assertEquals("d-5", tgt.byId().get("a").docId(), "Map value bridges across packages");
+    assertEquals("map", tgt.name());
+  }
+
+  @Test
+  @DisplayName("an Optional<X> whose element is a cross-package sub-bridge imports and bridges")
+  void optionalCrossPackageElementResolves() {
+    final var src = new CxOptSource(Optional.of(new CxDoc("d-6")), "opt");
+
+    final var tgt = CxOptBridgeDefBridge.BRIDGE.read(src);
+
+    assertEquals("d-6", tgt.doc().orElseThrow().docId(), "Optional element bridges across packages");
+    assertEquals("opt", tgt.name());
   }
 }
