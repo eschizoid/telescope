@@ -112,6 +112,44 @@ class FromMapProcessorTest {
     }
 
     @Test
+    @DisplayName("nested @FromMap in another package imports that package's converter (cross-package recursion)")
+    void nestedFromMapCrossPackageImportsConverter() {
+      // The nested converter is referenced by simple name (AddressFromMap.fromMap(...)); when the
+      // nested type lives in another package, the parent converter must import it or the generated
+      // code won't compile. The harness is -proc:only (no compile-check), so assert the import
+      // text.
+      final var compilation = compile(
+        source(
+          "demo.Profile",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.FromMap;
+          @FromMap
+          public record Profile(String handle, other.Address address) {}
+          """
+        ),
+        source(
+          "other.Address",
+          """
+          package other;
+          import io.github.eschizoid.telescope.annotations.FromMap;
+          @FromMap
+          public record Address(String city) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.ProfileFromMap");
+      assertNotNull(generated, () -> "ProfileFromMap not generated; saw " + compilation.generated().keySet());
+      assertTrue(generated.contains("AddressFromMap.fromMap("), generated);
+      assertTrue(
+        generated.contains("import other.AddressFromMap;"),
+        () -> "cross-package converter import missing:\n" + generated
+      );
+    }
+
+    @Test
     @DisplayName("List<@FromMap> field element-maps each entry through the element's generated converter")
     void listOfNestedElementMaps() {
       final var compilation = compile(

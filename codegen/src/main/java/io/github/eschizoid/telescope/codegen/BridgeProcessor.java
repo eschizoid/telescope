@@ -1651,7 +1651,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // target).
     if (carrierEl != null) emitBridgeProvider(source, target, bridgeName, pkg);
 
-    final var imports = new TreeSet<>(importsFor(fieldPlans, sourceFields, targetFields, renames));
+    final var imports = new TreeSet<>(importsFor(fieldPlans, sourceFields, targetFields, renames, pkg));
     imports.add("io.github.eschizoid.telescope.Telescope");
     imports.add("io.github.eschizoid.telescope.conversion.BridgeFn");
     writeClass(
@@ -2719,12 +2719,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Map<String, FieldPlan> fieldPlans,
     final List<Field> sourceFields,
     final List<Field> targetFields,
-    final Map<String, String> renames
+    final Map<String, String> renames,
+    final String parentPkg
   ) {
     final var imports = new TreeSet<String>();
     for (final var entry : fieldPlans.entrySet()) {
       final var plan = entry.getValue();
-      // Raw-container helpers render every type by fully-qualified name, so they need no imports.
+      // A field plan that references a sub-bridge by simple name resolves for free when the
+      // sub-bridge is emitted in this bridge's own package (the common single-package case). When
+      // it
+      // isn't — a cross-package sub-pair, e.g. a DB-entity field bridged to a same-simple-name BO
+      // type in another package — the simple name is unresolvable; import the sub-bridge's FQN.
+      // This
+      // applies to raw-container plans too (their helper also calls the sub-bridge by simple name),
+      // so it runs before the raw-container short-circuit below.
+      final var subImport = crossPackageSubBridgeImport(
+        plan,
+        fieldByName(sourceFields, entry.getKey()).type(),
+        parentPkg
+      );
+      if (subImport != null) imports.add(subImport);
+      // Raw-container helpers render every container/element TYPE by fully-qualified name, so they
+      // need no container-type imports (only the sub-bridge import handled above).
       if (plan.rawContainer()) continue;
       switch (plan.kind()) {
         // A container field needs both the declared raw of each side (the helper return / param
@@ -2745,6 +2761,48 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
     return imports;
+  }
+
+  /**
+   * The FQN to import for {@code plan}'s sub-bridge when it lives in a different package than
+   * {@code parentPkg}, or {@code null} when the plan references no sub-bridge, the element passes
+   * through (identity), or the sub-bridge shares this bridge's package (simple name already
+   * resolves). The sub-bridge is emitted in the source sub-element's package, so that package plus
+   * the plan's simple sub-bridge name is the import.
+   */
+  private String crossPackageSubBridgeImport(
+    final FieldPlan plan,
+    final TypeMirror srcFieldType,
+    final String parentPkg
+  ) {
+    final var sub = plan.subBridgeName();
+    if (sub == null || IDENTITY_ELEMENT_SENTINEL.equals(sub)) return null;
+    // A @ViaMapper / qualifier sub-bridge name is already a fully-qualified user class (e.g.
+    // `mapper.AddressBridge`); the body emits it verbatim, so it resolves on its own and needs no
+    // import. Only auto-generated bridge names (a bare simple name, no dot) need the cross-package
+    // import — prepending a package to a name that already has one yields a bogus import.
+    if (sub.indexOf('.') >= 0) return null;
+    final var subElement = switch (plan.kind()) {
+      case RECURSE, NULLABLE_TO_OPTIONAL -> srcFieldType;
+      case LIST, SET, MAP_VALUES, OPTIONAL, OPTIONAL_TO_NULLABLE -> {
+        // A raw Collection/Map subtype field (`class CxDocs extends ArrayList<CxDoc>`) carries
+        // its
+        // element in the supertype, so containerShapeOf returns null — fall back to the raw
+        // shape,
+        // mirroring how planFields derives the element for the same field.
+        final var shape = containerShapeOf(srcFieldType);
+        yield shape != null
+          ? shape.elementType()
+          : rawContainerShapeOf(srcFieldType) != null
+            ? rawContainerShapeOf(srcFieldType).elementType()
+            : null;
+      }
+      default -> null;
+    };
+    if (!(subElement instanceof DeclaredType dt) || !(dt.asElement() instanceof TypeElement te)) return null;
+    final var subPkg = processingEnv.getElementUtils().getPackageOf(te).getQualifiedName().toString();
+    if (subPkg.isEmpty() || subPkg.equals(parentPkg)) return null;
+    return subPkg + "." + sub;
   }
 
   /**
