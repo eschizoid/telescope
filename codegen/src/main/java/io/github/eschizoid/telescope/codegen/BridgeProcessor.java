@@ -2777,6 +2777,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var sub = plan.subBridgeName();
     if (sub == null || IDENTITY_ELEMENT_SENTINEL.equals(sub)) return null;
+    // A @ViaMapper / qualifier sub-bridge name is already a fully-qualified user class (e.g.
+    // `mapper.AddressBridge`); the body emits it verbatim, so it resolves on its own and needs no
+    // import. Only auto-generated bridge names (a bare simple name, no dot) need the cross-package
+    // import — prepending a package to a name that already has one yields a bogus import.
+    if (sub.indexOf('.') >= 0) return null;
     final var subElement = switch (plan.kind()) {
       case RECURSE, NULLABLE_TO_OPTIONAL -> srcFieldType;
       case LIST, SET, MAP_VALUES, OPTIONAL, OPTIONAL_TO_NULLABLE -> {

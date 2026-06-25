@@ -9,6 +9,7 @@ import io.github.eschizoid.telescope.bridgexpkg.dbm.CxMapSource;
 import io.github.eschizoid.telescope.bridgexpkg.dbm.CxOptSource;
 import io.github.eschizoid.telescope.bridgexpkg.dbm.CxRawSource;
 import io.github.eschizoid.telescope.bridgexpkg.dbm.CxSource;
+import io.github.eschizoid.telescope.bridgexpkg.vm.VmAddress;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -83,5 +84,16 @@ class CrossPackageSubBridgeTest {
 
     assertEquals("d-6", tgt.doc().orElseThrow().docId(), "Optional element bridges across packages");
     assertEquals("opt", tgt.name());
+  }
+
+  @Test
+  @DisplayName("a cross-package @ViaMapper field fabricates no bogus import and bridges through the user mapper")
+  void crossPackageViaMapperResolves() {
+    final var src = new VmSource("o-1", new VmAddress("main st"));
+
+    final var tgt = VmSourceBridge.BRIDGE.read(src);
+
+    assertEquals("o-1", tgt.id());
+    assertEquals("main st", tgt.address().line(), "@ViaMapper bridges the cross-package field through the user mapper");
   }
 }
