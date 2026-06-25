@@ -2702,4 +2702,165 @@ class MigrationRegressionTest {
       assertEquals("ext-1", back.getIcVerificationExt());
     }
   }
+
+  @Nested
+  @DisplayName("Bidirectional Mapper — a same-typed to(src, tgt) rename with mismatched leaf types fails fast")
+  class BidirectionalRenameLeafTypeMismatch {
+
+    // Source carries an Integer; the target carries a String under a different name — the adopter's
+    // docUpdateAttempts → numberOfAttempts shape.
+    public static class AttemptsSource {
+
+      private Integer docUpdateAttempts;
+
+      public Integer getDocUpdateAttempts() {
+        return docUpdateAttempts;
+      }
+
+      public void setDocUpdateAttempts(final Integer docUpdateAttempts) {
+        this.docUpdateAttempts = docUpdateAttempts;
+      }
+    }
+
+    public static class AttemptsTarget {
+
+      private String numberOfAttempts;
+
+      public String getNumberOfAttempts() {
+        return numberOfAttempts;
+      }
+
+      public void setNumberOfAttempts(final String numberOfAttempts) {
+        this.numberOfAttempts = numberOfAttempts;
+      }
+    }
+
+    // Multi-field variant: a valid same-name row and a valid rename surround the one mismatched
+    // rename, so the build sees the bad row among good ones (strict bijection covers every field).
+    public static class MultiRowSource {
+
+      private String documentId;
+      private Integer docUpdateAttempts;
+      private String sourceSystem;
+
+      public String getDocumentId() {
+        return documentId;
+      }
+
+      public void setDocumentId(final String documentId) {
+        this.documentId = documentId;
+      }
+
+      public Integer getDocUpdateAttempts() {
+        return docUpdateAttempts;
+      }
+
+      public void setDocUpdateAttempts(final Integer docUpdateAttempts) {
+        this.docUpdateAttempts = docUpdateAttempts;
+      }
+
+      public String getSourceSystem() {
+        return sourceSystem;
+      }
+
+      public void setSourceSystem(final String sourceSystem) {
+        this.sourceSystem = sourceSystem;
+      }
+    }
+
+    public static class MultiRowTarget {
+
+      private String documentId;
+      private String numberOfAttempts;
+      private String origin;
+
+      public String getDocumentId() {
+        return documentId;
+      }
+
+      public void setDocumentId(final String documentId) {
+        this.documentId = documentId;
+      }
+
+      public String getNumberOfAttempts() {
+        return numberOfAttempts;
+      }
+
+      public void setNumberOfAttempts(final String numberOfAttempts) {
+        this.numberOfAttempts = numberOfAttempts;
+      }
+
+      public String getOrigin() {
+        return origin;
+      }
+
+      public void setOrigin(final String origin) {
+        this.origin = origin;
+      }
+    }
+
+    @Test
+    @DisplayName(
+      "2-arg to(Integer-getter, String-getter) rename is rejected at build, not a runtime ClassCastException"
+    )
+    void mismatchedSameTypedRenameRejectedAtBuild() {
+      // The feedback reports a runtime ClassCastException (Integer cannot be cast to String) at
+      // SettersWriter.construct: javac infers the shared type of the 2-arg to() as the LUB, so it
+      // compiles and then identity-passes the Integer into the String setter. The fix routes the
+      // same-typed row through autoIso, turning it into a build-time rejection that names the
+      // fields
+      // and points to the converting 4-arg form.
+      final var ex = assertThrows(IllegalStateException.class, () ->
+        Telescope.mapperBuilder(AttemptsSource.class, AttemptsTarget.class)
+          .add(Mapping.to(AttemptsSource::getDocUpdateAttempts, AttemptsTarget::getNumberOfAttempts))
+          .build()
+      );
+      assertTrue(ex.getMessage().contains("docUpdateAttempts"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("numberOfAttempts"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("to(src, tgt, forward, backward)"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("the documented fix — 4-arg to(src, tgt, forward, backward) — round-trips the renamed field")
+    void fourArgTransformRoundTrips() {
+      final var mapper = Telescope.mapperBuilder(AttemptsSource.class, AttemptsTarget.class)
+        .add(
+          Mapping.to(
+            AttemptsSource::getDocUpdateAttempts,
+            AttemptsTarget::getNumberOfAttempts,
+            i -> i == null ? null : String.valueOf(i),
+            s -> s == null ? null : Integer.parseInt(s)
+          )
+        )
+        .build();
+
+      final var src = new AttemptsSource();
+      src.setDocUpdateAttempts(7);
+
+      final var dto = mapper.forward(src);
+      assertEquals("7", dto.getNumberOfAttempts());
+
+      final var back = mapper.backward(dto);
+      assertEquals(Integer.valueOf(7), back.getDocUpdateAttempts());
+    }
+
+    @Test
+    @DisplayName("a mismatched rename buried among valid rows still fails fast and names the offending row")
+    void mismatchedRenameAmongValidRowsAttributedCorrectly() {
+      // The realistic shape: many valid rows and one bad rename. The build must reject and point at
+      // the mismatched fields, not at one of the valid same-type rows.
+      final var ex = assertThrows(IllegalStateException.class, () ->
+        Telescope.mapperBuilder(MultiRowSource.class, MultiRowTarget.class)
+          .add(Mapping.to(MultiRowSource::getDocumentId, MultiRowTarget::getDocumentId))
+          .add(Mapping.to(MultiRowSource::getDocUpdateAttempts, MultiRowTarget::getNumberOfAttempts))
+          .add(Mapping.to(MultiRowSource::getSourceSystem, MultiRowTarget::getOrigin))
+          .build()
+      );
+      assertTrue(ex.getMessage().contains("docUpdateAttempts"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("numberOfAttempts"), ex.getMessage());
+      assertFalse(ex.getMessage().contains("documentId"), ex.getMessage());
+      assertFalse(ex.getMessage().contains("sourceSystem"), ex.getMessage());
+      assertFalse(ex.getMessage().contains("origin"), ex.getMessage());
+    }
+  }
 }
