@@ -490,18 +490,30 @@ public final class DeepMap {
         // sync (typically same-typed copies of the same column), and the test pin makes the
         // last-row-wins behaviour explicit so silent ambiguity is impossible.
         claimedSrc.add(srcField);
+        final var srcType = srcRefl.genericType(source, srcField);
         final var tgtType = tgtRefl.genericType(target, tgtField);
-        final var rawRowIso = fieldIsoOf(row, srcRefl.genericType(source, srcField), tgtType);
-        // SameTypedTo rows are pure identity at the leaf — wrap with default-on-null when the
-        // mapper's null strategy is DEFAULT so an unset source field lands as the type default
-        // instead of null. Other field-iso rows (TypedTransformTo, ForwardOnlyTransformTo, Via)
-        // carry user-supplied forward functions and are explicitly NOT wrapped — the user already
-        // decided how their lambda handles null. This precedence rule lets toOrElse(...) (a
-        // TypedTransformTo) and explicit transforms win over the global hint without any extra
-        // marker on the row, which is the simplest "per-row beats per-mapper" semantics.
-        final var rowIso = (nullStrategy == NullHint.NullStrategy.DEFAULT && row instanceof SameTypedTo<?, ?, ?>)
-          ? wrapDefaultOnNull(rawRowIso, tgtType)
-          : rawRowIso;
+        // A same-typed to(src, tgt) carries no conversion — it resolves exactly like an
+        // auto-matched (here possibly renamed) field, so route it through autoIso. One tested place
+        // then supplies identity / null-safe primitive-wrapper / container lifting and the same
+        // default-on-null wrapping and "incompatible shapes" rejection the auto path gives. This
+        // also closes the LUB-inference hole: javac infers the shared type parameter as the
+        // least-upper-bound of the two accessors, so to(Integer-getter, String-getter) compiles and
+        // would otherwise identity-pass an Integer into a String setter (ClassCastException at
+        // construct). Rows that DO carry user forward/backward functions keep their own leaf Iso.
+        final var rowIso =
+          row instanceof SameTypedTo<?, ?, ?>
+            ? autoIso(
+                srcType,
+                tgtType,
+                srcField + " → " + tgtField,
+                overrides,
+                beanRefl,
+                cache,
+                nullStrategy,
+                cyclicPairs,
+                inProgress
+              )
+            : fieldIsoOf(row, srcType, tgtType);
         final var step = new FieldStep(srcField, tgtField, rowIso);
         byTargetName.put(tgtField, step);
         bySourceName.put(srcField, step);
@@ -1031,7 +1043,8 @@ public final class DeepMap {
         srcType.getTypeName() +
         " vs " +
         tgtType.getTypeName() +
-        ". Shapes must match: same scalar, both records/beans, or both same-kind container."
+        ". Shapes must match: same scalar, both records/beans, or both same-kind container. For " +
+        "differing scalar types, add a to(src, tgt, forward, backward) row to supply the conversion."
     );
   }
 
@@ -1070,7 +1083,12 @@ public final class DeepMap {
     // Inline the contributed leaf-level Iso for each row variant. Reading the public components
     // directly keeps Iso (internal) out of the mapping types' public signatures — so the mapping
     // types stay portable across packages without needing @SuppressWarnings("exports").
-    if (row instanceof SameTypedTo<?, ?, ?>) return Iso.identity();
+    // SameTypedTo carries no conversion; populateIso resolves it through autoIso (identity /
+    // primitive-wrapper / container lifting / incompatible-shape rejection), so it must not reach
+    // here. The guard surfaces a routing regression with a clear class name, like the rows below.
+    if (row instanceof SameTypedTo<?, ?, ?>) throw new IllegalStateException(
+      "SameTypedTo row should be resolved via autoIso, not fieldIsoOf"
+    );
     if (row instanceof TypedTransformTo<?, ?, ?, ?> r) return Iso.of((Function) r.forward(), (Function) r.backward());
     if (row instanceof ForwardOnlyTransformTo<?, ?, ?, ?> r) {
       // DEAD-BRANCH-DEFENSIVE: this throwingBackward lambda is unreachable via the public API.
