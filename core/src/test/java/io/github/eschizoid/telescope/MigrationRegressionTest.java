@@ -2735,6 +2735,70 @@ class MigrationRegressionTest {
       }
     }
 
+    // Multi-field variant: a valid same-name row and a valid rename surround the one mismatched
+    // rename, so the build sees the bad row among good ones (strict bijection covers every field).
+    public static class MultiRowSource {
+
+      private String documentId;
+      private Integer docUpdateAttempts;
+      private String sourceSystem;
+
+      public String getDocumentId() {
+        return documentId;
+      }
+
+      public void setDocumentId(final String documentId) {
+        this.documentId = documentId;
+      }
+
+      public Integer getDocUpdateAttempts() {
+        return docUpdateAttempts;
+      }
+
+      public void setDocUpdateAttempts(final Integer docUpdateAttempts) {
+        this.docUpdateAttempts = docUpdateAttempts;
+      }
+
+      public String getSourceSystem() {
+        return sourceSystem;
+      }
+
+      public void setSourceSystem(final String sourceSystem) {
+        this.sourceSystem = sourceSystem;
+      }
+    }
+
+    public static class MultiRowTarget {
+
+      private String documentId;
+      private String numberOfAttempts;
+      private String origin;
+
+      public String getDocumentId() {
+        return documentId;
+      }
+
+      public void setDocumentId(final String documentId) {
+        this.documentId = documentId;
+      }
+
+      public String getNumberOfAttempts() {
+        return numberOfAttempts;
+      }
+
+      public void setNumberOfAttempts(final String numberOfAttempts) {
+        this.numberOfAttempts = numberOfAttempts;
+      }
+
+      public String getOrigin() {
+        return origin;
+      }
+
+      public void setOrigin(final String origin) {
+        this.origin = origin;
+      }
+    }
+
     @Test
     @DisplayName(
       "2-arg to(Integer-getter, String-getter) rename is rejected at build, not a runtime ClassCastException"
@@ -2778,6 +2842,25 @@ class MigrationRegressionTest {
 
       final var back = mapper.backward(dto);
       assertEquals(Integer.valueOf(7), back.getDocUpdateAttempts());
+    }
+
+    @Test
+    @DisplayName("a mismatched rename buried among valid rows still fails fast and names the offending row")
+    void mismatchedRenameAmongValidRowsAttributedCorrectly() {
+      // The realistic shape: many valid rows and one bad rename. The build must reject and point at
+      // the mismatched fields, not at one of the valid same-type rows.
+      final var ex = assertThrows(IllegalStateException.class, () ->
+        Telescope.mapperBuilder(MultiRowSource.class, MultiRowTarget.class)
+          .add(Mapping.to(MultiRowSource::getDocumentId, MultiRowTarget::getDocumentId))
+          .add(Mapping.to(MultiRowSource::getDocUpdateAttempts, MultiRowTarget::getNumberOfAttempts))
+          .add(Mapping.to(MultiRowSource::getSourceSystem, MultiRowTarget::getOrigin))
+          .build()
+      );
+      assertTrue(ex.getMessage().contains("docUpdateAttempts"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("numberOfAttempts"), ex.getMessage());
+      assertFalse(ex.getMessage().contains("documentId"), ex.getMessage());
+      assertFalse(ex.getMessage().contains("sourceSystem"), ex.getMessage());
+      assertFalse(ex.getMessage().contains("origin"), ex.getMessage());
     }
   }
 }
