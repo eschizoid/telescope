@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.nestedextract;
 import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.HashMap;
@@ -11,10 +12,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Enh 12: a nested {@code Telescope.fromMap(...)} composes as the converter of an {@code
- * extract(...)} row via the {@code extract(key, accessor, ForwardMapper)} overload — so a nested
- * {@code Map<String, Object>} fills a nested POJO declaratively, without dropping into a manual
- * static method + cast.
+ * A nested {@code Telescope.fromMap(...)} composes as the converter of an {@code extract(...)} row
+ * via the {@code extract(key, accessor, ForwardMapper)} overload — so a nested {@code Map<String,
+ * Object>} fills a nested POJO declaratively, without dropping into a manual static method + cast.
  */
 class FromMapNestedExtractTest {
 
@@ -63,5 +63,23 @@ class FromMapNestedExtractTest {
 
     assertEquals("c-2", result.caseId());
     assertNull(result.pageDetails(), "absent nested map key → null nested component");
+  }
+
+  @Test
+  @DisplayName("a key present but holding a non-Map value fails with an error naming the key, not a bare CCE")
+  void presentNonMapKeyNamesTheKey() {
+    final var mapper = Telescope.fromMap(
+      CaseListRequest.class,
+      extract(
+        "pageDetails",
+        CaseListRequest::pageDetails,
+        Telescope.fromMap(PageDetails.class, extract("pageSize", PageDetails::pageSize, v -> (Integer) v))
+      )
+    );
+
+    final var source = new HashMap<String, Object>();
+    source.put("pageDetails", "not-a-map"); // wrong shape for a nested fromMap row
+    final var ex = assertThrows(IllegalArgumentException.class, () -> mapper.forward(source));
+    assertEquals(true, ex.getMessage().contains("pageDetails"), "error must name the offending key");
   }
 }

@@ -77,9 +77,11 @@ public sealed interface MapExtractStep permits Extract {
    *             extract("pageSize", PageDetails::getPageSize, v -> (Integer) v))));
    * }</pre>
    *
-   * <p>The unchecked {@code Object → Map<String, Object>} cast the nested map requires lives here,
-   * once, instead of at every call site. An absent key (a {@code null} raw value) yields a {@code
-   * null} component — {@link ForwardMapper#forward} is null-in/null-out.
+   * <p>The {@code Object → Map<String, Object>} cast the nested map requires lives here, once,
+   * instead of at every call site — and is guarded: an absent key (a {@code null} raw value) yields
+   * a {@code null} component ({@link ForwardMapper#forward} is null-in/null-out), while a key
+   * present but holding a non-{@code Map} value raises an {@link IllegalArgumentException} naming
+   * the key rather than leaking a bare {@code ClassCastException}.
    *
    * @param key the map key the row pulls its nested map from
    * @param targetAccessor method reference naming the target field/component
@@ -90,8 +92,19 @@ public sealed interface MapExtractStep permits Extract {
     final Accessor<T, X> targetAccessor,
     final ForwardMapper<Map<String, Object>, X> nested
   ) {
-    @SuppressWarnings("unchecked")
-    final Function<Object, X> converter = v -> nested.forward((Map<String, Object>) v);
+    final Function<Object, X> converter = v -> {
+      if (v == null) return null;
+      // The cast is the caller's now-internal one: guard it so a key that holds the wrong shape
+      // names itself, instead of leaking a bare `class String cannot be cast to class Map`.
+      if (!(v instanceof Map<?, ?> map)) {
+        throw new IllegalArgumentException(
+          "fromMap key \"" + key + "\" expects a nested Map<String, Object> but got " + v.getClass().getName()
+        );
+      }
+      @SuppressWarnings("unchecked")
+      final var nestedMap = (Map<String, Object>) map;
+      return nested.forward(nestedMap);
+    };
     return extract(key, targetAccessor, converter);
   }
 }
