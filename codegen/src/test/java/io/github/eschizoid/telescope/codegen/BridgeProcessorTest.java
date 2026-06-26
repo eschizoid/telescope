@@ -4504,7 +4504,7 @@ class BridgeProcessorTest {
       assertNotNull(compilation.generated().get("modela.SrcUrlToDstUrlBridge"));
       assertTrue(bridge.contains("new modelb.DstUrls()"), bridge);
       // ...and the misleading bean-introspection error never appears.
-      assertFalse(compilation.hasError("no setter for 'empty'"), () -> compilation.errorMessages());
+      assertFalse(compilation.hasError("no setter for 'empty'"), compilation::errorMessages);
     }
 
     @Test

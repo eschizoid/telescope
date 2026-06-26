@@ -206,8 +206,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
     // Collect annotated elements from both @Bridge (single use) and @Bridges (the container that
     // javac wraps multiple @Bridge into when the user declares more than one on the same type).
-    final var elements = new LinkedHashSet<Element>();
-    elements.addAll(roundEnv.getElementsAnnotatedWith(anno));
+    final var elements = new LinkedHashSet<Element>(roundEnv.getElementsAnnotatedWith(anno));
     if (bridgesAnno != null) elements.addAll(roundEnv.getElementsAnnotatedWith(bridgesAnno));
 
     for (final var element : elements) {
@@ -310,7 +309,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             error(element, "@Bridge value must be a class, record, or sealed-interface type");
             continue;
           }
-          sourceMirror = ((TypeElement) element).asType();
+          sourceMirror = element.asType();
         }
         final var sourceFq = carrierForm
           ? ((TypeElement) ((DeclaredType) sourceMirror).asElement()).getQualifiedName().toString()
