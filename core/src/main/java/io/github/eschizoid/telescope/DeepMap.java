@@ -1865,8 +1865,8 @@ public final class DeepMap {
   }
 
   /**
-   * Bundled return from {@link #resolution(Class, Class, MapStep...)} — the Iso and the patch
-   * table.
+   * Bundled return from {@link #resolution(Class, Class, MapStep[], boolean)} — the Iso and the
+   * patch table.
    */
   private record Resolution<A, B>(Iso<A, B> iso, Map<String, Mapper.PatchEntry> patchTable) {}
 

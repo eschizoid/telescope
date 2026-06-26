@@ -21,8 +21,7 @@ import org.junit.jupiter.api.Test;
  * <p>Reuses the {@link PhaseCSrc} / {@link PhaseCDst} / {@link PhaseCPlainSrc} / {@link
  * PhaseCPlainDst} fixtures — the same holders, observed from a different angle (forward construct
  * vs backward decompose). The annotated fixtures carry the {@code construct(...)} method since
- * {@link io.github.eschizoid.telescope.codegen.FocusProcessor FocusProcessor} emits it alongside
- * the per-component lens constants.
+ * {@code FocusProcessor} emits it alongside the per-component lens constants.
  */
 class DeepMapPhaseDConstructTest {
 

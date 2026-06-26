@@ -4,10 +4,10 @@ import io.github.eschizoid.telescope.Telescope;
 import java.util.function.Supplier;
 
 /**
- * Forward-only lazy-supplier correspondence from {@link Mapping#compute(io.github.eschizoid
- * .telescope.Telescope.Accessor, Supplier) Mapping.compute(Accessor, Supplier)} and {@link
- * Mapping#compute(Telescope, Supplier) Mapping.compute(Telescope, Supplier)}. Invokes the supplier
- * once per forward call and stamps the result at the target location.
+ * Forward-only lazy-supplier correspondence from {@link Mapping#compute(Telescope.Accessor,
+ * Supplier) Mapping.compute(Accessor, Supplier)} and {@link Mapping#compute(Telescope, Supplier)
+ * Mapping.compute(Telescope, Supplier)}. Invokes the supplier once per forward call and stamps the
+ * result at the target location.
  *
  * <p>The target is always a {@link Telescope} — the flat factory {@code compute(Accessor,
  * Supplier)} wraps the bare accessor in a single-hop telescope at construction time so the engine

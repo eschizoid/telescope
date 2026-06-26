@@ -4,10 +4,10 @@ import io.github.eschizoid.telescope.DeepMap;
 import io.github.eschizoid.telescope.Telescope;
 
 /**
- * Forward-only literal correspondence from {@link Mapping#constant(io.github.eschizoid.telescope
- * .Telescope.Accessor, Object) Mapping.constant(Accessor, X)} and {@link
- * Mapping#constant(Telescope, Object) Mapping.constant(Telescope, X)}. Stamps the captured value at
- * the target location each forward call.
+ * Forward-only literal correspondence from {@link Mapping#constant(Telescope.Accessor, Object)
+ * Mapping.constant(Accessor, X)} and {@link Mapping#constant(Telescope, Object)
+ * Mapping.constant(Telescope, X)}. Stamps the captured value at the target location each forward
+ * call.
  *
  * <p>The target is always a {@link Telescope} — the flat factory {@code constant(Accessor, X)}
  * wraps the bare accessor in a single-hop telescope at construction time so the engine has one

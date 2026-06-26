@@ -79,7 +79,7 @@ public sealed interface MapExtractStep permits Extract {
    *
    * <p>The {@code Object → Map<String, Object>} cast the nested map requires lives here, once,
    * instead of at every call site — and is guarded: an absent key (a {@code null} raw value) yields
-   * a {@code null} component ({@link ForwardMapper#forward} is null-in/null-out), while a key
+   * a {@code null} component ({@code ForwardMapper#forward} is null-in/null-out), while a key
    * present but holding a non-{@code Map} value raises an {@link IllegalArgumentException} naming
    * the key rather than leaking a bare {@code ClassCastException}.
    *
