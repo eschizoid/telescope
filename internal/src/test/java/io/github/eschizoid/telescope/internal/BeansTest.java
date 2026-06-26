@@ -750,16 +750,7 @@ class BeansTest {
       // Boxed wrappers arrive via valueByName; the cached setter MH unboxes them per the same
       // implicit conversions a direct Field.set call would apply (the setter handle was bound
       // with field-typed signature at cache-warm time).
-      final var values = Map.<String, Object>of(
-        "i",
-        Integer.valueOf(7),
-        "l",
-        Long.valueOf(42L),
-        "d",
-        Double.valueOf(3.14),
-        "b",
-        Boolean.TRUE
-      );
+      final var values = Map.<String, Object>of("i", 7, "l", 42L, "d", 3.14, "b", Boolean.TRUE);
       final var pojo = writer.construct(new String[] { "i", "l", "d", "b" }, values::get);
       assertEquals(7, pojo.getI());
       assertEquals(42L, pojo.getL());
@@ -828,7 +819,7 @@ class BeansTest {
       // void generates — a Method.invoke regression would still work here, so the test value is
       // in exercising the unboxing bridge end-to-end.
       final var writer = Beans.settersWriter(NoArgSetters.class);
-      final Map<String, Object> values = Map.of("name", "evan", "score", Integer.valueOf(42));
+      final Map<String, Object> values = Map.of("name", "evan", "score", 42);
       final var pojo = writer.construct(new String[] { "name", "score" }, values::get);
       assertEquals("evan", pojo.getName());
       assertEquals(42, pojo.getScore());
@@ -981,16 +972,7 @@ class BeansTest {
       // conversions a direct constructor call would apply. Order matches the constructor
       // parameter order (positional fallback when -parameters is not present at test compile
       // time, or by-name when it is — both produce the same result here).
-      final var values = Map.<String, Object>of(
-        "i",
-        Integer.valueOf(5),
-        "l",
-        Long.valueOf(99L),
-        "d",
-        Double.valueOf(2.5),
-        "b",
-        Boolean.TRUE
-      );
+      final var values = Map.<String, Object>of("i", 5, "l", 99L, "d", 2.5, "b", Boolean.TRUE);
       final var pojo = writer.construct(new String[] { "i", "l", "d", "b" }, values::get);
       assertEquals(5, pojo.getI());
       assertEquals(99L, pojo.getL());
@@ -1240,7 +1222,7 @@ class BeansTest {
       // method type is (Cls, Integer) -> void. LMF generates the unbox bridge to setX(int) —
       // this test exercises that bridge end-to-end via writeBeanProperty's public surface.
       final var pojo = new NoArgSetters();
-      Beans.writeBeanProperty(pojo, "score", Integer.valueOf(42));
+      Beans.writeBeanProperty(pojo, "score", 42);
       assertEquals(42, pojo.getScore());
     }
 
@@ -1461,17 +1443,17 @@ class BeansTest {
       final var names = new String[] { "longVal", "doubleVal", "floatVal", "byteVal", "shortVal", "charVal" };
       final Map<String, Object> values = Map.of(
         "longVal",
-        Long.valueOf(9_223_372_036L),
+        9_223_372_036L,
         "doubleVal",
-        Double.valueOf(3.14d),
+        3.14d,
         "floatVal",
-        Float.valueOf(2.5f),
+        2.5f,
         "byteVal",
-        Byte.valueOf((byte) 7),
+        (byte) 7,
         "shortVal",
-        Short.valueOf((short) 1234),
+        (short) 1234,
         "charVal",
-        Character.valueOf('Z')
+        'Z'
       );
       final var built = writer.construct(names, values::get);
       assertEquals(9_223_372_036L, built.getLongVal());

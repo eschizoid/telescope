@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal.optics;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -132,7 +133,7 @@ class OpticLawsTest {
       final Iso<String, String> a = Iso.identity();
       final Iso<Integer, Integer> b = Iso.identity();
       // Same instance after the unchecked cast — the singleton is type-erased.
-      assertTrue(a == (Object) b);
+      assertSame(a, b);
     }
 
     @Test

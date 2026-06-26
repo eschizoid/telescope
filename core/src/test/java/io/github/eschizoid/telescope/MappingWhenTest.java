@@ -374,7 +374,7 @@ class MappingWhenTest {
     @Test
     @DisplayName("predicate NPE wrapped in IllegalStateException naming inner-kind + source field")
     void decoratedExceptionNamesInnerAndField() {
-      final java.util.function.Predicate<Src> brokenPredicate = s -> s.name().length() > 0;
+      final java.util.function.Predicate<Src> brokenPredicate = s -> !s.name().isEmpty();
       // ^ throws NPE when name is null; the row's inner is Constant whose targetField is "stamped".
       final var mapper = Telescope.mapper(
         Src.class,
@@ -391,7 +391,7 @@ class MappingWhenTest {
       // carries a null message — otherwise the user sees "Predicate failure: null" and learns
       // nothing actionable. This pins the decoration improvement.
       assertTrue(msg.contains("NullPointerException"), "message names the failure class");
-      assertTrue(ex.getCause() instanceof NullPointerException, "original predicate cause preserved");
+      assertInstanceOf(NullPointerException.class, ex.getCause(), "original predicate cause preserved");
     }
   }
 
@@ -440,11 +440,7 @@ class MappingWhenTest {
       assertTrue(msg.contains("toOrElse"), "error suggests the field-level alternative");
       assertTrue(msg.contains("telescope-based"), "error names the supported shape");
       assertTrue(msg.contains("SameTypedTo"), "error names the rejected kind");
-      assertEquals(
-        true,
-        msg.contains("name → name"),
-        "error names the actual field claim so the user can find the row"
-      );
+      assertTrue(msg.contains("name → name"), "error names the actual field claim so the user can find the row");
     }
 
     @Test
@@ -455,11 +451,7 @@ class MappingWhenTest {
       );
       final var msg = ex.getMessage();
       assertTrue(msg.contains("Mapping.toOneWay"), "error names the forward-only construct");
-      assertEquals(
-        true,
-        msg.contains("fold the predicate"),
-        "error suggests inlining the predicate into the forward function"
-      );
+      assertTrue(msg.contains("fold the predicate"), "error suggests inlining the predicate into the forward function");
       assertTrue(msg.contains("ForwardOnlyTransformTo"), "error names the rejected kind");
     }
 
@@ -468,9 +460,7 @@ class MappingWhenTest {
     void rejectsNestedConditional() {
       final var emailTel = Telescope.of(Dst.class).field(Dst::name);
       final Mapping<Src, Dst> inner = when(s -> s.name() != null, to(Src::name, emailTel));
-      final var ex = assertThrows(IllegalArgumentException.class, () ->
-        when((java.util.function.Predicate<Src>) s -> true, inner)
-      );
+      final var ex = assertThrows(IllegalArgumentException.class, () -> when(s -> true, inner));
       assertTrue(ex.getMessage().contains("does not nest"), "error explains nesting is rejected");
     }
 

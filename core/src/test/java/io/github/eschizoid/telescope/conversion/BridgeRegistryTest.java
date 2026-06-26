@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.conversion;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -59,6 +58,6 @@ class BridgeRegistryTest {
         getClass().getClassLoader()
       )
     );
-    assertEquals(true, ex.getMessage().toLowerCase().contains("ambiguous"));
+    assertTrue(ex.getMessage().toLowerCase().contains("ambiguous"));
   }
 }
