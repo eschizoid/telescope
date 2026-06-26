@@ -15,7 +15,7 @@ import java.util.Set;
 
 /**
  * Shared fixture builder for the two integration tests. Mirrors the JSON shape consumers would POST
- * to either controller, keeps {@link Customer#id} and {@link Order#id} null on the way in
+ * to either controller, keeps {@code Customer#id} and {@code Order#id} null on the way in
  * (Hibernate assigns ids on save), and pins enough nesting (deep Address, Optional gift-wrap,
  * non-empty line-item list) to exercise every shape telescope's deep-mapping factory recurses
  * through.
