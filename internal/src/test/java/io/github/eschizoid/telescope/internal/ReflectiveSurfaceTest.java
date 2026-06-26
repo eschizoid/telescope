@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -87,7 +88,7 @@ class ReflectiveSurfaceTest {
     @DisplayName("genericType preserves parameterised types so DeepMap can detect List<String> containers")
     void genericTypePreservesParameterisedShape() {
       final var t = Reflective.RECORDS.genericType(AccountRecord.class, "tags");
-      assertTrue(t instanceof ParameterizedType, () -> "expected ParameterizedType, got " + t);
+      assertInstanceOf(ParameterizedType.class, t, () -> "expected ParameterizedType, got " + t);
       assertEquals(List.class, ((ParameterizedType) t).getRawType());
     }
 

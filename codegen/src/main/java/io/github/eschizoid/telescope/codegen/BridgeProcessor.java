@@ -206,8 +206,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
     // Collect annotated elements from both @Bridge (single use) and @Bridges (the container that
     // javac wraps multiple @Bridge into when the user declares more than one on the same type).
-    final var elements = new LinkedHashSet<Element>();
-    elements.addAll(roundEnv.getElementsAnnotatedWith(anno));
+    final var elements = new LinkedHashSet<Element>(roundEnv.getElementsAnnotatedWith(anno));
     if (bridgesAnno != null) elements.addAll(roundEnv.getElementsAnnotatedWith(bridgesAnno));
 
     for (final var element : elements) {
@@ -310,7 +309,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             error(element, "@Bridge value must be a class, record, or sealed-interface type");
             continue;
           }
-          sourceMirror = ((TypeElement) element).asType();
+          sourceMirror = element.asType();
         }
         final var sourceFq = carrierForm
           ? ((TypeElement) ((DeclaredType) sourceMirror).asElement()).getQualifiedName().toString()
@@ -568,9 +567,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         Boolean forwardOnly = Boolean.FALSE;
         for (final var re : renameAm.getElementValues().entrySet()) {
           final var k = re.getKey().getSimpleName().toString();
-          if (k.equals("source")) src = (String) re.getValue().getValue();
-          else if (k.equals("target")) tgt = (String) re.getValue().getValue();
-          else if (k.equals("forwardOnly")) forwardOnly = (Boolean) re.getValue().getValue();
+          switch (k) {
+            case "source" -> src = (String) re.getValue().getValue();
+            case "target" -> tgt = (String) re.getValue().getValue();
+            case "forwardOnly" -> forwardOnly = (Boolean) re.getValue().getValue();
+            default -> {
+            }
+          }
         }
         if (src == null || tgt == null || src.isEmpty() || tgt.isEmpty()) {
           error(element, "@Rename requires both `source` and `target` field names");
@@ -635,10 +638,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         String method = "";
         for (final var te : transformAm.getElementValues().entrySet()) {
           final var k = te.getKey().getSimpleName().toString();
-          if (k.equals("field")) field = (String) te.getValue().getValue();
-          else if (k.equals("using")) using = (TypeMirror) te.getValue().getValue();
-          else if (k.equals("forwardOnly")) forwardOnly = (Boolean) te.getValue().getValue();
-          else if (k.equals("method")) method = (String) te.getValue().getValue();
+          switch (k) {
+            case "field" -> field = (String) te.getValue().getValue();
+            case "using" -> using = (TypeMirror) te.getValue().getValue();
+            case "forwardOnly" -> forwardOnly = (Boolean) te.getValue().getValue();
+            case "method" -> method = (String) te.getValue().getValue();
+            default -> {
+            }
+          }
         }
         if (field == null || field.isEmpty()) {
           error(element, "@Transform requires a non-empty `field` name");
@@ -922,15 +929,37 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (kind == TypeKind.DECLARED) {
       final var fqn = ((TypeElement) ((DeclaredType) type).asElement()).getQualifiedName().toString();
       if ("null".equals(value)) return "null";
-      if (fqn.equals("java.lang.String")) return "\"" + escapeJavaString(value) + "\"";
-      if (fqn.equals("java.lang.Boolean")) return parseBooleanOrError(origin, fieldName, value, "Boolean");
-      if (fqn.equals("java.lang.Integer")) return parseIntegralOrError(origin, fieldName, value, "Integer", "");
-      if (fqn.equals("java.lang.Long")) return parseIntegralOrError(origin, fieldName, value, "Long", "L");
-      if (fqn.equals("java.lang.Short")) return castIntegralOrError(origin, fieldName, value, "Short", "short");
-      if (fqn.equals("java.lang.Byte")) return castIntegralOrError(origin, fieldName, value, "Byte", "byte");
-      if (fqn.equals("java.lang.Double")) return parseFloatingOrError(origin, fieldName, value, "Double", "");
-      if (fqn.equals("java.lang.Float")) return parseFloatingOrError(origin, fieldName, value, "Float", "f");
-      if (fqn.equals("java.lang.Character")) return parseCharOrError(origin, fieldName, value);
+      switch (fqn) {
+        case "java.lang.String" -> {
+          return "\"" + escapeJavaString(value) + "\"";
+        }
+        case "java.lang.Boolean" -> {
+          return parseBooleanOrError(origin, fieldName, value, "Boolean");
+        }
+        case "java.lang.Integer" -> {
+          return parseIntegralOrError(origin, fieldName, value, "Integer", "");
+        }
+        case "java.lang.Long" -> {
+          return parseIntegralOrError(origin, fieldName, value, "Long", "L");
+        }
+        case "java.lang.Short" -> {
+          return castIntegralOrError(origin, fieldName, value, "Short", "short");
+        }
+        case "java.lang.Byte" -> {
+          return castIntegralOrError(origin, fieldName, value, "Byte", "byte");
+        }
+        case "java.lang.Double" -> {
+          return parseFloatingOrError(origin, fieldName, value, "Double", "");
+        }
+        case "java.lang.Float" -> {
+          return parseFloatingOrError(origin, fieldName, value, "Float", "f");
+        }
+        case "java.lang.Character" -> {
+          return parseCharOrError(origin, fieldName, value);
+        }
+        default -> {
+        }
+      }
     }
     if (kind.isPrimitive()) {
       return switch (kind) {
@@ -2668,16 +2697,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.bwdNullDefault() + " : " + readExpr + ")";
       case RECURSE -> sub + ".backward(" + readExpr + ")";
-      case LIST -> elementIdentity
-        ? "(" +
-          readExpr +
-          " == null ? null : new " +
-          requireImpl(plan.bwdContainerImpl(), fieldName) +
-          "<>(" +
-          readExpr +
-          "))"
-        : "__bwd_" + fieldName + "(" + readExpr + ")";
-      case SET -> elementIdentity
+      case LIST, SET, MAP_VALUES -> elementIdentity
         ? "(" +
           readExpr +
           " == null ? null : new " +
@@ -2687,15 +2707,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           "))"
         : "__bwd_" + fieldName + "(" + readExpr + ")";
       case OPTIONAL -> "(" + readExpr + " == null ? null : " + readExpr + ".map(" + bwdElement + "))";
-      case MAP_VALUES -> elementIdentity
-        ? "(" +
-          readExpr +
-          " == null ? null : new " +
-          requireImpl(plan.bwdContainerImpl(), fieldName) +
-          "<>(" +
-          readExpr +
-          "))"
-        : "__bwd_" + fieldName + "(" + readExpr + ")";
       // For the cross-paradigm bridges, forward and backward are mirror images.
       case OPTIONAL_TO_NULLABLE -> "Optional.ofNullable(" + readExpr + ").map(" + bwdElement + ")";
       case NULLABLE_TO_OPTIONAL -> "(" +

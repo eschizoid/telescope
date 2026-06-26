@@ -1,10 +1,10 @@
 package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
@@ -41,8 +41,8 @@ class NullDefaultsTest {
       // Without this substitution the canonical-ctor call NPEs on the boxed-null unbox. The test
       // pins BOTH wrapper and primitive — a refactor that handled only one shape would silently
       // break the other.
-      assertEquals(Integer.valueOf(0), NullDefaults.defaultFor(Integer.class));
-      assertEquals(Integer.valueOf(0), NullDefaults.defaultFor(int.class));
+      assertEquals(0, NullDefaults.defaultFor(Integer.class));
+      assertEquals(0, NullDefaults.defaultFor(int.class));
     }
 
     @Test
@@ -54,24 +54,24 @@ class NullDefaultsTest {
       // specific wrappers (e.g. (Long) val for a DB primary-key column). A refactor that returned
       // Integer.valueOf(0) for every numeric default would compile but ClassCastException at
       // first use on a Long field.
-      assertEquals(Long.valueOf(0L), NullDefaults.defaultFor(Long.class));
-      assertEquals(Long.valueOf(0L), NullDefaults.defaultFor(long.class));
+      assertEquals(0L, NullDefaults.defaultFor(Long.class));
+      assertEquals(0L, NullDefaults.defaultFor(long.class));
       assertSame(Long.class, NullDefaults.defaultFor(Long.class).getClass());
 
-      assertEquals(Double.valueOf(0.0d), NullDefaults.defaultFor(Double.class));
-      assertEquals(Double.valueOf(0.0d), NullDefaults.defaultFor(double.class));
+      assertEquals(0.0d, NullDefaults.defaultFor(Double.class));
+      assertEquals(0.0d, NullDefaults.defaultFor(double.class));
       assertSame(Double.class, NullDefaults.defaultFor(Double.class).getClass());
 
-      assertEquals(Float.valueOf(0.0f), NullDefaults.defaultFor(Float.class));
-      assertEquals(Float.valueOf(0.0f), NullDefaults.defaultFor(float.class));
+      assertEquals(0.0f, NullDefaults.defaultFor(Float.class));
+      assertEquals(0.0f, NullDefaults.defaultFor(float.class));
       assertSame(Float.class, NullDefaults.defaultFor(Float.class).getClass());
 
-      assertEquals(Short.valueOf((short) 0), NullDefaults.defaultFor(Short.class));
-      assertEquals(Short.valueOf((short) 0), NullDefaults.defaultFor(short.class));
+      assertEquals((short) 0, NullDefaults.defaultFor(Short.class));
+      assertEquals((short) 0, NullDefaults.defaultFor(short.class));
       assertSame(Short.class, NullDefaults.defaultFor(Short.class).getClass());
 
-      assertEquals(Byte.valueOf((byte) 0), NullDefaults.defaultFor(Byte.class));
-      assertEquals(Byte.valueOf((byte) 0), NullDefaults.defaultFor(byte.class));
+      assertEquals((byte) 0, NullDefaults.defaultFor(Byte.class));
+      assertEquals((byte) 0, NullDefaults.defaultFor(byte.class));
       assertSame(Byte.class, NullDefaults.defaultFor(Byte.class).getClass());
     }
 
@@ -173,12 +173,12 @@ class NullDefaultsTest {
       // null for every `List<X>` / `Map<K, V>` field, breaking the empty-singleton contract.
       final var listComponent = Holder.class.getRecordComponents()[0];
       final Type genericListType = listComponent.getGenericType();
-      assertTrue(genericListType instanceof ParameterizedType, "precondition: List<String> is a ParameterizedType");
+      assertInstanceOf(ParameterizedType.class, genericListType, "precondition: List<String> is a ParameterizedType");
       assertSame(List.of(), NullDefaults.defaultFor(genericListType));
 
       final var mapComponent = Holder.class.getRecordComponents()[1];
       final Type genericMapType = mapComponent.getGenericType();
-      assertTrue(genericMapType instanceof ParameterizedType);
+      assertInstanceOf(ParameterizedType.class, genericMapType);
       assertSame(Map.of(), NullDefaults.defaultFor(genericMapType));
     }
   }

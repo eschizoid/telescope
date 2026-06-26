@@ -29,7 +29,7 @@ import java.util.Optional;
  * </ul>
  *
  * <p>The order id is nullable on the way in (the client doesn't know the database id when POSTing a
- * new order) and populated on the way back out. Mirrors the {@link Customer#id} pattern.
+ * new order) and populated on the way back out. Mirrors the {@code Customer#id} pattern.
  */
 @Focus
 public record Order(

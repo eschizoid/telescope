@@ -131,7 +131,11 @@ class OpticLawsTest {
     void identityIsSingleton() {
       final Iso<String, String> a = Iso.identity();
       final Iso<Integer, Integer> b = Iso.identity();
-      // Same instance after the unchecked cast — the singleton is type-erased.
+      // Same instance after the unchecked cast — the singleton is type-erased. assertSame here
+      // would
+      // trip an "inconvertible types" inspection on the two distinct generic instantiations; the
+      // explicit Object-cast == is the idiomatic reference-identity check across erased type
+      // params.
       assertTrue(a == (Object) b);
     }
 

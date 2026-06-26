@@ -362,7 +362,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final var rendered = new StringBuilder();
     for (final var arg : args) {
       final var part = renderType(arg);
-      if (rendered.length() > 0) rendered.append(", ");
+      if (!rendered.isEmpty()) rendered.append(", ");
       rendered.append(part.source());
       imports.addAll(part.imports());
     }

@@ -10,7 +10,6 @@ import io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUser;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.DataAlertRequest;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUser;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.SameRoundConsumer;
-import io.github.eschizoid.telescope.codegen.lombok.fixtures.ValueBuilderUser;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.function.Function;
@@ -44,8 +43,8 @@ class LombokFocusProcessorTest {
       final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
       assertNotNull(pathClass);
 
-      assertHasFocusMethod(pathClass, DataUser.class);
-      assertHasGetMethod(pathClass, DataUser.class);
+      assertHasFocusMethod(pathClass);
+      assertHasGetMethod(pathClass);
       assertReturnsTelescope(pathClass, "id");
       assertReturnsTelescope(pathClass, "email");
     }
@@ -56,8 +55,8 @@ class LombokFocusProcessorTest {
       final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserTelescope");
       assertNotNull(pathClass);
 
-      assertHasFocusMethod(pathClass, BuilderUser.class);
-      assertHasGetMethod(pathClass, BuilderUser.class);
+      assertHasFocusMethod(pathClass);
+      assertHasGetMethod(pathClass);
       assertReturnsTelescope(pathClass, "id");
       assertReturnsTelescope(pathClass, "email");
     }
@@ -70,7 +69,7 @@ class LombokFocusProcessorTest {
       );
       assertNotNull(pathClass);
 
-      assertHasFocusMethod(pathClass, ValueBuilderUser.class);
+      assertHasFocusMethod(pathClass);
       assertReturnsTelescope(pathClass, "id");
       assertReturnsTelescope(pathClass, "email");
     }
@@ -111,8 +110,8 @@ class LombokFocusProcessorTest {
       final var nestedType = Class.forName(
         "io.github.eschizoid.telescope.codegen.lombok.fixtures.OuterWithNested$Inner"
       );
-      assertHasFocusMethod(pathClass, nestedType);
-      assertHasGetMethod(pathClass, nestedType);
+      assertHasFocusMethod(pathClass);
+      assertHasGetMethod(pathClass);
       assertReturnsTelescope(pathClass, "label");
       assertReturnsTelescope(pathClass, "weight");
     }
@@ -328,13 +327,13 @@ class LombokFocusProcessorTest {
     }
   }
 
-  private static void assertHasFocusMethod(final Class<?> pathClass, final Class<?> rootType) throws Exception {
+  private static void assertHasFocusMethod(final Class<?> pathClass) throws Exception {
     final var start = pathClass.getDeclaredMethod("of");
     assertTrue(Modifier.isStatic(start.getModifiers()), "start() must be static");
     assertEquals(pathClass, start.getReturnType(), () -> "start() should return " + pathClass.getSimpleName());
   }
 
-  private static void assertHasGetMethod(final Class<?> pathClass, final Class<?> rootType) throws Exception {
+  private static void assertHasGetMethod(final Class<?> pathClass) throws Exception {
     final var get = pathClass.getDeclaredMethod("get");
     assertEquals(Telescope.class, get.getReturnType());
   }

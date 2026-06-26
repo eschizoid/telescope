@@ -4,6 +4,7 @@ import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.HashMap;
@@ -80,6 +81,6 @@ class FromMapNestedExtractTest {
     final var source = new HashMap<String, Object>();
     source.put("pageDetails", "not-a-map"); // wrong shape for a nested fromMap row
     final var ex = assertThrows(IllegalArgumentException.class, () -> mapper.forward(source));
-    assertEquals(true, ex.getMessage().contains("pageDetails"), "error must name the offending key");
+    assertTrue(ex.getMessage().contains("pageDetails"), "error must name the offending key");
   }
 }

@@ -108,7 +108,7 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
    * dispatch on the hot path. Auto-mapped same-typed fields end up holding this exact instance
    * after construction, so the optimisation fires on the dominant case.
    */
-  @SuppressWarnings({ "rawtypes", "unchecked" })
+  @SuppressWarnings("unchecked")
   static <X> Iso<X, X> identity() {
     return (Iso<X, X>) IDENTITY;
   }

@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -114,7 +115,7 @@ class RecordsTest {
       // DeepMap shape detection (List<X>, Map<K, V>, Optional<X>) needs the generic Type, not the
       // erased Class — verify the wrapping shape survives the round-trip.
       final var type = Records.componentType(Account.class, "tags");
-      assertTrue(type instanceof ParameterizedType, () -> "expected ParameterizedType for List<String>, got " + type);
+      assertInstanceOf(ParameterizedType.class, type, () -> "expected ParameterizedType for List<String>, got " + type);
       final var raw = ((ParameterizedType) type).getRawType();
       assertEquals(List.class, raw);
     }
