@@ -51,28 +51,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   protected record Prop(String name, String getter, TypeMirror type) {}
 
   /**
-   * Emit a generated {@code public final} class whose body references {@code Telescope}: the
-   * package declaration, the {@code io.github.eschizoid.telescope.Telescope} import, a one-line
-   * javadoc, and a private constructor, then {@code body} writes the members, then the closing
-   * brace. The package is derived from {@code qualifiedName}. An {@link IOException} is reported as
-   * a compile error on {@code origin}.
-   */
-  protected void writeClass(
-    final String qualifiedName,
-    final String simpleName,
-    final String javadoc,
-    final Element origin,
-    final Consumer<PrintWriter> body
-  ) {
-    writeClass(qualifiedName, simpleName, Set.of("io.github.eschizoid.telescope.Telescope"), javadoc, origin, body);
-  }
-
-  /**
-   * Same as {@link #writeClass(String, String, String, Element, Consumer)} but emits exactly the
-   * given {@code imports} — no implicit {@code Telescope}. A generator whose body references {@code
-   * Telescope} must include it in {@code imports}; one that doesn't (e.g. a {@code ForwardMapper}
-   * converter) omits it and gets no dead import. Use simple names in the body and list their FQNs
-   * here.
+   * Emits exactly the given {@code imports} — no implicit {@code Telescope}. A generator whose body
+   * references {@code Telescope} must include it in {@code imports}; one that doesn't (e.g. a
+   * {@code ForwardMapper} converter) omits it and gets no dead import. Use simple names in the body
+   * and list their FQNs here.
    */
   protected void writeClass(
     final String qualifiedName,
@@ -356,8 +338,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * name).
    */
   protected static String simpleNameOf(final String qualifiedName) {
-    final var dot = qualifiedName.lastIndexOf('.');
-    return dot < 0 ? qualifiedName : qualifiedName.substring(dot + 1);
+    return Coercion.simple(qualifiedName);
   }
 
   /**
@@ -916,11 +897,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   /**
    * Emit a {@code public static Map<String, Telescope<?, ?>> constants()} on the bean holder.
-   * Returns the pre-baked name → lens table directly so the runtime probe in {@link
-   * io.github.eschizoid.telescope.internal.MetadataHolderProbe MetadataHolderProbe} doesn't have to
-   * do a {@code getDeclaredFields()} scan plus N {@code field.get(null)} reads — goes from O(N)
-   * reflective ops per cold probe to O(1). Legacy holders without this method still fall back to
-   * the field-scan path.
+   * Returns the pre-baked name → lens table directly so the runtime probe in {@code
+   * MetadataHolderProbe} doesn't have to do a {@code getDeclaredFields()} scan plus N {@code
+   * field.get(null)} reads — goes from O(N) reflective ops per cold probe to O(1). Legacy holders
+   * without this method still fall back to the field-scan path.
    */
   private void emitBeanConstantsMap(final PrintWriter out, final List<Prop> props) {
     out.println("  /** Name -> lens map for the runtime probe to skip the field scan. */");

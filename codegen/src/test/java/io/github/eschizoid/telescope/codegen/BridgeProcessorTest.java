@@ -3524,7 +3524,7 @@ class BridgeProcessorTest {
         bridge.contains("final var out = new demo.PB()") && bridge.contains("out.setId(s.getId())"),
         () -> "expected SETTERS shape on forward, saw: " + bridge
       );
-      assertFalse(bridge.contains("demo.PB.builder()"), () -> "should not call builder() when SETTERS forced");
+      assertFalse(bridge.contains("demo.PB.builder()"), "should not call builder() when SETTERS forced");
     }
 
     @Test
@@ -4504,7 +4504,7 @@ class BridgeProcessorTest {
       assertNotNull(compilation.generated().get("modela.SrcUrlToDstUrlBridge"));
       assertTrue(bridge.contains("new modelb.DstUrls()"), bridge);
       // ...and the misleading bean-introspection error never appears.
-      assertFalse(compilation.hasError("no setter for 'empty'"), () -> compilation.errorMessages().toString());
+      assertFalse(compilation.hasError("no setter for 'empty'"), () -> compilation.errorMessages());
     }
 
     @Test

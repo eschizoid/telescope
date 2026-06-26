@@ -8,8 +8,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Integration test for the deep-mapping backward branch: when both sides of a {@link
- * Telescope#map(Class, Class, MapStep...)} call carry sibling {@code <X>Telescope} metadata
+ * Integration test for the deep-mapping backward branch: when both sides of a {@code
+ * Telescope.map(Class, Class, MapStep...)} call carry sibling {@code <X>Telescope} metadata
  * holders, the engine's structural-iso instance-to-map decomposition routes through the holders'
  * pre-baked {@code Lens} constants instead of the per-component {@code Records.read} dispatch.
  *

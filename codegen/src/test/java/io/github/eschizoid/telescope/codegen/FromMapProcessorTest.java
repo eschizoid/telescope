@@ -256,7 +256,7 @@ class FromMapProcessorTest {
         source("demo.Customer", "package demo; public record Customer(String name) {}")
       );
       assertFalse(compilation.success(), "a non-@FromMap nested object must be rejected");
-      assertTrue(compilation.hasError("isn't @FromMap"), () -> compilation.errorMessages().toString());
+      assertTrue(compilation.hasError("isn't @FromMap"), () -> compilation.errorMessages());
     }
 
     @Test
@@ -274,7 +274,7 @@ class FromMapProcessorTest {
         )
       );
       assertFalse(compilation.success(), "a JDK type with no String factory must be rejected, not cast");
-      assertTrue(compilation.hasError("can't be built from a Map value"), () -> compilation.errorMessages().toString());
+      assertTrue(compilation.hasError("can't be built from a Map value"), () -> compilation.errorMessages());
     }
 
     @Test
@@ -292,7 +292,7 @@ class FromMapProcessorTest {
         )
       );
       assertFalse(compilation.success(), "a collection subtype must be rejected");
-      assertTrue(compilation.hasError("collection subtype"), () -> compilation.errorMessages().toString());
+      assertTrue(compilation.hasError("collection subtype"), () -> compilation.errorMessages());
     }
   }
 

@@ -1746,8 +1746,7 @@ public sealed class Telescope<
    *
    * <p>Passed into {@link io.github.eschizoid.telescope.internal.Reflective#structuralIso(Class,
    * Map, java.util.function.Function)} by {@link DeepMap} so {@code :internal} can short-circuit
-   * the reflective {@link io.github.eschizoid.telescope.internal.Reflective#read} path without
-   * importing {@code Telescope}.
+   * the reflective {@code Reflective#read} path without importing {@code Telescope}.
    */
   @SuppressWarnings("unchecked")
   static Map<String, Lens<Object, Object>> holderReadersFor(final Class<?> cls, final String[] componentNames) {

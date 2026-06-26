@@ -155,7 +155,7 @@ class LombokFocusProcessorHarnessTest {
         )
       );
 
-      assertFalse(compilation.success(), () -> "bare @Value must fail compilation with a rejection diagnostic");
+      assertFalse(compilation.success(), "bare @Value must fail compilation with a rejection diagnostic");
       assertNull(
         compilation.generated().get("demo.BareValueTelescope"),
         () -> "bare @Value must NOT yield a navigator; saw " + compilation.generated().keySet()
