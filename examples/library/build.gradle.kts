@@ -34,6 +34,7 @@ val demos = listOf(
     "ValidatedMappingDemo",
     "ConversionDemo",
     "DeepMappingDemo",
+    "GraphQlMapToPojoDemo",
     "CodegenDemo",
     "LombokDemo",
 )
