@@ -1,6 +1,6 @@
 [versions]
 junit = "6.1.0"
-graphqlJava = "22.3"
+graphqlJava = "26.0"
 spotless = "8.7.0"
 googleJavaFormat = "1.28.0"
 prettier = "3.8.1"
