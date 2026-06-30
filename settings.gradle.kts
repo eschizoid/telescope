@@ -9,6 +9,7 @@ include("quarkus")
 include("benchmarks")
 
 include("examples:library")
+include("examples:mapstruct-vs-telescope")
 include("examples:graphql")
 include("examples:springboot:order-jpa")
 include("examples:springboot:product-starter")
