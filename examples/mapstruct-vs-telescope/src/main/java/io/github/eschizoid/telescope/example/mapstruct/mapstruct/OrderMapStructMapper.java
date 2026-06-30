@@ -12,10 +12,11 @@ import org.mapstruct.factory.Mappers;
 
 /**
  * The MapStruct side of the head-to-head. Forward Order to OrderDto, with the one rename spelled
- * the MapStruct way: a string-keyed {@code @Mapping}. The {@code Customer} sub-method is required
- * to carry the rename {@code @Mapping}; the {@code LineItem} one is written out to make the
- * collection recursion explicit (MapStruct would otherwise synthesize element mapping for the
- * same-named record).
+ * the MapStruct way: a string-keyed {@code @Mapping}. The {@code Customer} sub-method carries the
+ * rename {@code @Mapping} (the idiomatic spot — a dotted {@code source = "customer.email"} on the
+ * top-level method works too); the {@code LineItem} one is written out to make the collection
+ * recursion explicit (MapStruct would otherwise synthesize element mapping for the same-named
+ * record).
  *
  * <p>The load-bearing detail is the {@code "email"} string. Rename {@code Customer.email()} via an
  * IDE refactor and the string is <em>not</em> touched — it's opaque text, not a reference — so it

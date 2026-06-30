@@ -32,15 +32,21 @@ public final class TelescopeMappings {
   );
 
   /**
-   * Act 2 — deep immutable update. Multiply every line item's price by {@code rate} and rebuild the
-   * whole immutable {@code Order} graph in one typed pass, the original untouched. This is the
-   * clean structural gap: MapStruct maps {@code A -> B}; it does not read, write, or update a
-   * value's interior. The same {@code Telescope} vocabulary that mapped above also navigates here.
+   * Act 2 — deep immutable update, kept as a reusable <em>path value</em> that mirrors {@code
+   * ORDER_MAPPER}: a path is a thing you store, not a call you re-spell. The same {@code Telescope}
+   * vocabulary that mapped {@code Order -> OrderDto} above navigates to every line item's price
+   * here.
+   */
+  public static final Telescope<Order, BigDecimal> LINE_PRICES = Telescope.of(Order.class)
+    .each(Order::lines)
+    .field(LineItem::price);
+
+  /**
+   * Multiply every line item's price by {@code rate} and rebuild the whole immutable {@code Order}
+   * graph in one typed pass, the original untouched. The clean structural gap: MapStruct maps
+   * {@code A -> B}; it does not read, write, or update a value's interior.
    */
   public static Order applyRate(final Order order, final BigDecimal rate) {
-    return Telescope.of(Order.class)
-      .each(Order::lines)
-      .field(LineItem::price)
-      .update(order, price -> price.multiply(rate));
+    return LINE_PRICES.update(order, price -> price.multiply(rate));
   }
 }

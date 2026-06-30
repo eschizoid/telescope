@@ -52,8 +52,8 @@ silent. The difference is **who does the fixing**.
   that string, and every other `@Mapping` across every mapper that named the renamed field. telescope's refactor did all
   of it in one keystroke.
 
-So both are compile-safe; telescope is **refactor-safe**. The string isn't unsafe — it's _un-refactorable_, which turns
-every rename into a string-chase across your mappers.
+So both are compile-safe on a field they map explicitly; telescope is **refactor-safe**. The string isn't unsafe — it's
+_un-refactorable_, which turns every rename into a string-chase across your mappers.
 
 > The documented core of the pitch: **method references over string-keyed `@Mapping`.** Strings don't refactor.
 
