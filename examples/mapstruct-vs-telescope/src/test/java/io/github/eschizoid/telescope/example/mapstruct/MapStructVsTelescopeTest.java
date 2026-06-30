@@ -17,10 +17,11 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The reproducible proof behind the slice README's head-to-head. Committed state is green: both
- * frameworks map identically. The footgun test pins MapStruct's default-policy silent drop
- * permanently, so CI demonstrates Layer 1 without anyone having to apply a rename by hand. The
- * rename divergence itself (telescope auto-refactors / MapStruct goes stale) is a documented manual
- * step in the README — a compile failure can't also be a passing test.
+ * frameworks map identically. The footgun test pins MapStruct's default-policy silent drop of an
+ * unmapped target permanently, so CI demonstrates it without anyone applying a rename by hand. The
+ * rename divergence itself (telescope's method reference auto-refactors; MapStruct's stale
+ * {@code @Mapping} string fails to compile) is a documented manual step in the README — a compile
+ * failure can't also be a passing test.
  */
 class MapStructVsTelescopeTest {
 
@@ -54,14 +55,14 @@ class MapStructVsTelescopeTest {
   }
 
   @Test
-  @DisplayName("Layer 1 footgun: MapStruct's default policy leaves an unmapped target silently null")
+  @DisplayName("Unmapped-target footgun: MapStruct's default policy leaves a target with no source silently null")
   void mapStructSilentlyDropsUnmappedTarget() {
     final var dto = SilentDropMapper.INSTANCE.toContactDto(new Customer("Ada", "ada@example.com"));
 
     assertEquals("ada@example.com", dto.contactEmail(), "the mapped field is fine");
     assertNull(
       dto.region(),
-      "default unmappedTargetPolicy=WARN compiles and nulls the unmapped target — the exact shape a rename produces"
+      "default unmappedTargetPolicy=WARN compiles and nulls an unmapped target (a source rename is the separate case — a compile error)"
     );
   }
 

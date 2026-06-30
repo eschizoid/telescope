@@ -315,10 +315,11 @@ architecture stops. Two questions decide it — is it as fast, and what do you g
 
 > **Runnable head-to-head:** [`examples/mapstruct-vs-telescope`](examples/mapstruct-vs-telescope/) is the canonical
 > side-by-side — the same `Order → OrderDto` mapping written both ways, in one module. It demonstrates, reproducibly,
-> what a field rename does to each (telescope's method reference follows the IDE refactor; MapStruct's `@Mapping` string
-> goes stale — silently `null` under default config, a manual hand-edit under the strictest), then a deep immutable
-> update MapStruct's architecture can't express. Run `./gradlew :examples:mapstruct-vs-telescope:test` — every claim is
-> a passing test or a one-command reproduction.
+> what a field rename does to each (telescope's method reference follows the IDE refactor automatically; MapStruct's
+> `@Mapping` string can't be refactored, so the same rename is a compile error you hand-fix across every mapper), the
+> separate default-policy footgun where unmapped targets go silently `null`, then a deep immutable update MapStruct's
+> architecture can't express. Run `./gradlew :examples:mapstruct-vs-telescope:test` — every claim is a passing test or a
+> one-command reproduction.
 
 #### First, the performance objection — settled
 

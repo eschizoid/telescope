@@ -16,12 +16,12 @@ Order(id, Customer, List<LineItem>)        OrderDto(id, CustomerDto, List<LineIt
 ```
 
 Both frameworks produce the **identical** `OrderDto` (the first test pins it). This isn't a strawman where MapStruct is
-misused — it's configured the normal way, and it works. The difference shows up in two places MapStruct's design can't
-reach.
+misused — it's configured the normal way, and it works. The difference shows up the moment the code changes underneath
+it: renaming a field, leaving a target unmapped, or needing to do anything past mapping.
 
 ---
 
-## Act 1 — rename a field, and watch the mapping
+## Act 1 — rename a field: the mapping string can't refactor
 
 The one cross-named field has to be spelled out on both sides. Here's the entire difference:
 
@@ -36,32 +36,47 @@ CustomerDto toDto(Customer customer);
 ```
 
 Now do what every codebase does eventually: **rename `Customer.email()` → `Customer.emailAddress()`** with your IDE's
-rename refactor.
+rename refactor. Both frameworks catch the change at compile time — credit where due, MapStruct is loud here, not
+silent. The difference is **who does the fixing**.
 
-- **telescope:** `Customer::email` is a real reference. The refactor moves it to `Customer::emailAddress` automatically;
-  if you somehow miss it, it's a compile error pointing at the line. Nothing can go stale.
-- **MapStruct:** `@Mapping(source = "email", …)` is opaque text. The refactor does not touch it. What happens next is
-  the whole point, and it depends on a policy most teams never set:
-
-  **Layer 1 — default config (`unmappedTargetPolicy = WARN`).** The stale string leaves `contactEmail` with no source.
-  MapStruct compiles with a _warning_ and the field is **silently `null` at runtime**. A quietly wrong object, no error.
-  This module pins that behavior permanently — `SilentDropMapper` has an unmapped `region`, and the test asserts the
-  `null`, so CI demonstrates the footgun on every run:
+- **telescope:** `Customer::email` is a real reference. The refactor updates it to `Customer::emailAddress`
+  automatically; if anything is missed it's a compile error at the line. Zero edits, and the mapping keeps working.
+- **MapStruct:** `@Mapping(source = "email", …)` is opaque text the refactor cannot touch. Left pointing at a property
+  that no longer exists, MapStruct **fails the build** — this is the actual error, captured from this module:
 
   ```
-  warning: Unmapped target property: "region".   // <- compiles anyway; region is null at runtime
+  error: No property named "email" exists in source parameter(s). Did you mean "emailAddress"?
   ```
 
-  **Layer 2 — strictest config (`unmappedTargetPolicy = ERROR`).** Now the stale string fails the build instead of
-  nulling — safer. But you've only traded a silent bug for manual labor: every `@Mapping` string referencing the renamed
-  field, across every mapper in the codebase, must be found and hand-edited. telescope's IDE refactor did all of that in
-  one keystroke, and a stale string was never possible.
+  That's the _good_ outcome: caught at compile time, not a silent runtime bug. But the fix is **manual** — you hand-edit
+  that string, and every other `@Mapping` across every mapper that named the renamed field. telescope's refactor did all
+  of it in one keystroke.
 
-**Reproduce it:** open `Customer.java`, rename `email` via your IDE, and run
-`./gradlew :examples:mapstruct-vs-telescope:build`. Watch the telescope reference follow the rename while the MapStruct
-string is left behind — silently (default) or as a compile error you now own (strict).
+So both are compile-safe; telescope is **refactor-safe**. The string isn't unsafe — it's _un-refactorable_, which turns
+every rename into a string-chase across your mappers.
 
-> This is the documented core of the pitch: **method references over string-keyed `@Mapping`.** Strings don't refactor.
+> The documented core of the pitch: **method references over string-keyed `@Mapping`.** Strings don't refactor.
+
+**Reproduce it:** rename `Customer.email` via your IDE (let it update telescope's `Customer::email`), leave the
+`@Mapping("email")` string as-is, and run `./gradlew :examples:mapstruct-vs-telescope:build`. telescope compiles;
+MapStruct prints the error above.
+
+---
+
+## A separate footgun — unmapped targets go silently null
+
+MapStruct's _other_ hazard is unrelated to renames, and it really is silent. A target field with **no source at all** —
+a newly added DTO field, or one whose source quietly drifted away — is, under MapStruct's **default**
+`unmappedTargetPolicy` (`WARN`), compiled with only a warning and left **`null` at runtime**:
+
+```
+warning: Unmapped target property: "region".   // <- compiles anyway; region is null at runtime
+```
+
+This module pins it permanently: `SilentDropMapper` maps to a `CustomerContactDto` whose `region` has no source, and the
+test asserts the `null`, so CI demonstrates the footgun on every run. Setting `unmappedTargetPolicy = ERROR` turns it
+into a build failure (the recommended hardening) — but it's off by default. telescope's strict `mapper(...)` refuses an
+unmapped field at _construction_ rather than nulling it.
 
 ---
 
@@ -81,8 +96,9 @@ Order taxed = Telescope.of(Order.class)
 ```
 
 MapStruct has **no equivalent**, by design: it maps `A → B`. It does not read, write, or update a value's interior, so
-this operation simply isn't expressible. The test pins that the original `Order` is unchanged and a new graph is
-returned.
+this operation simply isn't expressible. (MapStruct's `@MappingTarget` update methods mutate an existing _mutable_ bean
+in place — they can't rebuild an immutable record graph and hand you a new value with the original untouched.) The test
+pins that the original `Order` is unchanged and a new graph is returned.
 
 One vocabulary mapped the object _and_ updated it. With MapStruct you'd reach for a second tool (hand-written
 copy-with-changes, or an optics library) the moment you step past mapping.
@@ -93,7 +109,7 @@ copy-with-changes, or an optics library) the moment you step past mapping.
 
 Being fair is the point of a reproducible comparison:
 
-- **Mature ecosystem and IDE tooling** — MapStruct has years of plugins, docs, and Stack Overflow answers.
+- **Mature ecosystem and IDE tooling** — MapStruct has years of plugins, docs, and community answers behind it.
 - **Pure compile-time generation everywhere** — telescope's runtime path uses reflection (its `@Focus` / `@Bridge`
   codegen path is reflection-free, but it's opt-in); MapStruct generates code for every mapping by default.
 - **`jakarta` validation accumulates too** — if your only need is "collect all invalid fields," `Validator.validate()`
