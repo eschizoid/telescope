@@ -9,9 +9,8 @@ Telescope's runtime conversion factories — `Telescope.map`, `Telescope.mapper`
 incompatible-shapes rejection, and the eager `WriteHint` validation all throw a precise `IllegalStateException` /
 `IllegalArgumentException` when the mapper value is first built. Loud and early, but still runtime. MapStruct's core
 trust contract is stronger: _if it compiles, every mapping is complete._ Telescope only delivers that on the opt-in
-`@Bridge` codegen path — the ergonomic API everyone actually reaches for is compile-silent about a drifted field. Our
-own comparison slice (`examples/mapstruct-vs-telescope`) concedes this as the one dimension where MapStruct's
-architecture is safer by default. It is the last such concession.
+`@Bridge` codegen path — the ergonomic API everyone actually reaches for is compile-silent about a drifted field. That
+remains the one dimension where MapStruct's architecture is safer by default. It is the last such concession.
 
 Closing it requires checking **call sites** (`Telescope.mapper(A.class, B.class, rows…)` inside method bodies), which
 plain JSR-269 cannot see — annotation processors receive declared elements, never expression trees. And any checker
