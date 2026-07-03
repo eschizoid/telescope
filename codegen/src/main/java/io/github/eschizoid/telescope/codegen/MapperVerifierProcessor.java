@@ -138,9 +138,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             } catch (final RuntimeException e) {
               // The verifier must never break a build except through its own diagnostics — an
               // uncaught exception in a task listener aborts the compile. Skip the unit; the
-              // construction-time validation still applies. If this ever fires it is a
-              // verifier
-              // bug: verbose mode appends the stack trace so the report is debuggable.
+              // construction-time validation still applies. If this ever fires it is a verifier
+              // bug; verbose mode appends the stack trace so the report is debuggable.
               final var detail = new StringWriter();
               if (verbose) e.printStackTrace(new PrintWriter(detail));
               processingEnv
@@ -452,8 +451,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         report(row, PairingMessages.writeBeanTargetsRecord(elements.getBinaryName(targetEl).toString()));
         return;
       }
-      if (!hintTargets.add(elements.getBinaryName(targetEl).toString())) {
-        report(row, PairingMessages.duplicateWriteBeanHint(elements.getBinaryName(targetEl).toString()));
+      final var binaryName = elements.getBinaryName(targetEl).toString();
+      if (!hintTargets.add(binaryName)) {
+        report(row, PairingMessages.duplicateWriteBeanHint(binaryName));
       }
     }
 
