@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
  * Direct contract tests for {@link ReflectionProps} — the reflection-world {@link PropertySystem}
  * adapter the runtime mapper construction supplies to {@link PairingRules}. Pins the boxing table,
  * the class-handle discrimination, the parameterized-type decomposition, and the allocability
- * probe's tri-state answers.
+ * probe's answers (ALLOCABLE / NOT_ALLOCABLE — the reflection world never answers UNKNOWN).
  */
 class ReflectionPropsTest {
 
@@ -35,7 +35,10 @@ class ReflectionPropsTest {
     private static final long serialVersionUID = 1L;
   }
 
-  /** Package-private implicit constructor — the allocator probe requires a public one. */
+  /**
+   * Package-private implicit constructor — the allocator probe requires a public one (or a public
+   * static {@code builder()}).
+   */
   static class NoPublicCtorUrls extends ArrayList<String> {
 
     @Serial

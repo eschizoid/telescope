@@ -7,14 +7,19 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.PropertySystem.Allocability;
+import io.github.eschizoid.telescope.internal.pairing.PropertySystem.WellKnown;
 import java.io.Serial;
 import java.lang.reflect.Type;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.util.AbstractCollection;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
@@ -35,7 +40,8 @@ import org.junit.jupiter.api.Test;
  * runtime mapper construction and the compile-time verifier delegate to. Pins the {@code
  * decidePair} branch ordering (the decision lattice), the container-view selection rules, the
  * reflectability exclusions, the same-kind discriminator axes, and the same-name field matching —
- * all through the reflection world's {@link ReflectionProps}, independently of either consumer.
+ * independently of either consumer, driving the type-pairing decisions through the reflection
+ * world's {@link ReflectionProps}.
  */
 class PairingRulesTest {
 
@@ -81,6 +87,109 @@ class PairingRulesTest {
     private static final long serialVersionUID = 1L;
   }
 
+  /** Package-private implicit constructor — provably not allocable by the copy branch. */
+  static class NoPublicCtorUrls extends ArrayList<String> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  /** A Collection that is neither List, Set, nor Queue — beyond every discriminator axis. */
+  public static final class Bag extends AbstractCollection<String> {
+
+    @Override
+    public Iterator<String> iterator() {
+      return Collections.emptyIterator();
+    }
+
+    @Override
+    public int size() {
+      return 0;
+    }
+  }
+
+  /** A parameterized type the auto-lift does not understand. */
+  @SuppressWarnings("unused")
+  static final class Box<T> {
+
+    T value;
+  }
+
+  /**
+   * Delegates every primitive to {@link ReflectionProps} but answers {@code UNKNOWN} allocability —
+   * the compile-time world's posture, where no allocator can be probed. Lets the suite pin that
+   * {@link PairingRules} resolves the uncertainty in the accepting direction.
+   */
+  static final class UnknownAllocabilityProps implements PropertySystem<Type> {
+
+    private final ReflectionProps delegate = new ReflectionProps();
+
+    @Override
+    public boolean sameType(final Type a, final Type b) {
+      return delegate.sameType(a, b);
+    }
+
+    @Override
+    public boolean isClassType(final Type t) {
+      return delegate.isClassType(t);
+    }
+
+    @Override
+    public boolean isPrimitive(final Type t) {
+      return delegate.isPrimitive(t);
+    }
+
+    @Override
+    public Type boxed(final Type t) {
+      return delegate.boxed(t);
+    }
+
+    @Override
+    public boolean isRecordType(final Type t) {
+      return delegate.isRecordType(t);
+    }
+
+    @Override
+    public boolean isArrayType(final Type t) {
+      return delegate.isArrayType(t);
+    }
+
+    @Override
+    public boolean isEnumType(final Type t) {
+      return delegate.isEnumType(t);
+    }
+
+    @Override
+    public boolean isInterfaceType(final Type t) {
+      return delegate.isInterfaceType(t);
+    }
+
+    @Override
+    public boolean isSubtypeOf(final Type t, final WellKnown wellKnown) {
+      return delegate.isSubtypeOf(t, wellKnown);
+    }
+
+    @Override
+    public List<Type> typeArguments(final Type t) {
+      return delegate.typeArguments(t);
+    }
+
+    @Override
+    public Type rawType(final Type t) {
+      return delegate.rawType(t);
+    }
+
+    @Override
+    public Allocability copyAllocability(final Type src, final Type tgt) {
+      return Allocability.UNKNOWN;
+    }
+
+    @Override
+    public String typeName(final Type t) {
+      return delegate.typeName(t);
+    }
+  }
+
   /** Field declarations whose reflected generic types supply parameterized handles. */
   @SuppressWarnings("unused")
   static final class TypeHolder {
@@ -94,6 +203,7 @@ class PairingRulesTest {
     Map<String, String> mapStringToString;
     Map<Integer, String> mapIntegerToString;
     Map<?, String> mapWildcardToString;
+    Box<String> boxOfString;
   }
 
   private static Type typeOf(final String fieldName) {
@@ -138,13 +248,35 @@ class PairingRulesTest {
     @Test
     @DisplayName("raw same-kind container subclasses decide CollectionCopy before reflectable recursion can claim them")
     void collectionCopyPrecedesRecursion() {
+      assertTrue(rules.reflectable(ImageUrls.class), "premise: the recursion branch could claim this pair");
+      assertTrue(rules.reflectable(ImageUrlsDto.class), "premise: the recursion branch could claim this pair");
       assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ImageUrls.class, ImageUrlsDto.class, "f"));
     }
 
     @Test
     @DisplayName("raw same-kind Map subclasses decide MapCopy before reflectable recursion can claim them")
     void mapCopyPrecedesRecursion() {
+      assertTrue(rules.reflectable(Attrs.class), "premise: the recursion branch could claim this pair");
+      assertTrue(rules.reflectable(AttrsDto.class), "premise: the recursion branch could claim this pair");
       assertInstanceOf(PairDecision.MapCopy.class, rules.decidePair(Attrs.class, AttrsDto.class, "f"));
+    }
+
+    @Test
+    @DisplayName("a same-kind pair that is provably not allocable falls through to reflectable recursion")
+    void notAllocableSameKindPairFallsThrough() {
+      assertTrue(rules.sameKindCollection(ImageUrls.class, NoPublicCtorUrls.class), "premise: same-kind pair");
+      assertInstanceOf(PairDecision.RecursePair.class, rules.decidePair(ImageUrls.class, NoPublicCtorUrls.class, "f"));
+    }
+
+    @Test
+    @DisplayName("UNKNOWN allocability resolves in the accepting direction — copy decisions still fire")
+    void unknownAllocabilityStillDecidesCopy() {
+      final var optimistic = new PairingRules<Type>(new UnknownAllocabilityProps());
+      assertInstanceOf(
+        PairDecision.CollectionCopy.class,
+        optimistic.decidePair(ImageUrls.class, ImageUrlsDto.class, "f")
+      );
+      assertInstanceOf(PairDecision.MapCopy.class, optimistic.decidePair(Attrs.class, AttrsDto.class, "f"));
     }
 
     @Test
@@ -183,6 +315,7 @@ class PairingRulesTest {
       final var decision = rules.decidePair(typeOf("optionalOfString"), typeOf("optionalOfInteger"), "f");
       final var lift = assertInstanceOf(PairDecision.LiftContainer.class, decision);
       assertEquals(ContainerView.Kind.OPTIONAL, lift.src().kind());
+      assertEquals(ContainerView.Kind.OPTIONAL, lift.tgt().kind());
       assertEquals(String.class, lift.src().elementType());
       assertEquals(Integer.class, lift.tgt().elementType());
     }
@@ -203,7 +336,9 @@ class PairingRulesTest {
       final var decision = rules.decidePair(typeOf("mapStringToInteger"), typeOf("mapStringToString"), "f");
       final var lift = assertInstanceOf(PairDecision.LiftContainer.class, decision);
       assertEquals(ContainerView.Kind.MAP_VALUES, lift.src().kind());
+      assertEquals(ContainerView.Kind.MAP_VALUES, lift.tgt().kind());
       assertEquals(String.class, lift.src().keyType());
+      assertEquals(String.class, lift.tgt().keyType());
       assertEquals(Integer.class, lift.src().elementType());
       assertEquals(String.class, lift.tgt().elementType());
     }
@@ -220,10 +355,18 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("List<X> vs Set<X> is Incompatible — container kinds never cross-lift")
+    @DisplayName("List<X> vs Set<X> is Incompatible with the shape diagnostic — container kinds never cross-lift")
     void crossKindContainersAreIncompatible() {
       final var decision = rules.decidePair(typeOf("listOfString"), typeOf("setOfString"), "tags");
-      assertInstanceOf(PairDecision.Incompatible.class, decision);
+      final var incompatible = assertInstanceOf(PairDecision.Incompatible.class, decision);
+      assertEquals(
+        PairingMessages.incompatibleShapes(
+          "tags",
+          "java.util.List<java.lang.String>",
+          "java.util.Set<java.lang.String>"
+        ),
+        incompatible.message()
+      );
     }
 
     @Test
@@ -289,6 +432,12 @@ class PairingRulesTest {
     void nonParameterizedTypesHaveNoView() {
       assertNull(rules.containerViewOf(String.class));
       assertNull(rules.containerViewOf(ArrayList.class));
+    }
+
+    @Test
+    @DisplayName("a parameterized type that is not a known container presents no view")
+    void parameterizedNonContainerHasNoView() {
+      assertNull(rules.containerViewOf(typeOf("boxOfString")));
     }
   }
 
@@ -359,6 +508,13 @@ class PairingRulesTest {
     void nonCollectionIsNeverSameKind() {
       assertFalse(rules.sameKindCollection(String.class, ArrayList.class));
       assertFalse(rules.sameKindMap(String.class, HashMap.class));
+    }
+
+    @Test
+    @DisplayName("a Collection that is neither List, Set, nor Queue is never same-kind — even with itself")
+    void residualCollectionIsNeverSameKind() {
+      assertFalse(rules.sameKindCollection(Bag.class, Bag.class));
+      assertFalse(rules.sameKindCollection(Bag.class, ArrayList.class));
     }
 
     @Test
