@@ -265,6 +265,11 @@ class PairingRulesTest {
     @DisplayName("a same-kind pair that is provably not allocable falls through to reflectable recursion")
     void notAllocableSameKindPairFallsThrough() {
       assertTrue(rules.sameKindCollection(ImageUrls.class, NoPublicCtorUrls.class), "premise: same-kind pair");
+      assertEquals(
+        Allocability.NOT_ALLOCABLE,
+        new ReflectionProps().copyAllocability(ImageUrls.class, NoPublicCtorUrls.class),
+        "premise: provably not allocable"
+      );
       assertInstanceOf(PairDecision.RecursePair.class, rules.decidePair(ImageUrls.class, NoPublicCtorUrls.class, "f"));
     }
 
@@ -326,6 +331,7 @@ class PairingRulesTest {
       final var decision = rules.decidePair(typeOf("listOfString"), typeOf("listOfInteger"), "f");
       final var lift = assertInstanceOf(PairDecision.LiftContainer.class, decision);
       assertEquals(ContainerView.Kind.LIST, lift.src().kind());
+      assertEquals(ContainerView.Kind.LIST, lift.tgt().kind());
       assertEquals(String.class, lift.src().elementType());
       assertEquals(Integer.class, lift.tgt().elementType());
     }
