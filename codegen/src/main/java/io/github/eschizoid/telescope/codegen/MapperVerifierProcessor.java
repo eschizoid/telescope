@@ -33,7 +33,9 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeKind;
@@ -61,13 +63,13 @@ import javax.tools.Diagnostic;
  * {@code @UncheckedMapping("reason")} on an enclosing field, method, constructor, or class.
  *
  * <p>Scope notes, mirroring the runtime exactly: {@code mapperForward} is lenient by contract, so
- * only its explicit rows are checked (no completeness). Rows that carry user conversion functions
- * ({@code to(src, tgt, fwd, bwd)}, {@code toOneWay}, {@code enumTo}, {@code via}) are claims only —
- * their leaf conversion is the user's. Presence of a target-telescope / {@code constant} / {@code
- * compute} row switches the runtime into its permissive mode, so completeness checking is disabled
- * for that site too. Nested auto-recursed pairs are lenient about unmatched fields (as at runtime)
- * but still shape-checked. {@code toOrElse} / {@code toOrElseGet} are claims only: the runtime
- * constructs them without a shape gate, and this verifier never fires where construction succeeds.
+ * only its explicit rows are checked (no completeness). Rows that carry a conversion the verifier
+ * can't check ({@code to(src, tgt, fwd, bwd)}, {@code toOneWay}, {@code enumTo}, {@code via}) are
+ * claims only. Presence of a target-telescope / {@code constant} / {@code compute} row switches the
+ * runtime into its permissive mode, so completeness checking is disabled for that site too. Nested
+ * auto-recursed pairs are lenient about unmatched fields (as at runtime) but still shape-checked.
+ * {@code toOrElse} / {@code toOrElseGet} are claims only: the runtime constructs them without a
+ * shape gate, and this verifier never fires where construction succeeds.
  */
 @SupportedAnnotationTypes("*")
 @SupportedOptions({ "telescope.verify", "telescope.verify.verbose" })
@@ -118,12 +120,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     if (off) return;
     try {
       trees = Trees.instance(processingEnv);
-      // Scan each top-level type EXACTLY when its own analysis completes — its bodies are fully
-      // attributed there, so tree queries are pure reads. Scanning the whole unit on the first
-      // type's event would touch not-yet-attributed sibling types, and attributing on demand
-      // corrupts javac's symbol bookkeeping for anonymous classes when the final compile
-      // re-attributes the same trees (the classic reason body-level checkers run post-analysis).
-      // ANALYZE-finished fires once per top-level type, so per-type scanning needs no dedup.
+      // Scan each top-level type EXACTLY when its own analysis completes — its bodies (including
+      // every nested type's) are fully attributed there, so tree queries are pure reads. Scanning
+      // the whole unit on the first type's event would touch not-yet-attributed sibling types, and
+      // attributing on demand corrupts javac's symbol bookkeeping for anonymous classes when the
+      // final compile re-attributes the same trees (the classic reason body-level checkers run
+      // post-analysis). ANALYZE-finished fires per type DECLARATION — nested types included — so
+      // the top-level gate below is what prevents a nested type's subtree being scanned twice.
       // Registering from init keeps the processor packaging: one artifact, SPI-discovered.
       JavacTask.instance(processingEnv).addTaskListener(
         new TaskListener() {
@@ -131,7 +134,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           public void finished(final TaskEvent event) {
             if (event.getKind() != TaskEvent.Kind.ANALYZE) return;
             final var type = event.getTypeElement();
-            if (type == null) return;
+            if (type == null || type.getNestingKind() != NestingKind.TOP_LEVEL) return;
             final var path = trees.getPath(type);
             if (path == null) return;
             try {
@@ -139,9 +142,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             } catch (final RuntimeException e) {
               // The verifier must never break a build except through its own diagnostics — an
               // uncaught exception in a task listener aborts the compile. Skip the type; the
-              // construction-time validation still applies. If this ever fires it is a
-              // verifier
-              // bug; verbose mode appends the stack trace so the report is debuggable.
+              // construction-time validation still applies. A firing here is a verifier bug;
+              // verbose mode appends the stack trace so the report is debuggable.
               final var detail = new StringWriter();
               if (verbose) e.printStackTrace(new PrintWriter(detail));
               processingEnv
@@ -512,6 +514,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     /** True when {@code t} contains no wildcard or type variable at any depth. */
     private boolean staticallyComparable(final TypeMirror t) {
       if (t.getKind() == TypeKind.WILDCARD || t.getKind() == TypeKind.TYPEVAR) return false;
+      if (t instanceof ArrayType at) return staticallyComparable(at.getComponentType());
       if (t instanceof DeclaredType dt) {
         for (final var arg : dt.getTypeArguments()) {
           if (!staticallyComparable(arg)) return false;

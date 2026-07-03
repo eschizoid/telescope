@@ -14,9 +14,9 @@ import javax.lang.model.util.Types;
 /**
  * The {@code javax.lang.model} world's {@link PropertySystem}: type handles are {@link TypeMirror},
  * class handles are non-parameterized declared types (or primitives, matching the reflection
- * world's {@code Class} handles). {@link #copyAllocable} answers optimistically — compile-time
- * can't probe the real intermediate allocator, and optimism is the safe direction: an infeasible
- * copy surfaces at the construction-time backstop instead of as a speculative compile error.
+ * world's {@code Class} handles). {@link #copyAllocability} reports {@code UNKNOWN} — compile-time
+ * can't probe the real intermediate allocator; how that uncertainty resolves is the shared rules'
+ * policy, not this adapter's.
  */
 final class MirrorProps implements PropertySystem<TypeMirror> {
 
@@ -35,7 +35,9 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
 
   @Override
   public boolean isClassType(final TypeMirror t) {
-    if (t.getKind().isPrimitive()) return true;
+    // Arrays count: in the reflection world an array is a Class instance, and the container-view
+    // map-key gate relies on the two worlds agreeing.
+    if (t.getKind().isPrimitive() || t.getKind() == TypeKind.ARRAY) return true;
     return t instanceof DeclaredType dt && dt.getTypeArguments().isEmpty();
   }
 

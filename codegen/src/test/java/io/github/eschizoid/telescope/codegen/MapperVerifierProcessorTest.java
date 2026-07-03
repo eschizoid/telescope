@@ -459,8 +459,7 @@ class MapperVerifierProcessorTest {
     );
     assertFalse(compilation.success(), () -> compilation.errorMessages());
     assertTrue(compilation.hasError("duplicate override row for target field 'x'"), () -> compilation.errorMessages());
-    // The duplicate-target error is the only diagnostic — 'b' must not cascade as "unmatched
-    // source"
+    // The duplicate-target error is the only diagnostic — 'b' must not cascade as unmatched-source
     // because the duplicate row still consumes 'b' from the source side.
     final var errors = compilation
       .diagnostics()
@@ -471,6 +470,37 @@ class MapperVerifierProcessorTest {
       1,
       errors,
       () -> "the duplicate must not cascade into unmatched-field errors:\n" + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a call site inside a NESTED class is diagnosed exactly once, not once per enclosing type")
+  void nestedClassCallSiteDiagnosedOnce() {
+    final var compilation = verify(
+      """
+      package demo;
+      import io.github.eschizoid.telescope.Telescope;
+      import io.github.eschizoid.telescope.conversion.Mapper;
+      record Src(String a) {}
+      record Tgt(String a, String b) {}
+      class Holder {
+        static class Inner {
+          static final Mapper<Src, Tgt> M = Telescope.mapper(Src.class, Tgt.class);
+        }
+      }
+      """
+    );
+    assertFalse(compilation.success(), () -> compilation.errorMessages());
+    final var errors = compilation
+      .diagnostics()
+      .stream()
+      .filter(d -> d.getKind() == Diagnostic.Kind.ERROR)
+      .count();
+    assertEquals(
+      1,
+      errors,
+      () ->
+        "ANALYZE fires per type declaration; the nested subtree must be scanned once:\n" + compilation.errorMessages()
     );
   }
 

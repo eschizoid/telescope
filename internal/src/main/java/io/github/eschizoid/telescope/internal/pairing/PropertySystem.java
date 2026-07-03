@@ -50,8 +50,9 @@ public interface PropertySystem<T> {
   boolean sameType(T a, T b);
 
   /**
-   * True when {@code t} is a raw class handle — a primitive, or a non-parameterized, non-wildcard
-   * reference the rules may probe for record-ness, bean-ness, or subtype-copy pairing.
+   * True when {@code t} is a raw class handle — a primitive, an array, or a non-parameterized,
+   * non-wildcard reference the rules may probe for record-ness, bean-ness, or subtype-copy pairing.
+   * (In the reflection world all three are {@code Class} instances; the mirror world must agree.)
    * Parameterized container types answer {@code false} and flow to {@link
    * PairingRules#containerViewOf} instead.
    */
