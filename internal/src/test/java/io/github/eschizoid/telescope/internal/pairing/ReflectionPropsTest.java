@@ -35,6 +35,13 @@ class ReflectionPropsTest {
     private static final long serialVersionUID = 1L;
   }
 
+  /** Package-private implicit constructor — the allocator probe requires a public one. */
+  static class NoPublicCtorUrls extends ArrayList<String> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
   @SuppressWarnings("unused")
   static final class TypeHolder {
 
@@ -134,6 +141,13 @@ class ReflectionPropsTest {
     void nonClassHandleIsNotAllocable() {
       assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(listOfString(), UrlsDto.class));
       assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(Urls.class, listOfString()));
+    }
+
+    @Test
+    @DisplayName("a side without a public no-arg constructor (or builder) is NOT_ALLOCABLE")
+    void missingPublicNoArgCtorIsNotAllocable() {
+      assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(Urls.class, NoPublicCtorUrls.class));
+      assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(NoPublicCtorUrls.class, Urls.class));
     }
   }
 }
