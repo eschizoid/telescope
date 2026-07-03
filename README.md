@@ -313,6 +313,14 @@ duality. On the band they share (deep record↔record / bean↔record / bean↔b
 speed with compile-checked, bidirectional, refactor-safe rows; beyond that band, telescope keeps going where MapStruct's
 architecture stops. Two questions decide it — is it as fast, and what do you gain — in that order.
 
+> **Runnable head-to-head:** [`examples/mapstruct-vs-telescope`](examples/mapstruct-vs-telescope/) is the canonical
+> side-by-side — the same `Order → OrderDto` mapping written both ways, in one module. It demonstrates, reproducibly,
+> what a field rename does to each (telescope's method reference follows the IDE refactor automatically; MapStruct's
+> `@Mapping` string can't be refactored, so the same rename is a compile error you hand-fix across every mapper), the
+> separate default-policy footgun where unmapped targets go silently `null`, then a deep immutable update MapStruct's
+> architecture can't express. Run `./gradlew :examples:mapstruct-vs-telescope:test` — every claim is a passing test or a
+> one-command reproduction.
+
 #### First, the performance objection — settled
 
 **At the codegen level, telescope and MapStruct are the same performance class.** Both annotation processors emit direct
