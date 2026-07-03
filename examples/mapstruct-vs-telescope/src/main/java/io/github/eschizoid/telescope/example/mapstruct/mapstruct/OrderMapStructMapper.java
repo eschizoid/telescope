@@ -16,7 +16,8 @@ import org.mapstruct.factory.Mappers;
  * rename {@code @Mapping} (the idiomatic spot — a dotted {@code source = "customer.email"} on the
  * top-level method works too); the {@code LineItem} one is written out to make the collection
  * recursion explicit (MapStruct would otherwise synthesize element mapping for the same-named
- * record).
+ * properties). The targets are mutable JavaBeans, so MapStruct writes them the default way: no-arg
+ * constructor plus setters.
  *
  * <p>The load-bearing detail is the {@code "email"} string. Rename {@code Customer.email()} via an
  * IDE refactor and the string is <em>not</em> touched — it's opaque text, not a reference — so it

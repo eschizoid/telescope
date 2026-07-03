@@ -42,8 +42,12 @@ class MapStructVsTelescopeTest {
     final var viaTelescope = TelescopeMappings.ORDER_MAPPER.forward(order);
 
     assertEquals(viaMapStruct, viaTelescope, "both frameworks map the same Order to the same OrderDto");
-    assertEquals("ada@example.com", viaTelescope.customer().contactEmail(), "the email -> contactEmail rename landed");
-    assertEquals(2, viaTelescope.lines().size(), "the line-item collection recursed");
+    assertEquals(
+      "ada@example.com",
+      viaTelescope.getCustomer().getContactEmail(),
+      "the email -> contactEmail rename landed"
+    );
+    assertEquals(2, viaTelescope.getLines().size(), "the line-item collection recursed");
   }
 
   @Test
@@ -59,9 +63,9 @@ class MapStructVsTelescopeTest {
   void mapStructSilentlyDropsUnmappedTarget() {
     final var dto = SilentDropMapper.INSTANCE.toContactDto(new Customer("Ada", "ada@example.com"));
 
-    assertEquals("ada@example.com", dto.contactEmail(), "the mapped field is fine");
+    assertEquals("ada@example.com", dto.getContactEmail(), "the mapped field is fine");
     assertNull(
-      dto.region(),
+      dto.getRegion(),
       "default unmappedTargetPolicy=WARN compiles and nulls an unmapped target (a source rename is the separate case — a compile error)"
     );
   }

@@ -18,17 +18,19 @@ public final class TelescopeMappings {
 
   /**
    * Act 1 — the entire {@code Order -> OrderDto} mapping as one declarative value,
-   * <em>bidirectional for free</em> ({@code forward} / {@code backward}). Recursion handles the
-   * nested {@code Customer}, the {@code LineItem} list, and every same-named field; the single
-   * {@code to(...)} override spells the one difference with method references — {@code
-   * Customer::email} and {@code CustomerDto::contactEmail} — that the compiler checks and the IDE
+   * <em>bidirectional for free</em> ({@code forward} / {@code backward}). The source side is
+   * immutable records, the target side mutable JavaBeans — telescope handles the paradigm hop
+   * (no-arg constructor plus setters forward, getters backward). Recursion handles the nested
+   * {@code Customer}, the {@code LineItem} list, and every same-named field; the single {@code
+   * to(...)} override spells the one difference with method references — {@code Customer::email}
+   * and the bean getter {@code CustomerDto::getContactEmail} — that the compiler checks and the IDE
    * refactors. Rename {@code Customer.email()} and this reference moves with the rename; nothing
    * goes stale.
    */
   public static final Mapper<Order, OrderDto> ORDER_MAPPER = Telescope.mapper(
     Order.class,
     OrderDto.class,
-    to(Customer::email, CustomerDto::contactEmail)
+    to(Customer::email, CustomerDto::getContactEmail)
   );
 
   /**

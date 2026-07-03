@@ -7,12 +7,15 @@ can run it yourself:
 ./gradlew :examples:mapstruct-vs-telescope:test
 ```
 
-The domain is deliberately ordinary — a nested object and a collection, one field that needs an explicit rename:
+The domain is deliberately ordinary — a nested object and a collection, one field that needs an explicit rename.
+Immutable records in, mutable JavaBean DTOs out — the shape JPA and serialization frameworks impose — and both
+frameworks handle the paradigm hop:
 
 ```text
-Order(id, Customer, List<LineItem>)        OrderDto(id, CustomerDto, List<LineItemDto>)
-  Customer(name, email)          ──▶         CustomerDto(name, contactEmail)     // email -> contactEmail
-  LineItem(sku, quantity, price)             LineItemDto(sku, quantity, price)   // same-named, auto
+immutable records                          mutable JavaBeans (no-arg ctor + setters)
+Order(id, Customer, List<LineItem>)        OrderDto(getId, getCustomer, getLines)
+  Customer(name, email)          ──▶         CustomerDto(getName, getContactEmail)      // email -> contactEmail
+  LineItem(sku, quantity, price)             LineItemDto(getSku, getQuantity, getPrice) // same-named, auto
 ```
 
 Both frameworks produce the **identical** `OrderDto` (the first test pins it). This isn't a strawman where MapStruct is
@@ -28,7 +31,7 @@ The one cross-named field has to be spelled out on both sides. Here's the entire
 ```java
 // telescope — a method reference the compiler checks and the IDE refactors
 Telescope.mapper(Order.class, OrderDto.class,
-    to(Customer::email, CustomerDto::contactEmail));     // recursion handles everything else
+    to(Customer::email, CustomerDto::getContactEmail));  // recursion handles everything else
 
 // MapStruct — a string the IDE cannot see
 @Mapping(source = "email", target = "contactEmail")
