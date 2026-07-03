@@ -29,6 +29,13 @@ tasks.withType<JavaCompile>().configureEach {
     options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-Werror", "-parameters"))
 }
 
+tasks.named<JavaCompile>("compileTestJava") {
+    // This suite deliberately constructs invalid mappers to pin the construction-time rejections;
+    // the compile-time verifier would (correctly) refuse to compile them. The module under test IS
+    // the construction-time validator, so compile-time verification is off for its own tests.
+    options.compilerArgs.add("-Atelescope.verify=off")
+}
+
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
     testLogging {

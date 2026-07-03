@@ -12,6 +12,10 @@
 module io.github.eschizoid.telescope.codegen {
   requires transitive java.compiler;
   requires transitive io.github.eschizoid.telescope;
+  // The shared pairing decision spec (qualified-exported to this module) plus the javac tree API
+  // power MapperVerifierProcessor's compile-time replay of construction-time pairing decisions.
+  requires io.github.eschizoid.telescope.internal;
+  requires jdk.compiler;
 
   exports io.github.eschizoid.telescope.codegen;
 
@@ -20,5 +24,6 @@ module io.github.eschizoid.telescope.codegen {
       io.github.eschizoid.telescope.codegen.FocusProcessor,
       io.github.eschizoid.telescope.codegen.BeanFocusProcessor,
       io.github.eschizoid.telescope.codegen.BridgeProcessor,
-      io.github.eschizoid.telescope.codegen.FromMapProcessor;
+      io.github.eschizoid.telescope.codegen.FromMapProcessor,
+      io.github.eschizoid.telescope.codegen.MapperVerifierProcessor;
 }

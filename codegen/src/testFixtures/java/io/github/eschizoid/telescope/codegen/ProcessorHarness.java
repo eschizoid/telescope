@@ -47,6 +47,41 @@ public final class ProcessorHarness {
    * round.
    */
   public static Compilation compile(final List<? extends Processor> processors, final JavaFileObject... sources) {
+    return compile(processors, List.of(), sources);
+  }
+
+  /**
+   * Same as {@link #compile(List, JavaFileObject...)} with extra compiler options appended — e.g.
+   * {@code -Atelescope.verify=warn} to exercise a processor's option handling.
+   */
+  public static Compilation compile(
+    final List<? extends Processor> processors,
+    final List<String> extraOptions,
+    final JavaFileObject... sources
+  ) {
+    return run(processors, extraOptions, true, sources);
+  }
+
+  /**
+   * Compile through the FULL javac pipeline (parse → process → analyze → generate), with class
+   * output captured in memory and discarded. Needed for processors that do their work from a
+   * post-analysis task listener rather than in the processing rounds — under {@code -proc:only} the
+   * analyze phase never runs, so such processors would be silent.
+   */
+  public static Compilation compileFully(
+    final List<? extends Processor> processors,
+    final List<String> extraOptions,
+    final JavaFileObject... sources
+  ) {
+    return run(processors, extraOptions, false, sources);
+  }
+
+  private static Compilation run(
+    final List<? extends Processor> processors,
+    final List<String> extraOptions,
+    final boolean procOnly,
+    final JavaFileObject... sources
+  ) {
     final JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
     if (compiler == null) {
       throw new IllegalStateException("no system Java compiler available (need a JDK, not a JRE)");
@@ -58,12 +93,17 @@ public final class ProcessorHarness {
     );
 
     // -proc:only runs annotation processing without emitting .class files (nothing leaks into the
-    // working tree, no read-back compile round). The -Xlint flags mirror the build.
+    // working tree, no read-back compile round); the full pipeline routes class output into the
+    // capturing manager's in-memory sink instead. The -Xlint flags mirror the build.
+    final var options = new ArrayList<>(
+      procOnly ? List.of("-proc:only", "-Xlint:all,-processing") : List.of("-Xlint:all,-processing")
+    );
+    options.addAll(extraOptions);
     final JavaCompiler.CompilationTask task = compiler.getTask(
       null,
       capturing,
       diagnostics,
-      List.of("-proc:only", "-Xlint:all,-processing"),
+      options,
       null,
       List.of(sources)
     );
@@ -156,6 +196,11 @@ public final class ProcessorHarness {
         captured.put(className, sourceFile);
         return sourceFile;
       }
+      // Full-pipeline compiles route class output here — sink it in memory so nothing lands in
+      // the working tree.
+      if (location == StandardLocation.CLASS_OUTPUT && kind == JavaFileObject.Kind.CLASS) {
+        return new DiscardedClass(className);
+      }
       return super.getJavaFileForOutput(location, className, kind, sibling);
     }
 
@@ -212,6 +257,19 @@ public final class ProcessorHarness {
   }
 
   /** In-memory sink for a single generated source file. */
+  /** In-memory sink for class output in full-pipeline compiles — the bytes are discarded. */
+  private static final class DiscardedClass extends SimpleJavaFileObject {
+
+    DiscardedClass(final String className) {
+      super(URI.create("mem:///" + className.replace('.', '/') + Kind.CLASS.extension), Kind.CLASS);
+    }
+
+    @Override
+    public OutputStream openOutputStream() {
+      return new ByteArrayOutputStream();
+    }
+  }
+
   private static final class CapturedSource extends SimpleJavaFileObject {
 
     private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
