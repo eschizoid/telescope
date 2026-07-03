@@ -16,6 +16,8 @@ import io.github.eschizoid.telescope.annotations.UncheckedMapping;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -63,7 +65,7 @@ import javax.tools.Diagnostic;
  *
  * <p>Scope notes, mirroring the runtime exactly: {@code mapperForward} is lenient by contract, so
  * only its explicit rows are checked (no completeness). Rows that carry user conversion functions
- * ({@code to(src, tgt, fwd, bwd)}, {@code forward}, {@code enumTo}, {@code via}) are claims only —
+ * ({@code to(src, tgt, fwd, bwd)}, {@code toOneWay}, {@code enumTo}, {@code via}) are claims only —
  * their leaf conversion is the user's. Presence of a target-telescope / {@code constant} / {@code
  * compute} row switches the runtime into its permissive mode, so completeness checking is disabled
  * for that site too. Nested auto-recursed pairs are lenient about unmatched fields (as at runtime)
@@ -95,6 +97,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   private boolean off;
   private boolean verbose;
   private boolean notedUnavailable;
+  private String unavailableReason;
 
   @Override
   public synchronized void init(final ProcessingEnvironment processingEnv) {
@@ -104,6 +107,14 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     props = new MirrorProps(types, elements);
     rules = new PairingRules<>(props);
     final var mode = processingEnv.getOptions().getOrDefault("telescope.verify", "error");
+    if (!"error".equals(mode) && !"warn".equals(mode) && !"off".equals(mode)) {
+      processingEnv
+        .getMessager()
+        .printMessage(
+          Diagnostic.Kind.NOTE,
+          "telescope: unrecognized -Atelescope.verify value '" + mode + "'; using 'error'."
+        );
+    }
     off = "off".equals(mode);
     reportKind = "warn".equals(mode) ? Diagnostic.Kind.WARNING : Diagnostic.Kind.ERROR;
     verbose = processingEnv.getOptions().containsKey("telescope.verify.verbose");
@@ -127,7 +138,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             } catch (final RuntimeException e) {
               // The verifier must never break a build except through its own diagnostics — an
               // uncaught exception in a task listener aborts the compile. Skip the unit; the
-              // construction-time validation still applies.
+              // construction-time validation still applies. If this ever fires it is a
+              // verifier
+              // bug: verbose mode appends the stack trace so the report is debuggable.
+              final var detail = new StringWriter();
+              if (verbose) e.printStackTrace(new PrintWriter(detail));
               processingEnv
                 .getMessager()
                 .printMessage(
@@ -136,14 +151,19 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
                     unit.getSourceFile().getName() +
                     " (" +
                     e +
-                    "); construction-time validation still applies."
+                    "); construction-time validation still applies." +
+                    (verbose ? "\n" + detail : "")
                 );
             }
           }
         }
       );
     } catch (final RuntimeException e) {
+      // Trees.instance / JavacTask.instance throw for non-javac environments; anything else
+      // escaping here is a real init bug. Either way the reason is carried into the one NOTE so
+      // the two causes are distinguishable in a report.
       trees = null;
+      unavailableReason = e.toString();
     }
   }
 
@@ -167,7 +187,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         .printMessage(
           Diagnostic.Kind.NOTE,
           "telescope: compile-time mapping verification needs the javac tree API; " +
-            "skipping (construction-time validation still applies)."
+            "skipping (construction-time validation still applies). Cause: " +
+            unavailableReason
         );
     }
     return false;
@@ -240,7 +261,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
       final var srcEl = props.elementOf(srcType);
       final var tgtEl = props.elementOf(tgtType);
-      if (srcEl == null || tgtEl == null || !rules.reflectable(srcType) || !rules.reflectable(tgtType)) return;
+      if (srcEl == null || tgtEl == null || !rules.reflectable(srcType) || !rules.reflectable(tgtType)) {
+        note(
+          node,
+          "telescope: mapping not statically verifiable (non-reflectable class argument); deferring to construction"
+        );
+        return;
+      }
 
       final var srcSimple = srcEl.getSimpleName().toString();
       final var tgtSimple = tgtEl.getSimpleName().toString();
@@ -275,7 +302,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           continue;
         }
         analyzable &= verifyRow(row, rowExec, srcType, tgtType, srcSimple, tgtSimple, claimedSrc, claimedTgt);
-        permissive |= isPermissiveRow(rowExec);
+        permissive |= isPermissiveRow(row, rowExec);
       }
 
       if (!analyzable) {
@@ -323,16 +350,18 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final var rowName = rowExec.getSimpleName().toString();
       final var rowArgs = row.getArguments();
       switch (rowName) {
-        case "to", "toOrElse", "toOrElseGet", "forward", "enumTo", "via" -> {
+        case "to", "toOrElse", "toOrElseGet", "toOneWay", "enumTo", "via" -> {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           final var tgt = rowArgs.size() < 2 ? null : accessorProp(rowArgs.get(1));
           if (src == null || tgt == null) return false;
           // Rows are grouped by the accessors' OWN classes at construction (a row may be keyed to
           // a nested pair encountered during recursion). Only rows keyed to THIS call's pair claim
           // fields here; nested-keyed rows are still shape-checked against their own types below.
+          // Both sides erased: a generic owner's asType() is the parameterized prototype, which
+          // isSameType would never match against the raw class literal.
           final var topLevelRow =
-            types.isSameType(src.owner().asType(), types.erasure(srcType)) &&
-            types.isSameType(tgt.owner().asType(), types.erasure(tgtType));
+            types.isSameType(types.erasure(src.owner().asType()), types.erasure(srcType)) &&
+            types.isSameType(types.erasure(tgt.owner().asType()), types.erasure(tgtType));
           if (topLevelRow) {
             // Always consume the source side — even when the target is a duplicate — so the source
             // field isn't later reported as unmatched (which would be a cascade error on top of the
@@ -355,7 +384,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         case "drop" -> {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           if (src == null) return false;
-          if (types.isSameType(src.owner().asType(), types.erasure(srcType)) && !claimedSrc.add(src.name())) {
+          if (
+            types.isSameType(types.erasure(src.owner().asType()), types.erasure(srcType)) && !claimedSrc.add(src.name())
+          ) {
             report(row, PairingMessages.duplicateSourceRow(srcSimple, tgtSimple, src.name()));
           }
           return true;
@@ -382,10 +413,24 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
     }
 
-    /** {@code constant} / {@code compute} switch the runtime into its permissive fixup mode. */
-    private boolean isPermissiveRow(final ExecutableElement rowExec) {
+    /**
+     * {@code constant} / {@code compute} switch the runtime into its permissive fixup mode — and a
+     * {@code when(...)} wrapper is peeled to its inner row at construction, so a wrapped {@code
+     * constant}/{@code compute} is exactly as permissive as a bare one.
+     */
+    private boolean isPermissiveRow(final MethodInvocationTree row, final ExecutableElement rowExec) {
       final var n = rowExec.getSimpleName().toString();
-      return "constant".equals(n) || "compute".equals(n);
+      if ("constant".equals(n) || "compute".equals(n)) return true;
+      if (
+        "when".equals(n) &&
+        row.getArguments().size() == 2 &&
+        row.getArguments().get(1) instanceof MethodInvocationTree inner
+      ) {
+        return (
+          elementAt(inner.getMethodSelect()) instanceof ExecutableElement innerExec && isPermissiveRow(inner, innerExec)
+        );
+      }
+      return false;
     }
 
     private void verifyWriteHint(
@@ -396,24 +441,19 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (!"writeBean".contentEquals(rowExec.getSimpleName())) return;
       final var target = row.getArguments().isEmpty() ? null : classLiteral(row.getArguments().get(0));
       final var targetEl = target == null ? null : props.elementOf(target);
-      if (targetEl == null) return;
-      if (targetEl.getKind() == ElementKind.RECORD) {
-        report(
+      if (targetEl == null) {
+        note(
           row,
-          "writeBean hint targets a record class (" +
-            elements.getBinaryName(targetEl) +
-            "). Records are always reconstructed via the canonical constructor; the hint cannot apply. " +
-            "Remove the writeBean(...) row, or move it to the bean side of the mapping."
+          "telescope: writeBean hint not statically verifiable (non-literal class argument); deferring to construction"
         );
         return;
       }
+      if (targetEl.getKind() == ElementKind.RECORD) {
+        report(row, PairingMessages.writeBeanTargetsRecord(elements.getBinaryName(targetEl).toString()));
+        return;
+      }
       if (!hintTargets.add(elements.getBinaryName(targetEl).toString())) {
-        report(
-          row,
-          "Duplicate writeBean hint for " +
-            elements.getBinaryName(targetEl) +
-            ". Each target class may declare at most one writeBean(...) row per Telescope.map(...) call."
-        );
+        report(row, PairingMessages.duplicateWriteBeanHint(elements.getBinaryName(targetEl).toString()));
       }
     }
 
@@ -430,6 +470,10 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final Tree at,
       final Set<String> seen
     ) {
+      // Wildcards and type variables aren't statically comparable across the two worlds — the
+      // runtime's structural Type#equals calls identical wildcard pairs equal where isSameType is
+      // specified false. Skip rather than mis-decide: the construction backstop still applies.
+      if (!staticallyComparable(srcType) || !staticallyComparable(tgtType)) return;
       final var decision = rules.decidePair(srcType, tgtType, componentName);
       if (decision instanceof PairDecision.Incompatible<TypeMirror> incompatible) {
         report(at, incompatible.message());
@@ -464,6 +508,17 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (decision instanceof PairDecision.LiftContainer<TypeMirror> d) {
         verifyDeep(d.src().elementType(), d.tgt().elementType(), componentName + "[*]", at, seen);
       }
+    }
+
+    /** True when {@code t} contains no wildcard or type variable at any depth. */
+    private boolean staticallyComparable(final TypeMirror t) {
+      if (t.getKind() == TypeKind.WILDCARD || t.getKind() == TypeKind.TYPEVAR) return false;
+      if (t instanceof DeclaredType dt) {
+        for (final var arg : dt.getTypeArguments()) {
+          if (!staticallyComparable(arg)) return false;
+        }
+      }
+      return true;
     }
 
     /** The {@code TypeMirror} behind a class-literal argument ({@code Order.class}), or null. */
@@ -533,8 +588,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (!method.getParameters().isEmpty()) continue;
       if (!method.getModifiers().contains(Modifier.PUBLIC) || method.getModifiers().contains(Modifier.STATIC)) continue;
       final var declaringType = (TypeElement) method.getEnclosingElement();
-      final var pkg = elements.getPackageOf(declaringType).getQualifiedName().toString();
-      if (pkg.startsWith("java.") || pkg.startsWith("jdk.")) continue;
+      // Skip platform supertypes by MODULE name, exactly like the runtime getter scan — a package
+      // prefix would miss javax.* packages living inside java.* modules (java.sql, java.naming, …).
+      final var declaringModule = elements.getModuleOf(declaringType);
+      if (declaringModule != null && !declaringModule.isUnnamed()) {
+        final var moduleName = declaringModule.getQualifiedName().toString();
+        if (moduleName.startsWith("java.") || moduleName.startsWith("jdk.")) continue;
+      }
       final var rawName = method.getSimpleName().toString();
       final String prop;
       if (rawName.length() > 3 && rawName.startsWith("get") && method.getReturnType().getKind() != TypeKind.VOID) {

@@ -197,16 +197,9 @@ public final class DeepMap {
     for (final var hint : hints) {
       if (hint instanceof WriteHint.DefaultWriteHint) continue; // handled by extractDefaultStrategy
       final var cls = hint.targetClass();
-      if (cls.isRecord()) throw new IllegalArgumentException(
-        "writeBean hint targets a record class (" +
-          cls.getName() +
-          "). Records are always reconstructed via the canonical constructor; the hint cannot apply. " +
-          "Remove the writeBean(...) row, or move it to the bean side of the mapping."
-      );
+      if (cls.isRecord()) throw new IllegalArgumentException(PairingMessages.writeBeanTargetsRecord(cls.getName()));
       if (map.containsKey(cls)) throw new IllegalArgumentException(
-        "Duplicate writeBean hint for " +
-          cls.getName() +
-          ". Each target class may declare at most one writeBean(...) row per Telescope.map(...) call."
+        PairingMessages.duplicateWriteBeanHint(cls.getName())
       );
       map.put(cls, writerFor(hint));
     }

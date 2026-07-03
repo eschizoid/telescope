@@ -361,6 +361,86 @@ class MapperVerifierProcessorTest {
   }
 
   @Test
+  @DisplayName("a when-wrapped constant is permissive exactly like a bare one — no completeness error")
+  void whenWrappedConstantIsPermissive() {
+    final var compilation = verify(
+      """
+      package demo;
+      import io.github.eschizoid.telescope.Telescope;
+      import io.github.eschizoid.telescope.conversion.Mapper;
+      import io.github.eschizoid.telescope.mapping.Mapping;
+      record Src(String a) {}
+      record Tgt(String a, String extra) {}
+      class Holder {
+        static final Mapper<Src, Tgt> M = Telescope.mapper(
+          Src.class, Tgt.class, Mapping.when(s -> true, Mapping.constant(Tgt::extra, "x")));
+      }
+      """
+    );
+    assertTrue(compilation.success(), () -> compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("a toOneWay row claims its fields — the renamed pair is not reported unmatched")
+  void toOneWayRowClaims() {
+    final var compilation = verify(
+      """
+      package demo;
+      import io.github.eschizoid.telescope.Telescope;
+      import io.github.eschizoid.telescope.conversion.ForwardMapper;
+      import io.github.eschizoid.telescope.mapping.Mapping;
+      record Src(Integer count) {}
+      record Tgt(String label) {}
+      class Holder {
+        static final ForwardMapper<Src, Tgt> M = Telescope.mapperForward(
+          Src.class, Tgt.class, Mapping.toOneWay(Src::count, Tgt::label, i -> String.valueOf(i)));
+      }
+      """
+    );
+    assertTrue(compilation.success(), () -> compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("an identical wildcard-bearing field pair is skipped, not mis-decided")
+  void wildcardIdentitySkips() {
+    final var compilation = verify(
+      """
+      package demo;
+      import io.github.eschizoid.telescope.Telescope;
+      import io.github.eschizoid.telescope.conversion.Mapper;
+      import java.util.List;
+      record Src(List<? extends CharSequence> xs) {}
+      record Tgt(List<? extends CharSequence> xs) {}
+      class Holder {
+        static final Mapper<Src, Tgt> M = Telescope.mapper(Src.class, Tgt.class);
+      }
+      """
+    );
+    assertTrue(compilation.success(), () -> compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("rows on a generic source class still claim their fields (erasure-matched owners)")
+  void genericOwnerRowsClaim() {
+    final var compilation = verify(
+      """
+      package demo;
+      import io.github.eschizoid.telescope.Telescope;
+      import io.github.eschizoid.telescope.conversion.Mapper;
+      import io.github.eschizoid.telescope.mapping.Mapping;
+      record Box<T>(String payload) {}
+      record BoxDto(String data) {}
+      class Holder {
+        @SuppressWarnings("rawtypes")
+        static final Mapper<Box, BoxDto> M = Telescope.mapper(
+          Box.class, BoxDto.class, Mapping.<Box, BoxDto, String>to(Box::payload, BoxDto::data));
+      }
+      """
+    );
+    assertTrue(compilation.success(), () -> compilation.errorMessages());
+  }
+
+  @Test
   @DisplayName("duplicate rows for the same target field error with the construction-time message")
   void duplicateTargetRowErrors() {
     final var compilation = verify(
@@ -379,10 +459,19 @@ class MapperVerifierProcessorTest {
     );
     assertFalse(compilation.success(), () -> compilation.errorMessages());
     assertTrue(compilation.hasError("duplicate override row for target field 'x'"), () -> compilation.errorMessages());
-    // The duplicate-target error is the only diagnostic — 'b' must not cascade as "unmatched source"
+    // The duplicate-target error is the only diagnostic — 'b' must not cascade as "unmatched
+    // source"
     // because the duplicate row still consumes 'b' from the source side.
-    final var errors = compilation.diagnostics().stream().filter(d -> d.getKind() == Diagnostic.Kind.ERROR).count();
-    assertEquals(1, errors, () -> compilation.errorMessages());
+    final var errors = compilation
+      .diagnostics()
+      .stream()
+      .filter(d -> d.getKind() == Diagnostic.Kind.ERROR)
+      .count();
+    assertEquals(
+      1,
+      errors,
+      () -> "the duplicate must not cascade into unmatched-field errors:\n" + compilation.errorMessages()
+    );
   }
 
   @Test

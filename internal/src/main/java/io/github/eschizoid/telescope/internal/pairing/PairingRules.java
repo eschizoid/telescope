@@ -15,9 +15,12 @@ import java.util.Set;
  * through {@link PropertySystem} — so the rules cannot drift between compile time and construction
  * time.
  *
- * <p>Decision order in {@link #decidePair} is load-bearing and mirrors the runtime lattice exactly:
- * identity → primitive/wrapper → same-kind subtype copy → reflectable recursion → cross-{@code
- * Optional} bridge → same-kind container lift → incompatible.
+ * <p>Decision order in {@link #decidePair} is load-bearing — it IS the runtime lattice: identity →
+ * primitive/wrapper → same-kind subtype copy → reflectable recursion → cross-{@code Optional}
+ * bridge → same-kind container lift → incompatible. Subtype copy must precede reflectable
+ * recursion: a raw container subclass ({@code class ImageUrls extends ArrayList<ImageUrl>}) counts
+ * as reflectable, and bean-decomposing it would fail at the JDK boundary (private lookup into
+ * {@code java.base} is rejected) — the copy branch intercepts those pairs first.
  *
  * @param <T> the world's type handle
  */
@@ -39,12 +42,21 @@ public final class PairingRules<T> {
       if (primitiveWrapperPair(srcType, tgtType)) return new PairDecision.PrimitiveWrapper<>();
 
       // (a.2) Same-kind Collection / Map subtype pair (raw container subclasses on both sides) —
-      // element copy, gated on kind-discriminator agreement AND allocability so an infeasible copy
-      // falls through to the remaining branches exactly like the runtime.
-      if (sameKindCollection(srcType, tgtType) && props.copyAllocable(srcType, tgtType)) {
+      // element copy, gated on kind-discriminator agreement AND allocability so a provably
+      // infeasible copy falls through to the remaining branches exactly like the runtime. UNKNOWN
+      // allocability (the compile-time world can't probe allocators) resolves in the ACCEPTING
+      // direction here: CollectionCopy/MapCopy are terminal accepts, so optimism can only defer an
+      // error to the construction backstop, never invent one.
+      if (
+        sameKindCollection(srcType, tgtType) &&
+        props.copyAllocability(srcType, tgtType) != PropertySystem.Allocability.NOT_ALLOCABLE
+      ) {
         return new PairDecision.CollectionCopy<>();
       }
-      if (sameKindMap(srcType, tgtType) && props.copyAllocable(srcType, tgtType)) {
+      if (
+        sameKindMap(srcType, tgtType) &&
+        props.copyAllocability(srcType, tgtType) != PropertySystem.Allocability.NOT_ALLOCABLE
+      ) {
         return new PairDecision.MapCopy<>();
       }
 
@@ -87,8 +99,9 @@ public final class PairingRules<T> {
    * The container view of {@code t}, or {@code null} when {@code t} is not a parameterized
    * container the auto-lift understands. Selection rules: {@code Optional} (final, exact) →
    * OPTIONAL; any {@code List} / {@code Set} subtype → LIST / SET; any {@code Map} subtype whose
-   * key argument is a plain class handle → MAP_VALUES (a wildcard or variable key defeats the
-   * key-equality guarantee, so the type is not treated as a liftable container).
+   * key argument is a plain class handle → MAP_VALUES (a non-class key — wildcard, type variable,
+   * or parameterized type — defeats the key-equality guarantee, so the type is not treated as a
+   * liftable container).
    */
   public ContainerView<T> containerViewOf(final T t) {
     final var args = props.typeArguments(t);
@@ -159,7 +172,12 @@ public final class PairingRules<T> {
     return props.isSubtypeOf(a, WellKnown.DEQUE) == props.isSubtypeOf(b, WellKnown.DEQUE);
   }
 
-  /** Both sides are {@code Map} subtypes agreeing on the SortedMap axis. */
+  /**
+   * Both sides are {@code Map} subtypes agreeing on the SortedMap axis — a {@code HashMap ↔
+   * TreeMap} pair over non-Comparable keys would throw at copy time when the fresh sorted map calls
+   * {@code compareTo} on the first inserted key, so the crossing is rejected before any conversion
+   * runs.
+   */
   public boolean sameKindMap(final T a, final T b) {
     if (!props.isSubtypeOf(a, WellKnown.MAP) || !props.isSubtypeOf(b, WellKnown.MAP)) return false;
     return props.isSubtypeOf(a, WellKnown.SORTED_MAP) == props.isSubtypeOf(b, WellKnown.SORTED_MAP);

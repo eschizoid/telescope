@@ -32,13 +32,28 @@ public interface PropertySystem<T> {
     CHARACTER_WRAPPER,
   }
 
+  /** Whether both sides of a same-kind subtype copy can actually be allocated. */
+  enum Allocability {
+    /** Both sides allocable — the copy is buildable. */
+    ALLOCABLE,
+    /** At least one side provably not allocable — the pair falls through to the next branch. */
+    NOT_ALLOCABLE,
+    /**
+     * This world can't tell (the compile-time adapter). {@link PairingRules} resolves the
+     * uncertainty in the accepting direction — an infeasible copy then surfaces at the
+     * construction-time backstop rather than as a speculative compile error.
+     */
+    UNKNOWN,
+  }
+
   /** Structural type equality — {@code Type#equals} / {@code Types#isSameType} semantics. */
   boolean sameType(T a, T b);
 
   /**
-   * True when {@code t} is a raw class handle — a non-parameterized, non-wildcard reference the
-   * rules may probe for record-ness, bean-ness, or subtype-copy pairing. Parameterized container
-   * types answer {@code false} and flow to {@link PairingRules#containerViewOf} instead.
+   * True when {@code t} is a raw class handle — a primitive, or a non-parameterized, non-wildcard
+   * reference the rules may probe for record-ness, bean-ness, or subtype-copy pairing.
+   * Parameterized container types answer {@code false} and flow to {@link
+   * PairingRules#containerViewOf} instead.
    */
   boolean isClassType(T t);
 
@@ -65,12 +80,12 @@ public interface PropertySystem<T> {
   T rawType(T t);
 
   /**
-   * True when a same-kind collection/map subtype pair can actually be element-copied — both sides
-   * allocable. The reflection world probes the real intermediate allocator; the compile-time world
-   * answers optimistically ({@code true} when uncertain) so an infeasible copy surfaces at the
-   * construction-time backstop rather than as a speculative compile error.
+   * Whether a same-kind collection/map subtype pair can actually be element-copied. A pure fact per
+   * world: the reflection adapter probes the real intermediate allocator; the compile-time adapter
+   * answers {@link Allocability#UNKNOWN}. The uncertainty POLICY (proceed as copyable) lives in
+   * {@link PairingRules}, not here.
    */
-  boolean copyAllocable(T src, T tgt);
+  Allocability copyAllocability(T src, T tgt);
 
   /** Human-readable type name for diagnostics — {@code Type#getTypeName} semantics. */
   String typeName(T t);

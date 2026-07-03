@@ -88,8 +88,8 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
-  public boolean copyAllocable(final TypeMirror src, final TypeMirror tgt) {
-    return true;
+  public Allocability copyAllocability(final TypeMirror src, final TypeMirror tgt) {
+    return Allocability.UNKNOWN;
   }
 
   @Override

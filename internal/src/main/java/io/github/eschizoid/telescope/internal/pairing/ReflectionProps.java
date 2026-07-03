@@ -88,13 +88,13 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
-  public boolean copyAllocable(final Type src, final Type tgt) {
-    return (
+  public Allocability copyAllocability(final Type src, final Type tgt) {
+    final var allocable =
       src instanceof Class<?> srcCls &&
       tgt instanceof Class<?> tgtCls &&
       Beans.intermediateAllocator(srcCls).get() != null &&
-      Beans.intermediateAllocator(tgtCls).get() != null
-    );
+      Beans.intermediateAllocator(tgtCls).get() != null;
+    return allocable ? Allocability.ALLOCABLE : Allocability.NOT_ALLOCABLE;
   }
 
   @Override

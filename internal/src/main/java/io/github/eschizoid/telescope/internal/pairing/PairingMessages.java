@@ -1,14 +1,33 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 /**
- * The single source of truth for every pairing diagnostic. The runtime throws these strings at
- * mapper construction; the compile-time verifier reports the same strings as compiler errors —
- * byte-identical, so a user who has seen one recognizes the other. Wording changes happen here and
- * nowhere else.
+ * The single source of truth for every diagnostic the shared pairing decisions emit. The runtime
+ * throws these strings at mapper construction; the compile-time verifier reports the same strings
+ * as compiler errors — byte-identical, so a user who has seen one recognizes the other. Wording
+ * changes happen here and nowhere else.
  */
 public final class PairingMessages {
 
   private PairingMessages() {}
+
+  /** A {@code writeBean} hint targeting a record — the hint can never apply. */
+  public static String writeBeanTargetsRecord(final String binaryName) {
+    return (
+      "writeBean hint targets a record class (" +
+      binaryName +
+      "). Records are always reconstructed via the canonical constructor; the hint cannot apply. " +
+      "Remove the writeBean(...) row, or move it to the bean side of the mapping."
+    );
+  }
+
+  /** Two {@code writeBean} hints for the same target class. */
+  public static String duplicateWriteBeanHint(final String binaryName) {
+    return (
+      "Duplicate writeBean hint for " +
+      binaryName +
+      ". Each target class may declare at most one writeBean(...) row per Telescope.map(...) call."
+    );
+  }
 
   /** Duplicate override row claiming an already-claimed source field. */
   public static String duplicateSourceRow(final String source, final String target, final String srcField) {
