@@ -6,6 +6,11 @@ import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.internal.pairing.ContainerView;
+import io.github.eschizoid.telescope.internal.pairing.PairDecision;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
+import io.github.eschizoid.telescope.internal.pairing.PairingRules;
+import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import io.github.eschizoid.telescope.mapping.Compute;
 import io.github.eschizoid.telescope.mapping.Conditional;
 import io.github.eschizoid.telescope.mapping.Constant;
@@ -24,7 +29,6 @@ import io.github.eschizoid.telescope.mapping.WriteHint;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.time.temporal.Temporal;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -39,16 +43,11 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.PriorityQueue;
-import java.util.Queue;
 import java.util.Set;
-import java.util.SortedMap;
-import java.util.SortedSet;
 import java.util.Stack;
 import java.util.TreeMap;
 import java.util.TreeSet;
-import java.util.UUID;
 import java.util.Vector;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
@@ -95,6 +94,14 @@ import java.util.function.Supplier;
 public final class DeepMap {
 
   private DeepMap() {}
+
+  /**
+   * The shared pairing decision spec, adapted to the reflection world. Every per-pair conversion
+   * decision and every pairing diagnostic routes through this one rule set — the compile-time
+   * verifier consumes the same rules through a {@code TypeMirror} adapter, so what constructs here
+   * and what compiles there cannot drift.
+   */
+  private static final PairingRules<Type> PAIRING = new PairingRules<>(new ReflectionProps());
 
   // ---------- Package-private entries (called from Telescope.map / Telescope.mapper) ----------
 
@@ -453,13 +460,7 @@ public final class DeepMap {
         // strict source-must-be-claimed pass below when one side carries fields the other doesn't.
         if (row instanceof Drop<?, ?, ?>) {
           if (!claimedSrc.add(srcField)) throw new IllegalArgumentException(
-            "Deep map " +
-              source.getSimpleName() +
-              " → " +
-              target.getSimpleName() +
-              ": duplicate override row for source field '" +
-              srcField +
-              "'. Each (source, target) type pair may declare at most one row per source field."
+            PairingMessages.duplicateSourceRow(source.getSimpleName(), target.getSimpleName(), srcField)
           );
           // Register a backward-only step under the source name so the source-reconstructor
           // (assembleIso's bySourceName loop) produces a placeholder value (null) for the dropped
@@ -473,13 +474,7 @@ public final class DeepMap {
         // overwrite each other in byTargetName and could produce non-bijective forward/backward
         // (each direction using a different correspondence).
         if (!claimedTgt.add(tgtField)) throw new IllegalArgumentException(
-          "Deep map " +
-            source.getSimpleName() +
-            " → " +
-            target.getSimpleName() +
-            ": duplicate override row for target field '" +
-            tgtField +
-            "'. Each (source, target) type pair may declare at most one row per target field."
+          PairingMessages.duplicateTargetRow(source.getSimpleName(), target.getSimpleName(), tgtField)
         );
         // Same-source fan-out IS permitted: one source field feeding multiple target fields is a
         // common enterprise pattern (e.g. `businessUnit → cretnUserId AND lastUpdtdUserId` on
@@ -564,19 +559,13 @@ public final class DeepMap {
             continue;
           }
           throw new IllegalStateException(
-            "Deep map " +
-              source.getSimpleName() +
-              " → " +
-              target.getSimpleName() +
-              ": target " +
-              slot(tgtRefl) +
-              " '" +
-              name +
-              "' has no same-name source " +
-              slot(srcRefl) +
-              ". Add a rename row to(sourceAccessor, targetAccessor) that maps to '" +
-              name +
-              "'."
+            PairingMessages.noSameNameSource(
+              source.getSimpleName(),
+              target.getSimpleName(),
+              slot(tgtRefl),
+              slot(srcRefl),
+              name
+            )
           );
         }
         final var step = new FieldStep(
@@ -616,19 +605,13 @@ public final class DeepMap {
           continue;
         }
         throw new IllegalStateException(
-          "Deep map " +
-            source.getSimpleName() +
-            " → " +
-            target.getSimpleName() +
-            ": source " +
-            slot(srcRefl) +
-            " '" +
-            name +
-            "' has no same-name target " +
-            slot(tgtRefl) +
-            ". Add a rename row to(sourceAccessor, targetAccessor) that consumes '" +
-            name +
-            "'."
+          PairingMessages.noSameNameTarget(
+            source.getSimpleName(),
+            target.getSimpleName(),
+            slot(srcRefl),
+            slot(tgtRefl),
+            name
+          )
         );
       }
 
@@ -894,69 +877,45 @@ public final class DeepMap {
     final Set<TypePair> cyclicPairs,
     final Deque<TypePair> inProgress
   ) {
+    // Every branch DECISION routes through the shared pairing spec — this method only maps each
+    // decision to its runtime Iso. Branch rationale (kind discriminators, scalar exclusions,
+    // ordering) lives on PairingRules#decidePair, consumed identically by the compile-time
+    // verifier so what constructs here and what compiles there cannot drift.
+    final var decision = PAIRING.decidePair(srcType, tgtType, componentName);
+
     // (a) Same generic type → identity Iso.
-    if (srcType.equals(tgtType)) return Iso.identity();
+    if (decision instanceof PairDecision.Identity) return Iso.identity();
 
     // (a.1) Primitive ↔ wrapper pair → autobox / unbox via JLS-default-safe Iso. Forward
     // unboxes (null-safe — substitutes the primitive default to avoid NPE on the wrapper-to-
     // primitive setter); backward boxes via the wrapper's static valueOf. Matches MapStruct's
     // behaviour for these pairs (it silently autoboxes and uses 0/false/etc. for null).
-    if (
-      srcType instanceof Class<?> srcClsAB &&
-      tgtType instanceof Class<?> tgtClsAB &&
-      isPrimitiveWrapperPair(srcClsAB, tgtClsAB)
-    ) {
-      return primitiveWrapperIso(srcClsAB, tgtClsAB);
+    if (decision instanceof PairDecision.PrimitiveWrapper) {
+      return primitiveWrapperIso((Class<?>) srcType, (Class<?>) tgtType);
     }
 
-    // (a.2) Collection / Map subtype pair. Common in legacy bean codebases: `class
-    //       ImageUrls extends ArrayList<ImageUrl>` and `class ImageUrlsBO extends
-    //       ArrayList<ImageUrl>` on opposite sides. Neither is identity (different concrete
-    //       classes), neither is a parameterised raw `List` / `Map` (so ContainerShape skips
-    //       them), and trying to bean-decompose would hit
-    //       `MethodHandles.privateLookupIn(ArrayList.class)` rejection. Copy elements via the
-    //       target's no-arg constructor + `addAll` / `putAll`.
-    //
-    //       Collection side is gated on same kind (List↔List, Set↔Set, Queue↔Queue). Copying a
-    //       `LinkedList` into a `HashSet` would silently deduplicate; an `ArrayList` into a
-    //       `PriorityQueue` would silently reorder by natural ordering. Users who genuinely want
-    //       a kind change must declare an explicit `Mapping.via(...)` row.
-    //
-    //       Map side uses a SortedMap-vs-non-Sorted axis (mirrors the SortedSet split): a
-    //       `HashMap ↔ TreeMap` pair over non-Comparable keys would CCE at putAll. Within each
-    //       side, iteration-order, comparator, and thread-safety guarantees may still shift
-    //       when the concrete kinds differ (e.g. `LinkedHashMap → HashMap` reorders;
-    //       `ConcurrentHashMap → HashMap` drops the concurrency contract). The Iso copies
-    //       entries verbatim — users with semantic dependencies on the source's concrete type
-    //       should declare an explicit row.
-    if (srcType instanceof Class<?> srcCC && tgtType instanceof Class<?> tgtCC) {
-      if (sameKindCollection(srcCC, tgtCC)) {
-        final var iso = collectionCopyIso(srcCC, tgtCC);
-        if (iso != null) return iso;
-      }
-      if (sameKindMap(srcCC, tgtCC)) {
-        final var iso = mapCopyIso(srcCC, tgtCC);
-        if (iso != null) return iso;
-      }
+    // (a.2) Same-kind Collection / Map subtype pair (raw container subclasses like `class
+    //       ImageUrls extends ArrayList<ImageUrl>` on both sides) — copy elements via the target's
+    //       no-arg constructor + `addAll` / `putAll`. The kind-discriminator and allocability
+    //       gates live on the shared spec; the decision only fires when the copy is buildable.
+    if (decision instanceof PairDecision.CollectionCopy) {
+      return collectionCopyIso((Class<?>) srcType, (Class<?>) tgtType);
+    }
+    if (decision instanceof PairDecision.MapCopy) {
+      return mapCopyIso((Class<?>) srcType, (Class<?>) tgtType);
     }
 
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
-    if (srcType instanceof Class<?> srcCls && tgtType instanceof Class<?> tgtCls) {
-      if (isReflectable(srcCls) && isReflectable(tgtCls)) {
-        // Nested recursion — `isNested` (inProgress.size() > 1) already triggers the lenient gate
-        // for unmatched fields regardless of the outer call's strictness. Pass `false` here so the
-        // lenient flag's meaning stays anchored to the user-facing top-level call (mapperForward).
-        populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null, nullStrategy, cyclicPairs, inProgress, false);
-        final var subKey = new TypePair(srcCls, tgtCls);
-        return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey));
-      }
+    if (decision instanceof PairDecision.RecursePair) {
+      final var srcCls = (Class<?>) srcType;
+      final var tgtCls = (Class<?>) tgtType;
+      // Nested recursion — `isNested` (inProgress.size() > 1) already triggers the lenient gate
+      // for unmatched fields regardless of the outer call's strictness. Pass `false` here so the
+      // lenient flag's meaning stays anchored to the user-facing top-level call (mapperForward).
+      populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null, nullStrategy, cyclicPairs, inProgress, false);
+      final var subKey = new TypePair(srcCls, tgtCls);
+      return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey));
     }
-
-    // (c) Both same-kind containers → recurse on the element TYPE so nested containers work
-    //     (List<Optional<X>>, Optional<List<X>>, Map<K, List<X>>, etc.). Scalar/record/container
-    //     elements all dispatch through this same autoIso recursion.
-    final var srcShape = ContainerShape.of(srcType);
-    final var tgtShape = ContainerShape.of(tgtType);
 
     // (c.1) Cross-paradigm Optional bridge — one side is Optional<X>, the other is a possibly-null
     //       scalar/record/bean. Common case: record uses Optional<Address> while the JPA-mapped
@@ -969,10 +928,10 @@ public final class DeepMap {
     //       corrupt the {@code .reverse()} on the second branch — coalesceForward's documented
     //       non-bijection at the null/default boundary would land on the BACKWARD direction post-
     //       reverse. Field-level wrap fires once at the outer autoIso return; that's enough.
-    if (srcShape != null && srcShape.kind == ContainerShape.Kind.OPTIONAL && tgtShape == null) {
+    if (decision instanceof PairDecision.OptionalToNullable<Type> d) {
       final var elementIso = autoIso(
-        srcShape.elementType,
-        tgtType,
+        d.elementSrc(),
+        d.elementTgt(),
         componentName + "[*]",
         overrides,
         beanRefl,
@@ -983,10 +942,10 @@ public final class DeepMap {
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso));
     }
-    if (tgtShape != null && tgtShape.kind == ContainerShape.Kind.OPTIONAL && srcShape == null) {
+    if (decision instanceof PairDecision.NullableToOptional<Type> d) {
       final var elementIso = autoIso(
-        srcType,
-        tgtShape.elementType,
+        d.elementSrc(),
+        d.elementTgt(),
         componentName + "[*]",
         overrides,
         beanRefl,
@@ -998,27 +957,14 @@ public final class DeepMap {
       return Iso.liftOptionalToNullable(eraseIso(elementIso)).reverse();
     }
 
-    if (srcShape != null && tgtShape != null && srcShape.kind == tgtShape.kind) {
-      // Map<K, X> ↔ Map<K, Y>: keys must match exactly; Iso.liftMapValues preserves source keys.
-      if (srcShape.kind == ContainerShape.Kind.MAP_VALUES && !srcShape.keyClass.equals(tgtShape.keyClass)) {
-        throw new IllegalStateException(
-          "Deep map: component '" +
-            componentName +
-            "' has incompatible Map key types — source " +
-            srcShape.keyClass.getName() +
-            " vs target " +
-            tgtShape.keyClass.getName() +
-            ". Key types must match exactly; auto-lifting preserves the source keys."
-        );
-      }
-      // Element-level recursion passes PROPAGATE — see the cross-Optional branch above for the
-      // rationale. NullStrategy.DEFAULT is a field-level semantic and the outer autoIso wraps the
-      // lifted result once; double-wrapping the element-level would over-substitute null elements
-      // inside the collection (per MapStruct's SET_TO_DEFAULT the gate is at the field, not the
-      // element).
+    // (c) Both same-kind containers → recurse on the element TYPE so nested containers work
+    //     (List<Optional<X>>, Optional<List<X>>, Map<K, List<X>>, etc.). Scalar/record/container
+    //     elements all dispatch through this same autoIso recursion. Element-level recursion
+    //     passes PROPAGATE — see the cross-Optional branch above for the rationale.
+    if (decision instanceof PairDecision.LiftContainer<Type> d) {
       final var elementIso = autoIso(
-        srcShape.elementType,
-        tgtShape.elementType,
+        d.src().elementType(),
+        d.tgt().elementType(),
         componentName + "[*]",
         overrides,
         beanRefl,
@@ -1027,25 +973,28 @@ public final class DeepMap {
         cyclicPairs,
         inProgress
       );
-      return switch (srcShape.kind) {
-        case LIST -> liftListIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
-        case SET -> liftSetIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
-        case MAP_VALUES -> liftMapIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
+      return switch (d.src().kind()) {
+        case LIST -> liftListIntoTargetRaw(
+          eraseIso(elementIso),
+          (Class<?>) d.src().rawType(),
+          (Class<?>) d.tgt().rawType()
+        );
+        case SET -> liftSetIntoTargetRaw(
+          eraseIso(elementIso),
+          (Class<?>) d.src().rawType(),
+          (Class<?>) d.tgt().rawType()
+        );
+        case MAP_VALUES -> liftMapIntoTargetRaw(
+          eraseIso(elementIso),
+          (Class<?>) d.src().rawType(),
+          (Class<?>) d.tgt().rawType()
+        );
         // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
       };
     }
 
-    throw new IllegalStateException(
-      "Deep map: component '" +
-        componentName +
-        "' has incompatible source/target shapes — " +
-        srcType.getTypeName() +
-        " vs " +
-        tgtType.getTypeName() +
-        ". Shapes must match: same scalar, both records/beans, or both same-kind container. For " +
-        "differing scalar types, add a to(src, tgt, forward, backward) row to supply the conversion."
-    );
+    throw new IllegalStateException(((PairDecision.Incompatible<Type>) decision).message());
   }
 
   /**
@@ -1148,28 +1097,40 @@ public final class DeepMap {
     final var elementIso = Iso.of(raw::forward, raw::backward);
     final var mapperSrc = raw.sourceClass();
     final var mapperTgt = raw.targetClass();
-    final var srcShape = ContainerShape.of(srcType);
-    final var tgtShape = ContainerShape.of(tgtType);
+    final var srcShape = PAIRING.containerViewOf(srcType);
+    final var tgtShape = PAIRING.containerViewOf(tgtType);
     if (
       srcShape != null &&
       tgtShape != null &&
-      srcShape.kind == tgtShape.kind &&
-      elementTypeMatches(srcShape.elementType, mapperSrc) &&
-      elementTypeMatches(tgtShape.elementType, mapperTgt)
+      srcShape.kind() == tgtShape.kind() &&
+      elementTypeMatches(srcShape.elementType(), mapperSrc) &&
+      elementTypeMatches(tgtShape.elementType(), mapperTgt)
     ) {
-      if (srcShape.kind == ContainerShape.Kind.MAP_VALUES && !srcShape.keyClass.equals(tgtShape.keyClass)) {
+      if (srcShape.kind() == ContainerView.Kind.MAP_VALUES && !srcShape.keyType().equals(tgtShape.keyType())) {
         throw new IllegalStateException(
           "Deep map via(...): Map key types must match exactly — source " +
-            srcShape.keyClass.getName() +
+            ((Class<?>) srcShape.keyType()).getName() +
             " vs target " +
-            tgtShape.keyClass.getName() +
+            ((Class<?>) tgtShape.keyType()).getName() +
             ". Key types must match exactly; auto-lifting preserves the source keys."
         );
       }
-      return switch (srcShape.kind) {
-        case LIST -> liftListIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
-        case SET -> liftSetIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
-        case MAP_VALUES -> liftMapIntoTargetRaw(eraseIso(elementIso), srcShape.rawClass, tgtShape.rawClass);
+      return switch (srcShape.kind()) {
+        case LIST -> liftListIntoTargetRaw(
+          eraseIso(elementIso),
+          (Class<?>) srcShape.rawType(),
+          (Class<?>) tgtShape.rawType()
+        );
+        case SET -> liftSetIntoTargetRaw(
+          eraseIso(elementIso),
+          (Class<?>) srcShape.rawType(),
+          (Class<?>) tgtShape.rawType()
+        );
+        case MAP_VALUES -> liftMapIntoTargetRaw(
+          eraseIso(elementIso),
+          (Class<?>) srcShape.rawType(),
+          (Class<?>) tgtShape.rawType()
+        );
         // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
       };
@@ -1249,48 +1210,6 @@ public final class DeepMap {
         return fresh;
       }
     );
-  }
-
-  private static boolean sameKindCollection(final Class<?> a, final Class<?> b) {
-    if (!Collection.class.isAssignableFrom(a) || !Collection.class.isAssignableFrom(b)) return false;
-    // Require both sides to AGREE on every kind discriminator so the Iso doesn't silently
-    // re-interpret container semantics OR throw ClassCastException at addAll time. Without
-    // these symmetric checks:
-    //   - `LinkedList ↔ ArrayDeque` would match the Queue branch (LinkedList is both List and
-    //     Queue) and turn random-access list semantics into FIFO queue semantics.
-    //   - `PriorityQueue ↔ ArrayDeque` would match the Queue branch and turn heap-ordered
-    //     dequeue into FIFO (or vice-versa).
-    //   - `HashSet ↔ TreeSet` over a non-Comparable element type would CCE at forward() time
-    //     because the fresh TreeSet's addAll falls through to compareTo on a Comparable-less
-    //     element. The SortedSet discriminator rejects that pair before the Iso runs.
-    // If either side is a List the other must be one too; same for Set's SortedSet axis; and
-    // within the Queue residual, both must agree on whether they're also Deque.
-    final var aList = List.class.isAssignableFrom(a);
-    final var bList = List.class.isAssignableFrom(b);
-    if (aList != bList) return false;
-    if (aList) return true;
-    final var aSet = Set.class.isAssignableFrom(a);
-    final var bSet = Set.class.isAssignableFrom(b);
-    if (aSet != bSet) return false;
-    if (aSet) return SortedSet.class.isAssignableFrom(a) == SortedSet.class.isAssignableFrom(b);
-    if (!Queue.class.isAssignableFrom(a) || !Queue.class.isAssignableFrom(b)) return false;
-    return Deque.class.isAssignableFrom(a) == Deque.class.isAssignableFrom(b);
-  }
-
-  private static boolean sameKindMap(final Class<?> a, final Class<?> b) {
-    if (!Map.class.isAssignableFrom(a) || !Map.class.isAssignableFrom(b)) return false;
-    // Same SortedMap discriminator as the Set side: a `HashMap ↔ TreeMap` pair over non-
-    // Comparable keys would CCE at putAll time when the fresh TreeMap calls compareTo on the
-    // first inserted key. Reject the Sorted/non-Sorted crossing before the Iso runs. Within
-    // each side (HashMap ↔ LinkedHashMap ↔ ConcurrentHashMap on non-Sorted; TreeMap ↔
-    // ConcurrentSkipListMap on Sorted), differences are iteration-order or thread-safety
-    // attribute drops — silent, but documented at the call site.
-    //
-    // Edge cases the gate intentionally accepts (silent but recoverable via an explicit
-    // `Mapping.via(...)` row): `IdentityHashMap ↔ HashMap` (the IdentityHashMap side de-dups
-    // equal-but-distinct-reference keys); `WeakHashMap ↔ HashMap` (WeakHashMap GCs keys
-    // without strong references).
-    return SortedMap.class.isAssignableFrom(a) == SortedMap.class.isAssignableFrom(b);
   }
 
   /**
@@ -1460,29 +1379,6 @@ public final class DeepMap {
   }
 
   /**
-   * True when {@code src} and {@code tgt} are a primitive ↔ wrapper pair (in either direction)
-   * referring to the same underlying scalar — e.g. {@code int} / {@code Integer}, {@code boolean} /
-   * {@code Boolean}. Same-scalar same-side pairs (already covered by the identity branch) are not
-   * matched here.
-   */
-  private static boolean isPrimitiveWrapperPair(final Class<?> src, final Class<?> tgt) {
-    return (src.isPrimitive() && wrap(src) == tgt) || (tgt.isPrimitive() && wrap(tgt) == src);
-  }
-
-  /** Wrap a primitive to its boxed class; non-primitives are returned unchanged. */
-  private static Class<?> wrap(final Class<?> cls) {
-    if (cls == int.class) return Integer.class;
-    if (cls == long.class) return Long.class;
-    if (cls == double.class) return Double.class;
-    if (cls == float.class) return Float.class;
-    if (cls == boolean.class) return Boolean.class;
-    if (cls == short.class) return Short.class;
-    if (cls == byte.class) return Byte.class;
-    if (cls == char.class) return Character.class;
-    return cls;
-  }
-
-  /**
    * Build the per-field Iso for a primitive ↔ wrapper pair. The Iso's {@code to} (forward)
    * substitutes the primitive default when the source value is null, so a wrapper-to-primitive
    * write never NPEs at the setter. {@code from} (backward) is symmetric.
@@ -1491,22 +1387,6 @@ public final class DeepMap {
     final var fwdDefault = tgt.isPrimitive() ? primitiveDefault(tgt) : null;
     final var bwdDefault = src.isPrimitive() ? primitiveDefault(src) : null;
     return Iso.of(v -> v == null ? fwdDefault : v, v -> v == null ? bwdDefault : v);
-  }
-
-  /** A record or any non-scalar class — anything Reflective can drive. */
-  private static boolean isReflectable(final Class<?> cls) {
-    if (cls.isRecord()) return true;
-    if (cls.isPrimitive()) return false;
-    if (cls.isArray()) return false;
-    if (cls.isEnum()) return false;
-    if (cls.isInterface()) return false;
-    // Common scalars that should NOT be treated as reflectable beans. CharSequence covers String,
-    // StringBuilder, StringBuffer, and any other implementation — assignableFrom catches subtypes.
-    if (CharSequence.class.isAssignableFrom(cls)) return false;
-    if (Number.class.isAssignableFrom(cls)) return false;
-    if (cls == Boolean.class || cls == Character.class) return false;
-    if (Temporal.class.isAssignableFrom(cls)) return false;
-    return !UUID.class.isAssignableFrom(cls);
   }
 
   // ---------- Iso assembly (lattice-routed) ----------
@@ -1879,41 +1759,4 @@ public final class DeepMap {
    * mapping a {@code Map<String, X>} to a {@code Map<Long, Y>} target would silently produce a
    * {@code Map<String, Y>} at runtime, which violates the target's declared key type.
    */
-  private record ContainerShape(Kind kind, Type elementType, Class<?> keyClass, Class<?> rawClass) {
-    enum Kind {
-      LIST,
-      SET,
-      MAP_VALUES,
-      OPTIONAL,
-    }
-
-    static ContainerShape of(final Type t) {
-      if (!(t instanceof ParameterizedType pt)) return null;
-      if (!(pt.getRawType() instanceof Class<?> raw)) return null;
-      // Optional is final; no subtypes possible — keep exact-match.
-      if (raw == Optional.class) return new ContainerShape(Kind.OPTIONAL, pt.getActualTypeArguments()[0], null, raw);
-      // List / Set / Map: accept any subtype of the interface. The raw class is carried so the
-      // autoIso lift can allocate the target's concrete class (e.g. `List<X>` ↔ `ArrayList<Y>`
-      // — both shapes match LIST, but the lifted Iso has to write into a fresh ArrayList<Y>
-      // when the target field is `ArrayList<Y>`).
-      if (List.class.isAssignableFrom(raw)) return new ContainerShape(
-        Kind.LIST,
-        pt.getActualTypeArguments()[0],
-        null,
-        raw
-      );
-      if (Set.class.isAssignableFrom(raw)) return new ContainerShape(
-        Kind.SET,
-        pt.getActualTypeArguments()[0],
-        null,
-        raw
-      );
-      if (Map.class.isAssignableFrom(raw)) {
-        final var keyArg = pt.getActualTypeArguments()[0];
-        if (!(keyArg instanceof Class<?> keyCls)) return null;
-        return new ContainerShape(Kind.MAP_VALUES, pt.getActualTypeArguments()[1], keyCls, raw);
-      }
-      return null;
-    }
-  }
 }
