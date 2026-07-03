@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.codegen;
 
-import com.sun.source.tree.CompilationUnitTree;
 import com.sun.source.tree.ExpressionTree;
 import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MemberSelectTree;
@@ -18,9 +17,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import java.io.PrintWriter;
 import java.io.StringWriter;
-import java.util.Collections;
 import java.util.HashSet;
-import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -121,24 +118,29 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     if (off) return;
     try {
       trees = Trees.instance(processingEnv);
-      // Scan AFTER each unit's analysis completes — bodies are fully attributed there, so tree
-      // queries are pure reads. Attributing on demand from inside processing rounds instead would
-      // corrupt javac's symbol bookkeeping for anonymous classes when the final compile
+      // Scan each top-level type EXACTLY when its own analysis completes — its bodies are fully
+      // attributed there, so tree queries are pure reads. Scanning the whole unit on the first
+      // type's event would touch not-yet-attributed sibling types, and attributing on demand
+      // corrupts javac's symbol bookkeeping for anonymous classes when the final compile
       // re-attributes the same trees (the classic reason body-level checkers run post-analysis).
+      // ANALYZE-finished fires once per top-level type, so per-type scanning needs no dedup.
       // Registering from init keeps the processor packaging: one artifact, SPI-discovered.
       JavacTask.instance(processingEnv).addTaskListener(
         new TaskListener() {
           @Override
           public void finished(final TaskEvent event) {
             if (event.getKind() != TaskEvent.Kind.ANALYZE) return;
-            final var unit = event.getCompilationUnit();
-            if (unit == null || !scannedUnits.add(unit)) return;
+            final var type = event.getTypeElement();
+            if (type == null) return;
+            final var path = trees.getPath(type);
+            if (path == null) return;
             try {
-              new CallSiteScanner().scan(new TreePath(unit), null);
+              new CallSiteScanner().scan(path, null);
             } catch (final RuntimeException e) {
               // The verifier must never break a build except through its own diagnostics — an
-              // uncaught exception in a task listener aborts the compile. Skip the unit; the
-              // construction-time validation still applies. If this ever fires it is a verifier
+              // uncaught exception in a task listener aborts the compile. Skip the type; the
+              // construction-time validation still applies. If this ever fires it is a
+              // verifier
               // bug; verbose mode appends the stack trace so the report is debuggable.
               final var detail = new StringWriter();
               if (verbose) e.printStackTrace(new PrintWriter(detail));
@@ -147,7 +149,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
                 .printMessage(
                   Diagnostic.Kind.NOTE,
                   "telescope: mapping verification skipped for " +
-                    unit.getSourceFile().getName() +
+                    type.getQualifiedName() +
                     " (" +
                     e +
                     "); construction-time validation still applies." +
@@ -170,9 +172,6 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   public SourceVersion getSupportedSourceVersion() {
     return SourceVersion.latestSupported();
   }
-
-  /** Units already scanned — ANALYZE events fire once per top-level type, not per unit. */
-  private final Set<CompilationUnitTree> scannedUnits = Collections.newSetFromMap(new IdentityHashMap<>());
 
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
