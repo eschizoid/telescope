@@ -334,11 +334,14 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
             types.isSameType(src.owner().asType(), types.erasure(srcType)) &&
             types.isSameType(tgt.owner().asType(), types.erasure(tgtType));
           if (topLevelRow) {
+            // Always consume the source side — even when the target is a duplicate — so the source
+            // field isn't later reported as unmatched (which would be a cascade error on top of the
+            // real duplicate-target diagnostic).
+            claimedSrc.add(src.name());
             if (!claimedTgt.add(tgt.name())) {
               report(row, PairingMessages.duplicateTargetRow(srcSimple, tgtSimple, tgt.name()));
               return true;
             }
-            claimedSrc.add(src.name());
           }
           // Only the 2-arg same-typed to(src, tgt) carries no conversion — the one row shape the
           // runtime itself routes through the pairing decision at construction. Every other form

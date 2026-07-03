@@ -256,7 +256,6 @@ public final class ProcessorHarness {
     }
   }
 
-  /** In-memory sink for a single generated source file. */
   /** In-memory sink for class output in full-pipeline compiles — the bytes are discarded. */
   private static final class DiscardedClass extends SimpleJavaFileObject {
 
@@ -270,6 +269,7 @@ public final class ProcessorHarness {
     }
   }
 
+  /** In-memory sink for a single generated source file. */
   private static final class CapturedSource extends SimpleJavaFileObject {
 
     private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();

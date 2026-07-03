@@ -379,6 +379,10 @@ class MapperVerifierProcessorTest {
     );
     assertFalse(compilation.success(), () -> compilation.errorMessages());
     assertTrue(compilation.hasError("duplicate override row for target field 'x'"), () -> compilation.errorMessages());
+    // The duplicate-target error is the only diagnostic — 'b' must not cascade as "unmatched source"
+    // because the duplicate row still consumes 'b' from the source side.
+    final var errors = compilation.diagnostics().stream().filter(d -> d.getKind() == Diagnostic.Kind.ERROR).count();
+    assertEquals(1, errors, () -> compilation.errorMessages());
   }
 
   @Test
