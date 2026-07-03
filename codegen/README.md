@@ -49,13 +49,15 @@ statically-visible `Telescope.map(...)` / `Telescope.mapper(...)` / `Telescope.m
 module is verified at compile time. The verifier replays the exact pairing decisions the runtime makes at mapper
 construction — completeness of the row set, shape compatibility of each row — and reports violations as compile errors
 anchored on the offending expression, with the identical diagnostic text the runtime would throw. For a fully
-statically-visible strict site: if it compiles, the mapping is complete. (`mapperForward` is lenient by contract — its
-rows are shape-checked, completeness is not required.)
+statically-visible strict site (no `constant` / `compute` rows — those switch the runtime itself into permissive mode):
+if it compiles, the mapping is complete. (`mapperForward` is lenient by contract — its rows are shape-checked,
+completeness is not required.)
 
 - **On by default, no annotation required.** Adding the processor is the opt-in.
 - **It only rejects what construction would reject.** A non-literal class argument defers the whole site to the
   construction-time check, which remains the always-on backstop. When only some rows are opaque — a row built by a
-  helper method, a spread array — completeness is skipped but every statically-visible row is still shape-checked.
+  helper method, a spread array — completeness is skipped but every statically-visible row is still checked exactly
+  where the runtime checks it (rows carrying a user-supplied conversion are accepted as-is, in both worlds).
 - **Knobs.** `-Atelescope.verify=warn` downgrades errors to warnings; `-Atelescope.verify=off` disables the pass;
   `@UncheckedMapping(reason)` exempts the annotated element's sites (field, method, constructor, or whole class).
   `-Atelescope.verify.verbose` reports skipped sites as NOTEs.
@@ -134,8 +136,8 @@ processor with round-deferred emission.
 
 ## Benchmarks
 
-`bridgeForwardRead` (codegen `@Bridge`) at ~15 ns/op vs runtime `mapBeanForwardRead` at ~142 ns/op is the closest
-apples-to-apples comparison. Full table in the [root README](../README.md#performance).
+`bridgeForwardRead` (codegen `@Bridge`) at ~7 ns/op vs runtime `mapBeanForwardRead` at ~285 ns/op is the closest
+apples-to-apples comparison. Full table in [`benchmarks/README.md`](../benchmarks/README.md).
 
 ## Performance honesty
 
