@@ -42,6 +42,24 @@ still build-time-validated for method references.
 When a type carries both `@Focus`/`@BeanFocus` **and** `@Bridge`, the navigator gains an `as<TargetSimpleName>()` method
 that chains the generated bridge constant.
 
+## Compile-time mapper verification
+
+Having `telescope-codegen` on the annotation-processor path does one more thing, with **zero ceremony**: every
+statically-visible `Telescope.map(...)` / `Telescope.mapper(...)` / `Telescope.mapperForward(...)` call site in the
+module is verified at compile time. The verifier replays the exact pairing decisions the runtime makes at mapper
+construction — completeness of the row set, shape compatibility of each row — and reports violations as compile errors
+anchored on the offending expression, with the identical diagnostic text the runtime would throw. If it compiles, the
+mapping is complete.
+
+- **On by default, no annotation required.** Adding the processor is the opt-in.
+- **It only rejects what construction would reject.** A site the verifier can't fully see — a non-literal class
+  argument, a row built by a helper method, a spread array — is silently deferred to the construction-time check, which
+  remains the always-on backstop. Every statically-visible row is still shape-checked.
+- **Knobs.** `-Atelescope.verify=warn` downgrades errors to warnings; `-Atelescope.verify=off` disables the pass;
+  `@UncheckedMapping(reason)` exempts a single site. `-Atelescope.verify.verbose` reports skipped sites as NOTEs.
+- **javac-only depth.** On a non-javac compiler (ECJ/Eclipse) the processor prints one NOTE and no-ops — you keep the
+  construction-time checking you have today.
+
 ## Install
 
 ```kotlin
@@ -119,5 +137,7 @@ apples-to-apples comparison. Full table in the [root README](../README.md#perfor
 
 ## Performance honesty
 
-We haven't published an apples-to-apples vs MapStruct benchmark yet — both bind at compile time, so the comparison would
-be tight. See PLAN Tier 1 item 1; benchmark lands before 1.0.
+The apples-to-apples vs MapStruct benchmark is published and CI-reproducible: at the codegen level the two are the same
+performance class — a tie at real-service depth (1.15× on deeply nested shapes, ~1.5× on a trivial flat struct). The
+full matrix, methodology, and gc-profiler decomposition live in
+[`benchmarks/README.md`](../benchmarks/README.md#mapstruct-comparison-apples-to-apples).
