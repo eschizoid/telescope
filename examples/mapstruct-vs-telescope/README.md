@@ -78,8 +78,11 @@ warning: Unmapped target property: "region".   // <- compiles anyway; region is 
 
 This module pins it permanently: `SilentDropMapper` maps to a `CustomerContactDto` whose `region` has no source, and the
 test asserts the `null`, so CI demonstrates the footgun on every run. Setting `unmappedTargetPolicy = ERROR` turns it
-into a build failure (the recommended hardening) — but it's off by default. telescope's strict `mapper(...)` refuses an
-unmapped field at _construction_ rather than nulling it.
+into a build failure (the recommended hardening) — but it's off by default. telescope closes this hole twice over: the
+strict `mapper(...)` refuses an unmapped field at construction rather than nulling it, and with `telescope-codegen` on
+the annotation-processor path the same refusal fires at **compile time** — the verifier replays the pairing decisions
+over every statically-visible `mapper(...)` call and anchors the error on the offending call site, with the identical
+diagnostic text, no annotation or policy flag required.
 
 ---
 

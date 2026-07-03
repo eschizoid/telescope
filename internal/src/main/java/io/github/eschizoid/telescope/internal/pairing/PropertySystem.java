@@ -8,7 +8,9 @@ import java.util.List;
  * {@code javax.lang.model}-backed adapter over {@code TypeMirror} (compile-time verification).
  * Every method is a <em>primitive</em> — a single type-system fact with no policy — so all pairing
  * policy (branch ordering, kind discriminators, scalar exclusions, matching) lives once, in {@link
- * PairingRules}, and cannot drift between the two worlds.
+ * PairingRules}, and cannot drift between the two worlds. Keep every method abstract: the world
+ * adapters rely on compile-time breakage when this interface grows, and a {@code default} method
+ * here would be a policy leak by construction.
  *
  * @param <T> the world's type handle ({@code Type} or {@code TypeMirror})
  */
