@@ -53,6 +53,10 @@ tasks.withType<Javadoc>().configureEach {
 
 dependencies {
     api(project(":core"))
+    // MapperVerifierProcessor executes PairingRules at annotation-processing runtime. The classes
+    // arrive transitively through :core's api scope today, but the verifier's dependency is direct
+    // — declared explicitly so a future :core scope change can't silently break the processor path.
+    implementation(project(":internal"))
 
     testImplementation(project(":core"))
     testImplementation(platform(libs.junitBom))

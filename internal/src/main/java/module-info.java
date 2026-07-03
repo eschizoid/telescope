@@ -39,4 +39,8 @@ module io.github.eschizoid.telescope.internal {
   exports io.github.eschizoid.telescope.internal to io.github.eschizoid.telescope;
   exports io.github.eschizoid.telescope.internal.optics to io.github.eschizoid.telescope;
   exports io.github.eschizoid.telescope.internal.optics.collections to io.github.eschizoid.telescope;
+  // The shared pairing decision spec: the runtime (:core) and the compile-time verifier (:codegen)
+  // consume one rule set so construction-time and compile-time diagnostics cannot drift.
+  exports io.github.eschizoid.telescope.internal.pairing
+    to io.github.eschizoid.telescope, io.github.eschizoid.telescope.codegen;
 }
