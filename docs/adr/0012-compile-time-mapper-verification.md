@@ -59,8 +59,10 @@ Behavioral contract:
   is the overwhelmingly common shape (class literals + inline rows). The last "MapStruct is safer by default" gap closes
   without a new user-facing API.
 - **JPMS graph change:** `:internal` adds a qualified export of the pairing package to `:codegen`
-  (`exports …internal.pairing to …core, …codegen`), and `:codegen` gains a `compileOnly` dependency on `:internal`. The
-  lattice packages stay unexported; classpath consumers still cannot reach the pairing spec from their own code.
+  (`exports …internal.pairing to …core, …codegen`), and `:codegen` gains an `implementation` dependency on `:internal` —
+  not `compileOnly`, because the pairing rules execute at annotation-processing _runtime_ and must resolve on the
+  consumer's processor path. The lattice packages stay unexported; classpath consumers still cannot reach the pairing
+  spec from their own code.
 - **ADR-0004 refined, not reversed:** rebuild strategies stay separate; only the pairing _decisions_ unify. Any future
   change to pairing behavior lands in one place and both worlds pick it up.
 - **`"*"` processing makes the processor aggregating** under Gradle incremental annotation processing. The `:codegen`
