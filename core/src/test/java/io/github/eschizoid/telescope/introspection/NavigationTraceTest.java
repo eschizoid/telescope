@@ -78,6 +78,45 @@ class NavigationTraceTest {
   }
 
   @Nested
+  @DisplayName("Leading narrow/filter and degenerate inputs")
+  class EdgeCases {
+
+    sealed interface Shape permits Circle {}
+
+    record Circle(int radius) implements Shape {}
+
+    @Test
+    @DisplayName("a path that LEADS with as(...) still executes (does not mis-route to the mapping-row render)")
+    void narrowFirstExecutes() {
+      final Shape shape = new Circle(5);
+      final var trace = Telescope.of(Shape.class).as(Circle.class).field(Circle::radius).trace(shape);
+      // Regression: the trace guard whitelisted only Focus/Traverse, so an as-first path rendered
+      // static node toStrings instead of running. The value must appear.
+      assertTrue(trace.toString().contains("radius → 5"), trace::toString);
+    }
+
+    @Test
+    @DisplayName("the depth cap truncates a deep traversal with a (depth cap) marker")
+    void depthCap() {
+      final var company = new Company("Acme", List.of(new Team("Sales", List.of(new User("Ada")))));
+      final var trace = Telescope.of(Company.class)
+        .each(Company::teams)
+        .each(Team::users)
+        .trace(company, new TraceLimits(10, 1));
+      assertTrue(trace.toString().contains("(depth cap)"), trace::toString);
+    }
+
+    @Test
+    @DisplayName("an empty fan-out renders the each node with no children, and a null intermediate does not throw")
+    void emptyAndNull() {
+      final var empty = new Company("Empty", List.of());
+      final var trace = Telescope.of(Company.class).each(Company::teams).field(Team::label).trace(empty);
+      assertEquals("each teams", trace.roots().get(0).label());
+      assertTrue(trace.roots().get(0).children().isEmpty(), trace::toString);
+    }
+  }
+
+  @Nested
   @DisplayName("Golden render — the exact tree, pinned")
   class Golden {
 

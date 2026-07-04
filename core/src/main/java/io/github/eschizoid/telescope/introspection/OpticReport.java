@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.introspection.OpticNode.Mapped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Skipped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Transformed;
 import java.util.List;
+import java.util.function.Function;
 
 /**
  * The result of {@code explain()} — the ordered {@link OpticNode} trail describing what an optic
@@ -64,7 +65,7 @@ public record OpticReport(List<OpticNode> nodes) {
       out,
       "Transformations",
       transformations(),
-      t -> "  • " + t.field() + "(" + t.fromType() + ") → " + t.toType()
+      t -> "  • " + t.from() + "(" + t.fromType() + ") → " + (t.from().equals(t.to()) ? "" : t.to() + " ") + t.toType()
     );
     final var skipped = skipped();
     final var skipWidth = skipped
@@ -93,7 +94,7 @@ public record OpticReport(List<OpticNode> nodes) {
     final StringBuilder out,
     final String heading,
     final List<T> rows,
-    final java.util.function.Function<T, String> render
+    final Function<T, String> render
   ) {
     if (rows.isEmpty()) return;
     out.append(heading).append(":\n");

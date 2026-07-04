@@ -50,9 +50,9 @@ final class MappingTraces {
     );
     if (node instanceof OpticNode.Transformed t) return new Row(
       "•",
-      t.field(),
-      render(readDotted(input, t.field())),
-      t.field() + " " + render(readDotted(output, t.field()))
+      t.from(),
+      render(readDotted(input, t.from())),
+      t.to() + " " + render(readDotted(output, t.to()))
     );
     if (node instanceof OpticNode.Skipped s) return new Row("•", s.field(), "", "(" + label(s.reason()) + ")");
     return new Row("•", String.valueOf(node), "", "");
@@ -62,7 +62,11 @@ final class MappingTraces {
     var current = root;
     for (final var segment : path.split("\\.")) {
       if (current == null) return null;
-      current = Reflective.of(current.getClass()).read(current, segment);
+      try {
+        current = Reflective.of(current.getClass()).read(current, segment);
+      } catch (final RuntimeException e) {
+        return null; // a debug aid never throws on a read that doesn't apply
+      }
     }
     return current;
   }

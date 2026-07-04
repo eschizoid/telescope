@@ -43,11 +43,17 @@ public sealed interface OpticNode {
 
   /**
    * A many-focus step over a container — {@code .each(Team::users)} → {@code Traverse("users",
-   * "List<User>")}. In a {@code trace}, this is where the walk fans out into per-element subtrees.
+   * "collection")}. {@code container} is a family label ({@code "collection"} / {@code "map
+   * values"} / {@code "optional"}), not the element type. In a {@code trace}, this is where the
+   * walk fans out into per-element subtrees.
    */
   record Traverse(String path, String container) implements OpticNode {}
 
-  /** A predicate restriction — {@code .filter(pred)} → {@code Filter("age > 18")}. */
+  /**
+   * A predicate restriction — {@code .filter(pred)} → {@code Filter("predicate")}. The description
+   * is a fixed placeholder: a lambda predicate cannot be recovered, so trace annotates the step
+   * without applying it.
+   */
   record Filter(String description) implements OpticNode {}
 
   /** A sealed-type narrowing — {@code .as(Dog.class)} → {@code Narrow("Dog")}. */
@@ -66,9 +72,11 @@ public sealed interface OpticNode {
 
   /**
    * A type-changing correspondence: a typed-transform row or a cross-type pairing decision
-   * (primitive↔wrapper, Optional bridge, container lift).
+   * (primitive↔wrapper, Optional bridge, container lift). {@code from} / {@code to} are the source
+   * and target field names (equal for a same-name transform, distinct for a renamed one); {@code
+   * fromType} / {@code toType} are their type names.
    */
-  record Transformed(String field, String fromType, String toType) implements OpticNode {}
+  record Transformed(String from, String to, String fromType, String toType) implements OpticNode {}
 
   /** A target field the mapping does not populate, with the reason it was left out. */
   record Skipped(String field, Reason reason) implements OpticNode {}

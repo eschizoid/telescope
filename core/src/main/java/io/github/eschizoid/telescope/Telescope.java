@@ -1235,6 +1235,15 @@ public sealed class Telescope<
    * {@link TraceLimits#defaults() defaults} this overload applies (10 elements per fan-out, 20
    * deep) which truncate with a {@code … (+K more)} marker.
    *
+   * <p><b>Structural fidelity caveat.</b> {@code trace} re-reads values by field name; it does not
+   * execute the built optic. {@code filter}, {@code as} (narrow), and codegen bridge hops are
+   * recorded and their value is passed through unchanged — the predicate, subtype check, and bridge
+   * conversion are not captured in the trail, so trace cannot apply them. A trace may therefore
+   * show a value a real {@code read} would exclude (a filtered-out element, a non-matching
+   * subtype), and a field read downstream of an unapplied bridge/narrow that doesn't exist on the
+   * un-converted value renders as {@code (n/a)} rather than throwing. Use {@code trace} to see the
+   * path shape and per-field values; use {@code read} / {@code find} for the exact result.
+   *
    * @param input the value to run the path against
    * @return the executed trace tree; never null
    */
@@ -1249,9 +1258,13 @@ public sealed class Telescope<
     if (trail.isEmpty()) return new Trace(List.of(Trace.Node.leaf(renderValue(input))));
     // A mapping-built telescope (from Telescope.map) carries field rows, not a sequential path;
     // value-tracing those runs the mapper — surfaced on Mapper/ForwardMapper. Here, render the
-    // static rows so trace() on a mapping telescope is coherent rather than a fallback.
+    // static rows so trace() on a mapping telescope is coherent rather than a fallback. Gate on the
+    // mapping-row node kinds so a navigation path that LEADS with as / filter / a codegen bridge
+    // (Narrow / Filter / Bridge) still executes rather than mis-routing to the row render.
     final var first = trail.get(0);
-    if (!(first instanceof OpticNode.Focus) && !(first instanceof OpticNode.Traverse)) return mappingRowsTrace();
+    if (
+      first instanceof OpticNode.Mapped || first instanceof OpticNode.Transformed || first instanceof OpticNode.Skipped
+    ) return mappingRowsTrace();
     return new Trace(List.of(traceHop(trail, 0, input, limits, 0)));
   }
 
@@ -1275,14 +1288,13 @@ public sealed class Telescope<
     final var hop = hops.get(i);
     final var last = i == hops.size() - 1;
     if (hop instanceof OpticNode.Focus f) {
-      final var v = value == null ? null : Reflective.of(value.getClass()).read(value, f.path());
+      final var v = readField(value, f.path());
       if (last) return Trace.Node.leaf(f.path() + " → " + renderValue(v));
       return new Trace.Node(f.path(), List.of(traceHop(hops, i + 1, v, limits, depth)), false);
     }
     if (hop instanceof OpticNode.Traverse t) {
       if (depth >= limits.maxDepth()) return Trace.Node.cut("each " + t.path() + " … (depth cap)");
-      final var elements =
-        value == null ? List.of() : elementsOf(Reflective.of(value.getClass()).read(value, t.path()));
+      final var elements = elementsOf(readField(value, t.path()));
       final var children = new ArrayList<Trace.Node>();
       for (var e = 0; e < elements.size(); e++) {
         if (e >= limits.maxBreadth()) {
@@ -1297,19 +1309,60 @@ public sealed class Telescope<
       }
       return new Trace.Node("each " + t.path(), children, false);
     }
-    if (hop instanceof OpticNode.Narrow n) {
-      if (last) return Trace.Node.leaf("as " + n.targetType() + " → " + renderValue(value));
-      return new Trace.Node("as " + n.targetType(), List.of(traceHop(hops, i + 1, value, limits, depth)), false);
-    }
-    if (hop instanceof OpticNode.Filter) {
-      if (last) return Trace.Node.leaf("filter → " + renderValue(value));
-      return new Trace.Node("filter", List.of(traceHop(hops, i + 1, value, limits, depth)), false);
-    }
+    // Narrow / Filter / Bridge are structural annotations: the subtype check, predicate, and bridge
+    // conversion are NOT captured in the trail, so trace cannot apply them — it records the hop and
+    // passes the value through unchanged. See the trace() javadoc caveat.
+    if (hop instanceof OpticNode.Narrow n) return passThrough(
+      hops,
+      i,
+      "as " + n.targetType(),
+      value,
+      limits,
+      depth,
+      last
+    );
+    if (hop instanceof OpticNode.Filter) return passThrough(hops, i, "filter", value, limits, depth, last);
+    if (hop instanceof OpticNode.Bridge b) return passThrough(
+      hops,
+      i,
+      "as " + b.targetType(),
+      value,
+      limits,
+      depth,
+      last
+    );
     return Trace.Node.leaf(String.valueOf(hop));
   }
 
+  private static Trace.Node passThrough(
+    final List<OpticNode> hops,
+    final int i,
+    final String label,
+    final Object value,
+    final TraceLimits limits,
+    final int depth,
+    final boolean last
+  ) {
+    if (last) return Trace.Node.leaf(label + " → " + renderValue(value));
+    return new Trace.Node(label, List.of(traceHop(hops, i + 1, value, limits, depth)), false);
+  }
+
+  // Sentinel for a read that could not apply — e.g. a field read downstream of an unapplied bridge
+  // or narrow, where the value is not the type the field belongs to. Surfaced as "(n/a)", never
+  // swallowed silently and never thrown (trace is a debug aid, not a load-bearing read).
+  private static final Object UNREADABLE = new Object();
+
+  private static Object readField(final Object value, final String name) {
+    if (value == null) return null;
+    try {
+      return Reflective.of(value.getClass()).read(value, name);
+    } catch (final RuntimeException e) {
+      return UNREADABLE;
+    }
+  }
+
   private static List<Object> elementsOf(final Object container) {
-    if (container == null) return List.of();
+    if (container == null || container == UNREADABLE) return List.of();
     if (container instanceof Optional<?> o) return o.isPresent() ? List.of(o.get()) : List.of();
     if (container instanceof Map<?, ?> m) return List.copyOf(m.values());
     if (container instanceof Iterable<?> it) {
@@ -1321,6 +1374,7 @@ public sealed class Telescope<
   }
 
   private static String renderValue(final Object v) {
+    if (v == UNREADABLE) return "(n/a)";
     if (v == null) return "null";
     if (v instanceof String s) return "\"" + s + "\"";
     return String.valueOf(v);

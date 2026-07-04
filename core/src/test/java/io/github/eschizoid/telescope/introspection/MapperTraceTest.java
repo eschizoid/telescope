@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.introspection;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.drop;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -65,8 +66,34 @@ class MapperTraceTest {
     void nestedDottedValues() {
       final var input = new Customer("Ada", new Address("Paris"));
       final var trace = Telescope.mapper(Customer.class, CustomerDto.class).trace(input);
-      assertTrue(trace.toString().contains("address.city"), trace::toString);
-      assertTrue(trace.toString().contains("\"Paris\""), trace::toString);
+      // The nested same-name row shows source→target with the value on the target side.
+      assertTrue(trace.toString().contains("→ address.city \"Paris\""), trace::toString);
+    }
+  }
+
+  @Nested
+  @DisplayName("Renamed typed transform")
+  class RenamedTransform {
+
+    record Src(String count) {}
+
+    record Tgt(Integer amount) {}
+
+    @Test
+    @DisplayName("a renamed typed-transform row traces source→target reading the correct field on each side, no throw")
+    void renamedTransformTrace() {
+      final var mapper = Telescope.mapper(
+        Src.class,
+        Tgt.class,
+        to(Src::count, Tgt::amount, Integer::parseInt, String::valueOf)
+      );
+      // Regression: Transformed used to drop the source field name, so trace read the target name
+      // "amount" off the source and threw. It must read "count" off source, "amount" off target.
+      final var text = mapper.trace(new Src("42")).toString();
+      assertTrue(text.contains("count"), text);
+      assertTrue(text.contains("\"42\""), text);
+      assertTrue(text.contains("amount"), text);
+      assertTrue(text.contains("42") && !text.contains("(n/a)"), text);
     }
   }
 }

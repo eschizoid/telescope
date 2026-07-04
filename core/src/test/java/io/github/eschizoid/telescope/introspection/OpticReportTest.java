@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.introspection.OpticNode.Reason;
 import io.github.eschizoid.telescope.introspection.OpticNode.Skipped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Transformed;
 import io.github.eschizoid.telescope.introspection.OpticNode.Traverse;
+import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -31,7 +32,7 @@ class OpticReportTest {
     private final OpticReport report = new OpticReport(
       List.of(
         new Mapped("firstName", "firstName", "givenName"),
-        new Transformed("birthDate", "String", "LocalDate"),
+        new Transformed("birthDate", "birthDate", "String", "LocalDate"),
         new Skipped("id", Reason.DROPPED),
         new Mapped("address.city", "address.city", "city"),
         new Skipped("region", Reason.MISSING_SOURCE)
@@ -50,7 +51,7 @@ class OpticReportTest {
     @Test
     @DisplayName("transformations() returns only the Transformed nodes")
     void transformedSlice() {
-      assertEquals(List.of(new Transformed("birthDate", "String", "LocalDate")), report.transformations());
+      assertEquals(List.of(new Transformed("birthDate", "birthDate", "String", "LocalDate")), report.transformations());
     }
 
     @Test
@@ -98,7 +99,7 @@ class OpticReportTest {
     @Test
     @DisplayName("the report copies its input list, so external mutation does not leak in")
     void defensiveCopy() {
-      final var mutable = new java.util.ArrayList<OpticNode>();
+      final var mutable = new ArrayList<OpticNode>();
       mutable.add(new Mapped("a", "a", "a"));
       final var report = new OpticReport(mutable);
       mutable.clear();
@@ -123,7 +124,7 @@ class OpticReportTest {
       final var report = new OpticReport(
         List.of(
           new Mapped("firstName", "firstName", "givenName"),
-          new Transformed("birthDate", "String", "LocalDate"),
+          new Transformed("birthDate", "birthDate", "String", "LocalDate"),
           new Skipped("id", Reason.DROPPED)
         )
       );
@@ -171,7 +172,7 @@ class OpticReportTest {
         List.of(
           new Mapped("firstName", "firstName", "givenName"),
           new Mapped("address.city", "address.city", "city"),
-          new Transformed("birthDate", "String", "LocalDate"),
+          new Transformed("birthDate", "birthDate", "String", "LocalDate"),
           new Skipped("id", Reason.DROPPED)
         )
       );

@@ -32,8 +32,8 @@ built on one unified node model derived from the structure the optic already com
 public record variants (unlike `Mapping`'s package-private impls: here the variants are user-facing, constructed and
 asserted on directly, e.g. `new Mapped("firstName", "firstName", "givenName")`). Its variants cover both worlds:
 
-- **Navigation hops** — `Focus(path)`, `Traverse(container)`, `Filter(desc)`, `Narrow(type)`, `Bridge(target)`.
-- **Mapping rows** — `Mapped(path, from, to)`, `Transformed(field, fromType, toType)`, `Skipped(field, Reason)` where
+- **Navigation hops** — `Focus(path)`, `Traverse(path, container)`, `Filter(desc)`, `Narrow(type)`, `Bridge(target)`.
+- **Mapping rows** — `Mapped(path, from, to)`, `Transformed(from, to, fromType, toType)`, `Skipped(field, Reason)` where
   `Reason ∈ { DROPPED, MISSING_SOURCE, UNMAPPED_SOURCE }`.
 
 `DROPPED` is an explicit `Mapping.drop(src)` row; `MISSING_SOURCE` is a target field with no source (an
@@ -41,18 +41,23 @@ asserted on directly, e.g. `new Mapped("firstName", "firstName", "givenName")`).
 `unmatchedSources` entry). One vocabulary, two shapes of optic.
 
 **2. `explain()` → the static structure.** On every optic-carrying type. Returns the `OpticNode` trail — for a mapper,
-the field rows; for a navigator, the hop path. Derived from the **same decision stream / composition the optic itself
-uses**, never a parallel re-walk: if `explain()` reasoned independently it could drift and lie; deriving it from the one
-structure makes drift impossible (mantra #3, lattice-first). `explain()` is thus a _third lens_ on the same engine,
-alongside `DeepMap`'s "decision → `Iso`" and the ADR-0012 verifier's "decision → diagnostic."
+the field rows; for a navigator, the hop path. Derived from the **same decisions the optic itself uses**: top-level
+mapping rows are captured _inside_ `populateIso`'s own matched/unmatched loops (positionally faithful), and navigation
+hops are recorded by the combinators as they build. Nested dotted-path rows are the one re-derivation — an isolated
+`collectNested` walk that re-runs the same shared `PairingRules.matchFields` / `decidePair` primitives (rather than
+threading a collector through the Iso recursion), fired only for pure-auto nested pairs; it consumes the identical spec
+so it cannot drift, but it is a parallel walk, not the original stream. `explain()` is thus a _third lens_ on the same
+engine, alongside `DeepMap`'s "decision → `Iso`" and the ADR-0012 verifier's "decision → diagnostic."
 
 **3. `trace(input)` → the structure with values.** The same node vocabulary, executed against a concrete input and
 enriched: each node gains its actual `valueIn → valueOut`. `trace` is `explain` with a value column filled in — one
 model, two levels of detail. At many-focus nodes (`each`/`eachValue`/`whenPresent`) `trace` **expands into a tree**:
 each fan-out node spawns one child sub-trace per element, so you see exactly which element produced which downstream
-value. A pure mapping (all 1→1) never fans out, so its trace stays the linear `field → value` shape. Fan-out reuses the
-existing `Traversal#getAll` semantics — the foci at each node are what `getAll` returns there. `forward()` / `read()`
-stay fused and fast; `trace()` is the separate instrumented walk, off the hot path.
+value. A pure mapping (all 1→1) never fans out, so its trace stays the linear `field → value` shape. `trace` re-reads
+values by field name via reflection — it does **not** execute the built optic — so `filter` / `as` (narrow) / bridge
+hops are annotated but not applied (the predicate / subtype / conversion aren't captured in the trail); a trace may
+therefore show a value a real `read()` would exclude. `forward()` / `read()` stay fused and fast; `trace()` is the
+separate instrumented walk, off the hot path.
 
 **4. Universal surface.** `explain()` / `trace()` live on the `Mapper` / `ForwardMapper` family (covering `mapper`,
 `mapperForward`, `fromMap`) **and** on the general `Telescope<S, A>` (covering `map` and all navigation). On a navigator
@@ -64,20 +69,21 @@ forward-only keeps the family uniform, and it matches the "bidirectional is over
 / `traceBackward()` are a deferred later addition for `Mapper` if a real need appears.
 
 **6. Retention: decision stream now, executors lazily.** Each optic retains a compact immutable `List<OpticNode>` trail
-— a byproduct of the resolution/composition it already runs, generalizing the existing single-slot `firstHopName` into
-the full list (with `firstHopName` becoming the trail's head). `explain()` reads it directly. `trace()` rebuilds the
-small per-field/per-hop executors from the retained accessors only when called. One modest immutable list per optic;
-nothing extra on the hot path; no re-validation.
+— a byproduct of the resolution/composition it already runs, adding a full `List<OpticNode>` alongside the retained
+single-slot `firstHopName` (kept as its own field so `DeepMap`'s nested-row routing is untouched). `explain()` reads it
+directly. `trace()` rebuilds the small per-field/per-hop executors from the retained accessors only when called. One
+modest immutable list per optic; nothing extra on the hot path; no re-validation.
 
 **7. `trace()` is capped by default, with an uncapped override.** `trace(input)` materializes one node per focus, so it
 caps breadth-per-fan-out and depth with `… (+K more)` truncation markers (a small `TraceLimits` type).
 `trace(input, TraceLimits.none())` lifts the caps for the full tree. Safe by default; complete when you ask.
 
 **8. Codegen parity, in the same release.** The `@Focus` / `@BeanFocus` / `@Bridge` processors (and the lombok module)
-emit a static `OpticNode`-trail constant into their generated navigators/bridges, so codegen-built optics support
-`explain()` / `trace()` with the same public surface as runtime-built ones. The verifier already holds this exact data
-at compile time; this stops discarding it there too. Shipping codegen without `explain()` would leave a public-API gap
-where the generated path silently lacks a method the runtime path has.
+chain a `.hop(new OpticNode.…(…))` onto each generated navigator step (a `Focus` per field, a single `Traverse` per
+container step, a `Bridge` per `as<Target>()`), so codegen-built optics build the same trail and support `explain()` /
+`trace()` with the same public surface as runtime-built ones. The verifier already holds this exact data at compile
+time; this stops discarding it there too. Shipping codegen without `explain()` would leave a public-API gap where the
+generated path silently lacks a method the runtime path has.
 
 ## What it looks like
 
@@ -115,7 +121,7 @@ assertThat(mapper.explain().mapped())
 mapper.trace(new UserDto("Ada", "2020-01-02", /* id */ 7L));
 //   ✓ firstName  "Ada"          → givenName "Ada"
 //   • birthDate  "2020-01-02"   → LocalDate[2020-01-02]
-//   • id         7              → (dropped)
+//   • id                          → (dropped)
 ```
 
 **Lenient / `fromMap` — the gaps show, with reasons:**
@@ -133,7 +139,7 @@ Telescope.fromMap(CustomerContact.class, /* rows … */).explain();
 
 ```java
 Telescope.of(Company.class).each(Company::departments).field(Department::name).explain();
-// Traverse: departments (List<Department>)
+// Traverse: departments (collection)
 // Focus:    name
 ```
 
@@ -157,7 +163,10 @@ Telescope.of(Company.class)
 
 ```java
 path.trace(companyWith10kDepartments);
-//   each departments → [Sales, Eng … (+9998 more)]     // default caps
+// each departments        // default caps: 10 elements shown, then a truncation marker
+//  ├ Sales
+//  ├ …                     (8 more shown)
+//  └ … (+9990 more)
 path.trace(companyWith10kDepartments, TraceLimits.none());
 //   … full tree, no truncation
 ```

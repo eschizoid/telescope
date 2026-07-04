@@ -10,6 +10,7 @@ import io.github.eschizoid.telescope.introspection.OpticNode.Mapped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Reason;
 import io.github.eschizoid.telescope.introspection.OpticNode.Skipped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Transformed;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -45,10 +46,7 @@ class MapperExplainTest {
     void allMappedNoSkips() {
       final var mapper = Telescope.mapper(Source.class, Target.class);
       final var report = mapper.explain();
-      assertEquals(
-        java.util.List.of(new Mapped("name", "name", "name"), new Mapped("city", "city", "city")),
-        report.mapped()
-      );
+      assertEquals(List.of(new Mapped("name", "name", "name"), new Mapped("city", "city", "city")), report.mapped());
       assertTrue(report.skipped().isEmpty(), () -> "strict mapper must skip nothing, got: " + report.skipped());
       assertTrue(report.transformations().isEmpty(), report::toString);
     }
@@ -89,7 +87,7 @@ class MapperExplainTest {
       );
       final var report = mapper.explain();
       assertTrue(
-        report.transformations().contains(new Transformed("count", "String", "Integer")),
+        report.transformations().contains(new Transformed("count", "count", "String", "Integer")),
         () -> "expected the typed transform; got " + report.transformations()
       );
     }
@@ -157,9 +155,27 @@ class MapperExplainTest {
         report
           .transformations()
           .stream()
-          .noneMatch(t -> t.field().equals("customer")),
+          .noneMatch(t -> t.to().equals("customer")),
         () -> "customer should be recursed, not a single Transformed row: " + report.transformations()
       );
+    }
+  }
+
+  @Nested
+  @DisplayName("Self-referential (cyclic) type graph")
+  class Cyclic {
+
+    record Node(String value, Node next) {}
+
+    record NodeDto(String value, NodeDto next) {}
+
+    @Test
+    @DisplayName("explain() on a self-referential mapper terminates — the cycle severs, no StackOverflow")
+    void cyclicExplainTerminates() {
+      // The dotted-path walk (collectNested) must sever Node → NodeDto at its second encounter via
+      // the seen-guard; without it this recurses forever. Assert it returns and records the scalar.
+      final var report = Telescope.mapper(Node.class, NodeDto.class).explain();
+      assertTrue(report.mapped().contains(new Mapped("value", "value", "value")), report::toString);
     }
   }
 

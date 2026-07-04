@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.focus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.introspection.OpticNode.Bridge;
 import io.github.eschizoid.telescope.introspection.OpticNode.Focus;
@@ -30,5 +31,14 @@ class GeneratedCodegenEdgesIntrospectionTest {
   void bridgeHop() {
     final var report = FocusEntityTelescope.of().asFocusDto().email().explain();
     assertEquals(List.of(new Bridge("FocusDto"), new Focus("email")), report.nodes());
+  }
+
+  @Test
+  @DisplayName("a bridge-first navigator still traces (does not truncate at the Bridge node or mis-route)")
+  void bridgeTraceRuns() {
+    final var trace = FocusEntityTelescope.of().asFocusDto().email().trace(new FocusEntity("1", "a@b.com"));
+    // Regression: a Bridge-first trail mis-routed to the mapping-row render, and traceHop had no
+    // Bridge branch so it truncated. The email field must be reached and its value shown.
+    assertTrue(trace.toString().contains("email → \"a@b.com\""), trace::toString);
   }
 }

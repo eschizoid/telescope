@@ -369,7 +369,7 @@ public final class DeepMap {
     final Type tgtType
   ) {
     if (srcType.equals(tgtType)) return new OpticNode.Mapped(sourceField, sourceField, targetField);
-    return new OpticNode.Transformed(targetField, simpleTypeName(srcType), simpleTypeName(tgtType));
+    return new OpticNode.Transformed(sourceField, targetField, simpleTypeName(srcType), simpleTypeName(tgtType));
   }
 
   private static String simpleTypeName(final Type t) {
@@ -626,7 +626,7 @@ public final class DeepMap {
         if (trailOut != null) trailOut.add(
           row instanceof SameTypedTo<?, ?, ?>
             ? fieldNode(tgtField, srcField, srcType, tgtType)
-            : new OpticNode.Transformed(tgtField, simpleTypeName(srcType), simpleTypeName(tgtType))
+            : new OpticNode.Transformed(srcField, tgtField, simpleTypeName(srcType), simpleTypeName(tgtType))
         );
       }
 
