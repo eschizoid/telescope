@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.NullDefaults;
@@ -129,6 +130,21 @@ public final class DeepMap {
    */
   static <A, B> Iso<A, B> resolveForward(final Class<A> source, final Class<B> target, final MapStep[] steps) {
     return resolution(source, target, steps, true).iso;
+  }
+
+  /**
+   * Forward-only resolution that also carries the introspection trail, so {@code
+   * Telescope.mapperForward}'s row path produces a {@link ForwardMapper} whose {@code explain()}
+   * surfaces its field decisions — including the lenient {@code MISSING_SOURCE} / {@code
+   * UNMAPPED_SOURCE} skips a strict {@code Mapper} would reject.
+   */
+  static <A, B> ForwardMapper<A, B> resolveForwardMapper(
+    final Class<A> source,
+    final Class<B> target,
+    final MapStep[] steps
+  ) {
+    final var r = resolution(source, target, steps, true);
+    return ForwardMapper.create(r.iso::to, source, target, r.trail);
   }
 
   // ---------- Resolution (shared by both public entries) ----------

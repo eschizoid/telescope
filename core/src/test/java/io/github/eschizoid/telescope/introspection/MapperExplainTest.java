@@ -118,4 +118,40 @@ class MapperExplainTest {
       );
     }
   }
+
+  @Nested
+  @DisplayName("Forward-only mapper — lenient skips surface with reasons")
+  class Forward {
+
+    record NarrowSource(String name) {}
+
+    record WideTarget(String name, String region) {}
+
+    record WideSource(String name, String legacyId) {}
+
+    record NarrowTarget(String name) {}
+
+    @Test
+    @DisplayName("a target field with no source is Skipped(MISSING_SOURCE) on a forward mapper")
+    void missingSourceIsSkipped() {
+      final var mapper = Telescope.mapperForward(NarrowSource.class, WideTarget.class);
+      final var report = mapper.explain();
+      assertTrue(
+        report.skipped().contains(new Skipped("region", Reason.MISSING_SOURCE)),
+        () -> "expected region as missing source; got " + report.skipped()
+      );
+      assertTrue(report.mapped().contains(new Mapped("name", "name", "name")), report::toString);
+    }
+
+    @Test
+    @DisplayName("a source field with no consumer is Skipped(UNMAPPED_SOURCE) on a forward mapper")
+    void unmappedSourceIsSkipped() {
+      final var mapper = Telescope.mapperForward(WideSource.class, NarrowTarget.class);
+      final var report = mapper.explain();
+      assertTrue(
+        report.skipped().contains(new Skipped("legacyId", Reason.UNMAPPED_SOURCE)),
+        () -> "expected legacyId as unmapped source; got " + report.skipped()
+      );
+    }
+  }
 }

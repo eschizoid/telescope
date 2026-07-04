@@ -662,8 +662,7 @@ public sealed class Telescope<
         return ForwardMapper.create(bridge::read, source, target);
       }
     }
-    final var iso = DeepMap.resolveForward(source, target, steps);
-    return ForwardMapper.create(iso::to, source, target);
+    return DeepMap.resolveForwardMapper(source, target, steps);
   }
 
   /**

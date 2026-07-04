@@ -2,6 +2,8 @@ package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.optics.Getter;
+import io.github.eschizoid.telescope.introspection.OpticNode;
+import io.github.eschizoid.telescope.introspection.OpticReport;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -32,11 +34,25 @@ public final class ForwardMapper<A, B> {
   private final Getter<A, B> forward;
   private final Class<A> sourceClass;
   private final Class<B> targetClass;
+  // The field-decision trail the deep-mapping engine resolved, surfaced by explain(). Empty for
+  // bridge-backed, then-composed, and hook-wrapped forward mappers (no single top-level field
+  // table); carries the rows resolved by mapperForward(...).
+  private final List<OpticNode> explainTrail;
 
   ForwardMapper(final Getter<A, B> forward, final Class<A> sourceClass, final Class<B> targetClass) {
+    this(forward, sourceClass, targetClass, List.of());
+  }
+
+  ForwardMapper(
+    final Getter<A, B> forward,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final List<OpticNode> explainTrail
+  ) {
     this.forward = forward;
     this.sourceClass = sourceClass;
     this.targetClass = targetClass;
+    this.explainTrail = List.copyOf(explainTrail);
   }
 
   /**
@@ -53,8 +69,35 @@ public final class ForwardMapper<A, B> {
     final Class<A> sourceClass,
     final Class<B> targetClass
   ) {
+    return create(forward, sourceClass, targetClass, List.of());
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> Same as {@link #create(Function, Class, Class)}
+   * plus the introspection trail the deep-mapping engine resolved, so {@link #explain()} can
+   * surface the forward-only mapper's field decisions.
+   */
+  public static <A, B> ForwardMapper<A, B> create(
+    final Function<? super A, ? extends B> forward,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final List<OpticNode> explainTrail
+  ) {
     final Getter<A, B> getter = forward::apply;
-    return new ForwardMapper<>(getter, sourceClass, targetClass);
+    return new ForwardMapper<>(getter, sourceClass, targetClass, explainTrail);
+  }
+
+  /**
+   * Describe what this forward mapper does, as a queryable {@link OpticReport} — the field
+   * correspondences it resolved, the transformations it applies, and the target fields it skips
+   * (with reasons). Built from the same pairing decisions the mapper converts with, so it cannot
+   * drift. Lenient forward mappers surface {@code MISSING_SOURCE} / {@code UNMAPPED_SOURCE} skips a
+   * strict {@code Mapper} would reject at construction.
+   *
+   * @return the structure of this mapper's conversion; never null
+   */
+  public OpticReport explain() {
+    return new OpticReport(explainTrail);
   }
 
   /** Forward conversion {@code A → B}. */
