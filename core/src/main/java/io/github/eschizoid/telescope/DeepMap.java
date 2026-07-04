@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Compute;
 import io.github.eschizoid.telescope.mapping.Conditional;
 import io.github.eschizoid.telescope.mapping.Constant;
@@ -114,8 +115,9 @@ public final class DeepMap {
     // Round-trip safety depends on every field having a same-name counterpart or an explicit row.
     final var r = resolution(source, target, steps, false);
     // Go through Mapper.create (public, Function-typed) — same call works regardless of whether
-    // Mapper sits in this package or moves to conversion/.
-    return Mapper.create(r.iso::to, r.iso::from, source, target, r.patchTable);
+    // Mapper sits in this package or moves to conversion/. The trail rides along so explain() can
+    // surface the field decisions this resolution just made.
+    return Mapper.create(r.iso::to, r.iso::from, source, target, r.patchTable, r.trail);
   }
 
   /**
@@ -162,6 +164,7 @@ public final class DeepMap {
     final var topSteps = new LinkedHashMap<String, FieldStep>();
     final var cyclicPairs = new HashSet<TypePair>();
     final var inProgress = new ArrayDeque<TypePair>();
+    final var trail = new ArrayList<OpticNode>();
     populateIso(
       source,
       target,
@@ -172,7 +175,8 @@ public final class DeepMap {
       nullStrategy,
       cyclicPairs,
       inProgress,
-      lenient
+      lenient,
+      trail
     );
     validateAllHintsConsumed(hintMap, cache);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
@@ -180,7 +184,7 @@ public final class DeepMap {
     topSteps.forEach((tgtName, step) ->
       patchTable.put(tgtName, new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v)))
     );
-    return new Resolution<>(iso, patchTable);
+    return new Resolution<>(iso, patchTable, List.copyOf(trail));
   }
 
   // ---------- Hint validation + writer eager construction ----------
@@ -328,6 +332,25 @@ public final class DeepMap {
   // ---------- Recursive resolver (writes into the cache) ----------
 
   /**
+   * The introspection node for one resolved field: {@link OpticNode.Mapped} when the source and
+   * target types are identical (a same-name or renamed pass-through), {@link OpticNode.Transformed}
+   * otherwise (a type change — boxing, container lift, cross-type row).
+   */
+  private static OpticNode fieldNode(
+    final String targetField,
+    final String sourceField,
+    final Type srcType,
+    final Type tgtType
+  ) {
+    if (srcType.equals(tgtType)) return new OpticNode.Mapped(sourceField, sourceField, targetField);
+    return new OpticNode.Transformed(targetField, simpleTypeName(srcType), simpleTypeName(tgtType));
+  }
+
+  private static String simpleTypeName(final Type t) {
+    return t instanceof Class<?> c ? c.getSimpleName() : t.getTypeName();
+  }
+
+  /**
    * Build the Iso for {@code (source, target)} and store it in {@code cache}. If {@code
    * topStepsOut} is non-null, also populate it with the per-component FieldSteps for this exact
    * call — used by the top-level entry to derive the patch table.
@@ -342,7 +365,12 @@ public final class DeepMap {
     final NullHint.NullStrategy nullStrategy,
     final Set<TypePair> cyclicPairs,
     final Deque<TypePair> inProgress,
-    final boolean lenient
+    final boolean lenient,
+    // Introspection collector: non-null only for the top-level pair, where each field decision
+    // appends one OpticNode as it is made. Recursive (nested-pair) calls pass null — nested
+    // dotted
+    // paths are a later refinement; this captures the top-level field table faithfully at source.
+    final List<OpticNode> trailOut
   ) {
     final var key = new TypePair(source, target);
     if (cache.containsKey(key)) {
@@ -460,6 +488,7 @@ public final class DeepMap {
           // field. The step is NOT registered under byTargetName, so the forward direction omits
           // the source field from the target map entirely.
           bySourceName.put(srcField, new FieldStep(srcField, null, NULLING_ISO));
+          if (trailOut != null) trailOut.add(new OpticNode.Skipped(srcField, OpticNode.Reason.DROPPED));
           continue;
         }
         final var tgtField = tgtRefl.normalize(row.targetField());
@@ -505,6 +534,15 @@ public final class DeepMap {
         final var step = new FieldStep(srcField, tgtField, rowIso);
         byTargetName.put(tgtField, step);
         bySourceName.put(srcField, step);
+        if (trailOut != null) {
+          // A same-typed row is a (possibly renamed) pass-through; a row carrying user
+          // forward/backward functions is a transform regardless of the declared field types.
+          trailOut.add(
+            row instanceof SameTypedTo<?, ?, ?>
+              ? fieldNode(tgtField, srcField, srcType, tgtType)
+              : new OpticNode.Transformed(tgtField, simpleTypeName(srcType), simpleTypeName(tgtType))
+          );
+        }
       }
 
       final var srcNames = srcRefl.names(source);
@@ -549,6 +587,7 @@ public final class DeepMap {
               name,
               new FieldStep(null, name, placeholderIsoFor(fieldType, telescopeWritesTgt.contains(name)))
             );
+            if (trailOut != null) trailOut.add(new OpticNode.Skipped(name, OpticNode.Reason.MISSING_SOURCE));
             continue;
           }
           throw new IllegalStateException(
@@ -561,24 +600,17 @@ public final class DeepMap {
             )
           );
         }
+        final var autoSrcType = srcRefl.genericType(source, name);
+        final var autoTgtType = tgtRefl.genericType(target, name);
         final var step = new FieldStep(
           name,
           name,
-          autoIso(
-            srcRefl.genericType(source, name),
-            tgtRefl.genericType(target, name),
-            name,
-            overrides,
-            beanRefl,
-            cache,
-            nullStrategy,
-            cyclicPairs,
-            inProgress
-          )
+          autoIso(autoSrcType, autoTgtType, name, overrides, beanRefl, cache, nullStrategy, cyclicPairs, inProgress)
         );
         byTargetName.put(name, step);
         bySourceName.put(name, step);
         claimedSrc.add(name);
+        if (trailOut != null) trailOut.add(fieldNode(name, name, autoSrcType, autoTgtType));
       }
 
       for (final var name : srcNames) {
@@ -595,6 +627,7 @@ public final class DeepMap {
         // with no consumer fall back to a NULLING placeholder rather than failing.
         if (!telescopeFixups.isEmpty() || inProgress.size() > 1 || lenient) {
           bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
+          if (trailOut != null) trailOut.add(new OpticNode.Skipped(name, OpticNode.Reason.UNMAPPED_SOURCE));
           continue;
         }
         throw new IllegalStateException(
@@ -905,7 +938,7 @@ public final class DeepMap {
       // Nested recursion — `isNested` (inProgress.size() > 1) already triggers the lenient gate
       // for unmatched fields regardless of the outer call's strictness. Pass `false` here so the
       // lenient flag's meaning stays anchored to the user-facing top-level call (mapperForward).
-      populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null, nullStrategy, cyclicPairs, inProgress, false);
+      populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null, nullStrategy, cyclicPairs, inProgress, false, null);
       final var subKey = new TypePair(srcCls, tgtCls);
       return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey));
     }
@@ -1741,7 +1774,7 @@ public final class DeepMap {
    * Bundled return from {@link #resolution(Class, Class, MapStep[], boolean)} — the Iso and the
    * patch table.
    */
-  private record Resolution<A, B>(Iso<A, B> iso, Map<String, Mapper.PatchEntry> patchTable) {}
+  private record Resolution<A, B>(Iso<A, B> iso, Map<String, Mapper.PatchEntry> patchTable, List<OpticNode> trail) {}
 
   /**
    * Shape of a container-typed component: kind (list / map values / optional), value/element {@link
