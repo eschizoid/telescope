@@ -28,8 +28,9 @@ not state _why_ a target field was left unset.
 Add two introspection surfaces — a static `explain()` and a data-driven `trace(input)` — to the whole optic surface,
 built on one unified node model derived from the structure the optic already computes.
 
-**1. One unified node model.** A **sealed public `OpticNode` family in `:core`** (following the `Mapping.java` /
-`Edit.java` shape: sealed interface + package-private record impls) whose variants cover both worlds:
+**1. One unified node model.** A **sealed public `OpticNode` family in `:core`** — a public sealed ADT with nested
+public record variants (unlike `Mapping`'s package-private impls: here the variants are user-facing, constructed and
+asserted on directly, e.g. `new Mapped("firstName", "firstName", "givenName")`). Its variants cover both worlds:
 
 - **Navigation hops** — `Focus(path)`, `Traverse(container)`, `Filter(desc)`, `Narrow(type)`, `Bridge(target)`.
 - **Mapping rows** — `Mapped(path, from, to)`, `Transformed(field, fromType, toType)`, `Skipped(field, Reason)` where
