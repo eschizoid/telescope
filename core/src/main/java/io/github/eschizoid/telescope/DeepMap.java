@@ -377,6 +377,67 @@ public final class DeepMap {
   }
 
   /**
+   * True when {@code (srcType, tgtType)} recurses into a nested record/bean pair AND carries no
+   * explicit override rows — the pure-auto nesting the introspection trail can safely descend into
+   * with dotted paths. A nested pair WITH rows is left as a single node (conservative): its rows
+   * are resolved by {@code populateIso}, not re-walked here.
+   */
+  private static boolean isNestedAutoPair(
+    final Type srcType,
+    final Type tgtType,
+    final Map<TypePair, List<Mapping<?, ?>>> overrides
+  ) {
+    if (!(PAIRING.decidePair(srcType, tgtType, "") instanceof PairDecision.RecursePair)) return false;
+    return overrides.getOrDefault(new TypePair((Class<?>) srcType, (Class<?>) tgtType), List.of()).isEmpty();
+  }
+
+  /**
+   * Emit dotted-path introspection nodes for a pure-auto nested pair, recursing to any depth. Uses
+   * the same {@link PairingRules#matchFields} name-matching and {@link PairingRules#decidePair}
+   * classification the resolver uses, so the nested rows are faithful; only fires for pairs with no
+   * override rows (see {@link #isNestedAutoPair}). {@code prefix} is the dotted path accumulated so
+   * far (e.g. {@code "customer.address."}).
+   */
+  private static void collectNested(
+    final Class<?> srcCls,
+    final Class<?> tgtCls,
+    final String prefix,
+    final Map<TypePair, List<Mapping<?, ?>>> overrides,
+    final Reflective beanRefl,
+    final List<OpticNode> out,
+    final Set<TypePair> seen
+  ) {
+    final var srcRefl = pickReflective(srcCls, beanRefl);
+    final var tgtRefl = pickReflective(tgtCls, beanRefl);
+    final var match = PairingRules.matchFields(
+      List.of(srcRefl.names(srcCls)),
+      List.of(tgtRefl.names(tgtCls)),
+      Set.of(),
+      Set.of()
+    );
+    for (final var name : match.matched()) {
+      final var st = srcRefl.genericType(srcCls, name);
+      final var tt = tgtRefl.genericType(tgtCls, name);
+      // Descend only into a pure-auto nested pair not already on the current path — the seen guard
+      // severs cyclic type graphs (A → B → A) at the second encounter, emitting a single node
+      // there.
+      if (
+        st instanceof Class<?> sc &&
+        tt instanceof Class<?> tc &&
+        isNestedAutoPair(st, tt, overrides) &&
+        seen.add(new TypePair(sc, tc))
+      ) {
+        collectNested(sc, tc, prefix + name + ".", overrides, beanRefl, out, seen);
+        seen.remove(new TypePair(sc, tc));
+      } else out.add(fieldNode(prefix + name, prefix + name, st, tt));
+    }
+    for (final var name : match.unmatchedTargets())
+      out.add(new OpticNode.Skipped(prefix + name, OpticNode.Reason.MISSING_SOURCE));
+    for (final var name : match.unmatchedSources())
+      out.add(new OpticNode.Skipped(prefix + name, OpticNode.Reason.UNMAPPED_SOURCE));
+  }
+
+  /**
    * Build the Iso for {@code (source, target)} and store it in {@code cache}. If {@code
    * topStepsOut} is non-null, also populate it with the per-component FieldSteps for this exact
    * call — used by the top-level entry to derive the patch table.
@@ -636,7 +697,19 @@ public final class DeepMap {
         byTargetName.put(name, step);
         bySourceName.put(name, step);
         claimedSrc.add(name);
-        if (trailOut != null) trailOut.add(fieldNode(name, name, autoSrcType, autoTgtType));
+        if (trailOut != null && isNestedAutoPair(autoSrcType, autoTgtType, overrides)) {
+          final var seen = new HashSet<TypePair>();
+          seen.add(new TypePair((Class<?>) autoSrcType, (Class<?>) autoTgtType));
+          collectNested(
+            (Class<?>) autoSrcType,
+            (Class<?>) autoTgtType,
+            name + ".",
+            overrides,
+            beanRefl,
+            trailOut,
+            seen
+          );
+        } else if (trailOut != null) trailOut.add(fieldNode(name, name, autoSrcType, autoTgtType));
       }
 
       for (final var name : srcNames) {

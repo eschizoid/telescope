@@ -120,6 +120,50 @@ class MapperExplainTest {
   }
 
   @Nested
+  @DisplayName("N-level nested mapping — dotted paths")
+  class Nested3Level {
+
+    record Address(String city, String zip) {}
+
+    record AddressDto(String city, String zip) {}
+
+    record Customer(String name, Address address) {}
+
+    record CustomerDto(String name, AddressDto address) {}
+
+    record Order(String id, Customer customer) {}
+
+    record OrderDto(String id, CustomerDto customer) {}
+
+    @Test
+    @DisplayName("a 3-level auto mapper recurses into nested fields with dotted paths, not a single row")
+    void dottedPathsToThreeLevels() {
+      final var report = Telescope.mapper(Order.class, OrderDto.class).explain();
+      assertTrue(report.mapped().contains(new Mapped("id", "id", "id")), report::toString);
+      assertTrue(
+        report.mapped().contains(new Mapped("customer.name", "customer.name", "customer.name")),
+        report::toString
+      );
+      assertTrue(
+        report.mapped().contains(new Mapped("customer.address.city", "customer.address.city", "customer.address.city")),
+        report::toString
+      );
+      assertTrue(
+        report.mapped().contains(new Mapped("customer.address.zip", "customer.address.zip", "customer.address.zip")),
+        report::toString
+      );
+      // The nested record field is NOT emitted as a single opaque row — we descended into it.
+      assertTrue(
+        report
+          .transformations()
+          .stream()
+          .noneMatch(t -> t.field().equals("customer")),
+        () -> "customer should be recursed, not a single Transformed row: " + report.transformations()
+      );
+    }
+  }
+
+  @Nested
   @DisplayName("Forward-only mapper — lenient skips surface with reasons")
   class Forward {
 
