@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.introspection;
 import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
@@ -79,6 +80,10 @@ class MapperTraceTest {
 
     record WideTarget(String name, String region) {}
 
+    record WideSource(String name, String legacyId) {}
+
+    record NarrowTarget(String name) {}
+
     @Test
     @DisplayName("a lenient forward mapper traces the mapped field and the missing-source skip")
     void forwardMissingSourceTrace() {
@@ -86,6 +91,47 @@ class MapperTraceTest {
       final var text = trace.toString();
       assertTrue(text.contains("name") && text.contains("\"Ada\""), text);
       assertTrue(text.contains("region") && text.contains("(missing source)"), text);
+    }
+
+    @Test
+    @DisplayName("a forward mapper traces a source field with no consumer as an (unused source) row")
+    void forwardUnusedSourceTrace() {
+      final var trace = Telescope.mapperForward(WideSource.class, NarrowTarget.class).trace(
+        new WideSource("Ada", "L-9")
+      );
+      final var text = trace.toString();
+      assertTrue(text.contains("name") && text.contains("\"Ada\""), text);
+      assertTrue(text.contains("legacyId") && text.contains("(unused source)"), text);
+    }
+  }
+
+  @Nested
+  @DisplayName("Bean source — the mapping-side read path")
+  class BeanSourceMapping {
+
+    public static final class BeanUser {
+
+      private final String name;
+
+      public BeanUser(final String name) {
+        this.name = name;
+      }
+
+      public String getName() {
+        return name;
+      }
+    }
+
+    record UserView(String name) {}
+
+    @Test
+    @DisplayName("a bean-source mapper traces the property value through the bean read path, no (n/a)")
+    void beanSourceTrace() {
+      final var trace = Telescope.mapper(BeanUser.class, UserView.class).trace(new BeanUser("Ada"));
+      final var text = trace.toString();
+      // readDotted must resolve the bean property "name" via the Reflective bean branch.
+      assertTrue(text.contains("name") && text.contains("\"Ada\""), text);
+      assertFalse(text.contains("(n/a)"), text);
     }
   }
 

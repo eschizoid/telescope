@@ -205,6 +205,33 @@ class NavigationTraceTest {
       assertTrue(trace.toString().contains("\"Ada\""), trace::toString);
       assertFalse(trace.toString().contains("(n/a)"), trace::toString);
     }
+
+    public static final class Endpoint {
+
+      private String url;
+
+      public Endpoint() {}
+
+      public String getURL() {
+        return url;
+      }
+
+      public void setURL(final String url) {
+        this.url = url;
+      }
+    }
+
+    @Test
+    @DisplayName("an all-caps getter (getURL) normalizes to the JavaBeans property (URL), reading the value")
+    void acronymGetterReadsValue() {
+      final var endpoint = new Endpoint();
+      endpoint.setURL("/v1");
+      final var trace = Telescope.ofBean(Endpoint.class).field(Endpoint::getURL).trace(endpoint);
+      // JavaBeans decapitalize keeps a two-leading-uppercase acronym as-is: getURL → "URL", not
+      // "uRL".
+      assertTrue(trace.toString().contains("URL → \"/v1\""), trace::toString);
+      assertFalse(trace.toString().contains("(n/a)"), trace::toString);
+    }
   }
 
   @Nested

@@ -145,8 +145,8 @@ public final class DeepMap {
   /**
    * Forward-only resolution that also carries the introspection trail, so {@code
    * Telescope.mapperForward}'s row path produces a {@link ForwardMapper} whose {@code explain()}
-   * surfaces its field decisions — including the lenient {@code MISSING_SOURCE} / {@code
-   * UNMAPPED_SOURCE} skips a strict {@code Mapper} would reject.
+   * surfaces its field decisions — including the lenient {@code MISSING_SOURCE} skips and {@code
+   * UnusedSource} rows a strict {@code Mapper} would reject.
    */
   static <A, B> ForwardMapper<A, B> resolveForwardMapper(
     final Class<A> source,

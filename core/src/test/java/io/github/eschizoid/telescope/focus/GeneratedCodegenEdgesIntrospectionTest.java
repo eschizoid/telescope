@@ -41,4 +41,19 @@ class GeneratedCodegenEdgesIntrospectionTest {
     // Bridge branch so it truncated. The email field must be reached and its value shown.
     assertTrue(trace.toString().contains("email → \"a@b.com\""), trace::toString);
   }
+
+  @Test
+  @DisplayName("a generated @BeanFocus navigator records property-named Focus hops and traces the value")
+  void beanNavigatorExplainAndTrace() {
+    final var report = FocusSetterBeanTelescope.of().email().explain();
+    // The generated bean navigator records the PROPERTY name (email), not the getter (getEmail) —
+    // matching the runtime bean path, so explain() and trace() agree across the two tiers.
+    assertEquals(List.of(new Focus("email")), report.nodes());
+    final var bean = new FocusSetterBean();
+    bean.setEmail("a@b.com");
+    assertTrue(
+      FocusSetterBeanTelescope.of().email().trace(bean).toString().contains("email → \"a@b.com\""),
+      "a bean navigator trace must read the property value, not surface (n/a)"
+    );
+  }
 }

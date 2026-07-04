@@ -1946,13 +1946,21 @@ public sealed class Telescope<
   private static String fieldNameOf(final Accessor<?, ?> getter) {
     final var raw = LambdaIntrospection.methodNameOf(getter);
     if (LambdaIntrospection.implClassOf(getter).isRecord()) return raw;
-    if (raw.length() > 3 && raw.startsWith("get") && Character.isUpperCase(raw.charAt(3))) return (
-      Character.toLowerCase(raw.charAt(3)) + raw.substring(4)
+    if (raw.length() > 3 && raw.startsWith("get") && Character.isUpperCase(raw.charAt(3))) return beanDecapitalize(
+      raw.substring(3)
     );
-    if (raw.length() > 2 && raw.startsWith("is") && Character.isUpperCase(raw.charAt(2))) return (
-      Character.toLowerCase(raw.charAt(2)) + raw.substring(3)
+    if (raw.length() > 2 && raw.startsWith("is") && Character.isUpperCase(raw.charAt(2))) return beanDecapitalize(
+      raw.substring(2)
     );
     return raw;
+  }
+
+  // JavaBeans Introspector.decapitalize: an acronym whose first two chars are both uppercase (e.g.
+  // "URL") is left as-is; otherwise the first char is lowercased. Mirrors the codegen processor's
+  // property-name derivation so a runtime bean node's name agrees with the generated one.
+  private static String beanDecapitalize(final String s) {
+    if (s.length() > 1 && Character.isUpperCase(s.charAt(0)) && Character.isUpperCase(s.charAt(1))) return s;
+    return Character.toLowerCase(s.charAt(0)) + s.substring(1);
   }
 
   static <A> Class<A> implClassOf(final Serializable lambda) {

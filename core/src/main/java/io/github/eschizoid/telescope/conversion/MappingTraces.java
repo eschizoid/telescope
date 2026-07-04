@@ -55,7 +55,7 @@ final class MappingTraces {
       t.to() + " " + render(readDotted(output, t.to()))
     );
     if (node instanceof OpticNode.Skipped s) return new Row("•", s.field(), "", "(" + label(s.reason()) + ")");
-    if (node instanceof OpticNode.UnusedSource u) return new Row("•", u.field(), "", "(unmapped source)");
+    if (node instanceof OpticNode.UnusedSource u) return new Row("•", u.field(), "", "(unused source)");
     return new Row("•", String.valueOf(node), "", "");
   }
 
