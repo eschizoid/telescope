@@ -38,7 +38,7 @@ class LombokFocusProcessorTest {
   class Generated {
 
     @Test
-    @DisplayName("@Data POJO yields a DataUserTelescope with start(), get(), and per-property methods")
+    @DisplayName("@Data POJO yields a DataUserTelescope with of(), get(), and per-property methods")
     void dataPath() throws Exception {
       final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserTelescope");
       assertNotNull(pathClass);
@@ -50,7 +50,7 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("@Builder POJO yields a BuilderUserTelescope with start(), get(), and per-property methods")
+    @DisplayName("@Builder POJO yields a BuilderUserTelescope with of(), get(), and per-property methods")
     void builderPath() throws Exception {
       final var pathClass = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserTelescope");
       assertNotNull(pathClass);
@@ -328,9 +328,9 @@ class LombokFocusProcessorTest {
   }
 
   private static void assertHasFocusMethod(final Class<?> pathClass) throws Exception {
-    final var start = pathClass.getDeclaredMethod("of");
-    assertTrue(Modifier.isStatic(start.getModifiers()), "start() must be static");
-    assertEquals(pathClass, start.getReturnType(), () -> "start() should return " + pathClass.getSimpleName());
+    final var of = pathClass.getDeclaredMethod("of");
+    assertTrue(Modifier.isStatic(of.getModifiers()), "of() must be static");
+    assertEquals(pathClass, of.getReturnType(), () -> "of() should return " + pathClass.getSimpleName());
   }
 
   private static void assertHasGetMethod(final Class<?> pathClass) throws Exception {

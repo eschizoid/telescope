@@ -1,6 +1,6 @@
 # telescope-lombok
 
-Compile-time `<X>Path<R>` navigator emission for Lombok-annotated POJOs. Sibling of
+Compile-time `<X>Telescope<R>` navigator emission for Lombok-annotated POJOs. Sibling of
 [`telescope-codegen`](../codegen/README.md), out-of-tree consumer of the same `AbstractTelescopeProcessor` base — split
 because Lombok's lazy AST patching breaks the in-memory test harness `:codegen` uses, and round-deferred emission means
 a different processor lifecycle.
@@ -25,7 +25,7 @@ public class User {
 You want the same compile-checked navigator as `@Focus`/`@BeanFocus`:
 
 ```java
-UserPath.of()
+UserTelescope.of()
     .address().city()
     .update(user, city -> city.toLowerCase());
 ```
@@ -87,8 +87,8 @@ synthesised getters / setters / builder), causing a "no readable properties" err
 
 ## Generated output
 
-Same `<X>Path<R>` shape as [`telescope-codegen`'s](../codegen/README.md) emission — see that module's README for the
-full structure. The processor uses the Lombok-synthesised getter / setter / builder where present:
+Same `<X>Telescope<R>` shape as [`telescope-codegen`'s](../codegen/README.md) emission — see that module's README for
+the full structure. The processor uses the Lombok-synthesised getter / setter / builder where present:
 
 - `@Data` / `@Value` → read via `getFoo()` / `isFoo()`, rebuild via no-arg ctor + setters
 - `@Builder` → rebuild via the generated `Builder.foo(value).build()` chain
@@ -96,16 +96,16 @@ full structure. The processor uses the Lombok-synthesised getter / setter / buil
 If a class carries both `@Data` and `@Builder`, the builder rebuild path wins (higher fidelity for field-renamed builder
 methods).
 
-## Caveat: same-module main code can't reference the emitted Path
+## Caveat: same-module main code can't reference the emitted navigator
 
-Lombok-emitted `<Pojo>Path<R>` is emitted in `processingOver()` — the final processor round, after main-source symbol
-resolution. Same-module main code that directly references `<Pojo>Path` won't compile, since the symbol isn't visible
-until after main resolution finishes.
+Lombok-emitted `<Pojo>Telescope<R>` is emitted in `processingOver()` — the final processor round, after main-source
+symbol resolution. Same-module main code that directly references `<Pojo>Telescope` won't compile, since the symbol
+isn't visible until after main resolution finishes.
 
 Workarounds:
 
-- Reference the Path from test code (works — test compilation is a separate phase)
-- Reference from downstream modules (works — they're compiled later, the jar carries the emitted Path)
+- Reference the navigator from test code (works — test compilation is a separate phase)
+- Reference from downstream modules (works — they're compiled later, the jar carries the emitted navigator)
 - For same-module main code, use the reflective `Telescope.ofBean(Pojo.class).field(Pojo::getFoo)` path instead.
   Slightly slower; gets the same end-state.
 

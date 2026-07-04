@@ -23,10 +23,12 @@ drift, and with error-severity diagnostics a drifted rule is a user's build brok
 Two coupled decisions, one feature.
 
 **1. A call-site verifier in `:codegen`, built on JSR-269 + the Compiler Tree API.** `MapperVerifierProcessor` claims
-`"*"`, obtains `Trees.instance(processingEnv)`, and walks every root element's tree for invocations of the four
-factories. From class-literal arguments and statically-recognizable `Mapping` / `WriteHint` row factories (method
-references resolve to real `ExecutableElement`s — the compile-time twin of the `SerializedLambda` decode), it replays
-the construction-time pairing decisions and reports violations as **compile errors anchored on the offending row
+`"*"`, obtains `Trees.instance(processingEnv)`, and walks every root element's tree for invocations of the three
+verified factories — `Telescope.map` / `Telescope.mapper` (strict) and `Telescope.mapperForward` (lenient).
+(`Telescope.fromMap` verification is descoped to a tracked follow-up: its untyped `Map` source has no compile-time field
+set to pair against.) From class-literal arguments and statically-recognizable `Mapping` / `WriteHint` row factories
+(method references resolve to real `ExecutableElement`s — the compile-time twin of the `SerializedLambda` decode), it
+replays the construction-time pairing decisions and reports violations as **compile errors anchored on the offending row
 expression**, with the same diagnostic text the runtime throws. On a non-javac compiler (`Trees` unavailable) the
 processor prints one NOTE and no-ops: verification is additive, never load-bearing — the construction-time check remains
 the backstop, so a skipped site is exactly as safe as today.

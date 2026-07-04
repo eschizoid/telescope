@@ -1,6 +1,7 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
 import org.jreleaser.model.Active.ALWAYS
 import org.jreleaser.model.Active.NEVER
+import pl.allegro.tech.build.axion.release.VerifyReleaseTask
 
 plugins {
     base
@@ -52,6 +53,16 @@ scmVersion {
 allprojects {
     group = "io.github.eschizoid"
     version = rootProject.scmVersion.version
+}
+
+// The snapshot-dependency scan resolves every subproject's configurations from the root
+// verifyRelease task; the GraalVM native-buildtools plugin (:examples:graphql) forbids that
+// cross-project resolution ("attempted without an exclusive lock"), failing every release run at
+// configuration-cache store time. Replacing the convention provider with an empty set neutralizes
+// only the scan — the task's uncommitted-changes / ahead-of-remote guards keep running. Safe here:
+// every dependency is a catalog-pinned release version, so the SNAPSHOT guard has nothing to catch.
+tasks.withType<VerifyReleaseTask>().configureEach {
+    snapshotDependencies.empty()
 }
 
 // Single source of truth for which subprojects ship to Maven Central. Used below to drive both

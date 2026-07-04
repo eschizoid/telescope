@@ -1089,10 +1089,11 @@ final Telescope<OrderRecord, OrderPojo> conv = Telescope.map(
 
 Validation is eager: a misconfigured hint (`BUILDER` on a no-builder class, hint targeting a record, duplicate hint,
 unused hint) throws at `Telescope.map(...)` time — not on first `iso.to()` deep in production. And with
-`telescope-codegen` on the annotation-processor path, the same validation moves up to **compile time**:
-statically-visible `map(...)` / `mapper(...)` call sites are replayed by the verifier and violations surface as compile
-errors with the identical diagnostic text
-([details in `telescope-codegen`](codegen/README.md#compile-time-mapper-verification)).
+`telescope-codegen` on the annotation-processor path, the structural rejections that don't need the live classpath — a
+hint targeting a record, a duplicate hint — move up to **compile time**: statically-visible `map(...)` / `mapper(...)`
+call sites are replayed by the verifier and those violations surface as compile errors with the identical diagnostic
+text ([details in `telescope-codegen`](codegen/README.md#compile-time-mapper-verification)). The builder-feasibility and
+unused-hint checks stay at construction time (both still eager and loud).
 
 **`writeBeans(STRATEGY)` — one default for every bean target.** When every entity in the recursion shares the same
 construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibernate's identity assignment fires), one
@@ -1251,7 +1252,7 @@ Telescope.of(Company.class)
   .update(company, String::toLowerCase);
 
 // Compile-time, reflection-free — same Telescope, generator-built
-CompanyPath.of()
+CompanyTelescope.of()
   .departments().each().teams().each()
   .users().each().email()
   .update(company, String::toLowerCase);
@@ -1265,38 +1266,39 @@ import io.github.eschizoid.telescope.annotations.Focus;
 @Focus record Team(String name, List<User> users) {}
 @Focus record Company(String name, List<Team> teams) {}
 
-// Generated: <X>Path<R> per annotated type plus a step class per collection-shaped component.
+// Generated: <X>Telescope<R> per annotated type plus a step class per collection-shaped component.
 // Usage reads like the reflective DSL — but every hop is type-checked by javac and every read /
 // rebuild is a direct method-ref + constructor call (no reflection):
-final Telescope<Company, String> userNames = CompanyPath.of()
-  .teams().each()        // step over List<Team> → TeamPath<Company>
-  .users().each()        // step over List<User> → UserPath<Company>
+final Telescope<Company, String> userNames = CompanyTelescope.of()
+  .teams().each()        // step over List<Team> → TeamTelescope<Company>
+  .users().each()        // step over List<User> → UserTelescope<Company>
   .name();               // terminal Telescope<Company, String>
 
 final Company shouted = userNames.update(company, String::toUpperCase);
 
 // Single fields are just as direct:
-UserPath.of().address().city().update(alice, String::toUpperCase);
+UserTelescope.of().address().city().update(alice, String::toUpperCase);
 ```
 
 Each scalar component yields a terminal `Telescope<R, T>`; each sub-record component (also `@Focus`-annotated) yields a
-`<Sub>Path<R>` to keep navigating; each container component yields a small step class whose `.each()` (List/Set/
-Iterable), `.eachValue()` (Map values, keys preserved), or `.whenPresent()` (Optional) returns the element's `Path` when
-the element is itself annotated, or a terminal `Telescope` otherwise. At any hop, `.get()` returns the current
-`Telescope` — so a step or path _is_ a navigator, but every leaf is the same `Telescope<R, X>` value the reflective DSL
-gives you.
+`<Sub>Telescope<R>` navigator to keep navigating; each container component yields a small step class whose `.each()`
+(List/Set/Iterable), `.eachValue()` (Map values, keys preserved), or `.whenPresent()` (Optional) returns the element's
+navigator when the element is itself annotated, or a terminal `Telescope` otherwise. At any hop, `.get()` returns the
+current `Telescope` — so a step or navigator _is_ a navigator, but every leaf is the same `Telescope<R, X>` value the
+reflective DSL gives you.
 
-**Ops at every hop, effects included.** Every generated `Path` and `Step` also forwards the full `Telescope` operation
-surface — `read` / `find` / `toList` / `count` / `exists` / `set` / `update` / `updateIndexed` / `toListIndexed` /
-`then` plus the four effect methods `updateAsync` (with or without `Executor`) / `updateOptional` / `updateEither` /
-`updateValidated`. You don't need to terminate with `.get()` first; the navigator stands in for the wrapped Telescope at
-any intermediate hop. So `CompanyPath.of().teams().each().users().each().updateAsync(company, svc::lookup, pool)`
-returns a `CompletableFuture<Company>` directly, with the effect threaded through the generated chain.
+**Ops at every hop, effects included.** Every generated navigator and `Step` also forwards the full `Telescope`
+operation surface — `read` / `find` / `toList` / `count` / `exists` / `set` / `update` / `updateIndexed` /
+`toListIndexed` / `then` plus the four effect methods `updateAsync` (with or without `Executor`) / `updateOptional` /
+`updateEither` / `updateValidated`. You don't need to terminate with `.get()` first; the navigator stands in for the
+wrapped Telescope at any intermediate hop. So
+`CompanyTelescope.of().teams().each().users().each().updateAsync(company, svc::lookup, pool)` returns a
+`CompletableFuture<Company>` directly, with the effect threaded through the generated chain.
 
-**Bridge hops — conversion as a navigator step.** If a type carries both `@Focus`/`@BeanFocus` (so it has a `*Path`) and
-`@Bridge(Target.class)` (so it has a `*Bridge.BRIDGE`), the navigator gains a fluent **`as<Target>()`** method that
-chains the bridge in. The navigator becomes a single compile-checked surface for _both_ navigation _and_ conversion,
-crossing paradigms naturally (record↔record, record↔POJO, POJO↔POJO):
+**Bridge hops — conversion as a navigator step.** If a type carries both `@Focus`/`@BeanFocus` (so it has a `*Telescope`
+navigator) and `@Bridge(Target.class)` (so it has a `*Bridge.BRIDGE`), the navigator gains a fluent **`as<Target>()`**
+method that chains the bridge in. The navigator becomes a single compile-checked surface for _both_ navigation _and_
+conversion, crossing paradigms naturally (record↔record, record↔POJO, POJO↔POJO):
 
 ```java
 @Focus
@@ -1308,15 +1310,15 @@ record UserDto(String id, String email) {}
 
 // Navigate through the bridge into a target field, then update. The Iso round-trips, so the
 // result is a new UserEntity:
-final UserEntity lowered = UserEntityPath.of()
-  .asUserDto() // → UserDtoPath<UserEntity>
+final UserEntity lowered = UserEntityTelescope.of()
+  .asUserDto() // → UserDtoTelescope<UserEntity>
   .email() // → Telescope<UserEntity, String>
   .update(entity, String::toLowerCase);
 ```
 
 The return type degrades to a terminal `Telescope<R, Target>` when the target isn't itself annotated (so there's no
-`<Target>Path` to chain into). The reverse direction (target's Path getting `.asSource()`) still goes through
-`.then(SourceBridge.BRIDGE.reverse())` for now — forward only at the navigator level.
+`<Target>Telescope` navigator to chain into). The reverse direction (target's navigator getting `.asSource()`) still
+goes through `.then(SourceBridge.BRIDGE.reverse())` for now — forward only at the navigator level.
 
 Gradle wiring:
 
@@ -1340,8 +1342,8 @@ import io.github.eschizoid.telescope.annotations.BeanFocus;
 
 @BeanFocus public class UserBean { /* getId/getEmail + setters, or a static builder() */ }
 
-// Generated alongside: UserBeanPath<R> with the same fluent surface as a record navigator.
-UserBeanPath.of().email().update(user, String::toLowerCase);   // no reflection
+// Generated alongside: UserBeanTelescope<R> with the same fluent surface as a record navigator.
+UserBeanTelescope.of().email().update(user, String::toLowerCase);   // no reflection
 ```
 
 ---
@@ -1561,7 +1563,7 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
      can't verify the name exists or that the inferred type matches the actual field. Wrong name → runtime error.
 
    For zero runtime-check points, use the **`@Focus` / `@BeanFocus` / `@Bridge` annotation processors** — they generate
-   a typed `<X>Path<R>` navigator at compile time, with every step a typed method call.
+   a typed `<X>Telescope<R>` navigator at compile time, with every step a typed method call.
 
 7. **Versioning policy — semver.** Source and binary compatibility across minor versions; breaks only on majors.
 

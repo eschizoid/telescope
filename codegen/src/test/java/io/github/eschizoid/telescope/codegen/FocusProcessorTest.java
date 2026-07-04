@@ -13,10 +13,10 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Drives {@link FocusProcessor} through the shared {@link ProcessorHarness}. Asserts on the shape
- * of the generated fluent navigator: a {@code <Record>Telescope<R>} class with a {@code start()}
- * factory, a {@code get()} terminal, and one method per component (scalar terminal /
- * sub-record-Path / container step), plus the container step classes for {@code List}/{@code
- * Map}/{@code Optional} components.
+ * of the generated fluent navigator: a {@code <Record>Telescope<R>} class with an {@code of()}
+ * factory, a {@code get()} terminal, and one method per component (scalar terminal / sub-record
+ * navigator / container step), plus the container step classes for {@code List}/{@code Map}/{@code
+ * Optional} components.
  */
 class FocusProcessorTest {
 
@@ -29,7 +29,7 @@ class FocusProcessorTest {
   class HappyPath {
 
     @Test
-    @DisplayName("generates a <Record>Telescope<R> class with start(), get(), and one method per component")
+    @DisplayName("generates a <Record>Telescope<R> class with of(), get(), and one method per component")
     void generatesPathClass() {
       final var compilation = compile(
         source(
@@ -93,7 +93,7 @@ class FocusProcessorTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.ComboTelescope");
-      assertNotNull(generated, () -> "ComboPath not generated; saw " + compilation.generated().keySet());
+      assertNotNull(generated, () -> "ComboTelescope not generated; saw " + compilation.generated().keySet());
 
       // Off-path component reads are null-guarded so the lens rebuilds a fresh record when it
       // writes
@@ -195,7 +195,7 @@ class FocusProcessorTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.AgeTelescope");
-      assertNotNull(generated, () -> "AgePath not generated; saw " + compilation.generated().keySet());
+      assertNotNull(generated, () -> "AgeTelescope not generated; saw " + compilation.generated().keySet());
 
       assertTrue(generated.contains("public Telescope<R, Integer> age()"), generated);
       // The primitive name must not leak into the reference-typed Telescope parameter.
@@ -246,7 +246,7 @@ class FocusProcessorTest {
 
       // The Path itself routes the members() method to the Step.
       final var path = compilation.generated().get("demo.TeamTelescope");
-      assertNotNull(path, () -> "TeamPath not generated; saw " + compilation.generated().keySet());
+      assertNotNull(path, () -> "TeamTelescope not generated; saw " + compilation.generated().keySet());
       assertTrue(path.contains("public TeamMembersStep<R> members()"), path);
     }
 
@@ -330,7 +330,7 @@ class FocusProcessorTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.EntityTelescope");
-      assertNotNull(generated, () -> "EntityPath not generated; saw " + compilation.generated().keySet());
+      assertNotNull(generated, () -> "EntityTelescope not generated; saw " + compilation.generated().keySet());
 
       // Target is itself navigable (@Focus'd) → return its Path.
       assertTrue(generated.contains("public demo.DtoTelescope<R> asDto()"), generated);
@@ -365,13 +365,13 @@ class FocusProcessorTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("src.EntityTelescope");
-      assertNotNull(generated, () -> "EntityPath not generated; saw " + compilation.generated().keySet());
+      assertNotNull(generated, () -> "EntityTelescope not generated; saw " + compilation.generated().keySet());
       // The bridge hop must instantiate a navigator from a different package — DtoPath's ctor
       // must therefore be visible (public) for this to compile.
       assertTrue(generated.contains("new tgt.DtoTelescope<>(path.then(EntityBridge.BRIDGE))"), generated);
       // Confirm the foreign target's Path emits a public ctor so the cross-package `new` resolves.
       final var dtoPath = compilation.generated().get("tgt.DtoTelescope");
-      assertNotNull(dtoPath, () -> "DtoPath not generated; saw " + compilation.generated().keySet());
+      assertNotNull(dtoPath, () -> "DtoTelescope not generated; saw " + compilation.generated().keySet());
       assertTrue(dtoPath.contains("public DtoTelescope(final Telescope<R, Dto> path)"), dtoPath);
     }
 
@@ -401,7 +401,7 @@ class FocusProcessorTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.EntityTelescope");
-      assertNotNull(generated, () -> "EntityPath not generated; saw " + compilation.generated().keySet());
+      assertNotNull(generated, () -> "EntityTelescope not generated; saw " + compilation.generated().keySet());
 
       // Target isn't @Focus'd → return terminal Telescope, not a Path.
       assertTrue(generated.contains("public Telescope<R, demo.Plain> asPlain()"), generated);
@@ -426,7 +426,7 @@ class FocusProcessorTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.PlainRecTelescope");
-      assertNotNull(generated, () -> "PlainRecPath not generated; saw " + compilation.generated().keySet());
+      assertNotNull(generated, () -> "PlainRecTelescope not generated; saw " + compilation.generated().keySet());
 
       // No @Bridge → no bridge hop (no reference to a <Source>Bridge.BRIDGE constant).
       assertFalse(generated.contains("Bridge.BRIDGE"), () -> "unexpected bridge hop in: " + generated);
