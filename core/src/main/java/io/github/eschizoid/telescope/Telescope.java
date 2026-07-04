@@ -14,6 +14,7 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Records;
+import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Affine;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
@@ -22,6 +23,8 @@ import io.github.eschizoid.telescope.internal.optics.Traversal;
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
+import io.github.eschizoid.telescope.introspection.Trace;
+import io.github.eschizoid.telescope.introspection.TraceLimits;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
@@ -1200,6 +1203,106 @@ public sealed class Telescope<
    */
   public OpticReport explain() {
     return new OpticReport(trail);
+  }
+
+  /**
+   * Execute this telescope's navigation against {@code input} and describe what each hop did to the
+   * data, as a {@link Trace} tree. Where {@link #explain()} is the static path, {@code trace} runs
+   * it: single-focus hops ({@code field}) descend linearly; many-focus hops ({@code each} / {@code
+   * eachValue} / {@code whenPresent}) expand into one subtree per element. A pure single-focus path
+   * stays linear.
+   *
+   * <p>This is a debugging aid, run off the hot path — it materializes one node per focus. Over a
+   * large collection use {@link #trace(Object, TraceLimits)} with explicit caps, or accept the safe
+   * {@link TraceLimits#defaults() defaults} this overload applies (10 elements per fan-out, 20
+   * deep) which truncate with a {@code … (+K more)} marker.
+   *
+   * @param input the value to run the path against
+   * @return the executed trace tree; never null
+   */
+  public Trace trace(final S input) {
+    return trace(input, TraceLimits.defaults());
+  }
+
+  /**
+   * {@link #trace(Object)} with explicit caps — use {@link TraceLimits#none()} for the full tree.
+   */
+  public Trace trace(final S input, final TraceLimits limits) {
+    if (trail.isEmpty()) return new Trace(List.of(Trace.Node.leaf(renderValue(input))));
+    // A mapping-built telescope (from Telescope.map) carries field rows, not a sequential path;
+    // value-tracing those runs the mapper — surfaced on Mapper/ForwardMapper. Here, render the
+    // static rows so trace() on a mapping telescope is coherent rather than a fallback.
+    if (!(trail.get(0) instanceof OpticNode.Focus) && !(trail.get(0) instanceof OpticNode.Traverse)) {
+      return new Trace(
+        explain()
+          .nodes()
+          .stream()
+          .map(n -> Trace.Node.leaf(String.valueOf(n)))
+          .toList()
+      );
+    }
+    return new Trace(List.of(traceHop(trail, 0, input, limits, 0)));
+  }
+
+  private static Trace.Node traceHop(
+    final List<OpticNode> hops,
+    final int i,
+    final Object value,
+    final TraceLimits limits,
+    final int depth
+  ) {
+    final var hop = hops.get(i);
+    final var last = i == hops.size() - 1;
+    if (hop instanceof OpticNode.Focus f) {
+      final var v = value == null ? null : Reflective.of(value.getClass()).read(value, f.path());
+      if (last) return Trace.Node.leaf(f.path() + " → " + renderValue(v));
+      return new Trace.Node(f.path(), List.of(traceHop(hops, i + 1, v, limits, depth)), false);
+    }
+    if (hop instanceof OpticNode.Traverse t) {
+      if (depth >= limits.maxDepth()) return Trace.Node.cut("each " + t.path() + " … (depth cap)");
+      final var elements =
+        value == null ? List.of() : elementsOf(Reflective.of(value.getClass()).read(value, t.path()));
+      final var children = new ArrayList<Trace.Node>();
+      for (var e = 0; e < elements.size(); e++) {
+        if (e >= limits.maxBreadth()) {
+          children.add(Trace.Node.cut("… (+" + (elements.size() - e) + " more)"));
+          break;
+        }
+        final var elem = elements.get(e);
+        if (last) children.add(Trace.Node.leaf(renderValue(elem)));
+        else children.add(
+          new Trace.Node(renderValue(elem), List.of(traceHop(hops, i + 1, elem, limits, depth + 1)), false)
+        );
+      }
+      return new Trace.Node("each " + t.path(), children, false);
+    }
+    if (hop instanceof OpticNode.Narrow n) {
+      if (last) return Trace.Node.leaf("as " + n.targetType() + " → " + renderValue(value));
+      return new Trace.Node("as " + n.targetType(), List.of(traceHop(hops, i + 1, value, limits, depth)), false);
+    }
+    if (hop instanceof OpticNode.Filter) {
+      if (last) return Trace.Node.leaf("filter → " + renderValue(value));
+      return new Trace.Node("filter", List.of(traceHop(hops, i + 1, value, limits, depth)), false);
+    }
+    return Trace.Node.leaf(String.valueOf(hop));
+  }
+
+  private static List<Object> elementsOf(final Object container) {
+    if (container == null) return List.of();
+    if (container instanceof Optional<?> o) return o.isPresent() ? List.of(o.get()) : List.of();
+    if (container instanceof Map<?, ?> m) return List.copyOf(m.values());
+    if (container instanceof Iterable<?> it) {
+      final var out = new ArrayList<Object>();
+      it.forEach(out::add);
+      return out;
+    }
+    return List.of(container);
+  }
+
+  private static String renderValue(final Object v) {
+    if (v == null) return "null";
+    if (v instanceof String s) return "\"" + s + "\"";
+    return String.valueOf(v);
   }
 
   /**

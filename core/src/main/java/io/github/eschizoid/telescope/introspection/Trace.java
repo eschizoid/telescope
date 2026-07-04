@@ -1,0 +1,73 @@
+package io.github.eschizoid.telescope.introspection;
+
+import java.util.List;
+
+/**
+ * The result of {@code trace(input)} — the optic's structure executed against a concrete value,
+ * with each step's actual value filled in and many-focus steps ({@code each} / {@code eachValue})
+ * expanded into per-element subtrees. Where {@code explain()} is the static skeleton, {@code trace}
+ * is that skeleton with a value column and branch expansion.
+ *
+ * <p>Data first: walk {@link #roots()} and the {@link Node#children()} to assert on the shape; the
+ * {@link #toString()} render draws the {@code ├ / └} tree as a view.
+ */
+public record Trace(List<Node> roots) {
+  public Trace {
+    roots = List.copyOf(roots);
+  }
+
+  /**
+   * One node in the trace tree: a rendered {@code label} for what happened at this step (a hop
+   * applied, an element reached, a leaf value), its {@code children}, and whether it was cut short
+   * by a {@link TraceLimits} cap.
+   */
+  public record Node(String label, List<Node> children, boolean truncated) {
+    public Node {
+      children = List.copyOf(children);
+    }
+
+    /** A leaf node — no children, not truncated. */
+    public static Node leaf(final String label) {
+      return new Node(label, List.of(), false);
+    }
+
+    /** A truncation marker — the {@code … (+K more)} / depth-cap cut. */
+    public static Node cut(final String label) {
+      return new Node(label, List.of(), true);
+    }
+  }
+
+  @Override
+  public String toString() {
+    final var out = new StringBuilder();
+    for (var i = 0; i < roots.size(); i++) {
+      renderNode(out, roots.get(i), "", i == roots.size() - 1);
+    }
+    return out.toString().stripTrailing();
+  }
+
+  private static void renderNode(final StringBuilder out, final Node node, final String prefix, final boolean last) {
+    out.append(node.label()).append('\n');
+    final var children = node.children();
+    for (var i = 0; i < children.size(); i++) {
+      final var isLast = i == children.size() - 1;
+      out.append(prefix).append(isLast ? " └ " : " ├ ");
+      renderChild(out, children.get(i), prefix + (isLast ? "   " : " │ "), isLast);
+    }
+  }
+
+  private static void renderChild(
+    final StringBuilder out,
+    final Node node,
+    final String childPrefix,
+    final boolean last
+  ) {
+    out.append(node.label()).append('\n');
+    final var children = node.children();
+    for (var i = 0; i < children.size(); i++) {
+      final var isLast = i == children.size() - 1;
+      out.append(childPrefix).append(isLast ? " └ " : " ├ ");
+      renderChild(out, children.get(i), childPrefix + (isLast ? "   " : " │ "), isLast);
+    }
+  }
+}
