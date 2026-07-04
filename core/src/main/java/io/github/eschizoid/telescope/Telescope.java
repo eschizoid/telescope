@@ -1232,16 +1232,19 @@ public sealed class Telescope<
     // A mapping-built telescope (from Telescope.map) carries field rows, not a sequential path;
     // value-tracing those runs the mapper — surfaced on Mapper/ForwardMapper. Here, render the
     // static rows so trace() on a mapping telescope is coherent rather than a fallback.
-    if (!(trail.get(0) instanceof OpticNode.Focus) && !(trail.get(0) instanceof OpticNode.Traverse)) {
-      return new Trace(
-        explain()
-          .nodes()
-          .stream()
-          .map(n -> Trace.Node.leaf(String.valueOf(n)))
-          .toList()
-      );
-    }
+    final var first = trail.get(0);
+    if (!(first instanceof OpticNode.Focus) && !(first instanceof OpticNode.Traverse)) return mappingRowsTrace();
     return new Trace(List.of(traceHop(trail, 0, input, limits, 0)));
+  }
+
+  private Trace mappingRowsTrace() {
+    return new Trace(
+      explain()
+        .nodes()
+        .stream()
+        .map(n -> Trace.Node.leaf(String.valueOf(n)))
+        .toList()
+    );
   }
 
   private static Trace.Node traceHop(

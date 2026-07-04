@@ -621,15 +621,13 @@ public final class DeepMap {
         final var step = new FieldStep(srcField, tgtField, rowIso);
         byTargetName.put(tgtField, step);
         bySourceName.put(srcField, step);
-        if (trailOut != null) {
-          // A same-typed row is a (possibly renamed) pass-through; a row carrying user
-          // forward/backward functions is a transform regardless of the declared field types.
-          trailOut.add(
-            row instanceof SameTypedTo<?, ?, ?>
-              ? fieldNode(tgtField, srcField, srcType, tgtType)
-              : new OpticNode.Transformed(tgtField, simpleTypeName(srcType), simpleTypeName(tgtType))
-          );
-        }
+        // A same-typed row is a (possibly renamed) pass-through; a row carrying user
+        // forward/backward functions is a transform regardless of the declared field types.
+        if (trailOut != null) trailOut.add(
+          row instanceof SameTypedTo<?, ?, ?>
+            ? fieldNode(tgtField, srcField, srcType, tgtType)
+            : new OpticNode.Transformed(tgtField, simpleTypeName(srcType), simpleTypeName(tgtType))
+        );
       }
 
       final var srcNames = srcRefl.names(source);
