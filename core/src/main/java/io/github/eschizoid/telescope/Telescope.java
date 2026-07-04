@@ -1207,18 +1207,20 @@ public sealed class Telescope<
 
   /**
    * <b>Codegen-support seam — NOT for hand-written call sites.</b> Return a copy of this telescope
-   * with one {@code Focus} hop appended to its introspection trail, so a generated {@code
+   * with one {@link OpticNode} appended to its introspection trail, so a generated {@code
    * <X>Telescope} navigator — which composes via {@link #lens(Function, BiFunction)} rather than
    * the {@code SerializedLambda}-decoding {@link #field(Accessor)} — still answers {@link
-   * #explain()} / {@link #trace(Object)} with the field it navigated. The processors emit {@code
-   * .hop("componentName")} after each lens composition. Hand-written paths use {@link
-   * #field(Accessor)}, which records the hop automatically.
+   * #explain()} / {@link #trace(Object)} with what it navigated. The processors emit {@code
+   * .hop(new OpticNode.Focus("field"))} after a lens composition, {@code new
+   * OpticNode.Traverse(...)} on a container step's {@code each()}, and {@code new
+   * OpticNode.Bridge(...)} on an {@code as<Target>()} hop. Hand-written paths use {@link
+   * #field(Accessor)} / {@link #each(Accessor)}, which record the hop automatically.
    *
-   * @param name the component / property name of the hop
+   * @param node the trail node for this hop
    * @return a copy with the hop recorded; the optic and all other state are unchanged
    */
-  public Telescope<S, A> hop(final String name) {
-    return new Telescope<>(optic, fieldOptics, chain, firstHopName, plus(new OpticNode.Focus(name)));
+  public Telescope<S, A> hop(final OpticNode node) {
+    return new Telescope<>(optic, fieldOptics, chain, firstHopName, plus(node));
   }
 
   /**

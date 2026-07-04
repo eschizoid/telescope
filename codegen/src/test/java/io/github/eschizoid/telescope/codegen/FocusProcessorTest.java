@@ -332,9 +332,15 @@ class FocusProcessorTest {
       final var generated = compilation.generated().get("demo.EntityTelescope");
       assertNotNull(generated, () -> "EntityTelescope not generated; saw " + compilation.generated().keySet());
 
-      // Target is itself navigable (@Focus'd) → return its navigator.
+      // Target is itself navigable (@Focus'd) → return its navigator. The bridge hop records a
+      // Bridge node in the introspection trail.
       assertTrue(generated.contains("public demo.DtoTelescope<R> asDto()"), generated);
-      assertTrue(generated.contains("new demo.DtoTelescope<>(path.then(EntityBridge.BRIDGE))"), generated);
+      assertTrue(
+        generated.contains(
+          "new demo.DtoTelescope<>(path.then(EntityBridge.BRIDGE).hop(new OpticNode.Bridge(\"Dto\")))"
+        ),
+        generated
+      );
     }
 
     @Test
@@ -368,7 +374,10 @@ class FocusProcessorTest {
       assertNotNull(generated, () -> "EntityTelescope not generated; saw " + compilation.generated().keySet());
       // The bridge hop must instantiate a navigator from a different package — DtoTelescope's ctor
       // must therefore be visible (public) for this to compile.
-      assertTrue(generated.contains("new tgt.DtoTelescope<>(path.then(EntityBridge.BRIDGE))"), generated);
+      assertTrue(
+        generated.contains("new tgt.DtoTelescope<>(path.then(EntityBridge.BRIDGE).hop(new OpticNode.Bridge(\"Dto\")))"),
+        generated
+      );
       // Confirm the foreign target's navigator emits a public ctor so the cross-package `new`
       // resolves.
       final var dtoPath = compilation.generated().get("tgt.DtoTelescope");
@@ -404,9 +413,13 @@ class FocusProcessorTest {
       final var generated = compilation.generated().get("demo.EntityTelescope");
       assertNotNull(generated, () -> "EntityTelescope not generated; saw " + compilation.generated().keySet());
 
-      // Target isn't @Focus'd → return terminal Telescope, not a generated navigator.
+      // Target isn't @Focus'd → return terminal Telescope, not a generated navigator. The bridge
+      // hop records a Bridge node in the introspection trail.
       assertTrue(generated.contains("public Telescope<R, demo.Plain> asPlain()"), generated);
-      assertTrue(generated.contains("return path.then(EntityBridge.BRIDGE);"), generated);
+      assertTrue(
+        generated.contains("return path.then(EntityBridge.BRIDGE).hop(new OpticNode.Bridge(\"Plain\"));"),
+        generated
+      );
       assertFalse(generated.contains("PlainTelescope"), generated);
     }
 

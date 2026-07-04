@@ -386,13 +386,17 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var targetSimple = simpleNameOf(targetFqn);
     final var bridgeName = sourceSimpleName + "Bridge";
     final var methodName = "as" + targetSimple;
+    // Record the cross-paradigm conversion as a Bridge hop in the introspection trail.
+    final var bridgeHop = ".hop(new OpticNode.Bridge(\"" + targetSimple + "\"))";
     if (isNavigablePath(targetFqn)) {
       out.println("  public " + targetFqn + "Telescope<R> " + methodName + "() {");
-      out.println("    return new " + targetFqn + "Telescope<>(path.then(" + bridgeName + ".BRIDGE));");
+      out.println(
+        "    return new " + targetFqn + "Telescope<>(path.then(" + bridgeName + ".BRIDGE)" + bridgeHop + ");"
+      );
       out.println("  }");
     } else {
       out.println("  public Telescope<R, " + targetFqn + "> " + methodName + "() {");
-      out.println("    return path.then(" + bridgeName + ".BRIDGE);");
+      out.println("    return path.then(" + bridgeName + ".BRIDGE)" + bridgeHop + ";");
       out.println("  }");
     }
     out.println();
@@ -682,6 +686,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         out.println("import java.util.function.Function;");
         out.println("import io.github.eschizoid.telescope.effects.Either;");
         out.println("import io.github.eschizoid.telescope.Indexed;");
+        out.println("import io.github.eschizoid.telescope.introspection.OpticNode;");
         out.println("import io.github.eschizoid.telescope.introspection.OpticReport;");
         out.println("import io.github.eschizoid.telescope.introspection.Trace;");
         out.println("import io.github.eschizoid.telescope.introspection.TraceLimits;");
@@ -1122,7 +1127,18 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       elementType +
       ">wrap(io.github.eschizoid.telescope.internal.optics.collections.Traversals.eachIterable()))";
     };
-    final var elementBody = elementIsNavigable ? "new " + elementType + "Telescope<>(" + stepCore + ")" : stepCore;
+    // Record a single Traverse for this step, matching a hand-written .each(...) / .eachValue(...)
+    // /
+    // .whenPresent(...). The label mirrors the runtime container families the hand-written hops
+    // use.
+    final var containerLabel = switch (shape.containerKind()) {
+      case "map" -> "map values";
+      case "optional" -> "optional";
+      default -> "collection";
+    };
+    final var traverseHop = ".hop(new OpticNode.Traverse(\"" + componentName + "\", \"" + containerLabel + "\"))";
+    final var hoppedCore = stepCore + traverseHop;
+    final var elementBody = elementIsNavigable ? "new " + elementType + "Telescope<>(" + hoppedCore + ")" : hoppedCore;
 
     writeInstanceClass(qualifiedStep, stepName, "<R>", javadoc, origin, out -> {
       out.println("  private final Telescope<R, " + containerType + "> path;");
@@ -1157,15 +1173,17 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final String lensArgs,
     final Set<String> navigableAnnotations
   ) {
-    // `.hop("name")` records the field in the composed telescope's introspection trail so the
-    // generated navigator answers explain()/trace() — codegen composes via lens/then, which the
-    // SerializedLambda-decoding field(...) hop-recording never sees.
-    final var hop = ".hop(\"" + componentName + "\")";
+    // `.hop(new OpticNode.Focus("name"))` records the field in the composed telescope's
+    // introspection trail so the generated navigator answers explain()/trace() — codegen composes
+    // via lens/then, which the SerializedLambda-decoding field(...) hop-recording never sees. A
+    // container field records NO Focus here: the step's each() records a single Traverse instead,
+    // matching a hand-written .each(...).
+    final var focusHop = ".hop(new OpticNode.Focus(\"" + componentName + "\"))";
     final var shape = traversalKind(componentType);
     if (shape != null) {
       final var stepName = enclosingSimpleName + capitalize(componentName) + "Step";
       out.println("  public " + stepName + "<R> " + componentName + "() {");
-      out.println("    return new " + stepName + "<>(path.then(Telescope.lens(" + lensArgs + "))" + hop + ");");
+      out.println("    return new " + stepName + "<>(path.then(Telescope.lens(" + lensArgs + ")));");
       out.println("  }");
       out.println();
       return;
@@ -1173,14 +1191,16 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var subFq = navigableType(componentType, navigableAnnotations);
     if (subFq != null) {
       out.println("  public " + subFq + "Telescope<R> " + componentName + "() {");
-      out.println("    return new " + subFq + "Telescope<>(path.then(Telescope.lens(" + lensArgs + "))" + hop + ");");
+      out.println(
+        "    return new " + subFq + "Telescope<>(path.then(Telescope.lens(" + lensArgs + "))" + focusHop + ");"
+      );
       out.println("  }");
       out.println();
       return;
     }
     final var typeStr = shortenStdImports(boxedType(componentType));
     out.println("  public Telescope<R, " + typeStr + "> " + componentName + "() {");
-    out.println("    return path.then(Telescope.lens(" + lensArgs + "))" + hop + ";");
+    out.println("    return path.then(Telescope.lens(" + lensArgs + "))" + focusHop + ";");
     out.println("  }");
     out.println();
   }
