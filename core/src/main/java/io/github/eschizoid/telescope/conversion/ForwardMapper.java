@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
+import io.github.eschizoid.telescope.introspection.Trace;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -98,6 +99,18 @@ public final class ForwardMapper<A, B> {
    */
   public OpticReport explain() {
     return new OpticReport(explainTrail);
+  }
+
+  /**
+   * Run this forward mapper against {@code input} and show, per resolved field, the source value
+   * flowing to the target value — a {@link Trace} with the value column filled in. Where {@link
+   * #explain()} is the static field structure, {@code trace} runs the conversion. Off the hot path.
+   *
+   * @param input the source value to convert and trace
+   * @return the per-field value trace; never null
+   */
+  public Trace trace(final A input) {
+    return MappingTraces.of(input, forward(input), explainTrail);
   }
 
   /** Forward conversion {@code A → B}. */

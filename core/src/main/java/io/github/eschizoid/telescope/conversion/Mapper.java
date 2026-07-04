@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
+import io.github.eschizoid.telescope.introspection.Trace;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -179,6 +180,19 @@ public final class Mapper<A, B> {
    */
   public OpticReport explain() {
     return new OpticReport(explainTrail);
+  }
+
+  /**
+   * Run this mapper against {@code input} and show, per resolved field, the source value flowing to
+   * the target value — a {@link Trace} with the value column filled in. Where {@link #explain()} is
+   * the static field structure, {@code trace} runs the conversion and reports what each field
+   * became. Off the hot path; a debugging aid.
+   *
+   * @param input the source value to convert and trace
+   * @return the per-field value trace; never null
+   */
+  public Trace trace(final A input) {
+    return MappingTraces.of(input, forward(input), explainTrail);
   }
 
   /**
