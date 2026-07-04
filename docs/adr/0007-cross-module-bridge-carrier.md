@@ -55,8 +55,8 @@ cross-module setups.
   carries a `source = ...` attribute → carrier path (read source + target from the annotation, emit
   `<Carrier>Bridge.BRIDGE` in the carrier's package); else → existing model-anchored path. The downstream emit pipeline
   is otherwise unchanged.
-- **`as<Target>()` Path hop is only generated for the model-anchored form.** Carrier-anchored bridges don't have a
-  source-class `<Source>Path<R>` to hang the hop off of, by design — the source class is annotation-free in the
+- **`as<Target>()` navigator hop is only generated for the model-anchored form.** Carrier-anchored bridges don't have a
+  source-class `<Source>Telescope<R>` to hang the hop off of, by design — the source class is annotation-free in the
   cross-module case. Adopters use the carrier's `<Carrier>Bridge.BRIDGE` constant directly via
   `Telescope.from(...).to(...).using(BRIDGE)` or `Telescope.of(Source.class).then(BRIDGE)`. Documented limitation;
   symmetric with the reality that the source module can't see the carrier class either.
