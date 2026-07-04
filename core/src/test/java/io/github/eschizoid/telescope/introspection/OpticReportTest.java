@@ -133,17 +133,14 @@ class OpticReportTest {
       assertTrue(text.contains("Transformations:"), text);
       assertTrue(text.contains("birthDate(String) → LocalDate"), text);
       assertTrue(text.contains("Skipped:"), text);
-      assertTrue(text.contains("id (dropped)"), text);
+      assertTrue(text.contains("(dropped)"), text);
     }
 
     @Test
-    @DisplayName("a navigation report renders the hop path under a Path section")
+    @DisplayName("a navigation report renders each hop as a padded, headingless line")
     void navigationRender() {
-      final var report = new OpticReport(List.of(new Traverse("departments", "List<Department>"), new Focus("name")));
-      final var text = report.toString();
-      assertTrue(text.contains("Path:"), text);
-      assertTrue(text.contains("Traverse: departments (List<Department>)"), text);
-      assertTrue(text.contains("Focus:    name"), text);
+      final var report = new OpticReport(List.of(new Traverse("departments", "collection"), new Focus("name")));
+      assertEquals("Traverse: departments (collection)\nFocus:    name", report.toString());
     }
 
     @Test
@@ -157,9 +154,53 @@ class OpticReportTest {
         )
       );
       final var text = report.toString();
-      assertTrue(text.contains("a (dropped)"), text);
-      assertTrue(text.contains("b (missing source)"), text);
-      assertTrue(text.contains("c (unmapped source)"), text);
+      assertTrue(text.contains("(dropped)"), text);
+      assertTrue(text.contains("(missing source)"), text);
+      assertTrue(text.contains("(unmapped source)"), text);
+    }
+  }
+
+  @Nested
+  @DisplayName("Golden render — the exact visual output, pinned so it cannot silently rot")
+  class Golden {
+
+    @Test
+    @DisplayName("a mapping report renders with the source column aligned so every arrow lines up")
+    void mappingGolden() {
+      final var report = new OpticReport(
+        List.of(
+          new Mapped("firstName", "firstName", "givenName"),
+          new Mapped("address.city", "address.city", "city"),
+          new Transformed("birthDate", "String", "LocalDate"),
+          new Skipped("id", Reason.DROPPED)
+        )
+      );
+      final var expected = String.join(
+        "\n",
+        "Mapped:",
+        "  ✓ firstName    → givenName",
+        "  ✓ address.city → city",
+        "Transformations:",
+        "  • birthDate(String) → LocalDate",
+        "Skipped:",
+        "  • id  (dropped)"
+      );
+      assertEquals(expected, report.toString());
+    }
+
+    @Test
+    @DisplayName("a navigation report renders each hop as a label-aligned line")
+    void navigationGolden() {
+      final var report = new OpticReport(
+        List.of(new Traverse("departments", "collection"), new Traverse("teams", "collection"), new Focus("name"))
+      );
+      final var expected = String.join(
+        "\n",
+        "Traverse: departments (collection)",
+        "Traverse: teams (collection)",
+        "Focus:    name"
+      );
+      assertEquals(expected, report.toString());
     }
   }
 }

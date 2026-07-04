@@ -52,16 +52,34 @@ public record OpticReport(List<OpticNode> nodes) {
   public String toString() {
     if (nodes.isEmpty()) return "(no mapping)";
     final var out = new StringBuilder();
-    renderSection(out, "Mapped", mapped(), m -> "  ✓ " + m.from() + " → " + m.to());
+    final var mapped = mapped();
+    // Left-pad the source column so every → lines up, matching the report's aligned layout.
+    final var fromWidth = mapped
+      .stream()
+      .mapToInt(m -> m.from().length())
+      .max()
+      .orElse(0);
+    renderSection(out, "Mapped", mapped, m -> "  ✓ " + pad(m.from(), fromWidth) + " → " + m.to());
     renderSection(
       out,
       "Transformations",
       transformations(),
       t -> "  • " + t.field() + "(" + t.fromType() + ") → " + t.toType()
     );
-    renderSection(out, "Skipped", skipped(), s -> "  • " + s.field() + " (" + label(s.reason()) + ")");
-    renderSection(out, "Path", hops(), OpticReport::renderHop);
+    final var skipped = skipped();
+    final var skipWidth = skipped
+      .stream()
+      .mapToInt(s -> s.field().length())
+      .max()
+      .orElse(0);
+    renderSection(out, "Skipped", skipped, s -> "  • " + pad(s.field(), skipWidth) + "  (" + label(s.reason()) + ")");
+    // Navigation hops render headingless and un-indented — a path reads as a sequence of steps.
+    for (final var hop : hops()) out.append(renderHop(hop)).append('\n');
     return out.toString().stripTrailing();
+  }
+
+  private static String pad(final String s, final int width) {
+    return s.length() >= width ? s : s + " ".repeat(width - s.length());
   }
 
   private List<OpticNode> hops() {
@@ -91,11 +109,12 @@ public record OpticReport(List<OpticNode> nodes) {
   }
 
   private static String renderHop(final OpticNode node) {
-    if (node instanceof OpticNode.Focus f) return "  Focus:    " + f.path();
-    if (node instanceof OpticNode.Traverse t) return "  Traverse: " + t.path() + " (" + t.container() + ")";
-    if (node instanceof OpticNode.Filter f) return "  Filter:   " + f.description();
-    if (node instanceof OpticNode.Narrow n) return "  Narrow:   " + n.targetType();
-    if (node instanceof OpticNode.Bridge b) return "  Bridge:   " + b.targetType();
-    return "  " + node;
+    // Labels padded to a common width so the hop details line up.
+    if (node instanceof OpticNode.Focus f) return "Focus:    " + f.path();
+    if (node instanceof OpticNode.Traverse t) return "Traverse: " + t.path() + " (" + t.container() + ")";
+    if (node instanceof OpticNode.Filter f) return "Filter:   " + f.description();
+    if (node instanceof OpticNode.Narrow n) return "Narrow:   " + n.targetType();
+    if (node instanceof OpticNode.Bridge b) return "Bridge:   " + b.targetType();
+    return String.valueOf(node);
   }
 }

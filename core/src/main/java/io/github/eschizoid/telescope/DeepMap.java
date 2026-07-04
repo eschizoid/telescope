@@ -111,6 +111,16 @@ public final class DeepMap {
     return resolution(source, target, steps, false).iso;
   }
 
+  /**
+   * Deep-conversion resolution that also carries the introspection trail, so the {@code
+   * Telescope<A, B>} returned by {@code Telescope.map} answers {@code explain()} with the field
+   * rows it resolved.
+   */
+  static <A, B> Telescope<A, B> resolveMapped(final Class<A> source, final Class<B> target, final MapStep[] steps) {
+    final var r = resolution(source, target, steps, false);
+    return Telescope.mapped(r.iso, r.trail);
+  }
+
   static <A, B> Mapper<A, B> resolveMapper(final Class<A> source, final Class<B> target, final MapStep[] steps) {
     // Bidirectional: strict bijection — unmatched fields on EITHER side throw at construction.
     // Round-trip safety depends on every field having a same-name counterpart or an explicit row.

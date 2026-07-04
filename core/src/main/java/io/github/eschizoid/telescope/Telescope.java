@@ -20,6 +20,8 @@ import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
+import io.github.eschizoid.telescope.introspection.OpticNode;
+import io.github.eschizoid.telescope.introspection.OpticReport;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
@@ -125,20 +127,25 @@ public sealed class Telescope<
   // LambdaIntrospection.methodNameOf(accessor) on the first .field(…) / .each(…) / .eachValue(…)
   // / .whenPresent(…) call that takes an Accessor.
   final String firstHopName;
+  // The full navigation trail: one OpticNode per combinator hop that built this Telescope, in
+  // order, surfaced by explain(). The generalization of firstHopName from a single slot to the
+  // whole path — accumulated immutably (copy-append) at build time, never touched on the
+  // read/update hot path. Empty for a bare Telescope.of(...) or an iso-backed conversion.
+  final List<OpticNode> trail;
 
   // Package-private so that the conversion-builder classes (From, To, BeanTo, MapBuilder, Mapper,
   // …) — extracted to sibling files in this same package to keep Telescope.java navigable — can
   // construct Telescope instances without needing us to expose internals through the JPMS export.
   Telescope(final Traversal<S, A> optic) {
-    this(optic, RecordFieldOptics.INSTANCE, Function.identity(), null);
+    this(optic, RecordFieldOptics.INSTANCE, Function.identity(), null, List.of());
   }
 
   private Telescope(final Traversal<S, A> optic, final FieldOptics fieldOptics) {
-    this(optic, fieldOptics, Function.identity(), null);
+    this(optic, fieldOptics, Function.identity(), null, List.of());
   }
 
   Telescope(final Traversal<S, A> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
-    this(optic, fieldOptics, chain, null);
+    this(optic, fieldOptics, chain, null, List.of());
   }
 
   Telescope(
@@ -147,10 +154,29 @@ public sealed class Telescope<
     final Function<S, S> chain,
     final String firstHopName
   ) {
+    this(optic, fieldOptics, chain, firstHopName, List.of());
+  }
+
+  Telescope(
+    final Traversal<S, A> optic,
+    final FieldOptics fieldOptics,
+    final Function<S, S> chain,
+    final String firstHopName,
+    final List<OpticNode> trail
+  ) {
     this.optic = optic;
     this.fieldOptics = fieldOptics;
     this.chain = chain;
     this.firstHopName = firstHopName;
+    this.trail = List.copyOf(trail);
+  }
+
+  /** Append one hop node to this Telescope's trail, returning the extended list (immutable). */
+  private List<OpticNode> plus(final OpticNode node) {
+    final var extended = new ArrayList<OpticNode>(trail.size() + 1);
+    extended.addAll(trail);
+    extended.add(node);
+    return List.copyOf(extended);
   }
 
   /**
@@ -198,6 +224,16 @@ public sealed class Telescope<
    */
   static <S, A> Telescope<S, A> wrap(final Traversal<S, A> optic) {
     return new Telescope<>(optic);
+  }
+
+  /**
+   * Package-private factory for a deep-conversion telescope that carries the introspection trail
+   * the mapping engine resolved, so {@code explain()} works on the {@code Telescope<A, B>} returned
+   * by {@link #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)}. Only {@link
+   * DeepMap} calls this.
+   */
+  static <S, A> Telescope<S, A> mapped(final Iso<S, A> iso, final List<OpticNode> trail) {
+    return new Telescope<>(iso, RecordFieldOptics.INSTANCE, Function.identity(), null, trail);
   }
 
   /**
@@ -508,7 +544,7 @@ public sealed class Telescope<
     // returned Telescope's backward leg (set/update through a path whose constituent Iso has a
     // throwing inverse). Catching it at the factory boundary keeps the diagnostic at the call site.
     rejectForwardOnlyRows(source, target, steps, "Telescope.map");
-    return new Telescope<>(DeepMap.resolve(source, target, steps));
+    return DeepMap.resolveMapped(source, target, steps);
   }
 
   /**
@@ -823,7 +859,13 @@ public sealed class Telescope<
    */
   public <B> Telescope<S, B> field(final Accessor<A, B> getter) {
     final Lens<A, B> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
+    return new Telescope<>(
+      optic.then(lens),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Focus(LambdaIntrospection.methodNameOf(getter)))
+    );
   }
 
   /**
@@ -919,7 +961,7 @@ public sealed class Telescope<
     // Records.fieldLens that fails at call time because the focus type isn't a record.
     final Lens<A, B> fieldLens =
       fieldOptics == BeanFieldOptics.INSTANCE ? Beans.fieldLens(fieldName) : Records.fieldLens(fieldName);
-    return new Telescope<>(optic.then(fieldLens), fieldOptics, chain);
+    return new Telescope<>(optic.then(fieldLens), fieldOptics, chain, null, plus(new OpticNode.Focus(fieldName)));
   }
 
   /**
@@ -959,7 +1001,13 @@ public sealed class Telescope<
   public <E> Telescope<S, E> each(final Accessor<A, ? extends Iterable<E>> getter) {
     final Traversal<Iterable<E>, E> elements = Traversals.eachIterable();
     final Lens<A, Iterable<E>> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens).then(elements), fieldOptics, chain, hopName(getter));
+    return new Telescope<>(
+      optic.then(lens).then(elements),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Traverse(LambdaIntrospection.methodNameOf(getter), "collection"))
+    );
   }
 
   /**
@@ -978,7 +1026,13 @@ public sealed class Telescope<
   public <K, V> Telescope<S, V> eachValue(final Accessor<A, ? extends Map<K, V>> getter) {
     final Traversal<Map<K, V>, V> values = Traversals.eachMapValue();
     final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens).then(values), fieldOptics, chain, hopName(getter));
+    return new Telescope<>(
+      optic.then(lens).then(values),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Traverse(LambdaIntrospection.methodNameOf(getter), "map values"))
+    );
   }
 
   /**
@@ -996,7 +1050,13 @@ public sealed class Telescope<
   public <E> Telescope<S, E> whenPresent(final Accessor<A, ? extends Optional<E>> getter) {
     final Traversal<Optional<E>, E> present = Traversals.eachOptional();
     final Lens<A, Optional<E>> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens).then(present), fieldOptics, chain, hopName(getter));
+    return new Telescope<>(
+      optic.then(lens).then(present),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Traverse(LambdaIntrospection.methodNameOf(getter), "optional"))
+    );
   }
 
   /**
@@ -1015,7 +1075,13 @@ public sealed class Telescope<
    */
   public <B extends A> Telescope<S, B> as(final Class<B> subType) {
     final Prism<A, B> prism = Prism.downcast(subType);
-    return new Telescope<>(optic.then(prism), fieldOptics, chain);
+    return new Telescope<>(
+      optic.then(prism),
+      fieldOptics,
+      chain,
+      null,
+      plus(new OpticNode.Narrow(subType.getSimpleName()))
+    );
   }
 
   /**
@@ -1032,7 +1098,7 @@ public sealed class Telescope<
    * }</pre>
    */
   public Telescope<S, A> filter(final Predicate<? super A> predicate) {
-    return new Telescope<>(optic.filter(predicate), fieldOptics, chain);
+    return new Telescope<>(optic.filter(predicate), fieldOptics, chain, null, plus(new OpticNode.Filter("predicate")));
   }
 
   /**
@@ -1104,13 +1170,36 @@ public sealed class Telescope<
    */
   public <B> Telescope<S, B> then(final Telescope<A, B> next) {
     // Prefer this side's firstHopName — only the FIRST hop on a chain is tracked. If this side has
-    // none (e.g. composing a root Telescope.of(...) with a sub-path), inherit from next.
+    // none (e.g. composing a root Telescope.of(...) with a sub-path), inherit from next. The
+    // explain() trail concatenates both sides' hops in order, so a composed path describes the
+    // whole route.
+    final var joined = new ArrayList<OpticNode>(trail.size() + next.trail.size());
+    joined.addAll(trail);
+    joined.addAll(next.trail);
     return new Telescope<>(
       optic.then(next.optic),
       fieldOptics,
       chain,
-      firstHopName != null ? firstHopName : next.firstHopName
+      firstHopName != null ? firstHopName : next.firstHopName,
+      List.copyOf(joined)
     );
+  }
+
+  /**
+   * Describe what this telescope does, as a queryable {@link OpticReport}. For a navigation path
+   * ({@code of(…).each(…).field(…)}) the report is the ordered hop trail; for a conversion built by
+   * {@link #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)} it is the field
+   * rows the deep-mapping engine resolved. A bare {@code Telescope.of(…)} identity — or any
+   * iso-backed telescope with no recorded path — yields the {@link OpticReport#isEmpty() empty}
+   * report. Never throws.
+   *
+   * <p>The trail is captured at build time from the same steps that compose the optic, so the
+   * report cannot drift from what the telescope actually does.
+   *
+   * @return the structure of this telescope; never null
+   */
+  public OpticReport explain() {
+    return new OpticReport(trail);
   }
 
   /**
