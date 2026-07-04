@@ -368,7 +368,7 @@ public final class DeepMap {
     final Type srcType,
     final Type tgtType
   ) {
-    if (srcType.equals(tgtType)) return new OpticNode.Mapped(sourceField, sourceField, targetField);
+    if (srcType.equals(tgtType)) return new OpticNode.Mapped(sourceField, targetField);
     return new OpticNode.Transformed(sourceField, targetField, simpleTypeName(srcType), simpleTypeName(tgtType));
   }
 
@@ -433,8 +433,7 @@ public final class DeepMap {
     }
     for (final var name : match.unmatchedTargets())
       out.add(new OpticNode.Skipped(prefix + name, OpticNode.Reason.MISSING_SOURCE));
-    for (final var name : match.unmatchedSources())
-      out.add(new OpticNode.Skipped(prefix + name, OpticNode.Reason.UNMAPPED_SOURCE));
+    for (final var name : match.unmatchedSources()) out.add(new OpticNode.UnusedSource(prefix + name));
   }
 
   /**
@@ -454,9 +453,10 @@ public final class DeepMap {
     final Deque<TypePair> inProgress,
     final boolean lenient,
     // Introspection collector: non-null only for the top-level pair, where each field decision
-    // appends one OpticNode as it is made. Recursive (nested-pair) calls pass null — nested
-    // dotted
-    // paths are a later refinement; this captures the top-level field table faithfully at source.
+    // appends one OpticNode as it is made. Recursive (nested-pair) Iso-building calls pass null;
+    // nested dotted paths are captured separately by collectNested from the top-level pair, so
+    // the
+    // collector is not threaded through the Iso recursion.
     final List<OpticNode> trailOut
   ) {
     final var key = new TypePair(source, target);
@@ -672,7 +672,13 @@ public final class DeepMap {
               name,
               new FieldStep(null, name, placeholderIsoFor(fieldType, telescopeWritesTgt.contains(name)))
             );
-            if (trailOut != null) trailOut.add(new OpticNode.Skipped(name, OpticNode.Reason.MISSING_SOURCE));
+            // Only truly-unpopulated fields are MISSING_SOURCE. A field a fixup writes (constant /
+            // compute / nested-telescope row) is registered in telescopeWritesTgt and gets a real
+            // value from the post-fixup overlay — it is populated, not missing, so it is not
+            // skipped.
+            if (trailOut != null && !telescopeWritesTgt.contains(name)) trailOut.add(
+              new OpticNode.Skipped(name, OpticNode.Reason.MISSING_SOURCE)
+            );
             continue;
           }
           throw new IllegalStateException(
@@ -724,7 +730,7 @@ public final class DeepMap {
         // with no consumer fall back to a NULLING placeholder rather than failing.
         if (!telescopeFixups.isEmpty() || inProgress.size() > 1 || lenient) {
           bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
-          if (trailOut != null) trailOut.add(new OpticNode.Skipped(name, OpticNode.Reason.UNMAPPED_SOURCE));
+          if (trailOut != null) trailOut.add(new OpticNode.UnusedSource(name));
           continue;
         }
         throw new IllegalStateException(

@@ -24,6 +24,8 @@ public record Trace(List<Node> roots) {
   public record Node(String label, List<Node> children, boolean truncated) {
     public Node {
       children = List.copyOf(children);
+      // A cut is terminal — the marker stands in for the elided subtree, so it never has children.
+      if (truncated && !children.isEmpty()) throw new IllegalArgumentException("a truncated node cannot have children");
     }
 
     /** A leaf node — no children, not truncated. */

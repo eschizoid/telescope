@@ -72,6 +72,24 @@ class MapperTraceTest {
   }
 
   @Nested
+  @DisplayName("Forward mapper — lenient rows in the value column")
+  class Forward {
+
+    record NarrowSource(String name) {}
+
+    record WideTarget(String name, String region) {}
+
+    @Test
+    @DisplayName("a lenient forward mapper traces the mapped field and the missing-source skip")
+    void forwardMissingSourceTrace() {
+      final var trace = Telescope.mapperForward(NarrowSource.class, WideTarget.class).trace(new NarrowSource("Ada"));
+      final var text = trace.toString();
+      assertTrue(text.contains("name") && text.contains("\"Ada\""), text);
+      assertTrue(text.contains("region") && text.contains("(missing source)"), text);
+    }
+  }
+
+  @Nested
   @DisplayName("Renamed typed transform")
   class RenamedTransform {
 

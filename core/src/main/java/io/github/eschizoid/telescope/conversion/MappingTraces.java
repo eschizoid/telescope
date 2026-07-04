@@ -55,23 +55,29 @@ final class MappingTraces {
       t.to() + " " + render(readDotted(output, t.to()))
     );
     if (node instanceof OpticNode.Skipped s) return new Row("•", s.field(), "", "(" + label(s.reason()) + ")");
+    if (node instanceof OpticNode.UnusedSource u) return new Row("•", u.field(), "", "(unmapped source)");
     return new Row("•", String.valueOf(node), "", "");
   }
+
+  // Sentinel for a read that could not apply — distinct from a legitimately-null field value so the
+  // trace shows (n/a), not "null", never conflating a swallowed read failure with a real null.
+  private static final Object UNREADABLE = new Object();
 
   private static Object readDotted(final Object root, final String path) {
     var current = root;
     for (final var segment : path.split("\\.")) {
-      if (current == null) return null;
+      if (current == null) return null; // a legitimately-null intermediate — rendered as "null"
       try {
         current = Reflective.of(current.getClass()).read(current, segment);
       } catch (final RuntimeException e) {
-        return null; // a debug aid never throws on a read that doesn't apply
+        return UNREADABLE; // a debug aid never throws on a read that doesn't apply
       }
     }
     return current;
   }
 
   private static String render(final Object value) {
+    if (value == UNREADABLE) return "(n/a)";
     if (value == null) return "null";
     if (value instanceof String s) return "\"" + s + "\"";
     return String.valueOf(value);
@@ -81,7 +87,6 @@ final class MappingTraces {
     return switch (reason) {
       case DROPPED -> "dropped";
       case MISSING_SOURCE -> "missing source";
-      case UNMAPPED_SOURCE -> "unmapped source";
     };
   }
 

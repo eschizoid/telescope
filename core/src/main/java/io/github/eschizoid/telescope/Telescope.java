@@ -867,7 +867,7 @@ public sealed class Telescope<
       fieldOptics,
       chain,
       hopName(getter),
-      plus(new OpticNode.Focus(LambdaIntrospection.methodNameOf(getter)))
+      plus(new OpticNode.Focus(fieldNameOf(getter)))
     );
   }
 
@@ -1009,7 +1009,7 @@ public sealed class Telescope<
       fieldOptics,
       chain,
       hopName(getter),
-      plus(new OpticNode.Traverse(LambdaIntrospection.methodNameOf(getter), "collection"))
+      plus(new OpticNode.Traverse(fieldNameOf(getter), "collection"))
     );
   }
 
@@ -1034,7 +1034,7 @@ public sealed class Telescope<
       fieldOptics,
       chain,
       hopName(getter),
-      plus(new OpticNode.Traverse(LambdaIntrospection.methodNameOf(getter), "map values"))
+      plus(new OpticNode.Traverse(fieldNameOf(getter), "map values"))
     );
   }
 
@@ -1058,7 +1058,7 @@ public sealed class Telescope<
       fieldOptics,
       chain,
       hopName(getter),
-      plus(new OpticNode.Traverse(LambdaIntrospection.methodNameOf(getter), "optional"))
+      plus(new OpticNode.Traverse(fieldNameOf(getter), "optional"))
     );
   }
 
@@ -1256,15 +1256,13 @@ public sealed class Telescope<
    */
   public Trace trace(final S input, final TraceLimits limits) {
     if (trail.isEmpty()) return new Trace(List.of(Trace.Node.leaf(renderValue(input))));
-    // A mapping-built telescope (from Telescope.map) carries field rows, not a sequential path;
-    // value-tracing those runs the mapper — surfaced on Mapper/ForwardMapper. Here, render the
+    // A mapping-built telescope (from Telescope.map) carries field Rows, not a sequential path of
+    // Hops; value-tracing those runs the mapper — surfaced on Mapper/ForwardMapper. Here, render
+    // the
     // static rows so trace() on a mapping telescope is coherent rather than a fallback. Gate on the
-    // mapping-row node kinds so a navigation path that LEADS with as / filter / a codegen bridge
-    // (Narrow / Filter / Bridge) still executes rather than mis-routing to the row render.
-    final var first = trail.get(0);
-    if (
-      first instanceof OpticNode.Mapped || first instanceof OpticNode.Transformed || first instanceof OpticNode.Skipped
-    ) return mappingRowsTrace();
+    // Row supertype so a navigation path that LEADS with as / filter / a codegen bridge (all Hops)
+    // still executes rather than mis-routing to the row render.
+    if (trail.get(0) instanceof OpticNode.Row) return mappingRowsTrace();
     return new Trace(List.of(traceHop(trail, 0, input, limits, 0)));
   }
 
@@ -1294,7 +1292,13 @@ public sealed class Telescope<
     }
     if (hop instanceof OpticNode.Traverse t) {
       if (depth >= limits.maxDepth()) return Trace.Node.cut("each " + t.path() + " … (depth cap)");
-      final var elements = elementsOf(readField(value, t.path()));
+      final var container = readField(value, t.path());
+      // An unreadable container (e.g. the field read downstream of an unapplied bridge/narrow) must
+      // surface (n/a) like a Focus does — not degrade into an empty fan-out that looks like an
+      // empty
+      // collection. Honours the trace() javadoc caveat on every hop kind, not just Focus.
+      if (container == UNREADABLE) return Trace.Node.leaf("each " + t.path() + " → (n/a)");
+      final var elements = elementsOf(container);
       final var children = new ArrayList<Trace.Node>();
       for (var e = 0; e < elements.size(); e++) {
         if (e >= limits.maxBreadth()) {
@@ -1932,6 +1936,23 @@ public sealed class Telescope<
   // decode. These shims keep the existing callsites in this file unchanged.
   static String methodNameOf(final Serializable lambda) {
     return LambdaIntrospection.methodNameOf(lambda);
+  }
+
+  // The logical field name an introspection node carries for an accessor. A record component's
+  // accessor name IS the field name, so it passes through; a bean getter (getX / isX) is normalized
+  // to its JavaBeans property name so the node matches the codegen-emitted Focus/Traverse AND reads
+  // back through the same bean reflection path trace() uses. Record vs bean is decided by the
+  // accessor's declaring class (both lookups are per-lambda cached, so this is off the hot path).
+  private static String fieldNameOf(final Accessor<?, ?> getter) {
+    final var raw = LambdaIntrospection.methodNameOf(getter);
+    if (LambdaIntrospection.implClassOf(getter).isRecord()) return raw;
+    if (raw.length() > 3 && raw.startsWith("get") && Character.isUpperCase(raw.charAt(3))) return (
+      Character.toLowerCase(raw.charAt(3)) + raw.substring(4)
+    );
+    if (raw.length() > 2 && raw.startsWith("is") && Character.isUpperCase(raw.charAt(2))) return (
+      Character.toLowerCase(raw.charAt(2)) + raw.substring(3)
+    );
+    return raw;
   }
 
   static <A> Class<A> implClassOf(final Serializable lambda) {

@@ -4,10 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.introspection.OpticNode.Filter;
 import io.github.eschizoid.telescope.introspection.OpticNode.Focus;
 import io.github.eschizoid.telescope.introspection.OpticNode.Narrow;
 import io.github.eschizoid.telescope.introspection.OpticNode.Traverse;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -31,6 +33,8 @@ class NavigationExplainTest {
   record User(String name, Optional<String> nickname) {}
 
   record Company(String name, List<Team> teams) {}
+
+  record Registry(Map<String, User> members) {}
 
   @Nested
   @DisplayName("Single and chained hops")
@@ -78,6 +82,23 @@ class NavigationExplainTest {
     void asIsNarrow() {
       final var report = Telescope.of(Shape.class).as(Circle.class).field(Circle::radius).explain();
       assertEquals(List.of(new Narrow("Circle"), new Focus("radius")), report.nodes());
+    }
+
+    @Test
+    @DisplayName("eachValue is a Traverse hop over a map's values")
+    void eachValueIsTraverse() {
+      final var report = Telescope.of(Registry.class).eachValue(Registry::members).explain();
+      assertEquals(List.of(new Traverse("members", "map values")), report.nodes());
+    }
+
+    @Test
+    @DisplayName("filter is a Filter hop with the placeholder description")
+    void filterIsFilter() {
+      final var report = Telescope.of(User.class)
+        .field(User::name)
+        .filter(n -> n.length() > 2)
+        .explain();
+      assertEquals(List.of(new Focus("name"), new Filter("predicate")), report.nodes());
     }
   }
 

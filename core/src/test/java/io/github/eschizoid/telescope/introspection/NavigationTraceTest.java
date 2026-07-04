@@ -1,10 +1,14 @@
 package io.github.eschizoid.telescope.introspection;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -107,12 +111,122 @@ class NavigationTraceTest {
     }
 
     @Test
-    @DisplayName("an empty fan-out renders the each node with no children, and a null intermediate does not throw")
-    void emptyAndNull() {
+    @DisplayName("an empty fan-out renders the each node with no children")
+    void emptyFanOut() {
       final var empty = new Company("Empty", List.of());
       final var trace = Telescope.of(Company.class).each(Company::teams).field(Team::label).trace(empty);
       assertEquals("each teams", trace.roots().get(0).label());
       assertTrue(trace.roots().get(0).children().isEmpty(), trace::toString);
+    }
+
+    record Addr(String city) {}
+
+    record Person(String name, Addr home) {}
+
+    @Test
+    @DisplayName("a null intermediate field does not throw — the leaf renders null")
+    void nullIntermediate() {
+      final var person = new Person("Ada", null);
+      final var trace = Telescope.of(Person.class).field(Person::home).field(Addr::city).trace(person);
+      // home is null, so reading city off it must render null, not throw.
+      assertEquals("home\n └ city → null", trace.toString());
+    }
+  }
+
+  @Nested
+  @DisplayName("Container families and mid-path filter")
+  class ContainerFamilies {
+
+    record Member(String name) {}
+
+    record Registry(Map<String, Member> members) {}
+
+    record Profile(String name, Optional<String> nickname) {}
+
+    @Test
+    @DisplayName("eachValue fans out over a map's values, one child per value")
+    void eachValueFanOut() {
+      final var registry = new Registry(Map.of("a", new Member("Ada")));
+      final var trace = Telescope.of(Registry.class).eachValue(Registry::members).field(Member::name).trace(registry);
+      assertEquals("each members", trace.roots().get(0).label());
+      assertEquals(1, trace.roots().get(0).children().size(), trace::toString);
+      assertTrue(trace.toString().contains("name → \"Ada\""), trace::toString);
+    }
+
+    @Test
+    @DisplayName("whenPresent fans out a present optional to one child, and an empty optional to none")
+    void whenPresentFanOut() {
+      final var present = Telescope.of(Profile.class)
+        .whenPresent(Profile::nickname)
+        .trace(new Profile("Ada", Optional.of("Legend")));
+      assertEquals(1, present.roots().get(0).children().size(), present::toString);
+      assertTrue(present.toString().contains("\"Legend\""), present::toString);
+      final var absent = Telescope.of(Profile.class)
+        .whenPresent(Profile::nickname)
+        .trace(new Profile("Bo", Optional.empty()));
+      assertTrue(absent.roots().get(0).children().isEmpty(), absent::toString);
+    }
+
+    @Test
+    @DisplayName("a filter in the middle of a path is annotated and passed through, not applied")
+    void filterMidPath() {
+      final var trace = Telescope.of(Profile.class)
+        .field(Profile::name)
+        .filter(n -> n.isEmpty())
+        .trace(new Profile("Ada", Optional.empty()));
+      // The predicate would exclude "Ada", but trace does not apply it — the value flows through.
+      assertTrue(trace.toString().contains("filter"), trace::toString);
+      assertTrue(trace.toString().contains("Ada"), trace::toString);
+    }
+  }
+
+  @Nested
+  @DisplayName("Bean read path")
+  class BeanPath {
+
+    public static final class Bean {
+
+      private final String label;
+
+      public Bean(final String label) {
+        this.label = label;
+      }
+
+      public String getLabel() {
+        return label;
+      }
+    }
+
+    @Test
+    @DisplayName("a bean-backed telescope traces through the getter, reading the property value")
+    void beanFieldTrace() {
+      final var trace = Telescope.ofBean(Bean.class).field(Bean::getLabel).trace(new Bean("Ada"));
+      // The bean read path (Reflective bean branch) must resolve the value, not surface (n/a).
+      assertTrue(trace.toString().contains("\"Ada\""), trace::toString);
+      assertFalse(trace.toString().contains("(n/a)"), trace::toString);
+    }
+  }
+
+  @Nested
+  @DisplayName("Uncapped limits and constructor guards")
+  class Limits {
+
+    record Post(String title, List<String> tags) {}
+
+    @Test
+    @DisplayName("TraceLimits.none() shows every element of a wide fan-out with no truncation marker")
+    void uncappedShowsAll() {
+      final var post = new Post("Hello", List.of("a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"));
+      final var trace = Telescope.of(Post.class).each(Post::tags).trace(post, TraceLimits.none());
+      assertEquals(12, trace.roots().get(0).children().size(), trace::toString);
+      assertFalse(trace.toString().contains("more)"), trace::toString);
+    }
+
+    @Test
+    @DisplayName("a non-positive breadth or depth is rejected at construction")
+    void guardsRejectNonPositive() {
+      assertThrows(IllegalArgumentException.class, () -> new TraceLimits(0, 10));
+      assertThrows(IllegalArgumentException.class, () -> new TraceLimits(10, 0));
     }
   }
 

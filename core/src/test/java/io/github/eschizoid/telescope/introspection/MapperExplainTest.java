@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.introspection;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.constant;
 import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -10,6 +11,7 @@ import io.github.eschizoid.telescope.introspection.OpticNode.Mapped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Reason;
 import io.github.eschizoid.telescope.introspection.OpticNode.Skipped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Transformed;
+import io.github.eschizoid.telescope.introspection.OpticNode.UnusedSource;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -46,7 +48,7 @@ class MapperExplainTest {
     void allMappedNoSkips() {
       final var mapper = Telescope.mapper(Source.class, Target.class);
       final var report = mapper.explain();
-      assertEquals(List.of(new Mapped("name", "name", "name"), new Mapped("city", "city", "city")), report.mapped());
+      assertEquals(List.of(new Mapped("name", "name"), new Mapped("city", "city")), report.mapped());
       assertTrue(report.skipped().isEmpty(), () -> "strict mapper must skip nothing, got: " + report.skipped());
       assertTrue(report.transformations().isEmpty(), report::toString);
     }
@@ -66,7 +68,7 @@ class MapperExplainTest {
       );
       final var report = mapper.explain();
       assertTrue(
-        report.mapped().contains(new Mapped("firstName", "firstName", "givenName")),
+        report.mapped().contains(new Mapped("firstName", "givenName")),
         () -> "expected the rename row; got " + report.mapped()
       );
       assertTrue(report.skipped().isEmpty(), report::toString);
@@ -94,6 +96,29 @@ class MapperExplainTest {
   }
 
   @Nested
+  @DisplayName("Auto cross-type field — boxing")
+  class AutoCrossType {
+
+    record BoxSource(int count) {}
+
+    record BoxTarget(Integer count) {}
+
+    @Test
+    @DisplayName("a same-name field whose types differ (int → Integer) auto-resolves to a Transformed row")
+    void autoBoxingIsTransformed() {
+      final var report = Telescope.mapper(BoxSource.class, BoxTarget.class).explain();
+      assertTrue(
+        report.transformations().contains(new Transformed("count", "count", "int", "Integer")),
+        () -> "expected an auto boxing transform; got " + report.transformations()
+      );
+      assertTrue(
+        report.mapped().isEmpty(),
+        () -> "a boxing pair is a transform, not a same-typed Mapped; got " + report.mapped()
+      );
+    }
+  }
+
+  @Nested
   @DisplayName("Dropped field")
   class Dropped {
 
@@ -111,7 +136,7 @@ class MapperExplainTest {
         () -> "expected the dropped field; got " + report.skipped()
       );
       assertTrue(
-        report.mapped().contains(new Mapped("name", "name", "name")),
+        report.mapped().contains(new Mapped("name", "name")),
         () -> "name should still map; got " + report.mapped()
       );
     }
@@ -137,17 +162,14 @@ class MapperExplainTest {
     @DisplayName("a 3-level auto mapper recurses into nested fields with dotted paths, not a single row")
     void dottedPathsToThreeLevels() {
       final var report = Telescope.mapper(Order.class, OrderDto.class).explain();
-      assertTrue(report.mapped().contains(new Mapped("id", "id", "id")), report::toString);
+      assertTrue(report.mapped().contains(new Mapped("id", "id")), report::toString);
+      assertTrue(report.mapped().contains(new Mapped("customer.name", "customer.name")), report::toString);
       assertTrue(
-        report.mapped().contains(new Mapped("customer.name", "customer.name", "customer.name")),
+        report.mapped().contains(new Mapped("customer.address.city", "customer.address.city")),
         report::toString
       );
       assertTrue(
-        report.mapped().contains(new Mapped("customer.address.city", "customer.address.city", "customer.address.city")),
-        report::toString
-      );
-      assertTrue(
-        report.mapped().contains(new Mapped("customer.address.zip", "customer.address.zip", "customer.address.zip")),
+        report.mapped().contains(new Mapped("customer.address.zip", "customer.address.zip")),
         report::toString
       );
       // The nested record field is NOT emitted as a single opaque row — we descended into it.
@@ -175,7 +197,7 @@ class MapperExplainTest {
       // The dotted-path walk (collectNested) must sever Node → NodeDto at its second encounter via
       // the seen-guard; without it this recurses forever. Assert it returns and records the scalar.
       final var report = Telescope.mapper(Node.class, NodeDto.class).explain();
-      assertTrue(report.mapped().contains(new Mapped("value", "value", "value")), report::toString);
+      assertTrue(report.mapped().contains(new Mapped("value", "value")), report::toString);
     }
   }
 
@@ -200,17 +222,44 @@ class MapperExplainTest {
         report.skipped().contains(new Skipped("region", Reason.MISSING_SOURCE)),
         () -> "expected region as missing source; got " + report.skipped()
       );
-      assertTrue(report.mapped().contains(new Mapped("name", "name", "name")), report::toString);
+      assertTrue(report.mapped().contains(new Mapped("name", "name")), report::toString);
     }
 
     @Test
-    @DisplayName("a source field with no consumer is Skipped(UNMAPPED_SOURCE) on a forward mapper")
-    void unmappedSourceIsSkipped() {
+    @DisplayName("a source field with no consumer is an UnusedSource on a forward mapper")
+    void unmappedSourceIsUnusedSource() {
       final var mapper = Telescope.mapperForward(WideSource.class, NarrowTarget.class);
       final var report = mapper.explain();
       assertTrue(
-        report.skipped().contains(new Skipped("legacyId", Reason.UNMAPPED_SOURCE)),
-        () -> "expected legacyId as unmapped source; got " + report.skipped()
+        report.unusedSources().contains(new UnusedSource("legacyId")),
+        () -> "expected legacyId as an unused source; got " + report.unusedSources()
+      );
+      assertTrue(
+        report.skipped().isEmpty(),
+        () -> "an unused source is not a target-side skip; got " + report.skipped()
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("Constant / computed target — populated, not missing")
+  class ConstantAndCompute {
+
+    record CtSource(String name) {}
+
+    record CtTarget(String name, String status) {}
+
+    @Test
+    @DisplayName("a constant-populated target field is not reported as a missing-source skip")
+    void constantFieldIsNotSkipped() {
+      final var mapper = Telescope.mapperForward(CtSource.class, CtTarget.class, constant(CtTarget::status, "ACTIVE"));
+      final var report = mapper.explain();
+      assertTrue(
+        report
+          .skipped()
+          .stream()
+          .noneMatch(s -> s.field().equals("status")),
+        () -> "status is populated by a constant row, not missing; got " + report.skipped()
       );
     }
   }

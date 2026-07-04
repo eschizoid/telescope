@@ -30,15 +30,19 @@ built on one unified node model derived from the structure the optic already com
 
 **1. One unified node model.** A **sealed public `OpticNode` family in `:core`** — a public sealed ADT with nested
 public record variants (unlike `Mapping`'s package-private impls: here the variants are user-facing, constructed and
-asserted on directly, e.g. `new Mapped("firstName", "firstName", "givenName")`). Its variants cover both worlds:
+asserted on directly, e.g. `new Mapped("firstName", "givenName")`). The family splits at the top into two sealed
+sub-interfaces so the navigation/mapping distinction is a type invariant, not a comment:
 
-- **Navigation hops** — `Focus(path)`, `Traverse(path, container)`, `Filter(desc)`, `Narrow(type)`, `Bridge(target)`.
-- **Mapping rows** — `Mapped(path, from, to)`, `Transformed(from, to, fromType, toType)`, `Skipped(field, Reason)` where
-  `Reason ∈ { DROPPED, MISSING_SOURCE, UNMAPPED_SOURCE }`.
+- **`Hop`** (navigation) — `Focus(path)`, `Traverse(path, container)`, `Filter(desc)`, `Narrow(type)`, `Bridge(target)`.
+- **`Row`** (mapping) — `Mapped(from, to)`, `Transformed(from, to, fromType, toType)`, `Skipped(field, Reason)` where
+  `Reason ∈ { DROPPED, MISSING_SOURCE }`, and `UnusedSource(field)`.
 
-`DROPPED` is an explicit `Mapping.drop(src)` row; `MISSING_SOURCE` is a target field with no source (an
-`unmatchedTargets` entry — lenient paths only, see below); `UNMAPPED_SOURCE` is a source field with no consumer (an
-`unmatchedSources` entry). One vocabulary, two shapes of optic.
+`Mapped.from == to` is a same-name auto pair; distinct names are a rename; nested pairs carry a dotted path in both.
+`DROPPED` is an explicit `Mapping.drop(src)` row and `MISSING_SOURCE` is a target field with no source (an
+`unmatchedTargets` entry — lenient paths only, see below); both name a **target** field, so they share `Skipped`. A
+source field with no consumer (an `unmatchedSources` entry) names a **source** field, so it is a distinct `UnusedSource`
+row rather than a third `Skipped` reason whose `field` slot would silently switch worlds. `OpticReport` exposes each as
+its own typed slice (`skipped()` / `unusedSources()`); `hops()` returns the `Hop` nodes by a positive exhaustive filter.
 
 **2. `explain()` → the static structure.** On every optic-carrying type. Returns the `OpticNode` trail — for a mapper,
 the field rows; for a navigator, the hop path. Derived from the **same decisions the optic itself uses**: top-level
@@ -97,8 +101,7 @@ final Mapper<UserDto, User> mapper = Telescope.mapper(UserDto.class, User.class,
 
 mapper.explain();
 // Mapped:
-//   ✓ firstName    → givenName
-//   ✓ address.city → city          (nested, dotted path)
+//   ✓ firstName → givenName
 // Transformations:
 //   • birthDate(String) → LocalDate
 // Skipped:
@@ -112,17 +115,20 @@ The report is data first — the text above is `toString()`. You assert on the s
 assertThat(mapper.explain().skipped()).isEmpty();
 
 assertThat(mapper.explain().mapped())
-    .contains(new Mapped("firstName", "firstName", "givenName"));
+    .contains(new Mapped("firstName", "givenName"));
 ```
 
 **Mapping — `trace(input)` (same rows, value column filled in):**
 
 ```java
 mapper.trace(new UserDto("Ada", "2020-01-02", /* id */ 7L));
-//   ✓ firstName  "Ada"          → givenName "Ada"
-//   • birthDate  "2020-01-02"   → LocalDate[2020-01-02]
-//   • id                          → (dropped)
+//   ✓ firstName  "Ada"         → givenName "Ada"
+//   • birthDate  "2020-01-02"  → birthDate LocalDate[2020-01-02]
+//   • id                       → (dropped)
 ```
+
+The value-column render always names the target field (`→ birthDate …`), even for a same-name row — it does not elide
+the repeated name the way `explain()` does.
 
 **Lenient / `fromMap` — the gaps show, with reasons:**
 
@@ -131,8 +137,9 @@ Telescope.fromMap(CustomerContact.class, /* rows … */).explain();
 // Mapped:
 //   ✓ name → name
 // Skipped:
-//   • region  (missing source)      // no key in the map
-//   • legacyId (unmapped source)    // key present, no target
+//   • region  (missing source)    // no key in the map — a target field with no source
+// Unused sources:
+//   • legacyId                    // key present, no target consumer
 ```
 
 **Navigation — `explain()` describes the path:**
@@ -145,29 +152,28 @@ Telescope.of(Company.class).each(Company::departments).field(Department::name).e
 
 **Navigation — `trace(input)` fans out into a tree:**
 
+Each fan-out element is its own node (labelled with the element's `toString()`); a trailing `field` hop renders as a
+`name → value` leaf beneath it.
+
 ```java
-Telescope.of(Company.class)
-    .each(Company::departments).each(Department::teams).field(Team::name)
-    .trace(company);
-// each departments
-//  ├ Sales
-//  │  └ each teams
-//  │     ├ A → name "A"
-//  │     └ B → name "B"
-//  └ Eng
-//     └ each teams
-//        └ C → name "C"
+Telescope.of(Company.class).each(Company::teams).field(Team::name).trace(company);
+// each teams
+//  ├ Team[name=Sales, …]
+//  │  └ name → "Sales"
+//  └ Team[name=Eng, …]
+//     └ name → "Eng"
 ```
 
 **Capped by default, uncapped on request:**
 
 ```java
-path.trace(companyWith10kDepartments);
-// each departments        // default caps: 10 elements shown, then a truncation marker
-//  ├ Sales
-//  ├ …                     (8 more shown)
+path.trace(companyWith10kTeams);
+// each teams               // default caps: first 10 elements shown, then one truncation marker
+//  ├ Team[name=…, …]
+//  ├ …                     // (8 more elements)
+//  ├ Team[name=…, …]
 //  └ … (+9990 more)
-path.trace(companyWith10kDepartments, TraceLimits.none());
+path.trace(companyWith10kTeams, TraceLimits.none());
 //   … full tree, no truncation
 ```
 
@@ -182,7 +188,8 @@ not four separate PRs. The build order lets each commit stand on its own and be 
    `each`, `eachValue`, `whenPresent`, `filter`, `as`, `then`) to append its node. `explain()` on `Telescope<S, A>`.
 3. **`trace(input)`.** The instrumented execution walk, tree fan-out via `getAll`, `TraceLimits` caps + `none()`
    override — for both mapping and navigation.
-4. **Codegen emission.** `Focus` / `BeanFocus` / `Bridge` processors + lombok emit the static trail constant.
+4. **Codegen emission.** `Focus` / `BeanFocus` / `Bridge` processors + lombok chain a `.hop(new OpticNode.…(…))` onto
+   each generated navigator step so codegen-built optics carry the same trail.
 
 ## Consequences
 

@@ -90,10 +90,11 @@ public final class ForwardMapper<A, B> {
 
   /**
    * Describe what this forward mapper does, as a queryable {@link OpticReport} — the field
-   * correspondences it resolved, the transformations it applies, and the target fields it skips
-   * (with reasons). Built from the same pairing decisions the mapper converts with, so it cannot
-   * drift. Lenient forward mappers surface {@code MISSING_SOURCE} / {@code UNMAPPED_SOURCE} skips a
-   * strict {@code Mapper} would reject at construction.
+   * correspondences it resolved, the transformations it applies, the target fields it skips (with
+   * reasons), and the source fields it leaves unused. Built from the same pairing decisions the
+   * mapper converts with, so it cannot drift. Lenient forward mappers surface the {@code
+   * MISSING_SOURCE} skips and {@code UnusedSource} rows a strict {@code Mapper} would reject at
+   * construction.
    *
    * @return the structure of this mapper's conversion; never null
    */

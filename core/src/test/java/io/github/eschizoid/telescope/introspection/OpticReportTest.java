@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.introspection.OpticNode.Reason;
 import io.github.eschizoid.telescope.introspection.OpticNode.Skipped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Transformed;
 import io.github.eschizoid.telescope.introspection.OpticNode.Traverse;
+import io.github.eschizoid.telescope.introspection.OpticNode.UnusedSource;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -31,21 +32,19 @@ class OpticReportTest {
 
     private final OpticReport report = new OpticReport(
       List.of(
-        new Mapped("firstName", "firstName", "givenName"),
+        new Mapped("firstName", "givenName"),
         new Transformed("birthDate", "birthDate", "String", "LocalDate"),
         new Skipped("id", Reason.DROPPED),
-        new Mapped("address.city", "address.city", "city"),
-        new Skipped("region", Reason.MISSING_SOURCE)
+        new Mapped("address.city", "city"),
+        new Skipped("region", Reason.MISSING_SOURCE),
+        new UnusedSource("legacyId")
       )
     );
 
     @Test
     @DisplayName("mapped() returns only the Mapped nodes, in trail order")
     void mappedSlice() {
-      assertEquals(
-        List.of(new Mapped("firstName", "firstName", "givenName"), new Mapped("address.city", "address.city", "city")),
-        report.mapped()
-      );
+      assertEquals(List.of(new Mapped("firstName", "givenName"), new Mapped("address.city", "city")), report.mapped());
     }
 
     @Test
@@ -60,6 +59,19 @@ class OpticReportTest {
       assertEquals(
         List.of(new Skipped("id", Reason.DROPPED), new Skipped("region", Reason.MISSING_SOURCE)),
         report.skipped()
+      );
+    }
+
+    @Test
+    @DisplayName("unusedSources() returns only the UnusedSource nodes")
+    void unusedSourcesSlice() {
+      assertEquals(List.of(new UnusedSource("legacyId")), report.unusedSources());
+      assertTrue(
+        report
+          .skipped()
+          .stream()
+          .noneMatch(s -> s.field().equals("legacyId")),
+        report::toString
       );
     }
 
@@ -100,7 +112,7 @@ class OpticReportTest {
     @DisplayName("the report copies its input list, so external mutation does not leak in")
     void defensiveCopy() {
       final var mutable = new ArrayList<OpticNode>();
-      mutable.add(new Mapped("a", "a", "a"));
+      mutable.add(new Mapped("a", "a"));
       final var report = new OpticReport(mutable);
       mutable.clear();
       assertEquals(1, report.nodes().size(), "report must not reflect post-construction mutation of the source list");
@@ -109,8 +121,8 @@ class OpticReportTest {
     @Test
     @DisplayName("nodes() is unmodifiable")
     void unmodifiableNodes() {
-      final var report = new OpticReport(List.of(new Mapped("a", "a", "a")));
-      assertThrows(UnsupportedOperationException.class, () -> report.nodes().add(new Mapped("b", "b", "b")));
+      final var report = new OpticReport(List.of(new Mapped("a", "a")));
+      assertThrows(UnsupportedOperationException.class, () -> report.nodes().add(new Mapped("b", "b")));
     }
   }
 
@@ -123,7 +135,7 @@ class OpticReportTest {
     void mappingRender() {
       final var report = new OpticReport(
         List.of(
-          new Mapped("firstName", "firstName", "givenName"),
+          new Mapped("firstName", "givenName"),
           new Transformed("birthDate", "birthDate", "String", "LocalDate"),
           new Skipped("id", Reason.DROPPED)
         )
@@ -148,16 +160,20 @@ class OpticReportTest {
     @DisplayName("each skip reason renders its human label")
     void reasonLabels() {
       final var report = new OpticReport(
-        List.of(
-          new Skipped("a", Reason.DROPPED),
-          new Skipped("b", Reason.MISSING_SOURCE),
-          new Skipped("c", Reason.UNMAPPED_SOURCE)
-        )
+        List.of(new Skipped("a", Reason.DROPPED), new Skipped("b", Reason.MISSING_SOURCE))
       );
       final var text = report.toString();
       assertTrue(text.contains("(dropped)"), text);
       assertTrue(text.contains("(missing source)"), text);
-      assertTrue(text.contains("(unmapped source)"), text);
+    }
+
+    @Test
+    @DisplayName("an unused source renders under its own section")
+    void unusedSourceRender() {
+      final var report = new OpticReport(List.of(new Mapped("name", "name"), new UnusedSource("legacyId")));
+      final var text = report.toString();
+      assertTrue(text.contains("Unused sources:"), text);
+      assertTrue(text.contains("• legacyId"), text);
     }
   }
 
@@ -170,8 +186,8 @@ class OpticReportTest {
     void mappingGolden() {
       final var report = new OpticReport(
         List.of(
-          new Mapped("firstName", "firstName", "givenName"),
-          new Mapped("address.city", "address.city", "city"),
+          new Mapped("firstName", "givenName"),
+          new Mapped("address.city", "city"),
           new Transformed("birthDate", "birthDate", "String", "LocalDate"),
           new Skipped("id", Reason.DROPPED)
         )
