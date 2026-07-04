@@ -81,7 +81,8 @@ class LombokFocusProcessorTest {
       // compilation pass with LombokFocusProcessor on the annotation-processor classpath. The
       // consumer references DataUserTelescope directly — if this class were loaded at all (it is,
       // by
-      // this test), the consumer compiled, meaning the Path symbol resolved during the consumer's
+      // this test), the consumer compiled, meaning the navigator symbol resolved during the
+      // consumer's
       // own binding phase. That's the regression guard against re-introducing the
       // processingOver()-only emission pattern.
       final var result = SameRoundConsumer.shoutEmail(new DataUser("u-1", "alice@example.com"));
@@ -90,11 +91,12 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("Nested static @Data class yields a flattened-name Path at package level")
+    @DisplayName("Nested static @Data class yields a flattened-name navigator at package level")
     void nestedStaticDataClassEmitsFlattenedPath() throws Exception {
-      // OuterWithNested holds a nested static @Data Inner. The processor should emit the Path /
+      // OuterWithNested holds a nested static @Data Inner. The processor should emit the navigator
+      // /
       // metadata holder at package level with the outer's name folded in to avoid colliding with
-      // a hypothetical top-level Inner. Path identifies the nested Inner via a dotted type
+      // a hypothetical top-level Inner. The navigator identifies the nested Inner via a dotted type
       // reference inside its own source.
       final var pathClass = Class.forName(
         "io.github.eschizoid.telescope.codegen.lombok.fixtures.OuterWithNestedInnerTelescope"
@@ -106,7 +108,8 @@ class LombokFocusProcessorTest {
       );
       assertNotNull(holder);
 
-      // Path's method signatures must reference the nested type, not a hypothetical top-level one.
+      // The navigator's method signatures must reference the nested type, not a hypothetical
+      // top-level one.
       final var nestedType = Class.forName(
         "io.github.eschizoid.telescope.codegen.lombok.fixtures.OuterWithNested$Inner"
       );
@@ -117,7 +120,7 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("@Data POJO with List<@Data> emits a container step whose each() returns the element's Path")
+    @DisplayName("@Data POJO with List<@Data> emits a container step whose each() returns the element's navigator")
     void containerStepDescendsIntoSubPath() throws Exception {
       final var teamPath = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataTeamTelescope");
       assertNotNull(teamPath);
@@ -139,12 +142,12 @@ class LombokFocusProcessorTest {
   }
 
   @Nested
-  @DisplayName("Sibling <X>Telescope metadata holders are emitted (ADR-0006)")
+  @DisplayName("Sibling <X>FieldOptics metadata holders are emitted (ADR-0006)")
   class MetadataHolder {
 
     @Test
     @DisplayName(
-      "@Data POJO yields a DataUserTelescope holder with public static final Telescope constants per property"
+      "@Data POJO yields a DataUserFieldOptics holder with public static final Telescope constants per property"
     )
     void dataHolder() throws Exception {
       final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserFieldOptics");
@@ -291,7 +294,7 @@ class LombokFocusProcessorTest {
   }
 
   @Nested
-  @DisplayName("Runtime behaviour — generated paths actually work end-to-end")
+  @DisplayName("Runtime behaviour — generated navigators actually work end-to-end")
   class Runtime {
 
     @Test

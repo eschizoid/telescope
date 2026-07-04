@@ -351,11 +351,11 @@ class BeanFocusProcessorTest {
   }
 
   @Nested
-  @DisplayName("Metadata holder emission — sibling <X>Telescope")
+  @DisplayName("Metadata holder emission — sibling <X>FieldOptics")
   class MetadataHolder {
 
     @Test
-    @DisplayName("emits a sibling <X>Telescope holder with one typed Telescope constant per property")
+    @DisplayName("emits a sibling <X>FieldOptics holder with one typed Telescope constant per property")
     void generatesTelescopeHolderForBean() {
       final var compilation = compile(
         source(
@@ -379,7 +379,7 @@ class BeanFocusProcessorTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var holder = compilation.generated().get("demo.PersonFieldOptics");
-      assertNotNull(holder, () -> "PersonTelescope not generated; saw " + compilation.generated().keySet());
+      assertNotNull(holder, () -> "PersonFieldOptics not generated; saw " + compilation.generated().keySet());
 
       // Holder is a top-level public final class in the user's package, no instances permitted.
       assertTrue(holder.contains("public final class PersonFieldOptics"), holder);

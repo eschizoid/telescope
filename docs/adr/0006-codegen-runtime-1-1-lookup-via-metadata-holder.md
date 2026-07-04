@@ -21,7 +21,7 @@ and getter/setter resolution. Those probes:
   architecture diagram.
 
 [ADR-0004](0004-runtime-and-codegen-strategy-separate.md) deliberately kept runtime and codegen as **separate
-strategies**. Users who annotate switch their call sites to `UserPath.of().name()` — different API entry. Users who
+strategies**. Users who annotate switch their call sites to `UserTelescope.of().name()` — different API entry. Users who
 don't, stay on `Telescope.of(User.class).field(User::name)` with the reflective metadata probe.
 
 The drawback of that split: a user who **wants** codegen ergonomics (no reflection) **and** the runtime entry point
@@ -36,8 +36,8 @@ generalises.
 ## Decision
 
 `FocusProcessor` and `BeanFocusProcessor` (and `LombokFocusProcessor` via the round-deferred emission pattern) **also**
-emit a sibling metadata holder class — `<X>Telescope` — alongside the existing `<X>Path<R>`. The holder exposes one
-`public static final Telescope<X, FieldType>` constant per record component / bean property.
+emit a sibling metadata holder class — `<X>FieldOptics` — alongside the generated `<X>Telescope<R>` navigator. The
+holder exposes one `public static final Telescope<X, FieldType>` constant per record component / bean property.
 
 At runtime, the dispatch sites that consume metadata (`Telescope.of(Class).field(Accessor)`,
 `Telescope.fieldByName(String)`, `Telescope.map(Class, Class, ...)`) consult a `ClassValue<Optional<HolderRef>>` cache
@@ -51,29 +51,29 @@ becomes a constant lookup rather than a reflective probe + LMF dispatch.
 
 Phased rollout (each phase is a discrete PR, no public API change):
 
-- **Phase A — emit `<X>Telescope`.** `FocusProcessor` and `BeanFocusProcessor` emit the sibling holder. Lombok
+- **Phase A — emit `<X>FieldOptics`.** `FocusProcessor` and `BeanFocusProcessor` emit the sibling holder. Lombok
   piggybacks on the existing `processingOver()` deferral. Pure additive: no runtime consumer yet.
 - **Phase B — runtime probe.** `ClassValue<Optional<HolderRef>>` short-circuit added to the dispatch sites in
   `Records.fieldLens(...)` / `Beans.lens(...)`. Holder-present types navigate via constants; holder-absent types fall
   through to today's LMF path unchanged.
-- **Phase C — deep-mapping uses constants.** `Reflective#structuralIso(cls)` probes for a sibling `<X>Telescope` and,
+- **Phase C — deep-mapping uses constants.** `Reflective#structuralIso(cls)` probes for a sibling `<X>FieldOptics` and,
   when present, pre-resolves a per-component `Lens` table. The backward branch (instance → name-keyed `Map`) reads via
   those lenses instead of routing through `Records.read` / `Beans.readProperty`. Holder-absent types and partial holders
   fall through to the reflective `read` path unchanged. The forward branch (`construct`) is untouched — the holder
   doesn't expose a constructor primitive, so canonical-ctor / `BeanWriter` dispatch remains. Net effect: for type pairs
   where both sides are annotated, every per-component value read during deep-mapping decomposition uses a pre-baked
   lens.
-- **Phase D — holder construct(...) closes the forward branch.** The `<X>Telescope` holder gains a
+- **Phase D — holder construct(...) closes the forward branch.** The `<X>FieldOptics` holder gains a
   `public static <X> construct(Function<String, Object> values)` method that mirrors the same write strategy the
-  `<X>Path<R>` lenses use (canonical constructor for records; builder chain or no-arg ctor + setters for beans). The
-  `MetadataHolderProbe.HolderRef` adds an optional `Function<Function<String, Object>, Object> constructor` field bound
-  once via `LambdaMetafactory` at probe time. `Reflective#structuralIso(cls)`'s forward branch routes through it when
-  present, bypassing the reflective `Records.construct` / `Beans.BeanWriter` path; older holders that predate Phase D
-  surface a `null` constructor and the engine falls back to today's reflective path unchanged. Net effect: for type
-  pairs where both sides are annotated, both the forward (construct) and the backward (read) branches of `structuralIso`
-  are reflection-free in the hot path; the only remaining runtime reflection is `SerializedLambda` decode on the user's
-  accessor method references.
-- **Phase E — holder constants() eliminates the probe's field scan.** The `<X>Telescope` holder gains a
+  `<X>Telescope<R>` navigator uses (canonical constructor for records; builder chain or no-arg ctor + setters for
+  beans). The `MetadataHolderProbe.HolderRef` adds an optional `Function<Function<String, Object>, Object> constructor`
+  field bound once via `LambdaMetafactory` at probe time. `Reflective#structuralIso(cls)`'s forward branch routes
+  through it when present, bypassing the reflective `Records.construct` / `Beans.BeanWriter` path; older holders that
+  predate Phase D surface a `null` constructor and the engine falls back to today's reflective path unchanged. Net
+  effect: for type pairs where both sides are annotated, both the forward (construct) and the backward (read) branches
+  of `structuralIso` are reflection-free in the hot path; the only remaining runtime reflection is `SerializedLambda`
+  decode on the user's accessor method references.
+- **Phase E — holder constants() eliminates the probe's field scan.** The `<X>FieldOptics` holder gains a
   `public static Map<String, Telescope<?, ?>> constants()` method that returns the name → lens map directly.
   `MetadataHolderProbe.probe(...)` calls this method as the only path; a holder that's missing the method (out-of-date
   codegen on the classpath) trips a precise `IllegalStateException` rather than silently falling back. Net effect on the
@@ -88,14 +88,14 @@ Phased rollout (each phase is a discrete PR, no public API change):
 The scout report surfaced ten open design questions; each is resolved here so the implementation has no remaining
 ambiguity:
 
-1. **Holder location.** Top-level `public final class <X>Telescope` in the user's package, alongside `<X>Path` and
-   `<X>Bridge`. Same shape as `@Bridge` output.
-   `Class.forName(cls.getName() + "Telescope", false, cls.getClassLoader())` is the runtime probe.
+1. **Holder location.** Top-level `public final class <X>FieldOptics` in the user's package, alongside `<X>Telescope`
+   and `<X>Bridge`. Same shape as `@Bridge` output.
+   `Class.forName(cls.getName() + "FieldOptics", false, cls.getClassLoader())` is the runtime probe.
 2. **What the holder exposes.** Typed `public static final Telescope<X, FieldType>` constants per field. **No** `Type[]`
    or `Class<?>[]` metadata arrays — container detection happens at codegen time when the constant is emitted,
    sidestepping generic-erasure questions. The constant _is_ the typed lens.
-3. **Holder naming.** Suffix convention `<X>Telescope` (e.g. `UserTelescope`). Matches `<X>Bridge` / `<X>Path`. No `$`
-   prefix.
+3. **Holder naming.** Suffix convention `<X>FieldOptics` (e.g. `UserFieldOptics`). Matches the generated `<X>Telescope`
+   / `<X>Bridge` pair. No `$` prefix.
 4. **`@Bridge` interaction.** `BridgeProcessor` stays as-is. The whole-record `BRIDGE` constant is already
    zero-reflection; composing it from per-field holder constants is a circuitous path with no perf gain.
 5. **`Reflective` interface.** Unchanged. Phase B adds a probe **before** the `Reflective.of(cls)` dispatch, two-tier;
@@ -109,8 +109,8 @@ ambiguity:
    `@MapTo(Target.class)` annotation or extending `@Bridge` semantics.
 9. **Lookup miss.** Throws `IllegalStateException` with a precise diagnostic ("Component 'name' not found in `User`'s
    metadata holder. Re-run the @Focus processor."). Silent fallback would mask stale codegen or accessor mismatches.
-10. **Lombok integration.** Holder emission uses the same `processingOver()` deferral the existing `<X>Path` emission
-    already uses — Lombok AST patches arrive lazily; early emission would see un-patched members.
+10. **Lombok integration.** Holder emission uses the same `processingOver()` deferral the existing `<X>Telescope`
+    emission already uses — Lombok AST patches arrive lazily; early emission would see un-patched members.
 
 ## Consequences
 
@@ -120,8 +120,8 @@ ambiguity:
   no other type info; the JDK requires this probe regardless of substrate.
 - **For non-annotated types, zero behavior change.** Phase B's short-circuit is opt-in via the holder's presence on the
   classpath.
-- **Codegen output grows.** One additional `<X>Telescope.class` per annotated type, alongside `<X>Path.class` and any
-  `<X><Comp>Step.class` files. Bounded by the surface of types the user explicitly annotates.
+- **Codegen output grows.** One additional `<X>FieldOptics.class` per annotated type, alongside `<X>Telescope.class` and
+  any `<X><Comp>Step.class` files. Bounded by the surface of types the user explicitly annotates.
 - **The `Telescope.map(A.class, B.class, ...)` path benefits most.** Today's reflective per-component name scan +
   per-component LMF bind per type pair becomes a per-pair `Iso<A, B>` composition from constants. This is where the
   hybrid's quantitative win is largest; the per-call navigation (`.field(...)`) is already at LMF parity with codegen
@@ -144,9 +144,9 @@ ambiguity:
   metadata reflection in `Reflective.java` / `Records.componentNames` / `Beans.propertyNames` — visible enough that the
   user flagged it during the v1.0 readiness pass. Leaving it would mean shipping 1.0 with the "reflection still in the
   runtime" caveat and pushing the resolution to v1.1; user explicitly pulled the resolution into 1.0.
-- **`<X>Telescope` as a nested class on `<X>Path`.** Rejected. Couples metadata to navigator presence at runtime; would
-  break for consumers who have the holder on the classpath but stripped the Path class. Top-level is cheaper to reason
-  about.
+- **`<X>FieldOptics` as a nested class on `<X>Telescope`.** Rejected. Couples metadata to navigator presence at runtime;
+  would break for consumers who have the holder on the classpath but stripped the navigator class. Top-level is cheaper
+  to reason about.
 - **Expose `Type[]` / `Class<?>[]` metadata on the holder instead of typed `Telescope` constants.** Rejected. Forces the
   runtime to interpret reflection types again; the typed-constant shape sidesteps generic erasure entirely by moving
   container detection to codegen time.

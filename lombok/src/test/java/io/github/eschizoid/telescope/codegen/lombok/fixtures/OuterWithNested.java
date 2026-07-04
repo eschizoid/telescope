@@ -6,18 +6,19 @@ import lombok.NoArgsConstructor;
 
 /**
  * Fixture: outer class holds a nested static {@code @Data} POJO. Pins that {@code
- * LombokFocusProcessor} emits a Path for the nested class, with the outer's name folded into the
- * Path's class name to avoid collision with any top-level sibling of the same simple name.
+ * LombokFocusProcessor} emits a navigator for the nested class, with the outer's name folded into
+ * the generated class name to avoid collision with any top-level sibling of the same simple name.
  *
  * <p>Expected emissions:
  *
  * <ul>
  *   <li>{@code OuterWithNestedInnerTelescope} — at package level (not nested inside
  *       OuterWithNested).
- *   <li>{@code OuterWithNestedInnerTelescope} — the metadata holder, also flattened.
+ *   <li>{@code OuterWithNestedInnerFieldOptics} — the metadata holder, also flattened.
  * </ul>
  *
- * The outer class itself is not annotated with a Lombok bean trigger so no Path is emitted for it.
+ * The outer class itself is not annotated with a Lombok bean trigger so no navigator is emitted for
+ * it.
  */
 public class OuterWithNested {
 
