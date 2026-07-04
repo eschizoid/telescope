@@ -1,130 +1,227 @@
-# ADR-0013: Introspectable mappings via `Mapper.explain()`
+# ADR-0013: Introspectable optics via `explain()` and `trace()`
 
-**Status:** Proposed (draft — the open decisions in §Open questions are unresolved and will be settled in design review
-before this moves to Accepted) · **Date:** 2026-07-04
+**Status:** Accepted (decision set resolved in design review, 2026-07-04) · **Date:** 2026-07-04
 
 ## Context
 
-A telescope mapper already reasons about every field pairing — twice — and throws the reasoning away both times.
+A telescope optic already reasons about what it does — and throws the reasoning away.
 
-At construction, `Telescope.mapper(A, B, rows…)` routes through `DeepMap.computeAutoIso`, which for each field pair
-calls `PairingRules.decidePair(srcType, tgtType, componentName)`, receives a sealed `PairDecision` (`Identity` /
+At mapper construction, `Telescope.mapper(A, B, rows…)` routes through `DeepMap.computeAutoIso`, which for each field
+pair calls `PairingRules.decidePair(srcType, tgtType, componentName)`, receives a sealed `PairDecision` (`Identity` /
 `PrimitiveWrapper` / `RecursePair` / `OptionalToNullable` / `LiftContainer` / `Incompatible` / …), uses it to select
 which `Iso` to build, and discards the decision. `PairingRules.matchFields` computes the `matched` / `unmatchedTargets`
-/ `unmatchedSources` name sets and discards those too. The compile-time verifier (ADR-0012) runs the _same_ `decidePair`
-walk a second time over the call site to raise diagnostics — and also discards the intermediate decisions once it has
-emitted its errors.
+/ `unmatchedSources` name sets and discards those too. The ADR-0012 verifier runs the _same_ `decidePair` walk over the
+call site to raise diagnostics — and also discards the intermediate decisions once it has emitted its errors.
 
-That discarded stream — the ordered `(path, PairDecision)` sequence plus the `MatchResult` — is a complete, precise
-answer to "what does this mapper do, and why did it skip what it skipped." Today there is no way to ask. The mapper is a
-black box between `read(A)` and its result.
+Navigation has a parallel gap. A telescope built by `.field(…)` / `.each(…)` / `.whenPresent(…)` composes its steps into
+one fused `Traversal<S, A>` and keeps only `firstHopName` — the method name of the _first_ hop, one slot, retained
+solely so `DeepMap` can route nested-telescope rows. The rest of the path structure is fused away.
 
-The comparison target's introspection story is "read the generated `.java`": you locate the generated mapper source,
-read imperative assignment code, and infer the mapping table by eye. It works, but it is not a queryable structure — you
-cannot assert on it in a test, log it from a running service, or surface it on a diagnostics endpoint — and it does not
-state _why_ a target field was left unset (under a lenient unmapped-target policy an unmapped field simply doesn't
-appear in the generated code; its absence is the only signal).
+So both worlds discard the structure they compute. There is no way to ask a mapper "what do you map, and why did you
+skip what you skipped," and no way to ask a navigator "what path do you take." The optic is a black box between its
+build and its result. The comparison target's introspection story is "read the generated `.java`" — real code, but not a
+queryable structure you can assert on in a test, log from a service, or surface on a diagnostics endpoint, and it does
+not state _why_ a target field was left unset.
 
 ## Decision
 
-Add an **introspection surface** to the row-based mapper factories that returns the discarded decision stream as a
-structured, queryable value.
+Add two introspection surfaces — a static `explain()` and a data-driven `trace(input)` — to the whole optic surface,
+built on one unified node model derived from the structure the optic already computes.
 
-**1. `Mapper<A, B>.explain()` → `MappingReport`.** A new instance method on `Mapper` (and its siblings — see §Open
-questions #6) returning a `MappingReport`: a **sealed public type family in `:core`**, following the existing
-`Mapping.java` / `Edit.java` shape (sealed interface + package-private record impls, static factories, world-class
-call-site ergonomics). The report is **data-primary** — a structure you can iterate, filter, and assert on — with a
-`toString()` that renders the human-readable form (the `Mapped: … / Skipped: … / Transformations: …` layout). The pretty
-print is a _view_ of the data, never the API.
+**1. One unified node model.** A **sealed public `OpticNode` family in `:core`** (following the `Mapping.java` /
+`Edit.java` shape: sealed interface + package-private record impls) whose variants cover both worlds:
 
-**2. Derived from the mapping's own decisions — single source of truth.** The report is built from the exact same
-`PairDecision` stream and `MatchResult` that `DeepMap` uses to assemble the executable `Iso` chain — not a parallel
-re-walk with its own logic. This is the lattice-first discipline (mantra #3) applied: if `explain()` derived its answer
-independently it could drift from what the mapper actually does and lie; deriving it from the one decision stream makes
-that structurally impossible. It also means `explain()` is a _third lens_ on `PairingRules`, alongside `DeepMap`'s
-"decision → `Iso`" and the ADR-0012 verifier's "decision → diagnostic" — the engine already shipped; this stops throwing
-its output away.
+- **Navigation hops** — `Focus(path)`, `Traverse(container)`, `Filter(desc)`, `Narrow(type)`, `Bridge(target)`.
+- **Mapping rows** — `Mapped(path, from, to)`, `Transformed(field, fromType, toType)`, `Skipped(field, Reason)` where
+  `Reason ∈ { DROPPED, MISSING_SOURCE, UNMAPPED_SOURCE }`.
 
-**3. Report sections.** Three, mapping onto vocabulary telescope already computes:
+`DROPPED` is an explicit `Mapping.drop(src)` row; `MISSING_SOURCE` is a target field with no source (an
+`unmatchedTargets` entry — lenient paths only, see below); `UNMAPPED_SOURCE` is a source field with no consumer (an
+`unmatchedSources` entry). One vocabulary, two shapes of optic.
 
-- **Mapped** — same-name auto-matches and explicit `to(srcAcc, tgtAcc)` rename rows, rendered as `from → to` with dotted
-  paths through nested `RecursePair` recursion (`address.city → city`).
-- **Transformations** — rows/decisions that change the value's type: typed-transform rows `to(src, tgt, fwd, bwd)`, and
-  cross-type `PairDecision`s (`PrimitiveWrapper`, `OptionalToNullable` / `NullableToOptional`, `LiftContainer`),
-  rendered as `field(FromType) → ToType`.
-- **Skipped** — a target field the mapper does not populate, with a reason: `DROPPED` (an explicit `Mapping.drop(src)`
-  row) and, on the lenient factories only, `MISSING_SOURCE` (an `unmatchedTargets` entry). See §Open questions #2 — the
-  `MISSING_SOURCE` case has real semantic subtlety.
+**2. `explain()` → the static structure.** On every optic-carrying type. Returns the `OpticNode` trail — for a mapper,
+the field rows; for a navigator, the hop path. Derived from the **same decision stream / composition the optic itself
+uses**, never a parallel re-walk: if `explain()` reasoned independently it could drift and lie; deriving it from the one
+structure makes drift impossible (mantra #3, lattice-first). `explain()` is thus a _third lens_ on the same engine,
+alongside `DeepMap`'s "decision → `Iso`" and the ADR-0012 verifier's "decision → diagnostic."
 
-**4. Zero hot-path cost.** The report is produced at construction time or on first `explain()` call (see §Open questions
-#1) — never on the per-`forward()` / per-`read()` path. Consistent with ADR-0012's premise that all pairing reasoning
-runs at build time only.
+**3. `trace(input)` → the structure with values.** The same node vocabulary, executed against a concrete input and
+enriched: each node gains its actual `valueIn → valueOut`. `trace` is `explain` with a value column filled in — one
+model, two levels of detail. At many-focus nodes (`each`/`eachValue`/`whenPresent`) `trace` **expands into a tree**:
+each fan-out node spawns one child sub-trace per element, so you see exactly which element produced which downstream
+value. A pure mapping (all 1→1) never fans out, so its trace stays the linear `field → value` shape. Fan-out reuses the
+existing `Traversal#getAll` semantics — the foci at each node are what `getAll` returns there. `forward()` / `read()`
+stay fused and fast; `trace()` is the separate instrumented walk, off the hot path.
 
-## Open questions (the design-review / grill targets)
+**4. Universal surface.** `explain()` / `trace()` live on the `Mapper` / `ForwardMapper` family (covering `mapper`,
+`mapperForward`, `fromMap`) **and** on the general `Telescope<S, A>` (covering `map` and all navigation). On a navigator
+they describe the path; on a mapper the field rows; on a bare `Telescope.of(…)` identity, an empty report — never a
+throw.
 
-These are deliberately unresolved in this draft. Each is load-bearing enough that guessing would bake in a decision the
-review should own.
+**5. Forward-only.** Both surfaces show the forward view (A→B / S→A). `ForwardMapper` and `fromMap` have no backward, so
+forward-only keeps the family uniform, and it matches the "bidirectional is overrated" positioning. `explainBackward()`
+/ `traceBackward()` are a deferred later addition for `Mapper` if a real need appears.
 
-1. **Eager retention vs lazy re-walk.** Retain a small immutable `MappingReport` on the `Mapper` at build time
-   (`explain()` is then a field read), or re-run the `PairingRules` walk on each `explain()` call (no retained state,
-   re-walks). Leaning eager — mappers are built once and long-lived, the report is tiny — but the memory cost per mapper
-   value and the "who else needs the retained decision stream" question want a real answer.
+**6. Retention: decision stream now, executors lazily.** Each optic retains a compact immutable `List<OpticNode>` trail
+— a byproduct of the resolution/composition it already runs, generalizing the existing single-slot `firstHopName` into
+the full list (with `firstHopName` becoming the trail's head). `explain()` reads it directly. `trace()` rebuilds the
+small per-field/per-hop executors from the retained accessors only when called. One modest immutable list per optic;
+nothing extra on the hot path; no re-validation.
 
-2. **Strict vs lenient `MISSING_SOURCE` semantics.** In strict `mapper(...)`, an unmatched target is a _hard
-   construction error_ (the strict bijection guard throws) — it never becomes a "skipped" row, so a strict mapper's
-   report has no `MISSING_SOURCE` section by construction. `MISSING_SOURCE` only exists on the lenient paths
-   (`mapperForward`, `fromMap`). This is not a bug — it points at where `explain()` earns the most: the lenient/untyped
-   surfaces, and especially `fromMap`, whose _verification_ is the deferred follow-up on the tracking issue. Decision:
-   is `explain()` primarily a lenient-mode / `fromMap` feature, with strict mappers getting the Mapped/Transformations
-   view only? Or do we surface strict mode's completeness differently?
+**7. `trace()` is capped by default, with an uncapped override.** `trace(input)` materializes one node per focus, so it
+caps breadth-per-fan-out and depth with `… (+K more)` truncation markers (a small `TraceLimits` type).
+`trace(input, TraceLimits.none())` lifts the caps for the full tree. Safe by default; complete when you ask.
 
-3. **Report data model.** Sealed hierarchy (`sealed interface ReportEntry permits Mapped, Transformed, Skipped`) vs flat
-   parallel lists (`List<Mapped>`, `List<Transformed>`, `List<Skipped>`) on the `MappingReport` record. Granularity of
-   the `Skipped.Reason` enum (`DROPPED`, `MISSING_SOURCE`, and possibly `UNMAPPED_TARGET` / `NO_WRITE_STRATEGY`). What
-   is the minimal shape that reads well at the call site _and_ is convenient to assert on in a test.
+**8. Codegen parity, in the same release.** The `@Focus` / `@BeanFocus` / `@Bridge` processors (and the lombok module)
+emit a static `OpticNode`-trail constant into their generated navigators/bridges, so codegen-built optics support
+`explain()` / `trace()` with the same public surface as runtime-built ones. The verifier already holds this exact data
+at compile time; this stops discarding it there too. Shipping codegen without `explain()` would leave a public-API gap
+where the generated path silently lacks a method the runtime path has.
 
-4. **Codegen parity.** The `@Bridge` verifier already holds this exact decision data at compile time. Should
-   `BridgeProcessor` emit a `MappingReport` constant into the generated class so codegen `.explain()` is a precomputed
-   constant (zero runtime cost, same `PairDecision` source, nice runtime/codegen symmetry)? Or is that scope creep for a
-   first cut — ship the runtime surface, add codegen emission later?
+## What it looks like
 
-5. **Bidirectional view.** Mappers are bidirectional; a typed transform has distinct forward/backward functions. Default
-   to a single forward-facing report (consistent with the "bidirectional is overrated, demote it" positioning), or offer
-   `explainForward()` / `explainBackward()`? Leaning forward-only for v1.
+**Mapping — `explain()` (static structure, no input):**
 
-6. **Surface scope.** `explain()` lives naturally on `Mapper<A, B>` (the "conversion with named rows" abstraction) and
-   its `ForwardMapper` / `fromMap`-result siblings. Does it also belong on the raw `Telescope<A, B>` returned by
-   `Telescope.map(...)`, which carries the same rows but a thinner type? Where is the surface boundary.
+```java
+final Mapper<UserDto, User> mapper = Telescope.mapper(UserDto.class, User.class,
+    Mapping.to(UserDto::firstName, User::givenName),
+    Mapping.to(UserDto::birthDate, User::birthDate, LocalDate::parse, LocalDate::toString),
+    Mapping.drop(UserDto::id));
 
-7. **Path rendering.** Dotted flatten (`address.city → city`) vs a nested tree in the data model (dotted only in the
-   `toString()`). The data model choice affects how a caller queries nested mappings.
+mapper.explain();
+// Mapped:
+//   ✓ firstName    → givenName
+//   ✓ address.city → city          (nested, dotted path)
+// Transformations:
+//   • birthDate(String) → LocalDate
+// Skipped:
+//   • id  (dropped)
+```
 
-8. **Runtime trace — in or out.** This ADR covers the _static structural_ report ("what would this mapper do"). A
-   distinct, larger sibling is a _runtime trace_ ("given this specific input instance, here is what each field became").
-   Explicitly scope it out of this ADR, or fold in a minimal hook now?
+The report is data first — the text above is `toString()`. You assert on the structure:
 
-## Consequences (contingent on the above resolving)
+```java
+// completeness test: a strict mapper skips nothing by construction
+assertThat(mapper.explain().skipped()).isEmpty();
 
-- **New public API surface** — the `MappingReport` sealed family plus `explain()` methods. Additive; no change to
-  existing signatures. Lands under the same `world-class ergonomics` bar as `Mapping` / `Edit`.
-- **Zero hot-path cost** — the report never touches `forward()` / `read()`; construction- or first-call-time only.
+assertThat(mapper.explain().mapped())
+    .contains(new Mapped("firstName", "firstName", "givenName"));
+```
+
+**Mapping — `trace(input)` (same rows, value column filled in):**
+
+```java
+mapper.trace(new UserDto("Ada", "2020-01-02", /* id */ 7L));
+//   ✓ firstName  "Ada"          → givenName "Ada"
+//   • birthDate  "2020-01-02"   → LocalDate[2020-01-02]
+//   • id         7              → (dropped)
+```
+
+**Lenient / `fromMap` — the gaps show, with reasons:**
+
+```java
+Telescope.fromMap(CustomerContact.class, /* rows … */).explain();
+// Mapped:
+//   ✓ name → name
+// Skipped:
+//   • region  (missing source)      // no key in the map
+//   • legacyId (unmapped source)    // key present, no target
+```
+
+**Navigation — `explain()` describes the path:**
+
+```java
+Telescope.of(Company.class).each(Company::departments).field(Department::name).explain();
+// Traverse: departments (List<Department>)
+// Focus:    name
+```
+
+**Navigation — `trace(input)` fans out into a tree:**
+
+```java
+Telescope.of(Company.class)
+    .each(Company::departments).each(Department::teams).field(Team::name)
+    .trace(company);
+// each departments
+//  ├ Sales
+//  │  └ each teams
+//  │     ├ A → name "A"
+//  │     └ B → name "B"
+//  └ Eng
+//     └ each teams
+//        └ C → name "C"
+```
+
+**Capped by default, uncapped on request:**
+
+```java
+path.trace(companyWith10kDepartments);
+//   each departments → [Sales, Eng … (+9998 more)]     // default caps
+path.trace(companyWith10kDepartments, TraceLimits.none());
+//   … full tree, no truncation
+```
+
+## Delivery stages (one PR, ordered commits)
+
+This is a large feature delivered as a **single PR** with the stages below as ordered commits — not a v1/later split and
+not four separate PRs. The build order lets each commit stand on its own and be reviewed in sequence within the one PR.
+
+1. **Node model + mapping `explain()`.** The public `OpticNode` sealed family, the report type, and the decision-stream
+   retention on `Mapper` / `ForwardMapper`. Runtime mapping introspection (`mapper` / `mapperForward` / `fromMap`).
+2. **Navigation `explain()`.** Generalize `firstHopName` → `List<OpticNode>`; instrument every combinator (`field`,
+   `each`, `eachValue`, `whenPresent`, `filter`, `as`, `then`) to append its node. `explain()` on `Telescope<S, A>`.
+3. **`trace(input)`.** The instrumented execution walk, tree fan-out via `getAll`, `TraceLimits` caps + `none()`
+   override — for both mapping and navigation.
+4. **Codegen emission.** `Focus` / `BeanFocus` / `Bridge` processors + lombok emit the static trail constant.
+
+## Consequences
+
+- **New public API surface** — the `OpticNode` sealed family, `TraceLimits`, and `explain()` / `trace()` methods.
+  Additive; no existing signature changes. Held to the same ergonomics bar as `Mapping` / `Edit`.
+- **This is a subsystem, not a harvest.** The original insight ("the data is already computed, just stop discarding it")
+  holds for _mapping_ decisions but not for navigation (only `firstHopName` is kept) or codegen (nothing emitted) — so
+  most of the scope is net-new instrumentation across every combinator and all processors. Recorded honestly: this is a
+  flagship-scale feature delivered in stages, not a one-PR win.
+- **A per-build tax on every optic.** Recording a node per combinator step allocates at _build_ time (not on
+  `read`/`update`/`forward`), paid once per path construction, by users who may never call `explain()`. The trail must
+  be a lightweight immutable structure (cons-list / copy-append), not repeated `ArrayList` copies; the per-step cost
+  must be benchmarked to stay negligible against navigation build cost.
+- **Zero hot-path cost** — `explain()` is a field read; `trace()` is an explicit off-hot-path debug call; neither
+  touches `forward()` / `read()`.
 - **A queryable introspection story the comparison target lacks** — assert-in-tests ("this mapper maps exactly these
-  fields, skips exactly these"), log-from-service, surface-on-diagnostics — none of which "read the generated `.java`"
-  offers. And it states the _reason_ for a skip, which generated imperative code does not.
-- **Reinforces the ADR-0012 safety narrative** — the verifier says "your mapping is complete or it won't compile";
-  `explain()` says "and here is exactly what complete means for this mapper," from the same engine, for a different
-  audience (build gate vs developer introspection).
-- **Natural home for the `fromMap` debugging story** — pairs with the deferred `fromMap` verification follow-up on the
-  tracking issue.
+  fields, skips exactly these"; "strict mapper → `explain().skipped()` is empty" as a completeness test),
+  log-from-service, surface-on-diagnostics — and the _reason_ for each skip, which generated imperative code does not
+  state.
+- **Reinforces the ADR-0012 safety narrative** — the verifier says "complete or it won't compile"; `explain()` says "and
+  here is exactly what complete means," from the same engine, for a developer-introspection audience.
+- **Natural home for the `fromMap` debugging story** — pairs with the deferred `fromMap` verification follow-up.
+
+## Semantic notes settled in review
+
+- **Universal report, semantics reflect what the optic did.** A strict `mapper(...)` cannot have `MISSING_SOURCE` rows —
+  an unmatched target is a _hard construction error_ (the strict bijection guard throws; `DeepMap` ~L113/555/601), so
+  its `Skipped` set is provably empty, which is itself a useful assertion. `MISSING_SOURCE` therefore only appears on
+  the lenient paths (`mapperForward`, nested pairs, `fromMap`), and on a strict top-level mapper the moment it carries a
+  `constant` / `compute` row or a nested pair (which flip resolution lenient; `DeepMap` ~L535/596). `explain()`
+  describes whatever the mapper actually did, uniformly, without special-casing.
+- **`explain()` static vs `trace()` expanded.** Without input, fan-out points are single `Traverse` nodes;
+  `trace(input)` is the only surface that expands them into per-element subtrees.
+- **Non-mapping / non-navigation optics** return an empty report, never throw.
 
 ## Alternatives considered
 
-- **`toString()` on `Mapper`.** Too coarse and string-only — not iterable, not filterable, not assertable, no reason
-  codes. The rendered text should be a _view_ of a structured report, not the interface.
-- **Log the decisions during construction.** Ephemeral and side-channel; you cannot assert on a log line in a unit test
-  or query it from a running service. The value is a returnable structure.
-- **Compile-time report artifact only** (emit a `mapping-report.txt` next to the generated code, no runtime API). Misses
-  the runtime-built and `fromMap` mappers entirely, and the test-assertion use case, which is where the queryable
-  structure earns most.
-- **Do nothing — "read the generated code."** Concedes the introspection gap the comparison target has, on a feature
-  where telescope already computes the answer and merely discards it.
+- **`toString()` on `Mapper` / `Telescope`.** Too coarse and string-only — not iterable, filterable, or assertable, no
+  reason codes. The rendered text is a _view_ of a structured report, not the interface.
+- **Log the decisions during construction.** Ephemeral side-channel; not assertable in a test or queryable from a
+  service. The value is a returnable structure.
+- **Compile-time report artifact only** (emit a `mapping-report.txt`, no runtime API). Misses runtime-built and
+  `fromMap` mappers and the test-assertion use case, which is where the queryable structure earns most.
+- **Mapper-only, forward-only, runtime-only (the conservative cut).** The tightest feature — surface the discarded
+  `DeepMap` decisions on `Mapper` and stop. Rejected in review in favor of the universal optic-introspection surface:
+  the reach across navigation and codegen makes it a headline differentiator rather than a mapper footnote, at the cost
+  of being a genuine subsystem (recorded in Consequences).
+- **Both-directions report.** Considered and rejected — meaningless for `ForwardMapper` / `fromMap` (no backward), would
+  double the report model for the one type with a reverse, and cuts against the "demote bidirectional" positioning.
+  Deferred as an opt-in `explainBackward()` on `Mapper` if demanded.
+- **Do nothing — "read the generated code."** Concedes the introspection gap on a feature where telescope already
+  computes the answer and merely discards it.
