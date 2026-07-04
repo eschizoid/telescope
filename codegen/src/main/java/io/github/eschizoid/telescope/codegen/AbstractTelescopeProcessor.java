@@ -1127,8 +1127,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       elementType +
       ">wrap(io.github.eschizoid.telescope.internal.optics.collections.Traversals.eachIterable()))";
     };
-    // Record a single Traverse for this step, matching a hand-written .each(...) / .eachValue(...) /
-    // .whenPresent(...). The label mirrors the runtime container families the hand-written hops use.
+    // One Traverse per container step, mirroring a hand-written .each(), .eachValue(), or
+    // .whenPresent(). The label names the runtime container family used by the hand-written hops.
     final var containerLabel = switch (shape.containerKind()) {
       case "map" -> "map values";
       case "optional" -> "optional";
