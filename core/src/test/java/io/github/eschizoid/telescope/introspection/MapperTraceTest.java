@@ -44,13 +44,13 @@ class MapperTraceTest {
     record DropTarget(String name) {}
 
     @Test
-    @DisplayName("a dropped source field traces to a (dropped) row")
+    @DisplayName("a dropped source field traces to an (ignored) row")
     void droppedRow() {
       final var trace = Telescope.mapper(DropSource.class, DropTarget.class, drop(DropSource::legacyId)).trace(
         new DropSource("Ada", "L-9")
       );
       assertTrue(trace.toString().contains("legacyId"), trace::toString);
-      assertTrue(trace.toString().contains("(dropped)"), trace::toString);
+      assertTrue(trace.toString().contains("(ignored)"), trace::toString);
       assertTrue(trace.toString().contains("name"), trace::toString);
     }
 

@@ -147,7 +147,7 @@ class OpticReportTest {
       assertTrue(text.contains("Transformations:"), text);
       assertTrue(text.contains("birthDate(String) → LocalDate"), text);
       assertTrue(text.contains("Skipped:"), text);
-      assertTrue(text.contains("(dropped)"), text);
+      assertTrue(text.contains("(ignored)"), text);
     }
 
     @Test
@@ -164,7 +164,7 @@ class OpticReportTest {
         List.of(new Skipped("a", Reason.DROPPED), new Skipped("b", Reason.MISSING_SOURCE))
       );
       final var text = report.toString();
-      assertTrue(text.contains("(dropped)"), text);
+      assertTrue(text.contains("(ignored)"), text);
       assertTrue(text.contains("(missing source)"), text);
     }
 
@@ -198,10 +198,12 @@ class OpticReportTest {
         "Mapped:",
         "  ✓ firstName    → givenName",
         "  ✓ address.city → city",
-        "Transformations:",
-        "  • birthDate(String) → LocalDate",
+        "",
         "Skipped:",
-        "  • id  (dropped)"
+        "  • id (ignored)",
+        "",
+        "Transformations:",
+        "  • birthDate(String) → LocalDate"
       );
       assertEquals(expected, report.toString());
     }

@@ -77,20 +77,22 @@ public record OpticReport(List<OpticNode> nodes) {
       .mapToInt(m -> m.from().length())
       .max()
       .orElse(0);
-    renderSection(out, "Mapped", mapped, m -> "  ✓ " + pad(m.from(), fromWidth) + " → " + m.to());
-    renderSection(
-      out,
-      "Transformations",
-      transformations(),
-      t -> "  • " + t.from() + "(" + t.fromType() + ") → " + (t.from().equals(t.to()) ? "" : t.to() + " ") + t.toType()
-    );
     final var skipped = skipped();
     final var skipWidth = skipped
       .stream()
       .mapToInt(s -> s.field().length())
       .max()
       .orElse(0);
-    renderSection(out, "Skipped", skipped, s -> "  • " + pad(s.field(), skipWidth) + "  (" + label(s.reason()) + ")");
+    // Sections in read order: what mapped, what was left out (with why), what changed type, and the
+    // unused source residue. A blank line separates them.
+    renderSection(out, "Mapped", mapped, m -> "  ✓ " + pad(m.from(), fromWidth) + " → " + m.to());
+    renderSection(out, "Skipped", skipped, s -> "  • " + pad(s.field(), skipWidth) + " (" + label(s.reason()) + ")");
+    renderSection(
+      out,
+      "Transformations",
+      transformations(),
+      t -> "  • " + t.from() + "(" + t.fromType() + ") → " + (t.from().equals(t.to()) ? "" : t.to() + " ") + t.toType()
+    );
     renderSection(out, "Unused sources", unusedSources(), u -> "  • " + u.field());
     // Navigation hops render headingless and un-indented — a path reads as a sequence of steps.
     for (final var hop : hops()) out.append(renderHop(hop)).append('\n');
@@ -110,11 +112,13 @@ public record OpticReport(List<OpticNode> nodes) {
     if (rows.isEmpty()) return;
     out.append(heading).append(":\n");
     for (final var row : rows) out.append(render.apply(row)).append('\n');
+    // Blank line between sections; the trailing one is dropped by stripTrailing().
+    out.append('\n');
   }
 
   private static String label(final OpticNode.Reason reason) {
     return switch (reason) {
-      case DROPPED -> "dropped";
+      case DROPPED -> "ignored";
       case MISSING_SOURCE -> "missing source";
     };
   }

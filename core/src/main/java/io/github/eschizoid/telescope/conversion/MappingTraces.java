@@ -85,7 +85,7 @@ public final class MappingTraces {
 
   private static String label(final OpticNode.Reason reason) {
     return switch (reason) {
-      case DROPPED -> "dropped";
+      case DROPPED -> "ignored";
       case MISSING_SOURCE -> "missing source";
     };
   }
