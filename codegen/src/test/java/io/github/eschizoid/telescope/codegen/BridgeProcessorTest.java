@@ -4303,7 +4303,7 @@ class BridgeProcessorTest {
     @Test
     @DisplayName("carrier form: emitted bridge sits in the CARRIER's package, named after the carrier")
     void carrierEmittedInCarrierPackage() {
-      // The whole point of carrier form (ADR-0007): when source and target live in modules with
+      // The whole point of carrier form: when source and target live in modules with
       // no compile-time visibility, the bridge declaration lives on a third "carrier" class in a
       // module that sees both. The emitted <Carrier>Bridge MUST land in the carrier's package, not
       // the source's — the source's module can't see the carrier and can't write into its package.

@@ -13,8 +13,8 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * JMH micro-benchmarks pinning the holder-routed dispatch path that ADR-0006 Phases B + C add on
- * top of the LMF substrate (ADR-0005). Two axes:
+ * JMH micro-benchmarks pinning the holder-routed dispatch path layered on top of the LMF substrate.
+ * Two axes:
  *
  * <ul>
  *   <li><b>Phase B — per-field dispatch.</b> {@link Telescope#field(Telescope.Accessor)} calls
@@ -142,7 +142,7 @@ public class HolderDispatchBenchmark {
   /**
    * Same dispatch shape against a {@link io.github.eschizoid.telescope.annotations.Focus
    * &#64;Focus}-annotated record — the probe hits and returns the pre-baked holder constant. This
-   * is the {@code field_lmf} row's ADR-0006 Phase B counterpart.
+   * is the {@code field_lmf} row's holder-routed counterpart.
    */
   @Benchmark
   public void field_holder(final Blackhole bh) {

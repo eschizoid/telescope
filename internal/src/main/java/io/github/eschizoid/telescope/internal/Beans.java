@@ -1512,7 +1512,7 @@ public final class Beans {
         throw new IllegalStateException("writeBean(" + cls.getName() + ", SETTERS) requires a no-arg constructor", e);
       }
       // Build the no-arg ctor as an LMF-bound Supplier — mirrors FieldsWriter / BuilderWriter and
-      // closes the ADR-0005 gap that left SettersWriter calling Constructor.newInstance on every
+      // closes the gap that left SettersWriter calling Constructor.newInstance on every
       // write. SETTERS is the autoWriter default for Lombok @Data beans, so this fires on the
       // dominant bean-write path.
       final var lookup = privateLookupOrThrow(cls, cls, "SETTERS strategy");

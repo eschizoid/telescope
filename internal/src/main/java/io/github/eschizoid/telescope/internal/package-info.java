@@ -16,8 +16,8 @@
  *       declaring class) at runtime.
  *   <li>{@link io.github.eschizoid.telescope.internal.MetadataHolderProbe} — {@code ClassValue}-
  *       cached lookup for sibling {@code <X>FieldOptics} metadata holders emitted by {@code @Focus}
- *       / {@code @BeanFocus} (ADR-0006 Phase B). When present, runtime navigation reads
- *       codegen-emitted constants directly instead of going through the LMF reflective path.
+ *       / {@code @BeanFocus}. When present, runtime navigation reads codegen-emitted constants
+ *       directly instead of going through the LMF reflective path.
  *   <li>{@link io.github.eschizoid.telescope.internal.NullDefaults} — JLS-default substitution
  *       table behind {@code NullHint.NullStrategy#DEFAULT} and the {@code mapperForward(...)} +
  *       {@code @Bridge(lenient = true)} lenient-fill paths.

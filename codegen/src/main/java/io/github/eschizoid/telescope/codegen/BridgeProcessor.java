@@ -119,7 +119,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // instantiating a BridgeFn. Always implicitly forward-only; the source field also lands in
     // forwardOnlyTransforms when this map carries an entry for it.
     Map<String, String> transformMethods,
-    // Carrier-form emission override (ADR-0007 / Enh 1). When set, the generated bridge class
+    // Carrier-form emission override. When set, the generated bridge class
     // lives in this carrier's package and is named after the carrier — the source's package and
     // simple name are ignored for emission purposes. `null` means model-anchored form (the legacy
     // path: source class IS the annotated element, package + name derive from it).
@@ -235,7 +235,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Carrier-form: `@Bridge(source = X.class, target = Y.class)` on a third class. The
         // annotated element is the CARRIER (just a package anchor + name); X is the actual source
         // and Y the actual target. Detect carrier form by checking whether `source = ...` is set
-        // to anything other than its `Void.class` default sentinel. ADR-0007.
+        // to anything other than its `Void.class` default sentinel.
         final var rawSource = rawSourceValueFromMirror(bridgeAm);
         final var rawCarrierTarget = rawCarrierTargetFromMirror(bridgeAm);
         final var carrierForm = rawSource != null && !isVoidSentinel(rawSource);
@@ -1119,7 +1119,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var targetFq = target.getQualifiedName().toString();
     final var thisPair = new TypePair(sourceFq, targetFq);
     final var cfgForEmission = configsByPair.getOrDefault(thisPair, BridgeConfig.EMPTY);
-    // Carrier-form (ADR-0007 / Enh 1): when @Bridge(source = X.class, target = Y.class) lives on a
+    // Carrier-form: when @Bridge(source = X.class, target = Y.class) lives on a
     // third "carrier" class, emission lands in the carrier's package under <Carrier>Bridge — NOT
     // in the source's package. carrierFq is null for the legacy model-anchored form (annotation
     // on the source class itself), in which case package + name derive from the source.

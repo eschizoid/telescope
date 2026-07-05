@@ -46,10 +46,16 @@ deferred follow-up if a good naming story appears.
 
 ## What it looks like
 
+```xml
+<!-- logback.xml — no code change: -->
+<logger name="io.github.eschizoid.telescope.mapper.UserDto.User" level="TRACE"/>  <!-- one mapper, values per conversion -->
+<logger name="io.github.eschizoid.telescope.mapper" level="DEBUG"/>               <!-- every mapper's structure at build -->
+```
+
 ```properties
-# logback.xml / logging.properties — no code change:
-io.github.eschizoid.telescope.mapper.UserDto.User = TRACE   # one mapper, values per conversion
-io.github.eschizoid.telescope.mapper               = DEBUG   # every mapper's structure at build
+# …or Spring Boot application.properties:
+logging.level.io.github.eschizoid.telescope.mapper.UserDto.User=TRACE
+logging.level.io.github.eschizoid.telescope.mapper=DEBUG
 ```
 
 ```

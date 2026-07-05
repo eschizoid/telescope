@@ -82,6 +82,9 @@ public final class Mapper<A, B> {
   // Both use lazy Supplier overloads, so nothing renders unless the level is enabled — a single
   // isLoggable check when off. Named by type pair so one mapper can be enabled from the app's
   // logging config without touching code (e.g. io.github.eschizoid.telescope.mapper.UserDto.User).
+  // The pair uses simple class names for readable, greppable logger names; two pairs sharing a
+  // simple name across different packages collide onto one logger (no independent level control) —
+  // an accepted trade-off over verbose fully-qualified names for the common distinct-name case.
   private static final String LOGGER_PREFIX = "io.github.eschizoid.telescope.mapper.";
   private final Logger logger;
 

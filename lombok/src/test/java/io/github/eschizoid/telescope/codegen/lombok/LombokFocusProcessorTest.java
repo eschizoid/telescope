@@ -142,7 +142,7 @@ class LombokFocusProcessorTest {
   }
 
   @Nested
-  @DisplayName("Sibling <X>FieldOptics metadata holders are emitted (ADR-0006)")
+  @DisplayName("Sibling <X>FieldOptics metadata holders are emitted")
   class MetadataHolder {
 
     @Test

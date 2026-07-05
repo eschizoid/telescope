@@ -9,7 +9,7 @@
  *       emitted {@code <X>Path<R>} / {@code <X>Telescope} / {@code <X>Bridge} class.
  *   <li>{@link io.github.eschizoid.telescope.codegen.FocusProcessor} — handles {@link
  *       io.github.eschizoid.telescope.annotations.Focus} on records; emits {@code <Record>Path<R>}
- *       navigators plus a sibling {@code <Record>Telescope} metadata holder (ADR-0006).
+ *       navigators plus a sibling {@code <Record>Telescope} metadata holder.
  *   <li>{@link io.github.eschizoid.telescope.codegen.BeanFocusProcessor} — handles {@link
  *       io.github.eschizoid.telescope.annotations.BeanFocus} on JavaBean-style POJOs; emits the
  *       same {@code <Bean>Path<R>} navigator shape with getter/setter-backed accessors.

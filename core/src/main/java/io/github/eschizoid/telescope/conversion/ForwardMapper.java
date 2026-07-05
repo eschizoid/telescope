@@ -48,6 +48,9 @@ public final class ForwardMapper<A, B> {
   // construction,
   // per-conversion value trace at TRACE on forward(). Lazy suppliers, free when the level is off.
   // Named by type pair (shared io.github.eschizoid.telescope.mapper.<A>.<B> namespace with Mapper).
+  // Simple class names keep the logger names readable and greppable; two pairs sharing a simple
+  // name across different packages collide onto one logger (no independent level control) — an
+  // accepted trade-off over verbose fully-qualified names for the common distinct-name case.
   private static final String LOGGER_PREFIX = "io.github.eschizoid.telescope.mapper.";
   private final Logger logger;
 

@@ -19,9 +19,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * End-to-end proof of ADR-0014's central promise: a mapper's {@code explain()} / {@code trace()}
- * auto-logging reaches the <b>application's real logging backend</b> driven only by a log level —
- * not just the JDK's default JUL sink covered by core's {@code MapperLoggingTest}.
+ * End-to-end proof that a mapper's {@code explain()} / {@code trace()} auto-logging reaches the
+ * <b>application's real logging backend</b> driven only by a log level — not just the JDK's default
+ * JUL sink covered by core's {@code MapperLoggingTest}.
  *
  * <p>The routing under test is the actual adopter path in a Spring Boot app: telescope logs through
  * {@code java.lang.System.Logger} → (no custom {@code LoggerFinder}, so) {@code java.util.logging}

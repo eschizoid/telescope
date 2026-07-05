@@ -1286,12 +1286,18 @@ You don't have to call `explain()` / `trace()` by hand. Each mapper logs its own
 - **`TRACE`** — `trace(input)` on every `forward()`.
 
 Loggers are named by type pair, so you enable one mapper or the whole library from your existing config — no code
-change:
+change. In Spring Boot `application.properties`:
 
 ```properties
-# logback.xml / logging.properties
-io.github.eschizoid.telescope.mapper.UserDto.User = TRACE   # one mapper, values per conversion
-io.github.eschizoid.telescope.mapper               = DEBUG   # every mapper's structure at build
+logging.level.io.github.eschizoid.telescope.mapper.UserDto.User=TRACE   # one mapper, values per conversion
+logging.level.io.github.eschizoid.telescope.mapper=DEBUG                 # every mapper's structure at build
+```
+
+or directly in `logback.xml`:
+
+```xml
+<logger name="io.github.eschizoid.telescope.mapper.UserDto.User" level="TRACE"/>
+<logger name="io.github.eschizoid.telescope.mapper" level="DEBUG"/>
 ```
 
 The log calls are always present and gated purely by level, so they cost nothing when off (guarded before the message is
