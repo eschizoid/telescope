@@ -112,7 +112,11 @@ public record OpticReport(List<OpticNode> nodes) {
     if (rows.isEmpty()) return;
     out.append(heading).append(":\n");
     for (final var row : rows) out.append(render.apply(row)).append('\n');
-    // Blank line between sections; the trailing one is dropped by stripTrailing().
+    // Blank line after each section. A report holds either mapping sections or navigation hops
+    // (never
+    // both), so on a mapping report the last section's blank is the final trailing whitespace,
+    // which
+    // toString()'s stripTrailing() removes.
     out.append('\n');
   }
 
