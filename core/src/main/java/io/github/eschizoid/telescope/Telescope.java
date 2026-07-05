@@ -1246,14 +1246,18 @@ public sealed class Telescope<
    * {@link TraceLimits#defaults() defaults} this overload applies (10 elements per fan-out, 20
    * deep) which truncate with a {@code … (+K more)} marker.
    *
-   * <p><b>Structural fidelity caveat.</b> {@code trace} re-reads values by field name; it does not
-   * execute the built optic. {@code filter}, {@code as} (narrow), and codegen bridge hops are
-   * recorded and their value is passed through unchanged — the predicate, subtype check, and bridge
-   * conversion are not captured in the trail, so trace cannot apply them. A trace may therefore
-   * show a value a real {@code read} would exclude (a filtered-out element, a non-matching
-   * subtype), and a field read downstream of an unapplied bridge/narrow that doesn't exist on the
-   * un-converted value renders as {@code (n/a)} rather than throwing. Use {@code trace} to see the
-   * path shape and per-field values; use {@code read} / {@code find} for the exact result.
+   * <p><b>Structural fidelity caveat.</b> For a <em>navigation</em> path, {@code trace} re-reads
+   * values by field name; it does not execute the built optic. {@code filter}, {@code as} (narrow),
+   * and codegen bridge hops are recorded and their value is passed through unchanged — the
+   * predicate, subtype check, and bridge conversion are not captured in the trail, so trace cannot
+   * apply them. A trace may therefore show a value a real {@code read} would exclude (a
+   * filtered-out element, a non-matching subtype), and a field read downstream of an unapplied
+   * bridge/narrow that doesn't exist on the un-converted value renders as {@code (n/a)} rather than
+   * throwing. (A <em>mapping</em>-built telescope from {@link #map(Class, Class,
+   * io.github.eschizoid.telescope.mapping.MapStep...)} is the exception: it runs the conversion
+   * forward once to fill the value column, since its rows have no field-by-field structural read.)
+   * Use {@code trace} to see the path shape and per-field values; use {@code read} / {@code find}
+   * for the exact result.
    *
    * @param input the value to run the path against
    * @return the executed trace tree; never null

@@ -35,9 +35,11 @@ public final class ForwardMapper<A, B> {
   private final Getter<A, B> forward;
   private final Class<A> sourceClass;
   private final Class<B> targetClass;
-  // The field-decision trail the deep-mapping engine resolved, surfaced by explain(). Empty for
-  // bridge-backed, then-composed, and hook-wrapped forward mappers (no single top-level field
-  // table); carries the rows resolved by mapperForward(...).
+  // The field-decision trail the deep-mapping engine resolved, surfaced by explain(). Carries the
+  // rows resolved by mapperForward(...), and is preserved through the value-only hooks
+  // (beforeForward / afterForward) which don't change the field mapping. Empty for bridge-backed
+  // and
+  // then-composed forward mappers, whose A→C projection has no single flat field table.
   private final List<OpticNode> explainTrail;
 
   ForwardMapper(final Getter<A, B> forward, final Class<A> sourceClass, final Class<B> targetClass) {
@@ -141,6 +143,8 @@ public final class ForwardMapper<A, B> {
     // Genuine lattice routing: Getter.then(Getter) composes two read-only optics into one. The
     // composition is one method call on the substrate, not an inline lambda closure.
     final Getter<A, C> composed = forward.then(next.forward);
+    // No field trail: the A→C projection routes through the intermediate B, so there is no single
+    // flat A→C field table to surface. explain() is intentionally empty on a then-composed mapper.
     return new ForwardMapper<>(composed, sourceClass, next.targetClass);
   }
 
@@ -155,7 +159,9 @@ public final class ForwardMapper<A, B> {
    */
   public ForwardMapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
     final Getter<A, A> pre = hook::apply;
-    return new ForwardMapper<>(pre.then(forward), sourceClass, targetClass);
+    // A pre-forward value hook doesn't change which field maps to which — keep the field trail so
+    // explain() / trace() stay populated after composition.
+    return new ForwardMapper<>(pre.then(forward), sourceClass, targetClass, explainTrail);
   }
 
   /**
@@ -167,7 +173,8 @@ public final class ForwardMapper<A, B> {
    */
   public ForwardMapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
     final Getter<B, B> post = hook::apply;
-    return new ForwardMapper<>(forward.then(post), sourceClass, targetClass);
+    // A post-forward value hook doesn't change the field mapping — keep the field trail.
+    return new ForwardMapper<>(forward.then(post), sourceClass, targetClass, explainTrail);
   }
 
   /**
@@ -184,7 +191,8 @@ public final class ForwardMapper<A, B> {
   public ForwardMapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
     final Getter<A, B> prior = forward;
     final Getter<A, B> wrapped = a -> hook.apply(a, prior.get(a));
-    return new ForwardMapper<>(wrapped, sourceClass, targetClass);
+    // A source-aware post hook still doesn't change the field mapping — keep the field trail.
+    return new ForwardMapper<>(wrapped, sourceClass, targetClass, explainTrail);
   }
 
   /**

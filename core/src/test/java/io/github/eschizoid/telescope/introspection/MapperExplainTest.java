@@ -226,6 +226,18 @@ class MapperExplainTest {
     }
 
     @Test
+    @DisplayName("a value-only hook (beforeForward / afterForward) preserves the explain trail")
+    void hookWrappedMapperKeepsTrail() {
+      final var base = Telescope.mapperForward(NarrowSource.class, WideTarget.class);
+      // A pre/post value hook does not change the field mapping — explain() must stay populated.
+      final var afterHook = base.afterForward(t -> t).explain();
+      assertTrue(afterHook.mapped().contains(new Mapped("name", "name")), afterHook::toString);
+      assertTrue(afterHook.skipped().contains(new Skipped("region", Reason.MISSING_SOURCE)), afterHook::toString);
+      final var beforeHook = base.beforeForward(s -> s).explain();
+      assertTrue(beforeHook.mapped().contains(new Mapped("name", "name")), beforeHook::toString);
+    }
+
+    @Test
     @DisplayName("a source field with no consumer is an UnusedSource on a forward mapper")
     void unmappedSourceIsUnusedSource() {
       final var mapper = Telescope.mapperForward(WideSource.class, NarrowTarget.class);
