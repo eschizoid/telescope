@@ -69,8 +69,10 @@ public final class MappingTraces {
       if (current == null) return null; // a legitimately-null intermediate — rendered as "null"
       try {
         current = Reflective.of(current.getClass()).read(current, segment);
-      } catch (final RuntimeException e) {
-        return UNREADABLE; // a debug aid never throws on a read that doesn't apply
+      } catch (final OutOfMemoryError fatal) {
+        throw fatal; // a dying JVM is not the read's fault — never mask it
+      } catch (final Throwable t) {
+        return UNREADABLE; // a debug aid never throws on a read that doesn't apply, error or not
       }
     }
     return current;
@@ -82,9 +84,16 @@ public final class MappingTraces {
     try {
       if (value instanceof String s) return "\"" + s + "\"";
       return String.valueOf(value);
-    } catch (final RuntimeException e) {
-      // A field whose toString() throws is "unreadable" for tracing — same sentinel as a failed
-      // read. A debug aid attached to a log level must never fail the conversion it observes.
+    } catch (final OutOfMemoryError fatal) {
+      // The JVM is out of memory — not the value's fault, and masking it would hide a dying
+      // process.
+      throw fatal;
+    } catch (final Throwable t) {
+      // A field whose toString() throws — a RuntimeException, an AssertionError, or a
+      // StackOverflowError from a cyclic toString() — is "unreadable" for tracing, the same
+      // sentinel
+      // as a failed read. A debug aid attached to a log level must never fail the conversion it
+      // observes.
       return "(n/a)";
     }
   }

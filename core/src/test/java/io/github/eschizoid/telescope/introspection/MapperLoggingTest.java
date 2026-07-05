@@ -126,13 +126,14 @@ class MapperLoggingTest {
 
   record Fragile(Boom value) {}
 
-  // A field value whose toString() throws — the trace render must degrade to a sentinel, never let
-  // the exception escape forward() and fail the conversion the log was only meant to observe.
+  // A field value whose toString() throws an Error (not just a RuntimeException) — the trace render
+  // must still degrade to a sentinel, never letting the throwable escape forward() and fail the
+  // conversion the log was only meant to observe.
   static final class Boom {
 
     @Override
     public String toString() {
-      throw new IllegalStateException("toString blew up");
+      throw new AssertionError("toString blew up");
     }
   }
 
