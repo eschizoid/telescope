@@ -204,9 +204,13 @@ class BeanFocusProcessorTest {
       final var generated = compilation.generated().get("demo.UserBeanTelescope");
       assertNotNull(generated, () -> "UserBeanTelescope not generated; saw " + compilation.generated().keySet());
 
-      // Target is not @Focus'd (just a record) → terminal Telescope.
+      // Target is not @Focus'd (just a record) → terminal Telescope. The bridge hop records a
+      // Bridge node in the introspection trail.
       assertTrue(generated.contains("public Telescope<R, demo.UserDto> asUserDto()"), generated);
-      assertTrue(generated.contains("return path.then(UserBeanBridge.BRIDGE);"), generated);
+      assertTrue(
+        generated.contains("return path.then(UserBeanBridge.BRIDGE).hop(new OpticNode.Bridge(\"UserDto\"));"),
+        generated
+      );
     }
 
     @Test

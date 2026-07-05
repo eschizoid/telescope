@@ -4,6 +4,9 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.introspection.OpticNode;
+import io.github.eschizoid.telescope.introspection.OpticReport;
+import io.github.eschizoid.telescope.introspection.Trace;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -66,6 +69,11 @@ public final class Mapper<A, B> {
   private final BiFunction<A, B, B> postForward;
   private final Function<B, B> preBackward;
   private final BiFunction<B, A, A> postBackward;
+  // The OpticNode rows the deep-mapping engine resolved for this mapper, captured at construction
+  // and surfaced by explain(). Empty for lifted mappers (list / set / optional / map-value shells
+  // have no top-level field table) and carried unchanged through the hook composers (before*/after*
+  // don't alter the field mapping).
+  private final List<OpticNode> explainTrail;
 
   /**
    * <b>Module-internal seam — NOT public API.</b> Construct a mapper directly from an {@link Iso},
@@ -82,7 +90,7 @@ public final class Mapper<A, B> {
     final Class<B> targetClass,
     final Map<String, PatchEntry> patchByTargetField
   ) {
-    this(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null);
+    this(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null, List.of());
   }
 
   private Mapper(
@@ -93,7 +101,8 @@ public final class Mapper<A, B> {
     final Function<A, A> preForward,
     final BiFunction<A, B, B> postForward,
     final Function<B, B> preBackward,
-    final BiFunction<B, A, A> postBackward
+    final BiFunction<B, A, A> postBackward,
+    final List<OpticNode> explainTrail
   ) {
     this.iso = iso;
     this.sourceClass = sourceClass;
@@ -106,6 +115,7 @@ public final class Mapper<A, B> {
     this.postForward = postForward;
     this.preBackward = preBackward;
     this.postBackward = postBackward;
+    this.explainTrail = List.copyOf(explainTrail);
   }
 
   /**
@@ -125,7 +135,64 @@ public final class Mapper<A, B> {
     final Class<B> targetClass,
     final Map<String, PatchEntry> patchByTargetField
   ) {
-    return new Mapper<>(Iso.of(forward, backward), sourceClass, targetClass, patchByTargetField);
+    return create(forward, backward, sourceClass, targetClass, patchByTargetField, List.of());
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> Same as {@link #create(Function, Function, Class,
+   * Class, Map)} plus the introspection trail the deep-mapping engine resolved for this mapper.
+   * {@code DeepMap#resolveMapper} passes the captured {@link OpticNode} list here so {@link
+   * #explain()} can surface it.
+   */
+  public static <A, B> Mapper<A, B> create(
+    final Function<? super A, ? extends B> forward,
+    final Function<? super B, ? extends A> backward,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final Map<String, PatchEntry> patchByTargetField,
+    final List<OpticNode> explainTrail
+  ) {
+    return new Mapper<>(
+      Iso.of(forward, backward),
+      sourceClass,
+      targetClass,
+      patchByTargetField,
+      null,
+      null,
+      null,
+      null,
+      explainTrail
+    );
+  }
+
+  /**
+   * Describe what this mapper does, as a queryable {@link OpticReport} — the field correspondences
+   * it resolved, the transformations it applies, and the target fields it skips (with reasons). The
+   * report is built from the same pairing decisions the mapper uses to convert, so it cannot drift
+   * from the mapper's actual behaviour.
+   *
+   * <pre>{@code
+   * // completeness test — a strict mapper skips nothing by construction
+   * assertThat(mapper.explain().skipped()).isEmpty();
+   * }</pre>
+   *
+   * @return the structure of this mapper's forward conversion; never null
+   */
+  public OpticReport explain() {
+    return new OpticReport(explainTrail);
+  }
+
+  /**
+   * Run this mapper against {@code input} and show, per resolved field, the source value flowing to
+   * the target value — a {@link Trace} with the value column filled in. Where {@link #explain()} is
+   * the static field structure, {@code trace} runs the conversion and reports what each field
+   * became. Off the hot path; a debugging aid.
+   *
+   * @param input the source value to convert and trace
+   * @return the per-field value trace; never null
+   */
+  public Trace trace(final A input) {
+    return MappingTraces.of(input, forward(input), explainTrail);
   }
 
   /**
@@ -368,7 +435,8 @@ public final class Mapper<A, B> {
       next,
       postForward,
       preBackward,
-      postBackward
+      postBackward,
+      explainTrail
     );
   }
 
@@ -413,7 +481,17 @@ public final class Mapper<A, B> {
   public Mapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
     final BiFunction<A, B, B> prev = this.postForward;
     final BiFunction<A, B, B> next = prev == null ? hook::apply : (a, b) -> hook.apply(a, prev.apply(a, b));
-    return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, preForward, next, preBackward, postBackward);
+    return new Mapper<>(
+      iso,
+      sourceClass,
+      targetClass,
+      patchByTargetField,
+      preForward,
+      next,
+      preBackward,
+      postBackward,
+      explainTrail
+    );
   }
 
   /**
@@ -433,7 +511,17 @@ public final class Mapper<A, B> {
   public Mapper<A, B> beforeBackward(final Function<? super B, ? extends B> hook) {
     final Function<B, B> prev = this.preBackward;
     final Function<B, B> next = prev == null ? hook::apply : b -> hook.apply(prev.apply(b));
-    return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, preForward, postForward, next, postBackward);
+    return new Mapper<>(
+      iso,
+      sourceClass,
+      targetClass,
+      patchByTargetField,
+      preForward,
+      postForward,
+      next,
+      postBackward,
+      explainTrail
+    );
   }
 
   /**
@@ -467,7 +555,17 @@ public final class Mapper<A, B> {
   public Mapper<A, B> afterBackward(final BiFunction<? super B, ? super A, ? extends A> hook) {
     final BiFunction<B, A, A> prev = this.postBackward;
     final BiFunction<B, A, A> next = prev == null ? hook::apply : (b, a) -> hook.apply(b, prev.apply(b, a));
-    return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, preForward, postForward, preBackward, next);
+    return new Mapper<>(
+      iso,
+      sourceClass,
+      targetClass,
+      patchByTargetField,
+      preForward,
+      postForward,
+      preBackward,
+      next,
+      explainTrail
+    );
   }
 
   /**
