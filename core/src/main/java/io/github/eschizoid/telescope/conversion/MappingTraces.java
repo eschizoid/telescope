@@ -79,8 +79,14 @@ public final class MappingTraces {
   private static String render(final Object value) {
     if (value == UNREADABLE) return "(n/a)";
     if (value == null) return "null";
-    if (value instanceof String s) return "\"" + s + "\"";
-    return String.valueOf(value);
+    try {
+      if (value instanceof String s) return "\"" + s + "\"";
+      return String.valueOf(value);
+    } catch (final RuntimeException e) {
+      // A field whose toString() throws is "unreadable" for tracing — same sentinel as a failed
+      // read. A debug aid attached to a log level must never fail the conversion it observes.
+      return "(n/a)";
+    }
   }
 
   private static String label(final OpticNode.Reason reason) {
