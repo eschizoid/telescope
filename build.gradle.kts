@@ -128,6 +128,18 @@ subprojects {
             )
         }
     }
+
+    // Make every module's test run informative rather than a wall of pass/fail: show per-test
+    // events plus anything the tests log (through java.lang.System.Logger -> JUL console), with a
+    // message-only JUL format so narration reads cleanly. Single source of truth for all modules.
+    tasks.withType<Test>().configureEach {
+        testLogging {
+            showStandardStreams = true
+            events("passed", "failed", "skipped")
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        }
+        systemProperty("java.util.logging.SimpleFormatter.format", "%5\$s%n")
+    }
 }
 
 jreleaser {
