@@ -41,6 +41,9 @@ public record Trace(List<Node> roots) {
 
   @Override
   public String toString() {
+    // Neutral label for an empty trace, mirroring OpticReport's "(empty optic)" — an empty string
+    // would be indistinguishable from a rendering bug.
+    if (roots.isEmpty()) return "(empty optic)";
     final var out = new StringBuilder();
     for (final var root : roots) render(out, root, "");
     return out.toString().stripTrailing();
