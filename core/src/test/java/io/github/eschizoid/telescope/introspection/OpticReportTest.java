@@ -259,7 +259,7 @@ class OpticReportTest {
 
     @Test
     @DisplayName(
-      "a mixed report (mapping rows + hops) separates the section from the hops with one blank line, no stray trailing"
+      "a mixed report (mapping rows + hops) separates the section from the hops with a single blank line and no trailing blank"
     )
     void mixedReportRender() {
       // A mapping telescope further navigated (e.g. map(A, B).field(B::x)) yields both Rows and
