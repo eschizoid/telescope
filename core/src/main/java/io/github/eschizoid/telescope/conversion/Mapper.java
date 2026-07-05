@@ -128,8 +128,8 @@ public final class Mapper<A, B> {
     this.explainTrail = List.copyOf(explainTrail);
     this.logger = System.getLogger(LOGGER_PREFIX + sourceClass.getSimpleName() + "." + targetClass.getSimpleName());
     // Structure once at DEBUG (skip the trail-less lifted shells, which would just log "(empty
-    // optic)"). Lazy — the render only runs if DEBUG is enabled.
-    if (!this.explainTrail.isEmpty()) logger.log(
+    // optic)"). Guarded so the Supplier isn't built when DEBUG is off.
+    if (!this.explainTrail.isEmpty() && logger.isLoggable(Level.DEBUG)) logger.log(
       Level.DEBUG,
       () -> "map " + sourceClass.getSimpleName() + " → " + targetClass.getSimpleName() + "\n" + explain()
     );
@@ -337,9 +337,13 @@ public final class Mapper<A, B> {
     if (a1 == null) return null;
     final B b = iso.to(a1);
     final B result = postForward == null ? b : postForward.apply(a1, b);
-    // Value trace at TRACE, built from the already-computed result (never re-running forward, which
-    // would recurse). Lazy — the render only runs if TRACE is enabled.
-    logger.log(Level.TRACE, () -> MappingTraces.of(a, result, explainTrail).toString());
+    // Value trace at TRACE, from the already-computed result (never re-running forward, which would
+    // recurse). Gate with isLoggable BEFORE building the Supplier so the hot path is
+    // allocation-free
+    // when off, and skip trail-less shells (their trace is empty). Both checks are cheap.
+    if (!explainTrail.isEmpty() && logger.isLoggable(Level.TRACE)) logger.log(Level.TRACE, () ->
+      MappingTraces.of(a, result, explainTrail).toString()
+    );
     return result;
   }
 

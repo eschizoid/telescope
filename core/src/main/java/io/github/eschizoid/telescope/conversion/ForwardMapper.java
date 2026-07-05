@@ -66,8 +66,9 @@ public final class ForwardMapper<A, B> {
     this.targetClass = targetClass;
     this.explainTrail = List.copyOf(explainTrail);
     this.logger = System.getLogger(LOGGER_PREFIX + sourceClass.getSimpleName() + "." + targetClass.getSimpleName());
-    // Structure once at DEBUG (skip trail-less shells). Lazy — only rendered if DEBUG is enabled.
-    if (!this.explainTrail.isEmpty()) logger.log(
+    // Structure once at DEBUG (skip trail-less shells). Guarded so the Supplier isn't built when
+    // off.
+    if (!this.explainTrail.isEmpty() && logger.isLoggable(Level.DEBUG)) logger.log(
       Level.DEBUG,
       () -> "forward " + sourceClass.getSimpleName() + " → " + targetClass.getSimpleName() + "\n" + explain()
     );
@@ -137,8 +138,12 @@ public final class ForwardMapper<A, B> {
     if (a == null) return null;
     final B result = forward.get(a);
     // Value trace at TRACE from the already-computed result (never re-running forward, which would
-    // recurse through trace). Lazy — the render only runs if TRACE is enabled.
-    logger.log(Level.TRACE, () -> MappingTraces.of(a, result, explainTrail).toString());
+    // recurse). Gate with isLoggable BEFORE building the Supplier so the hot path is
+    // allocation-free
+    // when off, and skip trail-less shells (their trace is empty). Both checks are cheap.
+    if (!explainTrail.isEmpty() && logger.isLoggable(Level.TRACE)) logger.log(Level.TRACE, () ->
+      MappingTraces.of(a, result, explainTrail).toString()
+    );
     return result;
   }
 

@@ -22,8 +22,10 @@ library, and its `log(Level, Supplier<String>)` overload only evaluates the mess
 - **TRACE — `trace(input)` per `forward()`.** The value column for that conversion, built from the **already-computed
   result** (never re-running `forward`, which would recurse through `trace`).
 
-Both calls use the lazy `Supplier` overload, so nothing is rendered unless the level is enabled — a single `isLoggable`
-check on the hot path when off. This is the "off the hot path" guarantee ADR-0013 wanted, now automatic.
+Both calls are guarded by an explicit `isLoggable` check (plus a non-empty-trail check) _before_ the `Supplier` is
+built, then use the lazy `log(Level, Supplier)` overload. So when the level is off the hot path is fully allocation-free
+— not even the capturing lambda is created — and the render never runs. This is the "off the hot path" guarantee
+ADR-0013 wanted, now automatic.
 
 **Always-on, level-gated (not opt-in).** The log calls are always present; the log _level_ is the switch. This is what
 "flip a level, see it" demands, and it is free when off. `forward()` gains a benign, level-gated log side-effect — the
