@@ -111,6 +111,52 @@ copy-with-changes, or an optics library) the moment you step past mapping.
 
 ---
 
+## Act 3 — telescope explains and traces itself; MapStruct is a black box
+
+Acts 1 and 2 were about _writing_ the mapping. Act 3 is about **seeing it**. Every telescope mapper answers two
+questions MapStruct structurally cannot: its structure lives only in generated `…MapperImpl.java` you go read, and its
+runtime behaviour is whatever you hand-instrument.
+
+**`explain()` — the static structure, as data.** The Act 1 rename isn't a string buried in generated code; it's a row
+you can print or assert on:
+
+```java
+TelescopeMappings.CUSTOMER_MAPPER.explain();
+// Mapped:
+//   ✓ email → contactEmail
+//   ✓ name  → name
+```
+
+That `✓ email → contactEmail` is the exact override from Act 1, now a first-class correspondence. The test asserts on it
+directly — `explain().mapped()` contains `("email", "contactEmail")` — a completeness check MapStruct offers no surface
+for.
+
+**`trace(input)` — the same rows with real values, whole nested graph.** For one `Order`:
+
+```java
+TelescopeMappings.ORDER_MAPPER.trace(order);
+// ✓ id        "o-1"                                      → id "o-1"
+// • customer  Customer[name=Ada, email=ada@example.com]  → customer CustomerDto[name=Ada, contactEmail=ada@example.com]
+// • lines     [LineItem[sku=sku-1, …], …]                → lines [LineItemDto[sku=sku-1, …], …]
+```
+
+**Auto-logging — flip a level, no code change.** telescope logs its own `explain()` at `DEBUG` and every conversion's
+`trace()` at `TRACE` through `java.lang.System.Logger` (java.base, zero dependency). Name the type-pair logger and every
+mapping narrates itself:
+
+```xml
+<logger name="io.github.eschizoid.telescope.mapper.Order.OrderDto" level="TRACE"/>
+```
+
+MapStruct's generated `OrderMapStructMapperImpl` is opaque: to see what it mapped you read generated source; to see
+values at runtime you instrument it by hand. telescope makes both first-class — structure you can assert on, values you
+can flip on.
+
+> This slice's own tests prove the point: every act narrates what it proves through `System.Logger`. Run
+> `./gradlew :examples:mapstruct-vs-telescope:test` and read the walkthrough, not just the green ticks.
+
+---
+
 ## Where MapStruct is still the right call
 
 Being fair is the point of a reproducible comparison:

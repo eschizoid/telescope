@@ -34,6 +34,19 @@ public final class TelescopeMappings {
   );
 
   /**
+   * Act 3 — the {@code Customer -> CustomerDto} leg on its own, so its {@code explain()} renders
+   * the Act 1 rename as first-class data: {@code ✓ email → contactEmail}. Same {@code to(...)}
+   * override as {@code ORDER_MAPPER}'s nested customer hop; here it is the whole mapper, so the
+   * correspondence is a top-level row you can assert on. MapStruct's equivalent decision lives only
+   * in generated {@code CustomerMapperImpl.java}.
+   */
+  public static final Mapper<Customer, CustomerDto> CUSTOMER_MAPPER = Telescope.mapper(
+    Customer.class,
+    CustomerDto.class,
+    to(Customer::email, CustomerDto::getContactEmail)
+  );
+
+  /**
    * Act 2 — deep immutable update, kept as a reusable <em>path value</em> that mirrors {@code
    * ORDER_MAPPER}: a path is a thing you store, not a call you re-spell. The same {@code Telescope}
    * vocabulary that mapped {@code Order -> OrderDto} above navigates to every line item's price

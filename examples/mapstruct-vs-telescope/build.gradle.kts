@@ -37,4 +37,13 @@ dependencies {
 
 tasks.named<Test>("test") {
     useJUnitPlatform()
+    testLogging {
+        // Surface each test's narrated head-to-head (logged through System.Logger -> JUL console),
+        // not just a wall of pass/fail ticks.
+        showStandardStreams = true
+        events("passed", "failed", "skipped")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
+    // Message-only JUL formatting so the narration reads cleanly, without timestamp/source noise.
+    systemProperty("java.util.logging.SimpleFormatter.format", "%5\$s%n")
 }
