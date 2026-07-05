@@ -1,0 +1,8 @@
+package io.github.eschizoid.telescope;
+
+/**
+ * Top-level no-annotation fixture for {@link DeepMapHolderIsoReadTest}. Has no sibling {@code
+ * <X>Telescope} holder, so the structural-iso holder path falls through to the reflective {@code
+ * Records.read} read — the deep-mapping behaviour must be identical to the annotated-source case.
+ */
+public record HolderIsoPlainSrc(String name, int age) {}
