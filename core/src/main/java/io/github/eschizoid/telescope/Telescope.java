@@ -1348,7 +1348,10 @@ public sealed class Telescope<
           new Trace.Node(renderValue(elem), List.of(traceHop(hops, i + 1, elem, limits, depth + 1)), false)
         );
       }
-      if (elements.total() > shown.size()) children.add(
+      // Exact remainder for a sized container; a bare Iterable with more past the cap reports an
+      // unknown remainder ("… (+more)") since it was never counted.
+      if (elements.total() == UNKNOWN_MORE) children.add(Trace.Node.cut("… (+more)"));
+      else if (elements.total() > shown.size()) children.add(
         Trace.Node.cut("… (+" + (elements.total() - shown.size()) + " more)")
       );
       return new Trace.Node("each " + t.path(), children, false);
@@ -1406,11 +1409,10 @@ public sealed class Telescope<
   }
 
   // The first `cap` elements of a container plus its total count — so a fan-out renders the capped
-  // slice without materializing a large collection. A Collection/Map reports size() in O(1) and
-  // only
-  // the shown slice is copied; a bare Iterable is walked once, storing only the cap (bounded
-  // memory)
-  // while still counting the total so the "(+K more)" marker stays exact.
+  // slice without materializing a large collection. A Collection/Map reports size() in O(1) so only
+  // the shown slice is copied and the remainder is exact. A bare Iterable is walked at most cap + 1
+  // times — enough to know whether more remain — and never fully, so trace() stays bounded in time
+  // even over an expensive or effectively-unbounded iterable; its remainder is UNKNOWN_MORE.
   private static Elements boundedElementsOf(final Object container, final int cap) {
     if (container == null || container == UNREADABLE) return new Elements(List.of(), 0);
     if (container instanceof Optional<?> o) return o.isPresent()
@@ -1420,12 +1422,10 @@ public sealed class Telescope<
     if (container instanceof Map<?, ?> m) return new Elements(firstN(m.values(), cap), m.size());
     if (container instanceof Iterable<?> it) {
       final var shown = new ArrayList<Object>();
-      var total = 0;
-      for (final var e : it) {
-        if (shown.size() < cap) shown.add(e);
-        total++;
-      }
-      return new Elements(shown, total);
+      final var iterator = it.iterator();
+      while (iterator.hasNext() && shown.size() < cap) shown.add(iterator.next());
+      // One peek past the cap tells us there are more, without counting (or exhausting) the rest.
+      return new Elements(shown, iterator.hasNext() ? UNKNOWN_MORE : shown.size());
     }
     return new Elements(List.of(container), 1);
   }
@@ -1438,6 +1438,9 @@ public sealed class Telescope<
     }
     return out;
   }
+
+  // Sentinel total for a bare Iterable known to have more elements past the cap but not counted.
+  private static final int UNKNOWN_MORE = -1;
 
   /** The shown (capped) elements of a fan-out plus the container's total element count. */
   private record Elements(List<Object> shown, int total) {}

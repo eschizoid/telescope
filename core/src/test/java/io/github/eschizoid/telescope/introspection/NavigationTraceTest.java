@@ -269,6 +269,21 @@ class NavigationTraceTest {
       assertThrows(IllegalArgumentException.class, () -> new TraceLimits(0, 10));
       assertThrows(IllegalArgumentException.class, () -> new TraceLimits(10, 0));
     }
+
+    record Feed(Iterable<String> items) {}
+
+    @Test
+    @DisplayName("a bare non-Collection Iterable reports an unknown remainder, walked only to the cap")
+    void bareIterableUnknownRemainder() {
+      // An Iterable that is not a Collection, so it has no O(1) size() — trace must not count it all.
+      final Iterable<String> items = () -> List.of("a", "b", "c", "d", "e").iterator();
+      final var trace = Telescope.of(Feed.class).each(Feed::items).trace(new Feed(items), new TraceLimits(2, 20));
+      final var root = trace.roots().get(0);
+      assertEquals(3, root.children().size(), trace::toString);
+      final var marker = root.children().get(2).label();
+      assertTrue(marker.contains("(+more)"), marker);
+      assertFalse(marker.matches(".*\\d.*"), () -> "remainder must be unknown, not a count: " + marker);
+    }
   }
 
   @Nested
