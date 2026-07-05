@@ -142,9 +142,11 @@ class OpticReportTest {
         )
       );
       final var text = report.toString();
+      // Collapse the alignment padding so the in-order mapped row is asserted as one unit (the
+      // arrow may sit any number of pad spaces past the field, but it must be the same row).
+      final var unpadded = text.replaceAll(" {2,}", " ");
       assertTrue(text.contains("Mapped:"), text);
-      assertTrue(text.contains("firstName"), text);
-      assertTrue(text.contains("→ givenName"), text);
+      assertTrue(unpadded.contains("✓ firstName → givenName"), text);
       assertTrue(text.contains("Transformations:"), text);
       assertTrue(text.contains("birthDate(String) → LocalDate"), text);
       assertTrue(text.contains("Skipped:"), text);

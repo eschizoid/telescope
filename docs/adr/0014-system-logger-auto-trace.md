@@ -33,7 +33,11 @@ Hibernate-logs-SQL-at-DEBUG posture — which we accept over an opt-in `mapper.l
 
 **Hierarchical, type-pair logger names.** `io.github.eschizoid.telescope.mapper.<Source>.<Target>` (both `Mapper` and
 `ForwardMapper` share the `.mapper.` namespace). A user enables one mapper, or the whole library by prefix, from their
-existing logging config — no telescope-specific configuration and no code change.
+existing logging config — no telescope-specific configuration and no code change. `<Source>` / `<Target>` are the
+**simple** class names (`Class#getSimpleName()`) — chosen for readable, greppable logger names over verbose FQNs. The
+trade-off: two mappers whose source (or target) types share a simple name across different packages land on the same
+logger, so they can't be level-controlled independently. Distinct simple names — the common case — get independent
+control; on a genuine clash, enable the shared logger (both fire) or the `.mapper.` prefix.
 
 **Navigation (`Telescope`) is out of scope for v1.** A navigator is built fluently (no single construction point for a
 DEBUG `explain`, and every intermediate `.field(...)` would log) and does not retain `Class<S>`, so there is no clean
