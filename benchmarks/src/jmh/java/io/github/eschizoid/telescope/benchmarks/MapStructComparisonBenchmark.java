@@ -44,7 +44,7 @@ import org.openjdk.jmh.infra.Blackhole;
  *   <li>{@code _runtime_*} — telescope's reflective {@link Telescope#mapper(Class, Class,
  *       io.github.eschizoid.telescope.mapping.MapStep...)} factory. Per-component reads / writes go
  *       through cached {@code LambdaMetafactory}-built {@code Function}/{@code BiConsumer}
- *       dispatchers (see ADR-0005). No codegen on the consumer's build.
+ *       dispatchers. No codegen on the consumer's build.
  *   <li>{@code _codegen_*} — telescope's {@code @Bridge}-emitted {@code *Bridge.BRIDGE} constant.
  *       Direct method-reference + canonical-constructor calls at every hop — the same dispatch
  *       shape MapStruct's generated impl uses, surfaced through the public {@link Telescope} value.

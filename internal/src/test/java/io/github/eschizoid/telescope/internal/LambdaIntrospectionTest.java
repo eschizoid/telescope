@@ -53,8 +53,8 @@ class LambdaIntrospectionTest {
     void beanGetterName() {
       // Layer responsibility boundary: LambdaIntrospection returns the method name; downstream
       // Beans.propertyOf handles the `get`/`is` strip + lowercase first letter. A future "helpful"
-      // normalization in this layer would shift the contract and break the Bug 2 fix (propertyOf
-      // null guard) which assumes the raw name flows through.
+      // normalization in this layer would shift the contract and break the propertyOf null-guard
+      // fix, which assumes the raw name flows through.
       final SerFn<BeanUser, String> ref = BeanUser::getEmail;
       assertEquals("getEmail", LambdaIntrospection.methodNameOf(ref));
     }

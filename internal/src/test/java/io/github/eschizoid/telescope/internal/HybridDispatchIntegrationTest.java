@@ -8,7 +8,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Integration test exercising ADR-0006 Phase B end-to-end: when an {@code @Focus}-annotated
+ * Integration test exercising holder-routed dispatch end-to-end: when an {@code @Focus}-annotated
  * record's call site dispatches via {@link Telescope#of(Class)} + {@link Telescope#field}, the
  * runtime probe finds the sibling {@code <X>Telescope} holder and routes through its pre-baked
  * {@link io.github.eschizoid.telescope.internal.optics.Lens Lens} constants instead of falling

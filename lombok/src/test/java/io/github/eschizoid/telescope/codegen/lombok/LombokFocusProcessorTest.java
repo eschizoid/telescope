@@ -142,7 +142,7 @@ class LombokFocusProcessorTest {
   }
 
   @Nested
-  @DisplayName("Sibling <X>FieldOptics metadata holders are emitted (ADR-0006)")
+  @DisplayName("Sibling <X>FieldOptics metadata holders are emitted")
   class MetadataHolder {
 
     @Test
@@ -198,7 +198,7 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("Phase D: @Data holder exposes a public static construct(Function) that rebuilds via setters")
+    @DisplayName("@Data holder exposes a public static construct(Function) that rebuilds via setters")
     void dataHolderConstruct() throws Exception {
       final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserFieldOptics");
       final var constructMethod = holder.getDeclaredMethod("construct", Function.class);
@@ -220,7 +220,7 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("Phase D: @Builder holder exposes a public static construct(Function) that chains the builder")
+    @DisplayName("@Builder holder exposes a public static construct(Function) that chains the builder")
     void builderHolderConstruct() throws Exception {
       final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUserFieldOptics");
       final var constructMethod = holder.getDeclaredMethod("construct", Function.class);

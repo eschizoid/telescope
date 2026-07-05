@@ -5,6 +5,8 @@ import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
 import io.github.eschizoid.telescope.introspection.Trace;
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -42,6 +44,16 @@ public final class ForwardMapper<A, B> {
   // then-composed forward mappers, whose A→C projection has no single flat field table.
   private final List<OpticNode> explainTrail;
 
+  // Zero-dependency observability via java.base's System.Logger — structure at DEBUG on
+  // construction,
+  // per-conversion value trace at TRACE on forward(). Lazy suppliers, free when the level is off.
+  // Named by type pair (shared io.github.eschizoid.telescope.mapper.<A>.<B> namespace with Mapper).
+  // Simple class names keep the logger names readable and greppable; two pairs sharing a simple
+  // name across different packages collide onto one logger (no independent level control) — an
+  // accepted trade-off over verbose fully-qualified names for the common distinct-name case.
+  private static final String LOGGER_PREFIX = "io.github.eschizoid.telescope.mapper.";
+  private final Logger logger;
+
   ForwardMapper(final Getter<A, B> forward, final Class<A> sourceClass, final Class<B> targetClass) {
     this(forward, sourceClass, targetClass, List.of());
   }
@@ -56,6 +68,13 @@ public final class ForwardMapper<A, B> {
     this.sourceClass = sourceClass;
     this.targetClass = targetClass;
     this.explainTrail = List.copyOf(explainTrail);
+    this.logger = System.getLogger(LOGGER_PREFIX + sourceClass.getSimpleName() + "." + targetClass.getSimpleName());
+    // Structure once at DEBUG (skip trail-less shells). Guarded so the Supplier isn't built when
+    // off.
+    if (!this.explainTrail.isEmpty() && logger.isLoggable(Level.DEBUG)) logger.log(
+      Level.DEBUG,
+      () -> "forward " + sourceClass.getSimpleName() + " → " + targetClass.getSimpleName() + "\n" + explain()
+    );
   }
 
   /**
@@ -120,7 +139,15 @@ public final class ForwardMapper<A, B> {
   public B forward(final A a) {
     // Null in, null out — matches Mapper.forward's contract and MapStruct's generated null guard.
     if (a == null) return null;
-    return forward.get(a);
+    final B result = forward.get(a);
+    // Value trace at TRACE from the already-computed result (never re-running forward, which would
+    // recurse). Gate with isLoggable BEFORE building the Supplier so the hot path is
+    // allocation-free
+    // when off, and skip trail-less shells (their trace is empty). Both checks are cheap.
+    if (!explainTrail.isEmpty() && logger.isLoggable(Level.TRACE)) logger.log(Level.TRACE, () ->
+      MappingTraces.of(a, result, explainTrail).toString()
+    );
+    return result;
   }
 
   /** Alias of {@link #forward(Object)}. */

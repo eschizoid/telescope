@@ -12,9 +12,9 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * Tests for the Phase A ergonomic helpers on {@link Either} and {@link Validated}: {@code mapLeft},
- * {@code swap}, {@code toValidated} on Either; {@code mapErrors}, {@code andThen}, {@code toEither}
- * on Validated.
+ * Tests for the ergonomic helpers on {@link Either} and {@link Validated}: {@code mapLeft}, {@code
+ * swap}, {@code toValidated} on Either; {@code mapErrors}, {@code andThen}, {@code toEither} on
+ * Validated.
  */
 class EitherValidatedHelpersTest {
 

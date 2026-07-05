@@ -5,7 +5,7 @@ nothing else. Mirrors the [`spring-boot-starter`](../spring-boot-starter/README.
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-quarkus:1.0.5")
+    implementation("io.github.eschizoid:telescope-quarkus:1.1.1")
 }
 ```
 
@@ -32,7 +32,7 @@ archive ... is being scanned without a Jandex index" warning.
 // Gradle (Quarkus 3 BOM picks up Quarkus's version)
 dependencies {
     implementation(platform("io.quarkus.platform:quarkus-bom:3.20.0"))
-    implementation("io.github.eschizoid:telescope-quarkus:1.0.5")
+    implementation("io.github.eschizoid:telescope-quarkus:1.1.1")
 }
 ```
 
@@ -41,7 +41,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-quarkus</artifactId>
-  <version>1.0.5</version>
+  <version>1.1.1</version>
 </dependency>
 ```
 

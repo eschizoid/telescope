@@ -13,26 +13,26 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * JMH micro-benchmarks pinning the holder-routed dispatch path that ADR-0006 Phases B + C add on
- * top of the LMF substrate (ADR-0005). Two axes:
+ * JMH micro-benchmarks pinning the holder-routed dispatch path layered on top of the LMF substrate.
+ * Two axes:
  *
  * <ul>
- *   <li><b>Phase B — per-field dispatch.</b> {@link Telescope#field(Telescope.Accessor)} calls
- *       {@link io.github.eschizoid.telescope.internal.MetadataHolderProbe#lensFromHolder
+ *   <li><b>Per-field dispatch.</b> {@link Telescope#field(Telescope.Accessor)} calls {@link
+ *       io.github.eschizoid.telescope.internal.MetadataHolderProbe#lensFromHolder
  *       MetadataHolderProbe.lensFromHolder(implClass, name)} first; when a sibling {@code
  *       <X>Telescope} holder is present, the cached {@code Telescope<X, FieldType>} constant is
  *       returned without re-running the {@link io.github.eschizoid.telescope.internal.Records}
  *       LMF-backed field-lens build. When absent, the original LMF path runs.
- *   <li><b>Phase C — deep-mapping backward branch.</b> {@link
+ *   <li><b>Deep-mapping backward branch.</b> {@link
  *       io.github.eschizoid.telescope.internal.Reflective#structuralIso(Class)
  *       Reflective.structuralIso(cls)}'s backward direction (instance &rarr; {@code Map<String,
  *       Object>}) routes per-component reads through the holder's pre-baked {@link
  *       io.github.eschizoid.telescope.internal.optics.Lens Lens} constants when present; absent
  *       falls back to {@link io.github.eschizoid.telescope.internal.Records#read Records.read} /
  *       {@link io.github.eschizoid.telescope.internal.Beans#readProperty Beans.readProperty}. The
- *       forward direction (map &rarr; instance) is unchanged — Phase D (out of scope here) will
- *       short-circuit it via a constructor holder; numbers for the backward branch are what this
- *       benchmark pins.
+ *       forward direction (map &rarr; instance) is unchanged — the forward-construct path (out of
+ *       scope here) will short-circuit it via a constructor holder; numbers for the backward branch
+ *       are what this benchmark pins.
  * </ul>
  *
  * <p>Two flavours of fixture for each axis: {@code _holder} rows compile against a {@link
@@ -127,7 +127,7 @@ public class HolderDispatchBenchmark {
     plainTgt = mapLmf.forward(plainSrc);
   }
 
-  // ---- Per-field dispatch (Phase B) -----------------------------------------------------------
+  // ---- Per-field dispatch ---------------------------------------------------------------------
 
   /**
    * {@code Telescope.of(X).field(X::name).update(x, fn)} against an unannotated record — the probe
@@ -142,7 +142,7 @@ public class HolderDispatchBenchmark {
   /**
    * Same dispatch shape against a {@link io.github.eschizoid.telescope.annotations.Focus
    * &#64;Focus}-annotated record — the probe hits and returns the pre-baked holder constant. This
-   * is the {@code field_lmf} row's ADR-0006 Phase B counterpart.
+   * is the {@code field_lmf} row's holder-routed counterpart.
    */
   @Benchmark
   public void field_holder(final Blackhole bh) {
@@ -160,7 +160,7 @@ public class HolderDispatchBenchmark {
     bh.consume(fieldHolderConstant.update(holderRec, String::toUpperCase));
   }
 
-  // ---- Deep-mapping forward (Phase C — backward Iso branch on the source read) ---------------
+  // ---- Deep-mapping forward (backward Iso branch on the source read) --------------------------
 
   /**
    * Forward conversion via {@code Mapper.forward(a)} against an unannotated source/target pair — no

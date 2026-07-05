@@ -142,12 +142,15 @@ class OpticReportTest {
         )
       );
       final var text = report.toString();
+      // Collapse the alignment padding so the in-order mapped row is asserted as one unit (the
+      // arrow may sit any number of pad spaces past the field, but it must be the same row).
+      final var unpadded = text.replaceAll(" {2,}", " ");
       assertTrue(text.contains("Mapped:"), text);
-      assertTrue(text.contains("firstName → givenName"), text);
+      assertTrue(unpadded.contains("✓ firstName → givenName"), text);
       assertTrue(text.contains("Transformations:"), text);
       assertTrue(text.contains("birthDate(String) → LocalDate"), text);
       assertTrue(text.contains("Skipped:"), text);
-      assertTrue(text.contains("(dropped)"), text);
+      assertTrue(text.contains("(ignored)"), text);
     }
 
     @Test
@@ -164,7 +167,7 @@ class OpticReportTest {
         List.of(new Skipped("a", Reason.DROPPED), new Skipped("b", Reason.MISSING_SOURCE))
       );
       final var text = report.toString();
-      assertTrue(text.contains("(dropped)"), text);
+      assertTrue(text.contains("(ignored)"), text);
       assertTrue(text.contains("(missing source)"), text);
     }
 
@@ -183,7 +186,7 @@ class OpticReportTest {
   class Golden {
 
     @Test
-    @DisplayName("a mapping report renders with the source column aligned so every arrow lines up")
+    @DisplayName("a mapping report aligns the left column across every section so all arrows line up")
     void mappingGolden() {
       final var report = new OpticReport(
         List.of(
@@ -193,15 +196,50 @@ class OpticReportTest {
           new Skipped("id", Reason.DROPPED)
         )
       );
+      // The widest left cell is "birthDate(String)" (17), so every marker, field, and → / ( aligns
+      // to that column — across Mapped, Skipped, and Transformations, not just within a section.
       final var expected = String.join(
         "\n",
         "Mapped:",
-        "  ✓ firstName    → givenName",
-        "  ✓ address.city → city",
+        "  ✓ firstName" + " ".repeat(9) + "→ givenName",
+        "  ✓ address.city" + " ".repeat(6) + "→ city",
+        "",
+        "Skipped:",
+        "  • id" + " ".repeat(16) + "(ignored)",
+        "",
+        "Transformations:",
+        "  • birthDate(String) → LocalDate"
+      );
+      assertEquals(expected, report.toString());
+    }
+
+    @Test
+    @DisplayName("a four-section report aligns Mapped, Skipped, Transformations, and Unused sources to one column")
+    void fourSectionGolden() {
+      final var report = new OpticReport(
+        List.of(
+          new Mapped("firstName", "givenName"),
+          new Skipped("id", Reason.DROPPED),
+          new Transformed("birthDate", "birthDate", "String", "LocalDate"),
+          new UnusedSource("legacyId")
+        )
+      );
+      // Section order is fixed (Mapped → Skipped → Transformations → Unused sources); the unused
+      // row
+      // carries no right cell, so it is emitted without trailing padding.
+      final var expected = String.join(
+        "\n",
+        "Mapped:",
+        "  ✓ firstName" + " ".repeat(9) + "→ givenName",
+        "",
+        "Skipped:",
+        "  • id" + " ".repeat(16) + "(ignored)",
+        "",
         "Transformations:",
         "  • birthDate(String) → LocalDate",
-        "Skipped:",
-        "  • id  (dropped)"
+        "",
+        "Unused sources:",
+        "  • legacyId"
       );
       assertEquals(expected, report.toString());
     }
@@ -219,6 +257,17 @@ class OpticReportTest {
         "Focus:    name"
       );
       assertEquals(expected, report.toString());
+    }
+
+    @Test
+    @DisplayName(
+      "a mixed report (mapping rows + hops) separates the section from the hops with a single blank line and no trailing blank"
+    )
+    void mixedReportRender() {
+      // A mapping telescope further navigated (e.g. map(A, B).field(B::x)) yields both Rows and
+      // Hops.
+      final var report = new OpticReport(List.of(new Mapped("a", "a"), new Focus("x")));
+      assertEquals("Mapped:\n  ✓ a → a\n\nFocus:    x", report.toString());
     }
   }
 }

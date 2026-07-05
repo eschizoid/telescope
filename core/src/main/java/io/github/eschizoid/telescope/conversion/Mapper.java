@@ -8,6 +8,8 @@ import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
 import io.github.eschizoid.telescope.introspection.Trace;
 import io.github.eschizoid.telescope.mapping.MapStep;
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -75,6 +77,17 @@ public final class Mapper<A, B> {
   // don't alter the field mapping).
   private final List<OpticNode> explainTrail;
 
+  // Zero-dependency observability via java.base's System.Logger: the structure (explain) is logged
+  // once at DEBUG on construction, and the per-conversion value trace at TRACE on each forward().
+  // Both use lazy Supplier overloads, so nothing renders unless the level is enabled — a single
+  // isLoggable check when off. Named by type pair so one mapper can be enabled from the app's
+  // logging config without touching code (e.g. io.github.eschizoid.telescope.mapper.UserDto.User).
+  // The pair uses simple class names for readable, greppable logger names; two pairs sharing a
+  // simple name across different packages collide onto one logger (no independent level control) —
+  // an accepted trade-off over verbose fully-qualified names for the common distinct-name case.
+  private static final String LOGGER_PREFIX = "io.github.eschizoid.telescope.mapper.";
+  private final Logger logger;
+
   /**
    * <b>Module-internal seam — NOT public API.</b> Construct a mapper directly from an {@link Iso},
    * the source/target classes, and a (possibly empty) patch table keyed by target component
@@ -116,6 +129,13 @@ public final class Mapper<A, B> {
     this.preBackward = preBackward;
     this.postBackward = postBackward;
     this.explainTrail = List.copyOf(explainTrail);
+    this.logger = System.getLogger(LOGGER_PREFIX + sourceClass.getSimpleName() + "." + targetClass.getSimpleName());
+    // Structure once at DEBUG (skip the trail-less lifted shells, which would just log "(empty
+    // optic)"). Guarded so the Supplier isn't built when DEBUG is off.
+    if (!this.explainTrail.isEmpty() && logger.isLoggable(Level.DEBUG)) logger.log(
+      Level.DEBUG,
+      () -> "map " + sourceClass.getSimpleName() + " → " + targetClass.getSimpleName() + "\n" + explain()
+    );
   }
 
   /**
@@ -319,7 +339,15 @@ public final class Mapper<A, B> {
     // both pre and post hooks are skipped.
     if (a1 == null) return null;
     final B b = iso.to(a1);
-    return postForward == null ? b : postForward.apply(a1, b);
+    final B result = postForward == null ? b : postForward.apply(a1, b);
+    // Value trace at TRACE, from the already-computed result (never re-running forward, which would
+    // recurse). Gate with isLoggable BEFORE building the Supplier so the hot path is
+    // allocation-free
+    // when off, and skip trail-less shells (their trace is empty). Both checks are cheap.
+    if (!explainTrail.isEmpty() && logger.isLoggable(Level.TRACE)) logger.log(Level.TRACE, () ->
+      MappingTraces.of(a, result, explainTrail).toString()
+    );
+    return result;
   }
 
   /**

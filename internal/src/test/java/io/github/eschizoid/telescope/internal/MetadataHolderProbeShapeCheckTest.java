@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 
 /**
  * Pins {@link MetadataHolderProbe}'s shape-check error branches AND the bound-constructor payoff
- * (Phase B's main outcome, which the original test exercised only by inspection of {@code
+ * (the holder probe's main outcome, which the original test exercised only by inspection of {@code
  * constantsByName}). Each hand-rolled fixture simulates a specific codegen-out-of-sync scenario; a
  * regression that swallowed or weakened any of these diagnostics would surface here as a failing
  * assertion rather than a cryptic deep-stack-trace at first adopter use.
@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test;
 class MetadataHolderProbeShapeCheckTest {
 
   @Nested
-  @DisplayName("Bound constructor — Phase B's runtime payoff is verified end-to-end")
+  @DisplayName("Bound constructor — the holder probe's runtime payoff is verified end-to-end")
   class BoundConstructor {
 
     @Test
@@ -29,7 +29,7 @@ class MetadataHolderProbeShapeCheckTest {
       "HolderRef.constructor() round-trips a sibling FieldOptics's construct(Function) via LambdaMetafactory"
     )
     void constructorRoundTrip() {
-      // The Phase B contract: probeFor returns a HolderRef whose `constructor` is a cached
+      // The holder-probe contract: probeFor returns a HolderRef whose `constructor` is a cached
       // Function<Function<String, Object>, Object> bound to the codegen-emitted construct(...) via
       // LambdaMetafactory. Existing MetadataHolderProbeTest never invokes constructor() —
       // a regression to per-call reflection (or a null `constructor` field) would not be caught.
@@ -37,7 +37,7 @@ class MetadataHolderProbeShapeCheckTest {
       final var probe = MetadataHolderProbe.probeFor(ProbedRecord.class);
       assertTrue(probe.isPresent(), "ProbedRecord must have a sibling FieldOptics holder");
       final var holder = probe.get();
-      assertNotNull(holder.constructor(), "constructor must be bound — Phase B's main payoff");
+      assertNotNull(holder.constructor(), "constructor must be bound — the holder probe's main payoff");
 
       final Function<String, Object> values = name ->
         switch (name) {
@@ -64,8 +64,9 @@ class MetadataHolderProbeShapeCheckTest {
     @Test
     @DisplayName("Missing constants() method throws IllegalStateException naming the missing method + re-run hint")
     void missingConstantsMethod() {
-      // Real scenario: adopter upgrades the runtime but their build cache still has Phase A
-      // FieldOptics from an older codegen that didn't emit constants(). The diagnostic must be
+      // Real scenario: adopter upgrades the runtime but their build cache still has an older holder
+      // shape — FieldOptics from an older codegen that didn't emit constants(). The diagnostic must
+      // be
       // precise — "missing the required `public static Map<String, Object> constants()` method.
       // Re-run the @Focus / @BeanFocus processor." — so the adopter knows exactly what to do.
       final var ex = assertThrows(IllegalStateException.class, () ->

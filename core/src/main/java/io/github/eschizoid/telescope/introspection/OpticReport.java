@@ -1,12 +1,16 @@
 package io.github.eschizoid.telescope.introspection;
 
+import static java.util.stream.Collectors.joining;
+
 import io.github.eschizoid.telescope.introspection.OpticNode.Hop;
 import io.github.eschizoid.telescope.introspection.OpticNode.Mapped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Skipped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Transformed;
 import io.github.eschizoid.telescope.introspection.OpticNode.UnusedSource;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 /**
  * The result of {@code explain()} — the ordered {@link OpticNode} trail describing what an optic
@@ -69,52 +73,68 @@ public record OpticReport(List<OpticNode> nodes) {
   @Override
   public String toString() {
     if (nodes.isEmpty()) return "(empty optic)";
-    final var out = new StringBuilder();
     final var mapped = mapped();
-    // Left-pad the source column so every → lines up, matching the report's aligned layout.
-    final var fromWidth = mapped
-      .stream()
-      .mapToInt(m -> m.from().length())
-      .max()
-      .orElse(0);
-    renderSection(out, "Mapped", mapped, m -> "  ✓ " + pad(m.from(), fromWidth) + " → " + m.to());
-    renderSection(
-      out,
-      "Transformations",
-      transformations(),
-      t -> "  • " + t.from() + "(" + t.fromType() + ") → " + (t.from().equals(t.to()) ? "" : t.to() + " ") + t.toType()
-    );
     final var skipped = skipped();
-    final var skipWidth = skipped
-      .stream()
-      .mapToInt(s -> s.field().length())
+    final var transformed = transformations();
+    final var unused = unusedSources();
+    // One left-column width shared across every mapping row (not per-section), so the marker,
+    // field, and the → / ( that follows all land in the same column — the whole report reads as a
+    // single aligned table rather than four independently-padded sections. The left cell is the
+    // field for a mapped/skipped/unused row, and "field(Type)" for a transformation.
+    final var leftWidth = Stream.of(
+      mapped.stream().map(Mapped::from),
+      skipped.stream().map(Skipped::field),
+      transformed.stream().map(t -> t.from() + "(" + t.fromType() + ")"),
+      unused.stream().map(UnusedSource::field)
+    )
+      .flatMap(Function.identity())
+      .mapToInt(String::length)
       .max()
       .orElse(0);
-    renderSection(out, "Skipped", skipped, s -> "  • " + pad(s.field(), skipWidth) + "  (" + label(s.reason()) + ")");
-    renderSection(out, "Unused sources", unusedSources(), u -> "  • " + u.field());
+    // Each non-empty part is one block; blocks are joined with a blank line. A block per mapping
+    // section (in read order: what mapped, what was left out and why, what changed type, the unused
+    // source residue) plus one block for the navigation hops. Joining — rather than appending a
+    // trailing blank per section — keeps the spacing correct for a mixed report (a mapping
+    // telescope
+    // further navigated, e.g. map(A, B).field(B::x)), where hops follow the sections.
+    final var blocks = new ArrayList<String>();
+    section(blocks, "Mapped", mapped, m -> row("✓", m.from(), leftWidth, "→ " + m.to()));
+    section(blocks, "Skipped", skipped, s -> row("•", s.field(), leftWidth, "(" + label(s.reason()) + ")"));
+    section(blocks, "Transformations", transformed, t ->
+      row(
+        "•",
+        t.from() + "(" + t.fromType() + ")",
+        leftWidth,
+        "→ " + (t.from().equals(t.to()) ? "" : t.to() + " ") + t.toType()
+      )
+    );
+    section(blocks, "Unused sources", unused, u -> row("•", u.field(), leftWidth, ""));
     // Navigation hops render headingless and un-indented — a path reads as a sequence of steps.
-    for (final var hop : hops()) out.append(renderHop(hop)).append('\n');
-    return out.toString().stripTrailing();
+    final var hops = hops();
+    if (!hops.isEmpty()) blocks.add(hops.stream().map(OpticReport::renderHop).collect(joining("\n")));
+    return String.join("\n\n", blocks);
   }
 
-  private static String pad(final String s, final int width) {
-    return s.length() >= width ? s : s + " ".repeat(width - s.length());
+  // A mapping row: two-space indent, marker, the left cell padded to the shared column, then the
+  // right cell. A row with no right cell (an unused source) is emitted without trailing padding.
+  private static String row(final String marker, final String left, final int leftWidth, final String right) {
+    final var head = "  " + marker + " " + left;
+    return right.isEmpty() ? head : head + " ".repeat(leftWidth - left.length() + 1) + right;
   }
 
-  private static <T> void renderSection(
-    final StringBuilder out,
+  private static <T> void section(
+    final List<String> blocks,
     final String heading,
     final List<T> rows,
     final Function<T, String> render
   ) {
     if (rows.isEmpty()) return;
-    out.append(heading).append(":\n");
-    for (final var row : rows) out.append(render.apply(row)).append('\n');
+    blocks.add(heading + ":\n" + rows.stream().map(render).collect(joining("\n")));
   }
 
   private static String label(final OpticNode.Reason reason) {
     return switch (reason) {
-      case DROPPED -> "dropped";
+      case DROPPED -> "ignored";
       case MISSING_SOURCE -> "missing source";
     };
   }

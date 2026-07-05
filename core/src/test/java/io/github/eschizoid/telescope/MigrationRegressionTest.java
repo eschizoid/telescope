@@ -61,8 +61,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * Regressions for the migration-feedback bugs (see {@code docs/migration-feedback.md}). One nested
- * class per bug — keeps the test names traceable back to the feedback entries.
+ * Regressions for adopter-reported mapping bugs. One nested class per bug — keeps the test names
+ * traceable back to each reported issue.
  */
 class MigrationRegressionTest {
 
@@ -117,7 +117,7 @@ class MigrationRegressionTest {
     @Test
     @DisplayName("Telescope.mapper(Order, OrderDto) constructs without NPE when boolean accessors are present")
     void mapperConstructionDoesNotNpeOnBooleanAccessors() {
-      // The migration feedback reports any class with a boolean primitive field is unusable with
+      // Any class with a boolean primitive field was reported unusable with
       // Telescope.mapper() / mapperForward() because Beans.propertyOf(null) NPEs in the bean
       // auto-discovery path. The unit-level fix lives in Beans; this test pins the end-to-end
       // contract from the public API surface.

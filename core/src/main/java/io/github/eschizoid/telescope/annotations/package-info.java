@@ -5,8 +5,8 @@
  * <ul>
  *   <li>{@link io.github.eschizoid.telescope.annotations.Focus} — applied to a record. The {@code
  *       :codegen} processor emits a sibling {@code <Record>Path<R>} navigator plus a {@code
- *       <Record>Telescope} metadata holder (ADR-0006), eliminating the per-field reflection cost of
- *       {@code .field(...)}.
+ *       <Record>Telescope} metadata holder, eliminating the per-field reflection cost of {@code
+ *       .field(...)}.
  *   <li>{@link io.github.eschizoid.telescope.annotations.BeanFocus} — the POJO counterpart of
  *       {@code @Focus}. Drives generation of {@code <Bean>Path<R>} navigators for getter/setter
  *       beans (including Lombok {@code @Data} / {@code @Value} / {@code @Builder} classes via the

@@ -33,7 +33,7 @@ MapStruct can't give you, and a strictly larger surface. [See it row by row →]
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-  implementation("io.github.eschizoid:telescope-core:1.0.5")
+  implementation("io.github.eschizoid:telescope-core:1.1.1")
 }
 ```
 
@@ -42,7 +42,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.0.5</version>
+  <version>1.1.1</version>
 </dependency>
 ```
 
@@ -501,8 +501,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:1.0.5")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")
+    implementation("io.github.eschizoid:telescope-core:1.1.1")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.1")
 }
 ```
 
@@ -512,7 +512,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.0.5</version>
+  <version>1.1.1</version>
 </dependency>
 
 <build>
@@ -525,7 +525,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>1.0.5</version>
+            <version>1.1.1</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
@@ -550,7 +550,7 @@ first**. Maven respects the declaration order of `<annotationProcessorPaths>`; G
   <path>
     <groupId>io.github.eschizoid</groupId>
     <artifactId>telescope-lombok</artifactId>
-    <version>1.0.5</version>
+    <version>1.1.1</version>
   </path>
 </annotationProcessorPaths>
 ```
@@ -558,8 +558,8 @@ first**. Maven respects the declaration order of `<annotationProcessorPaths>`; G
 ```kotlin
 dependencies {
   annotationProcessor("org.projectlombok:lombok:1.18.30")
-  annotationProcessor("io.github.eschizoid:telescope-lombok:1.0.5")
-  annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")
+  annotationProcessor("io.github.eschizoid:telescope-lombok:1.1.1")
+  annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.1")
 }
 ```
 
@@ -1231,6 +1231,82 @@ field-injection fallback) uses `setAccessible`, so under JPMS the POJO's package
 
 ---
 
+## Introspection — see what a mapper does (`explain()` / `trace()`)
+
+MapStruct's mapping is a black box — the generated code is the only record of what got mapped, dropped, or converted.
+telescope makes it a first-class value. Every `Mapper` / `ForwardMapper`, and every `Telescope` navigator, answers two
+questions:
+
+- **`explain()`** — the _static_ structure: which fields correspond, which were skipped (and why), which change type. No
+  input needed.
+- **`trace(input)`** — the same rows with the _values_ for one conversion filled in.
+
+```java
+final Mapper<UserDto, User> mapper = Telescope.mapper(UserDto.class, User.class,
+    Mapping.to(UserDto::firstName, User::givenName),
+    Mapping.to(UserDto::birthDate, User::birthDate, LocalDate::parse, LocalDate::toString),
+    Mapping.drop(UserDto::id));
+
+System.out.println(mapper.explain());
+// Mapped:
+//   ✓ firstName         → givenName
+//
+// Skipped:
+//   • id                (ignored)
+//
+// Transformations:
+//   • birthDate(String) → LocalDate
+
+System.out.println(mapper.trace(new UserDto("Ada", "2020-01-02", 7L)));
+//   ✓ firstName  "Ada"         → givenName "Ada"
+//   • birthDate  "2020-01-02"  → birthDate LocalDate[2020-01-02]
+//   • id                       → (ignored)
+```
+
+The left column is aligned across every section (the widest cell sets the width), so markers, fields, and each `→` line
+up as one table.
+
+**The render is a view; the data is the API.** `explain()` returns an `OpticReport` you assert on directly — pull a
+typed slice instead of scraping text:
+
+```java
+// completeness test — a strict mapper skips nothing by construction
+assertThat(mapper.explain().skipped()).isEmpty();
+assertThat(mapper.explain().mapped()).contains(new Mapped("firstName", "givenName"));
+```
+
+Slices: `mapped()`, `transformations()`, `skipped()`, `unusedSources()`, and `hops()` (for a navigator's path).
+
+### Auto-logging — flip a level, see every mapping
+
+You don't have to call `explain()` / `trace()` by hand. Each mapper logs its own introspection through
+`java.lang.System.Logger` (java.base — zero dependency, routes to whatever backend your app already runs):
+
+- **`DEBUG`** — `explain()` once, when the mapper is built.
+- **`TRACE`** — `trace(input)` on every `forward()`.
+
+Loggers are named by type pair, so you enable one mapper or the whole library from your existing config — no code
+change. In Spring Boot `application.properties`:
+
+```properties
+logging.level.io.github.eschizoid.telescope.mapper.UserDto.User=TRACE   # one mapper, values per conversion
+logging.level.io.github.eschizoid.telescope.mapper=DEBUG                 # every mapper's structure at build
+```
+
+or directly in `logback.xml`:
+
+```xml
+<logger name="io.github.eschizoid.telescope.mapper.UserDto.User" level="TRACE"/>
+<logger name="io.github.eschizoid.telescope.mapper" level="DEBUG"/>
+```
+
+The log calls are always present and gated purely by level, so they cost nothing when off (guarded before the message is
+ever built). `<Source>` / `<Target>` are simple class names. One backend nuance: through Spring Boot's default
+`jul-to-slf4j` bridge both lines render at `DEBUG` (the bridge maps `System.Logger.TRACE` onto SLF4J `DEBUG`); the level
+threshold still separates them — `DEBUG` shows structure, `TRACE` adds the per-conversion values.
+
+---
+
 ## Compile-time, reflection-free navigation (`@Focus` / `@BeanFocus`)
 
 The reflection-based `Telescope.of(User.class).field(User::name)` path resolves the field name at runtime — fast enough
@@ -1323,8 +1399,8 @@ goes through `.then(SourceBridge.BRIDGE.reverse())` for now — forward only at 
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope-core:1.0.5")
-annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")
+implementation("io.github.eschizoid:telescope-core:1.1.1")
+annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.1")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
