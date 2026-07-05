@@ -22,7 +22,7 @@ package io.github.eschizoid.telescope.introspection;
  * what the optic actually does.
  */
 public sealed interface OpticNode {
-  /** Why a target field was not populated by the mapping. */
+  /** Why a field was left out of a clean mapping. See {@link Skipped} for which side each names. */
   enum Reason {
     /** An explicit {@code Mapping.drop(src)} row removed a source field from the mapping. */
     DROPPED,

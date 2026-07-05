@@ -4,9 +4,9 @@ import java.util.List;
 
 /**
  * The result of {@code trace(input)} — the optic's structure executed against a concrete value,
- * with each step's actual value filled in and many-focus steps ({@code each} / {@code eachValue})
- * expanded into per-element subtrees. Where {@code explain()} is the static skeleton, {@code trace}
- * is that skeleton with a value column and branch expansion.
+ * with each step's actual value filled in and many-focus steps ({@code each} / {@code eachValue} /
+ * {@code whenPresent}) expanded into per-element subtrees. Where {@code explain()} is the static
+ * skeleton, {@code trace} is that skeleton with a value column and branch expansion.
  *
  * <p>Data first: walk {@link #roots()} and the {@link Node#children()} to assert on the shape; the
  * {@link #toString()} render draws the {@code ├ / └} tree as a view.
