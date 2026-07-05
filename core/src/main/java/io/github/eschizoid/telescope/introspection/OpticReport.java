@@ -68,7 +68,7 @@ public record OpticReport(List<OpticNode> nodes) {
 
   @Override
   public String toString() {
-    if (nodes.isEmpty()) return "(no mapping)";
+    if (nodes.isEmpty()) return "(empty optic)";
     final var out = new StringBuilder();
     final var mapped = mapped();
     // Left-pad the source column so every → lines up, matching the report's aligned layout.

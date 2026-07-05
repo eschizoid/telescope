@@ -98,9 +98,10 @@ class OpticReportTest {
     }
 
     @Test
-    @DisplayName("toString names the no-mapping case rather than rendering blank sections")
+    @DisplayName("toString names the empty-optic case rather than rendering blank sections")
     void emptyRender() {
-      assertEquals("(no mapping)", report.toString());
+      // Neutral label — the report serves navigation and mapping, so it is not "(no mapping)".
+      assertEquals("(empty optic)", report.toString());
     }
   }
 
