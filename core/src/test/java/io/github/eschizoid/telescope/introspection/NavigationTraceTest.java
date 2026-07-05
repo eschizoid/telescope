@@ -275,7 +275,8 @@ class NavigationTraceTest {
     @Test
     @DisplayName("a bare non-Collection Iterable reports an unknown remainder, walked only to the cap")
     void bareIterableUnknownRemainder() {
-      // An Iterable that is not a Collection, so it has no O(1) size() — trace must not count it all.
+      // An Iterable that is not a Collection, so it has no O(1) size() — trace must not count it
+      // all.
       final Iterable<String> items = () -> List.of("a", "b", "c", "d", "e").iterator();
       final var trace = Telescope.of(Feed.class).each(Feed::items).trace(new Feed(items), new TraceLimits(2, 20));
       final var root = trace.roots().get(0);
