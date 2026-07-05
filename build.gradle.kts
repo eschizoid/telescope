@@ -1,4 +1,7 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
+import com.diffplug.gradle.spotless.SpotlessTask
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
 import org.jreleaser.model.Active.ALWAYS
 import org.jreleaser.model.Active.NEVER
 import pl.allegro.tech.build.axion.release.VerifyReleaseTask
@@ -50,9 +53,25 @@ scmVersion {
     )
 }
 
+// Spotless's formatter/npm provisioning is not parallel-safe from a cold cache: concurrent provisions
+// across modules corrupt the shared google-java-format worker classpath and the prettier node_modules,
+// surfacing as sporadic NoClassDefFoundError / NoSuchFileException on `--no-build-cache` cold builds
+// (CI never hits it because `gradle/actions/setup-gradle` restores the caches, so nothing provisions
+// cold). A single-permit shared build service serializes the Spotless tasks so only one provisions at
+// a time; warm/incremental builds — where the caches already exist — are unaffected.
+abstract class SpotlessProvisionLock : BuildService<BuildServiceParameters.None>
+
+val spotlessProvisionLock =
+    gradle.sharedServices.registerIfAbsent("spotlessProvisionLock", SpotlessProvisionLock::class.java) {
+        maxParallelUsages.set(1)
+    }
+
 allprojects {
     group = "io.github.eschizoid"
     version = rootProject.scmVersion.version
+    tasks.withType<SpotlessTask>().configureEach {
+        usesService(spotlessProvisionLock)
+    }
 }
 
 // The snapshot-dependency scan resolves every subproject's configurations from the root
@@ -90,7 +109,7 @@ spotless {
                 "prettier" to libs.versions.prettier.get(),
                 "prettier-plugin-java" to libs.versions.prettierPluginJava.get(),
             ),
-        ).config(
+        ).npmInstallCache().config(
             mapOf(
                 "plugins" to listOf("prettier-plugin-java"),
                 "printWidth" to 120,
@@ -118,7 +137,7 @@ subprojects {
                     "prettier" to libs.versions.prettier.get(),
                     "prettier-plugin-java" to libs.versions.prettierPluginJava.get(),
                 ),
-            ).config(
+            ).npmInstallCache().config(
                 mapOf(
                     "plugins" to listOf("prettier-plugin-java"),
                     "parser" to "java",
