@@ -38,11 +38,13 @@ sub-interfaces so the navigation/mapping distinction is a type invariant, not a 
   `Reason ∈ { DROPPED, MISSING_SOURCE }`, and `UnusedSource(field)`.
 
 `Mapped.from == to` is a same-name auto pair; distinct names are a rename; nested pairs carry a dotted path in both.
-`DROPPED` is an explicit `Mapping.drop(src)` row and `MISSING_SOURCE` is a target field with no source (an
-`unmatchedTargets` entry — lenient paths only, see below); both name a **target** field, so they share `Skipped`. A
-source field with no consumer (an `unmatchedSources` entry) names a **source** field, so it is a distinct `UnusedSource`
-row rather than a third `Skipped` reason whose `field` slot would silently switch worlds. `OpticReport` exposes each as
-its own typed slice (`skipped()` / `unusedSources()`); `hops()` returns the `Hop` nodes by a positive exhaustive filter.
+`Skipped` carries the two _reasoned_ left-outs, each tagged by its `Reason`: `DROPPED` is an explicit
+`Mapping.drop(src)` row (its `field` is the dropped **source** field) and `MISSING_SOURCE` is a target field with no
+source (an `unmatchedTargets` entry — lenient paths only, see below; its `field` is the unpopulated **target** field).
+The side `Skipped.field` names therefore follows the `Reason`, which is documented on the record. A source field with no
+consumer (an `unmatchedSources` entry) is the reason-less lenient residue, so it is a distinct `UnusedSource` row rather
+than a third `Skipped` reason. `OpticReport` exposes each as its own typed slice (`skipped()` / `unusedSources()`);
+`hops()` returns the `Hop` nodes by a positive exhaustive filter.
 
 **2. `explain()` → the static structure.** On every optic-carrying type. Returns the `OpticNode` trail — for a mapper,
 the field rows; for a navigator, the hop path. Derived from the **same decisions the optic itself uses**: top-level

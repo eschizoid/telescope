@@ -47,7 +47,11 @@ public record OpticReport(List<OpticNode> nodes) {
     return nodes.stream().filter(Transformed.class::isInstance).map(Transformed.class::cast).toList();
   }
 
-  /** The unpopulated target fields with their reasons, in trail order. */
+  /**
+   * The fields left out of a clean correspondence, with their reasons, in trail order. Per {@link
+   * Skipped}, the field is the dropped source field for {@code DROPPED} and the unpopulated target
+   * field for {@code MISSING_SOURCE}.
+   */
   public List<Skipped> skipped() {
     return nodes.stream().filter(Skipped.class::isInstance).map(Skipped.class::cast).toList();
   }

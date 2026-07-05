@@ -24,7 +24,7 @@ package io.github.eschizoid.telescope.introspection;
 public sealed interface OpticNode {
   /** Why a target field was not populated by the mapping. */
   enum Reason {
-    /** An explicit {@code Mapping.drop(src)} row removed the field. */
+    /** An explicit {@code Mapping.drop(src)} row removed a source field from the mapping. */
     DROPPED,
     /**
      * A target field with no same-name source and no row — lenient / {@code fromMap} paths only.
@@ -84,9 +84,11 @@ public sealed interface OpticNode {
   record Transformed(String from, String to, String fromType, String toType) implements Row {}
 
   /**
-   * A target field the mapping does not populate, with the reason it was left out ({@link
-   * Reason#DROPPED} or {@link Reason#MISSING_SOURCE}). {@code field} always names a <em>target</em>
-   * field; a source field with no consumer is an {@link UnusedSource} instead.
+   * A field the mapping leaves out of a clean correspondence, with the reason. The side {@code
+   * field} names depends on the reason: {@link Reason#DROPPED} names the explicitly-dropped
+   * <em>source</em> field ({@code Mapping.drop(src)}), while {@link Reason#MISSING_SOURCE} names
+   * the unpopulated <em>target</em> field. A source field with no consumer (the lenient residue) is
+   * an {@link UnusedSource} instead.
    */
   record Skipped(String field, Reason reason) implements Row {}
 

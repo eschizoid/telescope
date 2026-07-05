@@ -36,6 +36,7 @@ import io.github.eschizoid.telescope.runtime.instances.OptionalK;
 import io.github.eschizoid.telescope.runtime.instances.ValidatedK;
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -174,12 +175,13 @@ public sealed class Telescope<
     this.trail = List.copyOf(trail);
   }
 
-  /** Append one hop node to this Telescope's trail, returning the extended list (immutable). */
+  // Append one hop node to this Telescope's trail. Returns a plain list — the constructor makes the
+  // single defensive immutable copy, so pre-copying here would copy the trail twice per hop.
   private List<OpticNode> plus(final OpticNode node) {
     final var extended = new ArrayList<OpticNode>(trail.size() + 1);
     extended.addAll(trail);
     extended.add(node);
-    return List.copyOf(extended);
+    return extended;
   }
 
   /**
@@ -1176,6 +1178,7 @@ public sealed class Telescope<
     // none (e.g. composing a root Telescope.of(...) with a sub-path), inherit from next. The
     // explain() trail concatenates both sides' hops in order, so a composed path describes the
     // whole route.
+    // The constructor makes the single defensive immutable copy, so pass the plain joined list.
     final var joined = new ArrayList<OpticNode>(trail.size() + next.trail.size());
     joined.addAll(trail);
     joined.addAll(next.trail);
@@ -1184,7 +1187,7 @@ public sealed class Telescope<
       fieldOptics,
       chain,
       firstHopName != null ? firstHopName : next.firstHopName,
-      List.copyOf(joined)
+      joined
     );
   }
 
@@ -1298,19 +1301,20 @@ public sealed class Telescope<
       // empty
       // collection. Honours the trace() javadoc caveat on every hop kind, not just Focus.
       if (container == UNREADABLE) return Trace.Node.leaf("each " + t.path() + " → (n/a)");
-      final var elements = elementsOf(container);
+      // Materialize only up to maxBreadth elements — a sized container reports its total via size()
+      // without copying every element, so the breadth cap bounds memory even for a huge collection.
+      final var elements = boundedElementsOf(container, limits.maxBreadth());
+      final var shown = elements.shown();
       final var children = new ArrayList<Trace.Node>();
-      for (var e = 0; e < elements.size(); e++) {
-        if (e >= limits.maxBreadth()) {
-          children.add(Trace.Node.cut("… (+" + (elements.size() - e) + " more)"));
-          break;
-        }
-        final var elem = elements.get(e);
+      for (final var elem : shown) {
         if (last) children.add(Trace.Node.leaf(renderValue(elem)));
         else children.add(
           new Trace.Node(renderValue(elem), List.of(traceHop(hops, i + 1, elem, limits, depth + 1)), false)
         );
       }
+      if (elements.total() > shown.size()) children.add(
+        Trace.Node.cut("… (+" + (elements.total() - shown.size()) + " more)")
+      );
       return new Trace.Node("each " + t.path(), children, false);
     }
     // Narrow / Filter / Bridge are structural annotations: the subtype check, predicate, and bridge
@@ -1365,17 +1369,42 @@ public sealed class Telescope<
     }
   }
 
-  private static List<Object> elementsOf(final Object container) {
-    if (container == null || container == UNREADABLE) return List.of();
-    if (container instanceof Optional<?> o) return o.isPresent() ? List.of(o.get()) : List.of();
-    if (container instanceof Map<?, ?> m) return List.copyOf(m.values());
+  // The first `cap` elements of a container plus its total count — so a fan-out renders the capped
+  // slice without materializing a large collection. A Collection/Map reports size() in O(1) and
+  // only
+  // the shown slice is copied; a bare Iterable is walked once, storing only the cap (bounded
+  // memory)
+  // while still counting the total so the "(+K more)" marker stays exact.
+  private static Elements boundedElementsOf(final Object container, final int cap) {
+    if (container == null || container == UNREADABLE) return new Elements(List.of(), 0);
+    if (container instanceof Optional<?> o) return o.isPresent()
+      ? new Elements(List.of(o.get()), 1)
+      : new Elements(List.of(), 0);
+    if (container instanceof Collection<?> c) return new Elements(firstN(c, cap), c.size());
+    if (container instanceof Map<?, ?> m) return new Elements(firstN(m.values(), cap), m.size());
     if (container instanceof Iterable<?> it) {
-      final var out = new ArrayList<Object>();
-      it.forEach(out::add);
-      return out;
+      final var shown = new ArrayList<Object>();
+      var total = 0;
+      for (final var e : it) {
+        if (shown.size() < cap) shown.add(e);
+        total++;
+      }
+      return new Elements(shown, total);
     }
-    return List.of(container);
+    return new Elements(List.of(container), 1);
   }
+
+  private static List<Object> firstN(final Iterable<?> it, final int cap) {
+    final var out = new ArrayList<Object>();
+    for (final var e : it) {
+      if (out.size() >= cap) break;
+      out.add(e);
+    }
+    return out;
+  }
+
+  /** The shown (capped) elements of a fan-out plus the container's total element count. */
+  private record Elements(List<Object> shown, int total) {}
 
   private static String renderValue(final Object v) {
     if (v == UNREADABLE) return "(n/a)";

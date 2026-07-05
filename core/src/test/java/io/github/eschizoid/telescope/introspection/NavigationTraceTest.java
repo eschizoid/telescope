@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -247,6 +248,19 @@ class NavigationTraceTest {
       final var trace = Telescope.of(Post.class).each(Post::tags).trace(post, TraceLimits.none());
       assertEquals(12, trace.roots().get(0).children().size(), trace::toString);
       assertFalse(trace.toString().contains("more)"), trace::toString);
+    }
+
+    @Test
+    @DisplayName("a large collection under a small cap renders the cap plus an exact remaining count")
+    void largeCollectionExactRemainder() {
+      final var tags = new ArrayList<String>();
+      for (var i = 0; i < 1000; i++) tags.add("t" + i);
+      final var trace = Telescope.of(Post.class).each(Post::tags).trace(new Post("Big", tags), new TraceLimits(3, 20));
+      final var root = trace.roots().get(0);
+      // 3 shown + 1 marker; the marker reports the exact remainder even though only the cap was
+      // materialized.
+      assertEquals(4, root.children().size(), trace::toString);
+      assertTrue(root.children().get(3).label().contains("(+997 more)"), root.children().get(3).label());
     }
 
     @Test
