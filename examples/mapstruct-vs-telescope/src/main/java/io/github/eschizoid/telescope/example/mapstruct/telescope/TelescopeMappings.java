@@ -38,7 +38,7 @@ public final class TelescopeMappings {
    * the Act 1 rename as first-class data: {@code ✓ email → contactEmail}. Same {@code to(...)}
    * override as {@code ORDER_MAPPER}'s nested customer hop; here it is the whole mapper, so the
    * correspondence is a top-level row you can assert on. MapStruct's equivalent decision lives only
-   * in generated {@code CustomerMapperImpl.java}.
+   * in generated {@code OrderMapStructMapperImpl.java}.
    */
   public static final Mapper<Customer, CustomerDto> CUSTOMER_MAPPER = Telescope.mapper(
     Customer.class,

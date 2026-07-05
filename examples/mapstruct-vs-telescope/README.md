@@ -141,12 +141,17 @@ TelescopeMappings.ORDER_MAPPER.trace(order);
 ```
 
 **Auto-logging — flip a level, no code change.** telescope logs its own `explain()` at `DEBUG` and every conversion's
-`trace()` at `TRACE` through `java.lang.System.Logger` (java.base, zero dependency). Name the type-pair logger and every
-mapping narrates itself:
+`trace()` at `TRACE` through `java.lang.System.Logger` (java.base, zero dependency). With the JDK's default backend it
+routes through `java.util.logging` (`TRACE` maps to JUL `FINER`); name the type-pair logger and every mapping narrates
+itself:
 
-```xml
-<logger name="io.github.eschizoid.telescope.mapper.Order.OrderDto" level="TRACE"/>
+```properties
+# logging.properties — the zero-dependency JDK default
+io.github.eschizoid.telescope.mapper.Order.OrderDto.level = FINER
 ```
+
+The same facade reaches any backend through its own level syntax — Logback
+(`<logger name="…mapper.Order.OrderDto" level="TRACE"/>`) or Spring Boot (`logging.level.…=TRACE`).
 
 MapStruct's generated `OrderMapStructMapperImpl` is opaque: to see what it mapped you read generated source; to see
 values at runtime you instrument it by hand. telescope makes both first-class — structure you can assert on, values you

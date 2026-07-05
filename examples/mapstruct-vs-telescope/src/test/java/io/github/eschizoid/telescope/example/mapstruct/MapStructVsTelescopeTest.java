@@ -79,6 +79,10 @@ class MapStructVsTelescopeTest {
       dto.getRegion(),
       "default unmappedTargetPolicy=WARN compiles and nulls an unmapped target (a source rename is the separate case — a compile error)"
     );
+    log(
+      "Unmapped-target footgun — MapStruct's default policy nulls a target with no source:",
+      "contactEmail = " + dto.getContactEmail() + "  |  region = " + dto.getRegion() + "  (silently null)"
+    );
   }
 
   @Test
@@ -96,6 +100,10 @@ class MapStructVsTelescopeTest {
       order.lines().get(0).price(),
       "the original Order is unchanged — immutable update"
     );
+    log(
+      "Act 2 — deep immutable update rebuilds the graph, original untouched:",
+      "before: " + order.lines() + "\nafter:  " + taxed.lines()
+    );
   }
 
   @Test
@@ -104,7 +112,7 @@ class MapStructVsTelescopeTest {
     final var order = sampleOrder();
 
     // Static structure — no input needed. The Act 1 rename is a first-class row here, not a string
-    // buried in generated CustomerMapperImpl.java.
+    // buried in generated OrderMapStructMapperImpl.java.
     final var report = TelescopeMappings.CUSTOMER_MAPPER.explain();
     assertFalse(report.isEmpty(), "the mapper describes its own structure");
     assertTrue(
