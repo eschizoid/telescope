@@ -29,12 +29,13 @@ class MappingTelescopeIntrospectionTest {
   }
 
   @Test
-  @DisplayName("map(...).trace(input) renders the mapping rows rather than throwing or fanning out")
-  void mapTraceRendersRows() {
+  @DisplayName("map(...).trace(input) renders the value column — source value → target value per row")
+  void mapTraceRendersValues() {
     final var trace = Telescope.map(Source.class, Target.class).trace(new Source("Ada", "Paris"));
     final var text = trace.toString();
-    // A mapping telescope is not a navigation path — its trace is the flat row render, not a tree.
-    assertTrue(text.contains("name"), text);
-    assertTrue(text.contains("city"), text);
+    // A mapping telescope's trace shows the same value column as Mapper.trace, not just node names.
+    assertTrue(text.contains("name") && text.contains("\"Ada\""), text);
+    assertTrue(text.contains("city") && text.contains("\"Paris\""), text);
+    assertTrue(text.contains("→"), text);
   }
 }

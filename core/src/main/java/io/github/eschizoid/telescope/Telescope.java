@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.conversion.MapperBuilder;
+import io.github.eschizoid.telescope.conversion.MappingTraces;
 import io.github.eschizoid.telescope.effects.Either;
 import io.github.eschizoid.telescope.effects.Validated;
 import io.github.eschizoid.telescope.internal.Beans;
@@ -37,6 +38,7 @@ import io.github.eschizoid.telescope.runtime.instances.ValidatedK;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -172,16 +174,20 @@ public sealed class Telescope<
     this.fieldOptics = fieldOptics;
     this.chain = chain;
     this.firstHopName = firstHopName;
-    this.trail = List.copyOf(trail);
+    // Stored as-is — every internal caller passes an unshared, already-immutable list (an empty
+    // List.of(), a fresh unmodifiable list from plus() / then(), or a defensively-copied one from
+    // mapped()). Copying here too would copy the trail a second time on every hop.
+    this.trail = trail;
   }
 
-  // Append one hop node to this Telescope's trail. Returns a plain list — the constructor makes the
-  // single defensive immutable copy, so pre-copying here would copy the trail twice per hop.
+  // Append one hop node to this Telescope's trail as a fresh immutable list — one copy of the
+  // existing trail, wrapped as an unmodifiable view the constructor stores directly (no second
+  // copy). The fresh ArrayList is never shared, so the view cannot be mutated behind our back.
   private List<OpticNode> plus(final OpticNode node) {
     final var extended = new ArrayList<OpticNode>(trail.size() + 1);
     extended.addAll(trail);
     extended.add(node);
-    return extended;
+    return Collections.unmodifiableList(extended);
   }
 
   /**
@@ -238,7 +244,9 @@ public sealed class Telescope<
    * DeepMap} calls this.
    */
   static <S, A> Telescope<S, A> mapped(final Iso<S, A> iso, final List<OpticNode> trail) {
-    return new Telescope<>(iso, RecordFieldOptics.INSTANCE, Function.identity(), null, trail);
+    // The one boundary that takes a caller-owned list — copy it immutable so the constructor can
+    // store every trail as-is.
+    return new Telescope<>(iso, RecordFieldOptics.INSTANCE, Function.identity(), null, List.copyOf(trail));
   }
 
   /**
@@ -1178,7 +1186,7 @@ public sealed class Telescope<
     // none (e.g. composing a root Telescope.of(...) with a sub-path), inherit from next. The
     // explain() trail concatenates both sides' hops in order, so a composed path describes the
     // whole route.
-    // The constructor makes the single defensive immutable copy, so pass the plain joined list.
+    // A fresh unshared list the constructor stores directly — one copy for the whole composition.
     final var joined = new ArrayList<OpticNode>(trail.size() + next.trail.size());
     joined.addAll(trail);
     joined.addAll(next.trail);
@@ -1187,7 +1195,7 @@ public sealed class Telescope<
       fieldOptics,
       chain,
       firstHopName != null ? firstHopName : next.firstHopName,
-      joined
+      Collections.unmodifiableList(joined)
     );
   }
 
@@ -1265,18 +1273,16 @@ public sealed class Telescope<
     // static rows so trace() on a mapping telescope is coherent rather than a fallback. Gate on the
     // Row supertype so a navigation path that LEADS with as / filter / a codegen bridge (all Hops)
     // still executes rather than mis-routing to the row render.
-    if (trail.get(0) instanceof OpticNode.Row) return mappingRowsTrace();
+    if (trail.get(0) instanceof OpticNode.Row) return mappingRowsTrace(input);
     return new Trace(List.of(traceHop(trail, 0, input, limits, 0)));
   }
 
-  private Trace mappingRowsTrace() {
-    return new Trace(
-      explain()
-        .nodes()
-        .stream()
-        .map(n -> Trace.Node.leaf(String.valueOf(n)))
-        .toList()
-    );
+  // A mapping-built Telescope (Telescope.map) carries field Rows; its trace shows the same value
+  // column as Mapper.trace — run the conversion forward to get the output, then render each row's
+  // source value → target value. Shares the renderer so the two surfaces can't drift.
+  private Trace mappingRowsTrace(final S input) {
+    final var output = find(input).orElse(null);
+    return MappingTraces.of(input, output, trail);
   }
 
   private static Trace.Node traceHop(

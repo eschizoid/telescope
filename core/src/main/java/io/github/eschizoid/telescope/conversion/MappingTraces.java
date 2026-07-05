@@ -12,7 +12,7 @@ import java.util.List;
  * {@link ForwardMapper}. A mapping trace is flat (one row per field correspondence, no fan-out) —
  * the tree shape is a navigation concern.
  */
-final class MappingTraces {
+public final class MappingTraces {
 
   private MappingTraces() {}
 
@@ -21,7 +21,7 @@ final class MappingTraces {
    * @param output the mapped result ({@code forward(input)})
    * @param trail the resolved {@link OpticNode} rows (the mapper's {@code explain()} trail)
    */
-  static Trace of(final Object input, final Object output, final List<OpticNode> trail) {
+  public static Trace of(final Object input, final Object output, final List<OpticNode> trail) {
     // Two passes: gather the columns, then pad so every arrow lines up, matching explain()'s
     // layout.
     final var rows = new ArrayList<Row>();
