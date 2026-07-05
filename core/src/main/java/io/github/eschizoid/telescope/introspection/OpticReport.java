@@ -1,10 +1,13 @@
 package io.github.eschizoid.telescope.introspection;
 
+import static java.util.stream.Collectors.joining;
+
 import io.github.eschizoid.telescope.introspection.OpticNode.Hop;
 import io.github.eschizoid.telescope.introspection.OpticNode.Mapped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Skipped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Transformed;
 import io.github.eschizoid.telescope.introspection.OpticNode.UnusedSource;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 
@@ -69,7 +72,6 @@ public record OpticReport(List<OpticNode> nodes) {
   @Override
   public String toString() {
     if (nodes.isEmpty()) return "(empty optic)";
-    final var out = new StringBuilder();
     final var mapped = mapped();
     // Left-pad the source column so every → lines up, matching the report's aligned layout.
     final var fromWidth = mapped
@@ -83,41 +85,40 @@ public record OpticReport(List<OpticNode> nodes) {
       .mapToInt(s -> s.field().length())
       .max()
       .orElse(0);
-    // Sections in read order: what mapped, what was left out (with why), what changed type, and the
-    // unused source residue. A blank line separates them.
-    renderSection(out, "Mapped", mapped, m -> "  ✓ " + pad(m.from(), fromWidth) + " → " + m.to());
-    renderSection(out, "Skipped", skipped, s -> "  • " + pad(s.field(), skipWidth) + " (" + label(s.reason()) + ")");
-    renderSection(
-      out,
+    // Each non-empty part is one block; blocks are joined with a blank line. A block per mapping
+    // section (in read order: what mapped, what was left out and why, what changed type, the unused
+    // source residue) plus one block for the navigation hops. Joining — rather than appending a
+    // trailing blank per section — keeps the spacing correct for a mixed report (a mapping
+    // telescope
+    // further navigated, e.g. map(A, B).field(B::x)), where hops follow the sections.
+    final var blocks = new ArrayList<String>();
+    section(blocks, "Mapped", mapped, m -> "  ✓ " + pad(m.from(), fromWidth) + " → " + m.to());
+    section(blocks, "Skipped", skipped, s -> "  • " + pad(s.field(), skipWidth) + " (" + label(s.reason()) + ")");
+    section(
+      blocks,
       "Transformations",
       transformations(),
       t -> "  • " + t.from() + "(" + t.fromType() + ") → " + (t.from().equals(t.to()) ? "" : t.to() + " ") + t.toType()
     );
-    renderSection(out, "Unused sources", unusedSources(), u -> "  • " + u.field());
+    section(blocks, "Unused sources", unusedSources(), u -> "  • " + u.field());
     // Navigation hops render headingless and un-indented — a path reads as a sequence of steps.
-    for (final var hop : hops()) out.append(renderHop(hop)).append('\n');
-    return out.toString().stripTrailing();
+    final var hops = hops();
+    if (!hops.isEmpty()) blocks.add(hops.stream().map(OpticReport::renderHop).collect(joining("\n")));
+    return String.join("\n\n", blocks);
   }
 
   private static String pad(final String s, final int width) {
     return s.length() >= width ? s : s + " ".repeat(width - s.length());
   }
 
-  private static <T> void renderSection(
-    final StringBuilder out,
+  private static <T> void section(
+    final List<String> blocks,
     final String heading,
     final List<T> rows,
     final Function<T, String> render
   ) {
     if (rows.isEmpty()) return;
-    out.append(heading).append(":\n");
-    for (final var row : rows) out.append(render.apply(row)).append('\n');
-    // Blank line after each section. A report holds either mapping sections or navigation hops
-    // (never
-    // both), so on a mapping report the last section's blank is the final trailing whitespace,
-    // which
-    // toString()'s stripTrailing() removes.
-    out.append('\n');
+    blocks.add(heading + ":\n" + rows.stream().map(render).collect(joining("\n")));
   }
 
   private static String label(final OpticNode.Reason reason) {

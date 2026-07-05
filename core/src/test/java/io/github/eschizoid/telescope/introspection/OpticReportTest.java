@@ -222,5 +222,16 @@ class OpticReportTest {
       );
       assertEquals(expected, report.toString());
     }
+
+    @Test
+    @DisplayName(
+      "a mixed report (mapping rows + hops) separates the section from the hops with one blank line, no stray trailing"
+    )
+    void mixedReportRender() {
+      // A mapping telescope further navigated (e.g. map(A, B).field(B::x)) yields both Rows and
+      // Hops.
+      final var report = new OpticReport(List.of(new Mapped("a", "a"), new Focus("x")));
+      assertEquals("Mapped:\n  ✓ a → a\n\nFocus:    x", report.toString());
+    }
   }
 }

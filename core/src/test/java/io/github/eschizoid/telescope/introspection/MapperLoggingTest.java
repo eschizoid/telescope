@@ -30,7 +30,8 @@ class MapperLoggingTest {
   // Attach a capturing JUL handler at the given level for the duration of `body`, then restore.
   private static List<LogRecord> capture(final Level level, final Runnable body) {
     final var jul = Logger.getLogger(LOGGER);
-    final var prior = jul.getLevel();
+    final var priorLevel = jul.getLevel();
+    final var priorParent = jul.getUseParentHandlers();
     final var records = new ArrayList<LogRecord>();
     final var handler = new Handler() {
       @Override
@@ -45,12 +46,15 @@ class MapperLoggingTest {
       public void close() {}
     };
     jul.setLevel(level);
+    // Isolate: don't let records propagate to the root logger's handlers (keeps CI logs quiet).
+    jul.setUseParentHandlers(false);
     jul.addHandler(handler);
     try {
       body.run();
     } finally {
       jul.removeHandler(handler);
-      jul.setLevel(prior);
+      jul.setLevel(priorLevel);
+      jul.setUseParentHandlers(priorParent);
     }
     return records;
   }
