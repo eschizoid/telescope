@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.introspection;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
@@ -37,5 +38,18 @@ class MappingTelescopeIntrospectionTest {
     assertTrue(text.contains("name") && text.contains("\"Ada\""), text);
     assertTrue(text.contains("city") && text.contains("\"Paris\""), text);
     assertTrue(text.contains("→"), text);
+  }
+
+  @Test
+  @DisplayName(
+    "a mapping telescope further navigated (map(...).field(...)) traces the final value, not a misleading row breakdown"
+  )
+  void mixedRowHopTraceIsSafe() {
+    final var trace = Telescope.map(Source.class, Target.class).field(Target::name).trace(new Source("Ada", "Paris"));
+    final var text = trace.toString();
+    // Mixed Row+Hop trail: the value column would misread mapping rows off the navigated leaf, so
+    // trace falls back to the safe final value — the navigated field, never (n/a).
+    assertTrue(text.contains("\"Ada\""), text);
+    assertFalse(text.contains("(n/a)"), text);
   }
 }

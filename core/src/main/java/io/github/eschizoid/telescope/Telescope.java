@@ -1186,16 +1186,24 @@ public sealed class Telescope<
     // none (e.g. composing a root Telescope.of(...) with a sub-path), inherit from next. The
     // explain() trail concatenates both sides' hops in order, so a composed path describes the
     // whole route.
-    // A fresh unshared list the constructor stores directly — one copy for the whole composition.
-    final var joined = new ArrayList<OpticNode>(trail.size() + next.trail.size());
-    joined.addAll(trail);
-    joined.addAll(next.trail);
+    // Both sides' trails are already immutable, so when one side is empty (common on codegen paths,
+    // where the hop is appended after composition) reuse the other directly — no allocation. Only a
+    // genuine two-sided join builds a fresh list.
+    final List<OpticNode> joinedTrail;
+    if (next.trail.isEmpty()) joinedTrail = trail;
+    else if (trail.isEmpty()) joinedTrail = next.trail;
+    else {
+      final var joined = new ArrayList<OpticNode>(trail.size() + next.trail.size());
+      joined.addAll(trail);
+      joined.addAll(next.trail);
+      joinedTrail = Collections.unmodifiableList(joined);
+    }
     return new Telescope<>(
       optic.then(next.optic),
       fieldOptics,
       chain,
       firstHopName != null ? firstHopName : next.firstHopName,
-      Collections.unmodifiableList(joined)
+      joinedTrail
     );
   }
 
@@ -1271,14 +1279,23 @@ public sealed class Telescope<
    */
   public Trace trace(final S input, final TraceLimits limits) {
     if (trail.isEmpty()) return new Trace(List.of(Trace.Node.leaf(renderValue(input))));
-    // A mapping-built telescope (from Telescope.map) carries field Rows, not a sequential path of
-    // Hops; value-tracing those runs the mapper — surfaced on Mapper/ForwardMapper. Here, render
-    // the
-    // static rows so trace() on a mapping telescope is coherent rather than a fallback. Gate on the
-    // Row supertype so a navigation path that LEADS with as / filter / a codegen bridge (all Hops)
-    // still executes rather than mis-routing to the row render.
-    if (trail.get(0) instanceof OpticNode.Row) return mappingRowsTrace(input);
-    return new Trace(List.of(traceHop(trail, 0, input, limits, 0)));
+    final var rowCount = trail
+      .stream()
+      .filter(n -> n instanceof OpticNode.Row)
+      .count();
+    // A pure mapping telescope (from Telescope.map — all Rows) value-traces the conversion,
+    // rendering
+    // each row's source value → target value like Mapper.trace. A pure navigation path (all Hops)
+    // executes structurally into a tree.
+    if (rowCount == trail.size()) return mappingRowsTrace(input);
+    if (rowCount == 0) return new Trace(List.of(traceHop(trail, 0, input, limits, 0)));
+    // Mixed (a mapping telescope further navigated, e.g. map(A, B).field(B::x)): the Row prefix is
+    // a
+    // whole conversion the field walk can't execute, and running the full optic then reading
+    // mapping
+    // rows off the navigated leaf would misread. Fall back to a safe execution-only trace of the
+    // final value rather than emit a misleading per-row breakdown.
+    return new Trace(List.of(Trace.Node.leaf(renderValue(find(input).orElse(null)))));
   }
 
   // A mapping-built Telescope (Telescope.map) carries field Rows; its trace shows the same value
