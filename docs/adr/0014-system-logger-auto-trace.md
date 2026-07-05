@@ -64,8 +64,5 @@ TRACE io...mapper.UserDto.User - ✓ firstName "Ada" → givenName "Ada"
   deliberate choice — the level is the opt-in.
 - **Verbosity is bounded.** A mapper in a tight loop at TRACE emits one trace per call; `TraceLimits` defaults already
   cap the per-fan-out breadth/depth of each render.
-- **Render refresh (this PR).** `OpticReport.toString` now renders sections Mapped → Skipped → Transformations → Unused
-  sources with a blank line between them, and a dropped field reads `(ignored)`. Same content, closer to the original
-  design mockup; the `explain()`/`trace()` golden tests were updated.
 - **Extends ADR-0013**, does not change its API — `explain()` / `trace()` keep their exact signatures; logging is purely
   additive.

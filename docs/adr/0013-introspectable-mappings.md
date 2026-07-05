@@ -104,10 +104,12 @@ final Mapper<UserDto, User> mapper = Telescope.mapper(UserDto.class, User.class,
 mapper.explain();
 // Mapped:
 //   ✓ firstName → givenName
+//
+// Skipped:
+//   • id (ignored)
+//
 // Transformations:
 //   • birthDate(String) → LocalDate
-// Skipped:
-//   • id  (dropped)
 ```
 
 The report is data first — the text above is `toString()`. You assert on the structure:
@@ -126,7 +128,7 @@ assertThat(mapper.explain().mapped())
 mapper.trace(new UserDto("Ada", "2020-01-02", /* id */ 7L));
 //   ✓ firstName  "Ada"         → givenName "Ada"
 //   • birthDate  "2020-01-02"  → birthDate LocalDate[2020-01-02]
-//   • id                       → (dropped)
+//   • id                       → (ignored)
 ```
 
 The value-column render always names the target field (`→ birthDate …`), even for a same-name row — it does not elide
@@ -138,8 +140,10 @@ the repeated name the way `explain()` does.
 Telescope.fromMap(CustomerContact.class, /* rows … */).explain();
 // Mapped:
 //   ✓ name → name
+//
 // Skipped:
 //   • region  (missing source)    // no key in the map — a target field with no source
+//
 // Unused sources:
 //   • legacyId                    // key present, no target consumer
 ```

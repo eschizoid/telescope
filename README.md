@@ -33,7 +33,7 @@ MapStruct can't give you, and a strictly larger surface. [See it row by row →]
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-  implementation("io.github.eschizoid:telescope-core:1.0.5")
+  implementation("io.github.eschizoid:telescope-core:1.1.0")
 }
 ```
 
@@ -42,7 +42,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.0.5</version>
+  <version>1.1.0</version>
 </dependency>
 ```
 
@@ -501,8 +501,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:1.0.5")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")
+    implementation("io.github.eschizoid:telescope-core:1.1.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.0")
 }
 ```
 
@@ -512,7 +512,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.0.5</version>
+  <version>1.1.0</version>
 </dependency>
 
 <build>
@@ -525,7 +525,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>1.0.5</version>
+            <version>1.1.0</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
@@ -550,7 +550,7 @@ first**. Maven respects the declaration order of `<annotationProcessorPaths>`; G
   <path>
     <groupId>io.github.eschizoid</groupId>
     <artifactId>telescope-lombok</artifactId>
-    <version>1.0.5</version>
+    <version>1.1.0</version>
   </path>
 </annotationProcessorPaths>
 ```
@@ -558,8 +558,8 @@ first**. Maven respects the declaration order of `<annotationProcessorPaths>`; G
 ```kotlin
 dependencies {
   annotationProcessor("org.projectlombok:lombok:1.18.30")
-  annotationProcessor("io.github.eschizoid:telescope-lombok:1.0.5")
-  annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")
+  annotationProcessor("io.github.eschizoid:telescope-lombok:1.1.0")
+  annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.0")
 }
 ```
 
@@ -1323,8 +1323,8 @@ goes through `.then(SourceBridge.BRIDGE.reverse())` for now — forward only at 
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope-core:1.0.5")
-annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")
+implementation("io.github.eschizoid:telescope-core:1.1.0")
+annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.0")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
