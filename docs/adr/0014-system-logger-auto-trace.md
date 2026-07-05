@@ -66,3 +66,11 @@ TRACE io...mapper.UserDto.User - ✓ firstName "Ada" → givenName "Ada"
   cap the per-fan-out breadth/depth of each render.
 - **Extends ADR-0013**, does not change its API — `explain()` / `trace()` keep their exact signatures; logging is purely
   additive.
+- **SLF4J-via-`jul-to-slf4j` renders both lines at DEBUG.** With no `System.LoggerFinder` on the path (the common Spring
+  Boot setup), `System.Logger` routes through `java.util.logging`, and the `jul-to-slf4j` bridge maps `TRACE` (JUL
+  `FINER`) onto SLF4J/Logback **DEBUG** — only JUL `FINEST` becomes SLF4J `TRACE`, and `System.Logger` cannot emit below
+  `TRACE`. So through that bridge both lines render at `DEBUG`. The **configured threshold still separates them** —
+  that's the adopter-facing knob: at `DEBUG` only the structure fires (`isLoggable(TRACE)` is false), and raising the
+  logger to `TRACE` additionally fires the per-forward values. An adopter who wants the two lines to carry distinct
+  SLF4J levels installs the direct `slf4j-jdk-platform-logging` provider (a `System.LoggerFinder`), bypassing JUL.
+  Pinned end-to-end by `MapperLoggingRoutingTest` in the `org-chart` demo.
