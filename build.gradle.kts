@@ -128,6 +128,24 @@ subprojects {
             )
         }
     }
+
+    // Make every module's test run informative rather than a wall of pass/fail: show per-test
+    // events plus anything the tests log (through java.lang.System.Logger -> JUL console), with a
+    // message-only JUL format so narration reads cleanly. Single source of truth for all modules.
+    tasks.withType<Test>().configureEach {
+        testLogging {
+            // Gradle side: stream the forked JVM's stdout/stderr live to the console.
+            showStandardStreams = true
+            events("passed", "failed", "skipped")
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        }
+        // JUnit side: also capture each test's stdout/stderr and file it under that test in the
+        // XML/HTML reports, so narration is attached per-test, not only streamed to console.
+        systemProperty("junit.platform.output.capture.stdout", "true")
+        systemProperty("junit.platform.output.capture.stderr", "true")
+        // Message-only JUL format so System.Logger narration reads cleanly, no timestamp/source noise.
+        systemProperty("java.util.logging.SimpleFormatter.format", "%5\$s%n")
+    }
 }
 
 jreleaser {

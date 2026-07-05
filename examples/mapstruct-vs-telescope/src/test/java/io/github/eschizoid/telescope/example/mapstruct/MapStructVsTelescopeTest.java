@@ -1,8 +1,10 @@
 package io.github.eschizoid.telescope.example.mapstruct;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.example.mapstruct.domain.Customer;
 import io.github.eschizoid.telescope.example.mapstruct.domain.LineItem;
@@ -10,6 +12,8 @@ import io.github.eschizoid.telescope.example.mapstruct.domain.Order;
 import io.github.eschizoid.telescope.example.mapstruct.mapstruct.OrderMapStructMapper;
 import io.github.eschizoid.telescope.example.mapstruct.mapstruct.SilentDropMapper;
 import io.github.eschizoid.telescope.example.mapstruct.telescope.TelescopeMappings;
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -24,6 +28,8 @@ import org.junit.jupiter.api.Test;
  * failure can't also be a passing test.
  */
 class MapStructVsTelescopeTest {
+
+  private static final Logger LOG = System.getLogger(MapStructVsTelescopeTest.class.getName());
 
   private static Order sampleOrder() {
     return new Order(
@@ -48,6 +54,10 @@ class MapStructVsTelescopeTest {
       "the email -> contactEmail rename landed"
     );
     assertEquals(2, viaTelescope.getLines().size(), "the line-item collection recursed");
+    log(
+      "Act 1 — both frameworks produce the identical OrderDto (no strawman):",
+      "MapStruct: " + viaMapStruct + "\ntelescope: " + viaTelescope
+    );
   }
 
   @Test
@@ -56,6 +66,7 @@ class MapStructVsTelescopeTest {
     final var order = sampleOrder();
     final var roundTripped = TelescopeMappings.ORDER_MAPPER.backward(TelescopeMappings.ORDER_MAPPER.forward(order));
     assertEquals(order, roundTripped, "one mapper(...) value gives both directions; MapStruct needs a second method");
+    log("Bidirectional for free — backward(forward(order)) == order:", roundTripped);
   }
 
   @Test
@@ -67,6 +78,10 @@ class MapStructVsTelescopeTest {
     assertNull(
       dto.getRegion(),
       "default unmappedTargetPolicy=WARN compiles and nulls an unmapped target (a source rename is the separate case — a compile error)"
+    );
+    log(
+      "Unmapped-target footgun — MapStruct's default policy nulls a target with no source:",
+      "contactEmail = " + dto.getContactEmail() + "  |  region = " + dto.getRegion() + "  (silently null)"
     );
   }
 
@@ -85,5 +100,40 @@ class MapStructVsTelescopeTest {
       order.lines().get(0).price(),
       "the original Order is unchanged — immutable update"
     );
+    log(
+      "Act 2 — deep immutable update rebuilds the graph, original untouched:",
+      "before: " + order.lines() + "\nafter:  " + taxed.lines()
+    );
+  }
+
+  @Test
+  @DisplayName("Act 3: the telescope mapper explains and traces itself; MapStruct is a black box")
+  void introspectionExposesWhatTheMapperDoes() {
+    final var order = sampleOrder();
+
+    // Static structure — no input needed. The Act 1 rename is a first-class row here, not a string
+    // buried in generated OrderMapStructMapperImpl.java.
+    final var report = TelescopeMappings.CUSTOMER_MAPPER.explain();
+    assertFalse(report.isEmpty(), "the mapper describes its own structure");
+    assertTrue(
+      report
+        .mapped()
+        .stream()
+        .anyMatch(m -> m.from().equals("email") && m.to().equals("contactEmail")),
+      () -> "the email -> contactEmail rename is enumerable data, not opaque generated code:\n" + report
+    );
+    log("Act 3 — CUSTOMER_MAPPER.explain() (structure as data; MapStruct has no equivalent):", report);
+
+    // Per-conversion values — the same rows with the actual Order data filled in, whole graph deep.
+    final var trace = TelescopeMappings.ORDER_MAPPER.trace(order).toString();
+    assertTrue(trace.contains("o-1"), () -> "the trace shows the real values flowing through:\n" + trace);
+    log("Act 3 — ORDER_MAPPER.trace(order) (per-conversion values, nested graph and all):", trace);
+  }
+
+  // Narrate what each act proves when the suite runs, through java.lang.System.Logger — the same
+  // zero-dependency facade telescope logs its own mappings through — so `./gradlew test` reads as a
+  // head-to-head walkthrough rather than a wall of green ticks.
+  private static void log(final String heading, final Object body) {
+    LOG.log(Level.INFO, () -> "\n" + heading + "\n" + body + "\n");
   }
 }

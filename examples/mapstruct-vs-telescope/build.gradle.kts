@@ -37,4 +37,7 @@ dependencies {
 
 tasks.named<Test>("test") {
     useJUnitPlatform()
+    // The test-output plumbing (showStandardStreams + per-test events + capture + clean JUL format)
+    // is global — set once for every module in the root build's subprojects { } block. This slice's
+    // tests add the per-act narration on top of it.
 }
