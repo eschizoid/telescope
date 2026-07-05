@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.From;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.conversion.MapperBuilder;
+import io.github.eschizoid.telescope.conversion.MappingTraces;
 import io.github.eschizoid.telescope.effects.Either;
 import io.github.eschizoid.telescope.effects.Validated;
 import io.github.eschizoid.telescope.internal.Beans;
@@ -14,12 +15,17 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Records;
+import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Affine;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
+import io.github.eschizoid.telescope.introspection.OpticNode;
+import io.github.eschizoid.telescope.introspection.OpticReport;
+import io.github.eschizoid.telescope.introspection.Trace;
+import io.github.eschizoid.telescope.introspection.TraceLimits;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
@@ -31,6 +37,8 @@ import io.github.eschizoid.telescope.runtime.instances.OptionalK;
 import io.github.eschizoid.telescope.runtime.instances.ValidatedK;
 import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -125,20 +133,25 @@ public sealed class Telescope<
   // LambdaIntrospection.methodNameOf(accessor) on the first .field(…) / .each(…) / .eachValue(…)
   // / .whenPresent(…) call that takes an Accessor.
   final String firstHopName;
+  // The full navigation trail: one OpticNode per combinator hop that built this Telescope, in
+  // order, surfaced by explain(). The generalization of firstHopName from a single slot to the
+  // whole path — accumulated immutably (copy-append) at build time, never touched on the
+  // read/update hot path. Empty for a bare Telescope.of(...) or an iso-backed conversion.
+  final List<OpticNode> trail;
 
   // Package-private so that the conversion-builder classes (From, To, BeanTo, MapBuilder, Mapper,
   // …) — extracted to sibling files in this same package to keep Telescope.java navigable — can
   // construct Telescope instances without needing us to expose internals through the JPMS export.
   Telescope(final Traversal<S, A> optic) {
-    this(optic, RecordFieldOptics.INSTANCE, Function.identity(), null);
+    this(optic, RecordFieldOptics.INSTANCE, Function.identity(), null, List.of());
   }
 
   private Telescope(final Traversal<S, A> optic, final FieldOptics fieldOptics) {
-    this(optic, fieldOptics, Function.identity(), null);
+    this(optic, fieldOptics, Function.identity(), null, List.of());
   }
 
   Telescope(final Traversal<S, A> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
-    this(optic, fieldOptics, chain, null);
+    this(optic, fieldOptics, chain, null, List.of());
   }
 
   Telescope(
@@ -147,10 +160,36 @@ public sealed class Telescope<
     final Function<S, S> chain,
     final String firstHopName
   ) {
+    this(optic, fieldOptics, chain, firstHopName, List.of());
+  }
+
+  Telescope(
+    final Traversal<S, A> optic,
+    final FieldOptics fieldOptics,
+    final Function<S, S> chain,
+    final String firstHopName,
+    final List<OpticNode> trail
+  ) {
     this.optic = optic;
     this.fieldOptics = fieldOptics;
     this.chain = chain;
     this.firstHopName = firstHopName;
+    // Stored as-is. The invariant callers must uphold is immutability, not non-sharing: every
+    // internal caller passes an already-immutable list (an empty List.of(), a fresh unmodifiable
+    // list from plus(), or a defensively-copied one from mapped()). then() may alias an existing
+    // immutable trail when one side is empty — safe precisely because it can never be mutated.
+    // Copying here too would copy the trail a second time on every hop.
+    this.trail = trail;
+  }
+
+  // Append one hop node to this Telescope's trail as a fresh immutable list — one copy of the
+  // existing trail, wrapped as an unmodifiable view the constructor stores directly (no second
+  // copy). The fresh ArrayList is never shared, so the view cannot be mutated behind our back.
+  private List<OpticNode> plus(final OpticNode node) {
+    final var extended = new ArrayList<OpticNode>(trail.size() + 1);
+    extended.addAll(trail);
+    extended.add(node);
+    return Collections.unmodifiableList(extended);
   }
 
   /**
@@ -198,6 +237,18 @@ public sealed class Telescope<
    */
   static <S, A> Telescope<S, A> wrap(final Traversal<S, A> optic) {
     return new Telescope<>(optic);
+  }
+
+  /**
+   * Package-private factory for a deep-conversion telescope that carries the introspection trail
+   * the mapping engine resolved, so {@code explain()} works on the {@code Telescope<A, B>} returned
+   * by {@link #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)}. Only {@link
+   * DeepMap} calls this.
+   */
+  static <S, A> Telescope<S, A> mapped(final Iso<S, A> iso, final List<OpticNode> trail) {
+    // The one boundary that takes a caller-owned list — copy it immutable so the constructor can
+    // store every trail as-is.
+    return new Telescope<>(iso, RecordFieldOptics.INSTANCE, Function.identity(), null, List.copyOf(trail));
   }
 
   /**
@@ -508,7 +559,7 @@ public sealed class Telescope<
     // returned Telescope's backward leg (set/update through a path whose constituent Iso has a
     // throwing inverse). Catching it at the factory boundary keeps the diagnostic at the call site.
     rejectForwardOnlyRows(source, target, steps, "Telescope.map");
-    return new Telescope<>(DeepMap.resolve(source, target, steps));
+    return DeepMap.resolveMapped(source, target, steps);
   }
 
   /**
@@ -662,8 +713,7 @@ public sealed class Telescope<
         return ForwardMapper.create(bridge::read, source, target);
       }
     }
-    final var iso = DeepMap.resolveForward(source, target, steps);
-    return ForwardMapper.create(iso::to, source, target);
+    return DeepMap.resolveForwardMapper(source, target, steps);
   }
 
   /**
@@ -824,7 +874,13 @@ public sealed class Telescope<
    */
   public <B> Telescope<S, B> field(final Accessor<A, B> getter) {
     final Lens<A, B> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
+    return new Telescope<>(
+      optic.then(lens),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Focus(fieldNameOf(getter)))
+    );
   }
 
   /**
@@ -920,7 +976,7 @@ public sealed class Telescope<
     // Records.fieldLens that fails at call time because the focus type isn't a record.
     final Lens<A, B> fieldLens =
       fieldOptics == BeanFieldOptics.INSTANCE ? Beans.fieldLens(fieldName) : Records.fieldLens(fieldName);
-    return new Telescope<>(optic.then(fieldLens), fieldOptics, chain);
+    return new Telescope<>(optic.then(fieldLens), fieldOptics, chain, null, plus(new OpticNode.Focus(fieldName)));
   }
 
   /**
@@ -960,7 +1016,13 @@ public sealed class Telescope<
   public <E> Telescope<S, E> each(final Accessor<A, ? extends Iterable<E>> getter) {
     final Traversal<Iterable<E>, E> elements = Traversals.eachIterable();
     final Lens<A, Iterable<E>> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens).then(elements), fieldOptics, chain, hopName(getter));
+    return new Telescope<>(
+      optic.then(lens).then(elements),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Traverse(fieldNameOf(getter), "collection"))
+    );
   }
 
   /**
@@ -979,7 +1041,13 @@ public sealed class Telescope<
   public <K, V> Telescope<S, V> eachValue(final Accessor<A, ? extends Map<K, V>> getter) {
     final Traversal<Map<K, V>, V> values = Traversals.eachMapValue();
     final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens).then(values), fieldOptics, chain, hopName(getter));
+    return new Telescope<>(
+      optic.then(lens).then(values),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Traverse(fieldNameOf(getter), "map values"))
+    );
   }
 
   /**
@@ -997,7 +1065,13 @@ public sealed class Telescope<
   public <E> Telescope<S, E> whenPresent(final Accessor<A, ? extends Optional<E>> getter) {
     final Traversal<Optional<E>, E> present = Traversals.eachOptional();
     final Lens<A, Optional<E>> lens = lensForAccessor(getter);
-    return new Telescope<>(optic.then(lens).then(present), fieldOptics, chain, hopName(getter));
+    return new Telescope<>(
+      optic.then(lens).then(present),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Traverse(fieldNameOf(getter), "optional"))
+    );
   }
 
   /**
@@ -1016,7 +1090,13 @@ public sealed class Telescope<
    */
   public <B extends A> Telescope<S, B> as(final Class<B> subType) {
     final Prism<A, B> prism = Prism.downcast(subType);
-    return new Telescope<>(optic.then(prism), fieldOptics, chain);
+    return new Telescope<>(
+      optic.then(prism),
+      fieldOptics,
+      chain,
+      null,
+      plus(new OpticNode.Narrow(subType.getSimpleName()))
+    );
   }
 
   /**
@@ -1033,7 +1113,7 @@ public sealed class Telescope<
    * }</pre>
    */
   public Telescope<S, A> filter(final Predicate<? super A> predicate) {
-    return new Telescope<>(optic.filter(predicate), fieldOptics, chain);
+    return new Telescope<>(optic.filter(predicate), fieldOptics, chain, null, plus(new OpticNode.Filter("predicate")));
   }
 
   /**
@@ -1105,13 +1185,271 @@ public sealed class Telescope<
    */
   public <B> Telescope<S, B> then(final Telescope<A, B> next) {
     // Prefer this side's firstHopName — only the FIRST hop on a chain is tracked. If this side has
-    // none (e.g. composing a root Telescope.of(...) with a sub-path), inherit from next.
+    // none (e.g. composing a root Telescope.of(...) with a sub-path), inherit from next. The
+    // explain() trail concatenates both sides' hops in order, so a composed path describes the
+    // whole route.
+    // Both sides' trails are already immutable, so when one side is empty (common on codegen paths,
+    // where the hop is appended after composition) reuse the other directly — no allocation. Only a
+    // genuine two-sided join builds a fresh list.
+    final List<OpticNode> joinedTrail;
+    if (next.trail.isEmpty()) joinedTrail = trail;
+    else if (trail.isEmpty()) joinedTrail = next.trail;
+    else {
+      final var joined = new ArrayList<OpticNode>(trail.size() + next.trail.size());
+      joined.addAll(trail);
+      joined.addAll(next.trail);
+      joinedTrail = Collections.unmodifiableList(joined);
+    }
     return new Telescope<>(
       optic.then(next.optic),
       fieldOptics,
       chain,
-      firstHopName != null ? firstHopName : next.firstHopName
+      firstHopName != null ? firstHopName : next.firstHopName,
+      joinedTrail
     );
+  }
+
+  /**
+   * Describe what this telescope does, as a queryable {@link OpticReport}. For a navigation path
+   * ({@code of(…).each(…).field(…)}) the report is the ordered hop trail; for a conversion built by
+   * {@link #map(Class, Class, io.github.eschizoid.telescope.mapping.MapStep...)} it is the field
+   * rows the deep-mapping engine resolved. A bare {@code Telescope.of(…)} identity — or any
+   * iso-backed telescope with no recorded path — yields the {@link OpticReport#isEmpty() empty}
+   * report. Never throws.
+   *
+   * <p>The trail is captured at build time from the same steps that compose the optic, so the
+   * report cannot drift from what the telescope actually does.
+   *
+   * @return the structure of this telescope; never null
+   */
+  public OpticReport explain() {
+    return new OpticReport(trail);
+  }
+
+  /**
+   * <b>Codegen-support seam — NOT for hand-written call sites.</b> Return a copy of this telescope
+   * with one {@link OpticNode} appended to its introspection trail, so a generated {@code
+   * <X>Telescope} navigator — which composes via {@link #lens(Function, BiFunction)} rather than
+   * the {@code SerializedLambda}-decoding {@link #field(Accessor)} — still answers {@link
+   * #explain()} / {@link #trace(Object)} with what it navigated. The processors emit {@code
+   * .hop(new OpticNode.Focus("field"))} after a lens composition, {@code new
+   * OpticNode.Traverse(...)} on a container step's {@code each()}, and {@code new
+   * OpticNode.Bridge(...)} on an {@code as<Target>()} hop. Hand-written paths use {@link
+   * #field(Accessor)} / {@link #each(Accessor)}, which record the hop automatically.
+   *
+   * @param node the trail node for this hop
+   * @return a copy with the hop recorded; the optic and all other state are unchanged
+   */
+  public Telescope<S, A> hop(final OpticNode node) {
+    return new Telescope<>(optic, fieldOptics, chain, firstHopName, plus(node));
+  }
+
+  /**
+   * Execute this telescope's navigation against {@code input} and describe what each hop did to the
+   * data, as a {@link Trace} tree. Where {@link #explain()} is the static path, {@code trace} runs
+   * it: single-focus hops ({@code field}) descend linearly; many-focus hops ({@code each} / {@code
+   * eachValue} / {@code whenPresent}) expand into one subtree per element. A pure single-focus path
+   * stays linear.
+   *
+   * <p>This is a debugging aid, run off the hot path — it materializes one node per focus. Over a
+   * large collection use {@link #trace(Object, TraceLimits)} with explicit caps, or accept the safe
+   * {@link TraceLimits#defaults() defaults} this overload applies (10 elements per fan-out, 20
+   * deep) which truncate with a {@code … (+K more)} marker.
+   *
+   * <p><b>Structural fidelity caveat.</b> For a <em>navigation</em> path, {@code trace} re-reads
+   * values by field name; it does not execute the built optic. {@code filter}, {@code as} (narrow),
+   * and codegen bridge hops are recorded and their value is passed through unchanged — the
+   * predicate, subtype check, and bridge conversion are not captured in the trail, so trace cannot
+   * apply them. A trace may therefore show a value a real {@code read} would exclude (a
+   * filtered-out element, a non-matching subtype), and a field read downstream of an unapplied
+   * bridge/narrow that doesn't exist on the un-converted value renders as {@code (n/a)} rather than
+   * throwing. (A <em>mapping</em>-built telescope from {@link #map(Class, Class,
+   * io.github.eschizoid.telescope.mapping.MapStep...)} is the exception: it runs the conversion
+   * forward once to fill the value column, since its rows have no field-by-field structural read.)
+   * Use {@code trace} to see the path shape and per-field values; use {@code read} / {@code find}
+   * for the exact result.
+   *
+   * @param input the value to run the path against
+   * @return the executed trace tree; never null
+   */
+  public Trace trace(final S input) {
+    return trace(input, TraceLimits.defaults());
+  }
+
+  /**
+   * {@link #trace(Object)} with explicit caps — use {@link TraceLimits#none()} for the full tree.
+   */
+  public Trace trace(final S input, final TraceLimits limits) {
+    if (trail.isEmpty()) {
+      // No instrumented trail (a bare identity, or an iso-backed conversion from from/to/using or a
+      // bridge). Render what the telescope actually produces — the executed focus — not the raw
+      // input, which would be wrong whenever the output differs from the input; fall back to the
+      // input when there is no focus.
+      final var focus = find(input);
+      return new Trace(List.of(Trace.Node.leaf(renderValue(focus.isPresent() ? focus.get() : input))));
+    }
+    final var rowCount = trail
+      .stream()
+      .filter(n -> n instanceof OpticNode.Row)
+      .count();
+    // A pure mapping telescope (from Telescope.map — all Rows) value-traces the conversion,
+    // rendering
+    // each row's source value → target value like Mapper.trace. A pure navigation path (all Hops)
+    // executes structurally into a tree.
+    if (rowCount == trail.size()) return mappingRowsTrace(input);
+    if (rowCount == 0) return new Trace(List.of(traceHop(trail, 0, input, limits, 0)));
+    // Mixed (a mapping telescope further navigated, e.g. map(A, B).field(B::x)): the Row prefix is
+    // a
+    // whole conversion the field walk can't execute, and running the full optic then reading
+    // mapping
+    // rows off the navigated leaf would misread. Fall back to a safe execution-only trace of the
+    // final value rather than emit a misleading per-row breakdown.
+    return new Trace(List.of(Trace.Node.leaf(renderValue(find(input).orElse(null)))));
+  }
+
+  // A mapping-built Telescope (Telescope.map) carries field Rows; its trace shows the same value
+  // column as Mapper.trace — run the conversion forward to get the output, then render each row's
+  // source value → target value. Shares the renderer so the two surfaces can't drift.
+  private Trace mappingRowsTrace(final S input) {
+    final var output = find(input).orElse(null);
+    return MappingTraces.of(input, output, trail);
+  }
+
+  private static Trace.Node traceHop(
+    final List<OpticNode> hops,
+    final int i,
+    final Object value,
+    final TraceLimits limits,
+    final int depth
+  ) {
+    final var hop = hops.get(i);
+    final var last = i == hops.size() - 1;
+    if (hop instanceof OpticNode.Focus f) {
+      final var v = readField(value, f.path());
+      if (last) return Trace.Node.leaf(f.path() + " → " + renderValue(v));
+      return new Trace.Node(f.path(), List.of(traceHop(hops, i + 1, v, limits, depth)), false);
+    }
+    if (hop instanceof OpticNode.Traverse t) {
+      if (depth >= limits.maxDepth()) return Trace.Node.cut("each " + t.path() + " … (depth cap)");
+      final var container = readField(value, t.path());
+      // An unreadable container (e.g. the field read downstream of an unapplied bridge/narrow) must
+      // surface (n/a) like a Focus does — not degrade into an empty fan-out that looks like an
+      // empty
+      // collection. Honours the trace() javadoc caveat on every hop kind, not just Focus.
+      if (container == UNREADABLE) return Trace.Node.leaf("each " + t.path() + " → (n/a)");
+      // Materialize only up to maxBreadth elements — a sized container reports its total via size()
+      // without copying every element, so the breadth cap bounds memory even for a huge collection.
+      final var elements = boundedElementsOf(container, limits.maxBreadth());
+      final var shown = elements.shown();
+      final var children = new ArrayList<Trace.Node>();
+      for (final var elem : shown) {
+        if (last) children.add(Trace.Node.leaf(renderValue(elem)));
+        else children.add(
+          new Trace.Node(renderValue(elem), List.of(traceHop(hops, i + 1, elem, limits, depth + 1)), false)
+        );
+      }
+      // Exact remainder for a sized container; a bare Iterable with more past the cap reports an
+      // unknown remainder ("… (+more)") since it was never counted.
+      if (elements.total() == UNKNOWN_MORE) children.add(Trace.Node.cut("… (+more)"));
+      else if (elements.total() > shown.size()) children.add(
+        Trace.Node.cut("… (+" + (elements.total() - shown.size()) + " more)")
+      );
+      return new Trace.Node("each " + t.path(), children, false);
+    }
+    // Narrow / Filter / Bridge are structural annotations: the subtype check, predicate, and bridge
+    // conversion are NOT captured in the trail, so trace cannot apply them — it records the hop and
+    // passes the value through unchanged. See the trace() javadoc caveat.
+    if (hop instanceof OpticNode.Narrow n) return passThrough(
+      hops,
+      i,
+      "as " + n.targetType(),
+      value,
+      limits,
+      depth,
+      last
+    );
+    if (hop instanceof OpticNode.Filter) return passThrough(hops, i, "filter", value, limits, depth, last);
+    if (hop instanceof OpticNode.Bridge b) return passThrough(
+      hops,
+      i,
+      "as " + b.targetType(),
+      value,
+      limits,
+      depth,
+      last
+    );
+    return Trace.Node.leaf(String.valueOf(hop));
+  }
+
+  private static Trace.Node passThrough(
+    final List<OpticNode> hops,
+    final int i,
+    final String label,
+    final Object value,
+    final TraceLimits limits,
+    final int depth,
+    final boolean last
+  ) {
+    if (last) return Trace.Node.leaf(label + " → " + renderValue(value));
+    return new Trace.Node(label, List.of(traceHop(hops, i + 1, value, limits, depth)), false);
+  }
+
+  // Sentinel for a read that could not apply — e.g. a field read downstream of an unapplied bridge
+  // or narrow, where the value is not the type the field belongs to. Surfaced as "(n/a)", never
+  // swallowed silently and never thrown (trace is a debug aid, not a load-bearing read).
+  private static final Object UNREADABLE = new Object();
+
+  private static Object readField(final Object value, final String name) {
+    if (value == null) return null;
+    try {
+      return Reflective.of(value.getClass()).read(value, name);
+    } catch (final RuntimeException e) {
+      return UNREADABLE;
+    }
+  }
+
+  // The first `cap` elements of a container plus its total count — so a fan-out renders the capped
+  // slice without materializing a large collection. A Collection/Map reports size() in O(1) so only
+  // the shown slice is copied and the remainder is exact. A bare Iterable is walked at most cap + 1
+  // times — enough to know whether more remain — and never fully, so trace() stays bounded in time
+  // even over an expensive or effectively-unbounded iterable; its remainder is UNKNOWN_MORE.
+  private static Elements boundedElementsOf(final Object container, final int cap) {
+    if (container == null || container == UNREADABLE) return new Elements(List.of(), 0);
+    if (container instanceof Optional<?> o) return o.isPresent()
+      ? new Elements(List.of(o.get()), 1)
+      : new Elements(List.of(), 0);
+    if (container instanceof Collection<?> c) return new Elements(firstN(c, cap), c.size());
+    if (container instanceof Map<?, ?> m) return new Elements(firstN(m.values(), cap), m.size());
+    if (container instanceof Iterable<?> it) {
+      final var shown = new ArrayList<Object>();
+      final var iterator = it.iterator();
+      while (iterator.hasNext() && shown.size() < cap) shown.add(iterator.next());
+      // One peek past the cap tells us there are more, without counting (or exhausting) the rest.
+      return new Elements(shown, iterator.hasNext() ? UNKNOWN_MORE : shown.size());
+    }
+    return new Elements(List.of(container), 1);
+  }
+
+  private static List<Object> firstN(final Iterable<?> it, final int cap) {
+    final var out = new ArrayList<Object>();
+    for (final var e : it) {
+      if (out.size() >= cap) break;
+      out.add(e);
+    }
+    return out;
+  }
+
+  // Sentinel total for a bare Iterable known to have more elements past the cap but not counted.
+  private static final int UNKNOWN_MORE = -1;
+
+  /** The shown (capped) elements of a fan-out plus the container's total element count. */
+  private record Elements(List<Object> shown, int total) {}
+
+  private static String renderValue(final Object v) {
+    if (v == UNREADABLE) return "(n/a)";
+    if (v == null) return "null";
+    if (v instanceof String s) return "\"" + s + "\"";
+    return String.valueOf(v);
   }
 
   /**
@@ -1666,6 +2004,31 @@ public sealed class Telescope<
   // decode. These shims keep the existing callsites in this file unchanged.
   static String methodNameOf(final Serializable lambda) {
     return LambdaIntrospection.methodNameOf(lambda);
+  }
+
+  // The logical field name an introspection node carries for an accessor. A record component's
+  // accessor name IS the field name, so it passes through; a bean getter (getX / isX) is normalized
+  // to its JavaBeans property name so the node matches the codegen-emitted Focus/Traverse AND reads
+  // back through the same bean reflection path trace() uses. Record vs bean is decided by the
+  // accessor's declaring class (both lookups are per-lambda cached, so this is off the hot path).
+  private static String fieldNameOf(final Accessor<?, ?> getter) {
+    final var raw = LambdaIntrospection.methodNameOf(getter);
+    if (LambdaIntrospection.implClassOf(getter).isRecord()) return raw;
+    if (raw.length() > 3 && raw.startsWith("get") && Character.isUpperCase(raw.charAt(3))) return beanDecapitalize(
+      raw.substring(3)
+    );
+    if (raw.length() > 2 && raw.startsWith("is") && Character.isUpperCase(raw.charAt(2))) return beanDecapitalize(
+      raw.substring(2)
+    );
+    return raw;
+  }
+
+  // JavaBeans Introspector.decapitalize: an acronym whose first two chars are both uppercase (e.g.
+  // "URL") is left as-is; otherwise the first char is lowercased. Mirrors the codegen processor's
+  // property-name derivation so a runtime bean node's name agrees with the generated one.
+  private static String beanDecapitalize(final String s) {
+    if (s.length() > 1 && Character.isUpperCase(s.charAt(0)) && Character.isUpperCase(s.charAt(1))) return s;
+    return Character.toLowerCase(s.charAt(0)) + s.substring(1);
   }
 
   static <A> Class<A> implClassOf(final Serializable lambda) {

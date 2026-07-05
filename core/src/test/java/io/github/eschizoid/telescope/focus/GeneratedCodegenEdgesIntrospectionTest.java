@@ -1,0 +1,59 @@
+package io.github.eschizoid.telescope.focus;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import io.github.eschizoid.telescope.introspection.OpticNode.Bridge;
+import io.github.eschizoid.telescope.introspection.OpticNode.Focus;
+import io.github.eschizoid.telescope.introspection.OpticNode.Traverse;
+import java.util.List;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Verifies the two codegen introspection edges beyond flat field navigation: a generated container
+ * step's {@code each()} records a single {@code Traverse} (matching a hand-written {@code
+ * .each(...)}), and a generated {@code as<Target>()} bridge hop records a {@code Bridge}. Uses the
+ * generated navigators for the {@code @Focus FocusTeam} (with a {@code List<FocusPerson>}) and the
+ * {@code @Focus @Bridge(FocusDto) FocusEntity} fixtures.
+ */
+class GeneratedCodegenEdgesIntrospectionTest {
+
+  @Test
+  @DisplayName("a container step's each() records one Traverse, then the element field is a Focus")
+  void containerStepTraverse() {
+    final var report = FocusTeamTelescope.of().members().each().name().explain();
+    assertEquals(List.of(new Traverse("members", "collection"), new Focus("name")), report.nodes());
+  }
+
+  @Test
+  @DisplayName("a bridge hop records a Bridge, then the target field is a Focus")
+  void bridgeHop() {
+    final var report = FocusEntityTelescope.of().asFocusDto().email().explain();
+    assertEquals(List.of(new Bridge("FocusDto"), new Focus("email")), report.nodes());
+  }
+
+  @Test
+  @DisplayName("a bridge-first navigator still traces (does not truncate at the Bridge node or mis-route)")
+  void bridgeTraceRuns() {
+    final var trace = FocusEntityTelescope.of().asFocusDto().email().trace(new FocusEntity("1", "a@b.com"));
+    // Regression: a Bridge-first trail mis-routed to the mapping-row render, and traceHop had no
+    // Bridge branch so it truncated. The email field must be reached and its value shown.
+    assertTrue(trace.toString().contains("email → \"a@b.com\""), trace::toString);
+  }
+
+  @Test
+  @DisplayName("a generated @BeanFocus navigator records property-named Focus hops and traces the value")
+  void beanNavigatorExplainAndTrace() {
+    final var report = FocusSetterBeanTelescope.of().email().explain();
+    // The generated bean navigator records the PROPERTY name (email), not the getter (getEmail) —
+    // matching the runtime bean path, so explain() and trace() agree across the two tiers.
+    assertEquals(List.of(new Focus("email")), report.nodes());
+    final var bean = new FocusSetterBean();
+    bean.setEmail("a@b.com");
+    assertTrue(
+      FocusSetterBeanTelescope.of().email().trace(bean).toString().contains("email → \"a@b.com\""),
+      "a bean navigator trace must read the property value, not surface (n/a)"
+    );
+  }
+}

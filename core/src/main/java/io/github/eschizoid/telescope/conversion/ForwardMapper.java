@@ -2,6 +2,9 @@ package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.internal.optics.Getter;
+import io.github.eschizoid.telescope.introspection.OpticNode;
+import io.github.eschizoid.telescope.introspection.OpticReport;
+import io.github.eschizoid.telescope.introspection.Trace;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -32,11 +35,27 @@ public final class ForwardMapper<A, B> {
   private final Getter<A, B> forward;
   private final Class<A> sourceClass;
   private final Class<B> targetClass;
+  // The field-decision trail the deep-mapping engine resolved, surfaced by explain(). Carries the
+  // rows resolved by mapperForward(...), and is preserved through the value-only hooks
+  // (beforeForward / afterForward) which don't change the field mapping. Empty for bridge-backed
+  // and
+  // then-composed forward mappers, whose A→C projection has no single flat field table.
+  private final List<OpticNode> explainTrail;
 
   ForwardMapper(final Getter<A, B> forward, final Class<A> sourceClass, final Class<B> targetClass) {
+    this(forward, sourceClass, targetClass, List.of());
+  }
+
+  ForwardMapper(
+    final Getter<A, B> forward,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final List<OpticNode> explainTrail
+  ) {
     this.forward = forward;
     this.sourceClass = sourceClass;
     this.targetClass = targetClass;
+    this.explainTrail = List.copyOf(explainTrail);
   }
 
   /**
@@ -53,8 +72,48 @@ public final class ForwardMapper<A, B> {
     final Class<A> sourceClass,
     final Class<B> targetClass
   ) {
+    return create(forward, sourceClass, targetClass, List.of());
+  }
+
+  /**
+   * <b>Module-internal seam — NOT public API.</b> Same as {@link #create(Function, Class, Class)}
+   * plus the introspection trail the deep-mapping engine resolved, so {@link #explain()} can
+   * surface the forward-only mapper's field decisions.
+   */
+  public static <A, B> ForwardMapper<A, B> create(
+    final Function<? super A, ? extends B> forward,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final List<OpticNode> explainTrail
+  ) {
     final Getter<A, B> getter = forward::apply;
-    return new ForwardMapper<>(getter, sourceClass, targetClass);
+    return new ForwardMapper<>(getter, sourceClass, targetClass, explainTrail);
+  }
+
+  /**
+   * Describe what this forward mapper does, as a queryable {@link OpticReport} — the field
+   * correspondences it resolved, the transformations it applies, the target fields it skips (with
+   * reasons), and the source fields it leaves unused. Built from the same pairing decisions the
+   * mapper converts with, so it cannot drift. Lenient forward mappers surface the {@code
+   * MISSING_SOURCE} skips and {@code UnusedSource} rows a strict {@code Mapper} would reject at
+   * construction.
+   *
+   * @return the structure of this mapper's conversion; never null
+   */
+  public OpticReport explain() {
+    return new OpticReport(explainTrail);
+  }
+
+  /**
+   * Run this forward mapper against {@code input} and show, per resolved field, the source value
+   * flowing to the target value — a {@link Trace} with the value column filled in. Where {@link
+   * #explain()} is the static field structure, {@code trace} runs the conversion. Off the hot path.
+   *
+   * @param input the source value to convert and trace
+   * @return the per-field value trace; never null
+   */
+  public Trace trace(final A input) {
+    return MappingTraces.of(input, forward(input), explainTrail);
   }
 
   /** Forward conversion {@code A → B}. */
@@ -84,6 +143,8 @@ public final class ForwardMapper<A, B> {
     // Genuine lattice routing: Getter.then(Getter) composes two read-only optics into one. The
     // composition is one method call on the substrate, not an inline lambda closure.
     final Getter<A, C> composed = forward.then(next.forward);
+    // No field trail: the A→C projection routes through the intermediate B, so there is no single
+    // flat A→C field table to surface. explain() is intentionally empty on a then-composed mapper.
     return new ForwardMapper<>(composed, sourceClass, next.targetClass);
   }
 
@@ -98,7 +159,9 @@ public final class ForwardMapper<A, B> {
    */
   public ForwardMapper<A, B> beforeForward(final Function<? super A, ? extends A> hook) {
     final Getter<A, A> pre = hook::apply;
-    return new ForwardMapper<>(pre.then(forward), sourceClass, targetClass);
+    // A pre-forward value hook doesn't change which field maps to which — keep the field trail so
+    // explain() / trace() stay populated after composition.
+    return new ForwardMapper<>(pre.then(forward), sourceClass, targetClass, explainTrail);
   }
 
   /**
@@ -110,7 +173,8 @@ public final class ForwardMapper<A, B> {
    */
   public ForwardMapper<A, B> afterForward(final Function<? super B, ? extends B> hook) {
     final Getter<B, B> post = hook::apply;
-    return new ForwardMapper<>(forward.then(post), sourceClass, targetClass);
+    // A post-forward value hook doesn't change the field mapping — keep the field trail.
+    return new ForwardMapper<>(forward.then(post), sourceClass, targetClass, explainTrail);
   }
 
   /**
@@ -127,7 +191,8 @@ public final class ForwardMapper<A, B> {
   public ForwardMapper<A, B> afterForward(final BiFunction<? super A, ? super B, ? extends B> hook) {
     final Getter<A, B> prior = forward;
     final Getter<A, B> wrapped = a -> hook.apply(a, prior.get(a));
-    return new ForwardMapper<>(wrapped, sourceClass, targetClass);
+    // A source-aware post hook still doesn't change the field mapping — keep the field trail.
+    return new ForwardMapper<>(wrapped, sourceClass, targetClass, explainTrail);
   }
 
   /**
