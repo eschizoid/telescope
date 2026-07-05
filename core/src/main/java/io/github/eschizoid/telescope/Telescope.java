@@ -174,9 +174,11 @@ public sealed class Telescope<
     this.fieldOptics = fieldOptics;
     this.chain = chain;
     this.firstHopName = firstHopName;
-    // Stored as-is — every internal caller passes an unshared, already-immutable list (an empty
-    // List.of(), a fresh unmodifiable list from plus() / then(), or a defensively-copied one from
-    // mapped()). Copying here too would copy the trail a second time on every hop.
+    // Stored as-is. The invariant callers must uphold is immutability, not non-sharing: every
+    // internal caller passes an already-immutable list (an empty List.of(), a fresh unmodifiable
+    // list from plus(), or a defensively-copied one from mapped()). then() may alias an existing
+    // immutable trail when one side is empty — safe precisely because it can never be mutated.
+    // Copying here too would copy the trail a second time on every hop.
     this.trail = trail;
   }
 
@@ -1278,7 +1280,14 @@ public sealed class Telescope<
    * {@link #trace(Object)} with explicit caps — use {@link TraceLimits#none()} for the full tree.
    */
   public Trace trace(final S input, final TraceLimits limits) {
-    if (trail.isEmpty()) return new Trace(List.of(Trace.Node.leaf(renderValue(input))));
+    if (trail.isEmpty()) {
+      // No instrumented trail (a bare identity, or an iso-backed conversion from from/to/using or a
+      // bridge). Render what the telescope actually produces — the executed focus — not the raw
+      // input, which would be wrong whenever the output differs from the input; fall back to the
+      // input when there is no focus.
+      final var focus = find(input);
+      return new Trace(List.of(Trace.Node.leaf(renderValue(focus.isPresent() ? focus.get() : input))));
+    }
     final var rowCount = trail
       .stream()
       .filter(n -> n instanceof OpticNode.Row)

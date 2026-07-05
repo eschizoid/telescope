@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.introspection;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -38,6 +39,14 @@ class MappingTelescopeIntrospectionTest {
     assertTrue(text.contains("name") && text.contains("\"Ada\""), text);
     assertTrue(text.contains("city") && text.contains("\"Paris\""), text);
     assertTrue(text.contains("→"), text);
+  }
+
+  @Test
+  @DisplayName("an iso-backed telescope (from/to/using, empty trail) traces the executed output, not the input")
+  void isoBackedTraceShowsExecutedOutput() {
+    final var iso = Telescope.from(String.class).to(Integer.class).using(Integer::parseInt, Object::toString);
+    // Empty trail: trace must render the converted focus (42), not the raw input ("42" quoted).
+    assertEquals("42", iso.trace("42").toString());
   }
 
   @Test
