@@ -42,34 +42,17 @@ public record Trace(List<Node> roots) {
   @Override
   public String toString() {
     final var out = new StringBuilder();
-    for (var i = 0; i < roots.size(); i++) {
-      renderNode(out, roots.get(i), "", i == roots.size() - 1);
-    }
+    for (final var root : roots) render(out, root, "");
     return out.toString().stripTrailing();
   }
 
-  private static void renderNode(final StringBuilder out, final Node node, final String prefix, final boolean last) {
+  private static void render(final StringBuilder out, final Node node, final String prefix) {
     out.append(node.label()).append('\n');
     final var children = node.children();
     for (var i = 0; i < children.size(); i++) {
       final var isLast = i == children.size() - 1;
       out.append(prefix).append(isLast ? " └ " : " ├ ");
-      renderChild(out, children.get(i), prefix + (isLast ? "   " : " │ "), isLast);
-    }
-  }
-
-  private static void renderChild(
-    final StringBuilder out,
-    final Node node,
-    final String childPrefix,
-    final boolean last
-  ) {
-    out.append(node.label()).append('\n');
-    final var children = node.children();
-    for (var i = 0; i < children.size(); i++) {
-      final var isLast = i == children.size() - 1;
-      out.append(childPrefix).append(isLast ? " └ " : " ├ ");
-      renderChild(out, children.get(i), childPrefix + (isLast ? "   " : " │ "), isLast);
+      render(out, children.get(i), prefix + (isLast ? "   " : " │ "));
     }
   }
 }
