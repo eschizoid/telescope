@@ -17,7 +17,9 @@ import java.lang.System.Logger.Level;
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 
 /**
  * The reproducible proof behind the slice README's head-to-head. Committed state is green: both
@@ -26,7 +28,13 @@ import org.junit.jupiter.api.Test;
  * rename divergence itself (telescope's method reference auto-refactors; MapStruct's stale
  * {@code @Mapping} string fails to compile) is a documented manual step in the README — a compile
  * failure can't also be a passing test.
+ *
+ * <p>Methods run in narrated order (Act 1 → bidirectional → footgun → Act 2 → Act 3) via
+ * {@code @Order} (fully qualified at each site — the simple name collides with the domain {@code
+ * Order} record), so the logged walkthrough reads as the README's story top-to-bottom rather than
+ * JUnit's default hash order.
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class MapStructVsTelescopeTest {
 
   private static final Logger LOG = System.getLogger(MapStructVsTelescopeTest.class.getName());
@@ -40,6 +48,7 @@ class MapStructVsTelescopeTest {
   }
 
   @Test
+  @org.junit.jupiter.api.Order(1)
   @DisplayName("Act 1 baseline: MapStruct and telescope produce the identical OrderDto, rename and all")
   void bothFrameworksMapToTheSameDto() {
     final var order = sampleOrder();
@@ -61,6 +70,7 @@ class MapStructVsTelescopeTest {
   }
 
   @Test
+  @org.junit.jupiter.api.Order(2)
   @DisplayName("telescope mapping is bidirectional for free — backward(forward(order)) == order")
   void telescopeMapperRoundTrips() {
     final var order = sampleOrder();
@@ -70,6 +80,7 @@ class MapStructVsTelescopeTest {
   }
 
   @Test
+  @org.junit.jupiter.api.Order(3)
   @DisplayName("Unmapped-target footgun: MapStruct's default policy leaves a target with no source silently null")
   void mapStructSilentlyDropsUnmappedTarget() {
     final var dto = SilentDropMapper.INSTANCE.toContactDto(new Customer("Ada", "ada@example.com"));
@@ -86,6 +97,7 @@ class MapStructVsTelescopeTest {
   }
 
   @Test
+  @org.junit.jupiter.api.Order(4)
   @DisplayName("Act 2: deep immutable update rebuilds the whole graph; the original is untouched")
   void deepUpdateRebuildsImmutably() {
     final var order = sampleOrder();
@@ -107,6 +119,7 @@ class MapStructVsTelescopeTest {
   }
 
   @Test
+  @org.junit.jupiter.api.Order(5)
   @DisplayName("Act 3: the telescope mapper explains and traces itself; MapStruct is a black box")
   void introspectionExposesWhatTheMapperDoes() {
     final var order = sampleOrder();
