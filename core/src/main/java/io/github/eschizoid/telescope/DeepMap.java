@@ -205,6 +205,7 @@ public final class DeepMap {
       trail
     );
     validateAllHintsConsumed(hintMap, cache);
+    validateAllOverridesConsumed(overrideTable, cache, source, target);
     final var iso = (Iso<A, B>) Objects.requireNonNull(cache.get(new TypePair(source, target)));
     final var patchTable = new LinkedHashMap<String, Mapper.PatchEntry>();
     topSteps.forEach((tgtName, step) ->
@@ -327,6 +328,46 @@ public final class DeepMap {
       "Unused writeBean hints — classes never encountered during deep-mapping recursion: " +
         String.join(", ", unused) +
         ". Remove the row, or verify the class is actually reached by the source/target structure."
+    );
+  }
+
+  /**
+   * Reject any {@code Mapping} row bucket whose (source, target) type pair the recursion never
+   * visited — the rows could only ever be silently ignored. The classic trip-wire is reusing a row
+   * group declared against one DTO variant inside a mapper for a different variant: the rows are
+   * keyed by the accessors' declaring classes, so the foreign pair's bucket would sit unvisited
+   * while same-name auto-mapping masks the loss. Failing loudly here keeps explicit rows on the
+   * same footing as the unmatched-field and writeBean-hint validations.
+   */
+  private static void validateAllOverridesConsumed(
+    final Map<TypePair, List<Mapping<?, ?>>> overrideTable,
+    final Map<TypePair, Iso<?, ?>> cache,
+    final Class<?> topSource,
+    final Class<?> topTarget
+  ) {
+    if (overrideTable.isEmpty()) return;
+    final var dead = new ArrayList<String>();
+    for (final var entry : overrideTable.entrySet()) {
+      final var pair = entry.getKey();
+      if (cache.containsKey(pair)) continue;
+      // Drop rows are exempt: an unreachable drop is a harmless no-op (nested pairs are lenient
+      // already), and the one-arg form deliberately buckets a nested source class with the top
+      // target. Only rows that promise a mapping effect can be silently lost.
+      final var rows = new ArrayList<String>();
+      for (final var r : entry.getValue()) {
+        if (!(r instanceof Drop)) rows.add(r.sourceField() + " -> " + r.targetField());
+      }
+      if (rows.isEmpty()) continue;
+      dead.add("(" + pair.source.getName() + " -> " + pair.target.getName() + "): [" + String.join(", ", rows) + "]");
+    }
+    if (!dead.isEmpty()) throw new IllegalArgumentException(
+      "Mapping rows bound to a type pair the mapper (" +
+        topSource.getName() +
+        " -> " +
+        topTarget.getName() +
+        ") never visits — they would be silently ignored: " +
+        String.join("; ", dead) +
+        ". Bind the rows to a type pair this mapper's recursion actually reaches, or remove them."
     );
   }
 
