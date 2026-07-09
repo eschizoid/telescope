@@ -3,10 +3,12 @@ package io.github.eschizoid.telescope.effects;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.runtime.instances.EitherK;
 import io.github.eschizoid.telescope.runtime.instances.ValidatedK;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -273,6 +275,14 @@ class SealedEffectsBranchTest {
     @DisplayName("empty input → Valid(empty list)")
     void emptyInputs() {
       assertEquals(Validated.valid(List.of()), Validated.<String, Integer>combineAll(List.of()));
+    }
+
+    @Test
+    @DisplayName("a null element fails loudly with a message naming the API, never a silent drop")
+    void nullElementFailsLoudly() {
+      final var inputs = Arrays.asList(Validated.<String, Integer>valid(1), null);
+      final var thrown = assertThrows(NullPointerException.class, () -> Validated.combineAll(inputs));
+      assertEquals("combineAll: null Validated element in inputs", thrown.getMessage());
     }
   }
 
