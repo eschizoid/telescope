@@ -173,7 +173,7 @@ forward), 97-104 (arity 3), 121-130 (arity 5, single factory)</sub>
 ### Implicit type conversions
 
 **Status: ⚠️ partial** · **MapStruct:** Automatic conversions between source/target types: primitive<->wrapper
-autoboxing, `String<->`number, enum<->String, date/time<->String, widening numeric conversions — all silent, no
+autoboxing, `String<->number`, `enum<->String`, `date/time<->String`, widening numeric conversions — all silent, no
 declaration needed.
 
 **telescope:**
@@ -191,15 +191,15 @@ Telescope.mapper(Src.class, Dst.class,
     enumTo(Src::status, Dst::status, SrcStatus.class, DstStatus.class));  // enum<->enum by name, exhaustiveness-checked
 ```
 
-`Primitive<->`wrapper is genuinely automatic and matches MapStruct's null->0/false behavior (tested). But
-`String<->`number, enum<->String, and date/time conversions are deliberately NOT implicit (ADR-0002 'no fuzzy
+`Primitive<->wrapper` is genuinely automatic and matches MapStruct's null->0/false behavior (tested). But
+`String<->number`, `enum<->String`, and date/time conversions are deliberately NOT implicit (ADR-0002 'no fuzzy
 auto-mapping'): a same-name field with mismatched types throws at mapper-build time with a message naming the fix. The
 workaround is one explicit to(src, tgt, fwd, bwd) row per pair — compile-typed, but a MapStruct migrator must write rows
 MapStruct generated silently. enum<->enum by name gets first-class sugar (enumTo, with build-time exhaustiveness
 MapStruct lacks); enum<->String does not.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:1016-1035 (Identity / PrimitiveWrapper
-autobox with JLS-default null guard / CollectionCopy branches), DeepMap.java:1049-1069 (`Optional<->`nullable lift);
+autobox with JLS-default null guard / CollectionCopy branches), DeepMap.java:1049-1069 (`Optional<->nullable` lift);
 core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java:472-500 (primitive<->wrapper auto-boxed,
 null boxed -> JLS default), MigrationRegressionTest.java:2815-2845 (same-name Integer vs String pair fails fast pointing
 at 'to(src, tgt, forward, backward)'; 4-arg transform is the documented fix);
