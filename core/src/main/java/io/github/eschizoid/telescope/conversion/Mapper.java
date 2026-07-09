@@ -372,10 +372,10 @@ public final class Mapper<A, B> {
    * mapper throws {@link UnsupportedOperationException} at apply time. Use {@link #forward(Object)}
    * and discard / replace the receiver, or have the target type be a bean with setters.
    *
-   * <p><b>Setter requirement.</b> Every property emitted by the mapping must have a public {@code
-   * setX(...)} setter on {@code target.getClass()}. A missing setter throws {@link
-   * IllegalArgumentException} naming the property; this is intentional — silently skipping
-   * properties without setters would hide the mapping's intent.
+   * <p><b>Setter requirement.</b> Properties are written through public {@code setX(...)} setters
+   * on {@code target.getClass()}; a property without a public setter is silently skipped — the same
+   * semantics MapStruct applies to {@code @MappingTarget} update methods, so read-only fields on
+   * the target don't block the rest of the update.
    *
    * <p><b>Return value for chaining.</b> Returns {@code target} (the same reference passed in) so
    * call sites can fluently chain ({@code repository.save(mapper.into(managed, dto))}).
@@ -385,8 +385,6 @@ public final class Mapper<A, B> {
    * @return {@code target} (same reference, mutated in place)
    * @throws NullPointerException if {@code target} or {@code source} is null
    * @throws UnsupportedOperationException if {@code target}'s class is a record
-   * @throws IllegalArgumentException if any mapped property lacks a public setter on {@code
-   *     target.getClass()}
    */
   public B into(final B target, final A source) {
     if (target == null) throw new NullPointerException("target");
