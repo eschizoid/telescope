@@ -363,19 +363,20 @@ public final class Mapper<A, B> {
    * repository.save(managed);
    * }</pre>
    *
-   * <p>Semantically equivalent to {@code forward(source)} writes — every property the forward
-   * mapping would set is set on {@code target} via its public {@code setX(value)} setter. The hook
-   * chain (before/after) runs as it does in {@link #forward}; the only difference is the final
-   * write step targets {@code target} rather than a fresh allocation.
+   * <p>Semantically equivalent to {@code forward(source)} writes — each property the forward
+   * mapping would set is written onto {@code target} through its public {@code setX(value)} setter
+   * (properties without one are skipped; see the setter note below). The hook chain (before/after)
+   * runs as it does in {@link #forward}; the only difference is the final write step targets {@code
+   * target} rather than a fresh allocation.
    *
    * <p><b>Records rejected.</b> Records are immutable; calling {@code into(...)} on a record-target
    * mapper throws {@link UnsupportedOperationException} at apply time. Use {@link #forward(Object)}
    * and discard / replace the receiver, or have the target type be a bean with setters.
    *
-   * <p><b>Setter requirement.</b> Every property emitted by the mapping must have a public {@code
-   * setX(...)} setter on {@code target.getClass()}. A missing setter throws {@link
-   * IllegalArgumentException} naming the property; this is intentional — silently skipping
-   * properties without setters would hide the mapping's intent.
+   * <p><b>Setter requirement.</b> Properties are written through public {@code setX(...)} setters
+   * on {@code target.getClass()}; a property without a public setter is silently skipped — the same
+   * semantics MapStruct applies to {@code @MappingTarget} update methods, so read-only fields on
+   * the target don't block the rest of the update.
    *
    * <p><b>Return value for chaining.</b> Returns {@code target} (the same reference passed in) so
    * call sites can fluently chain ({@code repository.save(mapper.into(managed, dto))}).
@@ -385,8 +386,6 @@ public final class Mapper<A, B> {
    * @return {@code target} (same reference, mutated in place)
    * @throws NullPointerException if {@code target} or {@code source} is null
    * @throws UnsupportedOperationException if {@code target}'s class is a record
-   * @throws IllegalArgumentException if any mapped property lacks a public setter on {@code
-   *     target.getClass()}
    */
   public B into(final B target, final A source) {
     if (target == null) throw new NullPointerException("target");
@@ -409,9 +408,9 @@ public final class Mapper<A, B> {
     // Scoping: iterate the mapper's patch-table keyset — the set of top-level target fields the
     // engine actually produced values for — NOT every getter-derived property on target.getClass().
     // Iterating all properties would (1) clobber unmapped pre-existing fields on the managed
-    // entity, defeating the "load-mutate-save" idiom; and (2) try to setX(...) on read-only
-    // computed getters (e.g. getFullName() derived from firstName + lastName), raising an IAE for
-    // a property the user never asked us to map.
+    // entity, defeating the "load-mutate-save" idiom; and (2) stage pointless reads for read-only
+    // computed getters (e.g. getFullName() derived from firstName + lastName) whose writes would
+    // silently no-op — work for a property the user never asked us to map.
     final var staged = new LinkedHashMap<String, Object>(patchByTargetField.size());
     for (final var name : patchByTargetField.keySet()) {
       staged.put(name, targetRefl.read(produced, name));

@@ -10,8 +10,9 @@ import io.github.eschizoid.telescope.Telescope.Accessor;
  * target component by name.
  *
  * <p>Single arity-agnostic type. The source slot is recovered from the source accessor's declaring
- * class via {@code SerializedLambda} — the same mechanism that drives {@code Mapping.auto()} — so
- * the row factories scale to any number of source classes without per-arity specialization.
+ * class via {@code SerializedLambda} — the same class-inference mechanism the {@code Mapping} row
+ * factories use — so the row factories scale to any number of source classes without per-arity
+ * specialization.
  *
  * <p>Sealed over two package-private records; users construct rows through the static factories
  * below.
@@ -41,9 +42,9 @@ public sealed interface MergeStep<T> permits MergeStep.FromInferred, MergeStep.A
   record AutoSameName<T>(Class<?> sourceClass) implements MergeStep<T> {}
 
   /**
-   * Row whose source class is inferred from the source accessor's declaring class. At build time
-   * the engine validates the inferred class is present in the merge's source bag declaration; at
-   * forward time it reads the source via {@link Sources#byClass(Class)}.
+   * Row whose source class is inferred from the source accessor's declaring class at build time; at
+   * forward time the engine reads the source via {@link Sources#byClass(Class)} — a missing entry
+   * throws {@link IllegalStateException} naming the class.
    *
    * <pre>{@code
    * Telescope.merge(Profile.class,
