@@ -82,8 +82,9 @@ class MapperBuilderTest {
         .inherit(AUDIT_COLUMNS)
         .add(constant(AdminDto::role, "ADMIN"));
       final var ex = assertThrows(IllegalArgumentException.class, builder::build);
-      assertTrue(ex.getMessage().contains("Entity -> AdminDto"), ex.getMessage());
-      assertTrue(ex.getMessage().contains("Entity -> Dto"), ex.getMessage());
+      // Stable tokens only — the class names (fully qualified in the message) and one dead row.
+      assertTrue(ex.getMessage().contains("AdminDto"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("never visits"), ex.getMessage());
       assertTrue(ex.getMessage().contains("createdAt"), ex.getMessage());
     }
 

@@ -358,21 +358,13 @@ public final class DeepMap {
         if (!(r instanceof Drop)) rows.add(r.sourceField() + " -> " + r.targetField());
       }
       if (rows.isEmpty()) continue;
-      dead.add(
-        "(" +
-          pair.source.getSimpleName() +
-          " -> " +
-          pair.target.getSimpleName() +
-          "): [" +
-          String.join(", ", rows) +
-          "]"
-      );
+      dead.add("(" + pair.source.getName() + " -> " + pair.target.getName() + "): [" + String.join(", ", rows) + "]");
     }
     if (!dead.isEmpty()) throw new IllegalArgumentException(
       "Mapping rows bound to a type pair the mapper (" +
-        topSource.getSimpleName() +
+        topSource.getName() +
         " -> " +
-        topTarget.getSimpleName() +
+        topTarget.getName() +
         ") never visits — they would be silently ignored: " +
         String.join("; ", dead) +
         ". Bind the rows to a type pair this mapper's recursion actually reaches, or remove them."

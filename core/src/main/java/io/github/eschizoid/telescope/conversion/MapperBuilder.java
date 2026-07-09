@@ -40,9 +40,10 @@ import java.util.Objects;
  * <p><b>Row groups bind to their type pair.</b> Each {@code Mapping} row is keyed by its accessors'
  * declaring classes, so a group declared against {@code (UserEntity, UserDto)} reuses across any
  * number of mappers of that same pair (or of pairs whose recursion visits it). Inheriting it into a
- * mapper of a different pair — say {@code (UserEntity, AdminUserDto)} — cannot apply, and {@code
- * build()} fails fast with an error naming the unreachable pair and its rows; declare a per-variant
- * group typed against the variant instead.
+ * mapper of a different pair — say {@code (UserEntity, AdminUserDto)} — cannot apply, and mapper
+ * construction fails fast (through {@code build()} here, or directly through {@link
+ * Telescope#mapper(Class, Class, MapStep...)}) with an error naming the unreachable pair and its
+ * rows; declare a per-variant group typed against the variant instead.
  *
  * <p><b>Equivalent to varargs spread, more declarative.</b> The builder is mechanically equivalent
  * to spreading a {@code MapStep[]} constant into {@link Telescope#mapper(Class, Class,
