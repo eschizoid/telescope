@@ -5,51 +5,51 @@ telescope's actual source and tests (citations below), then adversarially re-ver
 every citation — two verdicts were downgraded and two snippets corrected in that pass. Audited against MapStruct 1.6.3
 semantics and telescope `main`.
 
-**Legend:** ✅ full — the use case is covered, possibly via a different idiom that is no worse · ⚠️ partial —
-achievable, with the real limitation stated in its notes · ❌ missing.
+**Legend:** ✅ full — the use case is covered, possibly via a different idiom that is no worse · ⚠️ partial — the core
+use case works, with the real limitation stated in the row's notes · ❌ missing.
 
 ## Summary
 
-| Area                      | Feature                                                                                                                          | Status |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | :----: |
-| Core mapping              | [Implicit same-name mapping](#implicit-same-name-mapping)                                                                        |   ✅   |
-| Core mapping              | [Explicit rename](#explicit-rename)                                                                                              |   ✅   |
-| Core mapping              | [Nested source path](#nested-source-path)                                                                                        |   ✅   |
-| Core mapping              | [Multiple source parameters](#multiple-source-parameters)                                                                        |   ⚠️   |
-| Conversions               | [Implicit type conversions](#implicit-type-conversions)                                                                          |   ⚠️   |
-| Conversions               | [Format strings](#format-strings)                                                                                                |   ⚠️   |
-| Conversions               | [Expressions](#expressions)                                                                                                      |   ✅   |
-| Conversions               | [Constants and defaults](#constants-and-defaults)                                                                                |   ✅   |
-| Collections & containers  | [Collection element mapping](#collection-element-mapping-listentity---listdto-reusing-the-element-mapping)                       |   ✅   |
-| Collections & containers  | [Map mapping](#map-mapping-mapkv-valuekey-mapping-mapmappingvaluedateformat)                                                     |   ⚠️   |
-| Collections & containers  | [Collection target strategies](#collection-target-strategies-collectionmappingstrategy-mappingtarget-collection-merge-semantics) |   ⚠️   |
-| Collections & containers  | [Stream support](#stream-support-streama---listb--stream-mappings)                                                               |   ⚠️   |
-| Lifecycle & customization | [Before/after hooks](#beforeafter-hooks-beforemapping--aftermapping)                                                             |   ✅   |
-| Lifecycle & customization | [Context parameters](#context-parameters-context)                                                                                |   ⚠️   |
-| Lifecycle & customization | [Qualifiers](#qualifiers-named--custom-qualifier)                                                                                |   ✅   |
-| Lifecycle & customization | [Mapper composition](#mapper-composition-mapperuses)                                                                             |   ✅   |
-| Object creation & update  | [In-place update methods](#in-place-update-methods-mappingtarget)                                                                |   ✅   |
-| Object creation & update  | [Object factories](#object-factories-objectfactory)                                                                              |   ⚠️   |
-| Object creation & update  | [Builder support](#builder-support-auto-detected-builders)                                                                       |   ⚠️   |
-| Object creation & update  | [Records and constructor mapping](#records-and-constructor-mapping)                                                              |   ⚠️   |
-| Policies & null handling  | [Unmapped-target policy](#unmapped-target-policy)                                                                                |   ✅   |
-| Policies & null handling  | [Null value strategies](#null-value-strategies)                                                                                  |   ⚠️   |
-| Policies & null handling  | [Null check strategy](#null-check-strategy)                                                                                      |   ⚠️   |
-| Policies & null handling  | [Conditional mapping](#conditional-mapping)                                                                                      |   ⚠️   |
-| Advanced                  | [Config inheritance](#config-inheritance-inheritconfiguration--inheritinverseconfiguration)                                      |   ⚠️   |
-| Advanced                  | [Decorators](#decorators-decoratedwith)                                                                                          |   ✅   |
-| Advanced                  | [DI component models](#di-component-models-componentmodel--springcdijakarta)                                                     |   ✅   |
-| Advanced                  | [Enum mapping](#enum-mapping-valuemapping--enummapping)                                                                          |   ⚠️   |
-| Advanced                  | [Subclass mapping](#subclass-mapping-subclassmapping)                                                                            |   ⚠️   |
+| Area                      | Feature                                                             | Status |
+| ------------------------- | ------------------------------------------------------------------- | :----: |
+| Core mapping              | [Implicit same-name mapping](#implicit-same-name-mapping)           |   ✅   |
+| Core mapping              | [Explicit rename](#explicit-rename)                                 |   ✅   |
+| Core mapping              | [Nested source path](#nested-source-path)                           |   ✅   |
+| Core mapping              | [Multiple source parameters](#multiple-source-parameters)           |   ⚠️   |
+| Conversions               | [Implicit type conversions](#implicit-type-conversions)             |   ⚠️   |
+| Conversions               | [Format strings](#format-strings)                                   |   ⚠️   |
+| Conversions               | [Expressions](#expressions)                                         |   ✅   |
+| Conversions               | [Constants and defaults](#constants-and-defaults)                   |   ✅   |
+| Collections & containers  | [Collection element mapping](#collection-element-mapping)           |   ✅   |
+| Collections & containers  | [Map mapping](#map-mapping)                                         |   ⚠️   |
+| Collections & containers  | [Collection target strategies](#collection-target-strategies)       |   ⚠️   |
+| Collections & containers  | [Stream support](#stream-support)                                   |   ⚠️   |
+| Lifecycle & customization | [Before/after hooks](#beforeafter-hooks)                            |   ✅   |
+| Lifecycle & customization | [Context parameters](#context-parameters)                           |   ⚠️   |
+| Lifecycle & customization | [Qualifiers](#qualifiers)                                           |   ✅   |
+| Lifecycle & customization | [Mapper composition](#mapper-composition)                           |   ✅   |
+| Object creation & update  | [In-place update methods](#in-place-update-methods)                 |   ✅   |
+| Object creation & update  | [Object factories](#object-factories)                               |   ⚠️   |
+| Object creation & update  | [Builder support](#builder-support)                                 |   ⚠️   |
+| Object creation & update  | [Records and constructor mapping](#records-and-constructor-mapping) |   ⚠️   |
+| Policies & null handling  | [Unmapped-target policy](#unmapped-target-policy)                   |   ✅   |
+| Policies & null handling  | [Null value strategies](#null-value-strategies)                     |   ⚠️   |
+| Policies & null handling  | [Null check strategy](#null-check-strategy)                         |   ⚠️   |
+| Policies & null handling  | [Conditional mapping](#conditional-mapping)                         |   ⚠️   |
+| Advanced                  | [Config inheritance](#config-inheritance)                           |   ⚠️   |
+| Advanced                  | [Decorators](#decorators)                                           |   ✅   |
+| Advanced                  | [DI component models](#di-component-models)                         |   ✅   |
+| Advanced                  | [Enum mapping](#enum-mapping)                                       |   ⚠️   |
+| Advanced                  | [Subclass mapping](#subclass-mapping)                               |   ⚠️   |
 
-**Tally: 13 ✅ · 16 ⚠️ · 0 ❌** — no MapStruct feature is unreachable; every ⚠️ has a working idiom with its limitation
-stated.
+**Tally: 13 ✅ · 16 ⚠️ · 0 ❌** — no feature area is unreachable; every ⚠️ row has a working idiom for its core use
+case, with the residual gaps named in its notes.
 
 ## Core mapping
 
-### ✅ Implicit same-name mapping
+### Implicit same-name mapping
 
-**MapStruct:** Unannotated properties map by name automatically
+**Status: ✅ full** · **MapStruct:** Unannotated properties map by name automatically
 
 **telescope:**
 
@@ -76,9 +76,9 @@ generated-mapper default'); core/src/test/java/io/github/eschizoid/telescope/Dee
 same-name deep copy — no overrides needed': Telescope.map(SameAddrEntity.class, SameAddrDto.class) with zero rows);
 docs/adr/0002-no-fuzzy-auto-mapping.md</sub>
 
-### ✅ Explicit rename
+### Explicit rename
 
-**MapStruct:** @Mapping(source = "email", target = "contactEmail")
+**Status: ✅ full** · **MapStruct:** @Mapping(source = "email", target = "contactEmail")
 
 **telescope:**
 
@@ -92,10 +92,10 @@ Mapper<Customer, CustomerDto> mapper = Telescope.mapper(
 ); // typed method refs, no strings
 ```
 
-Strictly better than MapStruct's string attributes: source/target are compile-checked Serializable method references, so
-IDE rename refactors follow and typos fail at javac, not at annotation-processing. One rename row is keyed by
-(sourceClass, targetClass) and applies at every depth where the pair recurses — MapStruct needs a @Mapping per mapper
-method.
+Stronger than MapStruct's string attributes on refactor safety: source/target are compile-checked Serializable method
+references, so IDE rename refactors follow and typos fail at javac, not at annotation-processing. One rename row is
+keyed by (sourceClass, targetClass) and applies at every depth where the pair recurses — less repetition than a @Mapping
+per mapper method, at the cost of broader scope when two usages of the same pair need different renames.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:97-100 (to(src, tgt) same-typed
 rename) and 111-118 (to(src, tgt, fwd, bwd) typed transform for renames that also change type);
@@ -103,9 +103,10 @@ core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:122-128 (t
 CompanyDto::since) rename in 5-level nesting); core/src/main/java/io/github/eschizoid/telescope/Telescope.java:509-517
 (javadoc: a rename row applies wherever recursion lands on that type pair)</sub>
 
-### ✅ Nested source path
+### Nested source path
 
-**MapStruct:** @Mapping(source = "customer.address.city", target = "city") — dotted path into nested source
+**Status: ✅ full** · **MapStruct:** @Mapping(source = "customer.address.city", target = "city") — dotted path into
+nested source
 
 **telescope:**
 
@@ -128,15 +129,15 @@ instead of dotted strings, so javac checks every hop. Rows using Telescope paths
 pair only — same scope as MapStruct's per-method @Mapping. Known edge: flat-source -> nested-target intermediate
 allocation needs a via(...) workaround for bean intermediates lacking a no-arg ctor/builder.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:361-379 (to(Telescope<A,X>,
-Accessor<B,X>) — javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), 381-402 (both-nested
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:361-379 (to(`Telescope<A,X>`,
+`Accessor<B,X>`) — javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), 381-402 (both-nested
 to(Telescope, Telescope)), 320-359 (nested-target mirror);
 core/src/test/java/io/github/eschizoid/telescope/TelescopeMappingTest.java:181-193 (forward reads nested source path,
 writes flat target), 200-214 (both-nested), 158-174 (codegen navigators on both sides)</sub>
 
-### ⚠️ Multiple source parameters
+### Multiple source parameters
 
-**MapStruct:** CustomerDto toDto(Customer c, Address a) — one target built from several sources
+**Status: ⚠️ partial** · **MapStruct:** CustomerDto toDto(Customer c, Address a) — one target built from several sources
 
 **telescope:**
 
@@ -169,10 +170,11 @@ forward), 97-104 (arity 3), 121-130 (arity 5, single factory)</sub>
 
 ## Conversions
 
-### ⚠️ Implicit type conversions
+### Implicit type conversions
 
-**MapStruct:** Automatic conversions between source/target types: primitive<->wrapper autoboxing, String<->number,
-enum<->String, date/time<->String, widening numeric conversions — all silent, no declaration needed.
+**Status: ⚠️ partial** · **MapStruct:** Automatic conversions between source/target types: primitive<->wrapper
+autoboxing, `String<->`number, enum<->String, date/time<->String, widening numeric conversions — all silent, no
+declaration needed.
 
 **telescope:**
 
@@ -189,25 +191,25 @@ Telescope.mapper(Src.class, Dst.class,
     enumTo(Src::status, Dst::status, SrcStatus.class, DstStatus.class));  // enum<->enum by name, exhaustiveness-checked
 ```
 
-Primitive<->wrapper is genuinely automatic and matches MapStruct's null->0/false behavior (tested). But String<->number,
-enum<->String, and date/time conversions are deliberately NOT implicit (ADR-0002 'no fuzzy auto-mapping'): a same-name
-field with mismatched types throws at mapper-build time with a message naming the fix. The workaround is one explicit
-to(src, tgt, fwd, bwd) row per pair — compile-typed, but a MapStruct migrator must write rows MapStruct generated
-silently. enum<->enum by name gets first-class sugar (enumTo, with build-time exhaustiveness MapStruct lacks);
-enum<->String does not.
+`Primitive<->`wrapper is genuinely automatic and matches MapStruct's null->0/false behavior (tested). But
+`String<->`number, enum<->String, and date/time conversions are deliberately NOT implicit (ADR-0002 'no fuzzy
+auto-mapping'): a same-name field with mismatched types throws at mapper-build time with a message naming the fix. The
+workaround is one explicit to(src, tgt, fwd, bwd) row per pair — compile-typed, but a MapStruct migrator must write rows
+MapStruct generated silently. enum<->enum by name gets first-class sugar (enumTo, with build-time exhaustiveness
+MapStruct lacks); enum<->String does not.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:1016-1035 (Identity / PrimitiveWrapper
-autobox with JLS-default null guard / CollectionCopy branches), DeepMap.java:1049-1069 (Optional<->nullable lift);
+autobox with JLS-default null guard / CollectionCopy branches), DeepMap.java:1049-1069 (`Optional<->`nullable lift);
 core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java:472-500 (primitive<->wrapper auto-boxed,
 null boxed -> JLS default), MigrationRegressionTest.java:2815-2845 (same-name Integer vs String pair fails fast pointing
 at 'to(src, tgt, forward, backward)'; 4-arg transform is the documented fix);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:175-188 (enumTo);
 docs/adr/0002-no-fuzzy-auto-mapping.md (exact name+type only, explicit rows otherwise)</sub>
 
-### ⚠️ Format strings
+### Format strings
 
-**MapStruct:** @Mapping(numberFormat = "$#.00") / @Mapping(dateFormat = "dd.MM.yyyy") — annotation attribute, MapStruct
-generates DecimalFormat/SimpleDateFormat code for both directions.
+**Status: ⚠️ partial** · **MapStruct:** @Mapping(numberFormat = "$#.00") / @Mapping(dateFormat = "dd.MM.yyyy") —
+annotation attribute, MapStruct generates DecimalFormat/SimpleDateFormat code for both directions.
 
 **telescope:**
 
@@ -238,10 +240,10 @@ qualifier dispatch, DateTimeFormatter example at lines 83-94); README.md:981-991
 to @Mapping qualifiedBy); core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java:2826-2845
 (number<->String transform round-trip)</sub>
 
-### ✅ Expressions
+### Expressions
 
-**MapStruct:** @Mapping(expression = "java(...)") for computed target values and defaultExpression = "java(...)" for
-lazily-computed null fallbacks; string-templated Java inside an annotation.
+**Status: ✅ full** · **MapStruct:** @Mapping(expression = "java(...)") for computed target values and defaultExpression
+= "java(...)" for lazily-computed null fallbacks; string-templated Java inside an annotation.
 
 **telescope:**
 
@@ -257,25 +259,25 @@ Telescope.mapper(Order.class, OrderDto.class,
 // or per-field: toOneWay(Order::total, OrderDto::totalText, t -> "$" + t)
 ```
 
-Strictly better idiom than MapStruct's stringly expression: plain typed Java, javac-checked, refactor-safe, no
-expression parser. compute() takes a Supplier (no source arg) — source-dependent expressions route through toOneWay(src,
-tgt, fn) for one source field or the typed afterForward((src, dto) -> ...) hook for multi-field derivation.
-compute/constant rows are forward-only by design (backward drops the slot). Codegen @Compute requires a top-level
-Supplier class (no lambdas in annotations) — slightly heavier than runtime form.
+A better idiom than MapStruct's stringly expression: plain typed Java, javac-checked, refactor-safe, no expression
+parser. compute() takes a Supplier (no source arg) — source-dependent expressions route through toOneWay(src, tgt, fn)
+for one source field or the typed afterForward((src, dto) -> ...) hook for multi-field derivation. compute/constant rows
+are forward-only by design (backward drops the slot). Codegen @Compute requires a top-level Supplier class (no lambdas
+in annotations) — slightly heavier than runtime form.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:527-553 (compute(tgt, Supplier),
 javadoc names the expression=java(Instant.now()) gap), Mapping.java:582-597 (nested-target compute),
 Mapping.java:276-318 (toOrElseGet closes defaultExpression, plus predicate-gated overload), Mapping.java:142-148
 (toOneWay per-field function); core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:497-522
-(afterForward(BiFunction<A,B,B>) source-aware hook, typed @AfterMapping analog);
+(afterForward(`BiFunction<A,B,B>`) source-aware hook, typed @AfterMapping analog);
 core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java:104-148 (fresh-per-call, forward-only
 semantics pinned); core/src/main/java/io/github/eschizoid/telescope/annotations/Compute.java:37-51 (codegen
 @Compute(using = Supplier.class) for @Bridge); README.md:991</sub>
 
-### ✅ Constants and defaults
+### Constants and defaults
 
-**MapStruct:** @Mapping(target = "x", constant = "fixed") stamps a literal; @Mapping(target = "x", defaultValue =
-"fallback") substitutes when source is null.
+**Status: ✅ full** · **MapStruct:** @Mapping(target = "x", constant = "fixed") stamps a literal; @Mapping(target = "x",
+defaultValue = "fallback") substitutes when source is null.
 
 **telescope:**
 
@@ -314,9 +316,10 @@ core/src/main/java/io/github/eschizoid/telescope/annotations/Constant.java:41-50
 
 ## Collections & containers
 
-### ✅ Collection element mapping (List<Entity> -> List<Dto> reusing the element mapping)
+### Collection element mapping
 
-**MapStruct:** List<CarDto> map(List<Car> cars) — generated loop reuses the element mapping method automatically
+**Status: ✅ full** · **MapStruct:** `List<CarDto>` map(`List<Car>` cars) — generated loop reuses the element mapping
+method automatically
 
 **telescope:**
 
@@ -337,22 +340,23 @@ final Mapper<TeamEntity, TeamDto> teamMapper2 = Telescope.mapper(
 ```
 
 Element mapping is reused automatically (same-name recursion) or explicitly (via(...) with a pre-built element Mapper),
-including nested containers like List<Optional<X>> and Map<K,List<X>>. Bidirectional round-trip comes free. One honesty
-caveat: auto-lift requires SAME-kind containers on both sides (PairingRules.java:79 — srcView.kind() == tgtView.kind());
-MapStruct's List -> Set cross-kind copy needs an explicit to(src, tgt, fwd, bwd) row in telescope. Target concrete class
-(ArrayList/LinkedList/CopyOnWriteArrayList/...) is honored via listAllocatorFor (DeepMap.java:1441-1461).
+including nested containers like `List<Optional<X>>` and `Map<K,List<X>>`. Bidirectional round-trip comes free. One
+honesty caveat: auto-lift requires SAME-kind containers on both sides (PairingRules.java:79 — srcView.kind() ==
+tgtView.kind()); MapStruct's List -> Set cross-kind copy needs an explicit to(src, tgt, fwd, bwd) row in telescope.
+Target concrete class (ArrayList/LinkedList/CopyOnWriteArrayList/...) is honored via listAllocatorFor
+(DeepMap.java:1441-1461).
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:65-73 (engine javadoc:
 List/Set/Map-values/Optional lift the element Iso, containers nest to any depth), DeepMap.java:1093-1124 (LiftContainer
 dispatch recursing on element type), DeepMap.java:1213-1268 (liftViaIfNeeded: element-level Mapper auto-lifted through
 the accessor's container); core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:427-449 (via javadoc +
 factory: 'List pair, auto-lifts'); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:125-178
-(5-level nesting, element rename fires inside List of List of List), 264-289 (List<Optional<X>> and Map<K,List<X>>
-auto-lift), 342-372 (via(...) lifts Mapper<UserEntity,UserDto> through a List accessor pair, round-trips)</sub>
+(5-level nesting, element rename fires inside List of List of List), 264-289 (`List<Optional<X>>` and `Map<K,List<X>>`
+auto-lift), 342-372 (via(...) lifts `Mapper<UserEntity,UserDto>` through a List accessor pair, round-trips)</sub>
 
-### ⚠️ Map mapping (Map<K,V> value/key mapping, @MapMapping(valueDateFormat=...))
+### Map mapping
 
-**MapStruct:** Map<String, StringDto> map(Map<String, Entity> m);
+**Status: ⚠️ partial** · **MapStruct:** `Map<String, StringDto>` map(`Map<String, Entity>` m);
 @MapMapping(keyDateFormat/valueDateFormat/keyQualifiedBy/valueQualifiedBy)
 
 **telescope:**
@@ -385,14 +389,14 @@ HashMap/LinkedHashMap/TreeMap/ConcurrentHashMap/...; EnumMap rejected at plan ti
 internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java:80-91 (mismatched key types ->
 Incompatible), 119-122 (non-class key type arg means the Map is not treated as liftable);
 core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:172-174 (Map values recursed, keys preserved),
-280-289 (Map<K, List<Record>> auto-lifts);
+280-289 (`Map<K, List<Record>>` auto-lifts);
 core/src/test/java/io/github/eschizoid/telescope/DeepMapCoverageTest.java:77,152 (key-type mismatch rejection
 asserted)</sub>
 
-### ⚠️ Collection target strategies (CollectionMappingStrategy, @MappingTarget collection merge semantics)
+### Collection target strategies
 
-**MapStruct:** CollectionMappingStrategy = ACCESSOR_ONLY / SETTER_PREFERRED / ADDER_PREFERRED / TARGET_IMMUTABLE;
-@MappingTarget updates an existing target's collections
+**Status: ⚠️ partial** · **MapStruct:** CollectionMappingStrategy = ACCESSOR_ONLY / SETTER_PREFERRED / ADDER_PREFERRED /
+TARGET_IMMUTABLE; @MappingTarget updates an existing target's collections
 
 **telescope:**
 
@@ -429,10 +433,10 @@ core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java:45-98 (w
 BUILDER/SETTERS/FIELDS/CONSTRUCTOR — no ADDER); grep for 'adder' across core/ and codegen/ returned only WriteStrategy
 ladder docs (no adder support anywhere)</sub>
 
-### ⚠️ Stream support (Stream<A> -> List<B> / Stream mappings)
+### Stream support
 
-**MapStruct:** List<CarDto> map(Stream<Car> cars) — generated terminal collect; Stream-typed sources/targets in mapper
-signatures
+**Status: ⚠️ partial** · **MapStruct:** `List<CarDto>` map(`Stream<Car>` cars) — generated terminal collect;
+Stream-typed sources/targets in mapper signatures
 
 **telescope:**
 
@@ -443,7 +447,7 @@ final Mapper<Car, CarDto> carMapper = Telescope.mapper(Car.class, CarDto.class);
 final List<CarDto> dtos = cars.map(carMapper::forward).toList(); // Stream<Car> -> List<CarDto>
 ```
 
-No Stream support in the mapping engine: Stream is not a recognized container kind, so a Stream<X>-typed record
+No Stream support in the mapping engine: Stream is not a recognized container kind, so a `Stream<X>`-typed record
 component or bean property cannot be auto-mapped (the pair is rejected as incompatible shapes; workaround is a manual
 to(src, tgt, fwd, bwd) row that collects/re-streams). The dominant real-world case — converting a Stream at a call site
 — is a one-liner with mapper::forward that is arguably no worse than declaring a Stream method on a MapStruct interface,
@@ -459,9 +463,10 @@ README.md:805)</sub>
 
 ## Lifecycle & customization
 
-### ✅ Before/after hooks (@BeforeMapping / @AfterMapping)
+### Before/after hooks
 
-**MapStruct:** @BeforeMapping / @AfterMapping callback methods invoked around the generated mapping
+**Status: ✅ full** · **MapStruct:** @BeforeMapping / @AfterMapping callback methods invoked around the generated
+mapping
 
 **telescope:**
 
@@ -474,7 +479,7 @@ Mapper<Entity, Dto> mapper = Telescope.mapper(Entity.class, Dto.class, to(Entity
 ```
 
 Four symmetric hooks per direction, each returning a new immutable Mapper; BiFunction overloads give the hook both
-source and structural result (MapStruct's @AfterMapping-with-source pattern). Hooks are Function<X,X> not Consumer, so
+source and structural result (MapStruct's @AfterMapping-with-source pattern). Hooks are `Function<X,X>` not Consumer, so
 they work for immutable records too — arguably richer than MapStruct, where mutable-target hooks are the norm. Hooks
 survive .asTelescope() and chain left-to-right.
 
@@ -486,9 +491,10 @@ direction-laziness, asTelescope() propagation);
 core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java:1239, 1268, 1885; README.md:372
 (parity-table row)</sub>
 
-### ⚠️ Context parameters (@Context)
+### Context parameters
 
-**MapStruct:** @Context param threaded through nested mappings without being mapped itself (e.g. Locale, cycle-tracking)
+**Status: ⚠️ partial** · **MapStruct:** @Context param threaded through nested mappings without being mapped itself
+(e.g. Locale, cycle-tracking)
 
 **telescope:**
 
@@ -525,10 +531,10 @@ mutual recursion map without StackOverflow, zero user code);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:111 (to(src, tgt, fwd, bwd) typed-transform row
 where a closure captures context)</sub>
 
-### ✅ Qualifiers (@Named / custom @Qualifier)
+### Qualifiers
 
-**MapStruct:** @Named("formatter") / custom @Qualifier to pick between multiple candidate mapping methods for the same
-type pair
+**Status: ✅ full** · **MapStruct:** @Named("formatter") / custom @Qualifier to pick between multiple candidate mapping
+methods for the same type pair
 
 **telescope:**
 
@@ -545,10 +551,10 @@ public record UserEntity(String id, Instant expiresAt, Instant createdAt) {}
 ```
 
 The ambiguity qualifiers solve doesn't arise at runtime: each row names its converter/mapper by reference, resolved by
-javac — strictly safer than @Named string matching. Codegen side has the literal @Named-equivalent via @Transform(using,
-method) (forward-only, same asymmetry as a single MapStruct qualified method). One corner: the DI
-TelescopeMapperRegistry allows one mapper per (src,tgt) pair — two semantically-different mappers for the same pair must
-be injected directly with the framework's own @Qualifier, bypassing the registry.
+javac — safer than @Named string matching. Codegen side has the literal @Named-equivalent via @Transform(using, method)
+(forward-only, same asymmetry as a single MapStruct qualified method). One corner: the DI TelescopeMapperRegistry allows
+one mapper per (src,tgt) pair — two semantically-different mappers for the same pair must be injected directly with the
+framework's own @Qualifier, bypassing the registry.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java:59-100 (method() attribute —
 javadoc explicitly says it "unlocks MapStruct's @Named qualifier-dispatch pattern", emits direct
@@ -557,10 +563,10 @@ UsingClass.methodName(value) static call); core/src/main/java/io/github/eschizoi
 spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeMapperRegistry.java:44-66 (duplicate
 (src,tgt) pairs throw with a message directing to Spring @Qualifier + direct injection)</sub>
 
-### ✅ Mapper composition (@Mapper(uses = ...))
+### Mapper composition
 
-**MapStruct:** @Mapper(uses = OtherMapper.class) — delegating nested type conversions to other mappers or static helper
-methods
+**Status: ✅ full** · **MapStruct:** @Mapper(uses = OtherMapper.class) — delegating nested type conversions to other
+mappers or static helper methods
 
 **telescope:**
 
@@ -599,10 +605,10 @@ precedence over auto-recursion); core/src/test/java/io/github/eschizoid/telescop
 
 ## Object creation & update
 
-### ✅ In-place update methods (@MappingTarget)
+### In-place update methods
 
-**MapStruct:** void update(@MappingTarget Entity target, Dto source) — mutate an existing bean instead of constructing a
-fresh one
+**Status: ✅ full** · **MapStruct:** void update(@MappingTarget Entity target, Dto source) — mutate an existing bean
+instead of constructing a fresh one
 
 **telescope:**
 
@@ -627,10 +633,10 @@ with UnsupportedOperationException at :394-400); Mapper.java:290-323 (patch() sp
 core/src/test/java/io/github/eschizoid/telescope/MapperIntoTest.java:16 ('Pins Mapper.into(target, source) — the
 @MappingTarget equivalent'), :136-138 (assertSame identity preservation), :150-153 (repeatable mutation)</sub>
 
-### ⚠️ Object factories (@ObjectFactory)
+### Object factories
 
-**MapStruct:** @ObjectFactory — a user method that instantiates the target (custom constructor args, EntityManager
-lookup, DI-provided instance) which the generated mapper then populates
+**Status: ⚠️ partial** · **MapStruct:** @ObjectFactory — a user method that instantiates the target (custom constructor
+args, EntityManager lookup, DI-provided instance) which the generated mapper then populates
 
 **telescope:**
 
@@ -660,10 +666,10 @@ factory hook); core/src/main/java/io/github/eschizoid/telescope/Telescope.java:4
 conversion/Mapper.java:391-423 (into() covers the load-existing-instance use case); grep for 'ObjectFactory' across
 _.java/_.md returned zero hits</sub>
 
-### ⚠️ Builder support (auto-detected builders)
+### Builder support
 
-**MapStruct:** Auto-detected builder(): Immutables, Lombok @Builder, protobuf builders; customizable via BuilderProvider
-SPI and @Builder(builderMethod=...)
+**Status: ⚠️ partial** · **MapStruct:** Auto-detected builder(): Immutables, Lombok @Builder, protobuf builders;
+customizable via BuilderProvider SPI and @Builder(builderMethod=...)
 
 **telescope:**
 
@@ -696,10 +702,10 @@ LombokFocusProcessorTest.java:53-68 (@Builder and @Value+@Builder navigators ver
 core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:576-712 (writeBean BUILDER/FIELDS/CONSTRUCTOR hint
 tests)</sub>
 
-### ⚠️ Records and constructor mapping
+### Records and constructor mapping
 
-**MapStruct:** Constructor-based target population for records and immutable classes (parameter-name matching, @Default
-constructor selection)
+**Status: ⚠️ partial** · **MapStruct:** Constructor-based target population for records and immutable classes
+(parameter-name matching, @Default constructor selection)
 
 **telescope:**
 
@@ -736,9 +742,9 @@ test)</sub>
 
 ## Policies & null handling
 
-### ✅ Unmapped-target policy
+### Unmapped-target policy
 
-**MapStruct:** unmappedTargetPolicy = ERROR/WARN/IGNORE at @Mapper or @MapperConfig level
+**Status: ✅ full** · **MapStruct:** unmappedTargetPolicy = ERROR/WARN/IGNORE at @Mapper or @MapperConfig level
 
 **telescope:**
 
@@ -774,10 +780,10 @@ codegen/src/main/java/io/github/eschizoid/telescope/codegen/MapperVerifierProces
 Diagnostic.Kind.ERROR/WARNING/off), 325-328 (unmatchedTargets/unmatchedSources reported);
 docs/adr/0012-compile-time-mapper-verification.md:1-40</sub>
 
-### ⚠️ Null value strategies
+### Null value strategies
 
-**MapStruct:** nullValueMappingStrategy / nullValuePropertyMappingStrategy (RETURN_NULL vs RETURN_DEFAULT, SET_TO_NULL
-vs IGNORE on update)
+**Status: ⚠️ partial** · **MapStruct:** nullValueMappingStrategy / nullValuePropertyMappingStrategy (RETURN_NULL vs
+RETURN_DEFAULT, SET_TO_NULL vs IGNORE on update)
 
 **telescope:**
 
@@ -821,9 +827,10 @@ partial ... leaving the rest of base untouched');
 core/src/test/java/io/github/eschizoid/telescope/NullStrategyTest.java:25-100 and tail (PROPAGATE default, DEFAULT
 substitution for String/wrappers/BigDecimal/collections, bean targets, backward-unchanged)</sub>
 
-### ⚠️ Null check strategy
+### Null check strategy
 
-**MapStruct:** nullValueCheckStrategy = ALWAYS — guard every property read before conversion/setter
+**Status: ⚠️ partial** · **MapStruct:** nullValueCheckStrategy = ALWAYS — guard every property read before
+conversion/setter
 
 **telescope:**
 
@@ -855,9 +862,9 @@ internal/src/main/java/io/github/eschizoid/telescope/internal/optics/Iso.java:14
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:269-273 + 314-317 (toOrElse/toOrElseGet
 null-short-circuit before user predicates fire)</sub>
 
-### ⚠️ Conditional mapping
+### Conditional mapping
 
-**MapStruct:** @Condition presence-check methods (e.g. only map non-blank strings)
+**Status: ⚠️ partial** · **MapStruct:** @Condition presence-check methods (e.g. only map non-blank strings)
 
 **telescope:**
 
@@ -896,10 +903,10 @@ core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java (7 @Test
 
 ## Advanced
 
-### ⚠️ Config inheritance (@InheritConfiguration / @InheritInverseConfiguration)
+### Config inheritance
 
-**MapStruct:** @InheritConfiguration reuses a base @Mapping set on a sibling method; @InheritInverseConfiguration
-derives the reverse method from the forward one.
+**Status: ⚠️ partial** · **MapStruct:** @InheritConfiguration reuses a base @Mapping set on a sibling method;
+@InheritInverseConfiguration derives the reverse method from the forward one.
 
 **telescope:**
 
@@ -930,10 +937,10 @@ core/src/test/java/io/github/eschizoid/telescope/MapperBuilderTest.java:70-87 (s
 different mappers); core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:330 (forward), :426-433
 (backward from the same Iso); README.md:442 ("Same Mapping.to(...) row works both ways")</sub>
 
-### ✅ Decorators (@DecoratedWith)
+### Decorators
 
-**MapStruct:** @DecoratedWith(CustomDecorator.class) — an abstract decorator class wraps the generated mapper,
-overriding selected methods and delegating to the injected original.
+**Status: ✅ full** · **MapStruct:** @DecoratedWith(CustomDecorator.class) — an abstract decorator class wraps the
+generated mapper, overriding selected methods and delegating to the injected original.
 
 **telescope:**
 
@@ -961,10 +968,10 @@ afterForward, javadoc :497-502 cites @AfterMapping with @MappingTarget), :539 (b
 :246-252 (asTelescope carries the hook chain), :286-288 (toForwardMapper carries hooks); :151-159 (public
 Mapper.create(forward, backward, ...) for wholesale wrapping)</sub>
 
-### ✅ DI component models (componentModel = spring/cdi/jakarta)
+### DI component models
 
-**MapStruct:** componentModel = "spring" / "cdi" / "jakarta" annotates the generated mapper impl so it is discovered as
-an injectable bean.
+**Status: ✅ full** · **MapStruct:** componentModel = "spring" / "cdi" / "jakarta" annotates the generated mapper impl
+so it is discovered as an injectable bean.
 
 **telescope:**
 
@@ -993,15 +1000,15 @@ Quarkus module's auto-collection uses ArC's @All — but a Mapper is an ordinary
 
 <sub>Evidence:
 spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeAutoConfiguration.java:34-60
-(@AutoConfiguration builds TelescopeMapperRegistry from every Mapper bean; javadoc :26-28 "declare @Bean Mapper<A, B>
+(@AutoConfiguration builds TelescopeMapperRegistry from every Mapper bean; javadoc :26-28 "declare @Bean `Mapper<A, B>`
 and it shows up in the registry");
 quarkus/src/main/java/io/github/eschizoid/telescope/quarkus/TelescopeProducer.java:23-42 (@ApplicationScoped producer,
-ArC @All List<Mapper<?, ?>> collector); README.md:373 (starter row in the comparison table)</sub>
+ArC @All `List<Mapper<?, ?>>` collector); README.md:373 (starter row in the comparison table)</sub>
 
-### ⚠️ Enum mapping (@ValueMapping / @EnumMapping)
+### Enum mapping
 
-**MapStruct:** @ValueMapping(source = "X", target = "Y") per-constant renames with ANY_REMAINING/ANY_UNMAPPED defaults;
-@EnumMapping name-transformation strategies (prefix/suffix/case).
+**Status: ⚠️ partial** · **MapStruct:** @ValueMapping(source = "X", target = "Y") per-constant renames with
+ANY_REMAINING/ANY_UNMAPPED defaults; @EnumMapping name-transformation strategies (prefix/suffix/case).
 
 **telescope:**
 
@@ -1028,10 +1035,10 @@ Enum.valueOf both ways), :190-225 (factory-time exhaustiveness diff naming missi
 tgt, fwd, bwd)); core/src/test/java/io/github/eschizoid/telescope/MappingEnumToTest.java:62 (happy-path round-trip),
 :91-113 (mismatch diagnostics + escape-hatch message); README.md:369, :988 (comparison rows)</sub>
 
-### ⚠️ Subclass mapping (@SubclassMapping)
+### Subclass mapping
 
-**MapStruct:** @SubclassMapping(source = Sub.class, target = SubDto.class) — polymorphic dispatch over an
-abstract/sealed source hierarchy, inheriting the parent method's mapping config.
+**Status: ⚠️ partial** · **MapStruct:** @SubclassMapping(source = Sub.class, target = SubDto.class) — polymorphic
+dispatch over an abstract/sealed source hierarchy, inheriting the parent method's mapping config.
 
 **telescope:**
 

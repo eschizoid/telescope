@@ -22,8 +22,8 @@ public interface CustomerMapper {
 ```
 
 Strings become typed method references (the compiler checks them, the IDE refactors them), the reverse direction is
-free, and the mapper can [explain and trace itself](mapstruct-parity.md) — which is also how you _verify_ each migration
-step below.
+free, and the mapper can [explain and trace itself](../README.md) — which is also how you _verify_ each migration step
+below.
 
 ## Coexistence: migrate one mapper at a time
 
@@ -39,25 +39,25 @@ Nothing forces order: leave the long tail on MapStruct as long as you like.
 
 ## Translation table
 
-| MapStruct                                       | telescope                                                                                                                                    |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| implicit same-name mapping                      | implicit too — `Telescope.mapper(A.class, B.class)` with zero rows deep-recurses by name                                                     |
-| `@Mapping(source = "a", target = "b")`          | `to(A::a, B::getB)`                                                                                                                          |
-| `@Mapping(source = "x.y.z", target = "flat")`   | `to(Telescope.of(A.class).field(A::x).field(X::y).field(Y::z), B::getFlat)`                                                                  |
-| `@Mapping(target = "t", ignore = true)`         | `drop(A::t)`                                                                                                                                 |
-| `@Mapping(expression = "java(...)")`            | `to(A::src, B::getT, a -> compute(a), b -> invert(b))` — a typed function, not a string of Java                                              |
-| `@Mapping(constant = "fixed")` / `defaultValue` | a transform row whose function returns the constant / falls back on null                                                                     |
-| type conversion (`String` ↔ `LocalDate`, …)     | `to(A::birthDate, B::getBirthDate, LocalDate::parse, LocalDate::toString)`                                                                   |
-| nested type reuse / `@Mapper(uses = …)`         | `via(A::address, B::getAddress, addressMapper)`                                                                                              |
-| `@AfterMapping` / `@BeforeMapping`              | `mapper.afterForward((src, dst) -> …)` / `mapper.beforeForward(…)` — returns a new immutable mapper                                          |
-| `void update(@MappingTarget E e, D d)`          | `mapper.into(entity, dto)` (silent-skip on missing setters, same semantics) / `mapper.patch(…)`                                              |
-| `CustomerDto toDto(Customer c, Address a)`      | `Telescope.merge(CustomerDto.class, auto(Customer.class), from(Address::city, CustomerDto::city))`                                           |
-| `unmappedTargetPolicy = ERROR`                  | free — strict `mapper(...)` refuses unmapped fields at construction (and at **compile time** with `telescope-codegen` on the processor path) |
-| `unmappedTargetPolicy = WARN` (the default)     | `Telescope.mapperForward(A.class, B.class)` — lenient one-way, matching MapStruct's default posture                                          |
-| `componentModel = "spring"/"cdi"`               | plain `@Bean` / `@Produces Mapper<A, B>` + the starter's `TelescopeMapperRegistry`                                                           |
-| generated `…MapperImpl` you read to debug       | `mapper.explain()` / `mapper.trace(input)` / flip a log level — [introspection](mapstruct-parity.md)                                         |
+| MapStruct                                       | telescope                                                                                                                                                                           |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| implicit same-name mapping                      | implicit too — `Telescope.mapper(A.class, B.class)` with zero rows deep-recurses by name                                                                                            |
+| `@Mapping(source = "a", target = "b")`          | `to(A::a, B::getB)`                                                                                                                                                                 |
+| `@Mapping(source = "x.y.z", target = "flat")`   | `to(Telescope.of(A.class).field(A::x).field(X::y).field(Y::z), B::getFlat)`                                                                                                         |
+| `@Mapping(target = "t", ignore = true)`         | `drop(A::t)` for a source-side field; a target-only field takes `constant(B::getT, …)` or the lenient `mapperForward(...)`                                                          |
+| `@Mapping(expression = "java(...)")`            | `to(A::src, B::getT, a -> compute(a), b -> invert(b))` — a typed function, not a string of Java                                                                                     |
+| `@Mapping(constant = "fixed")` / `defaultValue` | `constant(B::getT, "fixed")` / `toOrElse(A::x, B::getX, fallback)`                                                                                                                  |
+| type conversion (`String` ↔ `LocalDate`, …)     | `to(A::birthDate, B::getBirthDate, LocalDate::parse, LocalDate::toString)`                                                                                                          |
+| nested type reuse / `@Mapper(uses = …)`         | `via(A::address, B::getAddress, addressMapper)`                                                                                                                                     |
+| `@AfterMapping` / `@BeforeMapping`              | `mapper.afterForward((src, dst) -> …)` / `mapper.beforeForward(…)` — returns a new immutable mapper                                                                                 |
+| `void update(@MappingTarget E e, D d)`          | `mapper.into(entity, dto)` (silent-skip on missing setters, same semantics) / `mapper.patch(…)`                                                                                     |
+| `CustomerDto toDto(Customer c, Address a)`      | `Telescope.merge(CustomerDto.class, auto(Customer.class), from(Address::city, CustomerDto::getCity))`                                                                               |
+| `unmappedTargetPolicy = ERROR`                  | free — strict `mapper(...)` refuses unmapped fields at construction (and at **compile time** with `telescope-codegen` on the processor path)                                        |
+| `unmappedTargetPolicy = WARN` (the default)     | `Telescope.mapperForward(A.class, B.class)` — lenient one-way like MapStruct's default at runtime (silently, i.e. IGNORE; add `-Atelescope.verify=warn` for the build-time warning) |
+| `componentModel = "spring"/"cdi"`               | plain `@Bean` / `@Produces Mapper<A, B>` + the starter's `TelescopeMapperRegistry`                                                                                                  |
+| generated `…MapperImpl` you read to debug       | `mapper.explain()` / `mapper.trace(input)` / flip a log level — [introspection](../README.md)                                                                                       |
 
-Every row above is expanded — with evidence and limitations — in the [parity matrix](mapstruct-parity.md).
+Every mapping row above is expanded — with evidence and limitations — in the [parity matrix](mapstruct-parity.md).
 
 ## Verify each step (don't trust the diff, assert it)
 
