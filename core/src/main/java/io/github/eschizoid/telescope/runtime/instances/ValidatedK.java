@@ -65,16 +65,16 @@ public final class ValidatedK<E> implements Kind.Witness {
         final var va = unbox(fa);
         final var vb = unbox(fb);
         if (
-          va instanceof Validated.Invalid<E, A>(List<E> errorsA) &&
-          vb instanceof Validated.Invalid<E, B>(List<E> errorsB)
+          va instanceof Validated.Invalid<E, A>(final List<E> errorsA) &&
+          vb instanceof Validated.Invalid<E, B>(final List<E> errorsB)
         ) {
           final var combined = new ArrayList<E>(errorsA.size() + errorsB.size());
           combined.addAll(errorsA);
           combined.addAll(errorsB);
           return box(Validated.invalid(combined));
         }
-        if (va instanceof Validated.Invalid<E, A>(List<E> errors)) return box(Validated.invalid(errors));
-        if (vb instanceof Validated.Invalid<E, B>(List<E> errors)) return box(Validated.invalid(errors));
+        if (va instanceof Validated.Invalid<E, A>(final List<E> errors)) return box(Validated.invalid(errors));
+        if (vb instanceof Validated.Invalid<E, B>(final List<E> errors)) return box(Validated.invalid(errors));
         final var a = ((Validated.Valid<E, A>) va).value();
         final var b = ((Validated.Valid<E, B>) vb).value();
         return box(Validated.valid(f.apply(a, b)));

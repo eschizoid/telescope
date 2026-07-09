@@ -287,14 +287,17 @@ public sealed interface Validated<E, A> {
     final Validated<E, B> right,
     final BiFunction<? super A, ? super B, ? extends C> f
   ) {
-    if (left instanceof Invalid<E, A>(List<E> leftErrors) && right instanceof Invalid<E, B>(List<E> rightErrors)) {
+    if (
+      left instanceof Invalid<E, A>(final List<E> leftErrors) &&
+      right instanceof Invalid<E, B>(final List<E> rightErrors)
+    ) {
       final var combined = new ArrayList<E>(leftErrors.size() + rightErrors.size());
       combined.addAll(leftErrors);
       combined.addAll(rightErrors);
       return new Invalid<>(combined);
     }
-    if (left instanceof Invalid<E, A>(List<E> errors)) return new Invalid<>(errors);
-    if (right instanceof Invalid<E, B>(List<E> errors)) return new Invalid<>(errors);
+    if (left instanceof Invalid<E, A>(final List<E> errors)) return new Invalid<>(errors);
+    if (right instanceof Invalid<E, B>(final List<E> errors)) return new Invalid<>(errors);
     final var l = ((Valid<E, A>) left).value();
     final var r = ((Valid<E, B>) right).value();
     return new Valid<>(f.apply(l, r));

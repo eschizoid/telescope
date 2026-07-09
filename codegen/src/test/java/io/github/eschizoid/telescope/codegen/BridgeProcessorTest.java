@@ -1440,7 +1440,9 @@ class BridgeProcessorTest {
   class SealedRoots {
 
     @Test
-    @DisplayName("sealed interface ↔ sealed interface emits a switch over permits that delegates to per-case bridges")
+    @DisplayName(
+      "sealed interface ↔ sealed interface emits an exhaustive Match over permits that delegates to per-case bridges"
+    )
     void sealedToSealed() {
       final var compilation = compile(
         source(

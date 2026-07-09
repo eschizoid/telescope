@@ -1788,9 +1788,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   // Sealed-source bridge: dispatch on the permits clause and delegate each case to the per-case
   // bridge that the user already declared with @Bridge on the subtype. The emitted forward/backward
-  // are pattern-match switches over the sealed permits; no field walking, no rebuild — just one
-  // dispatch arm per case. Requires every permit case to be @Bridge-annotated and its target to be
-  // a permit of the sealed target.
+  // dispatch through the Match.of(...).when(...).exhaustive() fluent over the sealed permits; no
+  // field walking, no rebuild — just one dispatch arm per case. Requires every permit case to be
+  // @Bridge-annotated and its target to be a permit of the sealed target.
   private void generateSealed(
     final TypeElement source,
     final TypeElement target,

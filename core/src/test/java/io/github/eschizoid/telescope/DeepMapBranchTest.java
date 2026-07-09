@@ -16,15 +16,15 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * Pins the instanceof / record-pattern branches in {@link DeepMap} that the Java 17 cross-compile
- * (PR #80) rewrote — specifically the post-fixup row routing inside {@code applyForward} / {@code
- * applyBackward} (covering {@code Constant}, {@code Compute}, {@code TelescopeToTelescope} zip /
- * broadcast, and {@code FromTelescopeTo}), and the {@code DefaultWriteHint} record-pattern site in
- * {@code extractDefaultStrategy}.
+ * Pins the row-routing branches in {@link DeepMap}'s post-fixup passes — {@code applyForward} /
+ * {@code applyBackward} (covering {@code Constant}, {@code Compute}, {@code TelescopeToTelescope}
+ * zip / broadcast, and {@code FromTelescopeTo}) — and the {@code DefaultWriteHint} record-pattern
+ * site in {@code extractDefaultStrategy}.
  *
  * <p>The base {@code TelescopeTest} / {@code MappingTest} fixtures cover the common rows; this file
- * targets the specific branches whose codecov coverage degraded when the sealed-switch
- * exhaustiveness check moved from compile-time (pre-#80) to runtime-fallthrough (post-#80).
+ * targets the branches that route sequentially through instanceof chains (no compiler-checked
+ * exhaustiveness there, unlike the sealed switch in {@code fieldIsoOf}), so each arm needs an
+ * explicit pin.
  */
 class DeepMapBranchTest {
 
