@@ -15,10 +15,10 @@ import java.util.Objects;
  *
  * <pre>{@code
  * private static final MapStep[] AUDIT_COLUMNS = {
- *     to(Entity::createdAt, Dto::createdAt),
- *     to(Entity::createdBy, Dto::createdBy),
- *     to(Entity::updatedAt, Dto::updatedAt),
- *     to(Entity::updatedBy, Dto::updatedBy)};
+ *     to(UserEntity::createdAt, UserDto::createdAt),
+ *     to(UserEntity::createdBy, UserDto::createdBy),
+ *     to(UserEntity::updatedAt, UserDto::updatedAt),
+ *     to(UserEntity::updatedBy, UserDto::updatedBy)};
  *
  * private static final MapStep[] DEFAULTS = {
  *     nullSourceValues(DEFAULT),
@@ -31,11 +31,18 @@ import java.util.Objects;
  *     .add(constant(UserDto::tenant, "us-east"))
  *     .build();
  *
- * final Mapper<UserEntity, AdminUserDto> adminMapper = Telescope.mapperBuilder(UserEntity.class, AdminUserDto.class)
- *     .inherit(AUDIT_COLUMNS)                                 // same audit rules
- *     .add(constant(AdminUserDto::role, "ADMIN"))
+ * final Mapper<UserEntity, UserDto> projectionMapper = Telescope.mapperBuilder(UserEntity.class, UserDto.class)
+ *     .inherit(AUDIT_COLUMNS)                                 // same audit rules, second mapper
+ *     .add(constant(UserDto::tenant, "eu-west"))
  *     .build();
  * }</pre>
+ *
+ * <p><b>Row groups bind to their type pair.</b> Each {@code Mapping} row is keyed by its accessors'
+ * declaring classes, so a group declared against {@code (UserEntity, UserDto)} reuses across any
+ * number of mappers of that same pair (or of pairs whose recursion visits it). Inheriting it into a
+ * mapper of a different pair — say {@code (UserEntity, AdminUserDto)} — cannot apply, and {@code
+ * build()} fails fast with an error naming the unreachable pair and its rows; declare a per-variant
+ * group typed against the variant instead.
  *
  * <p><b>Equivalent to varargs spread, more declarative.</b> The builder is mechanically equivalent
  * to spreading a {@code MapStep[]} constant into {@link Telescope#mapper(Class, Class,

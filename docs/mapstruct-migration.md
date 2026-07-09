@@ -98,9 +98,9 @@ cheapest possible safety net, and you delete it together with the old interface.
   mapper often _surfaces_ fields MapStruct was silently nulling — that's the point, not a regression.
 - **Multiple source parameters** go through `Telescope.merge(...)` with a `Sources` bag — the source-class check happens
   at `forward(...)` time, not at the method signature (see the matrix row for details).
-- **Row-group reuse** (`MapperBuilder.inherit`) currently applies only across mappers of the **same** (source, target)
-  pair — a group inherited into a different pair is silently dropped
-  ([#223](https://github.com/eschizoid/telescope/issues/223)).
+- **Row-group reuse** (`MapperBuilder.inherit`) applies across mappers of the **same** (source, target) pair; a group
+  inherited into a different pair fails fast at `build()` with an error naming the unreachable pair
+  ([#223](https://github.com/eschizoid/telescope/issues/223)) — declare a per-variant group instead.
 - **Multi-constructor immutables** (MapStruct's `@Default`) aren't disambiguated — records and single-constructor
   classes are the supported shapes.
 - **Hot loops:** the runtime path is reflective (fast enough outside hot paths); annotate the pair with

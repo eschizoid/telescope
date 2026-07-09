@@ -67,6 +67,42 @@ class MapperBuilderTest {
   }
 
   @Nested
+  @DisplayName("Cross-pair inherit fails fast — rows bound to a foreign type pair cannot be silently dropped")
+  class CrossPairInherit {
+
+    @Test
+    @DisplayName("inheriting a Dto-typed row group into an AdminDto mapper throws at build, naming both pairs")
+    void crossPairInheritThrowsAtBuild() {
+      // AUDIT_COLUMNS rows decode to the (Entity, Dto) pair; an (Entity, AdminDto) mapper never
+      // visits that pair, so the rows could only ever be silently ignored (same-name auto masks
+      // the loss). The builder must refuse instead.
+      // constant(role) satisfies the strict check, so pre-guard this mapper built cleanly and the
+      // inherited rows were dead — the exact silent loss the guard now surfaces.
+      final var builder = Telescope.mapperBuilder(Entity.class, AdminDto.class)
+        .inherit(AUDIT_COLUMNS)
+        .add(constant(AdminDto::role, "ADMIN"));
+      final var ex = assertThrows(IllegalArgumentException.class, builder::build);
+      assertTrue(ex.getMessage().contains("Entity -> AdminDto"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("Entity -> Dto"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("createdAt"), ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("the same dead-row guard fires through the plain varargs factory, not just the builder")
+    void crossPairRowsThrowViaVarargsFactory() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.mapper(
+          Entity.class,
+          AdminDto.class,
+          to(Entity::createdAt, Dto::createdAt),
+          constant(AdminDto::role, "ADMIN")
+        )
+      );
+      assertTrue(ex.getMessage().contains("never visits"), ex.getMessage());
+    }
+  }
+
+  @Nested
   @DisplayName("Different mappers reusing the same shared group")
   class SharedAcrossMappers {
 

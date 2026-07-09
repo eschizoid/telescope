@@ -929,9 +929,10 @@ Entity back = mapper.backward(mapper.forward(entity));
 ```
 
 Row groups reuse cleanly across mappers of the SAME (source, target) pair, and the inverse half is free (backward()
-derives from the same rows). Verified limitation: a group inherited into a DIFFERENT type pair is silently dropped (rows
-are bucketed by their decoded type pair; never-visited buckets are ignored) — cross-DTO-variant reuse per
-MapperBuilder's javadoc example does not currently apply the shared rows. Tracked as a bug (#223).
+derives from the same rows). Remaining limitation: rows bind to their decoded type pair, so a group cannot be reused
+across DTO variants of different pairs — but a group inherited into a foreign pair now fails fast at build with an error
+naming the unreachable pair and its rows (#223), instead of being silently dropped. Declare a per-variant group typed
+against the variant.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/MapperBuilder.java:10-14 (javadoc: "Closes
 MapStruct's @InheritConfiguration"), :106-109 (inherit), :150-152 (build delegates to Telescope.mapper);
