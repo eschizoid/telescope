@@ -663,8 +663,8 @@ losing auto-mapping for the remaining fields.
 accept only the 4-value WriteStrategy enum at :58-63 — no Supplier/factory function overload);
 core/src/main/java/io/github/eschizoid/telescope/conversion/MapperBuilder.java:91-160 (create/inherit/add/build — no
 factory hook); core/src/main/java/io/github/eschizoid/telescope/Telescope.java:463-495 (from/to/using escape hatch);
-conversion/Mapper.java:391-423 (into() covers the load-existing-instance use case); grep for 'ObjectFactory' across
-_.java/_.md returned zero hits</sub>
+conversion/Mapper.java:391-423 (into() covers the load-existing-instance use case); no ObjectFactory counterpart exists
+anywhere in the main source sets</sub>
 
 ### Builder support
 

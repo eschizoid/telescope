@@ -11,14 +11,26 @@ A MapStruct mapper is an annotated interface whose implementation is generated a
 **value** you build and hold:
 
 ```java
-// MapStruct                                        // telescope
-@Mapper                                             import static io.github.eschizoid.telescope.mapping.Mapping.to;
+// MapStruct — an annotated interface, implementation generated at compile time
+@Mapper
 public interface CustomerMapper {
-  @Mapping(source = "email",                        Mapper<Customer, CustomerDto> MAPPER = Telescope.mapper(
-           target = "contactEmail")                     Customer.class, CustomerDto.class,
-  CustomerDto toDto(Customer customer);                 to(Customer::email, CustomerDto::getContactEmail));
-  Customer fromDto(CustomerDto dto);                // backward() is the same value — no second method
+  @Mapping(source = "email", target = "contactEmail")
+  CustomerDto toDto(Customer customer);
+
+  Customer fromDto(CustomerDto dto); // the reverse direction is a second method
 }
+```
+
+```java
+// telescope — one value, both directions
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
+
+Mapper<Customer, CustomerDto> MAPPER = Telescope.mapper(
+  Customer.class,
+  CustomerDto.class,
+  to(Customer::email, CustomerDto::getContactEmail)
+);
+// MAPPER.forward(customer) and MAPPER.backward(dto) — no second method
 ```
 
 Strings become typed method references (the compiler checks them, the IDE refactors them), the reverse direction is
@@ -64,6 +76,8 @@ Every mapping row above is expanded — with evidence and limitations — in the
 telescope's introspection makes each migrated mapper self-checking:
 
 ```java
+import io.github.eschizoid.telescope.introspection.OpticNode.Mapped;
+
 // the migrated mapper maps everything the old one did — nothing silently dropped
 assertThat(mapper.explain().skipped()).isEmpty();
 
