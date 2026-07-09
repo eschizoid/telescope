@@ -4,8 +4,8 @@ plugins {
     id("io.spring.dependency-management") version "1.1.7"
 }
 
-// Spring Boot 4.0.1 — the latest GA at the time of this demo. Brings Spring Framework 7.0,
-// Jakarta EE 10 (`jakarta.persistence.*`), Hibernate 7, and Java 17 baseline. We compile to 25.
+// Spring Boot 4.x — brings Spring Framework 7.0, Jakarta EE 10 (`jakarta.persistence.*`), and
+// Hibernate 7. This module compiles with --release 21 on the Java 25 toolchain.
 
 group = "io.github.eschizoid.telescope.demo"
 version = "0.0.1-SNAPSHOT"
@@ -54,7 +54,7 @@ dependencies {
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release = 17
+    options.release = 21
     options.encoding = "UTF-8"
     // -parameters lets Spring's @PathVariable / @RequestParam resolve by name without
     // explicit annotation values, and helps Jackson's record-creator detection.

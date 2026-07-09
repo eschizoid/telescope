@@ -24,7 +24,7 @@ java {
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release = 17
+    options.release = 21
     options.encoding = "UTF-8"
     // -Xlint:-module suppresses the "qualified-export target module not found" warning that fires
     // because :core (io.github.eschizoid.telescope) requires :internal, not the other way around,

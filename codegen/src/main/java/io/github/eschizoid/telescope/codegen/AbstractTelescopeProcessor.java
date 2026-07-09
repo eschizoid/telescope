@@ -924,7 +924,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     if (props.isEmpty()) {
       out.println("    return Map.of();");
     } else if (props.size() == 1) {
-      final var onlyName = props.get(0).name();
+      final var onlyName = props.getFirst().name();
       out.println("    return Map.of(\"" + onlyName + "\", " + onlyName + ");");
     } else {
       out.println("    return Map.ofEntries(");

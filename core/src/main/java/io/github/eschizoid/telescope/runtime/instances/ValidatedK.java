@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.effects.Validated;
 import io.github.eschizoid.telescope.internal.optics.Applicative;
 import io.github.eschizoid.telescope.internal.optics.Kind;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -63,16 +64,17 @@ public final class ValidatedK<E> implements Kind.Witness {
       ) {
         final var va = unbox(fa);
         final var vb = unbox(fb);
-        if (va instanceof Validated.Invalid<E, A> invA && vb instanceof Validated.Invalid<E, B> invB) {
-          final var errors1 = invA.errors();
-          final var errors2 = invB.errors();
-          final var combined = new ArrayList<E>(errors1.size() + errors2.size());
-          combined.addAll(errors1);
-          combined.addAll(errors2);
+        if (
+          va instanceof Validated.Invalid<E, A>(final List<E> errorsA) &&
+          vb instanceof Validated.Invalid<E, B>(final List<E> errorsB)
+        ) {
+          final var combined = new ArrayList<E>(errorsA.size() + errorsB.size());
+          combined.addAll(errorsA);
+          combined.addAll(errorsB);
           return box(Validated.invalid(combined));
         }
-        if (va instanceof Validated.Invalid<E, A> invA) return box(Validated.invalid(invA.errors()));
-        if (vb instanceof Validated.Invalid<E, B> invB) return box(Validated.invalid(invB.errors()));
+        if (va instanceof Validated.Invalid<E, A>(final List<E> errors)) return box(Validated.invalid(errors));
+        if (vb instanceof Validated.Invalid<E, B>(final List<E> errors)) return box(Validated.invalid(errors));
         final var a = ((Validated.Valid<E, A>) va).value();
         final var b = ((Validated.Valid<E, B>) vb).value();
         return box(Validated.valid(f.apply(a, b)));

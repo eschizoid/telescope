@@ -142,9 +142,9 @@ final class DeepMappingDemo {
     final CompanyDto dto = mapper.read(entity);
     System.out.println("[map] founded→since         : " + dto.since());
     System.out.println(
-      "[map] name→fullName (deep)  : " + dto.departments().get(0).teams().get(0).users().get(0).fullName()
+      "[map] name→fullName (deep)  : " + dto.departments().getFirst().teams().getFirst().users().getFirst().fullName()
     );
-    System.out.println("[map] Optional<User> head   : " + dto.departments().get(0).head().orElseThrow().fullName());
+    System.out.println("[map] Optional<User> head   : " + dto.departments().getFirst().head().orElseThrow().fullName());
     System.out.println("[map] Map<String,Address>   : " + dto.officesByRegion().get("EU").city());
   }
 

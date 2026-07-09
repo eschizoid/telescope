@@ -262,11 +262,11 @@ public final class DeepMap {
   private static WriteHint.WriteStrategy extractDefaultStrategy(final List<WriteHint<?>> hints) {
     WriteHint.WriteStrategy defaultStrategy = null;
     for (final var hint : hints) {
-      if (!(hint instanceof WriteHint.DefaultWriteHint defaultHint)) continue;
+      if (!(hint instanceof WriteHint.DefaultWriteHint(final WriteHint.WriteStrategy strat))) continue;
       if (defaultStrategy != null) throw new IllegalArgumentException(
         "Duplicate writeBeans(...) default — at most one default write strategy per Telescope.map(...) call."
       );
-      defaultStrategy = defaultHint.strategy();
+      defaultStrategy = strat;
     }
     return defaultStrategy;
   }
@@ -1161,53 +1161,56 @@ public final class DeepMap {
     // Inline the contributed leaf-level Iso for each row variant. Reading the public components
     // directly keeps Iso (internal) out of the mapping types' public signatures — so the mapping
     // types stay portable across packages without needing @SuppressWarnings("exports").
-    // SameTypedTo carries no conversion; populateIso resolves it through autoIso (identity /
-    // primitive-wrapper / container lifting / incompatible-shape rejection), so it must not reach
-    // here. The guard surfaces a routing regression with a clear class name, like the rows below.
-    if (row instanceof SameTypedTo<?, ?, ?>) throw new IllegalStateException(
-      "SameTypedTo row should be resolved via autoIso, not fieldIsoOf"
-    );
-    if (row instanceof TypedTransformTo<?, ?, ?, ?> r) return Iso.of((Function) r.forward(), (Function) r.backward());
-    if (row instanceof ForwardOnlyTransformTo<?, ?, ?, ?> r) {
-      // DEAD-BRANCH-DEFENSIVE: this throwingBackward lambda is unreachable via the public API.
-      // Both factory entries Telescope.map(...) and Telescope.mapper(...) call
-      // rejectForwardOnlyRows
-      // up front; Telescope.mapperForward(...) accepts the row but never invokes the backward leg.
-      // The guard remains so a future cross-package construction path that bypasses
-      // rejectForwardOnlyRows produces a precise field-naming error rather than silent corruption.
-      // NOT a coverage target.
-      final String fieldName = r.sourceField();
-      final Function<Object, Object> throwingBackward = y -> {
-        throw new UnsupportedOperationException(
-          "Mapping.toOneWay is forward-only — backward direction is undefined for field '" +
-            fieldName +
-            "'. Use Telescope.mapperForward(...) for a forward-only mapper, or Mapping.to(src, " +
-            "tgt, forward, backward) for an explicit bidirectional row."
-        );
-      };
-      return Iso.of((Function) r.forward(), throwingBackward);
-    }
-    if (row instanceof Via<?, ?> r) return liftViaIfNeeded(r, srcType, tgtType);
-    // DEAD-BRANCH-DEFENSIVE block (rows below): every permit of the sealed Mapping hierarchy that
-    // is NOT a per-field leaf Iso is filtered out by populateIso BEFORE this method is called. The
-    // checks remain solely as a compile-time exhaustiveness backstop — if a future permit is added
-    // to Mapping and populateIso forgets to short-circuit, the corresponding throw here surfaces
-    // the routing bug with a clear class name. NOT coverage targets — these can only fire when a
-    // routing change in populateIso introduces a regression, at which point the test failure is in
-    // populateIso, not here.
-    if (row instanceof Drop<?, ?, ?>) throw new IllegalStateException("Drop row should not reach fieldIsoOf");
-    if (row instanceof TelescopeTo<?, ?, ?>) throw new IllegalStateException(
-      "TelescopeTo row should not reach fieldIsoOf"
-    );
-    if (row instanceof FromTelescopeTo<?, ?, ?>) throw new IllegalStateException(
-      "FromTelescopeTo row should not reach fieldIsoOf"
-    );
-    if (row instanceof TelescopeToTelescope<?, ?, ?>) throw new IllegalStateException(
-      "TelescopeToTelescope row should not reach fieldIsoOf"
-    );
-    if (row instanceof Constant<?, ?, ?>) throw new IllegalStateException("Constant row should not reach fieldIsoOf");
-    if (row instanceof Compute<?, ?, ?>) throw new IllegalStateException("Compute row should not reach fieldIsoOf");
-    throw new IllegalStateException("unreachable: Mapping is sealed");
+    return switch (row) {
+      // SameTypedTo carries no conversion; populateIso resolves it through autoIso (identity /
+      // primitive-wrapper / container lifting / incompatible-shape rejection), so it must not reach
+      // here. The guard surfaces a routing regression with a clear class name, like the cases
+      // below.
+      case SameTypedTo<?, ?, ?> __ -> throw new IllegalStateException(
+        "SameTypedTo row should be resolved via autoIso, not fieldIsoOf"
+      );
+      case TypedTransformTo<?, ?, ?, ?> r -> Iso.of((Function) r.forward(), (Function) r.backward());
+      case ForwardOnlyTransformTo<?, ?, ?, ?> r -> {
+        // DEAD-BRANCH-DEFENSIVE: this throwingBackward lambda is unreachable via the public API.
+        // Both factory entries Telescope.map(...) and Telescope.mapper(...) call
+        // rejectForwardOnlyRows
+        // up front; Telescope.mapperForward(...) accepts the row but never invokes the backward
+        // leg. The guard remains so a future cross-package construction path that bypasses
+        // rejectForwardOnlyRows produces a precise field-naming error rather than silent
+        // corruption. NOT a coverage target.
+        final String fieldName = r.sourceField();
+        final Function<Object, Object> throwingBackward = y -> {
+          throw new UnsupportedOperationException(
+            "Mapping.toOneWay is forward-only — backward direction is undefined for field '" +
+              fieldName +
+              "'. Use Telescope.mapperForward(...) for a forward-only mapper, or Mapping.to(src, " +
+              "tgt, forward, backward) for an explicit bidirectional row."
+          );
+        };
+        yield Iso.of((Function) r.forward(), throwingBackward);
+      }
+      case Via<?, ?> r -> liftViaIfNeeded(r, srcType, tgtType);
+      // DEAD-BRANCH-DEFENSIVE block (cases below): every permit of the sealed Mapping hierarchy
+      // that is NOT a per-field leaf Iso is filtered out by populateIso BEFORE this method is
+      // called. The cases exist only because the sealed switch must stay exhaustive — if a future
+      // permit is added to Mapping and populateIso forgets to short-circuit, the compiler forces a
+      // case here whose throw surfaces the routing bug with a clear class name. NOT coverage
+      // targets — these can only fire when a routing change in populateIso introduces a
+      // regression, at which point the test failure is in populateIso, not here.
+      case Drop<?, ?, ?> __ -> throw new IllegalStateException("Drop row should not reach fieldIsoOf");
+      case TelescopeTo<?, ?, ?> __ -> throw new IllegalStateException("TelescopeTo row should not reach fieldIsoOf");
+      case FromTelescopeTo<?, ?, ?> __ -> throw new IllegalStateException(
+        "FromTelescopeTo row should not reach fieldIsoOf"
+      );
+      case TelescopeToTelescope<?, ?, ?> __ -> throw new IllegalStateException(
+        "TelescopeToTelescope row should not reach fieldIsoOf"
+      );
+      case Constant<?, ?, ?> __ -> throw new IllegalStateException("Constant row should not reach fieldIsoOf");
+      case Compute<?, ?, ?> __ -> throw new IllegalStateException("Compute row should not reach fieldIsoOf");
+      case Conditional<?, ?> __ -> throw new IllegalStateException(
+        "Conditional row should be unwrapped by populateIso before fieldIsoOf"
+      );
+    };
   }
 
   /**

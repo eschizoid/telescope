@@ -93,13 +93,12 @@ public sealed interface Either<L, R> {
    * }</pre>
    */
   default <T> T fold(final Function<? super L, ? extends T> onLeft, final Function<? super R, ? extends T> onRight) {
-    // Sealed-aware dispatch: a single instanceof + a guaranteed-safe cast on the other branch.
-    // Avoids the dead "second instanceof always true" branch the explicit double-instanceof pattern
-    // produces (which JaCoCo flags as a partial and a defensive throw line as unreachable). Every
-    // other default method on Either delegates here so the sealed-dispatch logic lives in one
-    // place.
-    if (this instanceof Left<L, R> l) return onLeft.apply(l.value());
-    return onRight.apply(((Right<L, R>) this).value());
+    // Every other default method on Either delegates here, so the sealed-dispatch logic lives in
+    // one place. Exhaustiveness over the sealed hierarchy is compiler-checked.
+    return switch (this) {
+      case Left<L, R> l -> onLeft.apply(l.value());
+      case Right<L, R> r -> onRight.apply(r.value());
+    };
   }
 
   /**

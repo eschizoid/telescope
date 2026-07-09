@@ -34,15 +34,10 @@ public class ValidatedOrderController {
           : Validated.valid(quantity)
       );
 
-    // Sealed-dispatch via fold — the canonical shape, single source of truth for Valid/Invalid
-    // routing. Returns the OK response on Valid; throws on Invalid (the throw needs an `unchecked
-    // cast` of the fold's T inference back to `ResponseEntity<Order>`).
-    return result.fold(
-      errors -> {
-        throw new InvalidOrderException(new Validated.Invalid<>(errors));
-      },
-      ResponseEntity::ok
-    );
+    return switch (result) {
+      case Validated.Valid<LineItemValidationError, Order>(final Order accepted) -> ResponseEntity.ok(accepted);
+      case Validated.Invalid<LineItemValidationError, Order> bad -> throw new InvalidOrderException(bad);
+    };
   }
 
   // Recover the SKU of the first line item with this quantity for error context. The validator

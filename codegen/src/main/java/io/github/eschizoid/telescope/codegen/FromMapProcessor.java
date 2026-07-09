@@ -27,7 +27,7 @@ import javax.lang.model.type.TypeMirror;
  * generated code is GraalVM native-image clean.
  */
 @SupportedAnnotationTypes("io.github.eschizoid.telescope.annotations.FromMap")
-@SupportedSourceVersion(SourceVersion.RELEASE_17)
+@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class FromMapProcessor extends AbstractTelescopeProcessor {
 
   private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.FromMap";
@@ -375,7 +375,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
   private TypeMirror singleArgOf(final DeclaredType type, final String rawFqn) {
     if (!isErasure(type, rawFqn)) return null;
     final var args = type.getTypeArguments();
-    return args.size() == 1 ? args.get(0) : null;
+    return args.size() == 1 ? args.getFirst() : null;
   }
 
   /** Whether {@code type}'s erasure is exactly the raw type named {@code rawFqn}. */

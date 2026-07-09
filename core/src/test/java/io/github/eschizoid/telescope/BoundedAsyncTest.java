@@ -63,8 +63,7 @@ class BoundedAsyncTest {
         )
       );
 
-      final var pool = Executors.newFixedThreadPool(2);
-      try {
+      try (final var pool = Executors.newFixedThreadPool(2)) {
         final var done = USERS.updateAsync(
           team,
           user -> {
@@ -85,8 +84,6 @@ class BoundedAsyncTest {
         assertEquals(6, result.users().size());
         assertTrue(maxObserved.get() <= 2, "max concurrent invocations should be ≤ 2, was " + maxObserved.get());
         assertTrue(maxObserved.get() >= 1, "must have at least 1 in-flight at peak");
-      } finally {
-        pool.shutdown();
       }
     }
 
@@ -95,8 +92,7 @@ class BoundedAsyncTest {
     void rebuilds() throws Exception {
       final var team = new Team("eng", List.of(new User("alice", ""), new User("bob", "")));
 
-      final var pool = Executors.newFixedThreadPool(2);
-      try {
+      try (final var pool = Executors.newFixedThreadPool(2)) {
         final var done = USERS.updateAsync(
           team,
           user -> CompletableFuture.completedFuture(new User(user.name(), "x")),
@@ -104,8 +100,6 @@ class BoundedAsyncTest {
         );
         final var result = done.get(5, TimeUnit.SECONDS);
         assertEquals(List.of("x", "x"), result.users().stream().map(User::bio).toList());
-      } finally {
-        pool.shutdown();
       }
     }
   }

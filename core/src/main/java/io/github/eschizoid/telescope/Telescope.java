@@ -1980,12 +1980,9 @@ public sealed class Telescope<
    * literal upper bound on in-flight operations.
    *
    * <pre>{@code
-   * final var pool = Executors.newFixedThreadPool(10);
-   * try {
+   * try (final var pool = Executors.newFixedThreadPool(10)) {
    *   final CompletableFuture<Batch> done = path.updateAsync(batch, this::fetch, pool);
    *   done.join();
-   * } finally {
-   *   pool.shutdown();
    * }
    * }</pre>
    */
@@ -2307,7 +2304,7 @@ public sealed class Telescope<
   // fn.backward in one virtual hop. The Iso is still the underlying optic — composition (.then,
   // .field, .each, .as, etc.) returns a regular Telescope and keeps lattice semantics intact; the
   // fast path applies only when a terminal is invoked directly on the bridge constant.
-  static final class BridgeTelescope<S, T> extends Telescope<S, T> {
+  private static final class BridgeTelescope<S, T> extends Telescope<S, T> {
 
     private final BridgeFn<S, T> fn;
 
