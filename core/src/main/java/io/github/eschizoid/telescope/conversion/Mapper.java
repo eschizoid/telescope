@@ -363,10 +363,11 @@ public final class Mapper<A, B> {
    * repository.save(managed);
    * }</pre>
    *
-   * <p>Semantically equivalent to {@code forward(source)} writes — every property the forward
-   * mapping would set is set on {@code target} via its public {@code setX(value)} setter. The hook
-   * chain (before/after) runs as it does in {@link #forward}; the only difference is the final
-   * write step targets {@code target} rather than a fresh allocation.
+   * <p>Semantically equivalent to {@code forward(source)} writes — each property the forward
+   * mapping would set is written onto {@code target} through its public {@code setX(value)} setter
+   * (properties without one are skipped; see the setter note below). The hook chain (before/after)
+   * runs as it does in {@link #forward}; the only difference is the final write step targets {@code
+   * target} rather than a fresh allocation.
    *
    * <p><b>Records rejected.</b> Records are immutable; calling {@code into(...)} on a record-target
    * mapper throws {@link UnsupportedOperationException} at apply time. Use {@link #forward(Object)}

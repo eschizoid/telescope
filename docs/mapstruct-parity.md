@@ -311,8 +311,9 @@ strict-null + predicate-gated), Mapping.java:276-318 (toOrElseGet lazy + predica
 core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java:46-101 (constant stamps literal;
 backward drops to type default), core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java:27-155
 (null->default, pass-through, lazy supplier, empty-string/empty-collection predicates);
-core/src/main/java/io/github/eschizoid/telescope/annotations/Constant.java:41-50 and annotations/Default.java:48-61
-(codegen literals, parsed at emit time against field type); README.md:986-990</sub>
+core/src/main/java/io/github/eschizoid/telescope/annotations/Constant.java:41-50 and
+core/src/main/java/io/github/eschizoid/telescope/annotations/Default.java:48-61 (codegen literals, parsed at emit time
+against field type); README.md:986-990</sub>
 
 ## Collections & containers
 
@@ -663,8 +664,8 @@ losing auto-mapping for the remaining fields.
 accept only the 4-value WriteStrategy enum at :58-63 — no Supplier/factory function overload);
 core/src/main/java/io/github/eschizoid/telescope/conversion/MapperBuilder.java:91-160 (create/inherit/add/build — no
 factory hook); core/src/main/java/io/github/eschizoid/telescope/Telescope.java:463-495 (from/to/using escape hatch);
-conversion/Mapper.java:391-423 (into() covers the load-existing-instance use case); no ObjectFactory counterpart exists
-anywhere in the main source sets</sub>
+core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:391-423 (into() covers the
+load-existing-instance use case); no ObjectFactory counterpart exists anywhere in the main source sets</sub>
 
 ### Builder support
 
@@ -695,12 +696,12 @@ withX) covers Lombok, Immutables-fluent, and JavaBean-style builders.
 <sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java:742-768 (autoWriter probe order:
 setters → static builder() at :767 → fields → all-args ctor), :720-726 (builderWriter factory), :1229-1232 + 1259-1329
 (BuilderWriter: requires static method named exactly 'builder()' returning a type with 'build()' at :1272-1289; setter
-matching by exact name / setX / withX; LMF-de-reflected dispatch); mapping/WriteHint.java:50,59 (BUILDER strategy,
-'requires a static builder() method');
-lombok/src/test/java/io/github/eschizoid/telescope/codegen/lombok/fixtures/BuilderUser.java:10-12 (@Builder fixture) and
-LombokFocusProcessorTest.java:53-68 (@Builder and @Value+@Builder navigators verified end-to-end);
-core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:576-712 (writeBean BUILDER/FIELDS/CONSTRUCTOR hint
-tests)</sub>
+matching by exact name / setX / withX; LMF-de-reflected dispatch);
+core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java:50,59 (BUILDER strategy, 'requires a static
+builder() method'); lombok/src/test/java/io/github/eschizoid/telescope/codegen/lombok/fixtures/BuilderUser.java:10-12
+(@Builder fixture) and LombokFocusProcessorTest.java:53-68 (@Builder and @Value+@Builder navigators verified
+end-to-end); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:576-712 (writeBean
+BUILDER/FIELDS/CONSTRUCTOR hint tests)</sub>
 
 ### Records and constructor mapping
 
@@ -733,12 +734,13 @@ multi-constructor immutables: unsupported).
 
 <sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/Records.java:273-307 (cached
 canonical-constructor invoker per record class, components in canonical order, MethodHandle asSpreader);
-conversion/Mapper.java:301 ('Records: rebuilds via the canonical constructor'); internal/Beans.java:710-718
-(ConstructorWriter: name-matched with -parameters, positional fallback) and :769-790 (auto-detected as autoWriter's 4th
-rung with -parameters + name-alignment safety check, loud error otherwise); mapping/WriteHint.java:54-55 (CONSTRUCTOR
-strategy docs); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:42-59 (record↔record fixtures),
-:209 (nested record mapper), :671-688 ('CONSTRUCTOR hint constructs an immutable all-args-only POJO' + auto-detection
-test)</sub>
+core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:301 ('Records: rebuilds via the canonical
+constructor'); internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java:710-718 (ConstructorWriter:
+name-matched with -parameters, positional fallback) and :769-790 (auto-detected as autoWriter's 4th rung with
+-parameters + name-alignment safety check, loud error otherwise);
+core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java:54-55 (CONSTRUCTOR strategy docs);
+core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:42-59 (record↔record fixtures), :209 (nested
+record mapper), :671-688 ('CONSTRUCTOR hint constructs an immutable all-args-only POJO' + auto-detection test)</sub>
 
 ## Policies & null handling
 
