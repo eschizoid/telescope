@@ -137,7 +137,7 @@ final class Merge {
           srcType +
           ", target=" +
           tgtType +
-          ". Add an explicit MergeStep.from(...) row with a converter, or rename to break the name match if this row was unintentional."
+          ". Pre-convert the value into a matching-typed holder record, or rename to break the name match if this row was unintentional."
       );
       claimedTgt.add(name);
       final Getter<Object, Object> reader = src -> sourceRefl.read(src, name);

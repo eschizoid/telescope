@@ -408,9 +408,9 @@ public final class Mapper<A, B> {
     // Scoping: iterate the mapper's patch-table keyset — the set of top-level target fields the
     // engine actually produced values for — NOT every getter-derived property on target.getClass().
     // Iterating all properties would (1) clobber unmapped pre-existing fields on the managed
-    // entity, defeating the "load-mutate-save" idiom; and (2) try to setX(...) on read-only
-    // computed getters (e.g. getFullName() derived from firstName + lastName), raising an IAE for
-    // a property the user never asked us to map.
+    // entity, defeating the "load-mutate-save" idiom; and (2) stage pointless reads for read-only
+    // computed getters (e.g. getFullName() derived from firstName + lastName) whose writes would
+    // silently no-op — work for a property the user never asked us to map.
     final var staged = new LinkedHashMap<String, Object>(patchByTargetField.size());
     for (final var name : patchByTargetField.keySet()) {
       staged.put(name, targetRefl.read(produced, name));

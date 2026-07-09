@@ -251,9 +251,10 @@ to @Mapping qualifiedBy); core/src/test/java/io/github/eschizoid/telescope/Migra
 Telescope.mapper(Order.class, OrderDto.class,
     to(Order::id, OrderDto::id),
     compute(OrderDto::createdAt, Instant::now),          // expression: fresh per forward call
-    compute(OrderDto::traceId,   UUID::randomUUID),
-    compute(OrderDtoTelescope.of().audit().createdAt(), Instant::now), // nested target
-    toOrElseGet(Order::createdAt, OrderDto::createdAt, Instant::now))  // defaultExpression
+    compute(OrderDto::traceId, () -> UUID.randomUUID().toString()),
+    compute(OrderDtoTelescope.of().audit().createdAt(), Instant::now)) // nested target
+  // ...or, as the defaultExpression analog (instead of compute on the same field):
+  //   toOrElseGet(Order::createdAt, OrderDto::createdAt, Instant::now)
   // source-referencing expression (MapStruct: expression = "java(s.first() + \" \" + s.last())"):
   .afterForward((src, dto) -> dto.withDisplayName(src.firstName() + " " + src.lastName()));
 // or per-field: toOneWay(Order::total, OrderDto::totalText, t -> "$" + t)
@@ -289,7 +290,7 @@ Telescope.mapper(Order.class, OrderDto.class,
     constant(OrderDtoTelescope.of().shipping().country(), "US"),        // nested target
     toOrElse(Order::region, OrderDto::region, "EMEA"),                  // @Mapping(defaultValue = ...)
     toOrElse(Order::displayName, OrderDto::displayName, "(unnamed)", String::isBlank), // predicate-gated
-    toOrElseGet(Order::traceId, OrderDto::traceId, UUID::randomUUID));  // lazy default
+    toOrElseGet(Order::traceId, OrderDto::traceId, () -> UUID.randomUUID().toString()));  // lazy default
 
 // Codegen (@Bridge) form:
 @Bridge(value = UserEntity.class,
@@ -619,7 +620,7 @@ final OrderEntity managed = repository.findById(id).orElseThrow();
 mapper.into(managed, dto);        // writes dto's mapped fields onto `managed` via setters, same reference back
 repository.save(managed);
 // sparse sibling: only non-null fields of a partial target overlay the base
-final OrderEntity updated = mapper.patch(entity, dtoPatch);
+final OrderDto updated = mapper.patch(dto, entityPatch); // patch(base A, partial B) -> A
 ```
 
 Deliberate parity feature — the javadoc names @MappingTarget explicitly and the test class pins JPA load-mutate-save

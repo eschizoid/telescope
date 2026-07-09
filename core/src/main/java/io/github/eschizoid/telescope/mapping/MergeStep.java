@@ -42,9 +42,9 @@ public sealed interface MergeStep<T> permits MergeStep.FromInferred, MergeStep.A
   record AutoSameName<T>(Class<?> sourceClass) implements MergeStep<T> {}
 
   /**
-   * Row whose source class is inferred from the source accessor's declaring class. At build time
-   * the engine validates the inferred class is present in the merge's source bag declaration; at
-   * forward time it reads the source via {@link Sources#byClass(Class)}.
+   * Row whose source class is inferred from the source accessor's declaring class at build time; at
+   * forward time the engine reads the source via {@link Sources#byClass(Class)} — a missing entry
+   * throws {@link IllegalStateException} naming the class.
    *
    * <pre>{@code
    * Telescope.merge(Profile.class,
