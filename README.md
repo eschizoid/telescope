@@ -4,7 +4,9 @@
 
 # telescope
 
-**Build a typed path through your nested data — then read, update, or convert through it. Bidirectionally. One line.**
+**The modern MapStruct alternative** — typed method references instead of string annotations, bidirectional from a
+single declaration, and mappers that **explain themselves**. Then a strictly larger surface: build a typed path through
+your nested data and read, update, or convert through it. One line.
 
 Works on Java records, POJOs, and Lombok `@Data` classes. Compile-time codegen is optional. Spring Boot starter and
 Quarkus extension ship as separate artifacts.
@@ -14,10 +16,16 @@ annotations, compile-time-only, one direction per interface, mapping, and nothin
 the **same codegen speed** (a tie on the shape real services run — deep nesting with list traversals), but on a modern
 foundation: typed method references the compiler checks (a typo is a `javac` error, not a processor warning),
 bidirectional from a single declaration, runtime _or_ codegen — and with `telescope-codegen` on the processor path,
-every statically-visible mapper call site is verified **complete at compile time**, no annotation required. Then it
-keeps going where MapStruct structurally stops — deep navigation, effectful update, sealed-root dispatch, multi-source
-merge, JPA-cycle and Hibernate-`LAZY` handling, all from one `Telescope<S, A>` type. Same speed, compile safety
-MapStruct can't give you, and a strictly larger surface. [See it row by row →](#how-it-compares-to-mapstruct)
+every statically-visible mapper call site is verified **complete at compile time**, no annotation required. Every mapper
+is also **introspectable** — `explain()` renders what maps where, `trace(input)` shows the values flowing through, and
+flipping a log level narrates every conversion — where MapStruct's only record of a mapping is generated source you go
+read. Then it keeps going where MapStruct structurally stops — deep navigation, effectful update, sealed-root dispatch,
+multi-source merge, JPA-cycle and Hibernate-`LAZY` handling, all from one `Telescope<S, A>` type.
+
+**The receipts:** a [feature-by-feature parity matrix](docs/mapstruct-parity.md) — 29 MapStruct features audited against
+real source, **0 missing** — a [one-mapper-at-a-time migration guide](docs/mapstruct-migration.md), and a
+[runnable head-to-head](examples/mapstruct-vs-telescope/) where every claim is a passing test.
+[See it row by row →](#how-it-compares-to-mapstruct)
 
 [![JVM 21+](https://img.shields.io/badge/JVM-21%2B-brightgreen.svg?&logo=openjdk)](https://openjdk.org/projects/jdk/21/)
 [![Build](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml/badge.svg)](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml)
@@ -321,6 +329,11 @@ architecture stops. Two questions decide it — is it as fast, and what do you g
 > separate default-policy footgun where unmapped targets go silently `null`, then a deep immutable update MapStruct's
 > architecture can't express. Run `./gradlew :examples:mapstruct-vs-telescope:test` — every claim is a passing test or a
 > one-command reproduction.
+>
+> **The paper trail:** the [parity matrix](docs/mapstruct-parity.md) scores all 29 MapStruct features against telescope
+> with `file:line` evidence per verdict (13 full · 16 partial · 0 missing), and the
+> [migration guide](docs/mapstruct-migration.md) turns it into a one-mapper-at-a-time recipe — coexistence setup,
+> translation table, and self-verifying asserts.
 
 #### First, the performance objection — settled
 
