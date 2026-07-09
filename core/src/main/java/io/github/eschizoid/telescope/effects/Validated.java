@@ -262,6 +262,7 @@ public sealed interface Validated<E, A> {
     final var errors = new ArrayList<E>();
     for (final var v : inputs) {
       switch (v) {
+        case null -> throw new NullPointerException("combineAll: null Validated element in inputs");
         case Valid<E, A> ok -> values.add(ok.value());
         case Invalid<E, A> bad -> errors.addAll(bad.errors());
       }
