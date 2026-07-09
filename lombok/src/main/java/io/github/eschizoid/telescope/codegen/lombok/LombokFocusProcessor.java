@@ -34,7 +34,7 @@ import javax.lang.model.element.TypeElement;
  * guaranteed done patching.
  */
 @SupportedAnnotationTypes({ "lombok.Data", "lombok.Value", "lombok.Builder" })
-@SupportedSourceVersion(SourceVersion.RELEASE_17)
+@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
 
   /**

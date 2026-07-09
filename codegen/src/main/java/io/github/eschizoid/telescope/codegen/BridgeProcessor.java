@@ -64,7 +64,7 @@ import javax.tools.StandardLocation;
 @SupportedAnnotationTypes(
   { "io.github.eschizoid.telescope.annotations.Bridge", "io.github.eschizoid.telescope.annotations.Bridges" }
 )
-@SupportedSourceVersion(SourceVersion.RELEASE_17)
+@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
@@ -1850,7 +1850,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           );
         } else if (caseBridges.size() == 1) {
           // Single @Bridge whose target isn't in the sealed-target permits — name it explicitly.
-          final var only = rawTargetValueFromMirror(caseBridges.get(0));
+          final var only = rawTargetValueFromMirror(caseBridges.getFirst());
           if (!(only instanceof DeclaredType decl)) continue;
           final var onlyEl = (TypeElement) decl.asElement();
           error(
@@ -2170,13 +2170,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (!(type instanceof DeclaredType dt)) return null;
     final var args = dt.getTypeArguments();
     if (assignableToRaw(type, "java.util.Optional")) {
-      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.OPTIONAL, args.get(0), null) : null;
+      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.OPTIONAL, args.getFirst(), null) : null;
     }
     if (args.size() == 1 && assignableToRaw(type, "java.util.List")) {
-      return new ContainerShape(FieldPlan.Kind.LIST, args.get(0), null);
+      return new ContainerShape(FieldPlan.Kind.LIST, args.getFirst(), null);
     }
     if (args.size() == 1 && assignableToRaw(type, "java.util.Set")) {
-      return new ContainerShape(FieldPlan.Kind.SET, args.get(0), null);
+      return new ContainerShape(FieldPlan.Kind.SET, args.getFirst(), null);
     }
     if (args.size() == 2 && assignableToRaw(type, "java.util.Map")) {
       return new ContainerShape(FieldPlan.Kind.MAP_VALUES, args.get(1), args.get(0));
@@ -2194,11 +2194,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (!(type instanceof DeclaredType dt) || !dt.getTypeArguments().isEmpty()) return null;
     if (assignableToRaw(type, "java.util.List")) {
       final var args = containerViewArgs(type, "java.util.List");
-      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.LIST, args.get(0), null) : null;
+      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.LIST, args.getFirst(), null) : null;
     }
     if (assignableToRaw(type, "java.util.Set")) {
       final var args = containerViewArgs(type, "java.util.Set");
-      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.SET, args.get(0), null) : null;
+      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.SET, args.getFirst(), null) : null;
     }
     if (assignableToRaw(type, "java.util.Map")) {
       final var args = containerViewArgs(type, "java.util.Map");
@@ -2930,7 +2930,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return "new " + implFqn + "<" + args.get(0) + ", " + args.get(1) + ">()";
     }
     final var args = containerViewArgs(container, kind == FieldPlan.Kind.SET ? "java.util.Set" : "java.util.List");
-    return "new " + implFqn + "<" + args.get(0) + ">()";
+    return "new " + implFqn + "<" + args.getFirst() + ">()";
   }
 
   private void emitListHelper(
@@ -2941,8 +2941,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String subBridge,
     final String direction
   ) {
-    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().get(0);
-    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().get(0);
+    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().getFirst();
+    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
     final var returnRaw = simpleName(containerRawFqn(tgtContainer));
     final var paramRaw = simpleName(containerRawFqn(srcContainer));
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.LIST);
@@ -2977,8 +2977,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String subBridge,
     final String direction
   ) {
-    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().get(0);
-    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().get(0);
+    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().getFirst();
+    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
     final var returnRaw = simpleName(containerRawFqn(tgtContainer));
     final var paramRaw = simpleName(containerRawFqn(srcContainer));
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.SET);

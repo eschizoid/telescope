@@ -439,7 +439,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final Set<String> hintTargets
     ) {
       if (!"writeBean".contentEquals(rowExec.getSimpleName())) return;
-      final var target = row.getArguments().isEmpty() ? null : classLiteral(row.getArguments().get(0));
+      final var target = row.getArguments().isEmpty() ? null : classLiteral(row.getArguments().getFirst());
       final var targetEl = target == null ? null : props.elementOf(target);
       if (targetEl == null) {
         note(

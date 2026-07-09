@@ -20,7 +20,7 @@ import javax.lang.model.element.TypeElement;
  * setters — see {@link AbstractTelescopeProcessor#emitBeanNavigator}.
  */
 @SupportedAnnotationTypes("io.github.eschizoid.telescope.annotations.BeanFocus")
-@SupportedSourceVersion(SourceVersion.RELEASE_17)
+@SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
 
   /**

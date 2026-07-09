@@ -104,12 +104,12 @@ class MapStructVsTelescopeTest {
 
     final var taxed = TelescopeMappings.applyRate(order, new BigDecimal("2"));
 
-    assertEquals(new BigDecimal("20.00"), taxed.lines().get(0).price(), "every line price doubled");
+    assertEquals(new BigDecimal("20.00"), taxed.lines().getFirst().price(), "every line price doubled");
     assertEquals(new BigDecimal("10.00"), taxed.lines().get(1).price(), "every line price doubled");
     assertNotSame(order, taxed, "a new Order graph is returned");
     assertEquals(
       new BigDecimal("10.00"),
-      order.lines().get(0).price(),
+      order.lines().getFirst().price(),
       "the original Order is unchanged — immutable update"
     );
     log(

@@ -16,7 +16,7 @@ java {
 }
 
 tasks.withType<JavaCompile>().configureEach {
-    options.release = 17
+    options.release = 21
     options.encoding = "UTF-8"
     // -processing keeps MapStruct's own processor notes out of -Xlint; -parameters lets MapStruct
     // and telescope match constructor args by name on the domain records.

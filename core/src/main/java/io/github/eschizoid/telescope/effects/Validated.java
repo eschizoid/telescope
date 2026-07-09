@@ -119,12 +119,12 @@ public sealed interface Validated<E, A> {
     final Function<? super List<E>, ? extends T> onInvalid,
     final Function<? super A, ? extends T> onValid
   ) {
-    // Sealed-aware dispatch: a single instanceof + a guaranteed-safe cast on the other branch.
     // Every other default method on Validated delegates here, so the sealed-dispatch logic lives
-    // in one place and the partial-coverage / dead-throw branches the explicit double-instanceof
-    // pattern produces don't multiply across each method.
-    if (this instanceof Invalid<E, A> inv) return onInvalid.apply(inv.errors());
-    return onValid.apply(((Valid<E, A>) this).value());
+    // in one place. Exhaustiveness over the sealed hierarchy is compiler-checked.
+    return switch (this) {
+      case Invalid<E, A> inv -> onInvalid.apply(inv.errors());
+      case Valid<E, A> v -> onValid.apply(v.value());
+    };
   }
 
   /**
@@ -261,10 +261,9 @@ public sealed interface Validated<E, A> {
     final var values = new ArrayList<A>(inputs.size());
     final var errors = new ArrayList<E>();
     for (final var v : inputs) {
-      if (v instanceof Valid<E, A> ok) {
-        values.add(ok.value());
-      } else if (v instanceof Invalid<E, A> bad) {
-        errors.addAll(bad.errors());
+      switch (v) {
+        case Valid<E, A> ok -> values.add(ok.value());
+        case Invalid<E, A> bad -> errors.addAll(bad.errors());
       }
     }
     if (!errors.isEmpty()) return new Invalid<>(errors);
@@ -288,16 +287,14 @@ public sealed interface Validated<E, A> {
     final Validated<E, B> right,
     final BiFunction<? super A, ? super B, ? extends C> f
   ) {
-    if (left instanceof Invalid<E, A> leftInvalid && right instanceof Invalid<E, B> rightInvalid) {
-      final var leftErrors = leftInvalid.errors();
-      final var rightErrors = rightInvalid.errors();
+    if (left instanceof Invalid<E, A>(List<E> leftErrors) && right instanceof Invalid<E, B>(List<E> rightErrors)) {
       final var combined = new ArrayList<E>(leftErrors.size() + rightErrors.size());
       combined.addAll(leftErrors);
       combined.addAll(rightErrors);
       return new Invalid<>(combined);
     }
-    if (left instanceof Invalid<E, A> leftInvalid) return new Invalid<>(leftInvalid.errors());
-    if (right instanceof Invalid<E, B> rightInvalid) return new Invalid<>(rightInvalid.errors());
+    if (left instanceof Invalid<E, A>(List<E> errors)) return new Invalid<>(errors);
+    if (right instanceof Invalid<E, B>(List<E> errors)) return new Invalid<>(errors);
     final var l = ((Valid<E, A>) left).value();
     final var r = ((Valid<E, B>) right).value();
     return new Valid<>(f.apply(l, r));

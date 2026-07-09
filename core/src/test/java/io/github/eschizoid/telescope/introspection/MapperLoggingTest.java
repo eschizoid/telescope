@@ -107,7 +107,7 @@ class MapperLoggingTest {
     });
     // Exactly one record: the construction explain. No per-forward value trace leaks in at DEBUG.
     assertEquals(1, records.size(), () -> "expected only the construction explain at DEBUG; got " + messages(records));
-    assertEquals(Level.FINE, records.get(0).getLevel(), "the construction log must be at DEBUG (JUL FINE)");
+    assertEquals(Level.FINE, records.getFirst().getLevel(), "the construction log must be at DEBUG (JUL FINE)");
     assertTrue(any(records, "Mapped:"), () -> "expected the explain structure; got " + messages(records));
     assertFalse(any(records, "\"Ada\""), () -> "the value trace must not appear at DEBUG; got " + messages(records));
   }
