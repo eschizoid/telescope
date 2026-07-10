@@ -31,10 +31,10 @@ Works on Java records, POJOs, and Lombok `@Data` classes, on Java 21+. Runtime b
 codegen when a path gets hot and you're in MapStruct's performance class. Spring Boot starter and Quarkus extension ship
 as separate artifacts.
 
-**The receipts:** a [feature-by-feature parity matrix](docs/mapstruct-parity.md) — 29 MapStruct features audited against
-real source, **0 missing** — a [one-mapper-at-a-time migration guide](docs/mapstruct-migration.md), and a
-[runnable head-to-head](examples/mapstruct-vs-telescope/) where every claim is a passing test.
-[See it row by row →](#how-it-compares-to-mapstruct)
+**The receipts:** a [feature-by-feature parity matrix](docs/mapstruct-parity.md) (29 MapStruct features audited against
+real source, **0 missing**), a [one-mapper-at-a-time migration guide](docs/mapstruct-migration.md), and a
+[runnable head-to-head](examples/mapstruct-vs-telescope/) where every claim is a passing test. The
+[row-by-row comparison](#how-it-compares-to-mapstruct) is below.
 
 ---
 
@@ -61,7 +61,7 @@ That's the runtime. Compile-time codegen, Spring Boot starter, Quarkus extension
 
 ---
 
-## First 5 minutes
+## Quick start
 
 You have nested data and you want to update a field deep inside without writing copy constructors:
 
@@ -94,25 +94,10 @@ async/validation effects — is the same path with a different terminal method.
 
 ---
 
-## Picking your entry point
+## The tour
 
-Two questions decide it: are you working with **records** or **POJOs**, and do you want to **navigate** one type in
-place or **convert** between two types?
-
-| You want to…                          | Records                                       | POJOs                                | POJO ⇄ record                                  |
-| ------------------------------------- | --------------------------------------------- | ------------------------------------ | ---------------------------------------------- |
-| **Navigate & update** in place        | `Telescope.of(R.class)`                       | `Telescope.ofBean(P.class)`          | bridge first (below), then navigate the record |
-| **Convert / map** between two types   | `Telescope.map(A.class, B.class, to(...), …)` | `Telescope.map(A.class, B.class, …)` | `Telescope.map(P.class, R.class, …)`           |
-| **Reflection-free** (compile-checked) | `@Focus` (navigate)                           | `@BeanFocus` (navigate)              | `@Bridge` (convert, any pair)                  |
-
-Conversions are bidirectional `Iso`s, so any cell in the middle row composes into a longer navigation path with
-`.then(...)`. Mismatched names get an explicit `Mapping.to(srcAccessor, tgtAccessor)` row in the `Telescope.map(...)`
-call; classes the auto-detect can't handle get a `WriteHint.writeBean(target, strategy)` row. Both are covered under
-[Working with POJOs](#working-with-pojos).
-
----
-
-## 30-second vignettes
+Quick start showed one deep update. These are the three shapes you'll actually live in — records, mapping, and beans —
+each in a screenful.
 
 ### Records
 
@@ -282,9 +267,27 @@ That's the library. No `Iso`, `Lens`, `Prism`, `Affine`, `Traversal`, `Getter`, 
 
 ---
 
+## Picking your entry point
+
+The tour used three of these; here is the whole map. Two questions decide it: are you working with **records** or
+**POJOs**, and do you want to **navigate** one type in place or **convert** between two types?
+
+| You want to…                          | Records                                       | POJOs                                | POJO ⇄ record                                  |
+| ------------------------------------- | --------------------------------------------- | ------------------------------------ | ---------------------------------------------- |
+| **Navigate & update** in place        | `Telescope.of(R.class)`                       | `Telescope.ofBean(P.class)`          | bridge first (below), then navigate the record |
+| **Convert / map** between two types   | `Telescope.map(A.class, B.class, to(...), …)` | `Telescope.map(A.class, B.class, …)` | `Telescope.map(P.class, R.class, …)`           |
+| **Reflection-free** (compile-checked) | `@Focus` (navigate)                           | `@BeanFocus` (navigate)              | `@Bridge` (convert, any pair)                  |
+
+Conversions are bidirectional `Iso`s, so any cell in the middle row composes into a longer navigation path with
+`.then(...)`. Mismatched names get an explicit `Mapping.to(srcAccessor, tgtAccessor)` row in the `Telescope.map(...)`
+call; classes the auto-detect can't handle get a `WriteHint.writeBean(target, strategy)` row. Both are covered under
+[Working with POJOs](#working-with-pojos).
+
+---
+
 ## Examples
 
-Five runnable demos cover the surface — pick the one matching what you're evaluating:
+When a screenful isn't enough, five runnable demos cover the surface — pick the one matching what you're evaluating:
 
 | Module                                                                         | Stack                         | Pick when                                                                                                     |
 | ------------------------------------------------------------------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -301,22 +304,6 @@ focused follow-ups for specific concerns.
 
 See [`examples/springboot/README.md`](examples/springboot/README.md) for the full per-module guide with endpoint maps,
 capability lists, vs-MapStruct callouts, and benchmark cross-links.
-
----
-
-## What it is _not_
-
-- **Not bound to MapStruct's architecture.** Same job, typed optics instead of string annotations — and mapping is one
-  capability among navigation, deep update, effects, and sealed dispatch. The full row-by-row case, including where
-  MapStruct still leads, is [the next section](#how-it-compares-to-mapstruct).
-
-- **Not a fuzzy auto-mapper.** `Telescope.map(...)` matches fields by exact name and type, nothing more — no fuzzy name
-  heuristics, no flattening, no inferred relationships (that's ModelMapper / Dozer territory, and they lost to MapStruct
-  for good reasons). Anything that isn't an exact name match you declare yourself with a `Mapping.to(srcAcc, tgtAcc)` or
-  `Mapping.via(srcAcc, tgtAcc, nestedMapper)` row.
-- **Not category theory.** Internally it's a Monocle-style Traversal, but `Iso`, `Lens`, `Prism`, `Affine`, and
-  `Traversal` are all package-private behind a JPMS boundary. You read, write, update, traverse, convert, and lift
-  through one `Telescope<S, A>` type — you never have to type the academic words.
 
 ---
 
@@ -470,9 +457,9 @@ is the [migration guide](docs/mapstruct-migration.md)'s table.
 - You want the same `Telescope<S, A>` type to do reading, updating, mapping, and conversion — one mental model instead
   of separate libraries
 
-> **Convinced? Two minutes:** add `implementation("io.github.eschizoid:telescope-core:1.1.1")`, write your next mapper
-> as one `Telescope.mapper(...)` call ([First 5 minutes](#first-5-minutes) has the shape), and leave every existing
-> MapStruct mapper alone — the [migration guide](docs/mapstruct-migration.md) covers the rest whenever you're ready.
+> **Convinced?** Add `implementation("io.github.eschizoid:telescope-core:1.1.1")`, write your next mapper as one
+> `Telescope.mapper(...)` call ([quick start](#quick-start) has the shape), and leave every existing MapStruct mapper
+> alone — the [migration guide](docs/mapstruct-migration.md) covers the rest whenever you're ready.
 
 ---
 
@@ -943,6 +930,10 @@ classes up front, then varargs of `MapStep` rows (`MapStep` is the sealed supert
 components identity-map, nested records / POJOs recurse, `List<X>↔List<Y>` / `Set<X>↔Set<Y>` / `Map<K, X>↔Map<K, Y>` /
 `Optional<X>↔Optional<Y>` lift the inner-element Iso through the container automatically (to any depth —
 `List<Map<K, Set<X>>>` works by construction). You only spell the _differences_.
+
+> Auto means exact name + type, nothing more — no fuzzy heuristics, no flattening, no inferred relationships (that's
+> ModelMapper / Dozer territory, and they lost to MapStruct for good reasons). Anything that isn't an exact match you
+> declare yourself with a `Mapping.to(srcAcc, tgtAcc)` or `Mapping.via(srcAcc, tgtAcc, nestedMapper)` row.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
@@ -1647,7 +1638,9 @@ UserBeanTelescope.of().email().update(user, String::toLowerCase);   // no reflec
 
 ## Architecture (short version)
 
-Three modules with a hard public/internal boundary:
+Internally telescope is a Monocle-style optic lattice; externally you never have to type the academic words — `Iso`,
+`Lens`, `Prism`, `Affine`, and `Traversal` are package-private behind a JPMS boundary, and everything you do goes
+through the one `Telescope<S, A>` type. Three modules with a hard public/internal boundary:
 
 - **`telescope-core`** — the public DSL. `Telescope<S, A>` plus the `Mapping` / `Mapper` / `Edit` / effects vocabulary
   and the `@Focus` / `@BeanFocus` / `@Bridge` annotations.
