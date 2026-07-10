@@ -362,55 +362,32 @@ branch, tune the iteration / fork knobs; the run prints `results.txt` and attach
 
 #### Then, what you gain
 
-The table is mostly "telescope: yes / MapStruct: not in scope" — bidirectional from one definition, deep navigation,
-effectful update, accumulating validation, sealed-root dispatch, multi-source merge, JPA cycles + Hibernate `LAZY`
-unwrap. That asymmetry, not nanoseconds, is the decision.
+The asymmetry, not nanoseconds, is the decision — most of the comparison is "telescope: yes / MapStruct: not in scope":
 
-| Capability                                   | telescope                                                                                                                                                                                                                                                                                                   | MapStruct                                                                                                    |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| **Bidirectional out of the box**             | Every `Mapping.to(srcAcc, tgtAcc)` row works both ways via `Mapper.forward(...)` / `.backward(...)`                                                                                                                                                                                                         | One direction per `@Mapper` interface; reverse is separate                                                   |
-| **Deep nested navigation + update**          | `Telescope.of(C).each(C::depts).field(D::address).update(c, fn)`                                                                                                                                                                                                                                            | Not in scope                                                                                                 |
-| **Effectful update**                         | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated`                                                                                                                                                                                                                                       | Not in scope                                                                                                 |
-| **Accumulating validation**                  | `Validated.combine(...)` / `combineAll(...)` builds the target only when every field passes, collecting _all_ failures in one pass                                                                                                                                                                          | Throw on first bad field, or hand-rolled `@AfterMapping`                                                     |
-| **Compile-time codegen**                     | `@Focus` / `@BeanFocus` / `@Bridge` annotation processors                                                                                                                                                                                                                                                   | `@Mapper` interfaces                                                                                         |
-| **Unmapped-target safety**                   | Compile error at the call site — `telescope-codegen` verifies every statically-visible `mapper(...)` / `map(...)` call, on by default (knobs and scope in the [`telescope-codegen` README](codegen/README.md#compile-time-mapper-verification)); strict construction-time refusal is the always-on backstop | `unmappedTargetPolicy` defaults to `WARN` — compiles, field is silently `null` at runtime; `ERROR` is opt-in |
-| **Runtime path (no codegen required)**       | `Telescope.of(Class)` with reflective metadata probe; users can opt into `@Focus` later                                                                                                                                                                                                                     | Compile-time only                                                                                            |
-| **Sealed types / pattern matching**          | `.as(Subtype.class)` narrows; the path stays type-safe                                                                                                                                                                                                                                                      | Not in scope                                                                                                 |
-| **Sealed-root dispatch**                     | `Match.of(...).when(Case.class, ...).exhaustive()` — compile-checked permit list, lattice-routed via `Prism.downcast()`                                                                                                                                                                                     | Not in scope                                                                                                 |
-| **Multi-source mappers (N → 1)**             | `Telescope.merge(Target.class, from(A::id, T::id), …)` returning `Mapper<Sources, T>` with a class-keyed `Sources` bag                                                                                                                                                                                      | Multi-source methods with `@Mapping(source = "param.x")`                                                     |
-| **Forward-only mappers**                     | `Telescope.mapperForward(...)` returning typed `ForwardMapper<A, B>` — no `backward` method at the type level                                                                                                                                                                                               | Write a separate `@Mapper` interface                                                                         |
-| **Enum value mapping**                       | `Mapping.enumTo(src, tgt, SrcEnum.class, TgtEnum.class)` with build-time exhaustiveness                                                                                                                                                                                                                     | `@ValueMapping(source = "X", target = "Y")`                                                                  |
-| **Null-coalescing defaults**                 | `Mapping.toOrElse(src, tgt, default)` / `toOrElseGet(src, tgt, supplier)` (predicate-gated overload)                                                                                                                                                                                                        | `@Mapping(defaultValue = "...")` / `defaultExpression`                                                       |
-| **Conditional / drop**                       | `Mapping.drop(src)` skips the field; predicate-gated `toOrElse(src, tgt, Predicate, default)` for value-conditional fallback                                                                                                                                                                                | `@Mapping(condition = "...")`                                                                                |
-| **`@BeforeMapping` / `@AfterMapping` hooks** | `Mapper.beforeForward(...)` / `afterForward(...)` / `beforeBackward(...)` / `afterBackward(...)` — chain composes left-to-right                                                                                                                                                                             | Annotation-driven                                                                                            |
-| **Spring / Quarkus / CDI integration**       | `telescope-spring-boot-starter` (Spring Boot 4 autoconfig + `Mapper<A, B>` bean registry) + `telescope-quarkus` (Arc extension, Jandex-discovered)                                                                                                                                                          | Native via `componentModel = "spring"` / `"jsr330"` / etc.                                                   |
-| **Maturity**                                 | 1.0 line; JMH-backed perf claims                                                                                                                                                                                                                                                                            | Ten years; thousands of production deployments                                                               |
-| **Dispatch perf — codegen vs codegen**       | **Same performance class — a tie at realistic depth** (1.15× deep, 1.5× on a trivial flat struct); both emit direct JIT-inlined calls. CI-reproducible matrix below                                                                                                                                         | Direct bytecode, monomorphic call site                                                                       |
+| Capability                         | telescope                                                             | MapStruct                           |
+| ---------------------------------- | --------------------------------------------------------------------- | ----------------------------------- |
+| Bidirectional out of the box       | one row list, `forward(...)` / `backward(...)`                        | one direction per interface         |
+| Deep nested navigation + update    | `of(C).each(C::depts).field(D::address).update(c, fn)`                | not in scope                        |
+| Effectful update                   | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated` | not in scope                        |
+| Accumulating validation            | `Validated.combine(...)` collects every failure in one pass           | throw on first, or hand-rolled      |
+| Mapper introspection               | `explain()` / `trace(input)` / flip a log level                       | read the generated source           |
+| Unmapped-target safety             | compile error at the call site, strict construction as backstop       | `WARN` by default — silently `null` |
+| Sealed-root dispatch               | `Match.of(...).when(...).exhaustive()`                                | not in scope                        |
+| Multi-source merge (N → 1)         | `Telescope.merge(Target.class, from(...), ...)`                       | string-keyed multi-source methods   |
+| Runtime path (no codegen required) | `Telescope.of(Class)`, opt into `@Focus` later                        | compile-time only                   |
+
+That is the short form. The full accounting — all 29 MapStruct features, each scored with the telescope idiom, its
+honest limitation, and `file:line` evidence — is the [parity matrix](docs/mapstruct-parity.md). One source of truth,
+kept next to the code it cites.
 
 #### Accumulating validation — what MapStruct can't say
 
 Mapping a stringly-typed input into a typed domain object usually means validating several fields at once. MapStruct
-maps field-by-field with no way to _collect_ failures — you throw on the first bad field or hand-roll an `@AfterMapping`
-accumulator. Telescope ships `Validated` as a first-class effect, so "build the target only if every field passes, and
-report all failures in one pass" is a primitive:
-
-```java
-// Bad email AND bad age surface together — not just the first.
-final Validated<String, Account> account = Validated.combine(
-  validateEmail(form.email()),
-  validateAge(form.ageText()),
-  Account::new
-);
-
-// → Invalid[email: missing '@' …, age: out of range: 200]
-
-// combineAll folds a batch into one result — every error from every offending row:
-final Validated<String, List<Account>> batch = Validated.combineAll(rows.stream().map(this::mapForm).toList());
-```
-
-`combine` accumulates (applicative); `Either` short-circuits on the first failure. For 3+ fields, chain `combine`.
-Runnable in
-[`ValidatedMappingDemo`](examples/library/src/main/java/io/github/eschizoid/telescope/examples/ValidatedMappingDemo.java).
+maps field-by-field with no way to _collect_ failures; telescope ships `Validated` as a first-class effect, so "build
+the target only if every field passes, and report all failures in one pass" is a primitive —
+`Validated.combine(validateEmail(...), validateAge(...), Account::new)` surfaces the bad email _and_ the bad age
+together. The full treatment, including `combineAll` over row batches, lives in
+[Working with `Either` and `Validated`](#working-with-either-and-validated).
 
 #### Per-field source/target mapping — side by side
 
@@ -447,28 +424,19 @@ final Order back = mapper.backward(dto);
 same row vocabulary, useful when you want to thread the conversion into a longer `.then(...)` chain rather than call
 `forward` / `backward` / `patch` on a Mapper handle.
 
-| Aspect                               | MapStruct                                               | telescope                                                                  |
-| ------------------------------------ | ------------------------------------------------------- | -------------------------------------------------------------------------- |
-| **Source / target syntax**           | Strings: `"customerName"`                               | Typed method references: `Order::getCustomerName`                          |
-| **Typo / type-mismatch caught at**   | Annotation-processor run                                | **`javac` compile time** — the wrong-type accessor doesn't compile         |
-| **Survives a rename (IDE refactor)** | String breaks; processor re-runs and surfaces the error | IDE refactor follows the accessor everywhere                               |
-| **Reverse direction**                | A second method with `@InheritInverseConfiguration`     | Same `Mapping.to(...)` row works both ways                                 |
-| **Nested path** (`source = "a.b.c"`) | Expression-string                                       | `Mapping.via(srcAcc, tgtAcc, nestedMapper)` — typed at every hop           |
-| **Custom expression**                | `@Mapping(expression = "java(...)")`                    | `Mapping.via(srcAcc, tgtAcc, customMapper)` — plain Java mapper, type-safe |
-| **`condition = "..."` predicate**    | Annotation attribute                                    | `Edit.overIfPresent(...)` for updates; `Mapping.drop(...)` for mappings    |
-
-The intent is identical; the calculus is different. MapStruct trades the typed-ref ergonomics for the ability to express
-things like `source = "user.address.street"` as a single string. Telescope trades the string-path brevity for the
-guarantee that everything you wrote against the source/target types compiles iff it still makes sense.
+The intent is identical; the calculus is different: MapStruct trades typed-ref ergonomics for string-path brevity,
+telescope trades the brevity for the guarantee that everything you wrote against the source/target types compiles iff it
+still makes sense. The pattern-by-pattern translation — every MapStruct annotation shape and its telescope equivalent —
+is the [migration guide](docs/mapstruct-migration.md)'s table.
 
 #### When MapStruct is the right pick
 
 - You need embedded expression-language mapping bodies — `@Mapping(expression = "java(...)")` or
   `@Mapping(qualifiedByName = "...")` qualifier dispatch — and want them inline in the annotation rather than as plain
   Java mappers passed to `Mapping.via(...)`
-- You need MapStruct-specific declarative shapes telescope doesn't expose: `@InheritConfiguration` row-set reuse, full
-  `@SubclassMapping` polymorphic dispatch, or `@MappingTarget` update-in-place semantics (telescope's `Mapper.patch`
-  covers sparse overlay, not full update-into-existing)
+- You need full `@SubclassMapping` polymorphic dispatch across mapper methods — telescope's `Match` covers sealed-root
+  dispatch, but MapStruct's annotation-driven subclass fan-out is broader (the [parity matrix](docs/mapstruct-parity.md)
+  scores the gap honestly)
 - The mappers are flat `Entity → Dto` only — no bidirectional, deep navigation, sealed dispatch, multi-source merge, or
   effectful update needs — and you'd never reach for optics for anything else
 
