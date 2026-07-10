@@ -4,35 +4,37 @@
 
 # telescope
 
-**The modern MapStruct alternative** — typed method references instead of string annotations, bidirectional from a
-single declaration, and mappers that **explain themselves**. Then a strictly larger surface: build a typed path through
-your nested data and read, update, or convert through it. One line.
-
-Works on Java records, POJOs, and Lombok `@Data` classes. Compile-time codegen is optional. Spring Boot starter and
-Quarkus extension ship as separate artifacts.
-
-**Coming from MapStruct? This is the upgrade.** MapStruct's architecture is a decade old — string-keyed `@Mapping`
-annotations, compile-time-only, one direction per interface, mapping, and nothing else. Telescope does that same job at
-the **same codegen speed** (a tie on the shape real services run — deep nesting with list traversals), but on a modern
-foundation: typed method references the compiler checks (a typo is a `javac` error, not a processor warning),
-bidirectional from a single declaration, runtime _or_ codegen — and with `telescope-codegen` on the processor path,
-every statically-visible mapper call site is verified **complete at compile time**, no annotation required. Every mapper
-is also **introspectable** — `explain()` renders what maps where, `trace(input)` shows the values flowing through, and
-flipping a log level narrates every conversion — where MapStruct's only record of a mapping is generated source you go
-read. Then it keeps going where MapStruct structurally stops — deep navigation, effectful update, sealed-root dispatch,
-multi-source merge, JPA-cycle and Hibernate-`LAZY` handling, all from one `Telescope<S, A>` type.
-
-**The receipts:** a [feature-by-feature parity matrix](docs/mapstruct-parity.md) — 29 MapStruct features audited against
-real source, **0 missing** — a [one-mapper-at-a-time migration guide](docs/mapstruct-migration.md), and a
-[runnable head-to-head](examples/mapstruct-vs-telescope/) where every claim is a passing test.
-[See it row by row →](#how-it-compares-to-mapstruct)
-
 [![JVM 21+](https://img.shields.io/badge/JVM-21%2B-brightgreen.svg?&logo=openjdk)](https://openjdk.org/projects/jdk/21/)
 [![Build](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml/badge.svg)](https://github.com/eschizoid/telescope/actions/workflows/ci.yaml)
 [![Codecov](https://codecov.io/gh/eschizoid/telescope/graph/badge.svg?token=a235ea8b-e6dc-45c6-8fea-e5050940c5d4)](https://codecov.io/gh/eschizoid/telescope)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.eschizoid/telescope-core.svg?label=Maven%20Central)](https://central.sonatype.com/artifact/io.github.eschizoid/telescope-core)
 [![Javadoc](https://javadoc.io/badge2/io.github.eschizoid/telescope-core/javadoc.svg?color=purple)](https://javadoc.io/doc/io.github.eschizoid/telescope-core)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+**The modern MapStruct alternative** — typed method references instead of string annotations, bidirectional from a
+single declaration, and mappers that **explain themselves**. Then a strictly larger surface: build a typed path through
+your nested data and read, update, or convert through it. One line.
+
+```java
+Mapper<Order, OrderDto> mapper = Telescope.mapper(
+  Order.class,
+  OrderDto.class,
+  to(Order::customerName, OrderDto::fullName) // typed refs — javac checks them, the IDE refactors them
+);
+
+OrderDto dto  = mapper.forward(order);  // same-name fields auto-map, nesting recurses
+Order    back = mapper.backward(dto);   // the reverse direction comes free
+mapper.explain();                       // and the mapper tells you what it maps — no generated source to read
+```
+
+Works on Java records, POJOs, and Lombok `@Data` classes, on Java 21+. Runtime by default — add `@Focus` / `@Bridge`
+codegen when a path gets hot and you're in MapStruct's performance class. Spring Boot starter and Quarkus extension ship
+as separate artifacts.
+
+**The receipts:** a [feature-by-feature parity matrix](docs/mapstruct-parity.md) — 29 MapStruct features audited against
+real source, **0 missing** — a [one-mapper-at-a-time migration guide](docs/mapstruct-migration.md), and a
+[runnable head-to-head](examples/mapstruct-vs-telescope/) where every claim is a passing test.
+[See it row by row →](#how-it-compares-to-mapstruct)
 
 ---
 
@@ -84,6 +86,8 @@ async/validation effects — is the same path with a different terminal method.
 
 - Navigate `List<X>` / `Optional<X>` / `Map<K, V>` → [Cookbook](#cookbook)
 - Convert between types (record↔record, POJO↔record) → [Type conversion](#type-conversion)
+- Ask any mapper what it maps (`explain()` / `trace()` / a log level) →
+  [Introspection](#introspection--see-what-a-mapper-does-explain--trace)
 - Lift through async / validated / either / optional effects → [Effects](#effects)
 - Compile-time-bound navigators for hot paths →
   [Compile-time codegen](#compile-time-reflection-free-navigation-focus--beanfocus)
@@ -108,7 +112,7 @@ call; classes the auto-detect can't handle get a `WriteHint.writeBean(target, st
 
 ---
 
-## More 30-second vignettes
+## 30-second vignettes
 
 ### Records
 
@@ -237,6 +241,20 @@ Telescope.mapper(Order.class, OrderDto.class,
 whenever a literal would share one mutable reference — `HashMap::new`, `Instant::now`, `UUID::randomUUID`). Both are
 forward-only by design; backward direction silently drops the slot, matching MapStruct semantics.
 
+And every mapper you build this way can tell you what it does — no generated source to read:
+
+```java
+dtoMapper.explain();
+// Mapped:
+//   ✓ name → fullName
+//   ✓ city → town
+//   ...
+```
+
+The render is a view; the structure is data you can assert on (`explain().skipped()` empty = nothing dropped). The full
+story — `trace(input)` with real values, and narrating every conversion by flipping a log level — is under
+[Introspection](#introspection--see-what-a-mapper-does-explain--trace).
+
 ### Beans
 
 POJOs don't need a mirror record. Navigate the bean directly with `ofBean`; `set`/`update` rebuild it immutably, so the
@@ -288,19 +306,9 @@ capability lists, vs-MapStruct callouts, and benchmark cross-links.
 
 ## What it is _not_
 
-- **Not bound to MapStruct's architecture.** MapStruct is a decade-proven framework, but its design is string-keyed
-  `@Mapping` annotations, compile-time-only, one direction per interface, and mapping is the whole job. Telescope is
-  typed optics: method-reference rows the compiler checks, bidirectional from one declaration, runtime _or_ codegen, and
-  mapping is one capability among navigation, deep update, effectful update, and sealed dispatch. The codegen path runs
-  at the **same performance class** — a tie at real-service depth (see [How it compares](#how-it-compares-to-mapstruct))
-  — over a strictly larger, more modern surface. It covers every common `@Mapping(...)` shape — same-name auto, renames,
-  typed transforms, nested mappers, flat → nested-path correspondences, eager literals, computed values, forward-only
-  mappers, multi-source merge, by-name enum mapping, null-coalescing defaults, lifecycle hooks, Spring/Quarkus
-  autoconfig. And it reaches the shapes MapStruct's architecture can't express. MapStruct still leads on raw maturity
-  and a handful of declarative features (inline `expression = "java(...)"` bodies, qualifier dispatch, full
-  `@SubclassMapping`, `@MappingTarget` update-in-place);
-  [When MapStruct is the right pick](#when-mapstruct-is-the-right-pick) is honest about those. The
-  [full row-by-row comparison](#how-it-compares-to-mapstruct) has the rest.
+- **Not bound to MapStruct's architecture.** Same job, typed optics instead of string annotations — and mapping is one
+  capability among navigation, deep update, effects, and sealed dispatch. The full row-by-row case, including where
+  MapStruct still leads, is [the next section](#how-it-compares-to-mapstruct).
 
 - **Not a fuzzy auto-mapper.** `Telescope.map(...)` matches fields by exact name and type, nothing more — no fuzzy name
   heuristics, no flattening, no inferred relationships (that's ModelMapper / Dozer territory, and they lost to MapStruct
@@ -322,13 +330,16 @@ duality. On the band they share (deep record↔record / bean↔record / bean↔b
 speed with compile-checked, bidirectional, refactor-safe rows; beyond that band, telescope keeps going where MapStruct's
 architecture stops. Two questions decide it — is it as fast, and what do you gain — in that order.
 
-> **Runnable head-to-head:** [`examples/mapstruct-vs-telescope`](examples/mapstruct-vs-telescope/) is the canonical
-> side-by-side — the same `Order → OrderDto` mapping written both ways, in one module. It demonstrates, reproducibly,
-> what a field rename does to each (telescope's method reference follows the IDE refactor automatically; MapStruct's
-> `@Mapping` string can't be refactored, so the same rename is a compile error you hand-fix across every mapper), the
-> separate default-policy footgun where unmapped targets go silently `null`, then a deep immutable update MapStruct's
-> architecture can't express. Run `./gradlew :examples:mapstruct-vs-telescope:test` — every claim is a passing test or a
-> one-command reproduction.
+> **Runnable head-to-head** — the same `Order → OrderDto` mapping written both ways in one module
+> ([`examples/mapstruct-vs-telescope`](examples/mapstruct-vs-telescope/)):
+>
+> ```bash
+> ./gradlew :examples:mapstruct-vs-telescope:test
+> ```
+>
+> Every claim is a passing test: a field rename (telescope's method reference follows the IDE refactor; MapStruct's
+> `@Mapping` string is hand-fixed across every mapper), the default-policy footgun where unmapped targets go silently
+> `null`, and a deep immutable update MapStruct's architecture can't express.
 >
 > **The paper trail:** the [parity matrix](docs/mapstruct-parity.md) scores all 29 MapStruct features against telescope
 > with `file:line` evidence per verdict (13 full · 16 partial · 0 missing), and the
@@ -458,6 +469,10 @@ is the [migration guide](docs/mapstruct-migration.md)'s table.
   bridge between them
 - You want the same `Telescope<S, A>` type to do reading, updating, mapping, and conversion — one mental model instead
   of separate libraries
+
+> **Convinced? Two minutes:** add `implementation("io.github.eschizoid:telescope-core:1.1.1")`, write your next mapper
+> as one `Telescope.mapper(...)` call ([First 5 minutes](#first-5-minutes) has the shape), and leave every existing
+> MapStruct mapper alone — the [migration guide](docs/mapstruct-migration.md) covers the rest whenever you're ready.
 
 ---
 
@@ -923,10 +938,11 @@ Telescope.of(EntityPage.class)
 ### Deep recursive mapping (`Telescope.map(A.class, B.class, to(...)...)`)
 
 The recommended shape for record-to-record (and POJO↔POJO, and cross-paradigm) conversion: pass the source and target
-classes up front, then varargs of `MapStep` rows. **Recursion is the default.** Same-named components identity-map,
-nested records / POJOs recurse, `List<X>↔List<Y>` / `Set<X>↔Set<Y>` / `Map<K, X>↔Map<K, Y>` / `Optional<X>↔Optional<Y>`
-lift the inner-element Iso through the container automatically (to any depth — `List<Map<K, Set<X>>>` works by
-construction). You only spell the _differences_.
+classes up front, then varargs of `MapStep` rows (`MapStep` is the sealed supertype of the `Mapping` field rows and the
+`WriteHint` / `NullHint` behavior hints — one varargs slot for all three). **Recursion is the default.** Same-named
+components identity-map, nested records / POJOs recurse, `List<X>↔List<Y>` / `Set<X>↔Set<Y>` / `Map<K, X>↔Map<K, Y>` /
+`Optional<X>↔Optional<Y>` lift the inner-element Iso through the container automatically (to any depth —
+`List<Map<K, Set<X>>>` works by construction). You only spell the _differences_.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
@@ -1040,7 +1056,7 @@ class LegacyUser {
 record UserRecord(String id, String email, String name) {}
 
 // Same-name 1-liner — every getter/component lines up by normalized name.
-final Telescope<LegacyUser, UserRecord> bridge = Telescope.map(LegacyUser.class, UserRecord.class);
+final Telescope<LegacyUser, UserRecord> conversion = Telescope.map(LegacyUser.class, UserRecord.class);
 ```
 
 Renames (`Mapping.to(srcAcc, tgtAcc)`), typed transforms (`Mapping.to(srcAcc, tgtAcc, fwd, bwd)`), null-coalescing
@@ -1094,13 +1110,13 @@ final Mapper<Order, OrderEntity> orderMapper = Telescope.mapper(
 );
 ```
 
-**Composing through a bridge.** The mapping result is a `Telescope<A, B>`, so it threads through a longer path the same
-way any other telescope does:
+**Composing the conversion into a path.** The mapping result is a `Telescope<A, B>`, so it threads through a longer path
+the same way any other telescope does:
 
 ```java
 Telescope.of(Page.class)                  // Page is a record holding List<LegacyUser>
     .each(Page::items)
-    .then(bridge)                         // each POJO ↔ record at this hop
+    .then(conversion)                     // each POJO ↔ record at this hop
     .field(UserRecord::email)
     .update(page, String::toLowerCase);
 ```
@@ -1158,13 +1174,14 @@ final Page lowered = Telescope.of(Page.class)
 
 It auto-detects each side's strategy at compile time (record canonical constructor; POJO name-matched constructor →
 builder → no-arg + setters). Renames and per-field transforms can't be expressed in an annotation — use the runtime
-`map` / `from/to/using` for those. Wire up `telescope-codegen` as shown under [Installation](#installation).
+`map` / `from/to/using` for those. Wire up `telescope-codegen` as shown under
+[Compile-time `@Focus` codegen](#compile-time-focus-codegen-optional).
 
 **`from/to/using` — hand-written.** When the mapping is lossy, one-directional, or just custom, write both functions
 yourself:
 
 ```java
-public static final Telescope<LegacyUser, UserRecord> USER_BRIDGE = Telescope.from(LegacyUser.class)
+public static final Telescope<LegacyUser, UserRecord> USER_ISO = Telescope.from(LegacyUser.class)
   .to(UserRecord.class)
   .using(
     (l) -> new UserRecord(l.getName(), l.getEmail(), l.getAddress()),
@@ -1192,7 +1209,7 @@ Telescope.ofBean(LegacyUser.class)
 ```
 
 **Cost — measured.** `ofBean` rebuilds the whole POJO and re-reads every getter at _each_ level of the path: a 3-level
-update benchmarks at ~442 ns/op (~18x a hand-written copy, ~1.8x record reflection — see
+update benchmarks at ~440–490 ns/op (~18x a hand-written copy, ~1.8x record reflection — see
 [`benchmarks/`](benchmarks/README.md)). Fine for ordinary use (sub-microsecond); for a hot loop over many objects,
 convert to a record once with `Telescope.map(Pojo.class, Record.class)` and navigate the record (or use `@BeanFocus`
 codegen) instead. The runtime deep-mapping bridges are cheaper — ~114 ns (POJO→record) and ~142 ns (POJO↔POJO), in line
@@ -1214,8 +1231,8 @@ field-injection fallback) uses `setAccessible`, so under JPMS the POJO's package
 
 ## Introspection — see what a mapper does (`explain()` / `trace()`)
 
-MapStruct's mapping is a black box — the generated code is the only record of what got mapped, dropped, or converted.
-telescope makes it a first-class value. Every `Mapper` / `ForwardMapper`, and every `Telescope` navigator, answers two
+Every mapper built in the last two sections — and every `Telescope` navigator — can describe itself. Where MapStruct's
+only record of a mapping is the generated source, telescope makes the mapping a first-class value that answers two
 questions:
 
 - **`explain()`** — the _static_ structure: which fields correspond, which were skipped (and why), which change type. No
@@ -1285,123 +1302,6 @@ The log calls are always present and gated purely by level, so they cost nothing
 ever built). `<Source>` / `<Target>` are simple class names. One backend nuance: through Spring Boot's default
 `jul-to-slf4j` bridge both lines render at `DEBUG` (the bridge maps `System.Logger.TRACE` onto SLF4J `DEBUG`); the level
 threshold still separates them — `DEBUG` shows structure, `TRACE` adds the per-conversion values.
-
----
-
-## Compile-time, reflection-free navigation (`@Focus` / `@BeanFocus`)
-
-The reflection-based `Telescope.of(User.class).field(User::name)` path resolves the field name at runtime — fast enough
-for ordinary use (~100 ns), but a typo or a rename surfaces as a runtime error, not a compile error. Annotate the types
-you navigate with `@Focus` (records) or `@BeanFocus` (POJOs) and add the processor to your build; for each annotated
-type the processor emits a sibling **fluent typed path navigator** that reads like the runtime DSL but is fully
-compile-checked and reflection-free.
-
-**Same path, two ways.** The two surfaces produce the same terminal `Telescope<Company, String>` and the same `update`
-result — they only differ in _when_ the path is resolved (runtime vs `javac`) and _how_ it's dispatched (reflection vs
-direct method-ref + constructor calls). On the [benchmarks](benchmarks/README.md), the reflective deep-field path
-measures ~262 ns/op; the codegen lens path it desugars to measures ~45 ns/op (~5.8x).
-
-```java
-// Reflective — runtime resolution, ~100 ns per field hop
-Telescope.of(Company.class)
-  .each(Company::departments).each(Department::teams)
-  .each(Team::users).field(User::email)
-  .update(company, String::toLowerCase);
-
-// Compile-time, reflection-free — same Telescope, generator-built
-CompanyTelescope.of()
-  .departments().each().teams().each()
-  .users().each().email()
-  .update(company, String::toLowerCase);
-```
-
-```java
-import io.github.eschizoid.telescope.annotations.Focus;
-
-@Focus record Address(String city, String zip) {}
-@Focus record User(String name, int age, Address address) {}
-@Focus record Team(String name, List<User> users) {}
-@Focus record Company(String name, List<Team> teams) {}
-
-// Generated: <X>Telescope<R> per annotated type plus a step class per collection-shaped component.
-// Usage reads like the reflective DSL — but every hop is type-checked by javac and every read /
-// rebuild is a direct method-ref + constructor call (no reflection):
-final Telescope<Company, String> userNames = CompanyTelescope.of()
-  .teams().each()        // step over List<Team> → TeamTelescope<Company>
-  .users().each()        // step over List<User> → UserTelescope<Company>
-  .name();               // terminal Telescope<Company, String>
-
-final Company shouted = userNames.update(company, String::toUpperCase);
-
-// Single fields are just as direct:
-UserTelescope.of().address().city().update(alice, String::toUpperCase);
-```
-
-Each scalar component yields a terminal `Telescope<R, T>`; each sub-record component (also `@Focus`-annotated) yields a
-`<Sub>Telescope<R>` navigator to keep navigating; each container component yields a small step class whose `.each()`
-(List/Set/Iterable), `.eachValue()` (Map values, keys preserved), or `.whenPresent()` (Optional) returns the element's
-navigator when the element is itself annotated, or a terminal `Telescope` otherwise. At any hop, `.get()` returns the
-current `Telescope` — so a step or navigator _is_ a navigator, but every leaf is the same `Telescope<R, X>` value the
-reflective DSL gives you.
-
-**Ops at every hop, effects included.** Every generated navigator and `Step` also forwards the full `Telescope`
-operation surface — `read` / `find` / `toList` / `count` / `exists` / `set` / `update` / `updateIndexed` /
-`toListIndexed` / `then` plus the four effect methods `updateAsync` (with or without `Executor`) / `updateOptional` /
-`updateEither` / `updateValidated`. You don't need to terminate with `.get()` first; the navigator stands in for the
-wrapped Telescope at any intermediate hop. So
-`CompanyTelescope.of().teams().each().users().each().updateAsync(company, svc::lookup, pool)` returns a
-`CompletableFuture<Company>` directly, with the effect threaded through the generated chain.
-
-**Bridge hops — conversion as a navigator step.** If a type carries both `@Focus`/`@BeanFocus` (so it has a `*Telescope`
-navigator) and `@Bridge(Target.class)` (so it has a `*Bridge.BRIDGE`), the navigator gains a fluent **`as<Target>()`**
-method that chains the bridge in. The navigator becomes a single compile-checked surface for _both_ navigation _and_
-conversion, crossing paradigms naturally (record↔record, record↔POJO, POJO↔POJO):
-
-```java
-@Focus
-@Bridge(UserDto.class)
-record UserEntity(String id, String email) {}
-
-@Focus
-record UserDto(String id, String email) {}
-
-// Navigate through the bridge into a target field, then update. The Iso round-trips, so the
-// result is a new UserEntity:
-final UserEntity lowered = UserEntityTelescope.of()
-  .asUserDto() // → UserDtoTelescope<UserEntity>
-  .email() // → Telescope<UserEntity, String>
-  .update(entity, String::toLowerCase);
-```
-
-The return type degrades to a terminal `Telescope<R, Target>` when the target isn't itself annotated (so there's no
-`<Target>Telescope` navigator to chain into). The reverse direction (target's navigator getting `.asSource()`) still
-goes through `.then(SourceBridge.BRIDGE.reverse())` for now — forward only at the navigator level.
-
-Gradle wiring:
-
-```kotlin
-implementation("io.github.eschizoid:telescope-core:1.1.1")
-annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.1")
-```
-
-`@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
-wire up codegen. Only top-level records / classes are supported (the generated top-level navigator can't reference a
-nested type's constructor).
-
-**`@BeanFocus` — the POJO analog.** Same surface as `@Focus`, applied to a POJO with either a static `builder()` or a
-no-arg constructor + `setX` setters. Field injection isn't available to generated code, so a POJO that exposes neither
-is a compile error; reach for runtime `Telescope.ofBean` in that case. Compare ~488 ns for the runtime `ofBean` 3-level
-path vs ~15 ns for a generated `@Bridge` conversion in the benchmark — the navigator gets you the same reflection-free
-win for navigation.
-
-```java
-import io.github.eschizoid.telescope.annotations.BeanFocus;
-
-@BeanFocus public class UserBean { /* getId/getEmail + setters, or a static builder() */ }
-
-// Generated alongside: UserBeanTelescope<R> with the same fluent surface as a record navigator.
-UserBeanTelescope.of().email().update(user, String::toLowerCase);   // no reflection
-```
 
 ---
 
@@ -1594,17 +1494,136 @@ return afterUsers.flatMapAsync(ok -> enrichPath.updateAsync(ok, this::enrich));
 
 ---
 
+## Compile-time, reflection-free navigation (`@Focus` / `@BeanFocus`)
+
+The reflection-based `Telescope.of(User.class).field(User::name)` path resolves the field name at runtime — fast enough
+for ordinary use (~100 ns), but a typo or a rename surfaces as a runtime error, not a compile error. Annotate the types
+you navigate with `@Focus` (records) or `@BeanFocus` (POJOs) and add the processor to your build; for each annotated
+type the processor emits a sibling **fluent typed path navigator** that reads like the runtime DSL but is fully
+compile-checked and reflection-free.
+
+**Same path, two ways.** The two surfaces produce the same terminal `Telescope<Company, String>` and the same `update`
+result — they only differ in _when_ the path is resolved (runtime vs `javac`) and _how_ it's dispatched (reflection vs
+direct method-ref + constructor calls). On the [benchmarks](benchmarks/README.md), the reflective deep-field path
+measures ~262 ns/op; the codegen lens path it desugars to measures ~45 ns/op (~5.8x).
+
+```java
+// Reflective — runtime resolution, ~100 ns per field hop
+Telescope.of(Company.class)
+  .each(Company::departments).each(Department::teams)
+  .each(Team::users).field(User::email)
+  .update(company, String::toLowerCase);
+
+// Compile-time, reflection-free — same Telescope, generator-built
+CompanyTelescope.of()
+  .departments().each().teams().each()
+  .users().each().email()
+  .update(company, String::toLowerCase);
+```
+
+```java
+import io.github.eschizoid.telescope.annotations.Focus;
+
+@Focus record Address(String city, String zip) {}
+@Focus record User(String name, int age, Address address) {}
+@Focus record Team(String name, List<User> users) {}
+@Focus record Company(String name, List<Team> teams) {}
+
+// Generated: <X>Telescope<R> per annotated type plus a step class per collection-shaped component.
+// Usage reads like the reflective DSL — but every hop is type-checked by javac and every read /
+// rebuild is a direct method-ref + constructor call (no reflection):
+final Telescope<Company, String> userNames = CompanyTelescope.of()
+  .teams().each()        // step over List<Team> → TeamTelescope<Company>
+  .users().each()        // step over List<User> → UserTelescope<Company>
+  .name();               // terminal Telescope<Company, String>
+
+final Company shouted = userNames.update(company, String::toUpperCase);
+
+// Single fields are just as direct:
+UserTelescope.of().address().city().update(alice, String::toUpperCase);
+```
+
+Each scalar component yields a terminal `Telescope<R, T>`; each sub-record component (also `@Focus`-annotated) yields a
+`<Sub>Telescope<R>` navigator to keep navigating; each container component yields a small step class whose `.each()`
+(List/Set/Iterable), `.eachValue()` (Map values, keys preserved), or `.whenPresent()` (Optional) returns the element's
+navigator when the element is itself annotated, or a terminal `Telescope` otherwise. At any hop, `.get()` returns the
+current `Telescope` — so a step or navigator _is_ a navigator, but every leaf is the same `Telescope<R, X>` value the
+reflective DSL gives you.
+
+**Ops at every hop, effects included.** Every generated navigator and `Step` also forwards the full `Telescope`
+operation surface — `read` / `find` / `toList` / `count` / `exists` / `set` / `update` / `updateIndexed` /
+`toListIndexed` / `then` plus the four effect methods `updateAsync` (with or without `Executor`) / `updateOptional` /
+`updateEither` / `updateValidated`. You don't need to terminate with `.get()` first; the navigator stands in for the
+wrapped Telescope at any intermediate hop. So
+`CompanyTelescope.of().teams().each().users().each().updateAsync(company, svc::lookup, pool)` returns a
+`CompletableFuture<Company>` directly, with the effect threaded through the generated chain.
+
+**Bridge hops — conversion as a navigator step.** If a type carries both `@Focus`/`@BeanFocus` (so it has a `*Telescope`
+navigator) and `@Bridge(Target.class)` (so it has a `*Bridge.BRIDGE`), the navigator gains a fluent **`as<Target>()`**
+method that chains the bridge in. The navigator becomes a single compile-checked surface for _both_ navigation _and_
+conversion, crossing paradigms naturally (record↔record, record↔POJO, POJO↔POJO):
+
+```java
+@Focus
+@Bridge(UserDto.class)
+record UserEntity(String id, String email) {}
+
+@Focus
+record UserDto(String id, String email) {}
+
+// Navigate through the bridge into a target field, then update. The Iso round-trips, so the
+// result is a new UserEntity:
+final UserEntity lowered = UserEntityTelescope.of()
+  .asUserDto() // → UserDtoTelescope<UserEntity>
+  .email() // → Telescope<UserEntity, String>
+  .update(entity, String::toLowerCase);
+```
+
+The return type degrades to a terminal `Telescope<R, Target>` when the target isn't itself annotated (so there's no
+`<Target>Telescope` navigator to chain into). The reverse direction (target's navigator getting `.asSource()`) still
+goes through `.then(SourceBridge.BRIDGE.reverse())` for now — forward only at the navigator level.
+
+Gradle wiring:
+
+```kotlin
+implementation("io.github.eschizoid:telescope-core:1.1.1")
+annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.1")
+```
+
+`@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
+wire up codegen. Only top-level records / classes are supported (the generated top-level navigator can't reference a
+nested type's constructor).
+
+**`@BeanFocus` — the POJO analog.** Same surface as `@Focus`, applied to a POJO with either a static `builder()` or a
+no-arg constructor + `setX` setters. Field injection isn't available to generated code, so a POJO that exposes neither
+is a compile error; reach for runtime `Telescope.ofBean` in that case. Compare ~440–490 ns for the runtime `ofBean`
+3-level path vs ~15 ns for a generated `@Bridge` conversion in the benchmark — the navigator gets you the same
+reflection-free win for navigation.
+
+```java
+import io.github.eschizoid.telescope.annotations.BeanFocus;
+
+@BeanFocus public class UserBean { /* getId/getEmail + setters, or a static builder() */ }
+
+// Generated alongside: UserBeanTelescope<R> with the same fluent surface as a record navigator.
+UserBeanTelescope.of().email().update(user, String::toLowerCase);   // no reflection
+```
+
+---
+
 ## Constraints worth knowing
 
-1. **Records only.** Field navigation rebuilds via the record's canonical constructor. Non-record types throw at runtime
-   with a clear message. To work with POJOs, bridge them to a record — see [Working with POJOs](#working-with-pojos).
+1. **`Telescope.of(...)` is records-only.** It rebuilds via the record's canonical constructor, and non-record types
+   throw at runtime with a clear message pointing at the fix: POJOs and Lombok classes go through
+   `Telescope.ofBean(...)` (and the deep-mapping factories handle both sides transparently) — see
+   [Working with POJOs](#working-with-pojos).
 2. **Method references, not lambdas.** `User::name` works; `u -> u.name()` doesn't. The compiler synthesizes a name like
    `lambda$xx$0` and we can't recover the field name from it. The library throws a clear error.
 3. **`List<T>` element types are inferred from the method-ref signature**, not from runtime generics. That's why
    `each(Team::users)` works without a type witness — `Team::users` has compile-time type `Function<Team, List<User>>`
    and Java unifies `E = User`.
 4. **Reflection cost.** Field access uses `RecordComponent.getAccessor().invoke(...)` and the canonical constructor —
-   roughly ~100 ns per reflective field access, vs ~10 ns for a hand-written record copy; the reflection-free `lens`
+   roughly ~100 ns per reflective field access, vs ~25 ns for a hand-written record copy; the reflection-free `lens`
    path (`@Focus` codegen) sits in between. Fine for almost everything; matters for tight loops. See
    [`benchmarks/`](benchmarks/README.md) for measured numbers.
 5. **Sibling-context updates close over the source.** A plain `update` lambda only sees the focused value. If you need
