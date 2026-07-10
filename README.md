@@ -307,22 +307,6 @@ capability lists, vs-MapStruct callouts, and benchmark cross-links.
 
 ---
 
-## What it is _not_
-
-- **Not bound to MapStruct's architecture.** Same job, typed optics instead of string annotations — and mapping is one
-  capability among navigation, deep update, effects, and sealed dispatch. The full row-by-row case, including where
-  MapStruct still leads, is [the next section](#how-it-compares-to-mapstruct).
-
-- **Not a fuzzy auto-mapper.** `Telescope.map(...)` matches fields by exact name and type, nothing more — no fuzzy name
-  heuristics, no flattening, no inferred relationships (that's ModelMapper / Dozer territory, and they lost to MapStruct
-  for good reasons). Anything that isn't an exact name match you declare yourself with a `Mapping.to(srcAcc, tgtAcc)` or
-  `Mapping.via(srcAcc, tgtAcc, nestedMapper)` row.
-- **Not category theory.** Internally it's a Monocle-style Traversal, but `Iso`, `Lens`, `Prism`, `Affine`, and
-  `Traversal` are all package-private behind a JPMS boundary. You read, write, update, traverse, convert, and lift
-  through one `Telescope<S, A>` type — you never have to type the academic words.
-
----
-
 ## How it compares to MapStruct
 
 Same job, newer architecture. MapStruct is a **mapping framework** built on string-keyed `@Mapping` annotations,
@@ -946,6 +930,10 @@ classes up front, then varargs of `MapStep` rows (`MapStep` is the sealed supert
 components identity-map, nested records / POJOs recurse, `List<X>↔List<Y>` / `Set<X>↔Set<Y>` / `Map<K, X>↔Map<K, Y>` /
 `Optional<X>↔Optional<Y>` lift the inner-element Iso through the container automatically (to any depth —
 `List<Map<K, Set<X>>>` works by construction). You only spell the _differences_.
+
+> Auto means exact name + type, nothing more — no fuzzy heuristics, no flattening, no inferred relationships (that's
+> ModelMapper / Dozer territory, and they lost to MapStruct for good reasons). Anything that isn't an exact match you
+> declare yourself with a `Mapping.to(srcAcc, tgtAcc)` or `Mapping.via(srcAcc, tgtAcc, nestedMapper)` row.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
@@ -1650,7 +1638,9 @@ UserBeanTelescope.of().email().update(user, String::toLowerCase);   // no reflec
 
 ## Architecture (short version)
 
-Three modules with a hard public/internal boundary:
+Internally telescope is a Monocle-style optic lattice; externally you never have to type the academic words — `Iso`,
+`Lens`, `Prism`, `Affine`, and `Traversal` are package-private behind a JPMS boundary, and everything you do goes
+through the one `Telescope<S, A>` type. Three modules with a hard public/internal boundary:
 
 - **`telescope-core`** — the public DSL. `Telescope<S, A>` plus the `Mapping` / `Mapper` / `Edit` / effects vocabulary
   and the `@Focus` / `@BeanFocus` / `@Bridge` annotations.
