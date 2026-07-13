@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Streams the telescope-vs-MapStruct head-to-head as a live reveal for the README GIF.
 # Every line is REAL output from:  ./gradlew :examples:mapstruct-vs-telescope:test  (trimmed).
-# Regenerate:  vhs scripts/demo/head-to-head.tape
+# Regenerate:  vhs scripts/demo/head-to-head.tape   (needs vhs, ttyd, ffmpeg)
 set -uo pipefail
 G='\033[32m'; D='\033[90m'; C='\033[36m'; Y='\033[33m'; B='\033[1m'; R='\033[0m'
 L=0.18    # per-line reveal
@@ -28,4 +28,4 @@ p "      ${G}✓${R} id        \"o-1\"                    → id \"o-1\""
 p "      • customer  Customer[name=Ada,…]  → CustomerDto[…, contactEmail=…]   ${G}✓${R}" "$A"
 echo
 p "  ${G}${B}BUILD SUCCESSFUL${R}  ${D}— every claim is a passing test${R}"
-sleep 2.8    # hold the finished frame so the viewer can read it before the loop
+sleep 4.2    # hold the finished frame so the viewer can read it before the loop
