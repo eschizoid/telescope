@@ -172,6 +172,13 @@ public class MapStructComparisonBenchmark {
     bh.consume(McNestedBeanBridge.forward(nestedBean));
   }
 
+  @Benchmark
+  public void nested_telescope_codegen_bridgefn_forward(final Blackhole bh) {
+    // The one-interface-hop BRIDGE_FN value at the nested tier — parity check against MapStruct's
+    // INSTANCE.toRec(...) once a nested sub-bridge hop is in the chain.
+    bh.consume(McNestedBeanBridge.BRIDGE_FN.forward(nestedBean));
+  }
+
   // ---------- Nested — backward ----------
 
   @Benchmark
@@ -209,6 +216,13 @@ public class MapStructComparisonBenchmark {
   @Benchmark
   public void deep_telescope_codegen_static_forward(final Blackhole bh) {
     bh.consume(McCompanyBeanBridge.forward(deepBean));
+  }
+
+  @Benchmark
+  public void deep_telescope_codegen_bridgefn_forward(final Blackhole bh) {
+    // The one-interface-hop BRIDGE_FN value at the realistic deep tier (3-level nesting + list
+    // hops) — where the codegen path is already a 1.15× near-tie with MapStruct.
+    bh.consume(McCompanyBeanBridge.BRIDGE_FN.forward(deepBean));
   }
 
   // ---------- Deep — backward ----------
