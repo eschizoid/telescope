@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# DEMO SHIM — NOT the Gradle wrapper. It exists so the README GIF can display the
-# real command `./gradlew :examples:mapstruct-vs-telescope:test` while rendering the
-# curated (real, trimmed) narration from head-to-head.sh instead of Gradle's noise.
-# The genuine head-to-head runs from the repo root with the real ./gradlew.
-exec "$(dirname "$0")/head-to-head.sh"
