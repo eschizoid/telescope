@@ -27,6 +27,12 @@ Order    back = mapper.backward(dto);   // the reverse direction comes free
 mapper.explain();                       // and the mapper tells you what it maps — no generated source to read
 ```
 
+<p align="center">
+  <img src="img/head-to-head.gif" alt="The telescope-vs-MapStruct head-to-head test, narrating itself: identical output, MapStruct's silent-null footgun, a deep immutable update, and the mapper explaining and tracing itself." width="820" />
+  <br />
+  <sub>The <a href="examples/mapstruct-vs-telescope/"><code>mapstruct-vs-telescope</code></a> test, narrating itself — real output, trimmed for width.</sub>
+</p>
+
 Works on Java records, POJOs, and Lombok `@Data` classes, on Java 21+. Runtime by default — add `@Focus` / `@Bridge`
 codegen when a path gets hot and you're in MapStruct's performance class. Spring Boot starter and Quarkus extension ship
 as separate artifacts.
