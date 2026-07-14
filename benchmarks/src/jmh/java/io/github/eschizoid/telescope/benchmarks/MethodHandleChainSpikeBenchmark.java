@@ -35,8 +35,9 @@ import org.openjdk.jmh.infra.Blackhole;
  * </ul>
  *
  * <p>If {@code mhChain} lands near {@code handWritten} and well below {@code currentMapper}, the
- * lattice-legal structural win (a MH-combinator leaf {@code Iso}) is real. If {@code mhChain} tracks
- * {@code currentMapper}, the runtime floor is confirmed and hot loops belong on {@code @Bridge}.
+ * lattice-legal structural win (a MH-combinator leaf {@code Iso}) is real. If {@code mhChain}
+ * tracks {@code currentMapper}, the runtime floor is confirmed and hot loops belong on
+ * {@code @Bridge}.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
@@ -60,8 +61,9 @@ public class MethodHandleChainSpikeBenchmark {
     final MethodHandles.Lookup lk = MethodHandles.lookup();
 
     // Raw, primitive-typed constructor handle: (int, long, String, double, boolean) -> Dst.
-    final MethodHandle ctor =
-      lk.unreflectConstructor(Dst.class.getDeclaredConstructor(int.class, long.class, String.class, double.class, boolean.class));
+    final MethodHandle ctor = lk.unreflectConstructor(
+      Dst.class.getDeclaredConstructor(int.class, long.class, String.class, double.class, boolean.class)
+    );
 
     // Raw, primitive-typed component accessors: each (Src) -> Ti.
     final MethodHandle a = lk.unreflect(Src.class.getMethod("a")); // (Src) -> int
@@ -81,14 +83,13 @@ public class MethodHandleChainSpikeBenchmark {
     // forward would pay (Iso.to -> captured forward.apply). A productionized MH-combinator leaf Iso
     // lands between mhChain (bare) and currentMapper.
     final MethodHandle h = mhChain;
-    mhFn =
-      s -> {
-        try {
-          return (Dst) h.invokeExact(s);
-        } catch (final Throwable t) {
-          throw new RuntimeException(t);
-        }
-      };
+    mhFn = s -> {
+      try {
+        return (Dst) h.invokeExact(s);
+      } catch (final Throwable t) {
+        throw new RuntimeException(t);
+      }
+    };
   }
 
   @Benchmark

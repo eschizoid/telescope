@@ -292,7 +292,8 @@ public final class Records {
     // Raw, primitive-typed handles for the MethodHandle-combinator assembly path (MhIso). Unlike
     // `readers` / `ctorFn` — which are typed Function<Object, Object> and therefore box every
     // primitive component — these keep the actual component/constructor signatures, so a composed
-    // (S) -> T handle stays unboxed end to end. `accessorHandles[i]` has type `(cls) -> compType[i]`;
+    // (S) -> T handle stays unboxed end to end. `accessorHandles[i]` has type `(cls) ->
+    // compType[i]`;
     // `ctorHandle` has type `(compType[0], ..., compType[n]) -> cls`.
     MethodHandle[] accessorHandles,
     MethodHandle ctorHandle
@@ -318,10 +319,10 @@ public final class Records {
     }
 
     /**
-     * Raw, primitive-typed component accessor handles — {@code (cls) -> componentType[i]}, no boxing.
-     * The {@link #readers} counterpart is forced to {@code Function<Object, Object>} (Function's only
-     * SAM) and boxes; these keep the component's real type so {@link MhIso} can compose them into an
-     * unboxed {@code (S) -> T} constructor call.
+     * Raw, primitive-typed component accessor handles — {@code (cls) -> componentType[i]}, no
+     * boxing. The {@link #readers} counterpart is forced to {@code Function<Object, Object>}
+     * (Function's only SAM) and boxes; these keep the component's real type so {@link MhIso} can
+     * compose them into an unboxed {@code (S) -> T} constructor call.
      */
     private static MethodHandle[] buildAccessorHandles(
       final Class<?> cls,

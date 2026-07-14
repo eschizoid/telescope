@@ -13,11 +13,11 @@ import java.util.function.Function;
  * and boxes every primitive component (its readers are typed {@code Function<Object, Object>} and
  * its builder spreads an {@code Object[]}). This assembler instead composes the whole conversion
  * into a single {@code (S) -> T} handle: each constructor argument is produced by running the
- * source's raw, primitive-typed accessor handle, piped straight into the target's raw
- * constructor handle via {@link MethodHandles#filterArguments} + {@link
- * MethodHandles#permuteArguments}. On same-name/same-type ("identity") fields the value flows
- * primitive-to-primitive with no box and no array; only fields carrying a real per-field {@link Iso}
- * (rename with conversion, nested pair, container lift) route through that Iso, exactly as before.
+ * source's raw, primitive-typed accessor handle, piped straight into the target's raw constructor
+ * handle via {@link MethodHandles#filterArguments} + {@link MethodHandles#permuteArguments}. On
+ * same-name/same-type ("identity") fields the value flows primitive-to-primitive with no box and no
+ * array; only fields carrying a real per-field {@link Iso} (rename with conversion, nested pair,
+ * container lift) route through that Iso, exactly as before.
  *
  * <p><b>Lattice.</b> The result is an ordinary {@link Iso#of(Function, Function)} — the composed
  * handles <em>are</em> the leaf Iso's forward/backward transforms. Composition above this leaf
@@ -26,7 +26,9 @@ import java.util.function.Function;
  */
 public final class MhIso {
 
-  /** Constructor-parameter ceiling for {@code filterArguments}/{@code permuteArguments} composition. */
+  /**
+   * Constructor-parameter ceiling for {@code filterArguments}/{@code permuteArguments} composition.
+   */
   private static final int MAX_ARITY = 250;
 
   private MhIso() {}
@@ -37,10 +39,12 @@ public final class MhIso {
    * over the array leaf — a shape decision, not a runtime fallback.
    */
   public static boolean supports(final Class<?> source, final Class<?> target) {
-    return source.isRecord()
-      && target.isRecord()
-      && source.getRecordComponents().length <= MAX_ARITY
-      && target.getRecordComponents().length <= MAX_ARITY;
+    return (
+      source.isRecord() &&
+      target.isRecord() &&
+      source.getRecordComponents().length <= MAX_ARITY &&
+      target.getRecordComponents().length <= MAX_ARITY
+    );
   }
 
   // (Iso, Object) -> Object  ==  iso.to(v) / iso.from(v). Bound per non-identity field.
@@ -79,12 +83,26 @@ public final class MhIso {
     // Erase both directions to (Object) -> Object so the Function SAM call site can invokeExact
     // them — the boundary casts (Object -> record on entry, record -> Object on exit) are cheap
     // reference casts; the primitive fields inside stay unboxed.
-    final MethodHandle fwd =
-      compose(source, target, srcInfo.accessorHandles(), tgtInfo.ctorHandle(), fwdSrcPos, fwdIso, ISO_TO, identity)
-        .asType(MethodType.methodType(Object.class, Object.class));
-    final MethodHandle bwd =
-      compose(target, source, tgtInfo.accessorHandles(), srcInfo.ctorHandle(), bwdTgtPos, bwdIso, ISO_FROM, identity)
-        .asType(MethodType.methodType(Object.class, Object.class));
+    final MethodHandle fwd = compose(
+      source,
+      target,
+      srcInfo.accessorHandles(),
+      tgtInfo.ctorHandle(),
+      fwdSrcPos,
+      fwdIso,
+      ISO_TO,
+      identity
+    ).asType(MethodType.methodType(Object.class, Object.class));
+    final MethodHandle bwd = compose(
+      target,
+      source,
+      tgtInfo.accessorHandles(),
+      srcInfo.ctorHandle(),
+      bwdTgtPos,
+      bwdIso,
+      ISO_FROM,
+      identity
+    ).asType(MethodType.methodType(Object.class, Object.class));
 
     final Function<S, T> forward = s -> {
       if (s == null) return null;
@@ -132,30 +150,35 @@ public final class MhIso {
       final int sp = slotSrcPos[i];
       final boolean isIdentity = slotIso[i] == identity;
       if (isIdentity && sp >= 0) {
-        // Plain passthrough: raw accessor straight into the constructor slot, primitive-to-primitive,
+        // Plain passthrough: raw accessor straight into the constructor slot,
+        // primitive-to-primitive,
         // no box. This is the fast path the whole assembler exists for.
         filters[i] = srcAccessors[sp].asType(MethodType.methodType(pt, srcCls));
       } else if (isIdentity) {
         // Identity Iso but no source field: yield null. asType into a primitive slot unboxes null →
         // NPE at call time, identical to the array path's `ctorFn.apply(nullSlot)`.
-        filters[i] =
-          MethodHandles.dropArguments(MethodHandles.constant(Object.class, null), 0, srcCls)
-            .asType(MethodType.methodType(pt, srcCls));
+        filters[i] = MethodHandles.dropArguments(MethodHandles.constant(Object.class, null), 0, srcCls).asType(
+          MethodType.methodType(pt, srcCls)
+        );
       } else {
         // Non-identity Iso (rename-with-conversion, nested pair, container lift, constant, compute,
-        // when-gate): mirror the array path's `iso.to(v)`, where v is the read value or null when the
+        // when-gate): mirror the array path's `iso.to(v)`, where v is the read value or null when
+        // the
         // slot has no source. isoStep : (Object) -> Object.
         final MethodHandle isoStep = isoDir.bindTo(slotIso[i]);
         if (sp < 0) {
           // v == null: constant / compute / gated rows produce their value from a null input.
-          filters[i] =
-            MethodHandles.dropArguments(MethodHandles.insertArguments(isoStep, 0, (Object) null), 0, srcCls)
-              .asType(MethodType.methodType(pt, srcCls));
+          filters[i] = MethodHandles.dropArguments(
+            MethodHandles.insertArguments(isoStep, 0, (Object) null),
+            0,
+            srcCls
+          ).asType(MethodType.methodType(pt, srcCls));
         } else {
           final Class<?> readType = srcAccessors[sp].type().returnType();
-          filters[i] =
-            MethodHandles.filterReturnValue(srcAccessors[sp], isoStep.asType(MethodType.methodType(Object.class, readType)))
-              .asType(MethodType.methodType(pt, srcCls));
+          filters[i] = MethodHandles.filterReturnValue(
+            srcAccessors[sp],
+            isoStep.asType(MethodType.methodType(Object.class, readType))
+          ).asType(MethodType.methodType(pt, srcCls));
         }
       }
     }
