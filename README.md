@@ -343,15 +343,15 @@ architecture stops. Two questions decide it — is it as fast, and what do you g
 
 **At the codegen level, telescope and MapStruct are the same performance class.** Both annotation processors emit direct
 constructor and accessor calls the JIT inlines into one tight basic block. On the shape real services run — deeply
-nested records with lists inside — they are a **tie**: 1.15×, about 7 ns on a 47 ns conversion. On a trivial flat
-5-field struct MapStruct's hand-templated body is ~1.7 ns quicker (1.5×). At that scale you are choosing on **API and
-capability, not nanoseconds.**
+nested records with lists inside — they are a **tie**: ~1.15×, about 6–7 ns on a ~50 ns conversion, stable across
+repeated CI runs. On a trivial flat 5-field struct the gap is **~1.07×** — well under a nanosecond. At every one of
+these scales you are choosing on **API and capability, not nanoseconds.**
 
-| Tier (codegen vs codegen)       | telescope vs MapStruct                                                           |
-| ------------------------------- | -------------------------------------------------------------------------------- |
-| flat (5 scalars)                | 1.5–1.6× — ~1.7 ns absolute                                                      |
-| nested (one nested type)        | 1.6–2.0× — one shallow hop isolates framework overhead, not a real-service shape |
-| **deep (3 levels + list hops)** | **1.15× — a tie**                                                                |
+| Tier (codegen vs codegen)       | telescope vs MapStruct                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| flat (5 scalars)                | **~1.07×** — under a nanosecond                                                                   |
+| nested (one nested type)        | near-parity, but JMH-noisy run-to-run — a framework-overhead microbench, not a real-service shape |
+| **deep (3 levels + list hops)** | **1.15× — a tie**                                                                                 |
 
 The full CI-reproducible matrix — both directions, all three tiers, the runtime path, the methodology, and the
 dispatch-overhead decomposition — lives in
