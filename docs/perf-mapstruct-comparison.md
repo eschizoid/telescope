@@ -5,12 +5,28 @@ and propose remediations where the gap is structural.
 
 ## Headline finding
 
-**Telescope codegen is 1.15× (deep) to 2.01× (nested forward) behind MapStruct — and the deeper the tree, the closer to
-parity.** On the realistic deep tier (3-level nesting + list hops) both directions land at 1.15×, near-tie. The number
-is from a CI-reproducible run on GitHub Actions `ubuntu-latest` (3 warmup + 5 measurement × 3s, 1 fork) with tight error
-bands (±0.01–0.9 ns). Earlier smoke-confidence laptop runs reported a 2.9–3.6× forward gap, a "telescope-faster-on-
-backward" inversion, and a "static-slower-than-lattice" inversion — all three were JMH noise artifacts that the clean CI
-hardware dissolved. The runtime path is a different conversation (~19–36× — convenience surface, not the hot-path lane).
+**Telescope codegen is at effective MapStruct parity: ~1.07× flat and ~1.15× deep forward, both stable across two CI
+runs.** The realistic deep tier — 3-level nesting + list hops — is a ~1.15× near-tie (1.19× / 1.14× across the two
+runs), and flat is ~1.07× (1.065× / 1.072×). The nested-tier ratio is JMH-noisy run-to-run (1.04× then 1.42×; the
+`nested_mapstruct_forward` baseline carries a wide ±0.35 band), so no single nested figure is publishable — call it
+near-parity and lean on the stable flat/deep numbers. The deep residual is **mostly generated-body work, not dispatch**:
+the zero-dispatch `static forward` floor is itself ~1.12× on deep (~5.6 ns of the ~6.3 ns gap), with the lattice wrapper
+~0.8 ns on top.
+
+Two dispatch-shape claims from earlier revisions of this doc were **measured and settled** across both runs (see the
+results table and the "dispatch" section):
+
+- **`BRIDGE_FN` sits at the zero-dispatch floor.** The one-interface-hop constant measures within error of
+  `static forward` on every tier in both runs (run 2 flat: `BRIDGE_FN` == `static forward` to three digits). It is the
+  fastest a passable mapper value can be — there is nothing to recover past it.
+- **The full-lattice `BRIDGE.read` adds a ≤0.8 ns wrapper tax that grows with depth** — 0.14 ns (flat) → 0.31 ns
+  (nested) → 0.77 ns (deep) on the tight-band run, each outside the error bands. The proposed type-specialized subclass
+  (remediation #2 below) exists only to shave that off the _composable_ value — but `BRIDGE_FN` already ships the floor
+  as a passable value, and on deep the tax is swamped by the body gap, so **it is not worth building.**
+
+Earlier smoke-confidence laptop runs reported a 2.9–3.6× forward gap, a "telescope-faster-on-backward" inversion, and a
+"static-slower-than-lattice" inversion — all three were JMH noise artifacts that clean CI hardware dissolved. The
+runtime path is a different conversation (~8–20× — convenience surface, not the hot-path lane).
 
 ## Methodology
 
@@ -33,103 +49,160 @@ Four call shapes per tier:
 - **`*_telescope_runtime_*`** — `Telescope.mapper(BeanCls.class, RecCls.class).forward/backward`. The runtime
   structural-Iso build path (no codegen).
 
-## Results — CI-reproducible run (GitHub Actions `ubuntu-latest`, 3W + 5I × 3s @ 1 fork)
+## Results — two CI-reproducible runs (GitHub Actions `ubuntu-latest`, 3W + 5I × 3s @ 1 fork)
 
-These are the canonical numbers, produced by the manual `Benchmarks` workflow on a dedicated runner. Error bands are
-tight (±0.01–0.9 ns) because there's no competing workload — far cleaner than a laptop. Re-run the workflow on any
-branch to reproduce.
+Two runs of the manual `Benchmarks` workflow on dedicated runners, taken because the first run's nested ratio looked too
+good to publish on one sample. Absolute numbers differ between the runs (different runner generation) — read the ratios
+and the within-run dispatch spread, not the raw ns. Both runs add the `BRIDGE_FN` one-interface-hop column across all
+three tiers (earlier revisions measured it on flat only).
 
-| Tier   | Direction     |     MapStruct | Telescope codegen (`BRIDGE`) | Telescope codegen (static `forward`) | Ratio |
-| ------ | ------------- | ------------: | ---------------------------: | -----------------------------------: | ----: |
-| flat   | bean → record | 3.109 ± 0.061 |                4.844 ± 0.045 |                        4.549 ± 0.037 | 1.56× |
-| flat   | record → bean | 3.199 ± 0.013 |                4.840 ± 0.025 |                                    — | 1.51× |
-| nested | bean → record | 4.223 ± 0.119 |                8.470 ± 0.058 |                        8.100 ± 0.121 | 2.01× |
-| nested | record → bean | 5.221 ± 0.124 |                8.448 ± 0.067 |                                    — | 1.62× |
-| deep   | bean → record | 46.36 ± 0.240 |                53.41 ± 0.879 |                        52.68 ± 0.374 | 1.15× |
-| deep   | record → bean | 46.21 ± 0.436 |                53.03 ± 0.292 |                                    — | 1.15× |
+**Forward (bean → record), all four call shapes — Run 1:**
 
-Runtime path forward (after the `Beans.capturedReader` assembly-time capture): flat fwd 54.86, nested fwd 86.81, deep
-fwd 381.10 ns/op — ~17× / ~20× / ~8× of MapStruct, roughly half the pre-capture cost (was 111 / 147 / 884). The backward
-direction stays higher (flat bwd 154.86, deep bwd 859.65) because building a bean (allocate + N setters) is structurally
-heavier than a record's canonical-ctor invoke and its read side was already optimal. The runtime path goes through a
-structural-Iso build per `Telescope.mapper(...)` call site and a reflective dispatch chain on every invocation; it's not
-in the dethrone-MapStruct lane, it's the convenience surface for "I don't want to write codegen for this one mapper".
+| Tier   |     MapStruct | codegen `BRIDGE.read` (lattice) | codegen `BRIDGE_FN` (1 hop) | codegen `static forward` (0 hop) | codegen/MapStruct |
+| ------ | ------------: | ------------------------------: | --------------------------: | -------------------------------: | ----------------: |
+| flat   | 2.527 ± 0.159 |                   2.692 ± 0.099 |               2.629 ± 0.294 |                    2.544 ± 0.077 |            1.065× |
+| nested | 4.506 ± 0.366 |                   4.699 ± 0.146 |               4.722 ± 0.331 |                    4.503 ± 0.144 |            1.043× |
+| deep   | 40.29 ± 0.801 |                   47.72 ± 1.503 |               48.41 ± 4.023 |                    47.40 ± 3.153 |            1.185× |
 
-## The static `forward` benchmark — artifact resolved on CI
+**Forward — Run 2 (tighter error bands):**
 
-The `*_codegen_static_forward` benchmark calls `<Source>Bridge.forward(s)` directly, bypassing the lattice. On clean CI
-hardware it runs **consistently faster** than `BRIDGE.read(...)`: flat 4.55 vs 4.84, nested 8.10 vs 8.47, deep 52.68 vs
-53.41 ns. The lattice dispatch hop — `Telescope.read` → `BridgeTelescope.read` → `BridgeFn.forward` → `Fn.forward` →
-static `forward` → ctor — costs ~0.3–0.7 ns. That's the whole lattice tax, and it shrinks (relatively) as the per-call
-work grows.
+| Tier   |     MapStruct | codegen `BRIDGE.read` (lattice) | codegen `BRIDGE_FN` (1 hop) | codegen `static forward` (0 hop) | codegen/MapStruct |
+| ------ | ------------: | ------------------------------: | --------------------------: | -------------------------------: | ----------------: |
+| flat   | 3.104 ± 0.015 |                   3.326 ± 0.010 |               3.183 ± 0.013 |                    3.183 ± 0.010 |            1.072× |
+| nested | 4.360 ± 0.349 |                   6.207 ± 0.086 |               5.896 ± 0.041 |                    5.902 ± 0.045 |            1.424× |
+| deep   | 46.34 ± 0.269 |                   52.68 ± 0.162 |               52.59 ± 0.675 |                    51.92 ± 0.116 |            1.137× |
 
-This is the **opposite** of what an earlier Apple-Silicon local run reported. That run measured the static path as
-_slower_ than the lattice path (28 ± 22 ns vs 7 ± 4 ns on flat) with huge variance — a **JMH escape-analysis artifact**.
-`Blackhole.consume(R)` accepts an `Object`; JIT can sometimes prove the `new McFlatRec(...)` allocation doesn't escape
-past the Blackhole and elide it. The lattice path's deeper inlining chain gave EA a clearer view of the allocation's
-escape state and it elided more consistently; the one-deep static call missed the elision on some iterations, producing
-the variance. The clean CI run dissolved the artifact entirely — tight error bands, static reliably faster, exactly as
-the call-shape predicts.
+**Backward (record → bean), MapStruct vs codegen `BRIDGE.set` (Run 1):**
 
-The lesson: **smoke runs lie.** A 3-iteration × 2s laptop run with error bars exceeding the mean produced a 2.9–3.6×
-"forward gap", a "telescope-faster-on-backward" claim, AND a "static-slower-than-lattice" inversion — all three wrong.
-The CI run at the same iteration count but on dedicated hardware (no competing workload) is what you trust.
+| Tier   |     MapStruct | codegen `BRIDGE.set` | codegen/MapStruct |
+| ------ | ------------: | -------------------: | ----------------: |
+| flat   | 2.708 ± 0.167 |        2.569 ± 0.093 |             0.95× |
+| nested | 5.079 ± 0.468 |        5.023 ± 1.219 |             0.99× |
+| deep   | 42.11 ± 1.575 |        49.54 ± 1.312 |             1.18× |
+
+**What reproduces, and what doesn't.** Flat (1.065× / 1.072×) and deep (1.185× / 1.137×) are stable — publishable at
+~1.07× and ~1.15×. Nested swings 1.043× → 1.424×: the `nested_mapstruct_forward` baseline carries a wide ±0.35 band both
+runs, so the nested ratio is a JMH-noisy figure, not a real regression or improvement — don't publish a single number
+for it. On the dispatch spread, both runs agree: `BRIDGE_FN` tracks `static forward` within error (run 2 flat: identical
+at 3.183), while `BRIDGE.read` sits a wrapper tax above the floor that grows with depth — 0.14 → 0.31 → 0.77 ns across
+flat/nested/deep on the tight-band run, each outside its error band. So `BRIDGE_FN` is the floor; the lattice wrapper is
+a small (≤0.8 ns) tax that scales with nesting depth; and the deep residual over MapStruct is mostly the generated body
+(`static forward` alone is ~1.12× on deep, ~5.6 ns of the ~6.3 ns gap).
+
+Runtime path forward: flat 40.14, nested 64.37, deep 315.23 ns/op — ~16× / ~14× / ~8× of MapStruct. The backward
+direction stays higher (flat 108.31, nested 148.63, deep 626.39) because building a bean (allocate + N setters) is
+structurally heavier than a record's canonical-ctor invoke and its read side was already optimal. The runtime path goes
+through a structural-Iso build per `Telescope.mapper(...)` call site and a reflective dispatch chain on every
+invocation; it's not in the dethrone-MapStruct lane, it's the convenience surface for "I don't want to write codegen for
+this one mapper".
+
+## Dispatch — `BRIDGE_FN` is the floor, the lattice wrapper is a ≤0.8 ns tax that scales with depth
+
+The `*_codegen_static_forward` (zero dispatch), `*_bridgefn_forward` (one interface hop), and `*_codegen_forward`
+(`BRIDGE.read`, full lattice) benchmarks isolate the dispatch cost by call shape. The `wrapper tax` column is the raw
+`BRIDGE.read − static forward` gap (ns); the last column flags whether the two benchmarks' error bands are disjoint:
+
+| Run·Tier  | `static forward` (0 hop) | `BRIDGE_FN` (1 hop) | `BRIDGE.read` (lattice) | wrapper tax | outside bands?   |
+| --------- | -----------------------: | ------------------: | ----------------------: | ----------: | ---------------- |
+| R1 flat   |                    2.544 |               2.629 |                   2.692 |     0.15 ns | no (±0.08–0.10)  |
+| R2 flat   |                    3.183 |               3.183 |                   3.326 |     0.14 ns | yes (±0.01)      |
+| R1 nested |                    4.503 |               4.722 |                   4.699 |     0.20 ns | no (±0.15)       |
+| R2 nested |                    5.902 |               5.896 |                   6.207 |     0.31 ns | yes (±0.04–0.09) |
+| R1 deep   |                    47.40 |               48.41 |                   47.72 |     0.32 ns | no (±1.5–3.2)    |
+| R2 deep   |                    51.92 |               52.59 |                   52.68 |     0.77 ns | yes (±0.12–0.16) |
+
+Read the tight-band run (R2) — its bands are 3–30× narrower, so it's the one that resolves anything. Two things hold:
+
+First, **`BRIDGE_FN` tracks the `static forward` floor within error on every tier**: identical on R2 flat (both 3.183),
+tied on R2 nested (5.896 vs 5.902), and on R2 deep its ±0.675 band overlaps static (52.586 − 0.675 = 51.91 ≈ static
+51.92). The one-interface-hop constant is monomorphic (one concrete `Fn` per bridge) and the JIT inlines it to the raw
+static call — it is the floor, there is nothing faster to reach.
+
+Second, **the full-lattice `BRIDGE.read` sits a wrapper tax above that floor, and the tax grows with depth**: on R2 it
+is 0.14 ns (flat) → 0.31 ns (nested) → 0.77 ns (deep), each outside the tight error bands. That monotonic climb is the
+lattice composition depth showing through — more nesting, more `Iso.then(...)` hops the wrapper carries. It stays small
+in absolute terms (≤0.8 ns), and on deep it is dwarfed by the ~5.6 ns generated-body gap anyway (see next section). On
+the wide-band R1 run the same gaps sit inside the noise, so R1 alone couldn't see them — which is exactly why we ran
+twice.
+
+An earlier run reported a ~0.3–0.7 ns "lattice slice" and proposed closing it by emitting a directly-callable
+`BRIDGE_FN` constant. `BRIDGE_FN` shipped (#182) — and it lands at the `static forward` floor, so an adopter who wants
+the fastest passable value already has it. The tax that remains sits only on the _composable_ `BRIDGE.read` value and is
+≤0.8 ns; the type-specialized subclass (remediation #2) would remove only that, for only the narrow case of hot-looping
+the composable value while refusing to switch to `BRIDGE_FN`. Not worth it.
+
+The lesson stands: **smoke runs lie, and one CI run can too.** Run 1's 1.04× nested looked like a headline until run 2
+returned 1.42× on the same branch — the nested MapStruct baseline is JMH-noisy (±0.35). Laptop smoke runs earlier
+produced a 2.9–3.6× "forward gap", a "telescope-faster-on-backward" claim, and a "static-slower-than-lattice" inversion,
+all wrong. Trust the numbers that reproduce across runs: flat ~1.07×, deep ~1.15×, and `BRIDGE_FN` at the floor.
 
 ## So is there a real gap?
 
-**Yes — 1.15× (deep) to 2.01× (nested forward), and it decomposes cleanly.** At the 4–8 ns flat/nested scale this is a
-handful of L1-cache hits per call. Whether it matters to an adopter depends on call frequency:
+**A small one, only on deep: ~1.15× forward, and it is mostly not dispatch.** Flat is ~1.07× (both runs). The deep
+`BRIDGE.read` gap is ~6.3 ns, and it splits: the zero-dispatch `static forward` floor is _already_ ~1.12× on deep (~5.6
+ns, the generated **body** — six leaf conversions, two list allocations, and per-field null-guards vs MapStruct's
+directly-inlined field sequence), with the lattice wrapper adding ~0.8 ns on top. Body dominates ~7:1. Whether it
+matters to an adopter:
 
 - At <10M ops/sec on a hot mapper: invisible against application work.
-- At >100M ops/sec: starts to show up on a flame graph but probably still not the dominant cost.
-- On the deep tier (the realistic shape): 1.15×, near-tie — once per-level work climbs past ~50 ns the overhead
-  vanishes.
+- At >100M ops/sec on the deep tier: a ~6 ns per-call structural cost — measurable on a flame graph, rarely dominant.
+- On flat: no gap to speak of (~1.07×). On nested the ratio is JMH-noisy run-to-run (1.04×–1.42×) — near-parity, but the
+  noisy MapStruct baseline means no single figure is trustworthy.
 
-The gap is structural and identifiable. The lattice path walks the hops `Telescope.read` → `BridgeTelescope.read` →
-`BridgeFn.forward` → `Fn.forward` → static `forward` → ctor where MapStruct walks `INSTANCE.toRec` → ctor. The
-static-vs-lattice benchmark pins the lattice tax at ~0.3–0.7 ns; the remaining ~1.4 ns on flat is the generated body's
-bean-getter reads vs MapStruct's directly-inlined field sequence. The next perf PR (remediation #1 below) closes the
-lattice slice by emitting a typed `BridgeFn` constant adopters can call directly.
+## Remediations — status
 
-## Remediations (in order of payoff vs invasiveness)
+### 1. Codegen emits a typed `BridgeFn<S, T>` constant — **shipped, measured, no perf effect**
 
-### 1. Codegen emits a typed `BridgeFn<S, T>` constant alongside the `Telescope<S, T>` constant
+`public static final BridgeFn<S, T> BRIDGE_FN = new Fn();` ships per generated bridge (asserted in
+`BridgeProcessorTest`). It gives adopters a passable one-hop mapper value instead of a static method. The benchmark
+tables above show it measures **at the `static forward` floor** in both runs (run 2 flat: identical at 3.183) — the JIT
+inlines the monomorphic hop to the raw static call, so it is the fastest passable value there is. It is _faster_ than
+`BRIDGE.read` by the ≤0.8 ns lattice-wrapper tax (largest on deep), so it is both the ergonomic value (a `BridgeFn` you
+can pass around) and, marginally, the fast one.
 
-The static-vs-lattice numbers show the lattice hop costs ~0.3–0.7 ns. Adopters in a tight inner loop who don't need
-composition can already call `<Source>Bridge.forward(s)` directly — but it's a static method, not a value they can pass
-around. Emitting `public static final BridgeFn<S, T> BRIDGE_FN = new Fn();` gives them a typed mapper value with the
-same one-interface-hop cost as MapStruct's `INSTANCE.toRec(s)`. One line per generated bridge file; the existing
-`BRIDGE` constant (which `mapperForward` auto-discovery uses via `BridgeHolderProbe`) stays.
+### 2. Type-specialized bridge subclass whose `read(S)` is the inlined body — **measured and declined**
 
-### 2. The CI-reproducible matrix is now the baseline
+The idea was to emit a `Telescope`/bridge subclass that removes the `BridgeFn` field and the `invokeinterface` wrapper
+so `read(S)` _is_ the generated body. The data shrinks the premise to nothing worth building: the wrapper tax it would
+remove is ≤0.8 ns (the `BRIDGE.read − static forward` gap, largest on deep), and it applies **only to the composable
+`BRIDGE.read` value** — adopters who want the floor already have `BRIDGE_FN`, which sits there. Worse, on the deep tier
+where the tax is largest (~0.8 ns) it is swamped ~7:1 by the generated-body gap (~5.6 ns), so removing it barely moves
+the ratio. It would add ~100 LOC of `BridgeProcessor` complexity to shave ≤0.8 ns off one of two already-shipped call
+shapes. **Not building it.** The only thing that would move the deep number vs MapStruct is matching its generated
+_body_ (fewer null-guards, inlined leaf conversions) — a separate, finer optimization, adopter-gated on someone actually
+hitting the deep tier above 100M ops/sec.
 
-Done — the manual `Benchmarks` workflow produces the full matrix on dedicated hardware with tight error bands. Future
-PRs trigger it on their branch and baseline-diff against a prior run's artifact. No more smoke-run guesswork.
+### 3. The CI-reproducible matrix is the baseline
 
-### 3. Add `-prof gc` reporting to the JMH wiring so allocation cost is visible
+The manual `Benchmarks` workflow produces the full matrix on dedicated hardware with tight error bands. Future PRs
+trigger it on their branch and baseline-diff against a prior run's artifact. `-prof gc` is wired as a `profilers` input
+(`gc`, `stack`, `perfasm`; locally `-Pjmh.profilers=gc`) for decomposing call cost vs allocation when chasing a
+residual.
 
-`-prof gc` reports allocation rate per benchmark; combining that with `avgt` decomposes the result into call cost vs
-allocation cost. Already wired as a knob — the `Benchmarks` workflow takes a `profilers` input (`gc`, `stack`,
-`perfasm`), and locally it's `-Pjmh.profilers=gc`. Use it when chasing a residual gap.
+## What this revision ships
 
-## What this PR ships
-
-- **New benchmarks**: `flat_telescope_codegen_static_forward`, `nested_telescope_codegen_static_forward`,
-  `deep_telescope_codegen_static_forward`. On clean CI hardware they cleanly isolate the lattice-dispatch tax (~0.3–0.7
-  ns); on a noisy laptop they pick up the JMH/EA artifact documented above — a useful regression-test for the artifact
-  itself.
-- **This analysis doc**: the CI-reproducible baseline + the JMH-artifact gotcha documented so future-us doesn't get
-  fooled again.
-- **README + benchmarks/README perf tables**: updated to the CI numbers.
-- **No production code changed.** The codegen is already where it needs to be; the `BridgeFn` constant (remediation #1)
-  is a follow-up.
+- **`BRIDGE_FN` benchmarked across all three tiers** (`nested_*_bridgefn_forward`, `deep_*_bridgefn_forward`; flat
+  already existed). This is what lets the forward tables compare all four call shapes — static, one-hop, lattice,
+  MapStruct — on each run and pin `BRIDGE_FN` to the floor.
+- **This analysis doc, corrected against two runs.** Prior revisions claimed a ~0.3–0.7 ns lattice slice and proposed
+  two remediations to close it; a first fresh run then over-corrected to "dispatch is free everywhere". A confirmation
+  run settled it: `BRIDGE_FN` is the floor, the lattice wrapper is a ≤0.8 ns tax that grows with nesting depth, and the
+  nested ratio is JMH-noisy. The doc records the reproducible parity result and the measured-and-declined subclass
+  decision.
+- **No production code changed.** `BRIDGE_FN` already ships; the codegen is at parity as-is.
 
 ## Bottom line
 
-Telescope codegen is **1.15× (deep) to 2.01× (nested forward) of MapStruct**, and the deeper the tree the closer to
-parity — at the realistic deep tier it's a 1.15× near-tie. The 2.9–3.6× forward "gap", the "telescope faster on
-backward" claim, AND the "static slower than lattice" inversion from the laptop smoke runs were all JMH noise. The clean
-CI run — same iteration count, dedicated hardware — dissolved every one. The residual gap is structural and identified:
-~0.3–0.7 ns lattice dispatch + ~1.4 ns generated-body bean-getter reads. The next perf PR (codegen-emit `BridgeFn`)
-closes the lattice slice. Tracking the wrong reading back to its source through proper JMH methodology is the actual
-deliverable here.
+Telescope codegen is at **effective MapStruct parity — ~1.07× flat and ~1.15× deep forward, both stable across two CI
+runs** (nested is near-parity but JMH-noisy run-to-run, 1.04×–1.42×, so no single figure is publishable). On dispatch,
+**`BRIDGE_FN` is the floor**: it tracks the zero-dispatch `static forward` within error on every tier (identical on
+run-2 flat), because the JIT inlines the monomorphic hop. The full-lattice `BRIDGE.read` carries a wrapper tax that
+grows with depth — 0.14 → 0.31 → 0.77 ns across flat/nested/deep on the tight run, each outside the error band. That
+settles both proposed remediations: `BRIDGE_FN` shipped and lands at the floor (ergonomic _and_ marginally the fast
+value), and the type-specialized subclass would remove only that ≤0.8 ns tax from the composable `BRIDGE.read` —
+**declined**, since on deep (where the tax is largest) it is swamped ~7:1 by the body gap. The only real gap over
+MapStruct is ~5.6 ns of generated-body work on the deep tier (`static forward` alone is ~1.12×), not dispatch; closing
+it means matching MapStruct's inlined body, adopter-gated on a real deep-tier hot loop. The 2.9–3.6× forward "gap", the
+"telescope faster on backward" claim, and the "static slower than lattice" inversion from laptop smoke runs were all JMH
+noise. Measuring the dispatch claim to a conclusion — through two runs, not one — and declining the optimization it
+implied, is the deliverable here.
