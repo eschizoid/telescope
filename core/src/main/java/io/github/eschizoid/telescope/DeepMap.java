@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
+import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
@@ -1596,11 +1597,30 @@ public final class DeepMap {
     // path (matches the prior dispatch-shape invariant: one branch outside the Iso, not N
     // branches inside).
     final var srcNames = srcRefl.names(source);
-    final var srcHolderReaders = Telescope.holderReadersFor(source, srcNames);
-    final var srcHolderConstructor = Telescope.holderConstructorFor(source);
     final var tgtNames = tgtRefl.names(target);
-    final var tgtHolderReaders = Telescope.holderReadersFor(target, tgtNames);
-    final var tgtHolderConstructor = Telescope.holderConstructorFor(target);
+    final var slotMaps = buildSlotMaps(byTargetName, bySourceName, srcNames, tgtNames);
+    final Iso<Object, Object> identity = Iso.identity();
+
+    // Composed-handle leaf for record↔record pairs: the whole conversion is one (S)→T / (T)→S
+    // MethodHandle — no Object[] intermediate, no boxing on same-type fields (identity slots read
+    // primitive-to-primitive straight into the canonical constructor). Non-identity slots (rename
+    // with conversion, nested pair, container lift) still route through their per-slot Iso. This is
+    // a build-time shape decision (see MhIso.supports), not a runtime fallback; it stays lattice-
+    // routed — the composed handles are the leaf Iso's transforms.
+    if (MhIso.supports(source, target)) {
+      return MhIso.recordPair(
+        source,
+        target,
+        slotMaps.fwdSrcPos(),
+        slotMaps.fwdIso(),
+        slotMaps.bwdTgtPos(),
+        slotMaps.bwdIso(),
+        identity
+      );
+    }
+
+    // Array leaf for bean-involving pairs: bean construction is setter/builder-based rather than a
+    // single canonical constructor, so its composed-handle assembly is a separate shape.
     // Fused-source-and-remap: bypass the source-side Object[] intermediate. The previous shape
     // ran S → Object[srcArity] (srcReader) → Object[tgtArity] (remap) → T (tgtBuilder) — two
     // intermediate arrays + three Iso.then virtual dispatches per call. The fused body inlines
@@ -1608,12 +1628,14 @@ public final class DeepMap {
     // value directly from srcReaders[fwdSrcPos[i]].apply(s) and apply the per-slot Iso. Saves one
     // alloc + 5 array writes + 5 array reads + 2 virtual Iso.then hops per call. Identity-Iso
     // short-circuit preserved against the cached singleton from Iso.identity().
+    final var srcHolderReaders = Telescope.holderReadersFor(source, srcNames);
+    final var srcHolderConstructor = Telescope.holderConstructorFor(source);
+    final var tgtHolderReaders = Telescope.holderReadersFor(target, tgtNames);
+    final var tgtHolderConstructor = Telescope.holderConstructorFor(target);
     final var srcReaders = srcRefl.positionalReaders(source, srcHolderReaders);
     final var tgtReaders = tgtRefl.positionalReaders(target, tgtHolderReaders);
     final var tgtBuilderFn = tgtRefl.positionalBuilder(target, tgtHolderReaders, tgtHolderConstructor);
     final var srcBuilderFn = srcRefl.positionalBuilder(source, srcHolderReaders, srcHolderConstructor);
-    final var slotMaps = buildSlotMaps(byTargetName, bySourceName, srcNames, tgtNames);
-    final Iso<Object, Object> identity = Iso.identity();
     return Iso.of(
       s -> {
         if (s == null) return null;
