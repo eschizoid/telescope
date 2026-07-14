@@ -288,7 +288,14 @@ public final class Records {
     RecordComponent[] components,
     Function<Object, Object>[] readers,
     Constructor<?> ctor,
-    Function<Object, Object> ctorFn
+    Function<Object, Object> ctorFn,
+    // Raw, primitive-typed handles for the MethodHandle-combinator assembly path (MhIso). Unlike
+    // `readers` / `ctorFn` — which are typed Function<Object, Object> and therefore box every
+    // primitive component — these keep the actual component/constructor signatures, so a composed
+    // (S) -> T handle stays unboxed end to end. `accessorHandles[i]` has type `(cls) -> compType[i]`;
+    // `ctorHandle` has type `(compType[0], ..., compType[n]) -> cls`.
+    MethodHandle[] accessorHandles,
+    MethodHandle ctorHandle
   ) {
     static RecordInfo of(final Class<?> cls) {
       if (!cls.isRecord()) throw new IllegalArgumentException("Not a record: " + cls.getName());
@@ -302,9 +309,49 @@ public final class Records {
         final var lookup = privateLookupIn(cls);
         final var readers = buildReaders(cls, comps, lookup);
         final var ctorFn = buildCtorFn(cls, ctor, lookup);
-        return new RecordInfo(comps, readers, ctor, ctorFn);
+        final var accessorHandles = buildAccessorHandles(cls, comps, lookup);
+        final var ctorHandle = buildCtorHandle(cls, ctor, lookup);
+        return new RecordInfo(comps, readers, ctor, ctorFn, accessorHandles, ctorHandle);
       } catch (final NoSuchMethodException e) {
         throw new IllegalStateException("Cannot find canonical constructor for " + cls.getName(), e);
+      }
+    }
+
+    /**
+     * Raw, primitive-typed component accessor handles — {@code (cls) -> componentType[i]}, no boxing.
+     * The {@link #readers} counterpart is forced to {@code Function<Object, Object>} (Function's only
+     * SAM) and boxes; these keep the component's real type so {@link MhIso} can compose them into an
+     * unboxed {@code (S) -> T} constructor call.
+     */
+    private static MethodHandle[] buildAccessorHandles(
+      final Class<?> cls,
+      final RecordComponent[] comps,
+      final MethodHandles.Lookup lookup
+    ) {
+      final var handles = new MethodHandle[comps.length];
+      for (var i = 0; i < comps.length; i++) {
+        try {
+          handles[i] = lookup.unreflect(comps[i].getAccessor());
+        } catch (final IllegalAccessException e) {
+          throw new IllegalStateException(
+            "Failed to build accessor handle for " + cls.getName() + "." + comps[i].getName(),
+            e
+          );
+        }
+      }
+      return handles;
+    }
+
+    /** Raw canonical-constructor handle {@code (compType[0], ..., compType[n]) -> cls}, unboxed. */
+    private static MethodHandle buildCtorHandle(
+      final Class<?> cls,
+      final Constructor<?> ctor,
+      final MethodHandles.Lookup lookup
+    ) {
+      try {
+        return lookup.unreflectConstructor(ctor);
+      } catch (final IllegalAccessException e) {
+        throw new IllegalStateException("Failed to build constructor handle for " + cls.getName(), e);
       }
     }
 
