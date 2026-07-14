@@ -101,6 +101,20 @@ public final class Beans {
     }
   };
 
+  // Raw, primitive-typed handles for the MethodHandle-combinator assembly path (MhIso) — the bean
+  // mirror of Records.RecordInfo's accessorHandles / ctorHandle. Unlike GETTER_INVOKERS /
+  // SETTER_INVOKERS (typed Function / BiConsumer, which box every primitive), these keep the real
+  // getter/setter/constructor signatures so a composed (S) -> BeanT handle stays unboxed end to
+  // end.
+  // Same ClassValue rationale as the sibling caches — the value strongly references reflective
+  // members; ClassValue keeps it off-heap from the Class so the key can still unload.
+  private static final ClassValue<BeanMhInfo> BEAN_MH_INFO = new ClassValue<>() {
+    @Override
+    protected BeanMhInfo computeValue(final Class<?> type) {
+      return BeanMhInfo.of(type);
+    }
+  };
+
   /**
    * Per-class cached {@link Supplier} that returns a fresh allocation of {@code cls}: tries a
    * public no-arg constructor first, then a public static {@code builder().build()} pair, and
@@ -737,6 +751,54 @@ public final class Beans {
   /** The bean's property names (getter-derived), in discovery order. */
   public static String[] propertyNames(final Class<?> beanClass) {
     return getters(beanClass).keySet().toArray(String[]::new);
+  }
+
+  /**
+   * Raw, primitive-typed getter handles for {@code beanClass}, one per property in {@link
+   * #propertyNames} order — the read-side input the MethodHandle-combinator assembly path ({@code
+   * MhIso}) needs. {@code handles[i]} has type {@code (beanClass) -> propertyType[i]}, unboxed,
+   * mirroring {@code Records.RecordInfo.accessorHandles}. The {@link #GETTER_INVOKERS} counterpart
+   * is forced to {@code Function<Object, Object>} and boxes; these keep the getter's real return
+   * type so a composed conversion stays box-free on same-type slots.
+   */
+  public static MethodHandle[] beanAccessorHandles(final Class<?> beanClass) {
+    return BEAN_MH_INFO.get(beanClass).accessorHandles();
+  }
+
+  /**
+   * Raw no-arg constructor handle {@code () -> beanClass} for the MethodHandle-combinator setter
+   * fold. Present only when {@code beanClass} has a no-arg constructor — {@code MhIso.supports}
+   * gates on {@link #isSetterConstructible} first, so callers never reach here for a bean without
+   * one.
+   */
+  public static MethodHandle beanNoArgCtorHandle(final Class<?> beanClass) {
+    return BEAN_MH_INFO.get(beanClass).noArgCtorHandle();
+  }
+
+  /**
+   * Raw setter handle {@code (beanClass, propertyType) -> void} for the property named {@code
+   * name}, or {@code null} when the property has no public single-arg {@code setX} setter. Used by
+   * the MethodHandle-combinator setter fold on a bean-target conversion; the value keeps the
+   * setter's real parameter type so a same-type slot writes unboxed.
+   */
+  public static MethodHandle beanSetterHandle(final Class<?> beanClass, final String name) {
+    return BEAN_MH_INFO.get(beanClass).setterHandle(name);
+  }
+
+  /**
+   * Whether {@code beanClass} can be constructed by the MethodHandle-combinator setter fold: it has
+   * a no-arg constructor and a public single-arg {@code setX} setter for every property in {@code
+   * requiredProperties}. Consulted by {@code MhIso.supports} as a build-time shape decision — a
+   * bean that needs a builder or field injection (no no-arg ctor, or a mapped property with no
+   * setter) returns {@code false} and routes to the array leaf instead. No runtime fallback.
+   */
+  public static boolean isSetterConstructible(final Class<?> beanClass, final String[] requiredProperties) {
+    if (!hasNoArgConstructor(beanClass)) return false;
+    final var info = BEAN_MH_INFO.get(beanClass);
+    for (final var name : requiredProperties) {
+      if (info.setterHandle(name) == null) return false;
+    }
+    return true;
   }
 
   /**
@@ -1602,6 +1664,84 @@ public final class Beans {
       } catch (final Throwable t) {
         throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
       }
+    }
+  }
+
+  /**
+   * Cached raw, primitive-typed handles for the MethodHandle-combinator conversion path — the bean
+   * mirror of {@code Records.RecordInfo}. {@code accessorHandles[i]} is the getter for property
+   * {@code i} (in {@link #propertyNames} order), typed {@code (beanClass) -> propertyType[i]} with
+   * no boxing; {@code setterHandles} maps a property name to its {@code (beanClass, propertyType)
+   * -> void} setter handle (absent when the property is getter-only); {@code noArgCtorHandle} is
+   * the raw {@code () -> beanClass} no-arg constructor handle, or {@code null} when the bean has no
+   * no-arg constructor (never reached by the fold — {@code MhIso.supports} gates it out).
+   *
+   * <p>Getter and setter dispatch each go {@code invokevirtual}, so a subtype instance still reads
+   * and writes correctly through a handle bound to the declared {@code beanClass}. The handles keep
+   * the member's actual signature so {@code MhIso} composes them into an unboxed {@code (S) ->
+   * BeanT} fold; the primitive-setter null guard {@link SettersWriter} applies is intentionally
+   * absent here — the combinator's per-slot Iso already substitutes primitive defaults before the
+   * value reaches the setter, exactly as the array leaf does.
+   */
+  record BeanMhInfo(
+    String[] names,
+    MethodHandle[] accessorHandles,
+    Map<String, MethodHandle> setterHandles,
+    MethodHandle noArgCtorHandle
+  ) {
+    static BeanMhInfo of(final Class<?> cls) {
+      final var props = propertyNames(cls);
+      final var getterMethods = getters(cls);
+      final var accessors = new MethodHandle[props.length];
+      final var lookupByDeclaringClass = new LinkedHashMap<Class<?>, MethodHandles.Lookup>();
+      for (var i = 0; i < props.length; i++) {
+        final var getter = getterMethods.get(props[i]);
+        final var declaringClass = getter.getDeclaringClass();
+        final var lookup = lookupByDeclaringClass.computeIfAbsent(declaringClass, dc ->
+          privateLookupOrThrow(dc, cls, "getter")
+        );
+        try {
+          accessors[i] = lookup.unreflect(getter);
+        } catch (final IllegalAccessException e) {
+          throw new IllegalStateException("Failed to build accessor handle for " + cls.getName() + "." + props[i], e);
+        }
+      }
+      final var setters = new LinkedHashMap<String, MethodHandle>();
+      for (final var name : props) {
+        final var setter = findSetter(cls, name);
+        if (setter == null) continue;
+        final var declaringClass = setter.getDeclaringClass();
+        final var lookup = lookupByDeclaringClass.computeIfAbsent(declaringClass, dc ->
+          privateLookupOrThrow(dc, cls, "setter")
+        );
+        try {
+          setters.put(name, lookup.unreflect(setter));
+        } catch (final IllegalAccessException e) {
+          throw new IllegalStateException("Failed to build setter handle for " + cls.getName() + "." + name, e);
+        }
+      }
+      MethodHandle ctorHandle = null;
+      try {
+        final var ctor = cls.getDeclaredConstructor();
+        final var lookup = privateLookupOrThrow(cls, cls, "no-arg constructor");
+        ctorHandle = lookup.unreflectConstructor(ctor);
+      } catch (final NoSuchMethodException | IllegalAccessException ignored) {
+        // No accessible no-arg constructor — the setter fold is unavailable for this bean, and
+        // MhIso.supports gates it out before the fold runs. Leave the handle null.
+      }
+      return new BeanMhInfo(props, accessors, setters, ctorHandle);
+    }
+
+    private static Method findSetter(final Class<?> cls, final String name) {
+      final var set = "set" + capitalize(name);
+      for (final var m : cls.getMethods()) {
+        if (m.getParameterCount() == 1 && m.getName().equals(set)) return m;
+      }
+      return null;
+    }
+
+    MethodHandle setterHandle(final String name) {
+      return setterHandles.get(name);
     }
   }
 }
