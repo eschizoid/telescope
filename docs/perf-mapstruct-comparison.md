@@ -121,7 +121,7 @@ static call — it is the floor, there is nothing faster to reach.
 Second, **the full-lattice `BRIDGE.read` sits a wrapper tax above that floor, and the tax grows with depth**: on R2 it
 is 0.14 ns (flat) → 0.31 ns (nested) → 0.77 ns (deep), each outside the tight error bands. That monotonic climb is the
 lattice composition depth showing through — more nesting, more `Iso.then(...)` hops the wrapper carries. It stays small
-in absolute terms (≤0.8 ns), and on deep it is dwarfed by the ~5–6 ns generated-body gap anyway (see next section). On
+in absolute terms (≤0.8 ns), and on deep it is dwarfed by the ~5.6 ns generated-body gap anyway (see next section). On
 the wide-band R1 run the same gaps sit inside the noise, so R1 alone couldn't see them — which is exactly why we ran
 twice.
 
