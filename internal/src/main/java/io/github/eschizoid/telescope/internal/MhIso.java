@@ -59,8 +59,16 @@ public final class MhIso {
    * property with no setter) returns {@code false} and routes to the array leaf.
    */
   public static boolean supports(final Class<?> source, final Class<?> target) {
+    // Test seam for the differential parity oracle: with the system property below set,
+    // MhIsoDifferentialParityTest routes the identical conversion through the legacy array leaf and
+    // asserts byte-identical output against this leaf. Unset in production; read once at build time
+    // (never per conversion), so no steady-state cost.
+    if (Boolean.getBoolean(DISABLE_PROPERTY)) return false;
     return constructibleBy(source) && constructibleBy(target);
   }
+
+  /** System property (test-only) that forces every pair to the legacy array leaf. See {@link #supports}. */
+  public static final String DISABLE_PROPERTY = "io.github.eschizoid.telescope.mhiso.disabled";
 
   private static boolean constructibleBy(final Class<?> cls) {
     if (cls.isRecord()) return cls.getRecordComponents().length <= MAX_ARITY;
@@ -274,8 +282,13 @@ public final class MhIso {
     final String[] props = Beans.propertyNames(beanCls);
     MethodHandle mk = MethodHandles.dropArguments(Beans.beanNoArgCtorHandle(beanCls), 0, srcCls);
     for (var i = 0; i < props.length; i++) {
-      final MethodHandle rawSetter = Beans.beanSetterHandle(beanCls, props[i]);
-      final Class<?> slotType = rawSetter.type().parameterType(1);
+      final MethodHandle discovered = Beans.beanSetterHandle(beanCls, props[i]);
+      final Class<?> slotType = discovered.type().parameterType(1);
+      // An inherited setter (declared on a superclass) is unreflected against its DECLARING class, so
+      // its receiver type is that superclass, not beanCls. The fold produces a beanCls instance and
+      // foldArguments requires the combiner's receiver to match — narrow the receiver to beanCls (a
+      // safe upcast on invoke; no-op when the setter is declared on beanCls itself).
+      final MethodHandle rawSetter = discovered.asType(discovered.type().changeParameterType(0, beanCls));
       // Fluent / chained setters (Lombok @Accessors(chain=true), builder-style beans) return the
       // bean rather than void. foldArguments needs a void combiner, so drop any returned value via
       // asType(void) — a plain void setter is unchanged by this.
