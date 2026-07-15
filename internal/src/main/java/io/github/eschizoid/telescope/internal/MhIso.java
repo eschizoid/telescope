@@ -27,7 +27,9 @@ import java.util.function.Function;
  *       the raw canonical-constructor handle via {@link MethodHandles#filterArguments} + {@link
  *       MethodHandles#permuteArguments}. A bean target folds the raw no-arg constructor handle with
  *       one raw setter per slot via {@link MethodHandles#foldArguments} — the setter runs as a void
- *       side effect and the bean instance carries through, all unboxed.
+ *       side effect and the bean instance carries through. Identity and reference slots stay
+ *       unboxed; a primitive slot fed by a value-producing (non-identity) Iso is read boxed only so
+ *       it can be null-guarded before unboxing (see {@code setterFromSource}).
  * </ul>
  *
  * <p><b>Lattice.</b> The result is an ordinary {@link Iso#of(Function, Function)} — the composed
@@ -50,11 +52,11 @@ public final class MhIso {
   /**
    * Whether the {@code source} &harr; {@code target} conversion can be composed by this assembler:
    * each side must be a record within the arity ceiling, or a bean constructible via a no-arg
-   * constructor plus a public {@code setX} setter for every property this conversion writes. {@code
-   * DeepMap} consults this once, at build time, to choose the composed-handle leaf over the array
-   * leaf — a shape decision, not a runtime fallback. A bean that needs a builder or field injection
-   * (no no-arg constructor, or a mapped property with no setter) returns {@code false} and routes
-   * to the array leaf.
+   * constructor plus a public {@code setX} setter for every property of the bean (not only the
+   * mapped ones — the conservative per-class gate). {@code DeepMap} consults this once, at build
+   * time, to choose the composed-handle leaf over the array leaf — a shape decision, not a runtime
+   * fallback. A bean that needs a builder or field injection (no no-arg constructor, or any
+   * property with no setter) returns {@code false} and routes to the array leaf.
    */
   public static boolean supports(final Class<?> source, final Class<?> target) {
     return constructibleBy(source) && constructibleBy(target);
@@ -255,8 +257,10 @@ public final class MhIso {
    * </ol>
    *
    * <p>Properties in {@code names(...)} order are folded in turn; {@code MhIso.supports} guarantees
-   * a setter for every one of them, so no slot is silently dropped. Primitives stay unboxed because
-   * every handle keeps its real signature.
+   * a setter for every one of them, so no slot is silently dropped. Identity primitive slots stay
+   * unboxed (source primitive, never null); a primitive slot fed by a non-identity Iso is read
+   * boxed and null-guarded in {@code setterFromSource}, matching the array leaf's {@code
+   * SettersWriter}.
    */
   private static MethodHandle beanSetterFold(
     final Class<?> srcCls,
@@ -330,6 +334,10 @@ public final class MhIso {
   }
 
   private static RuntimeException rethrow(final Class<?> from, final Class<?> to, final Throwable e) {
+    // Let Errors (StackOverflowError, OutOfMemoryError, linkage faults) propagate unwrapped — the
+    // array leaf has no try/catch and lets them through raw; masking them as a RuntimeException
+    // would defeat monitoring/recovery that classifies VM-level errors separately.
+    if (e instanceof Error err) throw err;
     if (e instanceof RuntimeException re) return re;
     return new RuntimeException("Failed to convert " + from.getSimpleName() + " -> " + to.getSimpleName(), e);
   }

@@ -1678,10 +1678,11 @@ public final class Beans {
    *
    * <p>Getter and setter dispatch each go {@code invokevirtual}, so a subtype instance still reads
    * and writes correctly through a handle bound to the declared {@code beanClass}. The handles keep
-   * the member's actual signature so {@code MhIso} composes them into an unboxed {@code (S) ->
-   * BeanT} fold; the primitive-setter null guard {@link SettersWriter} applies is intentionally
-   * absent here — the combinator's per-slot Iso already substitutes primitive defaults before the
-   * value reaches the setter, exactly as the array leaf does.
+   * the member's actual signature, so {@code MhIso} composes them into a mostly-unboxed {@code (S)
+   * -> BeanT} fold. This holder carries only the <em>raw</em> handles; the primitive-setter null
+   * guard that {@link SettersWriter} applies (skip a null into a primitive setter, leaving the JLS
+   * default) is layered on top in {@code MhIso.setterFromSource} for a primitive setter fed by a
+   * value-producing Iso — not here.
    */
   record BeanMhInfo(
     String[] names,

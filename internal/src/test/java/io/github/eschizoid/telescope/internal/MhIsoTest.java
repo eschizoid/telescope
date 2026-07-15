@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.optics.Iso;
@@ -247,6 +248,27 @@ class MhIsoTest {
       final var b = iso.to(new RecUser("zoe", 99));
       assertEquals("zoe", b.getName());
       assertEquals(0, b.getAge()); // skipped → JLS default, not an NPE
+    }
+
+    @Test
+    @DisplayName("an Error thrown during conversion propagates unwrapped, not masked as a RuntimeException")
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    void errorPropagatesUnwrapped() {
+      final Iso<Object, Object> identity = Iso.identity();
+      // A slot Iso that throws an Error mid-conversion. The array leaf has no try/catch and lets
+      // Errors through raw; MhIso must not mask it as a RuntimeException.
+      final Iso<Object, Object> boom = Iso.of(
+        ignored -> {
+          throw new StackOverflowError("boom");
+        },
+        ignored -> null
+      );
+      final int[] fwd = { 0, 1 };
+      final int[] bwd = { 0, 1 };
+      final Iso<Object, Object>[] fwdIso = new Iso[] { boom, identity };
+      final Iso<Object, Object>[] bwdIso = new Iso[] { identity, identity };
+      final Iso<RecUser, BeanUser> iso = MhIso.pair(RecUser.class, BeanUser.class, fwd, fwdIso, bwd, bwdIso, identity);
+      assertThrows(StackOverflowError.class, () -> iso.to(new RecUser("x", 1)));
     }
   }
 }
