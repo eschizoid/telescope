@@ -59,6 +59,36 @@ class MhIsoTest {
     }
   }
 
+  /**
+   * Fluent / chained setters returning {@code this} (Lombok {@code @Accessors(chain=true)},
+   * builder-style beans) — the non-void setter shape the void-only fold breaks on.
+   */
+  static final class FluentBeanUser {
+
+    private String name;
+    private int age;
+
+    public FluentBeanUser() {}
+
+    public String getName() {
+      return name;
+    }
+
+    public int getAge() {
+      return age;
+    }
+
+    public FluentBeanUser setName(final String name) {
+      this.name = name;
+      return this;
+    }
+
+    public FluentBeanUser setAge(final int age) {
+      this.age = age;
+      return this;
+    }
+  }
+
   private static BeanUser bean(final String name, final int age) {
     final var b = new BeanUser();
     b.setName(name);
@@ -136,6 +166,17 @@ class MhIsoTest {
       assertEquals("cara", out.getName());
       assertEquals(25, out.getAge());
     }
+
+    @Test
+    @DisplayName("record to a fluent-setter bean folds through chained setters that return this")
+    void recordToFluentBean() {
+      assertTrue(MhIso.supports(RecUser.class, FluentBeanUser.class));
+      final Iso<RecUser, FluentBeanUser> iso = identityPair(RecUser.class, FluentBeanUser.class);
+      final var b = iso.to(new RecUser("eve", 51));
+      assertEquals("eve", b.getName());
+      assertEquals(51, b.getAge());
+      assertEquals(new RecUser("eve", 51), iso.from(b));
+    }
   }
 
   @Nested
@@ -187,6 +228,25 @@ class MhIsoTest {
       final var b = iso.to(new RecUser("ignored", 9));
       assertEquals("CONST", b.getName());
       assertEquals(9, b.getAge());
+    }
+
+    @Test
+    @DisplayName("a non-identity Iso yielding null into a primitive bean setter is skipped, leaving the default")
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    void nullTransformIntoPrimitiveBeanSkipped() {
+      final Iso<Object, Object> identity = Iso.identity();
+      // The age slot's forward always yields null. The array leaf's SettersWriter skips a null into
+      // a
+      // primitive setter, leaving the JLS default (0); unboxing null would NPE. MhIso must match.
+      final Iso<Object, Object> nullify = Iso.of(ignored -> null, ignored -> 0);
+      final int[] fwd = { 0, 1 };
+      final int[] bwd = { 0, 1 };
+      final Iso<Object, Object>[] fwdIso = new Iso[] { identity, nullify };
+      final Iso<Object, Object>[] bwdIso = new Iso[] { identity, identity };
+      final Iso<RecUser, BeanUser> iso = MhIso.pair(RecUser.class, BeanUser.class, fwd, fwdIso, bwd, bwdIso, identity);
+      final var b = iso.to(new RecUser("zoe", 99));
+      assertEquals("zoe", b.getName());
+      assertEquals(0, b.getAge()); // skipped → JLS default, not an NPE
     }
   }
 }

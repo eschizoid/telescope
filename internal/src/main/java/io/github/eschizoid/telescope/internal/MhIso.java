@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.util.Objects;
 import java.util.function.Function;
 
 /**
@@ -73,12 +74,15 @@ public final class MhIso {
   // (Iso, Object) -> Object  ==  iso.to(v) / iso.from(v). Bound per non-identity field.
   private static final MethodHandle ISO_TO;
   private static final MethodHandle ISO_FROM;
+  // (Object) -> boolean  ==  value != null. Guards a primitive bean setter against a null value.
+  private static final MethodHandle NON_NULL;
 
   static {
     try {
       final MethodHandles.Lookup lk = MethodHandles.lookup();
       ISO_TO = lk.findVirtual(Iso.class, "to", MethodType.methodType(Object.class, Object.class));
       ISO_FROM = lk.findVirtual(Iso.class, "from", MethodType.methodType(Object.class, Object.class));
+      NON_NULL = lk.findStatic(Objects.class, "nonNull", MethodType.methodType(boolean.class, Object.class));
     } catch (final ReflectiveOperationException e) {
       throw new ExceptionInInitializerError(e);
     }
@@ -266,18 +270,23 @@ public final class MhIso {
     final String[] props = Beans.propertyNames(beanCls);
     MethodHandle mk = MethodHandles.dropArguments(Beans.beanNoArgCtorHandle(beanCls), 0, srcCls);
     for (var i = 0; i < props.length; i++) {
-      final MethodHandle setter = Beans.beanSetterHandle(beanCls, props[i]);
-      final Class<?> slotType = setter.type().parameterType(1);
-      final MethodHandle readVal = buildFilter(
+      final MethodHandle rawSetter = Beans.beanSetterHandle(beanCls, props[i]);
+      final Class<?> slotType = rawSetter.type().parameterType(1);
+      // Fluent / chained setters (Lombok @Accessors(chain=true), builder-style beans) return the
+      // bean rather than void. foldArguments needs a void combiner, so drop any returned value via
+      // asType(void) — a plain void setter is unchanged by this.
+      final MethodHandle setter = rawSetter.asType(rawSetter.type().changeReturnType(void.class));
+      final MethodHandle setFromS = setterFromSource(
         srcCls,
+        beanCls,
         slotType,
+        setter,
         srcAccessors,
         slotSrcPos[i],
         slotIso[i],
         isoDir,
         identity
       );
-      final MethodHandle setFromS = MethodHandles.filterArguments(setter, 1, readVal);
       final MethodHandle populate = MethodHandles.foldArguments(
         MethodHandles.dropArguments(MethodHandles.identity(beanCls), 1, srcCls),
         setFromS
@@ -285,6 +294,39 @@ public final class MhIso {
       mk = MethodHandles.foldArguments(populate, mk);
     }
     return mk.asType(MethodType.methodType(beanCls, srcCls));
+  }
+
+  /**
+   * Build {@code (beanCls, srcCls) -> void} — read the slot value from the source and apply {@code
+   * setter}. For a <b>primitive</b> setter fed by a <b>non-identity</b> Iso the value may be null
+   * (a user transform returning null), and unboxing null would NPE. The array leaf's {@code
+   * SettersWriter} instead <em>skips</em> the setter on null, leaving the JLS default; this mirrors
+   * that by reading the value boxed and guarding the setter with a null test. Identity primitive
+   * slots (source primitive, never null) keep the unboxed fast path; reference setters accept null
+   * as the array leaf does.
+   */
+  private static MethodHandle setterFromSource(
+    final Class<?> srcCls,
+    final Class<?> beanCls,
+    final Class<?> slotType,
+    final MethodHandle setter,
+    final MethodHandle[] srcAccessors,
+    final int sp,
+    final Iso<Object, Object> slotIso,
+    final MethodHandle isoDir,
+    final Iso<Object, Object> identity
+  ) {
+    if (slotType.isPrimitive() && slotIso != identity) {
+      final MethodHandle readBoxed = buildFilter(srcCls, Object.class, srcAccessors, sp, slotIso, isoDir, identity);
+      final MethodType guardType = MethodType.methodType(void.class, beanCls, Object.class);
+      final MethodHandle doSet = setter.asType(guardType); // unboxes the (non-null) Object into the primitive
+      final MethodHandle skip = MethodHandles.empty(guardType);
+      final MethodHandle test = MethodHandles.dropArguments(NON_NULL, 0, beanCls);
+      final MethodHandle guarded = MethodHandles.guardWithTest(test, doSet, skip);
+      return MethodHandles.filterArguments(guarded, 1, readBoxed);
+    }
+    final MethodHandle readVal = buildFilter(srcCls, slotType, srcAccessors, sp, slotIso, isoDir, identity);
+    return MethodHandles.filterArguments(setter, 1, readVal);
   }
 
   private static RuntimeException rethrow(final Class<?> from, final Class<?> to, final Throwable e) {
