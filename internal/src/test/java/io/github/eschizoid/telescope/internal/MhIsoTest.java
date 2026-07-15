@@ -232,7 +232,7 @@ class MhIsoTest {
     }
 
     @Test
-    @DisplayName("a non-identity Iso yielding null into a primitive bean setter is skipped, leaving the default")
+    @DisplayName("a non-identity Iso yielding null into a primitive bean setter is skipped, leaving the" + " default")
     @SuppressWarnings({ "unchecked", "rawtypes" })
     void nullTransformIntoPrimitiveBeanSkipped() {
       final Iso<Object, Object> identity = Iso.identity();

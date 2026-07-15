@@ -29,10 +29,11 @@ import org.junit.jupiter.api.Test;
  * the legacy {@code DeepMap.assembleIso} array leaf.
  *
  * <p>For each source/target shape and every sample instance, the same conversion is built and run
- * twice in a single JVM: once with {@code System.clearProperty(MhIso.DISABLE_PROPERTY)} (the MH leaf) and once with {@code
- * System.setProperty(MhIso.DISABLE_PROPERTY, "true")} (which makes {@code MhIso.supports} return {@code false}, so {@code
- * DeepMap.assembleIso} routes to the array leaf). The two results — forward, backward, patch, and
- * any thrown exception — must be byte-identical. Any divergence is a parity bug.
+ * twice in a single JVM: once with {@code System.clearProperty(MhIso.DISABLE_PROPERTY)} (the MH
+ * leaf) and once with {@code System.setProperty(MhIso.DISABLE_PROPERTY, "true")} (which makes
+ * {@code MhIso.supports} return {@code false}, so {@code DeepMap.assembleIso} routes to the array
+ * leaf). The two results — forward, backward, patch, and any thrown exception — must be
+ * byte-identical. Any divergence is a parity bug.
  */
 @DisplayName("MhIso ↔ array-leaf differential parity")
 final class MhIsoDifferentialParityTest {
@@ -331,10 +332,7 @@ final class MhIsoDifferentialParityTest {
     public boolean equals(final Object o) {
       if (!(o instanceof FluentBean f)) return false;
       return (
-        count == f.count &&
-        active == f.active &&
-        Objects.equals(label, f.label) &&
-        Objects.equals(ratio, f.ratio)
+        count == f.count && active == f.active && Objects.equals(label, f.label) && Objects.equals(ratio, f.ratio)
       );
     }
 
@@ -612,8 +610,8 @@ final class MhIsoDifferentialParityTest {
 
   /**
    * Forward-only variant for {@code mapperForward(...)} cases (constant / compute / when) where the
-   * result is a {@link io.github.eschizoid.telescope.conversion.ForwardMapper} with no backward. The
-   * {@code apply} closure builds the forward mapper under the CURRENT toggle and runs it, so
+   * result is a {@link io.github.eschizoid.telescope.conversion.ForwardMapper} with no backward.
+   * The {@code apply} closure builds the forward mapper under the CURRENT toggle and runs it, so
    * toggling {@code MhIso.DISABLE_PROPERTY} between the two calls selects the leaf.
    */
   private <A, B> void diffForward(final String shape, final Function<A, B> applyUnderToggle, final A sample) {
@@ -669,9 +667,7 @@ final class MhIsoDifferentialParityTest {
       return;
     }
     if (!Objects.equals(mh.value(), arr.value())) {
-      divergences.add(
-        label + ": MH=" + render(mh.value()) + " array=" + render(arr.value()) + " for input=" + input
-      );
+      divergences.add(label + ": MH=" + render(mh.value()) + " array=" + render(arr.value()) + " for input=" + input);
     }
   }
 
@@ -728,33 +724,36 @@ final class MhIsoDifferentialParityTest {
     assertEquals("n", leaf.getName());
 
     // record->bean primitives + wrappers land in the right slots
-    final var pb = Telescope
-      .mapper(FlatRec.class, FluentBean.class)
-      .forward(new FlatRec(42, "hi", true, 3.5));
+    final var pb = Telescope.mapper(FlatRec.class, FluentBean.class).forward(new FlatRec(42, "hi", true, 3.5));
     assertEquals(42, pb.getCount());
     assertEquals("hi", pb.getLabel());
     assertTrue(pb.isActive());
     assertEquals(3.5, pb.getRatio());
 
     // typed transform int->String at the leaf
-    final var yd = Telescope
-      .mapper(YearEntity.class, YearDto.class, to(YearEntity::year, YearDto::year, i -> Integer.toString(i), Integer::parseInt))
-      .forward(new YearEntity("a", 2024));
+    final var yd = Telescope.mapper(
+      YearEntity.class,
+      YearDto.class,
+      to(YearEntity::year, YearDto::year, i -> Integer.toString(i), Integer::parseInt)
+    ).forward(new YearEntity("a", 2024));
     assertEquals("2024", yd.year());
 
     // constant + compute forward-only
-    final var wide = Telescope
-      .mapperForward(SrcNarrow.class, TgtWide.class, constant(TgtWide::tenant, "prod"), compute(TgtWide::seq, () -> 42))
-      .forward(new SrcNarrow("neo"));
+    final var wide = Telescope.mapperForward(
+      SrcNarrow.class,
+      TgtWide.class,
+      constant(TgtWide::tenant, "prod"),
+      compute(TgtWide::seq, () -> 42)
+    ).forward(new SrcNarrow("neo"));
     assertEquals("neo", wide.name());
     assertEquals("prod", wide.tenant());
     assertEquals(42, wide.seq());
 
     // container recursion with rename inside the element is exercised by parity; here pin the
     // list element identity conversion produced a distinct-but-equal element type.
-    final var cont = Telescope
-      .mapper(ContRec.class, ContRec2.class)
-      .forward(new ContRec(List.of(new InnerRec("a", 1)), Set.of(), Map.of(), Optional.of(new InnerRec("o", 3))));
+    final var cont = Telescope.mapper(ContRec.class, ContRec2.class).forward(
+      new ContRec(List.of(new InnerRec("a", 1)), Set.of(), Map.of(), Optional.of(new InnerRec("o", 3)))
+    );
     assertEquals("a", cont.list().get(0).city());
     assertEquals(3, cont.opt().orElseThrow().zip());
   }
@@ -876,11 +875,18 @@ final class MhIsoDifferentialParityTest {
         Double.MAX_VALUE,
         "max"
       ),
-      // null wrappers into a bean (identity slots: array path also carries null through setters)
+      // null wrappers into a bean (identity slots: array path also carries null through
+      // setters)
       bean(3, 4L, (short) 5, (byte) 6, 'q', true, 3.14f, 2.71d, null, null, null, null, null, null, null, null, null)
     );
     for (final var s : samples) {
-      diff("PrimBean->PrimBean", PrimBean.class, PrimBean.class, () -> Telescope.mapper(PrimBean.class, PrimBean.class), s);
+      diff(
+        "PrimBean->PrimBean",
+        PrimBean.class,
+        PrimBean.class,
+        () -> Telescope.mapper(PrimBean.class, PrimBean.class),
+        s
+      );
     }
   }
 
@@ -892,7 +898,13 @@ final class MhIsoDifferentialParityTest {
       new FlatRec(-1, null, false, null) // null String + null Double wrapper
     );
     for (final var r : recs) {
-      diff("FlatRec->FluentBean", FlatRec.class, FluentBean.class, () -> Telescope.mapper(FlatRec.class, FluentBean.class), r);
+      diff(
+        "FlatRec->FluentBean",
+        FlatRec.class,
+        FluentBean.class,
+        () -> Telescope.mapper(FlatRec.class, FluentBean.class),
+        r
+      );
     }
     final List<FluentBean> beans = List.of(
       new FluentBean().setCount(0).setLabel("").setActive(false).setRatio(0.0),
@@ -900,7 +912,13 @@ final class MhIsoDifferentialParityTest {
       new FluentBean().setCount(-3).setLabel(null).setActive(true).setRatio(null)
     );
     for (final var b : beans) {
-      diff("FluentBean->FlatRec", FluentBean.class, FlatRec.class, () -> Telescope.mapper(FluentBean.class, FlatRec.class), b);
+      diff(
+        "FluentBean->FlatRec",
+        FluentBean.class,
+        FlatRec.class,
+        () -> Telescope.mapper(FluentBean.class, FlatRec.class),
+        b
+      );
     }
     // bean <-> bean (both sides fold setters); also stresses the fluent-setter fold
     for (final var b : beans) {
@@ -918,7 +936,13 @@ final class MhIsoDifferentialParityTest {
   private void fuzzInheritedAndFluentBeans() {
     final List<ChildRec> recs = List.of(new ChildRec(0L, ""), new ChildRec(99L, "abc"), new ChildRec(-5L, null));
     for (final var r : recs) {
-      diff("ChildRec->ChildBean", ChildRec.class, ChildBean.class, () -> Telescope.mapper(ChildRec.class, ChildBean.class), r);
+      diff(
+        "ChildRec->ChildBean",
+        ChildRec.class,
+        ChildBean.class,
+        () -> Telescope.mapper(ChildRec.class, ChildBean.class),
+        r
+      );
     }
     final List<ChildBean> beans = new ArrayList<>();
     for (final var r : recs) {
@@ -928,13 +952,29 @@ final class MhIsoDifferentialParityTest {
       beans.add(cb);
     }
     for (final var b : beans) {
-      diff("ChildBean->ChildRec", ChildBean.class, ChildRec.class, () -> Telescope.mapper(ChildBean.class, ChildRec.class), b);
+      diff(
+        "ChildBean->ChildRec",
+        ChildBean.class,
+        ChildRec.class,
+        () -> Telescope.mapper(ChildBean.class, ChildRec.class),
+        b
+      );
     }
 
     // Two-level inheritance (inherited setter AND inherited getter on the deepest bean).
-    final List<LeafRec> leafRecs = List.of(new LeafRec(0L, "", ""), new LeafRec(7L, "t", "n"), new LeafRec(-2L, null, null));
+    final List<LeafRec> leafRecs = List.of(
+      new LeafRec(0L, "", ""),
+      new LeafRec(7L, "t", "n"),
+      new LeafRec(-2L, null, null)
+    );
     for (final var r : leafRecs) {
-      diff("LeafRec->LeafBean", LeafRec.class, LeafBean.class, () -> Telescope.mapper(LeafRec.class, LeafBean.class), r);
+      diff(
+        "LeafRec->LeafBean",
+        LeafRec.class,
+        LeafBean.class,
+        () -> Telescope.mapper(LeafRec.class, LeafBean.class),
+        r
+      );
     }
     final List<LeafBean> leafBeans = new ArrayList<>();
     for (final var r : leafRecs) {
@@ -945,11 +985,23 @@ final class MhIsoDifferentialParityTest {
       leafBeans.add(lb);
     }
     for (final var b : leafBeans) {
-      diff("LeafBean->LeafRec", LeafBean.class, LeafRec.class, () -> Telescope.mapper(LeafBean.class, LeafRec.class), b);
+      diff(
+        "LeafBean->LeafRec",
+        LeafBean.class,
+        LeafRec.class,
+        () -> Telescope.mapper(LeafBean.class, LeafRec.class),
+        b
+      );
     }
     // bean->bean across the two-level hierarchy (both sides fold inherited setters)
     for (final var b : leafBeans) {
-      diff("LeafBean->LeafBean", LeafBean.class, LeafBean.class, () -> Telescope.mapper(LeafBean.class, LeafBean.class), b);
+      diff(
+        "LeafBean->LeafBean",
+        LeafBean.class,
+        LeafBean.class,
+        () -> Telescope.mapper(LeafBean.class, LeafBean.class),
+        b
+      );
     }
   }
 
@@ -961,7 +1013,13 @@ final class MhIsoDifferentialParityTest {
       new OuterRec("x", null) // null nested record
     );
     for (final var r : recs) {
-      diff("OuterRec->OuterRec2", OuterRec.class, OuterRec2.class, () -> Telescope.mapper(OuterRec.class, OuterRec2.class), r);
+      diff(
+        "OuterRec->OuterRec2",
+        OuterRec.class,
+        OuterRec2.class,
+        () -> Telescope.mapper(OuterRec.class, OuterRec2.class),
+        r
+      );
     }
     final List<OuterBean> beans = new ArrayList<>();
     for (final var spec : List.of(new String[] { "t", "NYC", "10001" }, new String[] { null, null, "0" })) {
@@ -979,7 +1037,13 @@ final class MhIsoDifferentialParityTest {
     nullInner.setInner(null);
     beans.add(nullInner);
     for (final var b : beans) {
-      diff("OuterBean->OuterBean", OuterBean.class, OuterBean.class, () -> Telescope.mapper(OuterBean.class, OuterBean.class), b);
+      diff(
+        "OuterBean->OuterBean",
+        OuterBean.class,
+        OuterBean.class,
+        () -> Telescope.mapper(OuterBean.class, OuterBean.class),
+        b
+      );
     }
   }
 
@@ -1010,7 +1074,13 @@ final class MhIsoDifferentialParityTest {
       new ContRec(null, null, null, null)
     );
     for (final var s : samples) {
-      diff("ContRec->ContRec2", ContRec.class, ContRec2.class, () -> Telescope.mapper(ContRec.class, ContRec2.class), s);
+      diff(
+        "ContRec->ContRec2",
+        ContRec.class,
+        ContRec2.class,
+        () -> Telescope.mapper(ContRec.class, ContRec2.class),
+        s
+      );
     }
 
     // scalar containers (no element recursion)
@@ -1035,9 +1105,19 @@ final class MhIsoDifferentialParityTest {
     final Function<Integer, String> fwd = i -> i == null ? null : Integer.toString(i);
     final Function<String, Integer> bwd = str -> str == null ? null : Integer.parseInt(str);
     final MapStep row = to(YearEntity::year, YearDto::year, fwd, bwd);
-    final List<YearEntity> samples = List.of(new YearEntity("a", 2024), new YearEntity(null, 0), new YearEntity("b", -7));
+    final List<YearEntity> samples = List.of(
+      new YearEntity("a", 2024),
+      new YearEntity(null, 0),
+      new YearEntity("b", -7)
+    );
     for (final var s : samples) {
-      diff("YearEntity->YearDto (typed transform)", YearEntity.class, YearDto.class, () -> Telescope.mapper(YearEntity.class, YearDto.class, row), s);
+      diff(
+        "YearEntity->YearDto (typed transform)",
+        YearEntity.class,
+        YearDto.class,
+        () -> Telescope.mapper(YearEntity.class, YearDto.class, row),
+        s
+      );
     }
 
     // Transform that returns null INTO a primitive record slot: both leaves should NPE-on-rebuild
@@ -1135,9 +1215,21 @@ final class MhIsoDifferentialParityTest {
   private void fuzzNullEdges() {
     diff("null PrimRec", PrimRec.class, PrimRec2.class, () -> Telescope.mapper(PrimRec.class, PrimRec2.class), null);
     diff("null PrimBean", PrimBean.class, PrimBean.class, () -> Telescope.mapper(PrimBean.class, PrimBean.class), null);
-    diff("null OuterRec", OuterRec.class, OuterRec2.class, () -> Telescope.mapper(OuterRec.class, OuterRec2.class), null);
+    diff(
+      "null OuterRec",
+      OuterRec.class,
+      OuterRec2.class,
+      () -> Telescope.mapper(OuterRec.class, OuterRec2.class),
+      null
+    );
     diff("null ContRec", ContRec.class, ContRec2.class, () -> Telescope.mapper(ContRec.class, ContRec2.class), null);
-    diff("null FluentBean", FluentBean.class, FlatRec.class, () -> Telescope.mapper(FluentBean.class, FlatRec.class), null);
+    diff(
+      "null FluentBean",
+      FluentBean.class,
+      FlatRec.class,
+      () -> Telescope.mapper(FluentBean.class, FlatRec.class),
+      null
+    );
   }
 
   // ---- helpers ----

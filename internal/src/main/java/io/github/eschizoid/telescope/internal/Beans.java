@@ -840,15 +840,18 @@ public final class Beans {
     throw new IllegalStateException(
       "No name-based write strategy for " +
         cls.getName() +
-        " — needs a static builder(), a no-arg constructor with setters, a no-arg constructor (field injection), " +
-        "or exactly one public constructor whose arity matches the property count (" +
+        " — needs a static builder(), a no-arg constructor with setters, a no-arg constructor" +
+        " (field injection), or exactly one public constructor whose arity matches the" +
+        " property count (" +
         props.length +
-        "), was compiled with -parameters, and whose parameter names line up with the getter-derived properties. " +
-        "Primary fix: recompile the target class with javac -parameters so its constructor arguments can be " +
-        "matched by name. The writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site is " +
-        "an escape hatch, but note it falls back to POSITIONAL argument matching when -parameters is absent — " +
-        "argument order is then the getter-discovery order (not a stable, user-defined canonical order), so " +
-        "the hint should still be paired with -parameters to be safe."
+        "), was compiled with -parameters, and whose parameter names line up with the" +
+        " getter-derived properties. Primary fix: recompile the target class with javac" +
+        " -parameters so its constructor arguments can be matched by name. The" +
+        " writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site is an" +
+        " escape hatch, but note it falls back to POSITIONAL argument matching when" +
+        " -parameters is absent — argument order is then the getter-discovery order (not a" +
+        " stable, user-defined canonical order), so the hint should still be paired with" +
+        " -parameters to be safe."
     );
   }
 
@@ -1128,10 +1131,10 @@ public final class Beans {
             cls.getName() +
             " for the FIELDS strategy. Add 'opens " +
             cls.getPackageName() +
-            " to io.github.eschizoid.telescope;' to that module's module-info.java. " +
-            "Switching the writeBean hint to CONSTRUCTOR / BUILDER / SETTERS reaches the bean " +
-            "through privateLookupIn rather than raw setAccessible, but the JPMS gate is the same " +
-            "— the open directive is the real fix for a fully closed package.",
+            " to io.github.eschizoid.telescope;' to that module's module-info.java. Switching" +
+            " the writeBean hint to CONSTRUCTOR / BUILDER / SETTERS reaches the bean through" +
+            " privateLookupIn rather than raw setAccessible, but the JPMS gate is the same —" +
+            " the open directive is the real fix for a fully closed package.",
           e
         );
       }
@@ -1161,7 +1164,7 @@ public final class Beans {
         // Diagnose the most likely root cause so the adopter doesn't have to read the JDK source
         // to figure out which of [final, JPMS-closed, missing opens] applies.
         final var finalHint = Modifier.isFinal(field.getModifiers())
-          ? " — field is final; switch the writeBean hint to SETTERS or BUILDER, or remove final"
+          ? " — field is final; switch the writeBean hint to SETTERS or BUILDER, or remove" + " final"
           : "";
         throw new RuntimeException(
           "Failed to bind setter for field '" + field.getName() + "' on " + cls.getName() + finalHint,
@@ -1226,7 +1229,8 @@ public final class Beans {
           cls.getName() +
           ", CONSTRUCTOR) requires a constructor with " +
           arity +
-          " parameters (parameters are matched by name when compiled with -parameters, otherwise positionally)."
+          " parameters (parameters are matched by name when compiled with -parameters," +
+          " otherwise positionally)."
       );
       // No raw setAccessible — buildCtorFn acquires private access through privateLookupOrThrow,
       // which is consistent with the FIELDS strategy and routes JPMS failures through the same

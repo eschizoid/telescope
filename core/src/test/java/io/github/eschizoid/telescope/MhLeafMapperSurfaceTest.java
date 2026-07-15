@@ -194,7 +194,7 @@ class MhLeafMapperSurfaceTest {
     // skips the setter (JLS default 0); the MH leaf's setterFromSource guards the same way. This
     // exercises that parity through the *full Mapper.forward*, not the raw MhIso leaf.
     @Test
-    @DisplayName("compute yielding null into an int bean slot leaves the JLS default (0), via Mapper.forward")
+    @DisplayName("compute yielding null into an int bean slot leaves the JLS default (0), via" + " Mapper.forward")
     void nullComputeIntoPrimitiveBeanSlot() {
       final var mapper = Telescope.mapper(
         OrderDto.class,

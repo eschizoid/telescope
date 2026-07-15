@@ -67,7 +67,10 @@ public final class MhIso {
     return constructibleBy(source) && constructibleBy(target);
   }
 
-  /** System property (test-only) that forces every pair to the legacy array leaf. See {@link #supports}. */
+  /**
+   * System property (test-only) that forces every pair to the legacy array leaf. See {@link
+   * #supports}.
+   */
   public static final String DISABLE_PROPERTY = "io.github.eschizoid.telescope.mhiso.disabled";
 
   private static boolean constructibleBy(final Class<?> cls) {
@@ -284,7 +287,8 @@ public final class MhIso {
     for (var i = 0; i < props.length; i++) {
       final MethodHandle discovered = Beans.beanSetterHandle(beanCls, props[i]);
       final Class<?> slotType = discovered.type().parameterType(1);
-      // An inherited setter (declared on a superclass) is unreflected against its DECLARING class, so
+      // An inherited setter (declared on a superclass) is unreflected against its DECLARING class,
+      // so
       // its receiver type is that superclass, not beanCls. The fold produces a beanCls instance and
       // foldArguments requires the combiner's receiver to match — narrow the receiver to beanCls (a
       // safe upcast on invoke; no-op when the setter is declared on beanCls itself).
