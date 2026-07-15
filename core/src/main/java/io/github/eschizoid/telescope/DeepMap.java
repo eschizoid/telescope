@@ -126,10 +126,10 @@ public final class DeepMap {
     // Bidirectional: strict bijection — unmatched fields on EITHER side throw at construction.
     // Round-trip safety depends on every field having a same-name counterpart or an explicit row.
     final var r = resolution(source, target, steps, false);
-    // Go through Mapper.create (public, Function-typed) — same call works regardless of whether
-    // Mapper sits in this package or moves to conversion/. The trail rides along so explain() can
-    // surface the field decisions this resolution just made.
-    return Mapper.create(r.iso::to, r.iso::from, source, target, r.patchTable, r.trail);
+    // Pass the leaf Iso straight through (Mapper.ofIso) rather than re-wrapping it in a second
+    // Iso.of via the Function-typed create — one fewer virtual Iso.to hop per forward/backward. The
+    // trail rides along so explain() can surface the field decisions this resolution just made.
+    return Mapper.ofIso(r.iso, source, target, r.patchTable, r.trail);
   }
 
   /**

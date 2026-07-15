@@ -186,6 +186,24 @@ public final class Mapper<A, B> {
   }
 
   /**
+   * <b>Module-internal seam — NOT public API.</b> Store an already-composed leaf {@link Iso}
+   * directly, without the {@code Iso.of(forward, backward)} re-wrap {@link #create(Function,
+   * Function, Class, Class, Map, List)} performs. {@code DeepMap#resolveMapper} holds the leaf Iso
+   * the deep-mapping engine built; passing it straight through removes one virtual {@code Iso.to}
+   * hop from every {@code forward}/{@code backward} call. Same lattice value, one fewer wrapper.
+   */
+  @SuppressWarnings("exports") // SPIKE ONLY — measuring the unwrap; Iso must not leak to ship this
+  public static <A, B> Mapper<A, B> ofIso(
+    final Iso<A, B> iso,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final Map<String, PatchEntry> patchByTargetField,
+    final List<OpticNode> explainTrail
+  ) {
+    return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null, explainTrail);
+  }
+
+  /**
    * Describe what this mapper does, as a queryable {@link OpticReport} — the field correspondences
    * it resolved, the transformations it applies, and the target fields it skips (with reasons). The
    * report is built from the same pairing decisions the mapper uses to convert, so it cannot drift
