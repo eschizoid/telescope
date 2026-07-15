@@ -220,21 +220,20 @@ hand-copy. That's the codegen payoff for deep field navigation.
 
 ### MapStruct comparison (apples-to-apples)
 
-Captured on GitHub Actions `ubuntu-latest` (JDK 25, x64) at the standard config (3 warmup + 5 measurement × 1 fork, 3s
-per iteration) via the manual [`Benchmarks`](../.github/workflows/benchmarks.yaml) workflow. Numbers below are from one
-of two confirming runs; absolute ns differ between runner generations, so read the ratios, not the raw ns. Three depth
-tiers, both directions, three engines per cell. All rows share their input fixtures via `@State(Scope.Benchmark)` — the
-only difference between same-tier rows is the dispatch path. Reproducible: re-run the workflow on any branch and
-compare.
+Captured on GitHub Actions `ubuntu-latest` (JDK 25, x64) at 3 warmup + 5 measurement × 3 forks × 3s via the manual
+[`Benchmarks`](../.github/workflows/benchmarks.yaml) workflow, on current `main` (with the MethodHandle-combinator
+runtime leaf). Absolute ns differ between runner generations, so read the ratios, not the raw ns. Three depth tiers,
+both directions, three engines per cell. All rows share their input fixtures via `@State(Scope.Benchmark)` — the only
+difference between same-tier rows is the dispatch path. Reproducible: re-run the workflow on any branch and compare.
 
 | Tier   | Direction     | MapStruct (ns/op) | Telescope codegen (ns/op) | Telescope codegen static (ns/op) | Telescope runtime (ns/op) |
 | ------ | ------------- | ----------------: | ------------------------: | -------------------------------: | ------------------------: |
-| flat   | bean → record |     3.104 ± 0.015 |             3.326 ± 0.010 |                    3.183 ± 0.010 |             55.65 ± 0.237 |
-| flat   | record → bean |     3.307 ± 0.024 |             3.309 ± 0.010 |                                — |            160.13 ± 0.953 |
-| nested | bean → record |     4.360 ± 0.349 |             6.207 ± 0.086 |                    5.902 ± 0.045 |             87.56 ± 0.442 |
-| nested | record → bean |     5.265 ± 0.073 |             5.577 ± 0.037 |                                — |            249.09 ± 1.026 |
-| deep   | bean → record |     46.34 ± 0.269 |             52.68 ± 0.162 |                    51.92 ± 0.116 |            377.86 ± 2.841 |
-| deep   | record → bean |     45.47 ± 0.300 |             52.01 ± 0.460 |                                — |            868.69 ± 16.85 |
+| flat   | bean → record |     3.167 ± 0.014 |             3.393 ± 0.011 |                    3.299 ± 0.005 |             12.21 ± 0.254 |
+| flat   | record → bean |     3.305 ± 0.028 |             3.485 ± 0.022 |                                — |             11.44 ± 0.947 |
+| nested | bean → record |     4.928 ± 0.024 |             5.879 ± 0.022 |                    5.553 ± 0.011 |             30.65 ± 2.596 |
+| nested | record → bean |     5.983 ± 0.024 |             5.355 ± 0.019 |                                — |             29.87 ± 0.504 |
+| deep   | bean → record |     48.68 ± 0.106 |             55.04 ± 0.522 |                    54.71 ± 0.375 |            212.26 ± 8.427 |
+| deep   | record → bean |     48.54 ± 0.273 |             54.81 ± 0.418 |                                — |            215.27 ± 2.921 |
 
 Tight error bands on the codegen/MapStruct rows (±0.01–0.35 ns) — the dedicated CI runner with no competing workload
 gives cleaner data than a laptop. The `static` column calls the codegen-emitted `<Source>Bridge.forward(s)` directly,
@@ -244,24 +243,25 @@ dispatch-tax decomposition live in [`docs/perf-mapstruct-comparison.md`](../docs
 
 #### How the runtime path stays fast
 
-Two structural choices keep the runtime path lean:
+The runtime leaf for a record/bean type pair is a **MethodHandle-combinator**: the whole `(S) -> T` conversion is one
+composed handle — each source property's raw, primitive-typed accessor piped straight into the target's raw canonical
+constructor (`filterArguments` + `permuteArguments`) or, for a bean target, its no-arg constructor folded with one raw
+setter per slot (`foldArguments`). On same-name/same-type slots the value flows **primitive-to-primitive with no box and
+no `Object[]`**; only slots carrying a real per-field conversion (rename, nested pair, container lift) route through
+their `Iso`. It stays lattice-native — the composed handle is wrapped in `Iso.of(...)`, and composition above the leaf
+is unchanged. This is what took the runtime path from ~16–48× MapStruct to ~3.5–6.2× (`MhIso`, byte-identical to the
+prior array leaf across a differential fuzz).
 
-- **Fused source-and-remap** in `DeepMap.assembleIso`: no source-side `Object[]` intermediate. The forward body gathers
-  directly from cached positional readers into the target `Object[]` per slot — one alloc + 5 array writes + 5 reads + 2
-  `Iso.then` virtual dispatches saved per call vs the naive three-Iso composition.
-- **Acyclic-pair shell bypass**: every nested type-pair hop would otherwise pay `ThreadLocal.get` +
-  `IdentityHashMap.put` + try/finally for cycle safety. Type pairs whose static graph has no path back to themselves
-  (detected during `populateIso` via SCC analysis on the recursion stack) get a plain Iso that skips the probe. Cyclic
-  SCCs still get the full guard.
-
-The acyclic-bypass alone reclaims ~15 ns per nested hop, compounding on the deep tier where the shell fires once per
-level walked.
+Two older structural choices still keep the paths above the leaf lean: **fused source-and-remap** (no source-side
+`Object[]` intermediate for the array leaf that owns builder/field-injection beans) and the **acyclic-pair shell
+bypass** (nested type-pair hops skip the `ThreadLocal` + `IdentityHashMap` cycle guard when SCC analysis proves no value
+cycle is possible; cyclic SCCs keep the full guard).
 
 #### What the numbers say
 
 **Codegen-for-codegen, telescope and MapStruct are the same performance class — a tie at realistic depth.** On flat
-(3.10 vs 3.33 ns) telescope is **~1.07×**, ~0.2 ns absolute; on deep (46.34 vs 52.68 ns) **~1.15× — a tie, ~6 ns on a
-~50 ns op**, both directions, stable across two CI runs. The nested single-hop tier swings 1.04×–1.42× run-to-run — its
+(3.17 vs 3.39 ns) telescope is **~1.07×**, ~0.2 ns absolute; on deep (48.68 vs 55.04 ns) **~1.13× — a tie, ~6 ns on a
+~50 ns op**, both directions, stable across CI runs. The nested single-hop tier swings 1.04×–1.42× run-to-run — its
 MapStruct baseline is JMH-noisy (±0.35) — so it's a framework-overhead microbench, not a number to publish. The deeper
 the tree, the more the per-level conversion work dominates the fixed dispatch overhead; at the flat scale you're
 choosing on API and capability, not nanoseconds.
@@ -280,21 +280,20 @@ costs ~0.2 ns total; on deep, where element-by-element list conversion dominates
 is a ~1.15× tie. If you're in a tight inner loop that doesn't need composition, call `<Source>Bridge.forward(s)` — or
 the directly-callable `BRIDGE_FN` constant — and pay the zero-dispatch floor.
 
-Runtime conversion (`Telescope.mapper(...)`) on the forward (bean → record) direction binds the source-side bean readers
-once at assembly time (`Beans.capturedReader`), so the hot read is a single virtual `Function#apply` instead of a
-per-call `persistentClassOf` + `GETTER_INVOKERS` ClassValue probe + name→reader lookup. That capture roughly halves the
-forward direction — flat 111 → 56 ns, deep 884 → 378 ns — putting it at **~18× MapStruct on flat, ~8× on deep**. The
-backward (record → bean) direction stays higher (~48× flat / ~19× deep): its read side is already optimal (record
-readers), but building a bean — allocate + N setter calls — is structurally heavier than a record's single
-canonical-constructor invoke. The deeper the tree, the more per-level work dominates the constant reflective-dispatch
-overhead. Sub-microsecond on flat and nested, single-microsecond on deep. Reach for codegen on hot paths; the runtime
-path is for one-shot conversions and non-hot service code.
+Runtime conversion (`Telescope.mapper(...)`) composes each record/bean pair into a single MethodHandle (see above), so
+the hot path is one `invokeExact` through the fused handle rather than an `Object[]` gather with boxed per-field
+dispatch. That lands the forward direction at **~3.9× MapStruct on flat, ~6.2× on nested, ~4.4× on deep**. The backward
+(record → bean) direction — previously the pathological case (allocate a bean, then N boxed setter calls, ~48× MapStruct
+on flat) — is now **~3.5× on flat** via the unboxed setter-fold, matching forward instead of trailing it. Allocation
+drops to the result-object floor (flat 32 B/op, the array + every primitive box gone). Sub-microsecond everywhere. Reach
+for codegen on the hottest paths; the runtime path is now within ~4–6× of MapStruct with **no annotations and no build
+step** — close enough for most service code, and `@Bridge` codegen is there when a loop turns hot.
 
-All four columns above are from the same run; the codegen/MapStruct ratios reproduce across two confirming runs within
-error (the runtime rows carry wider bands but the same magnitude).
+All four columns above are from the same run; the codegen/MapStruct ratios reproduce across confirming runs within error
+(the runtime rows carry wider bands but the same magnitude).
 
 A quick decision guide. If the problem is "convert this entity to this DTO and back, both directions known at build
-time, no nested-list iteration, only scalars," MapStruct's bytecode is ~1.07× faster on the row (3.10 vs 3.33 ns, ~0.2
+time, no nested-list iteration, only scalars," MapStruct's bytecode is ~1.07× faster on the row (3.17 vs 3.39 ns, ~0.2
 ns absolute). On realistic deep workloads — nested records with list-of-records inside — telescope codegen matches
 MapStruct.
 

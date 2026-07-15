@@ -359,9 +359,10 @@ dispatch-overhead decomposition — lives in
 the [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action: Actions → `Benchmarks` → `Run workflow`, pick a
 branch, tune the iteration / fork knobs; the run prints `results.txt` and attaches the full results as an artifact.
 
-> No codegen? `Telescope.mapper(...)` works reflectively with zero annotations — convenient for one-shot conversions and
-> non-hot service code (single-microsecond on deep). On a tight inner loop, add `@Bridge` and you're back in MapStruct's
-> performance class. The runtime-vs-codegen numbers are in
+> No codegen? `Telescope.mapper(...)` composes each record/bean pair into a single MethodHandle — zero annotations, no
+> build step, and now **within ~4–6× of MapStruct** (flat ~12 ns, deep ~210 ns), down from ~16–48×. Fast enough for most
+> service code as-is; on a tight inner loop, add `@Bridge` and you're back in MapStruct's performance class. The
+> runtime-vs-codegen numbers are in
 > [`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison-apples-to-apples).
 
 #### Then, what you gain
