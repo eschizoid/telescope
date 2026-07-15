@@ -1601,14 +1601,16 @@ public final class DeepMap {
     final var slotMaps = buildSlotMaps(byTargetName, bySourceName, srcNames, tgtNames);
     final Iso<Object, Object> identity = Iso.identity();
 
-    // Composed-handle leaf for record↔record pairs: the whole conversion is one (S)→T / (T)→S
+    // Composed-handle leaf for record/bean pairs: the whole conversion is one (S)→T / (T)→S
     // MethodHandle — no Object[] intermediate, no boxing on same-type fields (identity slots read
-    // primitive-to-primitive straight into the canonical constructor). Non-identity slots (rename
-    // with conversion, nested pair, container lift) still route through their per-slot Iso. This is
-    // a build-time shape decision (see MhIso.supports), not a runtime fallback; it stays lattice-
-    // routed — the composed handles are the leaf Iso's transforms.
+    // primitive-to-primitive straight into the canonical constructor, or into the setter fold for a
+    // bean target). Non-identity slots (rename with conversion, nested pair, container lift) still
+    // route through their per-slot Iso. Each side is a record (canonical-ctor rebuild) or a bean
+    // constructible via no-arg ctor + setters; a bean needing a builder or field injection falls to
+    // the array leaf below. This is a build-time shape decision (see MhIso.supports), not a runtime
+    // fallback; it stays lattice-routed — the composed handles are the leaf Iso's transforms.
     if (MhIso.supports(source, target)) {
-      return MhIso.recordPair(
+      return MhIso.pair(
         source,
         target,
         slotMaps.fwdSrcPos(),
@@ -1619,8 +1621,10 @@ public final class DeepMap {
       );
     }
 
-    // Array leaf for bean-involving pairs: bean construction is setter/builder-based rather than a
-    // single canonical constructor, so its composed-handle assembly is a separate shape.
+    // Array leaf for the pairs MhIso.supports declines — a bean side that needs a builder or
+    // field injection (no no-arg constructor, or a mapped property with no setter). Its
+    // construction can't be expressed as the no-arg-ctor + setter-fold combinator, so it stays on
+    // the reflective array shape.
     // Fused-source-and-remap: bypass the source-side Object[] intermediate. The previous shape
     // ran S → Object[srcArity] (srcReader) → Object[tgtArity] (remap) → T (tgtBuilder) — two
     // intermediate arrays + three Iso.then virtual dispatches per call. The fused body inlines
