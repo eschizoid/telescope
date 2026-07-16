@@ -165,21 +165,16 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
           final var compName = comp.getSimpleName().toString();
           final var fieldType = shortenStdImports(boxedType(comp.asType()));
           final var lensArgs = recordName + "::" + compName + ", " + canonicalSetter(recordName, components, compName);
-          out.println(
-            "  public static final Telescope<" +
-              recordName +
-              ", " +
-              fieldType +
-              "> " +
-              compName +
-              " = Telescope.lens(" +
-              lensArgs +
-              ");"
-          );
-          out.println();
+          emitFieldConstant(out, recordName, fieldType, compName, lensArgs);
         }
         emitRecordConstruct(out, recordName, components);
-        emitRecordConstantsMap(out, components);
+        emitConstantsMap(
+          out,
+          components
+            .stream()
+            .map(c -> c.getSimpleName().toString())
+            .toList()
+        );
       }
     );
   }
@@ -217,31 +212,6 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
       if (i < components.size() - 1) out.print(", ");
     }
     out.println(");");
-    out.println("  }");
-    out.println();
-  }
-
-  // Emit a `public static Map<String, Telescope<?, ?>> constants()` that returns the pre-baked
-  // name → lens table directly, so the runtime probe in MetadataHolderProbe doesn't have to do a
-  // `getDeclaredFields()` scan plus N `field.get(null)` reads. Goes from O(N) reflective ops per
-  // cold probe to O(1). Legacy holders without this method still fall back to the field-scan path.
-  private void emitRecordConstantsMap(final PrintWriter out, final List<? extends RecordComponentElement> components) {
-    out.println("  /** Name -> lens map for the runtime probe to skip the field scan. */");
-    out.println("  public static Map<String, Telescope<?, ?>> constants() {");
-    if (components.isEmpty()) {
-      out.println("    return Map.of();");
-    } else if (components.size() == 1) {
-      final var onlyName = components.getFirst().getSimpleName();
-      out.println("    return Map.of(\"" + onlyName + "\", " + onlyName + ");");
-    } else {
-      out.println("    return Map.ofEntries(");
-      for (var i = 0; i < components.size(); i++) {
-        final var compName = components.get(i).getSimpleName().toString();
-        out.print("      Map.entry(\"" + compName + "\", " + compName + ")");
-        out.println(i < components.size() - 1 ? "," : "");
-      }
-      out.println("    );");
-    }
     out.println("  }");
     out.println();
   }

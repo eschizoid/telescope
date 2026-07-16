@@ -519,7 +519,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     out.println("  public OpticReport explain() { return path.explain(); }");
     out.println("  public Trace trace(final R source) { return path.trace(source); }");
     out.println(
-      "  public Trace trace(final R source, final TraceLimits limits) { return path.trace(source, limits); }"
+      "  public Trace trace(final R source, final TraceLimits limits) { return path.trace(source," + " limits); }"
     );
     out.println();
   }
@@ -774,8 +774,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         triggerLabel +
           ": " +
           pojo.getQualifiedName() +
-          " needs a static builder() or a public no-arg constructor with setters (field injection " +
-          "isn't available to generated code — use Telescope.ofBean for the runtime path)"
+          " needs a static builder() or a public no-arg constructor with setters (field" +
+          " injection isn't available to generated code — use Telescope.ofBean for the" +
+          " runtime path)"
       );
       return;
     }
@@ -892,45 +893,60 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
           final var fieldType = shortenStdImports(boxedType(p.type()));
           final var lensArgs =
             pojoName + "::" + p.getter() + ", " + beanRebuild(p, props, setters, useBuilder, pojoName);
-          out.println(
-            "  public static final Telescope<" +
-              pojoName +
-              ", " +
-              fieldType +
-              "> " +
-              p.name() +
-              " = Telescope.lens(" +
-              lensArgs +
-              ");"
-          );
-          out.println();
+          emitFieldConstant(out, pojoName, fieldType, p.name(), lensArgs);
         }
         emitBeanConstruct(out, pojoName, props, setters, useBuilder);
-        emitBeanConstantsMap(out, props);
+        emitConstantsMap(out, props.stream().map(Prop::name).toList());
       }
     );
   }
 
   /**
-   * Emit a {@code public static Map<String, Telescope<?, ?>> constants()} on the bean holder.
-   * Returns the pre-baked name → lens table directly so the runtime probe in {@code
-   * MetadataHolderProbe} doesn't have to do a {@code getDeclaredFields()} scan plus N {@code
-   * field.get(null)} reads — goes from O(N) reflective ops per cold probe to O(1). Legacy holders
-   * without this method still fall back to the field-scan path.
+   * Emit one {@code public static final Telescope<Owner, FieldType> name =
+   * Telescope.lens(lensArgs);} metadata constant. Shared by the {@code @Focus} record holder
+   * ({@link FocusProcessor}) and the bean holder ({@link #emitBeanMetadataHolder}) — only the
+   * {@code lensArgs} (canonical-ctor rebuild vs setter/builder rebuild) and the field-name source
+   * differ; the constant's shape is identical.
    */
-  private void emitBeanConstantsMap(final PrintWriter out, final List<Prop> props) {
+  protected void emitFieldConstant(
+    final PrintWriter out,
+    final String ownerType,
+    final String fieldType,
+    final String fieldName,
+    final String lensArgs
+  ) {
+    out.println(
+      "  public static final Telescope<" +
+        ownerType +
+        ", " +
+        fieldType +
+        "> " +
+        fieldName +
+        " = Telescope.lens(" +
+        lensArgs +
+        ");"
+    );
+    out.println();
+  }
+
+  /**
+   * Emit the holder's {@code static Map<String, Telescope<?, ?>> constants()} — the name → lens
+   * table the runtime probe reads to skip the {@code getDeclaredFields()} scan. Shared by the
+   * record and bean holders; each supplies its field names in declaration order.
+   */
+  protected void emitConstantsMap(final PrintWriter out, final List<String> fieldNames) {
     out.println("  /** Name -> lens map for the runtime probe to skip the field scan. */");
     out.println("  public static Map<String, Telescope<?, ?>> constants() {");
-    if (props.isEmpty()) {
+    if (fieldNames.isEmpty()) {
       out.println("    return Map.of();");
-    } else if (props.size() == 1) {
-      final var onlyName = props.getFirst().name();
+    } else if (fieldNames.size() == 1) {
+      final var onlyName = fieldNames.getFirst();
       out.println("    return Map.of(\"" + onlyName + "\", " + onlyName + ");");
     } else {
       out.println("    return Map.ofEntries(");
-      for (var i = 0; i < props.size(); i++) {
-        out.print("      Map.entry(\"" + props.get(i).name() + "\", " + props.get(i).name() + ")");
-        out.println(i < props.size() - 1 ? "," : "");
+      for (var i = 0; i < fieldNames.size(); i++) {
+        out.print("      Map.entry(\"" + fieldNames.get(i) + "\", " + fieldNames.get(i) + ")");
+        out.println(i < fieldNames.size() - 1 ? "," : "");
       }
       out.println("    );");
     }
