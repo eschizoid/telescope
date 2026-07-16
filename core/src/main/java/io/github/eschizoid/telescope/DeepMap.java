@@ -1839,9 +1839,16 @@ public final class DeepMap {
     // Object-typed component holding an instance-level cycle), the bypass would be unsafe — but the
     // structural typing already prevents DeepMap from descending into Object-typed fields.
     if (acyclic) {
+      // populateIso(key) has completed by now (the RecursePair branch calls it before this), so the
+      // cache entry is the finished sub-Iso, not the in-progress null reservation. When it is a
+      // composed-handle leaf, hand it to the parent directly: the leaf null-guards internally, so
+      // this is byte-identical to the null-guarding proxy below, and MhIso.pair can then inline the
+      // leaf's raw handle (full-tree fusion). Every other sub-Iso keeps the null-guarding proxy.
+      final var cached = cache.get(key);
+      if (MhIso.isComposedLeaf(cached)) return cached;
       return Iso.of(
-        v -> v == null ? null : ((Iso<Object, Object>) cache.get(key)).to(v),
-        v -> v == null ? null : ((Iso<Object, Object>) cache.get(key)).from(v)
+        v -> v == null ? null : ((Iso<Object, Object>) cached).to(v),
+        v -> v == null ? null : ((Iso<Object, Object>) cached).from(v)
       );
     }
     return Iso.of(

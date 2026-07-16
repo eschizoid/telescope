@@ -81,6 +81,28 @@ public final class MhIso {
    */
   public static final String DISABLE_PROPERTY = "io.github.eschizoid.telescope.mhiso.disabled";
 
+  /**
+   * Whether {@code iso} is a composed-handle {@code Leaf} this assembler produced (so it carries
+   * raw forward/backward handles). {@code DeepMap} consults this to hand a parent pair the concrete
+   * leaf for an acyclic nested slot — enabling full-tree fusion in {@link #pair}'s filters —
+   * instead of a proxy that would force an {@code Iso.to} &rarr; {@code Function.apply} hop per
+   * nested object.
+   */
+  public static boolean isComposedLeaf(final Iso<?, ?> iso) {
+    // Test seam: with FUSION_DISABLE_PROPERTY set, DeepMap hands the parent the null-guarding proxy
+    // rather than the leaf, so pair's filter routes the nested conversion through Iso.to over that
+    // same leaf (the non-fused path). MhFusionParityTest flips this to prove fusion is
+    // byte-identical.
+    if (Boolean.getBoolean(FUSION_DISABLE_PROPERTY)) return false;
+    return iso instanceof Leaf<?, ?>;
+  }
+
+  /**
+   * System property (test-only) that forces a nested-pair slot back to the proxy dispatch (no
+   * fusion) while keeping the same underlying leaf. See {@link #isComposedLeaf}.
+   */
+  public static final String FUSION_DISABLE_PROPERTY = "io.github.eschizoid.telescope.mhiso.fusion.disabled";
+
   private static boolean constructibleBy(final Class<?> cls) {
     if (cls.isRecord()) return cls.getRecordComponents().length <= MAX_ARITY;
     // A bean side is composable only when it has a no-arg constructor and every one of its
@@ -106,6 +128,8 @@ public final class MhIso {
   private static final MethodHandle ENTRY_KEY; //          (Object) -> Object        Map.Entry.getKey
   private static final MethodHandle ENTRY_VALUE; //        (Object) -> Object      Map.Entry.getValue
   private static final MethodHandle SUPPLIER_GET; //       (Supplier) -> Object      Supplier.get
+  // (Throwable, Object, Class, Class) -> Object : relabels a fused nested-conversion failure.
+  private static final MethodHandle THROW_CONVERSION;
 
   static {
     try {
@@ -134,6 +158,11 @@ public final class MhIso {
       SUPPLIER_GET = lk
         .findVirtual(Supplier.class, "get", MethodType.methodType(Object.class))
         .asType(MethodType.methodType(Object.class, Supplier.class));
+      THROW_CONVERSION = lk.findStatic(
+        MhIso.class,
+        "throwConversion",
+        MethodType.methodType(Object.class, Throwable.class, Object.class, Class.class, Class.class)
+      );
     } catch (final ReflectiveOperationException e) {
       throw new ExceptionInInitializerError(e);
     }
@@ -340,6 +369,29 @@ public final class MhIso {
       return MethodHandles.dropArguments(MethodHandles.constant(Object.class, null), 0, srcCls).asType(
         MethodType.methodType(slotType, srcCls)
       );
+    }
+    // Full-tree fusion: a nested-pair slot whose Iso is itself a composed-handle Leaf inlines that
+    // leaf's raw (Object)->Object handle directly into this handle — no per-nested-object
+    // slotIso.to -> Function.apply hop. A per-element null guard reproduces the leaf's own null
+    // short-circuit (a null nested source maps to null), and a catchException relabels a nested
+    // conversion failure with the leaf's own classes (matching the proxy path's Leaf.forward wrap,
+    // and the container lift's containerIso relabel) instead of letting it surface under the root
+    // pair's classes. Because sub-leaves are built the same way, their own nested slots are already
+    // fused into their raw handle, so this fuses the whole acyclic subtree bottom-up. Only
+    // reachable
+    // for sp >= 0 (a Leaf converts a real source value); DeepMap hands the Leaf through for acyclic
+    // pairs only (cyclic pairs keep the cycle-guarding proxy, never a Leaf).
+    if (sp >= 0 && slotIso instanceof Leaf<?, ?> leaf) {
+      final boolean forward = isoDir == ISO_TO;
+      final MethodHandle raw = forward ? leaf.rawForward() : leaf.rawBackward();
+      final Class<?> from = forward ? leaf.sourceClass() : leaf.targetClass();
+      final Class<?> to = forward ? leaf.targetClass() : leaf.sourceClass();
+      final MethodHandle rawStep = guardElement(labelFailures(raw, from, to));
+      final Class<?> leafReadType = srcAccessors[sp].type().returnType();
+      return MethodHandles.filterReturnValue(
+        srcAccessors[sp],
+        rawStep.asType(MethodType.methodType(Object.class, leafReadType))
+      ).asType(MethodType.methodType(slotType, srcCls));
     }
     // Non-identity Iso (rename-with-conversion, nested pair, container lift, constant, compute,
     // when-gate): mirror the array path's iso.to(v), where v is the read value or null when the
@@ -559,6 +611,30 @@ public final class MhIso {
       Object.class
     );
     return MethodHandles.guardWithTest(NON_NULL, rawElem.asType(t), nullConst);
+  }
+
+  /**
+   * Wrap {@code (Object)->Object} {@code raw} so a throwable it raises is relabelled with {@code
+   * from -> to} — the leaf's own classes — via {@link #rethrow}, matching the wrap the proxy path
+   * applies through {@code Leaf.forward}/{@code backward}. The catch is a MethodHandle combinator,
+   * so the fused handle stays one composed tree with no SAM boundary; the happy path pays nothing.
+   */
+  private static MethodHandle labelFailures(final MethodHandle raw, final Class<?> from, final Class<?> to) {
+    final MethodHandle handler = MethodHandles.insertArguments(THROW_CONVERSION, 2, from, to);
+    return MethodHandles.catchException(
+      raw.asType(MethodType.methodType(Object.class, Object.class)),
+      Throwable.class,
+      handler
+    );
+  }
+
+  /**
+   * {@code (Throwable, Object) -> Object} catch handler (bound to {@code from}/{@code to}): always
+   * throws, relabelling the failure via {@link #rethrow}. The {@code Object} argument is the leaf's
+   * input, ignored — it only aligns the handler arity with the guarded handle.
+   */
+  private static Object throwConversion(final Throwable t, final Object input, final Class<?> from, final Class<?> to) {
+    throw rethrow(from, to, t);
   }
 
   /**
