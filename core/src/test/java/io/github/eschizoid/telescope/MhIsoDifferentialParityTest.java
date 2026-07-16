@@ -13,6 +13,9 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1070,6 +1073,18 @@ final class MhIsoDifferentialParityTest {
       ),
       // empty containers + empty optional
       new ContRec(List.of(), Set.of(), Map.of(), Optional.empty()),
+      // null ELEMENTS inside non-null containers: the leaf path null-guards each element
+      // (guardElement); the array-leaf path routes each through the cache proxy. Both must
+      // map a
+      // null element to null identically — this pins the container element-null semantics
+      // that the
+      // (now removed) resolveElementForLift reach-through used to straddle.
+      new ContRec(
+        new ArrayList<>(Arrays.asList(new InnerRec("a", 1), null)),
+        new LinkedHashSet<>(Arrays.asList(new InnerRec("s", 9), null)),
+        nullValueMap(),
+        Optional.empty()
+      ),
       // null containers + null optional-holder
       new ContRec(null, null, null, null)
     );
@@ -1233,6 +1248,15 @@ final class MhIsoDifferentialParityTest {
   }
 
   // ---- helpers ----
+  // A map with a present value and a null value, to exercise null map-value conversion on both
+  // leaves.
+  private static Map<String, InnerRec> nullValueMap() {
+    final var m = new LinkedHashMap<String, InnerRec>();
+    m.put("k1", new InnerRec("m1", 11));
+    m.put("k2", null);
+    return m;
+  }
+
   private static PrimBean bean(
     final int i,
     final long l,
