@@ -190,9 +190,17 @@ public final class Mapper<A, B> {
    * directly, without the {@code Iso.of(forward, backward)} re-wrap {@link #create(Function,
    * Function, Class, Class, Map, List)} performs. {@code DeepMap#resolveMapper} holds the leaf Iso
    * the deep-mapping engine built; passing it straight through removes one virtual {@code Iso.to}
-   * hop from every {@code forward}/{@code backward} call. Same lattice value, one fewer wrapper.
+   * hop from every {@code forward}/{@code backward} call (measured ~10–15% on the flat/nested
+   * runtime tiers). Same lattice value, one fewer wrapper.
+   *
+   * <p>The {@code exports} warning is suppressed deliberately: {@link Iso} is qualified-exported
+   * from {@code :internal} to {@code :core} only, so JPMS prevents any downstream module from
+   * resolving — let alone calling — this overload. It stays invisible to real API consumers exactly
+   * like the {@link Function}-typed {@link #create}; this is the same "module-internal seam"
+   * category as the six-argument {@code create} above, and the only place the engine can hand its
+   * leaf Iso to {@code Mapper} without the double wrap.
    */
-  @SuppressWarnings("exports") // SPIKE ONLY — measuring the unwrap; Iso must not leak to ship this
+  @SuppressWarnings("exports")
   public static <A, B> Mapper<A, B> ofIso(
     final Iso<A, B> iso,
     final Class<A> sourceClass,
@@ -410,9 +418,9 @@ public final class Mapper<A, B> {
     if (source == null) throw new NullPointerException("source");
     if (targetClass.isRecord()) {
       throw new UnsupportedOperationException(
-        "Mapper.into(target, source) requires a mutable target — records are immutable. " +
-          "Use Mapper.forward(source) and discard the receiver, or have your target type be a bean " +
-          "with public setters."
+        "Mapper.into(target, source) requires a mutable target — records are immutable. Use" +
+          " Mapper.forward(source) and discard the receiver, or have your target type be a" +
+          " bean with public setters."
       );
     }
     final B produced = forward(source);

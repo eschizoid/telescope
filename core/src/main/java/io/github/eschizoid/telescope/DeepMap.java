@@ -266,7 +266,7 @@ public final class DeepMap {
     for (final var hint : hints) {
       if (!(hint instanceof WriteHint.DefaultWriteHint(final WriteHint.WriteStrategy strat))) continue;
       if (defaultStrategy != null) throw new IllegalArgumentException(
-        "Duplicate writeBeans(...) default — at most one default write strategy per Telescope.map(...) call."
+        "Duplicate writeBeans(...) default — at most one default write strategy per" + " Telescope.map(...) call."
       );
       defaultStrategy = strat;
     }
@@ -328,7 +328,8 @@ public final class DeepMap {
     if (!unused.isEmpty()) throw new IllegalArgumentException(
       "Unused writeBean hints — classes never encountered during deep-mapping recursion: " +
         String.join(", ", unused) +
-        ". Remove the row, or verify the class is actually reached by the source/target structure."
+        ". Remove the row, or verify the class is actually reached by the source/target" +
+        " structure."
     );
   }
 
@@ -368,7 +369,8 @@ public final class DeepMap {
         topTarget.getName() +
         ") never visits — they would be silently ignored: " +
         String.join("; ", dead) +
-        ". Bind the rows to a type pair this mapper's recursion actually reaches, or remove them."
+        ". Bind the rows to a type pair this mapper's recursion actually reaches, or remove" +
+        " them."
     );
   }
 
@@ -1225,8 +1227,9 @@ public final class DeepMap {
           throw new UnsupportedOperationException(
             "Mapping.toOneWay is forward-only — backward direction is undefined for field '" +
               fieldName +
-              "'. Use Telescope.mapperForward(...) for a forward-only mapper, or Mapping.to(src, " +
-              "tgt, forward, backward) for an explicit bidirectional row."
+              "'. Use Telescope.mapperForward(...) for a forward-only mapper, or" +
+              " Mapping.to(src, tgt, forward, backward) for an explicit bidirectional" +
+              " row."
           );
         };
         yield Iso.of((Function) r.forward(), throwingBackward);
