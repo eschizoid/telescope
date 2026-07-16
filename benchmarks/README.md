@@ -299,7 +299,7 @@ the parent's composed handle, so the whole acyclic subtree collapses to one `inv
 → 15 ns. The backward (record → bean) direction — previously the pathological case (allocate a bean, then N boxed setter
 calls, ~48× MapStruct on flat) — is now **~3.5× on flat** via the unboxed setter-fold, matching forward instead of
 trailing it. Allocation drops to the result-object floor (flat 32 B/op, the array + every primitive box gone).
-Sub-microsecond everywhere. Reach for codegen on the hottest paths; the runtime path is now within ~1.3–6× of MapStruct
+Sub-microsecond everywhere. Reach for codegen on the hottest paths; the runtime path is now within ~1.3–4× of MapStruct
 with **no annotations and no build step** — and closest exactly where it matters most, on the deep container-heavy trees
 — close enough for most service code, and `@Bridge` codegen is there when a loop turns hot.
 
