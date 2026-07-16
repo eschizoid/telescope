@@ -232,8 +232,14 @@ difference between same-tier rows is the dispatch path. Reproducible: re-run the
 | flat   | record → bean |     3.305 ± 0.028 |             3.485 ± 0.022 |                                — |             11.44 ± 0.947 |
 | nested | bean → record |     4.928 ± 0.024 |             5.879 ± 0.022 |                    5.553 ± 0.011 |             30.65 ± 2.596 |
 | nested | record → bean |     5.983 ± 0.024 |             5.355 ± 0.019 |                                — |             29.87 ± 0.504 |
-| deep   | bean → record |     48.68 ± 0.106 |             55.04 ± 0.522 |                    54.71 ± 0.375 |            212.26 ± 8.427 |
-| deep   | record → bean |     48.54 ± 0.273 |             54.81 ± 0.418 |                                — |            215.27 ± 2.921 |
+| deep   | bean → record |     48.68 ± 0.106 |             55.04 ± 0.522 |                    54.71 ± 0.375 |              90.1 ± 2.5\* |
+| deep   | record → bean |     48.54 ± 0.273 |             54.81 ± 0.418 |                                — |              95.0 ± 2.5\* |
+
+\* The deep runtime cells were re-measured on a laptop after the container-element MethodHandle loop landed (a nested
+`List` element now loops over the leaf's raw handle instead of dispatching `Iso.to` per element). Same-machine A/B on
+that laptop: main **205.4 / 207.2 ns** → branch **90.1 / 95.0 ns** (**~2.2×**), taking deep runtime from ~4.4× MapStruct
+to ~1.3–1.9× on the same box. The other cells are the CI runner's; the whole table refreshes on the next benchmark
+workflow run.
 
 Tight error bands on the codegen/MapStruct rows (±0.01–0.35 ns) — the dedicated CI runner with no competing workload
 gives cleaner data than a laptop. The `static` column calls the codegen-emitted `<Source>Bridge.forward(s)` directly,
@@ -282,12 +288,16 @@ the directly-callable `BRIDGE_FN` constant — and pay the zero-dispatch floor.
 
 Runtime conversion (`Telescope.mapper(...)`) composes each record/bean pair into a single MethodHandle (see above), so
 the hot path is one `invokeExact` through the fused handle rather than an `Object[]` gather with boxed per-field
-dispatch. That lands the forward direction at **~3.9× MapStruct on flat, ~6.2× on nested, ~4.4× on deep**. The backward
-(record → bean) direction — previously the pathological case (allocate a bean, then N boxed setter calls, ~48× MapStruct
-on flat) — is now **~3.5× on flat** via the unboxed setter-fold, matching forward instead of trailing it. Allocation
-drops to the result-object floor (flat 32 B/op, the array + every primitive box gone). Sub-microsecond everywhere. Reach
-for codegen on the hottest paths; the runtime path is now within ~4–6× of MapStruct with **no annotations and no build
-step** — close enough for most service code, and `@Bridge` codegen is there when a loop turns hot.
+dispatch. That lands the forward direction at **~3.9× MapStruct on flat, ~6.2× on nested, ~1.3–1.9× on deep**. Deep used
+to trail at ~4.4×; the container-element MethodHandle loop (a nested `List`/`Set`/`Map` element loops over the leaf's
+raw handle instead of dispatching `Iso.to` → `Function.apply` per element, which also un-megamorphizes the shared lift
+call site) roughly halved it — same-machine 205 → 90 ns. The backward (record → bean) direction — previously the
+pathological case (allocate a bean, then N boxed setter calls, ~48× MapStruct on flat) — is now **~3.5× on flat** via
+the unboxed setter-fold, matching forward instead of trailing it. Allocation drops to the result-object floor (flat 32
+B/op, the array + every primitive box gone). Sub-microsecond everywhere. Reach for codegen on the hottest paths; the
+runtime path is now within ~1.3–6× of MapStruct with **no annotations and no build step** — and closest exactly where it
+matters most, on the deep container-heavy trees — close enough for most service code, and `@Bridge` codegen is there
+when a loop turns hot.
 
 All four columns above are from the same run; the codegen/MapStruct ratios reproduce across confirming runs within error
 (the runtime rows carry wider bands but the same magnitude).
