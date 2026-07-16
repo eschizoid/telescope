@@ -155,7 +155,7 @@ class ReflectiveSurfaceTest {
 
     @Test
     @DisplayName(
-      "hint map is consulted before falling through to autoWriter — wrapping HashMap records the get() probe"
+      "hint map is consulted before falling through to autoWriter — wrapping HashMap records the" + " get() probe"
     )
     void hintMapIsConsultedBeforeAutoWriter() {
       // The hint payload alone can't distinguish "hint fired" from "autoWriter happened to pick the
@@ -188,7 +188,8 @@ class ReflectiveSurfaceTest {
 
     @Test
     @DisplayName(
-      "default factory is consulted on every construct() call for unhinted classes (no per-class memoisation today)"
+      "default factory is consulted on every construct() call for unhinted classes (no per-class" +
+        " memoisation today)"
     )
     void defaultFactoryFiresOncePerConstructCall() {
       // Pins the actual (non-memoised) resolution behaviour at the constructBeanWithHints call
@@ -208,6 +209,31 @@ class ReflectiveSurfaceTest {
 
       assertEquals(2, factoryCalls[0], "default factory fires once per construct() call for unhinted classes");
     }
+
+    @Test
+    @DisplayName("a per-class hint takes precedence: the default factory is NOT consulted for a hinted" + " class")
+    void hintTakesPrecedenceOverDefaultFactory() {
+      // Resolution order is hint → default factory → autoWriter. When a hint exists for the target
+      // class, the default factory must be short-circuited entirely — not merely produce the same
+      // result. Pin the precedence with a factory that would throw if it were ever consulted for
+      // the hinted class, so a regression collapsing the two tiers fails loudly.
+      final var hints = new HashMap<Class<?>, Beans.BeanWriter<?>>();
+      hints.put(SimpleBean.class, Beans.settersWriter(SimpleBean.class));
+      final var refl = Reflective.beansWithHints(hints, cls -> {
+        throw new AssertionError("default factory must not be consulted when a hint exists for " + cls);
+      });
+
+      final var built = (SimpleBean) refl.construct(SimpleBean.class, name ->
+        switch (name) {
+          case "name" -> "ivy";
+          case "age" -> 44;
+          default -> null;
+        }
+      );
+
+      assertEquals("ivy", built.getName());
+      assertEquals(44, built.getAge());
+    }
   }
 
   @Nested
@@ -215,7 +241,7 @@ class ReflectiveSurfaceTest {
   class PositionalBuilder {
 
     @Test
-    @DisplayName("record fast-path: no holder data → cached canonical-ctor function applies the array directly")
+    @DisplayName("record fast-path: no holder data → cached canonical-ctor function applies the array" + " directly")
     void recordFastPathBindsCanonicalCtor() {
       final var builder = Reflective.RECORDS.positionalBuilder(SimpleUser.class, null, null);
       assertNotNull(builder);
@@ -254,7 +280,7 @@ class ReflectiveSurfaceTest {
     }
 
     @Test
-    @DisplayName("bean path captures the property name per slot and reads through Beans.readProperty's substrate")
+    @DisplayName("bean path captures the property name per slot and reads through Beans.readProperty's" + " substrate")
     void beanReadersReadByPropertyName() {
       final var refl = Reflective.BEANS;
       final var readers = refl.positionalReaders(SimpleBean.class, null);
@@ -282,7 +308,8 @@ class ReflectiveSurfaceTest {
 
     @Test
     @DisplayName(
-      "holderConstructor short-circuits the reflective construct path: returned function is applied with a name-indexed array view"
+      "holderConstructor short-circuits the reflective construct path: returned function is" +
+        " applied with a name-indexed array view"
     )
     void holderConstructorTakesPriorityOverReflectiveBuild() {
       // Stand-in for a codegen FieldOptics' bound construct(Function<String, Object>): if the
