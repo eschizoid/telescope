@@ -360,9 +360,10 @@ the [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action: Actions →
 branch, tune the iteration / fork knobs; the run prints `results.txt` and attaches the full results as an artifact.
 
 > No codegen? `Telescope.mapper(...)` composes each record/bean pair into a single MethodHandle — zero annotations, no
-> build step, and now **within ~4–6× of MapStruct** (flat ~12 ns, deep ~210 ns), down from ~16–48×. Fast enough for most
-> service code as-is; on a tight inner loop, add `@Bridge` and you're back in MapStruct's performance class. The
-> runtime-vs-codegen numbers are in
+> build step, and now **within ~1.3–6× of MapStruct** (flat ~12 ns, deep ~90 ns), down from ~16–48×. Deep
+> container-heavy trees are the closest: a nested `List`/`Set`/`Map` element loops over the leaf's raw handle instead of
+> dispatching per element. Fast enough for most service code as-is; on a tight inner loop, add `@Bridge` and you're back
+> in MapStruct's performance class. The runtime-vs-codegen numbers are in
 > [`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison-apples-to-apples).
 
 #### Then, what you gain

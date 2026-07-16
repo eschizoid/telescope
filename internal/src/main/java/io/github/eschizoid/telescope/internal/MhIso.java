@@ -4,8 +4,13 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * MethodHandle-combinator assembly of a structural conversion {@link Iso} where each side is a
@@ -32,10 +37,13 @@ import java.util.function.Function;
  *       it can be null-guarded before unboxing (see {@code setterFromSource}).
  * </ul>
  *
- * <p><b>Lattice.</b> The result is an ordinary {@link Iso#of(Function, Function)} — the composed
- * handles <em>are</em> the leaf Iso's forward/backward transforms. Composition above this leaf
- * (nested pairs, {@code liftList}/{@code liftMapValues}, {@code .then(...)}) is unchanged and still
- * routes through the optic lattice. This sharpens the leaf; it does not bypass the lattice.
+ * <p><b>Lattice.</b> The result is a {@code Leaf} — an {@link Iso} whose forward/backward
+ * <em>are</em> the composed handles (wrapped as null-guarded {@code Function}s, exactly as {@link
+ * Iso#of(Function, Function)} would), and which additionally exposes those raw {@code
+ * (Object)->Object} handles so a parent container lift can loop over them directly (see {@link
+ * #liftCollection}/{@link #liftMap}). Composition above this leaf (nested pairs, {@code
+ * liftList}/{@code liftMapValues}, {@code .then(...)}) is unchanged and still routes through the
+ * optic lattice. This sharpens the leaf; it does not bypass the lattice.
  */
 public final class MhIso {
 
@@ -89,6 +97,15 @@ public final class MhIso {
   private static final MethodHandle ISO_FROM;
   // (Object) -> boolean  ==  value != null. Guards a primitive bean setter against a null value.
   private static final MethodHandle NON_NULL;
+  // Combinator primitives for the container-element loops (liftCollection / liftMap), all erased to
+  // Object receivers so the loop bodies read/write through the raw element handle with no box.
+  private static final MethodHandle ITERABLE_ITERATOR; // (Object) -> Iterator      Iterable.iterator
+  private static final MethodHandle COLLECTION_ADD; //     (Object, Object) -> boolean Collection.add
+  private static final MethodHandle MAP_ENTRYSET; //       (Object) -> Object        Map.entrySet
+  private static final MethodHandle MAP_PUT; //            (Object, Object, Object) -> Object Map.put
+  private static final MethodHandle ENTRY_KEY; //          (Object) -> Object        Map.Entry.getKey
+  private static final MethodHandle ENTRY_VALUE; //        (Object) -> Object      Map.Entry.getValue
+  private static final MethodHandle SUPPLIER_GET; //       (Supplier) -> Object      Supplier.get
 
   static {
     try {
@@ -96,6 +113,27 @@ public final class MhIso {
       ISO_TO = lk.findVirtual(Iso.class, "to", MethodType.methodType(Object.class, Object.class));
       ISO_FROM = lk.findVirtual(Iso.class, "from", MethodType.methodType(Object.class, Object.class));
       NON_NULL = lk.findStatic(Objects.class, "nonNull", MethodType.methodType(boolean.class, Object.class));
+      ITERABLE_ITERATOR = lk
+        .findVirtual(Iterable.class, "iterator", MethodType.methodType(Iterator.class))
+        .asType(MethodType.methodType(Iterator.class, Object.class));
+      COLLECTION_ADD = lk
+        .findVirtual(Collection.class, "add", MethodType.methodType(boolean.class, Object.class))
+        .asType(MethodType.methodType(boolean.class, Object.class, Object.class));
+      MAP_ENTRYSET = lk
+        .findVirtual(Map.class, "entrySet", MethodType.methodType(Set.class))
+        .asType(MethodType.methodType(Object.class, Object.class));
+      MAP_PUT = lk
+        .findVirtual(Map.class, "put", MethodType.methodType(Object.class, Object.class, Object.class))
+        .asType(MethodType.methodType(Object.class, Object.class, Object.class, Object.class));
+      ENTRY_KEY = lk
+        .findVirtual(Map.Entry.class, "getKey", MethodType.methodType(Object.class))
+        .asType(MethodType.methodType(Object.class, Object.class));
+      ENTRY_VALUE = lk
+        .findVirtual(Map.Entry.class, "getValue", MethodType.methodType(Object.class))
+        .asType(MethodType.methodType(Object.class, Object.class));
+      SUPPLIER_GET = lk
+        .findVirtual(Supplier.class, "get", MethodType.methodType(Object.class))
+        .asType(MethodType.methodType(Object.class, Supplier.class));
     } catch (final ReflectiveOperationException e) {
       throw new ExceptionInInitializerError(e);
     }
@@ -148,7 +186,76 @@ public final class MhIso {
         throw rethrow(target, source, e);
       }
     };
-    return Iso.of(forward, backward);
+    // Return a Leaf carrier rather than a bare Iso.of: it behaves identically as an Iso (to/from
+    // delegate to the null-guarded Functions above) but also carries the raw (Object)->Object
+    // composed handles and the element source/target classes, so a parent's container slot can loop
+    // over the handles directly (liftCollection / liftMap) and label a per-element conversion
+    // failure
+    // with the real classes. The raw handles carry NO null guard (that lives in forward/backward);
+    // the container loops add a per-element null guard so a null element maps to null, matching the
+    // Java path's iso.to(null) == null.
+    return new Leaf<>(source, target, forward, backward, fwd, bwd);
+  }
+
+  /**
+   * The Iso returned by {@link #pair}: an ordinary structural-conversion {@link Iso} that also
+   * exposes its raw {@code (Object)->Object} forward/backward handles and its element source/target
+   * classes. A parent leaf that holds this as a container element's Iso ({@code List<Leaf>}, {@code
+   * Set<Leaf>}, {@code Map<K, Leaf>}) can loop over {@link #rawForward()} / {@link #rawBackward()}
+   * with a MethodHandle loop instead of dispatching {@code Iso.to} &rarr; {@code Function.apply}
+   * per element, and label a per-element failure with {@link #sourceClass()} / {@link
+   * #targetClass()}.
+   */
+  private static final class Leaf<S, T> implements Iso<S, T> {
+
+    private final Class<S> sourceClass;
+    private final Class<T> targetClass;
+    private final Function<S, T> forward;
+    private final Function<T, S> backward;
+    private final MethodHandle rawFwd;
+    private final MethodHandle rawBwd;
+
+    Leaf(
+      final Class<S> sourceClass,
+      final Class<T> targetClass,
+      final Function<S, T> forward,
+      final Function<T, S> backward,
+      final MethodHandle rawFwd,
+      final MethodHandle rawBwd
+    ) {
+      this.sourceClass = sourceClass;
+      this.targetClass = targetClass;
+      this.forward = forward;
+      this.backward = backward;
+      this.rawFwd = rawFwd;
+      this.rawBwd = rawBwd;
+    }
+
+    @Override
+    public T to(final S source) {
+      return forward.apply(source);
+    }
+
+    @Override
+    public S from(final T value) {
+      return backward.apply(value);
+    }
+
+    MethodHandle rawForward() {
+      return rawFwd;
+    }
+
+    MethodHandle rawBackward() {
+      return rawBwd;
+    }
+
+    Class<S> sourceClass() {
+      return sourceClass;
+    }
+
+    Class<T> targetClass() {
+      return targetClass;
+    }
   }
 
   /**
@@ -348,6 +455,167 @@ public final class MhIso {
     }
     final MethodHandle readVal = buildFilter(srcCls, slotType, srcAccessors, sp, slotIso, isoDir, identity);
     return MethodHandles.filterArguments(setter, 1, readVal);
+  }
+
+  /**
+   * Sharpen a {@code Collection}-of-element container lift: when {@code elementIso} is a {@link
+   * Leaf} (a record/bean pair this assembler composed), build the {@code List}/{@code Set}
+   * conversion as a MethodHandle {@link MethodHandles#iteratedLoop} that invokes the leaf's raw
+   * {@code (Object)->Object} handle per element — no {@code Iso.to} &rarr; {@code Function.apply}
+   * SAM hop in the loop body. {@code srcAlloc}/{@code tgtAlloc} produce the concrete source/target
+   * collection (the same allocators {@code DeepMap} uses), so iteration order and collection type
+   * are preserved.
+   *
+   * <p>Returns {@code null} when {@code elementIso} is not a Leaf (a scalar element, or an element
+   * on the array leaf) — the caller keeps its plain Java-loop lift for those. Mirrors the {@link
+   * #supports} / {@link #pair} probe-then-build split: this is a build-time sharpening, never a
+   * runtime fallback. Also returns {@code null} when {@link #CONTAINER_DISABLE_PROPERTY} is set
+   * (the test seam that routes a Leaf element back through the Java loop for differential parity).
+   */
+  public static Iso<Object, Object> liftCollection(
+    final Iso<Object, Object> elementIso,
+    final Supplier<Object> srcAlloc,
+    final Supplier<Object> tgtAlloc
+  ) {
+    if (Boolean.getBoolean(CONTAINER_DISABLE_PROPERTY)) return null;
+    if (!(elementIso instanceof Leaf<?, ?> leaf)) return null;
+    final MethodHandle fwd = collectionLoop(guardElement(leaf.rawForward()), tgtAlloc);
+    final MethodHandle bwd = collectionLoop(guardElement(leaf.rawBackward()), srcAlloc);
+    return containerIso(fwd, bwd, leaf.sourceClass(), leaf.targetClass());
+  }
+
+  /**
+   * System property (test-only) that forces every container lift back to its caller's Java loop
+   * even for a Leaf element, so {@code MhContainerLoopParityTest} can compare the MethodHandle loop
+   * against the Java loop over the identical Leaf. Unset in production; read once at build time.
+   */
+  public static final String CONTAINER_DISABLE_PROPERTY = "io.github.eschizoid.telescope.mhiso.container.disabled";
+
+  /**
+   * Sharpen a {@code Map}-values container lift the same way {@link #liftCollection} sharpens
+   * List/Set: a MethodHandle loop over the source map's entry set that puts {@code key ->
+   * rawElement(value)} into a fresh target map. Keys pass through verbatim (matching {@code
+   * Iso.liftMapValues}); only values route through the Leaf's raw handle. Returns {@code null} when
+   * the value element is not a Leaf (or the container test seam is set).
+   */
+  public static Iso<Object, Object> liftMap(
+    final Iso<Object, Object> valueIso,
+    final Supplier<Object> srcAlloc,
+    final Supplier<Object> tgtAlloc
+  ) {
+    if (Boolean.getBoolean(CONTAINER_DISABLE_PROPERTY)) return null;
+    if (!(valueIso instanceof Leaf<?, ?> leaf)) return null;
+    final MethodHandle fwd = mapLoop(guardElement(leaf.rawForward()), tgtAlloc);
+    final MethodHandle bwd = mapLoop(guardElement(leaf.rawBackward()), srcAlloc);
+    return containerIso(fwd, bwd, leaf.sourceClass(), leaf.targetClass());
+  }
+
+  /**
+   * Wrap two {@code (Object)->Object} whole-container loop handles as an {@link Iso}. The null
+   * guard for a null container reference stays here (outside the loop), mirroring the Java lifts'
+   * {@code xs == null ? null} head; a null container round-trips to null. {@code elemSrc}/{@code
+   * elemTgt} are the container element's source/target classes, so a per-element conversion failure
+   * is labelled with the real types (and the right direction) exactly as the Java lift's {@code
+   * elementIso.to} / {@code from} would — the forward direction converts {@code elemSrc ->
+   * elemTgt}, the backward {@code elemTgt -> elemSrc}.
+   */
+  private static Iso<Object, Object> containerIso(
+    final MethodHandle fwd,
+    final MethodHandle bwd,
+    final Class<?> elemSrc,
+    final Class<?> elemTgt
+  ) {
+    return Iso.of(
+      xs -> {
+        if (xs == null) return null;
+        try {
+          return (Object) fwd.invokeExact(xs);
+        } catch (final Throwable e) {
+          throw rethrow(elemSrc, elemTgt, e);
+        }
+      },
+      ys -> {
+        if (ys == null) return null;
+        try {
+          return (Object) bwd.invokeExact(ys);
+        } catch (final Throwable e) {
+          throw rethrow(elemTgt, elemSrc, e);
+        }
+      }
+    );
+  }
+
+  /**
+   * Per-element null guard: {@code element == null ? null : raw(element)}. A container may hold
+   * null elements; the Java lift calls {@code elementIso.to(null)} which returns null (the Leaf's
+   * forward Function short-circuits on null). The raw handle has no such guard — apply one here so
+   * the loop body matches byte-for-byte.
+   */
+  private static MethodHandle guardElement(final MethodHandle rawElem) {
+    final MethodType t = MethodType.methodType(Object.class, Object.class);
+    final MethodHandle nullConst = MethodHandles.dropArguments(
+      MethodHandles.constant(Object.class, null),
+      0,
+      Object.class
+    );
+    return MethodHandles.guardWithTest(NON_NULL, rawElem.asType(t), nullConst);
+  }
+
+  /**
+   * Build {@code (Object srcColl) -> Object tgtColl}: allocate a fresh target collection, iterate
+   * the source, and {@code add(element(x))} for each. {@code element} is the null-guarded raw
+   * handle.
+   */
+  private static MethodHandle collectionLoop(final MethodHandle element, final Supplier<Object> tgtAlloc) {
+    // init : (Object srcColl) -> Object tgtColl  == fresh target collection, ignoring the source
+    // arg.
+    final MethodHandle init = MethodHandles.dropArguments(supplierGet(tgtAlloc), 0, Object.class);
+    // add(acc, element(x)) as a void side effect: (Object acc, Object x) -> void.
+    final MethodHandle mapped = MethodHandles.filterArguments(COLLECTION_ADD, 1, element);
+    final MethodHandle addVoid = mapped.asType(mapped.type().changeReturnType(void.class));
+    // body : (Object acc, Object x, Object srcColl) -> Object acc  (run add, return the
+    // accumulator).
+    final MethodHandle retAcc = MethodHandles.dropArguments(MethodHandles.identity(Object.class), 1, Object.class);
+    final MethodHandle body2 = MethodHandles.foldArguments(retAcc, addVoid);
+    final MethodHandle body = MethodHandles.dropArguments(body2, 2, Object.class);
+    return MethodHandles.iteratedLoop(ITERABLE_ITERATOR, init, body).asType(
+      MethodType.methodType(Object.class, Object.class)
+    );
+  }
+
+  /**
+   * Build {@code (Object srcMap) -> Object tgtMap}: allocate a fresh target map, iterate the
+   * source's entry set, and {@code put(entry.key, element(entry.value))} for each. Keys pass
+   * through unchanged.
+   */
+  private static MethodHandle mapLoop(final MethodHandle element, final Supplier<Object> tgtAlloc) {
+    // iterator : (Object srcMap) -> Iterator over the entry set.
+    final MethodHandle iterator = MethodHandles.filterReturnValue(MAP_ENTRYSET, ITERABLE_ITERATOR);
+    // init : (Object srcMap) -> Object tgtMap.
+    final MethodHandle init = MethodHandles.dropArguments(supplierGet(tgtAlloc), 0, Object.class);
+    // put(acc, entry.key, element(entry.value)) as a void side effect.
+    final MethodHandle valFromEntry = MethodHandles.filterReturnValue(ENTRY_VALUE, element);
+    final MethodHandle putFromEntries = MethodHandles.filterArguments(MAP_PUT, 1, ENTRY_KEY, valFromEntry);
+    // putFromEntries : (Object acc, Object entryForKey, Object entryForVal) -> Object; feed the
+    // same
+    // entry to both slots, drop the returned previous-value.
+    final MethodHandle putEntry = MethodHandles.permuteArguments(
+      putFromEntries.asType(putFromEntries.type().changeReturnType(void.class)),
+      MethodType.methodType(void.class, Object.class, Object.class),
+      0,
+      1,
+      1
+    );
+    // body : (Object acc, Object entry, Object srcMap) -> Object acc.
+    final MethodHandle retAcc = MethodHandles.dropArguments(MethodHandles.identity(Object.class), 1, Object.class);
+    final MethodHandle body2 = MethodHandles.foldArguments(retAcc, putEntry);
+    final MethodHandle body = MethodHandles.dropArguments(body2, 2, Object.class);
+    return MethodHandles.iteratedLoop(iterator, init, body).asType(MethodType.methodType(Object.class, Object.class));
+  }
+
+  /** {@code () -> Object} bound to {@code alloc.get()}, as a MethodHandle for loop {@code init}. */
+  private static MethodHandle supplierGet(final Supplier<Object> alloc) {
+    return SUPPLIER_GET.bindTo(alloc);
   }
 
   private static RuntimeException rethrow(final Class<?> from, final Class<?> to, final Throwable e) {

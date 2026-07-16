@@ -1146,19 +1146,26 @@ public final class DeepMap {
         cyclicPairs,
         inProgress
       );
+      // For the collection lifts, reach through the acyclic cache proxy to the concrete element Iso
+      // so the lift can loop over an MhIso leaf's raw handle (see resolveElementForLift). Optional
+      // is
+      // ≤1 element — no loop to sharpen — so it keeps the proxy.
+      final var forLift = resolveElementForLift(
+        d.src().elementType(),
+        d.tgt().elementType(),
+        cache,
+        cyclicPairs,
+        elementIso
+      );
       return switch (d.src().kind()) {
         case LIST -> liftListIntoTargetRaw(
-          eraseIso(elementIso),
+          eraseIso(forLift),
           (Class<?>) d.src().rawType(),
           (Class<?>) d.tgt().rawType()
         );
-        case SET -> liftSetIntoTargetRaw(
-          eraseIso(elementIso),
-          (Class<?>) d.src().rawType(),
-          (Class<?>) d.tgt().rawType()
-        );
+        case SET -> liftSetIntoTargetRaw(eraseIso(forLift), (Class<?>) d.src().rawType(), (Class<?>) d.tgt().rawType());
         case MAP_VALUES -> liftMapIntoTargetRaw(
-          eraseIso(elementIso),
+          eraseIso(forLift),
           (Class<?>) d.src().rawType(),
           (Class<?>) d.tgt().rawType()
         );
@@ -1405,6 +1412,16 @@ public final class DeepMap {
   ) {
     final var srcAlloc = listAllocatorFor(srcRaw);
     final var tgtAlloc = listAllocatorFor(tgtRaw);
+    // When the element is a composed-handle leaf, iterate with a MethodHandle loop over its raw
+    // element handle instead of dispatching elementIso.to(x) -> Function.apply per element. In a
+    // deep
+    // tree the shared Java-loop lambda's call site goes megamorphic across nesting levels and the
+    // JIT
+    // stops inlining the element conversion; a dedicated per-level loop handle stays monomorphic
+    // and
+    // inlines. Null for a scalar/array-leaf element; keep the plain Java loop for those.
+    final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
+    if (mh != null) return mh;
     return Iso.of(
       src -> {
         if (src == null) return null;
@@ -1434,6 +1451,10 @@ public final class DeepMap {
   ) {
     final var srcAlloc = setAllocatorFor(srcRaw);
     final var tgtAlloc = setAllocatorFor(tgtRaw);
+    // Same MethodHandle-loop sharpening as the List lift (Set is also Collection.add). Null element
+    // Iso => keep the Java loop.
+    final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
+    if (mh != null) return mh;
     return Iso.of(
       src -> {
         if (src == null) return null;
@@ -1465,6 +1486,11 @@ public final class DeepMap {
   ) {
     final var srcAlloc = mapAllocatorFor(srcRaw);
     final var tgtAlloc = mapAllocatorFor(tgtRaw);
+    // MethodHandle entry-loop over the value element's raw handle when it is a composed-handle
+    // leaf;
+    // keys pass through verbatim. Null value Iso => keep the Java loop.
+    final var mh = MhIso.liftMap(elementIso, srcAlloc, tgtAlloc);
+    if (mh != null) return mh;
     return Iso.of(
       src -> {
         if (src == null) return null;
@@ -1766,6 +1792,39 @@ public final class DeepMap {
   private static final ThreadLocal<IdentityHashMap<Object, Boolean>> BACKWARD_SEEN = ThreadLocal.withInitial(
     IdentityHashMap::new
   );
+
+  /**
+   * Reach through the {@link #lazyCacheIso} proxy that {@code autoIso} returns for a container's
+   * element to the concrete element {@link Iso} in the cache, so a collection/map lift can loop
+   * over an {@code MhIso} leaf's raw handle instead of dispatching through the proxy per element.
+   *
+   * <p>Safe only for an <b>acyclic</b> pair: the proxy's acyclic branch is {@code v == null ? null
+   * : cache.get(key).to(v)} — a null guard plus a delegate — and the container loops reproduce that
+   * null guard per element, so looping over the cached leaf is byte-identical to looping over the
+   * proxy. By the time this runs (during the outer pair's {@code populateIso}), the element pair's
+   * {@code populateIso} has already completed, so {@code cache.get(key)} is the finished leaf.
+   *
+   * <p>Returns the {@code proxy} unchanged when the pair is cyclic (the per-call cycle guard in the
+   * proxy must stay), when either element type is not a raw {@link Class} (nested containers,
+   * wildcard elements — no cache key), or when the element is a scalar with no cache entry. In
+   * every fall-back case the lift keeps its plain Java loop.
+   */
+  private static Iso<?, ?> resolveElementForLift(
+    final Type srcElem,
+    final Type tgtElem,
+    final Map<TypePair, Iso<?, ?>> cache,
+    final Set<TypePair> cyclicPairs,
+    final Iso<?, ?> proxy
+  ) {
+    if (srcElem instanceof Class<?> s && tgtElem instanceof Class<?> t) {
+      final var key = new TypePair(s, t);
+      if (!cyclicPairs.contains(key)) {
+        final var cached = cache.get(key);
+        if (cached != null) return cached;
+      }
+    }
+    return proxy;
+  }
 
   @SuppressWarnings("unchecked")
   private static Iso<?, ?> lazyCacheIso(
