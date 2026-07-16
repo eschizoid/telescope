@@ -186,6 +186,36 @@ public final class Mapper<A, B> {
   }
 
   /**
+   * <b>Module-internal seam — NOT public API.</b> Store an already-composed leaf {@link Iso}
+   * directly, without the {@code Iso.of(forward, backward)} re-wrap {@link #create(Function,
+   * Function, Class, Class, Map, List)} performs. {@code DeepMap#resolveMapper} holds the leaf Iso
+   * the deep-mapping engine built; passing it straight through removes one virtual {@code Iso.to}
+   * hop from every {@code forward}/{@code backward} call (measured ~10–15% on the flat/nested
+   * runtime tiers). Same lattice value, one fewer wrapper.
+   *
+   * <p>The {@code exports} warning is suppressed deliberately, and this is the <b>first and
+   * only</b> place {@code conversion} puts an internal type ({@link Iso}) in a public signature — a
+   * deliberate, singular exception, not a pattern to copy. (The {@code Function}-typed {@code
+   * create} and {@code PatchEntry} are also "module-internal seams" but expose only exported types,
+   * so they need no suppression; do not read this as blessing {@code @SuppressWarnings("exports")}
+   * elsewhere.) It is fenced by the same JPMS containment {@code Telescope.mapped} relies on:
+   * {@link Iso} is qualified-exported from {@code :internal} to {@code :core} only, so no
+   * downstream module can resolve — let alone call — this overload; it stays invisible to real API
+   * consumers. It is the only way {@code DeepMap.resolveMapper} (a different package) can hand its
+   * leaf Iso to {@code Mapper}'s package-private constructor without the double wrap.
+   */
+  @SuppressWarnings("exports")
+  public static <A, B> Mapper<A, B> ofIso(
+    final Iso<A, B> iso,
+    final Class<A> sourceClass,
+    final Class<B> targetClass,
+    final Map<String, PatchEntry> patchByTargetField,
+    final List<OpticNode> explainTrail
+  ) {
+    return new Mapper<>(iso, sourceClass, targetClass, patchByTargetField, null, null, null, null, explainTrail);
+  }
+
+  /**
    * Describe what this mapper does, as a queryable {@link OpticReport} — the field correspondences
    * it resolved, the transformations it applies, and the target fields it skips (with reasons). The
    * report is built from the same pairing decisions the mapper uses to convert, so it cannot drift
@@ -392,9 +422,9 @@ public final class Mapper<A, B> {
     if (source == null) throw new NullPointerException("source");
     if (targetClass.isRecord()) {
       throw new UnsupportedOperationException(
-        "Mapper.into(target, source) requires a mutable target — records are immutable. " +
-          "Use Mapper.forward(source) and discard the receiver, or have your target type be a bean " +
-          "with public setters."
+        "Mapper.into(target, source) requires a mutable target — records are immutable. Use" +
+          " Mapper.forward(source) and discard the receiver, or have your target type be a" +
+          " bean with public setters."
       );
     }
     final B produced = forward(source);
