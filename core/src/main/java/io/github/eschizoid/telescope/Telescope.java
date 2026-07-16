@@ -17,7 +17,9 @@ import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Affine;
+import io.github.eschizoid.telescope.internal.optics.Applicative;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.internal.optics.Kind;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
@@ -623,13 +625,13 @@ public sealed class Telescope<
             target.getSimpleName() +
             ", ...) cannot accept a Mapping.toOneWay(...) row for field '" +
             r.targetField() +
-            "' — Mapping.toOneWay(...) is forward-only and would silently corrupt Mapper.backward / Mapper.patch. " +
-            "Use Telescope.mapperForward(" +
+            "' — Mapping.toOneWay(...) is forward-only and would silently corrupt" +
+            " Mapper.backward / Mapper.patch. Use Telescope.mapperForward(" +
             source.getSimpleName() +
             ", " +
             target.getSimpleName() +
-            ", ...) for a typed forward-only result, or Mapping.to(src, tgt, forward, backward) for " +
-            "an explicit bidirectional row."
+            ", ...) for a typed forward-only result, or Mapping.to(src, tgt, forward," +
+            " backward) for an explicit bidirectional row."
         );
       }
     }
@@ -1902,9 +1904,27 @@ public sealed class Telescope<
     final S source,
     final Function<? super A, ? extends CompletableFuture<A>> fn
   ) {
-    return CompletableFutureK.unbox(
-      optic.modifyF(CompletableFutureK.applicative(), source, a -> CompletableFutureK.box(fn.apply(a)))
-    );
+    return updateVia(CompletableFutureK.applicative(), source, fn, CompletableFutureK::box, CompletableFutureK::unbox);
+  }
+
+  /**
+   * The one effectful-update mechanism the four {@code update*} effect variants share: lift {@code
+   * fn}'s wrapped result into the {@link Kind} carrier ({@code box}), thread it through the same
+   * {@link Traversal#modifyF} the pure {@link #update} runs — driven by the effect's {@link
+   * Applicative} so the effect (short-circuit / accumulate / sequence) composes across the whole
+   * traversal — then unwrap the rebuilt {@code S} back out of the carrier ({@code unbox}). Each
+   * public variant differs only in its witness/applicative and the {@code box}/{@code unbox} pair;
+   * this keeps that composition in one place, so adding a future effect is one delegating method
+   * plus its {@code *K} witness.
+   */
+  private <F extends Kind.Witness, EffA, EffS> EffS updateVia(
+    final Applicative<F> applicative,
+    final S source,
+    final Function<? super A, ? extends EffA> fn,
+    final Function<? super EffA, ? extends Kind<F, A>> box,
+    final Function<? super Kind<F, S>, ? extends EffS> unbox
+  ) {
+    return unbox.apply(optic.modifyF(applicative, source, a -> box.apply(fn.apply(a))));
   }
 
   /**
@@ -1940,7 +1960,7 @@ public sealed class Telescope<
    * @see #updateEither
    */
   public <E> Validated<E, S> updateValidated(final S source, final Function<? super A, ? extends Validated<E, A>> fn) {
-    return ValidatedK.unbox(optic.modifyF(ValidatedK.forError(), source, a -> ValidatedK.box(fn.apply(a))));
+    return updateVia(ValidatedK.<E>forError(), source, fn, ValidatedK::box, ValidatedK::unbox);
   }
 
   /**
@@ -1953,7 +1973,7 @@ public sealed class Telescope<
    * @see #updateValidated
    */
   public <E> Either<E, S> updateEither(final S source, final Function<? super A, ? extends Either<E, A>> fn) {
-    return EitherK.unbox(optic.modifyF(EitherK.forLeft(), source, a -> EitherK.box(fn.apply(a))));
+    return updateVia(EitherK.<E>forLeft(), source, fn, EitherK::box, EitherK::unbox);
   }
 
   /**
@@ -1966,7 +1986,7 @@ public sealed class Telescope<
    * @see #updateEither
    */
   public Optional<S> updateOptional(final S source, final Function<? super A, ? extends Optional<A>> fn) {
-    return OptionalK.unbox(optic.modifyF(OptionalK.applicative(), source, a -> OptionalK.box(fn.apply(a))));
+    return updateVia(OptionalK.applicative(), source, fn, OptionalK::box, OptionalK::unbox);
   }
 
   /**
