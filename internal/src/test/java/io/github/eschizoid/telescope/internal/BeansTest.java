@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Map;
@@ -581,7 +582,7 @@ class BeansTest {
   class GetterScan {
 
     @Test
-    @DisplayName("getX / isX / boolean and Boolean isX / URL two-caps rule all resolve to expected property names")
+    @DisplayName("getX / isX / boolean and Boolean isX / URL two-caps rule all resolve to expected property" + " names")
     void propertyNamesCoverConventions() {
       final var names = Arrays.asList(Beans.propertyNames(WithGetters.class));
       assertTrue(names.contains("id"));
@@ -658,7 +659,9 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("readProperty auto-boxes primitive getter returns (int → Integer, long → Long, boolean → Boolean)")
+    @DisplayName(
+      "readProperty auto-boxes primitive getter returns (int → Integer, long → Long, boolean →" + " Boolean)"
+    )
     void readPropertyAutoBoxesPrimitives() {
       // Pins the LambdaMetafactory instantiatedMethodType bridge: the (P -> int) MethodHandle
       // surfaces through Function<Object, Object>::apply as a boxed Integer without a per-call
@@ -692,7 +695,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("inherited getter resolves through the parent's declaring class (no cross-class lookup error)")
+    @DisplayName("inherited getter resolves through the parent's declaring class (no cross-class lookup" + " error)")
     void getterOnInheritedAccessor() {
       // ChildBean inherits getId() from ParentBean. The LMF cache must build the invoker via a
       // lookup pinned to ParentBean (the declaring class), not ChildBean — otherwise an
@@ -797,7 +800,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("settersWriter round-trips a value through an inherited setter (declared on a parent class)")
+    @DisplayName("settersWriter round-trips a value through an inherited setter (declared on a parent" + " class)")
     void settersOnInheritedSetter() {
       // ChildBean inherits setId(String) from ParentBean. The LMF builder must use the setter's
       // declaring class (ParentBean) for privateLookupIn and the instantiated receiver — using
@@ -811,7 +814,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("LambdaMetafactory invoker auto-unboxes a boxed Integer source value into a setX(int) setter")
+    @DisplayName("LambdaMetafactory invoker auto-unboxes a boxed Integer source value into a setX(int)" + " setter")
     void settersAutoUnboxesPrimitiveArg() {
       // NoArgSetters has setScore(int). The source map carries an Object value (boxed Integer);
       // the LambdaMetafactory-built BiConsumer<Object, Object> must auto-unbox to int. This pins
@@ -906,7 +909,8 @@ class BeansTest {
 
     @Test
     @DisplayName(
-      "construct propagates dispatch-time failures raw (matching the other writer strategies and pre-LMF BuilderWriter)"
+      "construct propagates dispatch-time failures raw (matching the other writer strategies and" +
+        " pre-LMF BuilderWriter)"
     )
     void builderConstructPropagatesDispatchFailures() {
       // A String value flows into a setter expecting an int — the LMF auto-unbox bridge throws
@@ -1006,14 +1010,15 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("autoWriter prefers SettersWriter over BuilderWriter when both apply (@Data @Builder shape)")
+    @DisplayName("autoWriter prefers SettersWriter over BuilderWriter when both apply (@Data @Builder" + " shape)")
     void autoPrefersSettersOverBuilder() {
       final var writer = Beans.autoWriter(DataAndBuilder.class);
       assertEquals(
         "SettersWriter",
         writer.getClass().getSimpleName(),
-        "for Lombok @Data @Builder POJOs, SETTERS is the user-expected default — the public setters " +
-          "and the builder both apply, and SETTERS wins so no explicit writeBean hint is required"
+        "for Lombok @Data @Builder POJOs, SETTERS is the user-expected default — the public" +
+          " setters and the builder both apply, and SETTERS wins so no explicit writeBean" +
+          " hint is required"
       );
       final var pojo = writer.construct(new String[] { "name", "score" }, n -> Objects.equals(n, "name") ? "y" : 42);
       assertEquals("y", pojo.getName());
@@ -1191,7 +1196,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("readProperty routes through persistentClassOf so a subclass shares the parent's cache entry")
+    @DisplayName("readProperty routes through persistentClassOf so a subclass shares the parent's cache" + " entry")
     void readPropertyUnwrapsToParentCache() {
       // Even without a real HibernateProxy, prove readProperty works on a subclass instance —
       // the cache lookup uses the runtime class (or the unwrapped persistent class). This is the
@@ -1227,7 +1232,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("getter-only / no-setter property silently no-ops (matches MapStruct's @MappingTarget contract)")
+    @DisplayName("getter-only / no-setter property silently no-ops (matches MapStruct's @MappingTarget" + " contract)")
     void getterOnlyPropertyIsSilentNoOp() {
       // Documented contract at Beans.buildSetterInvoker: a property with no setX(value) method
       // gets a no-op BiConsumer rather than throwing — Mapper.into(target, source) would
@@ -1241,7 +1246,9 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("inherited setter: writeBeanProperty routes through the parent's declaring class for privateLookupIn")
+    @DisplayName(
+      "inherited setter: writeBeanProperty routes through the parent's declaring class for" + " privateLookupIn"
+    )
     void inheritedSetterRoutesThroughDeclaringClass() {
       // ChildBean inherits setId(String) from ParentBean. The LMF invoker must resolve a Lookup
       // against ParentBean (where setId is declared) rather than ChildBean — using the child's
@@ -1268,7 +1275,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("set rebuilds the POJO with the focused property replaced; off-path values are carried through")
+    @DisplayName("set rebuilds the POJO with the focused property replaced; off-path values are carried" + " through")
     void setReplacesFocusedPropertyAndCarriesOffPath() {
       final Lens<NoArgSetters, String> nameLens = Beans.fieldLens("name");
       final var src = new NoArgSetters();
@@ -1298,7 +1305,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("modify(non-null, fn) applies fn to the current value and rebuilds the POJO with the result")
+    @DisplayName("modify(non-null, fn) applies fn to the current value and rebuilds the POJO with the" + " result")
     void modifyOnNonNullSourceAppliesFnAndRebuilds() {
       // The non-null branch of modify reads the current value through get, applies the function,
       // and delegates to set for the rebuild. Off-path properties round-trip through the writer's
@@ -1313,7 +1320,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("set on a subtype source rebuilds using the subtype's class (writer is resolved at call time)")
+    @DisplayName("set on a subtype source rebuilds using the subtype's class (writer is resolved at call" + " time)")
     void setOnSubtypeRebuildsAsSubtype() {
       // fieldLens is class-deferred: the writer is resolved against source.getClass() per call,
       // not captured at lens build time. A ChildBean carrying both inherited and own properties
@@ -1329,7 +1336,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("set(s, null) on a primitive property substitutes the JLS default via SettersWriter's null-guard")
+    @DisplayName("set(s, null) on a primitive property substitutes the JLS default via SettersWriter's" + " null-guard")
     void setNullOnPrimitiveSubstitutesJlsDefault() {
       // Documented contract on Beans.fieldLens: when the focused property is a Java primitive,
       // set(s, null) substitutes the JLS default (0 for int) rather than throwing on the
@@ -1360,7 +1367,9 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("class lacking a public no-arg ctor but exposing static builder().build() yields a built instance")
+    @DisplayName(
+      "class lacking a public no-arg ctor but exposing static builder().build() yields a built" + " instance"
+    )
     void staticBuilderChainYieldsBuiltInstance() {
       // WithBuilder's ctor is private — the no-arg attempt fails and falls through to the
       // builder() lookup. The chained LMF Supplier composes builder() with build() and produces
@@ -1389,7 +1398,7 @@ class BeansTest {
   class LensSubtypeSlowPath {
 
     @Test
-    @DisplayName("set on a subtype instance reads off-path values through readProperty and rebuilds as pojoClass")
+    @DisplayName("set on a subtype instance reads off-path values through readProperty and rebuilds as" + " pojoClass")
     void setOnSubtypeUsesSlowPathReadAndRebuildsAsCapturedClass() {
       // Lens<ParentBean, String> captures the writer + reader-map for ParentBean. When set is
       // called with a ChildBean instance, source.getClass() != pojoClass, so the fast-path
@@ -1411,7 +1420,7 @@ class BeansTest {
   class ScanGettersModuleSkip {
 
     @Test
-    @DisplayName("a POJO extending java.util.ArrayList does not surface the inherited isEmpty/size as properties")
+    @DisplayName("a POJO extending java.util.ArrayList does not surface the inherited isEmpty/size as" + " properties")
     void platformInheritedAccessorsDoNotLeakAsProperties() {
       // Defence-in-depth against any caller that touches a JDK-derived class directly. Without
       // the java.*/jdk.* skip, propertyNames would include `empty` (from isEmpty) and downstream
@@ -1426,12 +1435,14 @@ class BeansTest {
   }
 
   @Nested
-  @DisplayName("SettersWriter — primitive-variant unbox bridges for every long/double/float/byte/short/char setter")
+  @DisplayName(
+    "SettersWriter — primitive-variant unbox bridges for every long/double/float/byte/short/char" + " setter"
+  )
   class PrimitiveSetterDispatch {
 
     @Test
     @DisplayName(
-      "long/double/float/byte/short/char setters each bind an LMF unbox bridge end-to-end through SettersWriter"
+      "long/double/float/byte/short/char setters each bind an LMF unbox bridge end-to-end through" + " SettersWriter"
     )
     void sixPrimitiveVariantsRoundTripThroughSettersWriter() {
       // Each setter forces wrap() to map its primitive type to the matching wrapper class; the
@@ -1462,6 +1473,178 @@ class BeansTest {
       assertEquals((byte) 7, built.getByteVal());
       assertEquals((short) 1234, built.getShortVal());
       assertEquals('Z', built.getCharVal());
+    }
+  }
+
+  @Nested
+  @DisplayName(
+    "capturedReader — pre-bound LMF reader, invokevirtual-dispatched (holder positional-read" + " substrate)"
+  )
+  class CapturedReader {
+
+    @Test
+    @DisplayName(
+      "returns the raw cached Function directly — same instance across calls, no per-call capture" + " lambda"
+    )
+    void returnsSameCachedFunctionInstance() {
+      // capturedReader hands back the raw cached Function from GETTER_INVOKERS (unlike getter(),
+      // which wraps a fresh capturing lambda each call). Two calls for the same (class, name) must
+      // return the identical instance so a positional-read loop can bind it once at assembly time.
+      final var a = Beans.capturedReader(NoArgSetters.class, "name");
+      final var b = Beans.capturedReader(NoArgSetters.class, "name");
+      assertSame(a, b, "capturedReader must return the cached Function, not a fresh wrapper per call");
+    }
+
+    @Test
+    @DisplayName("a reader bound to the parent class reads a subtype instance correctly (invokevirtual" + " dispatch)")
+    void readerBoundToParentReadsSubtype() {
+      // The reader is bound to ParentBean's getId(), but dispatches invokevirtual — so applying it
+      // to a ChildBean instance still reads the right value even though the reader was resolved
+      // against the declared parent class. This is the documented reason capturedReader can be
+      // bound once for the declared class and sidestep the per-proxy-subclass cache bloat.
+      final var reader = Beans.capturedReader(ParentBean.class, "id");
+      final var child = new ChildBean();
+      child.setId("via-subtype");
+      assertEquals("via-subtype", reader.apply(child));
+    }
+
+    @Test
+    @DisplayName("auto-boxes a primitive getter return through the Function<Object, Object> boundary")
+    void autoBoxesPrimitiveReturn() {
+      final var reader = Beans.capturedReader(WithPrimitives.class, "age");
+      final var age = reader.apply(new WithPrimitives(21, 0L, false));
+      assertEquals(Integer.class, age.getClass());
+      assertEquals(21, age);
+    }
+
+    @Test
+    @DisplayName("unknown property throws IllegalArgumentException at bind time, naming the property and" + " class")
+    void unknownPropertyThrows() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Beans.capturedReader(NoArgSetters.class, "ghost")
+      );
+      assertTrue(ex.getMessage().contains("ghost"), ex::getMessage);
+      assertTrue(ex.getMessage().contains(NoArgSetters.class.getName()), ex::getMessage);
+    }
+  }
+
+  @Nested
+  @DisplayName(
+    "isSetterConstructible — MhIso build-time shape gate (no-arg ctor + a setter per required" + " property)"
+  )
+  class SetterConstructible {
+
+    @Test
+    @DisplayName("true when a no-arg ctor exists and every required property has a public setter")
+    void trueWhenNoArgCtorAndAllSetters() {
+      assertTrue(Beans.isSetterConstructible(NoArgSetters.class, new String[] { "name", "score" }));
+    }
+
+    @Test
+    @DisplayName("false when a required property has no public setter (getter-only field)")
+    void falseWhenRequiredPropertyHasNoSetter() {
+      // NoArgFields has a no-arg ctor and getters but no setters — a required property with no
+      // matching setX gates the whole bean out of the setter fold.
+      assertFalse(Beans.isSetterConstructible(NoArgFields.class, new String[] { "name" }));
+    }
+
+    @Test
+    @DisplayName("false when the bean has no no-arg constructor even if setters exist")
+    void falseWhenNoNoArgConstructor() {
+      // ImmutableCtor has getters but no no-arg ctor — the setter fold constructs via the no-arg
+      // ctor first, so a missing one rules the strategy out regardless of setter presence.
+      assertFalse(Beans.isSetterConstructible(ImmutableCtor.class, new String[] { "label" }));
+    }
+
+    @Test
+    @DisplayName("empty required-property set with a no-arg ctor is trivially constructible")
+    void trueForEmptyRequiredSetWithNoArgCtor() {
+      assertTrue(Beans.isSetterConstructible(NoArgSetters.class, new String[] {}));
+    }
+  }
+
+  @Nested
+  @DisplayName("BeanMhInfo raw handles — beanAccessorHandles / beanSetterHandle / beanNoArgCtorHandle" + " (unboxed)")
+  class RawBeanHandles {
+
+    @Test
+    @DisplayName("accessor handles keep the getter's unboxed primitive return type and read the right value")
+    void accessorHandlesAreUnboxed() throws Throwable {
+      final var names = Beans.propertyNames(WithPrimitives.class);
+      final var handles = Beans.beanAccessorHandles(WithPrimitives.class);
+      assertEquals(names.length, handles.length);
+      final var ageIdx = indexOf(names, "age");
+      assertEquals(int.class, handles[ageIdx].type().returnType(), "handle keeps the unboxed int return type");
+      final var pojo = new WithPrimitives(9, 5L, true);
+      assertEquals(9, (int) handles[ageIdx].invoke(pojo));
+    }
+
+    @Test
+    @DisplayName("setterHandle keeps the setter's unboxed parameter type and writes through it")
+    void setterHandleIsUnboxedAndWrites() throws Throwable {
+      final MethodHandle setter = Beans.beanSetterHandle(NoArgSetters.class, "score");
+      assertNotNull(setter, "a property with a public setX must expose a raw setter handle");
+      assertEquals(int.class, setter.type().parameterType(1), "handle keeps the unboxed int parameter type");
+      final var pojo = new NoArgSetters();
+      setter.invoke(pojo, 42);
+      assertEquals(42, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("setterHandle is null for a getter-only property (no public setX)")
+    void setterHandleNullForGetterOnly() {
+      // NoArgFields exposes getName/getScore but no setters — the raw setter handle map must not
+      // carry an entry, so MhIso's supports() probe (via isSetterConstructible) can gate the bean
+      // out.
+      assertNull(Beans.beanSetterHandle(NoArgFields.class, "name"));
+    }
+
+    @Test
+    @DisplayName("noArgCtorHandle builds a fresh instance; absent (null) when the bean has no no-arg ctor")
+    void noArgCtorHandlePresenceMatchesCtorAvailability() throws Throwable {
+      final MethodHandle ctor = Beans.beanNoArgCtorHandle(NoArgSetters.class);
+      assertNotNull(ctor);
+      assertInstanceOf(NoArgSetters.class, ctor.invoke());
+      assertNull(Beans.beanNoArgCtorHandle(ImmutableCtor.class), "no no-arg ctor → null handle");
+    }
+
+    private static int indexOf(final String[] arr, final String needle) {
+      for (var i = 0; i < arr.length; i++) if (arr[i].equals(needle)) return i;
+      throw new IllegalArgumentException("not found: " + needle);
+    }
+  }
+
+  @Nested
+  @DisplayName("ClassValue caches key by class — distinct classes never bleed getter/property state")
+  class ClassValueKeying {
+
+    @Test
+    @DisplayName("propertyNames of two distinct classes are independent (no cross-class cache bleed)")
+    void distinctClassesHaveIndependentPropertyNames() {
+      // Both classes flow through the same GETTERS ClassValue. A keying regression that returned
+      // one
+      // class's entry for the other would surface here: NoArgSetters exposes name/score,
+      // WithGetters
+      // exposes id/active/flag/URL — disjoint sets, so a bleed is unambiguous.
+      final var setters = Arrays.asList(Beans.propertyNames(NoArgSetters.class));
+      final var getters = Arrays.asList(Beans.propertyNames(WithGetters.class));
+      assertTrue(setters.contains("name") && setters.contains("score"));
+      assertFalse(setters.contains("URL"), "WithGetters' property must not leak into NoArgSetters' entry");
+      assertTrue(getters.contains("URL"));
+      assertFalse(getters.contains("score"), "NoArgSetters' property must not leak into WithGetters' entry");
+    }
+
+    @Test
+    @DisplayName("a getter and a same-named setter on different classes resolve to their own class's" + " members")
+    void capturedReaderIsPerClass() {
+      // capturedReader for the same property name on two classes must return distinct Functions
+      // reading each class's own field — a shared-key regression would return one for both.
+      final var child = new ChildBean();
+      child.setName("child-name");
+      final var parent = new ParentBean();
+      parent.setId("parent-id");
+      assertEquals("child-name", Beans.capturedReader(ChildBean.class, "name").apply(child));
+      assertEquals("parent-id", Beans.capturedReader(ParentBean.class, "id").apply(parent));
     }
   }
 }
