@@ -193,12 +193,16 @@ public final class Mapper<A, B> {
    * hop from every {@code forward}/{@code backward} call (measured ~10–15% on the flat/nested
    * runtime tiers). Same lattice value, one fewer wrapper.
    *
-   * <p>The {@code exports} warning is suppressed deliberately: {@link Iso} is qualified-exported
-   * from {@code :internal} to {@code :core} only, so JPMS prevents any downstream module from
-   * resolving — let alone calling — this overload. It stays invisible to real API consumers exactly
-   * like the {@link Function}-typed {@link #create}; this is the same "module-internal seam"
-   * category as the six-argument {@code create} above, and the only place the engine can hand its
-   * leaf Iso to {@code Mapper} without the double wrap.
+   * <p>The {@code exports} warning is suppressed deliberately, and this is the <b>first and
+   * only</b> place {@code conversion} puts an internal type ({@link Iso}) in a public signature — a
+   * deliberate, singular exception, not a pattern to copy. (The {@code Function}-typed {@code
+   * create} and {@code PatchEntry} are also "module-internal seams" but expose only exported types,
+   * so they need no suppression; do not read this as blessing {@code @SuppressWarnings("exports")}
+   * elsewhere.) It is fenced by the same JPMS containment {@code Telescope.mapped} relies on:
+   * {@link Iso} is qualified-exported from {@code :internal} to {@code :core} only, so no
+   * downstream module can resolve — let alone call — this overload; it stays invisible to real API
+   * consumers. It is the only way {@code DeepMap.resolveMapper} (a different package) can hand its
+   * leaf Iso to {@code Mapper}'s package-private constructor without the double wrap.
    */
   @SuppressWarnings("exports")
   public static <A, B> Mapper<A, B> ofIso(
