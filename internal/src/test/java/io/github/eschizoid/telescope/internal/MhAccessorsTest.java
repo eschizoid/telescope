@@ -101,6 +101,15 @@ class MhAccessorsTest {
     assertInstanceOf(Exception.class, thrown.getCause());
   }
 
+  @Test
+  @DisplayName("an Error from the accessor propagates raw, never wrapped")
+  void errorPropagatesRaw() throws Throwable {
+    final var handle = LOOKUP.unreflect(Box.class.getMethod("throwsError"));
+    final var reader = MhAccessors.function(handle);
+    final var thrown = assertThrows(AssertionError.class, () -> reader.apply(new Box(0)));
+    assertEquals("err", thrown.getMessage());
+  }
+
   /** Test fixture exposing a getter, void + fluent setters, a factory, and throwing methods. */
   public static final class Box {
 
@@ -144,6 +153,10 @@ class MhAccessorsTest {
 
     public void checkedBoom() throws Exception {
       throw new Exception("checked");
+    }
+
+    public void throwsError() {
+      throw new AssertionError("err");
     }
   }
 }
