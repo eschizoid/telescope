@@ -83,13 +83,13 @@ first green CI run is what confirms it:
 
 ## Verdict
 
-**Pending the first green CI run.** What is confirmed today: the JVM run of `NativeVerify` (`runNativeVerify`) passes all
-seven capabilities, so the harness and its assertions are sound. On the native-image side, the one requirement found so
-far is the `--initialize-at-build-time` config above — the codegen `@Bridge`/`@FromMap` constant classes need build-time
-init because the constants live in the image heap. The expectation is that the seven capabilities then build and run
-natively with no further config, but the standing verdict is the workflow's actual green native-image run, not this
-prediction. This section will be updated to a firm "works" (or to name whatever additional config the run demands) once
-`.github/workflows/native-image.yaml` has its first green run — it fires on the next push to `main` and weekly
+**Pending the first green CI run.** What is confirmed today: the JVM run of `NativeVerify` (`runNativeVerify`) passes
+all seven capabilities, so the harness and its assertions are sound. On the native-image side, the one requirement found
+so far is the `--initialize-at-build-time` config above — the codegen `@Bridge`/`@FromMap` constant classes need
+build-time init because the constants live in the image heap. The expectation is that the seven capabilities then build
+and run natively with no further config, but the standing verdict is the workflow's actual green native-image run, not
+this prediction. This section will be updated to a firm "works" (or to name whatever additional config the run demands)
+once `.github/workflows/native-image.yaml` has its first green run — it fires on the next push to `main` and weekly
 thereafter against GraalVM updates.
 
 ## Appendix — feasibility of shading `:internal` into `:core` at publish
