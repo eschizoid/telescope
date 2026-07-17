@@ -1,22 +1,26 @@
-name: Native Image Smoke Test
+name: Native Image Verification
 
-# Proves telescope's reflection-free runtime substrate (the cached LambdaMetafactory-built
-# Function / Supplier / BiConsumer readers+writers, the SerializedLambda field-name decode, and a
-# codegen @Bridge constant) survives a GraalVM native-image build under the closed-world assumption.
+# Proves telescope's runtime + codegen substrate survives a GraalVM native-image build under the
+# closed-world assumption: the cached LambdaMetafactory-built Function / Supplier / BiConsumer
+# readers+writers, the SerializedLambda field-name decode behind .field(Record::accessor), the
+# runtime record→record and record→bean mappers, the generated @FromMap converter, and the generated
+# @Bridge constant baked into the image heap.
 #
-# The :native-smoke module's main exits non-zero on any capability mismatch, so `nativeRun`
-# building AND running the binary IS the test — a red job means the substrate hit a real
-# native-image gap (missing reflection/serialization registration, an LMF call site the image
-# builder couldn't fold, or a SerializedLambda decode that closed-world analysis broke).
+# The :examples:graphql module's NativeVerify main exercises all of these over the example's own
+# domain models and exits non-zero on any capability mismatch, so `nativeRun` building AND running
+# the binary IS the test — a red job means the substrate hit a real native-image gap (a missing
+# reflection/serialization registration, an LMF call site the image builder couldn't fold, a
+# SerializedLambda decode that closed-world analysis broke, or a constant that needs build-time init).
 
 on:
-  # Native-image builds are slow (several minutes) — don't gate every PR on them. Run on demand,
-  # on pushes to main, and on a weekly cadence so a GraalVM-version regression surfaces on its own.
+  # Native-image builds are slow (several minutes) and need a GraalVM toolchain the normal CI doesn't
+  # install — so this never gates a PR. It runs on demand, on pushes to main that touch the example
+  # or the substrate modules, and weekly, so a GraalVM-version regression surfaces on its own cadence.
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - "native-smoke/**"
+      - "examples/graphql/**"
       - "core/**"
       - "internal/**"
       - "codegen/**"
@@ -28,15 +32,14 @@ permissions:
   contents: read
 
 jobs:
-  native-smoke:
+  native-verify:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      # GraalVM ships native-image. The `java-version` here drives BOTH the compile toolchain and
-      # native-image; the smoke module targets release 21 bytecode, which GraalVM 21 consumes, but
+      # GraalVM ships native-image. The example targets release 21 bytecode, which GraalVM consumes;
       # we install 25 to match the rest of the project's toolchain and keep the JDK surface uniform.
       - name: Set up GraalVM (native-image)
         uses: graalvm/setup-graalvm@v1
@@ -52,21 +55,21 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      # nativeCompile builds the binary; nativeRun builds (if needed) then executes it. Because the
-      # smoke main calls System.exit(non-zero) on any failed capability, a failing binary fails this
-      # step — no extra assertion needed. --no-daemon keeps the forked JVM settings honest.
-      - name: Build and run the native smoke test
-        run: ./gradlew :native-smoke:nativeRun --no-daemon --stacktrace
+      # nativeRun builds the binary then executes it. Because NativeVerify calls System.exit(non-zero)
+      # on any failed capability, a failing binary fails this step — no extra assertion needed.
+      - name: Build and run the native-image verifier
+        run: ./gradlew :examples:graphql:nativeRun --no-daemon --stacktrace
 
       # Keep the produced binary + native-image build reports for post-mortem when the substrate
       # needs config: the build report lists exactly which classes were registered for reflection /
-      # serialization and which were initialized at build vs run time — the real finding lives here.
+      # serialization and which were initialized at build vs run time — where the next config
+      # requirement (if any) will show up.
       - name: Upload native-image build reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: native-image-reports
           path: |
-            native-smoke/build/native/nativeCompile/
-            native-smoke/build/reports/
+            examples/graphql/build/native/nativeCompile/
+            examples/graphql/build/reports/
           retention-days: 14

@@ -7,7 +7,6 @@ include("lombok")
 include("spring-boot-starter")
 include("quarkus")
 include("benchmarks")
-include("native-smoke")
 
 include("examples:library")
 include("examples:mapstruct-vs-telescope")
