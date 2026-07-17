@@ -62,7 +62,8 @@ jobs:
 
       # Keep the produced binary + native-image build reports for post-mortem when the substrate
       # needs config: the build report lists exactly which classes were registered for reflection /
-      # serialization and which were initialized at build vs run time — the real finding lives here.
+      # serialization and which were initialized at build vs run time — where the next config
+      # requirement (if any) will show up.
       - name: Upload native-image build reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7

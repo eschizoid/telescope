@@ -58,6 +58,7 @@ graalvmNative {
     binaries {
         named("main") {
             mainClass.set("io.github.eschizoid.telescope.examples.graphql.server.NativeVerify")
+            imageName.set("telescope-native-verify")
             buildArgs.add("--no-fallback")
             buildArgs.add("-H:+ReportExceptionStackTraces")
             // The codegen @Bridge / @FromMap constants (e.g. AccountBridge.BRIDGE — a
@@ -66,6 +67,12 @@ graalvmNative {
             // back those constants (Telescope + its inner Bridge/typed-container navigators, the
             // optic lattice) and the generated model classes that hold them must be initialized at
             // build time — otherwise a heap object of a run-time-init type is a hard build error.
+            //
+            // The four entries are listed explicitly rather than collapsed to the
+            // `io.github.eschizoid.telescope` prefix on purpose: the prefix subsumes the others only
+            // if native-image treats a package arg as a recursive prefix, and until the first green
+            // CI run pins that behaviour the belt-and-suspenders list is the safe form. Keep them
+            // explicit — do not "optimize" to one line before the workflow has run green.
             buildArgs.add("--initialize-at-build-time=io.github.eschizoid.telescope.examples.graphql.model")
             buildArgs.add("--initialize-at-build-time=io.github.eschizoid.telescope")
             buildArgs.add("--initialize-at-build-time=io.github.eschizoid.telescope.internal")

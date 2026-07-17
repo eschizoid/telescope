@@ -27,17 +27,20 @@ import java.util.Map;
  *   <li><b>record field update / read</b> — {@code Telescope.of(User).field(User::x)...}: {@code
  *       SerializedLambda} decode of the method reference + the cached LMF record reader + the
  *       canonical-constructor {@code MethodHandle} rebuild.
+ *   <li><b>bean-getter read</b> — {@code Telescope.ofBean(AccountEntity).field(getter).read(e)}:
+ *       the cached LMF getter {@code Function} dispatch, exercised on its own so a getter-LMF
+ *       regression surfaces as its own line rather than hiding inside the bean mapper's write path.
  *   <li><b>runtime record→record mapper</b> — {@code Telescope.mapper(User, UserView).forward(u)}:
  *       LMF readers on the source, canonical-constructor rebuild on the target, carrying the nested
- *       {@link Address} record and the {@link Role} enum through by identity.
+ *       {@link Address} record through unchanged and the {@link Role} enum through by identity.
  *   <li><b>runtime record→bean mapper</b> — {@code Telescope.mapper(Account, AccountEntity)}: the
  *       Beans LMF no-arg-constructor {@code Supplier} + LMF setter {@code BiConsumer} write path.
- *   <li><b>generated {@code @FromMap}</b> — {@code UserFromMap.fromMap(map)}: reflection-free
- *       codegen; the control that should always native-image (proven by this example historically).
+ *   <li><b>generated {@code @FromMap}</b> — {@code UserFromMap.fromMap(map)}: the reflection-free
+ *       codegen control — no LMF, no {@code SerializedLambda}, just typed method calls.
  *   <li><b>generated {@code @Bridge}</b> — {@code AccountBridge.BRIDGE.read(a)}: the codegen bridge
- *       constant, a {@code Telescope<Account, AccountEntity>} baked into the image heap. This is
- *       the path that first exposed the {@code --initialize-at-build-time} requirement for the
- *       {@code Telescope} constant classes.
+ *       constant, a {@code Telescope<Account, AccountEntity>} that lands in the build-time image
+ *       heap — which is why the telescope and generated-model classes take {@code
+ *       --initialize-at-build-time} (see {@code build.gradle.kts}).
  * </ul>
  *
  * <p>A JVM run only validates the harness; a green native-image run is the real verdict, and {@link
@@ -53,6 +56,9 @@ public final class NativeVerify {
       guard("record field update (SerializedLambda + LMF reader + ctor MH)", NativeVerify::recordFieldUpdate)
     );
     results.add(guard("record read path (.field(...).read())", NativeVerify::recordReadPath));
+    results.add(
+      guard("bean getter read (ofBean.field(getter).read(), LMF getter Function)", NativeVerify::beanReadPath)
+    );
     results.add(
       guard("runtime record → record mapper (LMF readers + ctor rebuild, nested + enum)", NativeVerify::recordMapper)
     );
@@ -110,7 +116,17 @@ public final class NativeVerify {
     expect("London".equals(city) && age == 36, "record read path mismatch: city=" + city + " age=" + age);
   }
 
-  // (c) runtime record → record deep mapper: same-name inference over nested record + enum.
+  // (c) LMF bean-getter read — ofBean(...).field(getter).read() dispatches the cached LMF getter
+  // Function. Read counterpart to the bean write path in (e); exercised on its own so a
+  // getter-LMF regression surfaces as its own line rather than hiding inside the bean mapper.
+  private static void beanReadPath() {
+    final var entity = new AccountEntity();
+    entity.setUsername("grace");
+    final String username = Telescope.ofBean(AccountEntity.class).field(AccountEntity::getUsername).read(entity);
+    expect("grace".equals(username), "bean getter read mismatch: " + username);
+  }
+
+  // (d) runtime record → record deep mapper: same-name inference over nested record + enum.
   private static void recordMapper() {
     final Mapper<User, UserView> mapper = Telescope.mapper(User.class, UserView.class);
     final var view = mapper.forward(sampleUser());
@@ -123,7 +139,7 @@ public final class NativeVerify {
     );
   }
 
-  // (d) runtime record → bean deep mapper: Beans LMF no-arg ctor Supplier + setter BiConsumer.
+  // (e) runtime record → bean deep mapper: Beans LMF no-arg ctor Supplier + setter BiConsumer.
   private static void beanMapper() {
     final Mapper<Account, AccountEntity> mapper = Telescope.mapper(Account.class, AccountEntity.class);
     final var entity = mapper.forward(new Account("ada", "ada@example.com"));
@@ -133,7 +149,7 @@ public final class NativeVerify {
     );
   }
 
-  // (e) generated @FromMap converter — reflection-free codegen control; also exercises enum +
+  // (f) generated @FromMap converter — reflection-free codegen control; also exercises enum +
   // nested.
   private static void fromMap() {
     final Map<String, Object> address = new HashMap<>();
@@ -155,7 +171,7 @@ public final class NativeVerify {
     );
   }
 
-  // (f) generated @Bridge constant — pure typed method calls, baked into the image heap.
+  // (g) generated @Bridge constant — pure typed method calls, baked into the image heap.
   private static void bridgeConstant() {
     final var entity = AccountBridge.BRIDGE.read(new Account("grace", "grace@example.com"));
     expect(

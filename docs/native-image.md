@@ -23,9 +23,10 @@ any failure — so `native-image` compiling and running the binary **is** the te
 | -------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | Record field update              | `SerializedLambda` method-reference decode + LMF record reader + cached canonical-ctor `MethodHandle` |
 | Record read (`.read()`)          | pure LMF-dispatched record component read (the `Records.read` path through the public surface)        |
+| Bean read (`.read()`)            | LMF-dispatched bean getter `Function` (`ofBean(...).field(getter).read()`, the `Beans` read path)     |
 | Runtime record → record `mapper` | LMF record readers on the source, canonical-constructor rebuild, carrying a nested record + enum      |
 | Runtime record → bean `mapper`   | LMF getter readers + no-arg-ctor `Supplier` + LMF setter `BiConsumer` writers (the `Beans` path)      |
-| Generated `@FromMap`             | reflection-free codegen `Map → record` converter — the control that always native-images              |
+| Generated `@FromMap`             | reflection-free codegen `Map → record` converter — the control (no LMF, no `SerializedLambda`)        |
 | Generated `@Bridge` constant     | the emitted `AccountBridge.BRIDGE` (`Telescope<Account, AccountEntity>`) baked into the image heap    |
 
 `Records` / `Beans` live in `:internal`, JPMS-sealed to `:core`, so the verifier cannot call them directly. It reaches
@@ -43,7 +44,7 @@ CI wiring: `.github/workflows/native-image.yaml` installs GraalVM via `graalvm/s
 `main` that touch the example or the substrate modules, and weekly (to catch a GraalVM-version regression on its own
 cadence). Native builds are minutes-long, so it deliberately does **not** gate every PR.
 
-## GraalVM config the substrate required
+## GraalVM config the substrate needs
 
 Two build args, both in `examples/graphql/build.gradle.kts`:
 
@@ -51,8 +52,8 @@ Two build args, both in `examples/graphql/build.gradle.kts`:
   a slow "native" binary that is really the JVM.
 - **`--initialize-at-build-time=...`** for the telescope classes (`io.github.eschizoid.telescope`,
   `...telescope.internal`, `...telescope.internal.optics`) and the generated model package
-  (`...examples.graphql.model`). **This is the real finding.** The first native-image run failed on the `@Bridge`
-  capability:
+  (`...examples.graphql.model`). **This is the load-bearing arg.** Without it a native-image build of the `@Bridge`
+  capability fails — the earlier native-image build of this exact mechanic surfaced:
 
   ```
   UnsupportedFeatureException: An object of type 'io.github.eschizoid.telescope.Telescope$BridgeTelescope'
@@ -65,27 +66,31 @@ Two build args, both in `examples/graphql/build.gradle.kts`:
   bakes the constant safely. These classes are stateless optic wrappers over `MethodHandle`/`Function` fields — no
   per-instance mutable or environment-dependent state — so build-time init is safe.
 
-On the other mechanics, no `reflect-config.json` / `serialization-config.json` was needed:
+On the other mechanics, the expectation is that no `reflect-config.json` / `serialization-config.json` is needed — the
+first green CI run is what confirms it:
 
 - **LMF / `invokedynamic`.** Telescope builds its readers/writers by calling `LambdaMetafactory.metafactory(...)`
   **explicitly at runtime** over `MethodHandle`s to accessors/constructors the verifier reaches through concrete,
   statically-reachable types. native-image folds those synthetic `Function`/`Supplier`/`BiConsumer` classes when the
   target member is reachable — no `Method.invoke`, so no reflection registration is implied.
 - **`SerializedLambda`.** `.field(User::name)` decodes a `Serializable` method reference. The record-field-update and
-  read capabilities exercise this; the first run did not require a `serialization-config.json` entry for them (they
-  passed once the build-time-init above let the build complete). If a future GraalVM regresses this, the failing
-  capability line + the uploaded build report will name the registration.
+  read capabilities exercise this; the decode targets concrete, statically-reachable accessors, so no
+  `serialization-config.json` entry is expected. If a native-image run regresses this, the failing capability line + the
+  uploaded build report will name the registration.
 - **`privateLookupIn`.** All records/beans here are public on the classpath, so `MethodHandles.privateLookupIn` succeeds
   without an `opens` directive. A downstream consumer with JPMS-closed packages still needs
   `opens ... to io.github.eschizoid.telescope;` — a module-descriptor requirement, not a native-image one.
 
 ## Verdict
 
-**Native-image works, with the `--initialize-at-build-time` config above.** The first CI run surfaced the one real
-requirement — the codegen `@Bridge`/`@FromMap` constant classes need build-time init because the constants live in the
-image heap — and with that config the six capabilities build and run natively. The JVM run of the identical `main`
-passes all six, confirming the harness; the workflow's green native-image run is the standing verdict, re-checked weekly
-against GraalVM updates. Update this section if a future run demands additional config.
+**Pending the first green CI run.** What is confirmed today: the JVM run of `NativeVerify` (`runNativeVerify`) passes all
+seven capabilities, so the harness and its assertions are sound. On the native-image side, the one requirement found so
+far is the `--initialize-at-build-time` config above — the codegen `@Bridge`/`@FromMap` constant classes need build-time
+init because the constants live in the image heap. The expectation is that the seven capabilities then build and run
+natively with no further config, but the standing verdict is the workflow's actual green native-image run, not this
+prediction. This section will be updated to a firm "works" (or to name whatever additional config the run demands) once
+`.github/workflows/native-image.yaml` has its first green run — it fires on the next push to `main` and weekly
+thereafter against GraalVM updates.
 
 ## Appendix — feasibility of shading `:internal` into `:core` at publish
 
