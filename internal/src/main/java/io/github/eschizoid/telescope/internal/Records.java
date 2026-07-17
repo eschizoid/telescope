@@ -380,11 +380,12 @@ public final class Records {
     }
 
     /**
-     * Build one {@link Function} per component via {@link LambdaMetafactory}. Forward: the
-     * metafactory synthesizes a class implementing {@link Function} whose {@code apply(Object)}
-     * directly calls the component accessor and auto-boxes any primitive return. After the first
-     * call per class the dispatch is a single virtual call the JIT inlines — no {@link
-     * java.lang.reflect.Method#invoke}, no per-call argument array, no access-check.
+     * Build one {@link Function} per component, each a direct accessor call with no {@link
+     * java.lang.reflect.Method#invoke}, per-call argument array, or access-check. On a stock JVM
+     * each reader is a {@link LambdaMetafactory}-synthesized class (see {@link #lmfReader}); inside
+     * a native image, where runtime class definition is banned, each is instead a {@link
+     * MethodHandle} closure (see {@link #mhReader}). Both dispatch as a single virtual call the JIT
+     * inlines.
      */
     @SuppressWarnings("unchecked")
     private static Function<Object, Object>[] buildReaders(
@@ -397,26 +398,56 @@ public final class Records {
         final var comp = comps[i];
         try {
           final var handle = lookup.unreflect(comp.getAccessor());
-          // SAM signature is `Object apply(Object)`; the instantiatedMethodType pins the actual
-          // (recordClass) -> componentType signature so the metafactory generates the right
-          // bridge — including auto-boxing for primitive returns (`int`, `long`, etc).
-          final var callSite = LambdaMetafactory.metafactory(
-            lookup,
-            "apply",
-            MethodType.methodType(Function.class),
-            MethodType.methodType(Object.class, Object.class),
-            handle,
-            MethodType.methodType(comp.getType(), cls)
-          );
-          readers[i] = (Function<Object, Object>) callSite.getTarget().invoke();
+          readers[i] = NativeImage.IN_IMAGE ? mhReader(handle) : lmfReader(handle, cls, comp, lookup);
         } catch (final Throwable t) {
-          throw new IllegalStateException(
-            "Failed to build LambdaMetafactory reader for " + cls.getName() + "." + comp.getName(),
-            t
-          );
+          throw new IllegalStateException("Failed to build reader for " + cls.getName() + "." + comp.getName(), t);
         }
       }
       return readers;
+    }
+
+    /**
+     * JVM hot path: {@link LambdaMetafactory} synthesizes a {@link Function} whose {@code
+     * apply(Object)} directly calls the accessor and auto-boxes any primitive return. The
+     * instantiatedMethodType pins the actual {@code (recordClass) -> componentType} signature so
+     * the metafactory generates the right boxing bridge.
+     */
+    @SuppressWarnings("unchecked")
+    private static Function<Object, Object> lmfReader(
+      final MethodHandle handle,
+      final Class<?> cls,
+      final RecordComponent comp,
+      final MethodHandles.Lookup lookup
+    ) throws Throwable {
+      final var callSite = LambdaMetafactory.metafactory(
+        lookup,
+        "apply",
+        MethodType.methodType(Function.class),
+        MethodType.methodType(Object.class, Object.class),
+        handle,
+        MethodType.methodType(comp.getType(), cls)
+      );
+      return (Function<Object, Object>) callSite.getTarget().invoke();
+    }
+
+    /**
+     * Native-image path: a source-level lambda closing over an {@link
+     * MethodHandle#asType(MethodType) asType}-adapted accessor handle. {@code asType} relaxes the
+     * receiver to {@code Object} and boxes a primitive return, so {@link MethodHandle#invokeExact
+     * invokeExact} dispatches from a generic context. No class is synthesized at run time — the
+     * lambda class is compile-time — so this survives native-image's ban on runtime class
+     * definition, unlike {@link #lmfReader}. The accessor must be registered for reflection (the
+     * {@code telescope-graalvm} Feature, or a hand-written reachability metadata file, does that).
+     */
+    private static Function<Object, Object> mhReader(final MethodHandle handle) {
+      final var adapted = handle.asType(MethodType.methodType(Object.class, Object.class));
+      return obj -> {
+        try {
+          return (Object) adapted.invokeExact(obj);
+        } catch (final Throwable t) {
+          throw new IllegalStateException("Failed to read record component", t);
+        }
+      };
     }
 
     /**

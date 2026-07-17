@@ -252,6 +252,17 @@ public final class Beans {
   ) {
     try {
       final var handle = lookup.unreflectConstructor(ctor);
+      if (NativeImage.IN_IMAGE) {
+        // Native-image path: a MethodHandle closure, no runtime class synthesis — see NativeImage.
+        final var adapted = handle.asType(MethodType.methodType(Object.class));
+        return () -> {
+          try {
+            return (Object) adapted.invokeExact();
+          } catch (final Throwable t) {
+            throw new RuntimeException("Failed to instantiate " + cls.getName(), t);
+          }
+        };
+      }
       final var callSite = LambdaMetafactory.metafactory(
         lookup,
         "get",
@@ -473,6 +484,19 @@ public final class Beans {
     final var instantiatedParamType = wrap(paramType);
     try {
       final var handle = lookup.unreflect(setter);
+      if (NativeImage.IN_IMAGE) {
+        // Native-image path: a MethodHandle closure, no runtime class synthesis — see NativeImage.
+        // asType relaxes the receiver to Object and unboxes a primitive param from the boxed value,
+        // matching the auto-unbox the LMF instantiatedMethodType installs below.
+        final var adapted = handle.asType(MethodType.methodType(void.class, Object.class, Object.class));
+        return (pojo, value) -> {
+          try {
+            adapted.invokeExact(pojo, value);
+          } catch (final Throwable t) {
+            throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
+          }
+        };
+      }
       final var callSite = LambdaMetafactory.metafactory(
         lookup,
         "accept",
