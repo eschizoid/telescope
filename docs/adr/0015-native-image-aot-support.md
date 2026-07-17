@@ -18,10 +18,10 @@ under a real GraalVM `native-image` build. The first two CI native builds establ
   for a lambda unless its capturing class is registered for serialization, so the decode throws and the navigation path
   reports `Expected a method reference`.
 
-  **Wall B — runtime `LambdaMetafactory` (the load-bearing one).** `Records` (line ~403) and `Beans` (lines ~206/224)
-  build one `Function` / `Supplier` / `BiConsumer` accessor per member by calling `LambdaMetafactory.metafactory(...)`
-  **at run time**, which defines a fresh hidden class per accessor. native-image's closed world forbids runtime class
-  definition outright
+  **Wall B — runtime `LambdaMetafactory` (the load-bearing one).** `Records.buildReaders` and the `Beans` no-arg-ctor /
+  setter / getter builders construct one `Function` / `Supplier` / `BiConsumer` accessor per member by calling
+  `LambdaMetafactory.metafactory(...)` **at run time**, which defines a fresh hidden class per accessor. native-image's
+  closed world forbids runtime class definition outright
   (`Classes cannot be defined at runtime by default when using ahead-of-time Native Image compilation`). No metadata
   file can lift this — it is a code-shape problem, not a registration gap.
 
@@ -70,11 +70,20 @@ Function<Object, Object> reader = IN_IMAGE
   : lmfFunction(handle); // LambdaMetafactory — the JVM hot path (ADR-0005), unchanged
 ```
 
-`mhInvokeClosure` is a source-level lambda closing over the resolved `MethodHandle`; native-image supports it because
-the lambda class is compile-time and the `MethodHandle` targets a member the app's reflection metadata has registered.
-This keeps `:internal` dependency-free — the detection is a JDK system property, not
-`org.graalvm.nativeimage.ImageInfo`. The sites that shipped are `Records.buildReaders` and `Beans.buildCtorSupplier` /
-`buildSetterInvoker` / `buildGetterInvokers`; `Records.buildCtorFn` was already `MethodHandle`-based.
+The MethodHandle closures are centralized in `internal/MhAccessors` — one `supplier` / `function` / `biConsumer` /
+`biFunction` builder, each closing over an `asType`-adapted handle, so every branched site shares one proven
+implementation per SAM shape. Each is a source-level lambda; native-image supports it because the lambda class is
+compile-time and the `MethodHandle` targets a member the app's reflection metadata has registered. This keeps
+`:internal` dependency-free — the detection is a JDK system property, not `org.graalvm.nativeimage.ImageInfo`.
+
+The branched sites cover every runtime rebuild strategy: `Records.buildReaders` (record reads); the `Beans` no-arg-ctor
+`Supplier`, the top-level and `SettersWriter` setters, and the getter invokers (the `SETTERS` / `FIELDS` strategies);
+and the `BuilderWriter` strategy end to end — `builder()` factory, fluent / void setters, `build()`, and the
+`builderDefaultSupplier` intermediate. `MetadataHolderProbe`'s `construct(Function)` binder is branched too, and
+`Records.buildCtorFn` was already `MethodHandle`-based. The one deliberate exception is the Hibernate-proxy accessor
+pair (`buildHibernateLazyInitializerFn` / `buildHibernatePersistentClassFn`): guarded by a Hibernate-on-classpath check,
+unreachable in the verifier, and not convertible-with-proof there — documented as JVM/codegen-only under AOT rather than
+shipped unverified.
 
 Rejected alternative for Wall B — **GraalVM `@Substitute` in a separate module.** Keeping `:internal` pristine and
 substituting `Records`/`Beans` was considered and rejected: substitutions are brittle (bound to internal method
@@ -144,13 +153,15 @@ registration at all.
 
 ## Build increments (what shipped)
 
-1. **Wall B substrate branch** in `:internal` — `Records.buildReaders` + `Beans.buildCtorSupplier` /
-   `buildSetterInvoker` / `buildGetterInvokers` dispatch to a `MethodHandle` closure under `NativeImage.IN_IMAGE`
-   (`Records.buildCtorFn` was already MH-based). Cleared the runtime-LMF wall for readers, getters, setters, and the
-   no-arg constructor; the record canonical-constructor path was already AOT-safe.
+1. **Wall B substrate branch** in `:internal` — every runtime rebuild strategy dispatches to an `MhAccessors` closure
+   under `NativeImage.IN_IMAGE`: `Records.buildReaders`; the `Beans` no-arg-ctor `Supplier`, top-level + `SettersWriter`
+   setters, and getter invokers; the whole `BuilderWriter` strategy (`builder()` / fluent + void setters / `build()` /
+   `builderDefaultSupplier`); and `MetadataHolderProbe.construct(Function)`. `Records.buildCtorFn` was already MH-based.
+   The Hibernate-proxy accessors are the one documented JVM/codegen-only exception.
 2. **Metadata** — telescope-core's `native-image.properties` (build-time init for the telescope packages), plus the
-   example's own `reflect-config.json` (DTO reflection) and `serialization-config.json` (lambda-capturing registration
-   for Wall A).
+   example's own `reflect-config.json` (DTO reflection, including the builder-only bean + its `Builder`) and
+   `serialization-config.json` (lambda-capturing registration for Wall A).
 
-All seven verifier capabilities pass under native-image; the `telescope-graalvm` module planned as a third increment was
-dropped as unnecessary (amendment above).
+All eight verifier capabilities — including the runtime record→builder-bean mapper, which exercises the `BuilderWriter`
+path no other capability reaches — pass under native-image. The `telescope-graalvm` module planned as a third increment
+was dropped as unnecessary (amendment above).

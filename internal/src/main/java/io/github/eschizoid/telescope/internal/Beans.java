@@ -185,7 +185,7 @@ public final class Beans {
     try {
       final var builderMethod = type.getMethod("builder");
       if (Modifier.isStatic(builderMethod.getModifiers()) && Modifier.isPublic(builderMethod.getModifiers())) {
-        return buildBuilderBuildSupplier(type, builderMethod);
+        return builderDefaultSupplier(type, builderMethod);
       }
     } catch (final NoSuchMethodException ignored) {
       // No static builder() — fall through to the null supplier.
@@ -194,7 +194,7 @@ public final class Beans {
   }
 
   @SuppressWarnings("unchecked")
-  private static Supplier<Object> buildBuilderBuildSupplier(final Class<?> type, final Method builderMethod) {
+  private static Supplier<Object> builderDefaultSupplier(final Class<?> type, final Method builderMethod) {
     try {
       // privateLookupIn lets the lookup cross JPMS module + package boundaries to reach the
       // user's builder method. The user's package must be `opens io.github.eschizoid.telescope`
@@ -203,15 +203,6 @@ public final class Beans {
       final var lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
       final var builderHandle = lookup.unreflect(builderMethod);
       final var builderReturnType = builderMethod.getReturnType();
-      final var builderCallSite = LambdaMetafactory.metafactory(
-        lookup,
-        "get",
-        MethodType.methodType(Supplier.class),
-        MethodType.methodType(Object.class),
-        builderHandle,
-        MethodType.methodType(builderReturnType)
-      );
-      final var builderFn = (Supplier<Object>) builderCallSite.getTarget().invoke();
       final var buildMethod = builderReturnType.getMethod("build");
       // The Builder class itself usually lives in the same package as `type`, but for nested
       // builders (Builder is an inner class of the enclosing type) the same lookup already
@@ -221,6 +212,22 @@ public final class Beans {
       final var buildLookup =
         builderReturnType == type ? lookup : MethodHandles.privateLookupIn(builderReturnType, MethodHandles.lookup());
       final var buildHandle = buildLookup.unreflect(buildMethod);
+      // Native-image: MethodHandle closures for both halves (no runtime class synthesis, see
+      // MhAccessors); stock JVM: the LambdaMetafactory bridges.
+      if (NativeImage.IN_IMAGE) {
+        final var mhBuilderFn = MhAccessors.supplier(builderHandle);
+        final var mhBuildFn = MhAccessors.function(buildHandle);
+        return () -> mhBuildFn.apply(mhBuilderFn.get());
+      }
+      final var builderCallSite = LambdaMetafactory.metafactory(
+        lookup,
+        "get",
+        MethodType.methodType(Supplier.class),
+        MethodType.methodType(Object.class),
+        builderHandle,
+        MethodType.methodType(builderReturnType)
+      );
+      final var builderFn = (Supplier<Object>) builderCallSite.getTarget().invoke();
       final var buildCallSite = LambdaMetafactory.metafactory(
         buildLookup,
         "apply",
@@ -252,17 +259,8 @@ public final class Beans {
   ) {
     try {
       final var handle = lookup.unreflectConstructor(ctor);
-      if (NativeImage.IN_IMAGE) {
-        // Native-image path: a MethodHandle closure, no runtime class synthesis — see NativeImage.
-        final var adapted = handle.asType(MethodType.methodType(Object.class));
-        return () -> {
-          try {
-            return (Object) adapted.invokeExact();
-          } catch (final Throwable t) {
-            throw new RuntimeException("Failed to instantiate " + cls.getName(), t);
-          }
-        };
-      }
+      // Native-image path: a MethodHandle closure, no runtime class synthesis — see MhAccessors.
+      if (NativeImage.IN_IMAGE) return MhAccessors.supplier(handle);
       final var callSite = LambdaMetafactory.metafactory(
         lookup,
         "get",
@@ -484,19 +482,10 @@ public final class Beans {
     final var instantiatedParamType = wrap(paramType);
     try {
       final var handle = lookup.unreflect(setter);
-      if (NativeImage.IN_IMAGE) {
-        // Native-image path: a MethodHandle closure, no runtime class synthesis — see NativeImage.
-        // asType relaxes the receiver to Object and unboxes a primitive param from the boxed value,
-        // matching the auto-unbox the LMF instantiatedMethodType installs below.
-        final var adapted = handle.asType(MethodType.methodType(void.class, Object.class, Object.class));
-        return (pojo, value) -> {
-          try {
-            adapted.invokeExact(pojo, value);
-          } catch (final Throwable t) {
-            throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
-          }
-        };
-      }
+      // Native-image path: a MethodHandle closure, no runtime class synthesis — see MhAccessors.
+      // asType relaxes the receiver to Object and unboxes a primitive param from the boxed value,
+      // matching the auto-unbox the LMF instantiatedMethodType installs below.
+      if (NativeImage.IN_IMAGE) return MhAccessors.biConsumer(handle);
       final var callSite = LambdaMetafactory.metafactory(
         lookup,
         "accept",
@@ -542,7 +531,7 @@ public final class Beans {
    * primitive return, with no {@link Method#invoke}, per-call argument array, or access-check. On a
    * stock JVM each is a {@link LambdaMetafactory}-synthesized class ({@link #lmfGetter}); inside a
    * native image, where runtime class definition is banned, each is a {@link MethodHandle} closure
-   * ({@link #mhGetter}). Both dispatch as a single virtual call the JIT inlines.
+   * ({@link MhAccessors#function}). Both dispatch as a single virtual call the JIT inlines.
    *
    * <p>JPMS access has the same rules as {@link AccessibleObject#setAccessible(boolean)}: if the
    * bean's package is not {@code opens}-exposed to {@code io.github.eschizoid.telescope}, the
@@ -571,7 +560,7 @@ public final class Beans {
         final var handle = lookup.unreflect(method);
         invokers.put(
           name,
-          NativeImage.IN_IMAGE ? mhGetter(handle, cls, name) : lmfGetter(handle, method, declaringClass, lookup)
+          NativeImage.IN_IMAGE ? MhAccessors.function(handle) : lmfGetter(handle, method, declaringClass, lookup)
         );
       } catch (final Throwable t) {
         throw new IllegalStateException("Failed to build getter invoker for " + cls.getName() + "." + name, t);
@@ -602,23 +591,6 @@ public final class Beans {
       MethodType.methodType(method.getReturnType(), declaringClass)
     );
     return (Function<Object, Object>) callSite.getTarget().invoke();
-  }
-
-  /**
-   * Native-image path: a source-level lambda closing over an {@link MethodHandle#asType(MethodType)
-   * asType}-adapted getter handle — no class synthesized at run time, so it survives native-image's
-   * ban on runtime class definition (see {@link NativeImage}). The getter must be registered for
-   * reflection.
-   */
-  private static Function<Object, Object> mhGetter(final MethodHandle handle, final Class<?> cls, final String name) {
-    final var adapted = handle.asType(MethodType.methodType(Object.class, Object.class));
-    return obj -> {
-      try {
-        return (Object) adapted.invokeExact(obj);
-      } catch (final Throwable t) {
-        throw new IllegalStateException("Failed to read '" + name + "' on " + cls.getName(), t);
-      }
-    };
   }
 
   /**
@@ -1500,7 +1472,14 @@ public final class Beans {
       final var samParamType = paramType.isPrimitive() ? wrap(paramType) : paramType;
       try {
         final var handle = lookup.unreflect(setter);
-        if (setter.getReturnType() == void.class) {
+        final var voidSetter = setter.getReturnType() == void.class;
+        if (NativeImage.IN_IMAGE) {
+          // Native-image: MethodHandle closures, no runtime class synthesis (see MhAccessors). A
+          // void setter binds as BiConsumer; a fluent setter as BiFunction (the returned builder is
+          // discarded at the call site).
+          return voidSetter ? MhAccessors.biConsumer(handle) : MhAccessors.biFunction(handle);
+        }
+        if (voidSetter) {
           // Void-returning setter (classic JavaBean style): bind directly as BiConsumer.
           final var callSite = LambdaMetafactory.metafactory(
             lookup,
@@ -1542,6 +1521,7 @@ public final class Beans {
       final var lookup = privateLookupOrThrow(factory.getDeclaringClass(), cls, "builder factory");
       try {
         final var handle = lookup.unreflect(factory);
+        if (NativeImage.IN_IMAGE) return MhAccessors.supplier(handle);
         final var callSite = LambdaMetafactory.metafactory(
           lookup,
           "get",
@@ -1572,6 +1552,7 @@ public final class Beans {
       final var lookup = privateLookupOrThrow(declaringClass, builderType, "builder build()");
       try {
         final var handle = lookup.unreflect(buildMethod);
+        if (NativeImage.IN_IMAGE) return MhAccessors.function(handle);
         // Pin the `instantiatedMethodType` return to the build method's actual return type, not
         // `cls`. A covariant `build()` (e.g. on a generic builder hierarchy) returns a subtype of
         // `cls`, and LMF will refuse the binding ("incorrect return type") if we pin to `cls`.
@@ -1693,30 +1674,36 @@ public final class Beans {
       final var instantiatedParamType = wrap(paramType);
       try {
         final var handle = lookup.unreflect(setter);
-        final var callSite = LambdaMetafactory.metafactory(
-          lookup,
-          "accept",
-          MethodType.methodType(BiConsumer.class),
-          MethodType.methodType(void.class, Object.class, Object.class),
-          handle,
-          MethodType.methodType(void.class, declaringClass, instantiatedParamType)
-        );
-        final var lmfSetter = (BiConsumer<Object, Object>) callSite.getTarget().invoke();
-        // Defence-in-depth on the primitive-setter null guard. The LMF-built setter for a
-        // primitive parameter (e.g. setCount(int)) NPEs when invoked with null
-        // (Object → Integer → int unbox). DeepMap's placeholderIsoFor short-circuits unmatched
-        // primitive target fields to their JLS default before the value ever reaches here, so
-        // this guard is unreachable on the happy path — it's kept to lock the contract against
-        // future code paths that may legitimately deliver null to a primitive setter (e.g.
-        // autoboxing-relaxation work). When the parameter type is a primitive, skip on null so
-        // the field stays at its JLS default rather than crashing the construct call.
+        final BiConsumer<Object, Object> baseSetter;
+        if (NativeImage.IN_IMAGE) {
+          // Native-image: a MethodHandle closure, no runtime class synthesis (see MhAccessors).
+          baseSetter = MhAccessors.biConsumer(handle);
+        } else {
+          final var callSite = LambdaMetafactory.metafactory(
+            lookup,
+            "accept",
+            MethodType.methodType(BiConsumer.class),
+            MethodType.methodType(void.class, Object.class, Object.class),
+            handle,
+            MethodType.methodType(void.class, declaringClass, instantiatedParamType)
+          );
+          baseSetter = (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+        }
+        // Defence-in-depth on the primitive-setter null guard. The built setter for a primitive
+        // parameter (e.g. setCount(int)) NPEs when invoked with null (Object → Integer → int
+        // unbox) — on either the LMF or the native-image MethodHandle path. DeepMap's
+        // placeholderIsoFor short-circuits unmatched primitive target fields to their JLS default
+        // before the value ever reaches here, so this guard is unreachable on the happy path — it's
+        // kept to lock the contract against future code paths that may legitimately deliver null to
+        // a primitive setter (e.g. autoboxing-relaxation work). When the parameter type is a
+        // primitive, skip on null so the field stays at its JLS default rather than crashing.
         if (paramType.isPrimitive()) {
           return (pojo, value) -> {
             if (value == null) return;
-            lmfSetter.accept(pojo, value);
+            baseSetter.accept(pojo, value);
           };
         }
-        return lmfSetter;
+        return baseSetter;
       } catch (final Throwable t) {
         throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
       }

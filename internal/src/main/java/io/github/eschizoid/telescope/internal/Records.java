@@ -384,8 +384,8 @@ public final class Records {
      * java.lang.reflect.Method#invoke}, per-call argument array, or access-check. On a stock JVM
      * each reader is a {@link LambdaMetafactory}-synthesized class (see {@link #lmfReader}); inside
      * a native image, where runtime class definition is banned, each is instead a {@link
-     * MethodHandle} closure (see {@link #mhReader}). Both dispatch as a single virtual call the JIT
-     * inlines.
+     * MethodHandle} closure ({@link MhAccessors#function}). Both dispatch as a single virtual call
+     * the JIT inlines.
      */
     @SuppressWarnings("unchecked")
     private static Function<Object, Object>[] buildReaders(
@@ -398,7 +398,7 @@ public final class Records {
         final var comp = comps[i];
         try {
           final var handle = lookup.unreflect(comp.getAccessor());
-          readers[i] = NativeImage.IN_IMAGE ? mhReader(handle) : lmfReader(handle, cls, comp, lookup);
+          readers[i] = NativeImage.IN_IMAGE ? MhAccessors.function(handle) : lmfReader(handle, cls, comp, lookup);
         } catch (final Throwable t) {
           throw new IllegalStateException("Failed to build reader for " + cls.getName() + "." + comp.getName(), t);
         }
@@ -428,26 +428,6 @@ public final class Records {
         MethodType.methodType(comp.getType(), cls)
       );
       return (Function<Object, Object>) callSite.getTarget().invoke();
-    }
-
-    /**
-     * Native-image path: a source-level lambda closing over an {@link
-     * MethodHandle#asType(MethodType) asType}-adapted accessor handle. {@code asType} relaxes the
-     * receiver to {@code Object} and boxes a primitive return, so {@link MethodHandle#invokeExact
-     * invokeExact} dispatches from a generic context. No class is synthesized at run time — the
-     * lambda class is compile-time — so this survives native-image's ban on runtime class
-     * definition, unlike {@link #lmfReader}. The accessor must be registered for reflection (the
-     * {@code telescope-graalvm} Feature, or a hand-written reachability metadata file, does that).
-     */
-    private static Function<Object, Object> mhReader(final MethodHandle handle) {
-      final var adapted = handle.asType(MethodType.methodType(Object.class, Object.class));
-      return obj -> {
-        try {
-          return (Object) adapted.invokeExact(obj);
-        } catch (final Throwable t) {
-          throw new IllegalStateException("Failed to read record component", t);
-        }
-      };
     }
 
     /**

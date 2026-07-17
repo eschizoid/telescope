@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.examples.graphql.model.Account;
 import io.github.eschizoid.telescope.examples.graphql.model.AccountBridge;
+import io.github.eschizoid.telescope.examples.graphql.model.AccountBuilderBean;
 import io.github.eschizoid.telescope.examples.graphql.model.AccountEntity;
 import io.github.eschizoid.telescope.examples.graphql.model.Address;
 import io.github.eschizoid.telescope.examples.graphql.model.Role;
@@ -35,6 +36,10 @@ import java.util.Map;
  *       {@link Address} record through unchanged and the {@link Role} enum through by identity.
  *   <li><b>runtime record→bean mapper</b> — {@code Telescope.mapper(Account, AccountEntity)}: the
  *       Beans LMF no-arg-constructor {@code Supplier} + LMF setter {@code BiConsumer} write path.
+ *   <li><b>runtime record→builder bean mapper</b> — {@code Telescope.mapper(Account,
+ *       AccountBuilderBean)}: the Beans {@code BuilderWriter} — {@code builder()} {@code Supplier}
+ *       + fluent-setter {@code BiFunction} + {@code build()} {@code Function}; the only capability
+ *       that reaches the builder write path (the target has no no-arg constructor or setters).
  *   <li><b>generated {@code @FromMap}</b> — {@code UserFromMap.fromMap(map)}: the reflection-free
  *       codegen control — no LMF, no {@code SerializedLambda}, just typed method calls.
  *   <li><b>generated {@code @Bridge}</b> — {@code AccountBridge.BRIDGE.read(a)}: the codegen bridge
@@ -44,7 +49,7 @@ import java.util.Map;
  * </ul>
  *
  * <p>A JVM run only validates the harness; a green native-image run is the real verdict, and {@link
- * #runtimeLabel()} says which one just passed. All seven capabilities are required on both
+ * #runtimeLabel()} says which one just passed. All eight capabilities are required on both
  * runtimes: the Wall B substrate branch plus telescope's build-time-init metadata and the example's
  * own reflection / serialization metadata carry the full runtime + codegen surface through
  * native-image, so any FAIL is a real regression.
@@ -69,6 +74,9 @@ public final class NativeVerify {
       guard("runtime record → record mapper (LMF readers + ctor rebuild, nested + enum)", NativeVerify::recordMapper)
     );
     results.add(guard("runtime record → bean mapper (Beans LMF no-arg ctor + setters)", NativeVerify::beanMapper));
+    results.add(
+      guard("runtime record → builder bean mapper (builder() + fluent setters + build())", NativeVerify::builderMapper)
+    );
     results.add(guard("generated @FromMap converter (reflection-free codegen control)", NativeVerify::fromMap));
     results.add(guard("generated @Bridge constant (AccountBridge.BRIDGE.read())", NativeVerify::bridgeConstant));
 
@@ -149,7 +157,19 @@ public final class NativeVerify {
     );
   }
 
-  // (f) generated @FromMap converter — reflection-free codegen control; also exercises enum +
+  // (f) runtime record → builder-only bean: Beans BuilderWriter — builder() Supplier + fluent
+  // setter BiFunction + build() Function. AccountBuilderBean has no no-arg ctor / setters, so this
+  // is the only capability that reaches the builder write path.
+  private static void builderMapper() {
+    final Mapper<Account, AccountBuilderBean> mapper = Telescope.mapper(Account.class, AccountBuilderBean.class);
+    final var bean = mapper.forward(new Account("ivy", "ivy@example.com"));
+    expect(
+      "ivy".equals(bean.getUsername()) && "ivy@example.com".equals(bean.getEmail()),
+      "builder mapper.forward mismatch: username=" + bean.getUsername() + " email=" + bean.getEmail()
+    );
+  }
+
+  // (g) generated @FromMap converter — reflection-free codegen control; also exercises enum +
   // nested.
   private static void fromMap() {
     final Map<String, Object> address = new HashMap<>();
@@ -171,7 +191,7 @@ public final class NativeVerify {
     );
   }
 
-  // (g) generated @Bridge constant — pure typed method calls, baked into the image heap.
+  // (h) generated @Bridge constant — pure typed method calls, baked into the image heap.
   private static void bridgeConstant() {
     final var entity = AccountBridge.BRIDGE.read(new Account("grace", "grace@example.com"));
     expect(

@@ -19,15 +19,16 @@ GraphQL servers.
 survival under native-image is what we verify. Each capability prints `PASS` / `FAIL` and the process exits non-zero on
 any failure — so `native-image` compiling and running the binary **is** the test.
 
-| Capability                       | Substrate mechanic under test                                                                         |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Record field update              | `SerializedLambda` method-reference decode + LMF record reader + cached canonical-ctor `MethodHandle` |
-| Record read (`.read()`)          | pure LMF-dispatched record component read (the `Records.read` path through the public surface)        |
-| Bean read (`.read()`)            | LMF-dispatched bean getter `Function` (`ofBean(...).field(getter).read()`, the `Beans` read path)     |
-| Runtime record → record `mapper` | LMF record readers on the source, canonical-constructor rebuild, carrying a nested record + enum      |
-| Runtime record → bean `mapper`   | LMF getter readers + no-arg-ctor `Supplier` + LMF setter `BiConsumer` writers (the `Beans` path)      |
-| Generated `@FromMap`             | reflection-free codegen `Map → record` converter — the control (no LMF, no `SerializedLambda`)        |
-| Generated `@Bridge` constant     | the emitted `AccountBridge.BRIDGE` (`Telescope<Account, AccountEntity>`) baked into the image heap    |
+| Capability                        | Substrate mechanic under test                                                                            |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Record field update               | `SerializedLambda` method-reference decode + LMF record reader + cached canonical-ctor `MethodHandle`    |
+| Record read (`.read()`)           | pure LMF-dispatched record component read (the `Records.read` path through the public surface)           |
+| Bean read (`.read()`)             | LMF-dispatched bean getter `Function` (`ofBean(...).field(getter).read()`, the `Beans` read path)        |
+| Runtime record → record `mapper`  | LMF record readers on the source, canonical-constructor rebuild, carrying a nested record + enum         |
+| Runtime record → bean `mapper`    | LMF getter readers + no-arg-ctor `Supplier` + LMF setter `BiConsumer` writers (the `Beans` path)         |
+| Runtime record → builder `mapper` | the `Beans` `BuilderWriter` — `builder()` `Supplier` + fluent-setter `BiFunction` + `build()` `Function` |
+| Generated `@FromMap`              | reflection-free codegen `Map → record` converter — the control (no LMF, no `SerializedLambda`)           |
+| Generated `@Bridge` constant      | the emitted `AccountBridge.BRIDGE` (`Telescope<Account, AccountEntity>`) baked into the image heap       |
 
 `Records` / `Beans` live in `:internal`, JPMS-sealed to `:core`, so the verifier cannot call them directly. It reaches
 the identical LMF call sites through the public `Telescope.of(...).field(...).read()` /
@@ -54,9 +55,13 @@ member by calling `LambdaMetafactory.metafactory(...)` **at run time**, which sy
 native-image's closed world forbids defining a class at run time (`Classes cannot be defined at runtime`). Fixed **in
 the substrate**: `internal/NativeImage.IN_IMAGE` (a JDK-only `org.graalvm.nativeimage.imagecode` system-property check,
 no GraalVM dependency) branches the accessor builders to a `MethodHandle.asType` closure inside an image — the same
-class-definition-free shape `Records.buildCtorFn` already used for the canonical constructor. The JVM keeps the
-`LambdaMetafactory` hot path unchanged; the branch is one folded `static final boolean`. This ships in `telescope-core`,
-so the runtime path is AOT-capable out of the box.
+class-definition-free shape `Records.buildCtorFn` already used for the canonical constructor, centralized in
+`internal/MhAccessors` (one closure per SAM shape). Every runtime rebuild strategy is covered: record reads, the
+no-arg-constructor + setter + getter paths, and the whole `BuilderWriter` path (`builder()` → fluent setters →
+`build()`), so mapping to an immutable `@Builder` target works too. The JVM keeps the `LambdaMetafactory` hot path
+unchanged; the branch is one folded `static final boolean`. This ships in `telescope-core`, so the runtime path is
+AOT-capable out of the box. (The one exception is the optional Hibernate-proxy accessor path, which stays
+JVM/codegen-only under AOT.)
 
 **Wall A — `SerializedLambda` decode.** `.field(User::name)` recovers the field name by invoking the method reference's
 `writeReplace()` to read a `SerializedLambda`. native-image only synthesizes `writeReplace()` for a lambda whose
@@ -77,21 +82,24 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
   with `Class.getRecordComponents()` and unreflects their accessors / constructor / setters, so those DTO types need a
   `reflect-config.json`; `.field(methodref)` needs the call-site class in a `serialization-config.json` (Wall A). Both
   live under the app's `META-INF/native-image/...`, exactly as every GraalVM app ships for its own domain types — the
-  example does this for its six model types. Hand-write them, or generate them with the GraalVM tracing agent.
+  example does this for its model types (including the builder-only bean and its `Builder`). Hand-write them, or
+  generate them with the GraalVM tracing agent.
 - **`privateLookupIn`.** All records/beans here are public on the classpath, so `MethodHandles.privateLookupIn` succeeds
   without an `opens` directive. A downstream consumer with JPMS-closed packages still needs
   `opens ... to io.github.eschizoid.telescope;` — a module-descriptor requirement, not a native-image one.
 
 ## Verdict
 
-**Runtime and codegen both work under GraalVM native-image.** All seven verifier capabilities — record field update,
-record read, bean read, the runtime record→record and record→bean mappers, `@FromMap`, and `@Bridge` — build and run in
-the native binary, confirmed by `.github/workflows/native-image.yaml`. Telescope's runtime reflective mapper is
-AOT-capable out of the box (Wall B is fixed in `telescope-core`); the adopter supplies only the standard reachability
-metadata for their own types (`reflect-config.json` for runtime-mapper DTOs, `serialization-config.json` for
-`.field(methodref)` call-site classes). The codegen path (`@Focus`/`@BeanFocus`/`@Bridge`/`@FromMap`) needs none of that
-— it is reflection-free and native-images with zero config. The workflow re-checks the whole surface on every push to
-`main` and weekly against GraalVM updates, so a regression in any capability turns the job red.
+**Runtime and codegen both work under GraalVM native-image.** All eight verifier capabilities — record field update,
+record read, bean read, the runtime record→record / record→bean / record→builder-bean mappers, `@FromMap`, and `@Bridge`
+— build and run in the native binary, confirmed by `.github/workflows/native-image.yaml`. Telescope's runtime reflective
+mapper is AOT-capable out of the box for every rebuild strategy (records, no-arg-ctor + setters, immutable `@Builder`
+targets); Wall B is fixed in `telescope-core`, and the adopter supplies only the standard reachability metadata for
+their own types (`reflect-config.json` for runtime-mapper DTOs, `serialization-config.json` for `.field(methodref)`
+call-site classes). The codegen path (`@Focus`/`@BeanFocus`/`@Bridge`/`@FromMap`) needs none of that — it is
+reflection-free and native-images with zero config. The one runtime path still JVM/codegen-only under AOT is the
+Hibernate-proxy accessor. The workflow re-checks the whole surface on every push to `main` and weekly against GraalVM
+updates, so a regression in any capability turns the job red.
 
 ## Appendix — feasibility of shading `:internal` into `:core` at publish
 
