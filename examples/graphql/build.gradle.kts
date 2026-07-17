@@ -34,23 +34,42 @@ tasks.register<JavaExec>("runRuntimeFromMapServer") {
 
 tasks.register<JavaExec>("runGeneratedFromMapServer") {
     group = "demos"
-    description = "Generated tier: graphql-java server using the @FromMap-generated UserFromMap — the entry the native image builds"
+    description = "Generated tier: graphql-java server using the @FromMap-generated UserFromMap"
     mainClass.set("io.github.eschizoid.telescope.examples.graphql.server.GeneratedFromMapServer")
     classpath = sourceSets["main"].runtimeClasspath
 }
 
-// GraalVM native build — proves the generated @FromMap converter (via GeneratedFromMapServer)
-// native-images with zero reachability config. native-image comes from a GraalVM toolchain (the
-// compile toolchain above stays on the project's JDK 25, targeting release 21 bytecode that GraalVM
-// 21 consumes).
+tasks.register<JavaExec>("runNativeVerify") {
+    group = "verification"
+    description = "Runs the native-image capability verifier on the JVM — a green run validates the harness; the native-image run is the verdict"
+    mainClass.set("io.github.eschizoid.telescope.examples.graphql.server.NativeVerify")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
+// GraalVM native build — the entry is NativeVerify, which exercises the full runtime + codegen
+// substrate (field update/read, runtime record→record and record→bean mappers, @FromMap, @Bridge)
+// and exits non-zero on any mismatch, so the native binary IS the substrate tripwire. native-image
+// comes from a GraalVM toolchain (the compile toolchain above stays on the project's JDK 25,
+// targeting release 21 bytecode that GraalVM consumes).
 graalvmNative {
     // Use the GraalVM pointed to by GRAALVM_HOME/JAVA_HOME for native-image (toolchain detection
     // otherwise picks the project's plain-JDK compile toolchain, which has no native-image).
     toolchainDetection.set(false)
     binaries {
         named("main") {
-            mainClass.set("io.github.eschizoid.telescope.examples.graphql.server.GeneratedFromMapServer")
+            mainClass.set("io.github.eschizoid.telescope.examples.graphql.server.NativeVerify")
             buildArgs.add("--no-fallback")
+            buildArgs.add("-H:+ReportExceptionStackTraces")
+            // The codegen @Bridge / @FromMap constants (e.g. AccountBridge.BRIDGE — a
+            // Telescope<Account, AccountEntity>) are baked into the image heap at class-init.
+            // native-image defaults every class to run-time init, so the telescope classes that
+            // back those constants (Telescope + its inner Bridge/typed-container navigators, the
+            // optic lattice) and the generated model classes that hold them must be initialized at
+            // build time — otherwise a heap object of a run-time-init type is a hard build error.
+            buildArgs.add("--initialize-at-build-time=io.github.eschizoid.telescope.examples.graphql.model")
+            buildArgs.add("--initialize-at-build-time=io.github.eschizoid.telescope")
+            buildArgs.add("--initialize-at-build-time=io.github.eschizoid.telescope.internal")
+            buildArgs.add("--initialize-at-build-time=io.github.eschizoid.telescope.internal.optics")
         }
     }
 }
