@@ -44,8 +44,9 @@ import java.util.Map;
  *       codegen control — no LMF, no {@code SerializedLambda}, just typed method calls.
  *   <li><b>generated {@code @Bridge}</b> — {@code AccountBridge.BRIDGE.read(a)}: the codegen bridge
  *       constant, a {@code Telescope<Account, AccountEntity>} that lands in the build-time image
- *       heap — which is why the telescope and generated-model classes take {@code
- *       --initialize-at-build-time} (see {@code build.gradle.kts}).
+ *       heap — which is why the telescope classes take {@code --initialize-at-build-time} from
+ *       telescope-core's {@code native-image.properties} and this example's generated-model package
+ *       takes it from {@code build.gradle.kts}.
  * </ul>
  *
  * <p>A JVM run only validates the harness; a green native-image run is the real verdict, and {@link

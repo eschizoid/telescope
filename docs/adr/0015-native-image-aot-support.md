@@ -47,10 +47,11 @@ app-level GraalVM reachability files. **No separate `telescope-graalvm` module**
 > DTO types are typically **un-annotated** (annotate with `@Focus` and you get the reflection-free codegen path, which
 > needs none of this), so a Feature keyed on `@Focus`/`@BeanFocus`/`@Bridge` would not cover the common case, and
 > un-annotated types cannot be discovered at build time — the app must declare them regardless. The graphql verifier
-> reached **all seven capabilities green** under native-image with only: the Wall B substrate branch, telescope-core's
-> `native-image.properties`, and the example's own `reflect-config.json` + `serialization-config.json`. Apps shipping
-> reachability metadata for their own types is idiomatic GraalVM, not telescope's job. So the module is dropped; the
-> section below records the shape that actually shipped.
+> reached all its capabilities green under native-image (seven at the time this decision was taken; an eighth,
+> builder-target, was added when Wall B was extended to the `BuilderWriter` path) with only: the Wall B substrate
+> branch, telescope-core's `native-image.properties`, and the example's own `reflect-config.json` +
+> `serialization-config.json`. Apps shipping reachability metadata for their own types is idiomatic GraalVM, not
+> telescope's job. So the module is dropped; the section below records the shape that actually shipped.
 
 ### 1. Wall B → gated `MethodHandle` accessor branch in `:internal` (no new dependency)
 
@@ -127,7 +128,7 @@ registration at all.
   types, exactly as any GraalVM app does.
 - **JVM hot path is unchanged.** The gated branch adds a folded `static final boolean` read; steady-state dispatch is
   the ADR-0005 LMF path unmodified. Full test suite green; benchmarks unaffected.
-- **The verifier is the standing proof.** `NativeVerify`'s seven capabilities pass natively (empirically confirmed), and
+- **The verifier is the standing proof.** `NativeVerify`'s eight capabilities pass natively (empirically confirmed), and
   the native-image workflow is the regression gate. The `docs/native-image.md` verdict is "runtime + codegen both work
   under native-image, with the documented adopter metadata."
 - **Wall A stays a sharp edge for `.field(methodref)`.** It is inherent to method-reference field-name recovery under a
