@@ -538,11 +538,11 @@ public final class Beans {
   }
 
   /**
-   * Build one {@link Function} per discovered getter via {@link LambdaMetafactory}. The metafactory
-   * synthesizes a {@link Function}-implementing class whose {@code apply(Object)} directly calls
-   * the getter and auto-boxes any primitive return ({@code int}, {@code boolean}, etc). After the
-   * first call per class the dispatch is a single virtual call the JIT inlines — no {@link
-   * Method#invoke}, no per-call argument array, no access-check.
+   * Build one {@link Function} per discovered getter, each a direct getter call that auto-boxes a
+   * primitive return, with no {@link Method#invoke}, per-call argument array, or access-check. On a
+   * stock JVM each is a {@link LambdaMetafactory}-synthesized class ({@link #lmfGetter}); inside a
+   * native image, where runtime class definition is banned, each is a {@link MethodHandle} closure
+   * ({@link #mhGetter}). Both dispatch as a single virtual call the JIT inlines.
    *
    * <p>JPMS access has the same rules as {@link AccessibleObject#setAccessible(boolean)}: if the
    * bean's package is not {@code opens}-exposed to {@code io.github.eschizoid.telescope}, the
@@ -569,28 +569,56 @@ public final class Beans {
       );
       try {
         final var handle = lookup.unreflect(method);
-        // SAM signature is `Object apply(Object)`; the instantiatedMethodType pins the actual
-        // (declaringClass) -> returnType signature so the metafactory generates the right bridge
-        // — including auto-boxing for primitive returns (`int`, `boolean`, etc).
-        final var callSite = LambdaMetafactory.metafactory(
-          lookup,
-          "apply",
-          MethodType.methodType(Function.class),
-          MethodType.methodType(Object.class, Object.class),
-          handle,
-          MethodType.methodType(method.getReturnType(), declaringClass)
+        invokers.put(
+          name,
+          NativeImage.IN_IMAGE ? mhGetter(handle, cls, name) : lmfGetter(handle, method, declaringClass, lookup)
         );
-        @SuppressWarnings("unchecked")
-        final var reader = (Function<Object, Object>) callSite.getTarget().invoke();
-        invokers.put(name, reader);
       } catch (final Throwable t) {
-        throw new IllegalStateException(
-          "Failed to build LambdaMetafactory getter invoker for " + cls.getName() + "." + name,
-          t
-        );
+        throw new IllegalStateException("Failed to build getter invoker for " + cls.getName() + "." + name, t);
       }
     }
     return invokers;
+  }
+
+  /**
+   * JVM hot path: {@link LambdaMetafactory} synthesizes a {@link Function} whose {@code
+   * apply(Object)} calls the getter directly and boxes a primitive return. The
+   * instantiatedMethodType pins the actual {@code (declaringClass) -> returnType} signature so the
+   * metafactory generates the boxing bridge.
+   */
+  @SuppressWarnings("unchecked")
+  private static Function<Object, Object> lmfGetter(
+    final MethodHandle handle,
+    final Method method,
+    final Class<?> declaringClass,
+    final MethodHandles.Lookup lookup
+  ) throws Throwable {
+    final var callSite = LambdaMetafactory.metafactory(
+      lookup,
+      "apply",
+      MethodType.methodType(Function.class),
+      MethodType.methodType(Object.class, Object.class),
+      handle,
+      MethodType.methodType(method.getReturnType(), declaringClass)
+    );
+    return (Function<Object, Object>) callSite.getTarget().invoke();
+  }
+
+  /**
+   * Native-image path: a source-level lambda closing over an {@link MethodHandle#asType(MethodType)
+   * asType}-adapted getter handle — no class synthesized at run time, so it survives native-image's
+   * ban on runtime class definition (see {@link NativeImage}). The getter must be registered for
+   * reflection.
+   */
+  private static Function<Object, Object> mhGetter(final MethodHandle handle, final Class<?> cls, final String name) {
+    final var adapted = handle.asType(MethodType.methodType(Object.class, Object.class));
+    return obj -> {
+      try {
+        return (Object) adapted.invokeExact(obj);
+      } catch (final Throwable t) {
+        throw new IllegalStateException("Failed to read '" + name + "' on " + cls.getName(), t);
+      }
+    };
   }
 
   /**
