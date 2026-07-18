@@ -384,20 +384,21 @@ Codegen was never the question: MapStruct's and telescope's generated mappers ar
 GraalVM native-image cleanly. The asymmetry is everything else. MapStruct has no runtime path, so under native-image its
 answer stops at codegen. Telescope's **runtime** mapper — `Telescope.mapper(...)`, `.field(User::name)`, zero
 annotations, no build step — **also works inside a native image**: the accessor substrate detects the image and switches
-from `LambdaMetafactory` (which defines classes at run time, forbidden by AOT's closed world) to precompiled
+from `LambdaMetafactory` (which defines classes at run time, forbidden by AOT's closed world) to class-definition-free
 `MethodHandle` closures. One folded `static final boolean` picks the branch; the JVM hot path is untouched.
 
 As an adopter you configure nothing for telescope itself — `telescope-core` ships its own native-image metadata in the
 jar. You register only your own types, as every GraalVM app does: the mapper's DTO classes in a `reflect-config.json`,
 and — if you use `.field(methodref)` navigation — the call-site class in a `serialization-config.json`
-(`.fieldByName(String)` and codegen navigators need no registration).
+(`.fieldByName(String)` and codegen navigators need no such registration; codegen needs no config at all).
 
-Be precise about the win: **instant startup, small images, and codegen-class throughput** — not faster reflective
-mapping (inside an image the runtime path dispatches through `MethodHandle.invokeExact`, a touch slower than the
-JIT-warmed JVM path, which is why the JVM keeps `LambdaMetafactory`). And the claim is proven, not aspirational: an
-eight-capability verifier — the record, bean, and builder runtime mappers, method-reference navigation and reads,
-`@FromMap`, `@Bridge` — builds and runs as a real native binary in CI on every substrate push and weekly. The full
-adopter contract lives in [`docs/native-image.md`](docs/native-image.md).
+Be precise about the win: **instant startup, small images, and — on the codegen path — the same throughput class as on
+the JVM** — not faster reflective mapping (inside an image the runtime path dispatches through
+`MethodHandle.invokeExact`, a touch slower than the JIT-warmed JVM path, which is why the JVM keeps
+`LambdaMetafactory`). And the claim is proven, not aspirational: an eight-capability verifier — the record, bean, and
+builder runtime mappers, method-reference navigation and reads, `@FromMap`, `@Bridge` — builds and runs as a real native
+binary in CI on every substrate push to `main` and weekly. The full adopter contract lives in
+[`docs/native-image.md`](docs/native-image.md).
 
 #### Then, what you gain
 
