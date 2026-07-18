@@ -1,0 +1,7 @@
+{
+  "lambdaCapturingTypes": [
+    { "name": "io.github.eschizoid.telescope.examples.graphql.server.NativeVerify" }
+  ],
+  "types": [],
+  "proxies": []
+}

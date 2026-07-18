@@ -177,6 +177,13 @@ public final class MetadataHolderProbe {
     try {
       final var lookup = MethodHandles.lookup();
       final var handle = lookup.unreflect(method);
+      if (NativeImage.IN_IMAGE) {
+        // Native-image: a MethodHandle closure (see MhAccessors), no runtime class synthesis. The
+        // holder's construct(Function) takes a Function<String, Object> argument, which the erased
+        // (Object) -> Object closure accepts, so the method reference adapts to the wider input.
+        final Function<Object, Object> constructor = MhAccessors.function(handle);
+        return constructor::apply;
+      }
       final var callSite = LambdaMetafactory.metafactory(
         lookup,
         "apply",
