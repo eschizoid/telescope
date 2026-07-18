@@ -56,7 +56,7 @@ real source, **0 missing**), a [one-mapper-at-a-time migration guide](docs/mapst
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-  implementation("io.github.eschizoid:telescope-core:1.1.1")
+  implementation("io.github.eschizoid:telescope-core:1.2.0")
 }
 ```
 
@@ -65,7 +65,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.1.1</version>
+  <version>1.2.0</version>
 </dependency>
 ```
 
@@ -503,7 +503,7 @@ is the [migration guide](docs/mapstruct-migration.md)'s table.
 - You want the same `Telescope<S, A>` type to do reading, updating, mapping, and conversion — one mental model instead
   of separate libraries
 
-> **Convinced?** Add `implementation("io.github.eschizoid:telescope-core:1.1.1")`, write your next mapper as one
+> **Convinced?** Add `implementation("io.github.eschizoid:telescope-core:1.2.0")`, write your next mapper as one
 > `Telescope.mapper(...)` call ([quick start](#quick-start) has the shape), and leave every existing MapStruct mapper
 > alone — the [migration guide](docs/mapstruct-migration.md) covers the rest whenever you're ready.
 
@@ -530,8 +530,8 @@ Gradle (Kotlin DSL):
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:1.1.1")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.1")
+    implementation("io.github.eschizoid:telescope-core:1.2.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:1.2.0")
 }
 ```
 
@@ -541,7 +541,7 @@ Maven:
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.1.1</version>
+  <version>1.2.0</version>
 </dependency>
 
 <build>
@@ -554,7 +554,7 @@ Maven:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>1.1.1</version>
+            <version>1.2.0</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
@@ -579,7 +579,7 @@ first**. Maven respects the declaration order of `<annotationProcessorPaths>`; G
   <path>
     <groupId>io.github.eschizoid</groupId>
     <artifactId>telescope-lombok</artifactId>
-    <version>1.1.1</version>
+    <version>1.2.0</version>
   </path>
 </annotationProcessorPaths>
 ```
@@ -587,8 +587,8 @@ first**. Maven respects the declaration order of `<annotationProcessorPaths>`; G
 ```kotlin
 dependencies {
   annotationProcessor("org.projectlombok:lombok:1.18.30")
-  annotationProcessor("io.github.eschizoid:telescope-lombok:1.1.1")
-  annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.1")
+  annotationProcessor("io.github.eschizoid:telescope-lombok:1.2.0")
+  annotationProcessor("io.github.eschizoid:telescope-codegen:1.2.0")
 }
 ```
 
@@ -1623,8 +1623,8 @@ goes through `.then(SourceBridge.BRIDGE.reverse())` for now — forward only at 
 Gradle wiring:
 
 ```kotlin
-implementation("io.github.eschizoid:telescope-core:1.1.1")
-annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.1")
+implementation("io.github.eschizoid:telescope-core:1.2.0")
+annotationProcessor("io.github.eschizoid:telescope-codegen:1.2.0")
 ```
 
 `@Focus` and `@BeanFocus` are source-retention and inert without the processor, so annotating costs nothing if you don't
