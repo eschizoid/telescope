@@ -139,9 +139,9 @@ public sealed class Telescope<
   // read/update hot path. Empty for a bare Telescope.of(...) or an iso-backed conversion.
   final List<OpticNode> trail;
 
-  // Package-private so that the conversion-builder classes (From, To, BeanTo, MapBuilder, Mapper,
-  // …) — extracted to sibling files in this same package to keep Telescope.java navigable — can
-  // construct Telescope instances without needing us to expose internals through the JPMS export.
+  // Package-private so that the conversion-builder classes (From, To, Mapper, …) — extracted to
+  // sibling files to keep Telescope.java navigable — can construct Telescope instances without
+  // needing us to expose internals through the JPMS export.
   Telescope(final Traversal<S, A> optic) {
     this(optic, RecordFieldOptics.INSTANCE, Function.identity(), null, List.of());
   }
