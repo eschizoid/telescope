@@ -32,19 +32,19 @@ import java.util.function.Supplier;
  *
  * <p><b>Read direction (POJO &rarr; record/Map).</b> Getters are discovered by convention — a
  * no-arg {@code getX()} with a non-void return, or {@code isX()} returning {@code boolean}/ {@code
- * Boolean} — and {@code X} is {@link #decapitalize(String) decapitalized} to a property name. This
- * deliberately avoids {@code java.beans.Introspector} so the library keeps zero dependencies
- * ({@code Introspector} lives in the {@code java.desktop} module). The discovered getter map is
- * cached per class via {@link ClassValue}. Alongside the {@link Method} cache, a sibling {@link
- * ClassValue} caches one {@link Function Function&lt;Object, Object&gt;} per property, built once
- * via {@link LambdaMetafactory} from the resolved accessor — the metafactory synthesizes a {@link
- * Function}-implementing class whose {@code apply(Object)} directly calls the getter and auto-boxes
- * any primitive return, so the hot path never touches {@link Method#invoke}. The lattice-primitive
- * read for one property is {@link #getter(Class, String)} — a {@link Getter Getter&lt;P,
- * Object&gt;} whose body delegates to the cached {@link Function} and allocates a fresh capturing
- * lambda per call (the lattice-shape entry for composing the read with other optics). {@link
- * #readProperty} is the hot-path shortcut that calls the cached {@link Function} directly, skipping
- * the per-call lambda allocation — preferred from inner loops (e.g. {@code
+ * Boolean} — and {@code X} is decapitalized to a property name by the shared {@code PropertyNames}
+ * rule. This deliberately avoids {@code java.beans.Introspector} so the library keeps zero
+ * dependencies ({@code Introspector} lives in the {@code java.desktop} module). The discovered
+ * getter map is cached per class via {@link ClassValue}. Alongside the {@link Method} cache, a
+ * sibling {@link ClassValue} caches one {@link Function Function&lt;Object, Object&gt;} per
+ * property, built once via {@link LambdaMetafactory} from the resolved accessor — the metafactory
+ * synthesizes a {@link Function}-implementing class whose {@code apply(Object)} directly calls the
+ * getter and auto-boxes any primitive return, so the hot path never touches {@link Method#invoke}.
+ * The lattice-primitive read for one property is {@link #getter(Class, String)} — a {@link Getter
+ * Getter&lt;P, Object&gt;} whose body delegates to the cached {@link Function} and allocates a
+ * fresh capturing lambda per call (the lattice-shape entry for composing the read with other
+ * optics). {@link #readProperty} is the hot-path shortcut that calls the cached {@link Function}
+ * directly, skipping the per-call lambda allocation — preferred from inner loops (e.g. {@code
  * Reflective.structuralIso(...).from(...)} reads every property of a target).
  *
  * <p><b>Write direction (Map/record &rarr; POJO).</b> Four strategies behind the sealed {@link
