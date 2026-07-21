@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -671,15 +672,13 @@ public final class Beans {
         if (moduleName.startsWith("java.") || moduleName.startsWith("jdk.")) continue;
       }
       final var n = m.getName();
+      final var afterGet = PropertyNames.afterGet(n);
+      final var afterIs = PropertyNames.afterIs(n);
       final String prop;
-      if (n.length() > 3 && n.startsWith("get") && m.getReturnType() != void.class) {
-        prop = decapitalize(n.substring(3));
-      } else if (
-        n.length() > 2 &&
-        n.startsWith("is") &&
-        (m.getReturnType() == boolean.class || m.getReturnType() == Boolean.class)
-      ) {
-        prop = decapitalize(n.substring(2));
+      if (afterGet != null && m.getReturnType() != void.class) {
+        prop = afterGet;
+      } else if (afterIs != null && (m.getReturnType() == boolean.class || m.getReturnType() == Boolean.class)) {
+        prop = afterIs;
       } else {
         continue;
       }
@@ -694,14 +693,6 @@ public final class Beans {
       }
     }
     return map;
-  }
-
-  // JavaBeans rule: a name whose first two characters are both uppercase is left unchanged (e.g.
-  // "URL").
-  private static String decapitalize(final String s) {
-    if (s.isEmpty()) return s;
-    if (s.length() > 1 && Character.isUpperCase(s.charAt(0)) && Character.isUpperCase(s.charAt(1))) return s;
-    return Character.toLowerCase(s.charAt(0)) + s.substring(1);
   }
 
   private static String capitalize(final String s) {
@@ -720,10 +711,7 @@ public final class Beans {
    * Beans.normalize}/{@code propertyOf} surface from NPE-ing if any future caller forgets to peel.
    */
   public static String propertyOf(final String getterName) {
-    if (getterName == null) return null;
-    if (getterName.length() > 3 && getterName.startsWith("get")) return decapitalize(getterName.substring(3));
-    if (getterName.length() > 2 && getterName.startsWith("is")) return decapitalize(getterName.substring(2));
-    return getterName;
+    return PropertyNames.property(getterName);
   }
 
   /**
