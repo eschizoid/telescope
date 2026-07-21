@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.examples.codegen.BeanFocusUser;
 import io.github.eschizoid.telescope.examples.codegen.BeanFocusUserTelescope;
 import io.github.eschizoid.telescope.examples.codegen.BridgeDto;
 import io.github.eschizoid.telescope.examples.codegen.BridgeEntity;
+import io.github.eschizoid.telescope.examples.codegen.BridgeEntityBridge;
 import io.github.eschizoid.telescope.examples.codegen.BridgeEntityTelescope;
 import io.github.eschizoid.telescope.examples.codegen.FocusAddress;
 import io.github.eschizoid.telescope.examples.codegen.FocusAddressTelescope;
@@ -74,7 +75,7 @@ final class CodegenDemo {
     System.out.println("[@Bridge] entity via DTO hop  : " + lowered);
 
     // The bridge itself is also reachable as the BRIDGE constant for direct conversion.
-    final BridgeDto dto = io.github.eschizoid.telescope.examples.codegen.BridgeEntityBridge.BRIDGE.read(entity);
+    final BridgeDto dto = BridgeEntityBridge.BRIDGE.read(entity);
     System.out.println("[@Bridge] direct BRIDGE.read  : " + dto);
   }
 }
