@@ -22,9 +22,9 @@ import org.junit.jupiter.api.Test;
  * site in {@code extractDefaultStrategy}.
  *
  * <p>The base {@code TelescopeTest} / {@code MappingTest} fixtures cover the common rows; this file
- * targets the branches that route sequentially through instanceof chains (no compiler-checked
- * exhaustiveness there, unlike the sealed switch in {@code fieldIsoOf}), so each arm needs an
- * explicit pin.
+ * pins each dispatch arm's behavior explicitly. The routing sites are compiler-forced exhaustive
+ * sealed switches, so a new permit cannot be silently dropped — these pins guard the semantics of
+ * each arm, not its existence.
  */
 class DeepMapBranchTest {
 
