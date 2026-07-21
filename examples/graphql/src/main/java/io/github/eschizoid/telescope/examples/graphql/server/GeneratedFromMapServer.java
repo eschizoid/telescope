@@ -7,8 +7,10 @@ import java.util.function.Function;
 
 /**
  * Generated tier: the {@code createUser} resolver converts the argument Map with the GENERATED
- * {@code UserFromMap} (emitted from {@code @FromMap} on {@link User}). Reflection-free, so this is
- * the entry point the GraalVM native image builds — {@code --no-fallback}, no reachability config.
+ * {@code UserFromMap} (emitted from {@code @FromMap} on {@link User}). Reflection-free by
+ * construction — no {@code SerializedLambda}, no reachability config, nothing to register. The
+ * native image's entry point is {@link NativeVerify}, which exercises this converter as one of its
+ * eight capabilities.
  */
 public final class GeneratedFromMapServer {
 

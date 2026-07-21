@@ -91,8 +91,9 @@ public final class GraphQlServer {
     return GraphQL.newGraphQL(schema).build();
   }
 
+  /** Null-safe erased-Map cast, shared by the harness and the runtime tier's nested converter. */
   @SuppressWarnings("unchecked")
-  private static Map<String, Object> asMap(final Object raw) {
+  static Map<String, Object> asMap(final Object raw) {
     return raw instanceof Map<?, ?> ? (Map<String, Object>) raw : null;
   }
 }
