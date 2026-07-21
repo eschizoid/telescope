@@ -17,27 +17,22 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * SPIKE (not a permanent benchmark): does a MethodHandle-combinator-composed {@code (Src) -> Dst}
- * forward — no {@code Object[]} intermediate, no boxing for primitive fields — beat the current
- * array-based reflective {@code Telescope.mapper(...).forward(...)} path, and how close does it get
- * to a hand-written constructor call (the MapStruct-equivalent unboxed ceiling)?
- *
- * <p>The fixture is a flat 5-field record pair with mixed primitives + a reference type, so boxing
- * is actually exercised. Three paths convert the SAME {@code Src} to a {@code Dst}:
+ * REGRESSION GUARD (originally the decision spike for the MethodHandle-combinator conversion leaf —
+ * that decision shipped, and {@code Telescope.mapper(...)} now IS the MH-chain path). The three
+ * rows keep their original names for continuity, but read them for what they are today:
  *
  * <ul>
  *   <li>{@code handWritten} — direct {@code new Dst(src.a(), ...)}; the unboxed ceiling.
- *   <li>{@code mhChain} — {@code filterArguments}(raw primitive accessors into raw ctor) {@code ->
- *       permuteArguments -> } one {@code (Src) -> Dst} handle, {@code invokeExact} through a {@code
- *       final} field. No array, no boxing.
- *   <li>{@code currentMapper} — {@code Telescope.mapper(...).forward(...)}; the {@code Object[]} +
- *       boxing baseline.
+ *   <li>{@code mhChain} — a hand-composed {@code filterArguments -> permuteArguments} handle
+ *       invoked through a {@code final} field; the shape the shipped leaf compiles down to.
+ *   <li>{@code currentMapper} — {@code Telescope.mapper(...).forward(...)}; since the leaf shipped
+ *       this rides the same MH chain plus the mapper's wrapper dispatch, so it should track {@code
+ *       mhChain} closely. A widening gap between the two rows is the regression signal — it means
+ *       the shipped mapper stopped compiling down to the composed handle.
  * </ul>
  *
- * <p>If {@code mhChain} lands near {@code handWritten} and well below {@code currentMapper}, the
- * lattice-legal structural win (a MH-combinator leaf {@code Iso}) is real. If {@code mhChain}
- * tracks {@code currentMapper}, the runtime floor is confirmed and hot loops belong on
- * {@code @Bridge}.
+ * <p>The fixture is a flat 5-field record pair with mixed primitives + a reference type, so boxing
+ * would show if it ever crept back in.
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
