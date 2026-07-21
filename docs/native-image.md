@@ -115,9 +115,12 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
        inputs.dir(classesDir)
        outputs.file(out)
        doLast {
-           val entries = classesDir.get().asFile.walkTopDown()
+           val base = classesDir.get().asFile
+           val entries = base.walkTopDown()
                .filter { it.extension == "class" && it.name != "package-info.class" }
-               .map { "$pkg.${it.nameWithoutExtension}" }
+               // Derive the binary name from the relative path so subpackages come out right:
+               // model/billing/Invoice.class → pkg.billing.Invoice, Foo$Builder.class → pkg.Foo$Builder.
+               .map { "$pkg." + it.relativeTo(base).invariantSeparatorsPath.removeSuffix(".class").replace('/', '.') }
                .sorted()
                .joinToString(",\n") {
                    """  { "name": "$it", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true }"""
