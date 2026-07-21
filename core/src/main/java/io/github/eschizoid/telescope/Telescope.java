@@ -22,6 +22,7 @@ import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
+import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
 import io.github.eschizoid.telescope.introspection.Trace;
@@ -2011,21 +2012,7 @@ public sealed class Telescope<
   private static String fieldNameOf(final Accessor<?, ?> getter) {
     final var raw = LambdaIntrospection.methodNameOf(getter);
     if (LambdaIntrospection.implClassOf(getter).isRecord()) return raw;
-    if (raw.length() > 3 && raw.startsWith("get") && Character.isUpperCase(raw.charAt(3))) return beanDecapitalize(
-      raw.substring(3)
-    );
-    if (raw.length() > 2 && raw.startsWith("is") && Character.isUpperCase(raw.charAt(2))) return beanDecapitalize(
-      raw.substring(2)
-    );
-    return raw;
-  }
-
-  // JavaBeans Introspector.decapitalize: an acronym whose first two chars are both uppercase (e.g.
-  // "URL") is left as-is; otherwise the first char is lowercased. Mirrors the codegen processor's
-  // property-name derivation so a runtime bean node's name agrees with the generated one.
-  private static String beanDecapitalize(final String s) {
-    if (s.length() > 1 && Character.isUpperCase(s.charAt(0)) && Character.isUpperCase(s.charAt(1))) return s;
-    return Character.toLowerCase(s.charAt(0)) + s.substring(1);
+    return PropertyNames.property(raw);
   }
 
   static <A> Class<A> implClassOf(final Serializable lambda) {

@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -148,12 +149,6 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   protected static String capitalize(final String s) {
     return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
-  }
-
-  protected static String decapitalize(final String s) {
-    if (s.isEmpty()) return s;
-    if (s.length() > 1 && Character.isUpperCase(s.charAt(0)) && Character.isUpperCase(s.charAt(1))) return s;
-    return Character.toLowerCase(s.charAt(0)) + s.substring(1);
   }
 
   /**
@@ -1287,15 +1282,16 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         continue;
       }
       final var name = m.getSimpleName().toString();
+      final var afterGet = PropertyNames.afterGet(name);
+      final var afterIs = PropertyNames.afterIs(name);
       final String prop;
-      if (name.length() > 3 && name.startsWith("get")) {
-        prop = decapitalize(name.substring(3));
+      if (afterGet != null) {
+        prop = afterGet;
       } else if (
-        name.length() > 2 &&
-        name.startsWith("is") &&
+        afterIs != null &&
         (m.getReturnType().getKind() == TypeKind.BOOLEAN || "java.lang.Boolean".equals(m.getReturnType().toString()))
       ) {
-        prop = decapitalize(name.substring(2));
+        prop = afterIs;
       } else {
         continue;
       }

@@ -15,6 +15,7 @@ import io.github.eschizoid.telescope.annotations.UncheckedMapping;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
+import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.HashSet;
@@ -598,11 +599,13 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         if (moduleName.startsWith("java.") || moduleName.startsWith("jdk.")) continue;
       }
       final var rawName = method.getSimpleName().toString();
+      final var afterGet = PropertyNames.afterGet(rawName);
+      final var afterIs = PropertyNames.afterIs(rawName);
       final String prop;
-      if (rawName.length() > 3 && rawName.startsWith("get") && method.getReturnType().getKind() != TypeKind.VOID) {
-        prop = decapitalize(rawName.substring(3));
-      } else if (rawName.length() > 2 && rawName.startsWith("is") && booleanReturn(method)) {
-        prop = decapitalize(rawName.substring(2));
+      if (afterGet != null && method.getReturnType().getKind() != TypeKind.VOID) {
+        prop = afterGet;
+      } else if (afterIs != null && booleanReturn(method)) {
+        prop = afterIs;
       } else {
         continue;
       }
@@ -627,14 +630,6 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
    * through unchanged.
    */
   private static String normalize(final String raw) {
-    if (raw.length() > 3 && raw.startsWith("get")) return decapitalize(raw.substring(3));
-    if (raw.length() > 2 && raw.startsWith("is")) return decapitalize(raw.substring(2));
-    return raw;
-  }
-
-  private static String decapitalize(final String s) {
-    if (s.isEmpty()) return s;
-    if (s.length() > 1 && Character.isUpperCase(s.charAt(0)) && Character.isUpperCase(s.charAt(1))) return s;
-    return Character.toLowerCase(s.charAt(0)) + s.substring(1);
+    return PropertyNames.property(raw);
   }
 }
