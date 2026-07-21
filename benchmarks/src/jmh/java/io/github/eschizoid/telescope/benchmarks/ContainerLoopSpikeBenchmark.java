@@ -9,45 +9,37 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
-import org.openjdk.jmh.annotations.Fork;
-import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
-import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.infra.Blackhole;
 
 /**
- * Decision-gate spike for the container-element lever: does mapping {@code List<Src> -> List<Dst>}
- * as a single {@link MethodHandles#iteratedLoop} over the raw {@code (Object)->Object} element
- * handle beat the current {@code liftList} path (a Java for-loop whose body dispatches {@code
- * Iso.to} -> {@code Function.apply} -> invokeExact per element)?
- *
- * <p>Fixture is the deep benchmark's inner hop: {@code List<Team>} of 3 elements, Team = {@code
- * (String name, int headcount)}, a record-to-record leaf. Four rows:
+ * REGRESSION GUARD (originally the decision spike for the container-element MethodHandle loop —
+ * that decision shipped: the runtime container path now loops the raw element handle, the shape the
+ * {@code mhIteratedLoop} / {@code fnLoop} rows model). The row names keep their original spike
+ * labels for continuity; read them for what they are today:
  *
  * <ul>
  *   <li>{@code handWritten} — Java for-loop, direct {@code new Dst(...)}. The MapStruct ceiling.
- *   <li>{@code liftListIso} — current path: a Java for-loop calling {@code elementIso.to(x)} where
- *       {@code elementIso} wraps the raw handle in {@code Iso.of}-shaped {@code (Object)->Object}
- *       Function (two virtual hops per element).
- *   <li>{@code mhIteratedLoop} — one {@code iteratedLoop} handle whose body invokes the raw element
- *       handle directly (invokeExact, no SAM hop), invoked once via invokeExact.
- *   <li>{@code fnLoop} — Java for-loop calling the raw element handle wrapped in a single {@code
- *       Function} (one virtual hop), to isolate the Iso.to layer from the Function.apply layer.
+ *   <li>{@code liftListIso} — the PRE-campaign shape (Iso.to -> Function.apply -> invokeExact, two
+ *       virtual hops per element), kept as the reference point the shipped path must stay below.
+ *   <li>{@code mhIteratedLoop} — one {@code iteratedLoop} handle invoking the raw element handle
+ *       directly; the shipped path's ceiling variant.
+ *   <li>{@code fnLoop} — the raw handle behind a single {@code Function} hop; closest model of the
+ *       shipped loop body.
  * </ul>
  *
- * <p>If {@code mhIteratedLoop} does not clear {@code liftListIso} by a real margin, the honest call
- * is that the runtime container path is at the dispatch floor and codegen owns the hot loop.
+ * <p>Fixture is the deep benchmark's inner hop: {@code List<Team>} of 3 elements, Team = {@code
+ * (String name, int headcount)}, a record-to-record leaf. The regression signal: {@code fnLoop} /
+ * {@code mhIteratedLoop} drifting up toward {@code liftListIso} means the shipped container loop
+ * regained a dispatch layer.
  */
 @State(Scope.Thread)
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
-@Warmup(iterations = 5, time = 1)
-@Measurement(iterations = 5, time = 1)
-@Fork(2)
 public class ContainerLoopSpikeBenchmark {
 
   public record Src(String name, int headcount) {}
