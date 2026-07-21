@@ -26,8 +26,9 @@ Runtime `Telescope.fromMap(...)` recovers each field name from its `User::name` 
 (reflectively invoking the lambda's `writeReplace`). Under native-image that works only when the class _holding_ the
 method references is registered as a lambda-capturing type in a `serialization-config.json` — Wall A in
 [`docs/native-image.md`](../../docs/native-image.md). This module registers `NativeVerify` (see
-`src/main/resources/META-INF/native-image/...`), so the verifier exercises the runtime path natively.
-`RuntimeFromMapServer` is deliberately left unregistered so the unconfigured failure mode stays reproducible:
+`src/main/resources/META-INF/native-image/...`), whose method-reference navigation capabilities exercise that same
+`SerializedLambda` decode natively — the exact mechanism that gates unregistered `fromMap`. `RuntimeFromMapServer` is
+deliberately left unregistered so the unconfigured failure mode stays reproducible:
 
 ```
 java.lang.IllegalArgumentException: Expected a method reference to a record component / bean property accessor

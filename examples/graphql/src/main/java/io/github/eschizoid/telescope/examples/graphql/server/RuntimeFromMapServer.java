@@ -16,8 +16,8 @@ import java.util.function.Function;
  * SerializedLambda}). Runs cleanly on the JVM. Under native-image the {@code SerializedLambda}
  * decode needs this class registered as a lambda-capturing type in {@code
  * serialization-config.json} — this class is deliberately left unregistered so the unconfigured
- * failure mode stays reproducible; {@link NativeVerify} is the registered call site that proves the
- * runtime path natively. See the module README.
+ * failure mode stays reproducible; {@link NativeVerify} is the registered call site whose
+ * method-reference navigation proves that same decode natively. See the module README.
  */
 public final class RuntimeFromMapServer {
 
