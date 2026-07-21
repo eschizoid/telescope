@@ -228,11 +228,11 @@ Need eager literals or per-call computed values stamped at the target — MapStr
 
 ```java
 Telescope.mapper(Order.class, OrderDto.class,
-  to(Order::id,                OrderDto::id),
-  constant(OrderDto::tenant,   "production"),       // eager literal
+  to(Order::id, OrderDto::id),
+  constant(OrderDto::tenant, "production"),       // eager literal
   compute(OrderDto::createdAt, Instant::now),      // fresh per call
-  compute(OrderDto::traceId,   UUID::randomUUID),
-  compute(OrderDto::metadata,  HashMap::new));     // fresh container per call
+  compute(OrderDto::traceId, UUID::randomUUID),
+  compute(OrderDto::metadata, HashMap::new));     // fresh container per call
 ```
 
 `constant` captures once at row construction; `compute` invokes the supplier each forward call (the right choice
@@ -891,7 +891,7 @@ static final Telescope<Company, String> USER_NAMES = Telescope.of(Company.class)
   .field(User::name);
 
 final Telescope<Company, Company> normalize = Telescope.all(
-  over(EMAILS,     String::toLowerCase),
+  over(EMAILS, String::toLowerCase),
   over(DEPT_NAMES, String::trim),
   over(USER_NAMES, titleCase));
 
@@ -916,7 +916,7 @@ prefer `Telescope.all(over(...))` when packing two or more edits.
 ```java
 // Equivalent to the Telescope.all(...) form above:
 Telescope.of(Company.class)
-  .update(EMAILS,     String::toLowerCase)
+  .update(EMAILS, String::toLowerCase)
   .update(DEPT_NAMES, String::trim)
   .update(USER_NAMES, titleCase)
   .apply(company);
@@ -941,7 +941,7 @@ no extra API: navigate to the common ancestor and do the multi-field work in one
 ```java
 // Two passes — the Company spine is rebuilt once per edit:
 Telescope.all(
-  over(EMAILS,     String::toLowerCase),   // Company → … → User.email
+  over(EMAILS, String::toLowerCase),   // Company → … → User.email
   over(USER_NAMES, titleCase))             // Company → … → User.name
   .apply(company);
 
