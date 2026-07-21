@@ -90,11 +90,10 @@ public final class NativeVerify {
       if (!r.passed()) failures++;
     }
     System.out.println();
-    if (failures == 0) {
-      System.out.println("ALL " + results.size() + " CAPABILITIES PASSED on this runtime (" + runtimeLabel() + ").");
-    } else {
-      System.out.println(failures + " of " + results.size() + " CAPABILITIES FAILED — see the FAIL lines.");
-    }
+    if (failures == 0) System.out.println(
+      "ALL " + results.size() + " CAPABILITIES PASSED on this runtime (" + runtimeLabel() + ")."
+    );
+    else System.out.println(failures + " of " + results.size() + " CAPABILITIES FAILED — see the FAIL lines.");
     System.exit(failures == 0 ? 0 : 1);
   }
 

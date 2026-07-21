@@ -13,7 +13,11 @@ import java.util.function.Function;
 /**
  * Runtime tier: the {@code createUser} resolver converts the argument Map with the RUNTIME {@code
  * Telescope.fromMap(...)} (it recovers field names from method references via {@code
- * SerializedLambda}). Runs cleanly on the JVM; it can NOT be native-imaged (see the module README).
+ * SerializedLambda}). Runs cleanly on the JVM. Under native-image the {@code SerializedLambda}
+ * decode needs this class registered as a lambda-capturing type in {@code
+ * serialization-config.json} — this class is deliberately left unregistered so the unconfigured
+ * failure mode stays reproducible; {@link NativeVerify} is the registered call site whose
+ * method-reference navigation proves that same decode natively. See the module README.
  */
 public final class RuntimeFromMapServer {
 
@@ -32,17 +36,12 @@ public final class RuntimeFromMapServer {
       extract("email", User::email, Object::toString),
       extract("age", User::age, v -> v == null ? 0 : Integer.parseInt(v.toString())),
       extract("role", User::role, v -> v instanceof Role r ? r : Role.valueOf(v.toString())),
-      extract("address", User::address, v -> addressMapper.forward(asMap(v)))
+      extract("address", User::address, v -> addressMapper.forward(GraphQlServer.asMap(v)))
     );
     return userMapper::forward;
   }
 
   public static void main(final String[] args) throws Exception {
     System.out.println("[runtime] " + GraphQlServer.serveOnce(converter(), GraphQlServer.CREATE_USER_MUTATION));
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Map<String, Object> asMap(final Object raw) {
-    return raw instanceof Map<?, ?> ? (Map<String, Object>) raw : null;
   }
 }

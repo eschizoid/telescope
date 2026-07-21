@@ -51,9 +51,10 @@ import org.springframework.web.bind.annotation.RestController;
  *
  * <p>{@code OrderPath}, {@code OrderTelescope}, and the {@code <X>Bridge} constants that back
  * {@code @Bridge(EntityType.class)} on the leaf records are all <b>generated at compile time</b> by
- * the telescope annotation processors registered as {@code
- * annotationProcessor("io.github.eschizoid:telescope-codegen:1.0.5")} in {@code build.gradle.kts}.
- * Look in {@code build/generated/sources/annotationProcessor/...} after a build to see them.
+ * the telescope annotation processors, registered on the {@code annotationProcessor} configuration
+ * in {@code build.gradle.kts} (this repo wires {@code project(":codegen")}; adopters use the
+ * published {@code io.github.eschizoid:telescope-codegen} coordinate). Look in {@code
+ * build/generated/sources/annotationProcessor/...} after a build to see them.
  *
  * <p>Endpoints:
  *
