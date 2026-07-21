@@ -27,7 +27,7 @@ import org.openjdk.jmh.annotations.State;
  * irreducible source-lookup cost that no binding strategy removes.
  *
  * <pre>{@code
- * ./gradlew :benchmarks:jmh -Pjmh.includes=FromMapBenchmark
+ * ./gradlew :benchmarks:jmh -Pjmh.includes=FromMapBenchmark -Pjmh.fork=3   # fork >= 3 for gating reads
  * }</pre>
  */
 @State(Scope.Benchmark)
@@ -131,5 +131,17 @@ public class FromMapBenchmark {
       0L,
       0
     );
+  }
+
+  /** The bean-side floor: same four source lookups, direct no-arg ctor + setters. */
+  @Benchmark
+  public PaymentBean handPositionalBean() {
+    final var amount = source.get("amountCents");
+    final var bean = new PaymentBean();
+    bean.setId(String.valueOf(source.get("id")));
+    bean.setCurrency(String.valueOf(source.get("currency")));
+    bean.setAmountCents(amount == null ? 0 : ((Number) amount).intValue());
+    bean.setReference(String.valueOf(source.get("reference")));
+    return bean;
   }
 }

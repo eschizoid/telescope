@@ -22,7 +22,7 @@ import org.openjdk.jmh.infra.Blackhole;
  * sides. Read the ratio, not the absolutes.
  *
  * <pre>{@code
- * ./gradlew :benchmarks:jmh -Pjmh.includes=MatchDispatchBenchmark
+ * ./gradlew :benchmarks:jmh -Pjmh.includes=MatchDispatchBenchmark -Pjmh.fork=3   # fork >= 3 for gating reads
  * }</pre>
  */
 @State(Scope.Benchmark)

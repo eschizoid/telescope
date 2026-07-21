@@ -24,7 +24,7 @@ import org.openjdk.jmh.annotations.State;
  * existsMiss}, the fold materializes everything before answering, which is its own finding.
  *
  * <pre>{@code
- * ./gradlew :benchmarks:jmh -Pjmh.includes=ReadFoldBenchmark
+ * ./gradlew :benchmarks:jmh -Pjmh.includes=ReadFoldBenchmark -Pjmh.fork=3   # fork >= 3 for gating reads
  * }</pre>
  */
 @State(Scope.Benchmark)
@@ -81,21 +81,43 @@ public class ReadFoldBenchmark {
     return missEmails.exists(org);
   }
 
-  /** The loop floor for toList. */
+  /**
+   * The loop floor for toList: default capacity (a generic fold can't pre-size a flatMapped path)
+   * and a terminal copy to match the unmodifiable contract {@code Stream.toList()} pays.
+   */
   @Benchmark
   public List<String> toListHand() {
-    final var out = new ArrayList<String>(100);
+    final var out = new ArrayList<String>();
     for (final var team : org.teams()) {
       for (final var user : team.users()) {
         out.add(user.email());
       }
     }
-    return out;
+    return List.copyOf(out);
   }
 
-  /** The loop floor for count. */
+  /**
+   * The achievable loop floor for count: visits every leaf and applies the leaf read, which is what
+   * a generic push-based fold must also do — it cannot know the final hop is a total lens.
+   */
   @Benchmark
   public long countHand() {
+    var n = 0L;
+    for (final var team : org.teams()) {
+      for (final var user : team.users()) {
+        if (user.email() != null) n++;
+      }
+    }
+    return n;
+  }
+
+  /**
+   * The cardinality-exploiting ceiling: sums container sizes without visiting elements. No generic
+   * fold reaches this — it is a separate candidate (a count that short-circuits total-lens tails),
+   * kept as its own row so the gate never reads phantom headroom.
+   */
+  @Benchmark
+  public long countAbsoluteFloor() {
     var n = 0L;
     for (final var team : org.teams()) {
       n += team.users().size();

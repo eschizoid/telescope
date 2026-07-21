@@ -18,19 +18,19 @@ import org.openjdk.jmh.annotations.State;
  * time.
  *
  * <p>Two shapes: the flat 5-field pair and the deep 3-level container tree (the same domains the
- * MapStruct comparison uses). Read the number against the forward call it amortizes — a
- * construction cost of N µs versus a ~tens-of-ns forward means the break-even is N×30-ish calls,
- * which is the "build once, hold it in a static" guidance quantified. This benchmark is a
- * measurement, not a target: whether to memoize sub-Isos globally is a separate decision that
- * starts from these numbers.
+ * MapStruct comparison uses). The harness reports ns/op; expect microsecond-to-millisecond scale.
+ * Read the number against the forward call it amortizes — a construction cost of N µs versus a
+ * ~tens-of-ns forward means the break-even is N×30-ish calls, which is the "build once, hold it in
+ * a static" guidance quantified. This benchmark is a measurement, not a target: whether to memoize
+ * sub-Isos globally is a separate decision that starts from these numbers.
  *
  * <pre>{@code
- * ./gradlew :benchmarks:jmh -Pjmh.includes=MapperConstructionBenchmark
+ * ./gradlew :benchmarks:jmh -Pjmh.includes=MapperConstructionBenchmark -Pjmh.fork=3   # fork >= 3 for gating reads
  * }</pre>
  */
 @State(Scope.Benchmark)
 @BenchmarkMode(Mode.AverageTime)
-@OutputTimeUnit(TimeUnit.MICROSECONDS)
+@OutputTimeUnit(TimeUnit.NANOSECONDS)
 public class MapperConstructionBenchmark {
 
   @Benchmark

@@ -26,7 +26,7 @@ import org.openjdk.jmh.annotations.State;
  * construct cost a positional bind would target.
  *
  * <pre>{@code
- * ./gradlew :benchmarks:jmh -Pjmh.includes=MergeBenchmark
+ * ./gradlew :benchmarks:jmh -Pjmh.includes=MergeBenchmark -Pjmh.fork=3   # fork >= 3 for gating reads
  * }</pre>
  */
 @State(Scope.Benchmark)

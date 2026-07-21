@@ -4,6 +4,7 @@ import static io.github.eschizoid.telescope.Edit.over;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -28,7 +29,7 @@ import org.openjdk.jmh.annotations.State;
  * .each(...)} prefix over a 100-element list rebuild the whole container k times.
  *
  * <pre>{@code
- * ./gradlew :benchmarks:jmh -Pjmh.includes=MultiEditBenchmark
+ * ./gradlew :benchmarks:jmh -Pjmh.includes=MultiEditBenchmark -Pjmh.fork=3   # fork >= 3 for gating reads
  * }</pre>
  */
 @State(Scope.Benchmark)
@@ -121,7 +122,10 @@ public class MultiEditBenchmark {
     return tree3.apply(org);
   }
 
-  /** The tree fusion floor: one pass over the container, all three leaf edits per element. */
+  /**
+   * The tree fusion floor: one pass over the container, all three leaf edits per element. The
+   * rebuilt list is wrapped, not copied — matching the traversal's own rebuild shape.
+   */
   @Benchmark
   public Org handFusedTree3() {
     final var users = org.users();
@@ -129,6 +133,6 @@ public class MultiEditBenchmark {
     for (final var u : users) {
       out.add(new User(u.name().trim(), u.email().toLowerCase(), u.age() + 1));
     }
-    return new Org(org.title(), List.copyOf(out));
+    return new Org(org.title(), Collections.unmodifiableList(out));
   }
 }
