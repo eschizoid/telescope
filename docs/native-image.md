@@ -82,11 +82,68 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
   with `Class.getRecordComponents()` and unreflects their accessors / constructor / setters, so those DTO types need a
   `reflect-config.json`; `.field(methodref)` needs the call-site class in a `serialization-config.json` (Wall A). Both
   live under the app's `META-INF/native-image/...`, exactly as every GraalVM app ships for its own domain types — the
-  example does this for its model types (including the builder-only bean and its `Builder`). Hand-write them, or
-  generate them with the GraalVM tracing agent.
+  example does this for its model types (including the builder-only bean and its `Builder`). Four ways to produce them,
+  in order of how often they fit — see below.
 - **`privateLookupIn`.** All records/beans here are public on the classpath, so `MethodHandles.privateLookupIn` succeeds
   without an `opens` directive. A downstream consumer with JPMS-closed packages still needs
   `opens ... to io.github.eschizoid.telescope;` — a module-descriptor requirement, not a native-image one.
+
+## Producing the app metadata
+
+1. **Hand-write it.** For a handful of DTO types this is the honest option: the example's
+   [`reflect-config.json`](../examples/graphql/src/main/resources/META-INF/native-image/io.github.eschizoid/telescope-examples-graphql/reflect-config.json)
+   is eight readable entries and doubles as the template. One gotcha: nested types get their own entry with the binary
+   name (`AccountBuilderBean$Builder`) — the builder write path unreflects the builder class too.
+2. **Framework hints — the route for the starter users.** Both frameworks telescope ships starters for generate this
+   metadata themselves; if you're on one, use its mechanism and skip the JSON entirely:
+   - **Quarkus**: `@RegisterForReflection(targets = { User.class, UserView.class })` on any class in the app (or
+     `classNames` for types you can't reference). Quarkus emits the config during the native build.
+   - **Spring Boot (AOT)**: `@RegisterReflectionForBinding(User.class)` on a `@Configuration` class, or a
+     `RuntimeHintsRegistrar` that loops your model package and calls `hints.reflection().registerType(...)` per type.
+     Spring's AOT engine writes the config during `bootBuildImage`.
+3. **Generate from the model package.** For a large plain-Java model, a small Gradle task can emit the entries from the
+   compiled classes directory. Walk **compiled classes, not sources** — nested types compile to their own `.class` files
+   (`AccountBuilderBean$Builder.class`), so the classes walk catches them where a source walk silently misses them:
+
+   ```kotlin
+   tasks.register("generateReflectConfig") {
+       dependsOn(tasks.compileJava)
+       val pkg = "com.acme.app.model"
+       val classesDir = layout.buildDirectory.dir("classes/java/main/" + pkg.replace('.', '/'))
+       val out = layout.buildDirectory.file("generated/native-config/reflect-config.json")
+       inputs.dir(classesDir)
+       outputs.file(out)
+       doLast {
+           val entries = classesDir.get().asFile.walkTopDown()
+               .filter { it.extension == "class" }
+               .map { "$pkg.${it.nameWithoutExtension}" }
+               .sorted()
+               .joinToString(",\n") {
+                   """  { "name": "$it", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true }"""
+               }
+           out.get().asFile.apply {
+               parentFile.mkdirs()
+               writeText("[\n$entries\n]\n")
+           }
+       }
+   }
+
+   graalvmNative {
+       binaries {
+           named("main") {
+               buildArgs.add("-H:ConfigurationFileDirectories=${layout.buildDirectory.dir("generated/native-config").get()}")
+           }
+       }
+   }
+   ```
+
+   It over-registers (every type in the package, all members) — the price of not enumerating by hand. Wire the task
+   before `nativeCompile` and keep the package boundary tight.
+
+4. **The GraalVM tracing agent.** Run the app or its tests once on the JVM with
+   `-agentlib:native-image-agent=config-output-dir=...` and it dumps all the config files from observed behavior.
+   Broadest coverage, noisiest output — entries for everything the run touched, not just your model — and it only
+   records what actually executed, so an untested code path is an unregistered one.
 
 ## Verdict
 
