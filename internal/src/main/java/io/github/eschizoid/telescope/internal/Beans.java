@@ -277,7 +277,11 @@ public final class Beans {
 
   @SuppressWarnings("unchecked")
   private static Function<Object, Object> buildHibernateLazyInitializerFn() {
-    if (HIBERNATE_PROXY == null) return null;
+    // In a native image, proxy unwrapping is off by contract (the one documented JVM/codegen-only
+    // accessor path). The guard also prevents a build-time-initialized LMF hidden class from being
+    // captured into the image heap when Hibernate is on the image classpath — these builders run at
+    // class init, which is build time under core's native-image.properties.
+    if (HIBERNATE_PROXY == null || NativeImage.IN_IMAGE) return null;
     try {
       final var method = HIBERNATE_PROXY.getMethod("getHibernateLazyInitializer");
       final var lookup = MethodHandles.lookup();
@@ -298,7 +302,8 @@ public final class Beans {
 
   @SuppressWarnings("unchecked")
   private static Function<Object, Class<?>> buildHibernatePersistentClassFn() {
-    if (HIBERNATE_PROXY == null) return null;
+    // Same native-image guard as buildHibernateLazyInitializerFn — see the comment there.
+    if (HIBERNATE_PROXY == null || NativeImage.IN_IMAGE) return null;
     try {
       final var lazyInitializer = Class.forName(
         "org.hibernate.proxy.LazyInitializer",
