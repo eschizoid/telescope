@@ -101,26 +101,32 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
    - **Spring Boot (AOT)**: `@RegisterReflectionForBinding(User.class)` on a `@Configuration` class, or a
      `RuntimeHintsRegistrar` that loops your model package and calls `hints.reflection().registerType(...)` per type.
      Spring's AOT engine writes the config during `bootBuildImage`.
-3. **Generate from the model package.** For a large plain-Java model, a small Gradle task can emit the `reflect-config`
+3. **Generate from the model packages.** For a large plain-Java model, a small Gradle task can emit the `reflect-config`
    entries from the compiled classes directory. Walk **compiled classes, not sources** — nested types compile to their
    own `.class` files (`AccountBuilderBean$Builder.class`), so the classes walk catches them where a source walk
-   silently misses them:
+   silently misses them. Takes as many packages as you have model roots:
 
    ```kotlin
    tasks.register("generateReflectConfig") {
        dependsOn(tasks.compileJava)
-       val pkg = "com.acme.app.model"
-       val classesDir = layout.buildDirectory.dir("classes/java/main/" + pkg.replace('.', '/'))
+       val pkgs = listOf("com.acme.app.model", "com.acme.billing.model")
+       val classesRoot = layout.buildDirectory.dir("classes/java/main")
        val out = layout.buildDirectory.file("generated/native-config/reflect-config.json")
-       inputs.dir(classesDir)
+       inputs.dir(classesRoot)
        outputs.file(out)
        doLast {
-           val base = classesDir.get().asFile
-           val entries = base.walkTopDown()
-               .filter { it.extension == "class" && it.name != "package-info.class" }
-               // Derive the binary name from the relative path so subpackages come out right:
-               // model/billing/Invoice.class → pkg.billing.Invoice, Foo$Builder.class → pkg.Foo$Builder.
-               .map { "$pkg." + it.relativeTo(base).invariantSeparatorsPath.removeSuffix(".class").replace('/', '.') }
+           val root = classesRoot.get().asFile
+           val entries = pkgs
+               .flatMap { pkg ->
+                   val base = root.resolve(pkg.replace('.', '/'))
+                   base
+                       .walkTopDown()
+                       .filter { it.extension == "class" && it.name != "package-info.class" }
+                       // Derive the binary name from the relative path so subpackages come out right:
+                       // model/billing/Invoice.class → pkg.billing.Invoice, Foo$Builder.class → pkg.Foo$Builder.
+                       .map { "$pkg." + it.relativeTo(base).invariantSeparatorsPath.removeSuffix(".class").replace('/', '.') }
+                       .toList()
+               }
                .sorted()
                .joinToString(",\n") {
                    """  { "name": "$it", "allDeclaredConstructors": true, "allDeclaredMethods": true, "allDeclaredFields": true }"""
@@ -141,12 +147,15 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
    }
    ```
 
-   It over-registers (every type in the package, all members) — the price of not enumerating by hand. Wire the task
-   before `nativeCompile` and keep the package boundary tight. Note this produces `reflect-config.json` only: the
-   `serialization-config` entries name the **call-site classes** holding your `.field(methodref)` references — usage
-   information, not model information — so no walk of the model folder can derive them. Hand-list those (usually one to
-   three classes), point the same walk at the package where your navigation code lives, or use `.fieldByName(String)` /
-   codegen navigators and skip the file entirely.
+   This exact task, pointed at the graphql example's model package, reproduces every entry of the example's hand-written
+   config (nested `$Builder` included, correct subpackage FQNs) plus four extras — the codegen-generated classes that
+   compile into the same package and need no registration. Which is the trade stated plainly: it over-registers (every
+   type in the walked packages, all members), the price of not enumerating by hand. Wire the task before `nativeCompile`
+   and keep the package boundaries tight. Note this produces `reflect-config.json` only: the `serialization-config`
+   entries name the **call-site classes** holding your `.field(methodref)` references — usage information, not model
+   information — so no walk of the model folder can derive them. Hand-list those (usually one to three classes), point
+   the same walk at the package where your navigation code lives, or use `.fieldByName(String)` / codegen navigators and
+   skip the file entirely.
 
 4. **The GraalVM tracing agent.** Run the app or its tests once on the JVM with
    `-agentlib:native-image-agent=config-output-dir=...` and it dumps all the config files from observed behavior.
