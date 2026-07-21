@@ -101,9 +101,10 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
    - **Spring Boot (AOT)**: `@RegisterReflectionForBinding(User.class)` on a `@Configuration` class, or a
      `RuntimeHintsRegistrar` that loops your model package and calls `hints.reflection().registerType(...)` per type.
      Spring's AOT engine writes the config during `bootBuildImage`.
-3. **Generate from the model package.** For a large plain-Java model, a small Gradle task can emit the entries from the
-   compiled classes directory. Walk **compiled classes, not sources** — nested types compile to their own `.class` files
-   (`AccountBuilderBean$Builder.class`), so the classes walk catches them where a source walk silently misses them:
+3. **Generate from the model package.** For a large plain-Java model, a small Gradle task can emit the `reflect-config`
+   entries from the compiled classes directory. Walk **compiled classes, not sources** — nested types compile to their
+   own `.class` files (`AccountBuilderBean$Builder.class`), so the classes walk catches them where a source walk
+   silently misses them:
 
    ```kotlin
    tasks.register("generateReflectConfig") {
@@ -115,7 +116,7 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
        outputs.file(out)
        doLast {
            val entries = classesDir.get().asFile.walkTopDown()
-               .filter { it.extension == "class" }
+               .filter { it.extension == "class" && it.name != "package-info.class" }
                .map { "$pkg.${it.nameWithoutExtension}" }
                .sorted()
                .joinToString(",\n") {
@@ -138,7 +139,11 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
    ```
 
    It over-registers (every type in the package, all members) — the price of not enumerating by hand. Wire the task
-   before `nativeCompile` and keep the package boundary tight.
+   before `nativeCompile` and keep the package boundary tight. Note this produces `reflect-config.json` only: the
+   `serialization-config` entries name the **call-site classes** holding your `.field(methodref)` references — usage
+   information, not model information — so no walk of the model folder can derive them. Hand-list those (usually one to
+   three classes), point the same walk at the package where your navigation code lives, or use `.fieldByName(String)` /
+   codegen navigators and skip the file entirely.
 
 4. **The GraalVM tracing agent.** Run the app or its tests once on the JVM with
    `-agentlib:native-image-agent=config-output-dir=...` and it dumps all the config files from observed behavior.
