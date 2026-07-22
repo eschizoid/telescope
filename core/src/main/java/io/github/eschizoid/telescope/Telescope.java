@@ -13,7 +13,6 @@ import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.BridgeHolderProbe;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
-import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Affine;
@@ -27,7 +26,6 @@ import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.OpticReport;
 import io.github.eschizoid.telescope.introspection.Trace;
 import io.github.eschizoid.telescope.introspection.TraceLimits;
-import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
 import io.github.eschizoid.telescope.mapping.MapStep;
@@ -40,12 +38,10 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -753,52 +749,8 @@ public sealed class Telescope<
    * @return a {@link ForwardMapper} from {@code Map<String, Object>} to {@code T}, ready to inject
    *     as a CDI/Spring bean.
    */
-  @SuppressWarnings("unchecked")
   public static <T> ForwardMapper<Map<String, Object>, T> fromMap(final Class<T> target, final MapExtractStep... rows) {
-    Objects.requireNonNull(target, "target");
-    Objects.requireNonNull(rows, "rows");
-    final var byField = new LinkedHashMap<String, Extract<?, ?>>();
-    for (final var row : rows) {
-      if (!(row instanceof Extract<?, ?> e)) throw new IllegalArgumentException(
-        "Telescope.fromMap rows must be built via MapExtractStep.extract(...)"
-      );
-      final var rawName = LambdaIntrospection.methodNameOf(e.targetAccessor());
-      final var prop = Beans.propertyOf(rawName);
-      final var fieldName = prop == null ? rawName : prop;
-      if (byField.put(fieldName, e) != null) throw new IllegalArgumentException(
-        "Telescope.fromMap: duplicate extract row for target field '" + fieldName + "'"
-      );
-    }
-    // Per-component JLS-default lookup table — built once at factory time, queried on every
-    // forward pass for unmatched target components. Records expose typed generic-type info on each
-    // RecordComponent; POJOs query Beans.propertyType per property.
-    final var defaultsByName = new HashMap<String, Object>();
-    final var isRecord = target.isRecord();
-    if (isRecord) {
-      for (final var c : target.getRecordComponents()) {
-        defaultsByName.put(c.getName(), NullDefaults.defaultFor(c.getGenericType()));
-      }
-    } else {
-      for (final var name : Beans.propertyNames(target)) {
-        defaultsByName.put(name, NullDefaults.defaultFor(Beans.propertyType(target, name)));
-      }
-    }
-    // Hoist the reflective writer + property-name array out of the hot path. Recomputing them per
-    // forward() would re-walk the bean's accessor methods every call — invariants in the closure.
-    final Beans.BeanWriter<T> writer = isRecord ? null : Beans.autoWriter(target);
-    final String[] propertyNames = isRecord ? null : Beans.propertyNames(target);
-    final Function<Map<String, Object>, T> forward = mapSrc -> {
-      if (mapSrc == null) return null;
-      final Function<String, Object> valueByName = name -> {
-        final var row = byField.get(name);
-        if (row == null) return defaultsByName.get(name); // unmatched target → JLS default
-        final var raw = mapSrc.get(row.key());
-        return ((Extract<?, Object>) row).converter().apply(raw);
-      };
-      if (isRecord) return Records.construct(target, valueByName);
-      return writer.construct(propertyNames, valueByName);
-    };
-    return ForwardMapper.create(forward, (Class<Map<String, Object>>) (Class<?>) Map.class, target);
+    return FromMap.build(target, rows);
   }
 
   /**

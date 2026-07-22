@@ -203,6 +203,25 @@ public final class Records {
     return (R) info.ctorFn().apply(args);
   }
 
+  /**
+   * Positional sibling of {@link #construct(Class, Function)}: invoke the canonical constructor
+   * with {@code args} already in component order, skipping the per-component name dispatch
+   * entirely. For callers that resolved their per-component work at construction time (a
+   * factory-time positional bind), this is the whole hot path: one cached {@code MethodHandle}
+   * invocation.
+   *
+   * @throws IllegalArgumentException when {@code args.length} doesn't match the component count
+   */
+  @SuppressWarnings("unchecked")
+  public static <R> R construct(final Class<R> recordClass, final Object[] args) {
+    final var info = info(recordClass);
+    final var arity = info.components().length;
+    if (args.length != arity) throw new IllegalArgumentException(
+      recordClass.getName() + " has " + arity + " components; got " + args.length + " positional args"
+    );
+    return (R) info.ctorFn().apply(args);
+  }
+
   private static Object readField(final Object source, final String fieldName) {
     if (source == null) return null;
     final var info = info(source.getClass());
