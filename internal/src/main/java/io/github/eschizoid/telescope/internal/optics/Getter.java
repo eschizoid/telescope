@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 /**
@@ -34,6 +35,12 @@ public interface Getter<S, A> extends Fold<S, A> {
   @Override
   default Stream<A> getAll(final S source) {
     return Stream.of(get(source));
+  }
+
+  /** Fold view: visit the single focused value. */
+  @Override
+  default boolean visitWhile(final S source, final Predicate<? super A> visitor) {
+    return visitor.test(get(source));
   }
 
   /**

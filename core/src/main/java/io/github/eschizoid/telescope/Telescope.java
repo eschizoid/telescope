@@ -1521,7 +1521,7 @@ public sealed class Telescope<
     if (optic instanceof final Affine<S, A> affine) {
       return affine.getOption(source).map(List::of).orElseGet(List::of);
     }
-    return optic.getAll(source).toList();
+    return optic.toList(source);
   }
 
   /**
@@ -1538,7 +1538,7 @@ public sealed class Telescope<
   public List<Indexed<A>> toListIndexed(final S source) {
     final var out = new ArrayList<Indexed<A>>();
     final var i = new int[] { 0 };
-    optic.getAll(source).forEach(a -> out.add(new Indexed<>(i[0]++, a)));
+    optic.forEach(source, a -> out.add(new Indexed<>(i[0]++, a)));
     return List.copyOf(out);
   }
 
@@ -1560,7 +1560,7 @@ public sealed class Telescope<
     if (optic instanceof final Affine<S, A> affine) {
       return affine.getOption(source).isPresent() ? 1L : 0L;
     }
-    return optic.getAll(source).count();
+    return optic.count(source);
   }
 
   /**
@@ -1574,7 +1574,10 @@ public sealed class Telescope<
     if (optic instanceof final Affine<S, A> affine) {
       return affine.getOption(source).isPresent();
     }
-    return optic.getAll(source).findAny().isPresent();
+    // A single false-returning visit stops at the first focus: visitWhile returns false iff at
+    // least one element was seen. Unlike Stream.findAny(), this tolerates a null focus (a null
+    // intermediate hop yields a one-element [null] traversal) instead of NPE-ing on Optional.of.
+    return !optic.visitWhile(source, a -> false);
   }
 
   /**

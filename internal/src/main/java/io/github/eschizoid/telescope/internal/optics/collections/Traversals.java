@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
@@ -44,6 +45,12 @@ public final class Traversals {
       }
 
       @Override
+      public boolean visitWhile(final List<A> source, final Predicate<? super A> visitor) {
+        for (final var a : source) if (!visitor.test(a)) return false;
+        return true;
+      }
+
+      @Override
       public List<A> modify(final List<A> source, final Function<? super A, ? extends A> f) {
         final var out = new ArrayList<A>(source.size());
         for (final var a : source) out.add(f.apply(a));
@@ -63,6 +70,12 @@ public final class Traversals {
       }
 
       @Override
+      public boolean visitWhile(final Set<A> source, final Predicate<? super A> visitor) {
+        for (final var a : source) if (!visitor.test(a)) return false;
+        return true;
+      }
+
+      @Override
       public Set<A> modify(final Set<A> source, final Function<? super A, ? extends A> f) {
         final var out = new LinkedHashSet<A>(source.size());
         for (final var a : source) out.add(f.apply(a));
@@ -79,6 +92,12 @@ public final class Traversals {
       @Override
       public Stream<V> getAll(final Map<K, V> source) {
         return source.values().stream();
+      }
+
+      @Override
+      public boolean visitWhile(final Map<K, V> source, final Predicate<? super V> visitor) {
+        for (final var v : source.values()) if (!visitor.test(v)) return false;
+        return true;
       }
 
       @Override
@@ -127,15 +146,22 @@ public final class Traversals {
       }
 
       @Override
+      public boolean visitWhile(final C source, final Predicate<? super E> visitor) {
+        if (source == null) return true;
+        for (final var e : source) if (!visitor.test(e)) return false;
+        return true;
+      }
+
+      @Override
       public C modify(final C source, final Function<? super E, ? extends E> f) {
         if (source == null) return null;
-        if (source instanceof List<?>) {
-          final var out = new ArrayList<E>();
+        if (source instanceof final List<?> list) {
+          final var out = new ArrayList<E>(list.size());
           for (final var e : source) out.add(f.apply(e));
           return (C) Collections.unmodifiableList(out);
         }
-        if (source instanceof Set<?>) {
-          final var out = new LinkedHashSet<E>();
+        if (source instanceof final Set<?> set) {
+          final var out = new LinkedHashSet<E>(set.size());
           for (final var e : source) out.add(f.apply(e));
           return (C) Collections.unmodifiableSet(out);
         }

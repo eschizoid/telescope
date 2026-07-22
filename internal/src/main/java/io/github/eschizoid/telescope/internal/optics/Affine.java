@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal.optics;
 import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 /**
@@ -40,6 +41,13 @@ public interface Affine<S, A> extends Traversal<S, A> {
   @Override
   default Stream<A> getAll(final S source) {
     return getOption(source).stream();
+  }
+
+  /** Fold view: visit the focused value when present, otherwise focus nothing. */
+  @Override
+  default boolean visitWhile(final S source, final Predicate<? super A> visitor) {
+    final var focus = getOption(source);
+    return focus.isEmpty() || visitor.test(focus.get());
   }
 
   /** Build an Affine from a partial getter and an {@code (S, A) -> S} setter. */
