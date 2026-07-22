@@ -1,4 +1,4 @@
- # telescope on GraalVM native-image
+# telescope on GraalVM native-image
 
 Telescope's runtime hot path is reflection-free by design: field reads and record/bean rebuilds ride a per-class cache
 of `LambdaMetafactory`-built `Function` / `Supplier` / `BiConsumer` instances (see `internal/Records.java`,
