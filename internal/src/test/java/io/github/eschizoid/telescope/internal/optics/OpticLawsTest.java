@@ -1,11 +1,15 @@
 package io.github.eschizoid.telescope.internal.optics;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -226,6 +230,61 @@ class OpticLawsTest {
       final var composed = uIso.then(dtoName);
       assertInstanceOf(Lens.class, composed);
       assertEquals("Alice", composed.get(ALICE));
+    }
+  }
+
+  @Nested
+  @DisplayName("visitWhile enumerates the same focuses as getAll")
+  class VisitWhileEquivalence {
+
+    // A List<User> traversed element-wise, then narrowed to each user's name: exercises
+    // Traversal.then's visitWhile (nested loops) against the getAll (flatMap) it must match.
+    static final Traversal<List<User>, String> eachName = Traversals.<User>eachList().then(userName);
+
+    static final List<User> roster = List.of(
+      new User("Alice", 30, null),
+      new User("Bob", 25, null),
+      new User("Cara", 40, null)
+    );
+
+    @Test
+    @DisplayName("a full visit collects the same elements in the same order as getAll")
+    void visitWhileMatchesGetAll() {
+      final var viaStream = eachName.getAll(roster).toList();
+      final var viaVisit = new ArrayList<String>();
+      final var full = eachName.visitWhile(roster, name -> {
+        viaVisit.add(name);
+        return true;
+      });
+      assertTrue(full); // nothing short-circuited, so every focus was visited
+      assertEquals(viaStream, viaVisit);
+      assertEquals(List.of("Alice", "Bob", "Cara"), viaVisit);
+    }
+
+    @Test
+    @DisplayName("a false visit stops immediately and reports the short-circuit")
+    void visitWhileShortCircuits() {
+      final var seen = new ArrayList<String>();
+      final var full = eachName.visitWhile(roster, name -> {
+        seen.add(name);
+        return !name.equals("Bob");
+      });
+      assertFalse(full); // the visit stopped early
+      assertEquals(List.of("Alice", "Bob"), seen); // stopped AT Bob; Cara was never visited
+    }
+
+    @Test
+    @DisplayName("a filtered visit skips non-matching focuses and still matches getAll order")
+    void filteredVisitWhileMatchesGetAll() {
+      final var shortNames = eachName.filter(name -> name.length() <= 4); // Alice=5 out, Bob/Cara in
+      final var viaStream = shortNames.getAll(roster).toList();
+      final var viaVisit = new ArrayList<String>();
+      shortNames.visitWhile(roster, name -> {
+        viaVisit.add(name);
+        return true;
+      });
+      assertEquals(viaStream, viaVisit);
+      assertEquals(List.of("Bob", "Cara"), viaVisit);
     }
   }
 }

@@ -103,8 +103,10 @@ class TelescopeTest {
     @DisplayName("a null focus is still a focus — exists/count/toList tolerate it, they don't NPE")
     void nullFocusToleratedByReadTerminals() {
       // A List element whose focused field is null yields a one-element [null] traversal. The read
-      // terminals must count it as one present focus; the prior Stream.findAny()/toList path
-      // NPE-d on the null (Optional.of / Stream.of reject null).
+      // terminals must count it as one present focus. exists() previously routed through
+      // Stream.findAny(), which NPEs on a null element (Optional.of); the visitor path tolerates
+      // it.
+      // (toList/count were already null-safe via Stream.toList()/.count() — this pins all three.)
       final var userName = Telescope.of(Team.class).each(Team::users).field(User::name);
       final var t = new Team("a", List.of(new User(null, 30, null)));
 
