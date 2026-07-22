@@ -19,11 +19,12 @@ import java.util.function.Function;
  * Map<String, Object> → T} boundary factory. Sibling of {@link Merge}: the {@code Telescope} facade
  * validates nothing and delegates here, keeping the factories-delegate-to-engines shape.
  *
- * <p>Everything name-keyed resolves at build time. Rows are matched to target components /
- * properties once, into positional arrays; the per-call forward path is then a source {@code
- * Map.get} plus converter call per extracted slot, a JLS default per unmatched slot, and one cached
- * canonical-constructor invocation (records) or writer fill (beans) — no per-call name→row or
- * name→default lookups.
+ * <p>Rows are matched to target components / properties once at build time, into positional arrays.
+ * On the record path the per-call forward is fully positional: a source {@code Map.get} plus
+ * converter per extracted slot, a JLS default per unmatched slot, and one cached
+ * canonical-constructor invocation — no name lookup survives. On the bean path the writer's {@code
+ * construct} contract stays name-driven, so one {@code name→index} lookup per property remains
+ * (down from the two the old engine paid — the row map and the defaults map).
  */
 final class FromMap {
 
