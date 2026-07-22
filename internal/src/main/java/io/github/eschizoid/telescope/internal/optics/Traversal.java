@@ -47,6 +47,12 @@ public interface Traversal<S, A> extends Fold<S, A>, Setter<S, A> {
       }
 
       @Override
+      public boolean visitWhile(final S source, final Predicate<? super A> visitor) {
+        // Skip non-matching focuses without invoking the visitor; short-circuit propagates through.
+        return self.visitWhile(source, a -> !predicate.test(a) || visitor.test(a));
+      }
+
+      @Override
       public S modify(final S source, final Function<? super A, ? extends A> f) {
         return self.modify(source, a -> predicate.test(a) ? f.apply(a) : a);
       }
@@ -118,6 +124,13 @@ public interface Traversal<S, A> extends Fold<S, A>, Setter<S, A> {
       @Override
       public Stream<B> getAll(final S source) {
         return self.getAll(source).flatMap(next::getAll);
+      }
+
+      @Override
+      public boolean visitWhile(final S source, final Predicate<? super B> visitor) {
+        // Nested loops instead of a flatMap tower: each outer focus drives the inner visit, and an
+        // inner short-circuit returns false up through the outer visit to stop the whole walk.
+        return self.visitWhile(source, a -> next.visitWhile(a, visitor));
       }
 
       @Override

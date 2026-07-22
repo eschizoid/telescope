@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 /**
@@ -81,6 +82,12 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
   @Override
   default Stream<B> getAll(final A source) {
     return Stream.of(to(source));
+  }
+
+  /** Fold view: visit the single converted value. */
+  @Override
+  default boolean visitWhile(final A source, final Predicate<? super B> visitor) {
+    return visitor.test(to(source));
   }
 
   /** Build an Iso from two inverse functions (must satisfy both round-trip laws). */

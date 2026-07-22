@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal.optics;
 import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 /**
@@ -142,6 +143,12 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
   default Stream<A> getAll(final S source) {
     if (source == null) return Stream.empty();
     return Stream.of(get(source));
+  }
+
+  /** Fold view: a null source focuses nothing; otherwise visit the single focused value. */
+  @Override
+  default boolean visitWhile(final S source, final Predicate<? super A> visitor) {
+    return source == null || visitor.test(get(source));
   }
 
   /** Build a Lens from a getter and an {@code (S, A) -> S} setter. */
