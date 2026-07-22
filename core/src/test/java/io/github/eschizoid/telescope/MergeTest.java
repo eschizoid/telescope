@@ -340,4 +340,99 @@ class MergeTest {
       assertTrue(ex.getMessage().contains("Customer"));
     }
   }
+
+  // A mutable POJO target: no-arg ctor + setters => the setters write strategy. The common
+  // bean-target shape, and the one the merge engine's bean path assembles.
+  static final class SettersProfile {
+
+    private String id;
+    private String region;
+
+    public SettersProfile() {}
+
+    public String getId() {
+      return id;
+    }
+
+    public void setId(final String id) {
+      this.id = id;
+    }
+
+    public String getRegion() {
+      return region;
+    }
+
+    public void setRegion(final String region) {
+      this.region = region;
+    }
+  }
+
+  // A field-injection target: no-arg ctor, NO setters, no static builder => the field write
+  // strategy. `label` is a getter-only computed property with no backing field, so the field
+  // writer skips it entirely — the corner where a lazily-read bound row could swallow a
+  // source-missing throw.
+  static final class FieldsTarget {
+
+    private String id;
+
+    public FieldsTarget() {}
+
+    public String getId() {
+      return id;
+    }
+
+    public String getLabel() {
+      return "label-of-" + id;
+    }
+  }
+
+  @Nested
+  @DisplayName("bean targets — the merge engine's bean write path")
+  class BeanTargets {
+
+    @Test
+    @DisplayName("forward assembles a mutable POJO target through its setters")
+    void beanTargetForwardAssembles() {
+      final Mapper<Sources, SettersProfile> mapper = Telescope.merge(
+        SettersProfile.class,
+        from(Customer::id, SettersProfile::getId),
+        from(Audit::createdBy, SettersProfile::getRegion)
+      );
+
+      final var result = mapper.forward(Sources.of(new Customer("c-9", "z@z.com"), new Audit("auditor", "2026-07-21")));
+      assertEquals("c-9", result.getId());
+      assertEquals("auditor", result.getRegion());
+    }
+
+    @Test
+    @DisplayName("a bean target left partially unmapped leaves the untouched property null")
+    void beanTargetUnmappedPropertyNull() {
+      final Mapper<Sources, SettersProfile> mapper = Telescope.merge(
+        SettersProfile.class,
+        from(Customer::id, SettersProfile::getId)
+      );
+
+      final var result = mapper.forward(Sources.of(new Customer("c-9", "z@z.com")));
+      assertEquals("c-9", result.getId());
+      assertEquals(null, result.getRegion());
+    }
+
+    @Test
+    @DisplayName("a missing source still throws even when the field writer would skip that bound property")
+    void beanFieldWriterMissingSourceStillThrows() {
+      // The row binds Audit->getLabel, a getter-only property the field writer skips at construct
+      // time. A lazily-read bound row would never be queried, swallowing the source-missing throw;
+      // the eager read keeps the guarantee that an absent source is reported.
+      final Mapper<Sources, FieldsTarget> mapper = Telescope.merge(
+        FieldsTarget.class,
+        from(Customer::id, FieldsTarget::getId),
+        from(Audit::createdBy, FieldsTarget::getLabel)
+      );
+
+      final var bag = Sources.of(new Customer("c-1", "x@y.com")); // no Audit
+      final var ex = assertThrows(IllegalStateException.class, () -> mapper.forward(bag));
+      assertTrue(ex.getMessage().contains("Audit"));
+      assertTrue(ex.getMessage().contains("label"));
+    }
+  }
 }

@@ -113,11 +113,20 @@ final class Merge {
       slots[i] = planByTgt.get(names[i]);
     }
     return sources -> {
+      // Read every bound row up front, then serve the writer from the filled array. Eager reads
+      // preserve the prior contract that a missing source throws even when the target's writer
+      // would not query that property — a getter-only property with no backing field is skipped by
+      // the field writer, so a lazy per-property read would swallow the source-missing throw there.
+      // Unbound slots stay null (merge applies no JLS defaults). The per-call staging map is still
+      // gone: values land in a positional array, resolved by the prebuilt name→index map.
+      final var values = new Object[n];
+      for (var i = 0; i < n; i++) {
+        final var r = slots[i];
+        if (r != null) values[i] = r.srcAccessor().get(sourceOrThrow(sources, r));
+      }
       final Function<String, Object> valueByName = name -> {
         final var i = indexByName.get(name);
-        if (i == null) return null;
-        final var r = slots[i];
-        return r == null ? null : r.srcAccessor().get(sourceOrThrow(sources, r));
+        return i == null ? null : values[i];
       };
       return (T) targetRefl.construct(target, valueByName);
     };
