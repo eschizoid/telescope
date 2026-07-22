@@ -155,13 +155,13 @@ public final class Traversals {
       @Override
       public C modify(final C source, final Function<? super E, ? extends E> f) {
         if (source == null) return null;
-        if (source instanceof List<?>) {
-          final var out = new ArrayList<E>();
+        if (source instanceof final List<?> list) {
+          final var out = new ArrayList<E>(list.size());
           for (final var e : source) out.add(f.apply(e));
           return (C) Collections.unmodifiableList(out);
         }
-        if (source instanceof Set<?>) {
-          final var out = new LinkedHashSet<E>();
+        if (source instanceof final Set<?> set) {
+          final var out = new LinkedHashSet<E>(set.size());
           for (final var e : source) out.add(f.apply(e));
           return (C) Collections.unmodifiableSet(out);
         }
