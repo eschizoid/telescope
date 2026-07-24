@@ -5,6 +5,8 @@ import static io.github.eschizoid.telescope.Edit.overIfPresent;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -215,12 +217,12 @@ class AllOverFusionTest {
   @DisplayName("container and paradigm coverage")
   class ContainerCoverage {
 
-    record Prefs(java.util.Map<String, String> flags, java.util.Optional<String> nickname, String plan) {}
+    record Prefs(Map<String, String> flags, Optional<String> nickname, String plan) {}
 
     @Test
     @DisplayName("eachValue + whenPresent + field fuse at one record level and match sequential")
     void mapOptionalAndFieldAtOneLevel() {
-      final var prefs = new Prefs(java.util.Map.of("a", "1", "b", "2"), java.util.Optional.of("nick"), "pro");
+      final var prefs = new Prefs(Map.of("a", "1", "b", "2"), Optional.of("nick"), "pro");
       final var flags = over(Telescope.of(Prefs.class).eachValue(Prefs::flags), (final String v) -> v + "!");
       final var nick = over(Telescope.of(Prefs.class).whenPresent(Prefs::nickname), String::toUpperCase);
       final var plan = over(Telescope.of(Prefs.class).field(Prefs::plan), String::toUpperCase);
@@ -231,7 +233,7 @@ class AllOverFusionTest {
     @Test
     @DisplayName("empty containers and empty Optionals pass through the fused walk unchanged")
     void emptyContainers() {
-      final var empty = new Prefs(java.util.Map.of(), java.util.Optional.empty(), "free");
+      final var empty = new Prefs(Map.of(), Optional.empty(), "free");
       final var flags = over(Telescope.of(Prefs.class).eachValue(Prefs::flags), (final String v) -> v + "!");
       final var nick = over(Telescope.of(Prefs.class).whenPresent(Prefs::nickname), String::toUpperCase);
 

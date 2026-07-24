@@ -22,8 +22,9 @@ import java.util.function.Function;
  * <ul>
  *   <li><b>Prefix sharing</b> — a hop shared by several edits ({@code each(Team::users)}) runs its
  *       {@code modify} once, with the fused sub-edits applied per focused value. Hop identity is
- *       the {@link Hop#key()}: {@code (owner class, component name)} for field/traverse hops (so
- *       separately-built paths still share), reference identity for filter predicates.
+ *       the kind-tagged {@link Hop#key()}: {@code (kind, owner class, component name[, container
+ *       kind])} for field/traverse hops (so separately-built paths still share), the predicate
+ *       object itself for filter hops — equality-based, which for lambdas means the same instance.
  *   <li><b>Sibling slot fusion</b> — when a trie node branches into field/traverse edits of
  *       pairwise-distinct components of one record, the node compiles to a single positional
  *       rebuild: read every component once (build-time-captured readers), apply each branch's edit
@@ -126,8 +127,8 @@ final class Fusion {
     }
 
     static Hop filter(final Object predicate, final Traversal<Object, Object> filtered) {
-      // Reference identity: two filter hops share a trie node only when they are literally the
-      // same predicate instance on a shared prefix — lambda equality cannot be decided.
+      // The predicate object is the key: sharing is equals-based, which for lambdas (no equals
+      // override) means the same instance on a shared prefix — lambda equality cannot be decided.
       return new Hop(Kind.FILTER, predicate, filtered, null, null, null);
     }
   }
