@@ -104,8 +104,11 @@ public interface Edit<S> {
    * factories when the carried value is {@code null}, so a sparse-PATCH composition can keep its
    * slot count visible without each null check distorting the surrounding shape.
    */
+  @SuppressWarnings("unchecked")
   static <S> Edit<S> identity() {
-    return s -> s;
+    // A shared singleton (safe: stateless) so Telescope.all's fusion pass can recognize and skip
+    // identity slots instead of treating each fresh lambda as an opaque, unfusible edit.
+    return (Edit<S>) EditIdentity.INSTANCE;
   }
 
   /**
@@ -113,15 +116,4 @@ public interface Edit<S> {
    * edits into a single {@code Function<S, S>}.
    */
   S apply(S s);
-}
-
-/**
- * The single {@link Edit} implementation. Package-private so users construct edits only through
- * {@link Edit#over(Telescope, Function)} and never see this type at the call site.
- */
-record EditImpl<S, X>(Telescope<S, X> path, Function<X, X> fn) implements Edit<S> {
-  @Override
-  public S apply(final S s) {
-    return path.update(s, fn);
-  }
 }
