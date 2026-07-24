@@ -2029,10 +2029,13 @@ public sealed class Telescope<
    * {@code executor}; pass {@code Executors.newFixedThreadPool(N)} to cap the number of concurrent
    * invocations at {@code N}.
    *
-   * <p>The executor bounds <em>when</em> {@code fn} is called, not the parallelism of the futures
-   * returned by {@code fn}. For fully non-blocking functions (e.g. {@code HttpClient.sendAsync})
-   * this is the right bound; for blocking work inside {@code fn}, the executor's size is the
-   * literal upper bound on in-flight operations.
+   * <p>The executor bounds concurrent {@code fn} <em>invocations</em> — not operations in flight
+   * behind futures {@code fn} returns. When the blocking work happens inside {@code fn} (return a
+   * completed future), the pool size is a literal upper bound on in-flight work. When {@code fn}
+   * merely <em>starts</em> an async call (e.g. {@code HttpClient.sendAsync}) and returns its
+   * future, the pool thread is released immediately and every element's operation can be
+   * outstanding at once — apply back-pressure inside {@code fn} (a {@code Semaphore}, a rate
+   * limiter) if you need a true in-flight cap.
    *
    * <pre>{@code
    * try (final var pool = Executors.newFixedThreadPool(10)) {
