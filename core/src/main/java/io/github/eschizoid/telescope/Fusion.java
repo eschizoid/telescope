@@ -42,18 +42,33 @@ import java.util.function.Function;
  *       {@code from/to/using} entry points, custom lenses);
  *   <li>one edit's path a strict prefix of another's (the deeper edit runs inside the shallower
  *       one's leaf — sequential order is observable);
- *   <li>a trie node branching on anything but same-owner, pairwise-distinct components — a filter
- *       or narrow hop may sit in a shared prefix, but branching across one is not provably
- *       order-free (a filtered branch and a direct branch can edit the same component).
+ *   <li>a trie node branching on anything but same-owner, pairwise-distinct components — filter and
+ *       narrow hops never participate in a branch (a filtered branch and a direct branch can edit
+ *       the same component).
  * </ul>
  *
- * <p>Edits with EQUAL full paths do fuse: their leaf functions compose in edit order, which is
- * exactly the sequential semantics. {@code Edit.identity()} slots (a sparse-PATCH {@code
+ * <p><b>Filters are value-dependent and get per-edit replay.</b> The sequential fold re-tests a
+ * filter's predicate between passes — an edit can change the very data the predicate reads, so a
+ * later edit must see the re-tested verdict on the already-edited value. A filter node carrying two
+ * or more edits therefore does NOT hoist the test: it compiles to a per-edit replay (each edit's
+ * remaining path applied through its own filter test, in edit order — per element, exactly the
+ * sequential work), while the container walk above the filter stays fused. Narrow hops need no
+ * replay: an edit's {@code Function<B, B>} cannot change whether the prism matches. Container
+ * traverses need none either: {@code modify} preserves element count and position.
+ *
+ * <p>Edits with EQUAL full paths fuse by composing leaf functions in edit order — sequential
+ * semantics, given the filter rule above. {@code Edit.identity()} slots (a sparse-PATCH {@code
  * overIfPresent(null)}) are skipped — they contribute nothing.
  *
  * <p>A record-level slot plan routes a {@code null} focused value through the same per-segment
  * sequential ops the fallback uses, so null handling is identical to composed-lens behavior by
  * construction rather than by re-implementation.
+ *
+ * <p><b>Purity scope.</b> "Observationally identical" assumes pure leaf functions, predicates, and
+ * record accessors — the standing optics assumption. Result values always match; what a fused pass
+ * changes is internal evaluation shape (element-major instead of edit-major, slot functions in
+ * component-declaration order, fewer structural rebuilds and accessor reads), which only a
+ * side-effecting function could observe.
  *
  * <p>Erasure note: the engine works in {@code Object}-typed segments. The types were proven at
  * path-build time (each segment IS the lattice optic the DSL composed); this is the same erased
@@ -64,20 +79,29 @@ final class Fusion {
   private Fusion() {}
 
   /**
-   * One navigation hop retained for fusion, parallel to the introspection trail: the identity key
-   * that drives trie sharing, the hop's un-composed optic segment, and — for component-anchored
-   * hops — the owning class and component name, plus the inner container traversal for traverse
-   * hops (used when the hop folds into a record slot plan).
+   * One navigation hop retained for fusion, parallel to the introspection trail: the hop kind, the
+   * identity key that drives trie sharing (kind-tagged so key domains cannot collide), the hop's
+   * un-composed optic segment, and — for component-anchored hops — the owning class and component
+   * name, plus the inner container traversal for traverse hops (used when the hop folds into a
+   * record slot plan).
    */
   record Hop(
+    Kind kind,
     Object key,
     Traversal<Object, Object> segment,
     Class<?> owner,
     String component,
     Traversal<Object, Object> inner
   ) {
+    enum Kind {
+      FIELD,
+      TRAVERSE,
+      NARROW,
+      FILTER,
+    }
+
     static Hop field(final Class<?> owner, final String component, final Traversal<Object, Object> lens) {
-      return new Hop(List.of(owner, component), lens, owner, component, null);
+      return new Hop(Kind.FIELD, List.of(Kind.FIELD, owner, component), lens, owner, component, null);
     }
 
     static Hop traverse(
@@ -87,17 +111,24 @@ final class Fusion {
       final Traversal<Object, Object> segment,
       final Traversal<Object, Object> inner
     ) {
-      return new Hop(List.of(owner, component, containerKind), segment, owner, component, inner);
+      return new Hop(
+        Kind.TRAVERSE,
+        List.of(Kind.TRAVERSE, owner, component, containerKind),
+        segment,
+        owner,
+        component,
+        inner
+      );
     }
 
     static Hop narrow(final Class<?> subType, final Traversal<Object, Object> prism) {
-      return new Hop(List.of(subType, "as"), prism, null, null, null);
+      return new Hop(Kind.NARROW, List.of(Kind.NARROW, subType), prism, null, null, null);
     }
 
     static Hop filter(final Object predicate, final Traversal<Object, Object> filtered) {
       // Reference identity: two filter hops share a trie node only when they are literally the
       // same predicate instance on a shared prefix — lambda equality cannot be decided.
-      return new Hop(predicate, filtered, null, null, null);
+      return new Hop(Kind.FILTER, predicate, filtered, null, null, null);
     }
   }
 
@@ -133,9 +164,17 @@ final class Fusion {
 
     final var root = new Node(null);
     for (final var e : live) {
+      final var hops = e.path().hops;
       var node = root;
-      for (final var hop : e.path().hops) {
+      for (var i = 0; i < hops.size(); i++) {
+        final var hop = hops.get(i);
         node = node.children.computeIfAbsent(hop.key(), __ -> new Node(hop));
+        // A filter's verdict is value-dependent: the sequential fold re-tests it between passes,
+        // so a filter node fusing >= 2 edits must replay them per edit. Record each edit's tail
+        // (remaining hops + leaf fn) at every filter node it crosses, in edit order.
+        if (node.hop.kind() == Hop.Kind.FILTER) {
+          node.tails.add(new Tail(hops.subList(i + 1, hops.size()), (Function<Object, Object>) e.fn()));
+        }
       }
       node.leafFns.add((Function<Object, Object>) e.fn());
     }
@@ -156,11 +195,17 @@ final class Fusion {
     final Hop hop; // null at the root
     final LinkedHashMap<Object, Node> children = new LinkedHashMap<>();
     final List<Function<Object, Object>> leafFns = new ArrayList<>();
+    // Populated at FILTER nodes only: one entry per edit crossing (or ending at) this node, in
+    // edit order — the replay data for the per-edit compile shape.
+    final List<Tail> tails = new ArrayList<>();
 
     Node(final Hop hop) {
       this.hop = hop;
     }
   }
+
+  /** An edit's remaining path below a filter node plus its leaf function. */
+  private record Tail(List<Hop> remaining, Function<Object, Object> fn) {}
 
   /** Compile a trie node into the edit applied at its focus, or {@code null} when unfusible. */
   @SuppressWarnings("unchecked")
@@ -174,30 +219,27 @@ final class Fusion {
     }
 
     final var kids = List.copyOf(node.children.values());
+
+    if (kids.size() == 1) return wrapChild(kids.get(0));
+
+    // Branching is fusible only across same-owner, pairwise-distinct components: that is the shape
+    // where cross-branch order is provably irrelevant. Filter / narrow hops never participate in a
+    // branch — a filtered branch and a direct branch can edit the same component.
+    Class<?> owner = null;
+    final var seenComponents = new HashSet<String>();
+    for (final var child : kids) {
+      final var h = child.hop;
+      if (h.kind() != Hop.Kind.FIELD && h.kind() != Hop.Kind.TRAVERSE) return null;
+      if (owner == null) owner = h.owner();
+      else if (owner != h.owner()) return null;
+      if (!seenComponents.add(h.component())) return null; // field vs each on one component — bail
+    }
+
     final var childFns = new ArrayList<Function<Object, Object>>(kids.size());
     for (final var child : kids) {
       final var fn = compile(child);
       if (fn == null) return null;
       childFns.add(fn);
-    }
-
-    if (kids.size() == 1) {
-      final var seg = kids.get(0).hop.segment();
-      final var inner = childFns.get(0);
-      return x -> seg.modify(x, inner);
-    }
-
-    // Branching is fusible only across same-owner, pairwise-distinct components: that is the shape
-    // where cross-branch order is provably irrelevant. Filter / narrow hops carry no component and
-    // therefore never participate in a branch.
-    Class<?> owner = null;
-    final var seenComponents = new HashSet<String>();
-    for (final var child : kids) {
-      final var h = child.hop;
-      if (h.owner() == null || h.component() == null) return null;
-      if (owner == null) owner = h.owner();
-      else if (owner != h.owner()) return null;
-      if (!seenComponents.add(h.component())) return null; // field vs each on one component — bail
     }
 
     // The per-segment sequential shape: the bean-owner compile target, and the null-source route
@@ -239,5 +281,38 @@ final class Fusion {
       }
       return Records.construct(cls, args);
     };
+  }
+
+  /**
+   * Compile a child node into the edit applied at its PARENT's focus (the child's segment wrap).
+   *
+   * <p>The filter-soundness seam lives here: a filter's verdict is value-dependent, and the
+   * sequential fold re-tests it between passes — an edit can change data the predicate reads, so a
+   * later edit must see the re-tested verdict on the already-edited value. A filter node fusing two
+   * or more edits therefore compiles to a per-edit replay: each edit's remaining path is applied
+   * through its own filter test, in edit order — per focused element, exactly the work the
+   * sequential fold does — while everything ABOVE the filter (the container walk) stays fused. A
+   * single-edit filter node has only one pass either way and takes the normal wrap.
+   */
+  private static Function<Object, Object> wrapChild(final Node child) {
+    final var seg = child.hop.segment();
+    if (child.hop.kind() == Hop.Kind.FILTER && child.tails.size() >= 2) {
+      Function<Object, Object> chain = Function.identity();
+      for (final var tail : child.tails) {
+        // edit order
+        var fn = tail.fn();
+        for (var i = tail.remaining().size() - 1; i >= 0; i--) {
+          final var hopSeg = tail.remaining().get(i).segment();
+          final var inner = fn;
+          fn = x -> hopSeg.modify(x, inner);
+        }
+        final var perEdit = fn;
+        chain = chain.andThen(x -> seg.modify(x, perEdit));
+      }
+      return chain;
+    }
+    final var inner = compile(child);
+    if (inner == null) return null;
+    return x -> seg.modify(x, inner);
   }
 }

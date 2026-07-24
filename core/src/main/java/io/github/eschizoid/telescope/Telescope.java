@@ -390,8 +390,12 @@ public sealed class Telescope<
    * result, not the original source. An empty argument list returns an identity telescope (apply
    * returns the source unchanged).
    *
-   * <p><b>Cost.</b> One structural pass per edit — no fusion across shared prefixes in this
-   * version. Costs the same as the equivalent chain accumulator.
+   * <p><b>Cost.</b> Edits with provably order-free paths fuse into one structural pass: a shared
+   * prefix (the same {@code .each(...)} hop, by field identity — separately-built paths count) is
+   * walked once, and disjoint field edits at one record level rebuild that record once. Everything
+   * else — overlapping paths, runtime-checked navigation, custom edits — runs as the sequential
+   * edit-by-edit fold. Results are identical either way (assuming pure functions); fusion only
+   * removes redundant structural rebuilds.
    *
    * @param edits the edits to apply, in order
    * @param <S> the shared root type — all edits must target the same {@code S}

@@ -13,8 +13,9 @@ import org.junit.jupiter.api.Test;
 /**
  * Pins {@code Telescope.all}'s fusion pass against the sequential fold it replaces: every fused
  * composition must produce the exact result the edit-by-edit application produces, the documented
- * fallbacks must stay correct, and the one observable difference — how many structural passes a
- * shared prefix runs — is pinned via a counting filter predicate.
+ * fallbacks must stay correct, and filters — whose verdicts are value-dependent — must re-test
+ * between edits exactly as the sequential fold does (the two review counterexamples are pinned as
+ * regressions).
  */
 class AllOverFusionTest {
 
@@ -152,14 +153,48 @@ class AllOverFusionTest {
   }
 
   @Nested
-  @DisplayName("fusion is observable where it should be")
-  class PassCounting {
+  @DisplayName("filter semantics — the value-dependent re-test is preserved")
+  class FilterSemantics {
 
     @Test
-    @DisplayName("a shared filter prefix evaluates its predicate once per element, not once per edit")
-    void sharedFilterPrefixRunsOnce() {
+    @DisplayName("an edit that changes what the predicate reads hides the element from later edits")
+    void editedValueFailsLaterFilterPass() {
+      // Sequential: pass 1 demotes Ann to 20; pass 2 re-tests the filter on the EDITED user, so
+      // Ann no longer matches and her name stays "Ann". A fused pass that tested the predicate
+      // once on the original element would wrongly uppercase her — the review counterexample.
+      final var adults = Telescope.of(Team.class)
+        .each(Team::users)
+        .filter(u -> u.age() >= 30);
+      final var ages = over(adults.field(User::age), (final Integer a) -> a - 10);
+      final var names = over(adults.field(User::name), String::toUpperCase);
+
+      final var out = Telescope.all(ages, names).apply(TEAM);
+      assertEquals(sequential(TEAM, ages, names), out);
+      assertEquals("Ann", out.users().get(0).name()); // demoted to 20 before the name pass
+      assertEquals(20, out.users().get(0).age());
+      assertEquals("CY", out.users().get(2).name()); // 41 stays >= 30 through both passes
+    }
+
+    @Test
+    @DisplayName("equal paths below a filter re-test between the composed functions")
+    void equalPathsBelowFilterReTest() {
+      // Ann: 30 - 10 = 20, then the second edit's filter pass rejects her — 20, not (30-10)*2.
+      final var adults = Telescope.of(Team.class)
+        .each(Team::users)
+        .filter(u -> u.age() >= 30);
+      final var demote = over(adults.field(User::age), (final Integer a) -> a - 10);
+      final var doubleAge = over(adults.field(User::age), (final Integer a) -> a * 2);
+
+      final var out = Telescope.all(demote, doubleAge).apply(TEAM);
+      assertEquals(sequential(TEAM, demote, doubleAge), out);
+      assertEquals(20, out.users().get(0).age());
+      assertEquals(62, out.users().get(2).age()); // Cy: (41 - 10) = 31, still matching, * 2
+    }
+
+    @Test
+    @DisplayName("a single edit under a filter takes the fused path and matches sequential")
+    void singleEditUnderFilter() {
       final var evaluations = new AtomicInteger();
-      // The shared prefix must be ONE instance: filter identity is the predicate reference.
       final var adults = Telescope.of(Team.class)
         .each(Team::users)
         .filter(u -> {
@@ -167,18 +202,107 @@ class AllOverFusionTest {
           return u.age() >= 30;
         });
       final var names = over(adults.field(User::name), String::toUpperCase);
-      final var emails = over(adults.field(User::email), String::toLowerCase);
+      final var label = over(Telescope.of(Team.class).field(Team::label), String::toUpperCase);
 
-      final var fused = Telescope.all(names, emails);
       evaluations.set(0);
-      final var out = fused.apply(TEAM);
+      final var out = Telescope.all(names, label).apply(TEAM);
+      assertEquals(3, evaluations.get()); // one edit under the filter: one test per element
+      assertEquals(sequential(TEAM, names, label), out);
+    }
+  }
 
-      // 3 elements, one structural pass: 3 evaluations. The sequential fold would run the filter
-      // once per edit — 6. This is the one observable trace of fusion, pinned on purpose.
-      assertEquals(3, evaluations.get());
-      assertEquals("ANN", out.users().get(0).name());
-      assertEquals("BO@x.io", out.users().get(1).email()); // under-30: filtered out of both edits
-      assertEquals(sequential(TEAM, names, emails), out);
+  @Nested
+  @DisplayName("container and paradigm coverage")
+  class ContainerCoverage {
+
+    record Prefs(java.util.Map<String, String> flags, java.util.Optional<String> nickname, String plan) {}
+
+    @Test
+    @DisplayName("eachValue + whenPresent + field fuse at one record level and match sequential")
+    void mapOptionalAndFieldAtOneLevel() {
+      final var prefs = new Prefs(java.util.Map.of("a", "1", "b", "2"), java.util.Optional.of("nick"), "pro");
+      final var flags = over(Telescope.of(Prefs.class).eachValue(Prefs::flags), (final String v) -> v + "!");
+      final var nick = over(Telescope.of(Prefs.class).whenPresent(Prefs::nickname), String::toUpperCase);
+      final var plan = over(Telescope.of(Prefs.class).field(Prefs::plan), String::toUpperCase);
+
+      assertEquals(sequential(prefs, flags, nick, plan), Telescope.all(flags, nick, plan).apply(prefs));
+    }
+
+    @Test
+    @DisplayName("empty containers and empty Optionals pass through the fused walk unchanged")
+    void emptyContainers() {
+      final var empty = new Prefs(java.util.Map.of(), java.util.Optional.empty(), "free");
+      final var flags = over(Telescope.of(Prefs.class).eachValue(Prefs::flags), (final String v) -> v + "!");
+      final var nick = over(Telescope.of(Prefs.class).whenPresent(Prefs::nickname), String::toUpperCase);
+
+      assertEquals(sequential(empty, flags, nick), Telescope.all(flags, nick).apply(empty));
+      assertEquals("free", Telescope.all(flags, nick).apply(empty).plan());
+    }
+
+    @Test
+    @DisplayName("a shared as(...) prefix narrows once and matches sequential")
+    void sharedNarrowPrefix() {
+      final var updated = Telescope.of(EventBox.class).field(EventBox::event).as(Updated.class);
+      final var diff = over(updated.field(Updated::diff), String::toUpperCase);
+      final var rev = over(updated.field(Updated::revision), (final Integer r) -> r + 1);
+
+      final var hit = new EventBox(new Updated("e1", "d", 1));
+      final var miss = new EventBox(new Created("e2"));
+      assertEquals(sequential(hit, diff, rev), Telescope.all(diff, rev).apply(hit));
+      assertEquals(sequential(miss, diff, rev), Telescope.all(diff, rev).apply(miss));
+      assertEquals(new Updated("e1", "D", 2), Telescope.all(diff, rev).apply(hit).event());
+    }
+
+    @Test
+    @DisplayName("bean-rooted paths fuse the shared prefix walk and match sequential")
+    void beanPaths() {
+      final var box = new MutableBox();
+      box.setLeft("l");
+      box.setRight("r");
+      final var left = over(Telescope.ofBean(MutableBox.class).field(MutableBox::getLeft), String::toUpperCase);
+      final var right = over(
+        Telescope.ofBean(MutableBox.class).field(MutableBox::getRight),
+        (final String v) -> v + "!"
+      );
+
+      final var fused = Telescope.all(left, right).apply(box);
+      final var seq = sequential(box, left, right);
+      assertEquals(seq.getLeft(), fused.getLeft());
+      assertEquals(seq.getRight(), fused.getRight());
+      assertEquals("L", fused.getLeft());
+      assertEquals("r!", fused.getRight());
+    }
+  }
+
+  sealed interface Event permits Created, Updated {}
+
+  record Created(String id) implements Event {}
+
+  record Updated(String id, String diff, int revision) implements Event {}
+
+  record EventBox(Event event) {}
+
+  static final class MutableBox {
+
+    private String left;
+    private String right;
+
+    public MutableBox() {}
+
+    public String getLeft() {
+      return left;
+    }
+
+    public void setLeft(final String left) {
+      this.left = left;
+    }
+
+    public String getRight() {
+      return right;
+    }
+
+    public void setRight(final String right) {
+      this.right = right;
     }
   }
 }
