@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.examples.graphql.model.Account;
 import io.github.eschizoid.telescope.examples.graphql.model.AccountBridge;
+import io.github.eschizoid.telescope.examples.graphql.model.UserTelescope;
 import io.github.eschizoid.telescope.examples.graphql.model.AccountBuilderBean;
 import io.github.eschizoid.telescope.examples.graphql.model.AccountEntity;
 import io.github.eschizoid.telescope.examples.graphql.model.Address;
@@ -80,6 +81,9 @@ public final class NativeVerify {
     );
     results.add(guard("generated @FromMap converter (reflection-free codegen control)", NativeVerify::fromMap));
     results.add(guard("generated @Bridge constant (AccountBridge.BRIDGE.read())", NativeVerify::bridgeConstant));
+    results.add(
+      guard("generated @Focus navigator (UserTelescope.of().address().city())", NativeVerify::focusNavigator)
+    );
 
     System.out.println();
     System.out.println("=== telescope native-image verification (graphql example) ===");
@@ -222,4 +226,17 @@ public final class NativeVerify {
   }
 
   private record Result(String name, boolean passed, String detail) {}
+
+  // (i) generated @Focus navigator — the emitted UserTelescope composes lenses from method
+  // references AT CALL TIME, so the generated class is the lambda-capturing type an image must
+  // register in serialization-config. This capability is the proof that the documented recipe
+  // (add the generated navigator class to lambdaCapturingTypes) actually works natively.
+  private static void focusNavigator() {
+    final var user = new User("ann", "ann@x.io", 30, Role.ADMIN, new Address("nyc", "10001"));
+    final String city = UserTelescope.of().address().city().read(user);
+    final var upper = UserTelescope.of().name().update(user, String::toUpperCase);
+    if (!"nyc".equals(city) || !"ANN".equals(upper.name())) {
+      throw new IllegalStateException("focus navigator mismatch: " + city + " / " + upper.name());
+    }
+  }
 }
