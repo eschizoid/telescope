@@ -395,7 +395,7 @@ under GraalVM native-image without configuration. The difference is the runtime 
 telescope's keeps working inside a native image: `Telescope.mapper(...)` and `.field(User::name)`, no build step. Inside
 an image the substrate swaps its `LambdaMetafactory` accessors (runtime class definition, which native-image's closed
 world forbids) for plain `MethodHandle` closures; one `static final boolean` picks the branch. `telescope-core` carries
-its own native-image metadata; you register your own DTO types, same as any GraalVM app. An eight-capability verifier
+its own native-image metadata; you register your own DTO types, same as any GraalVM app. A nine-capability verifier
 compiles and runs as a real native binary in CI on every substrate push plus weekly. Setup and limits:
 [`docs/native-image.md`](docs/native-image.md).
 
