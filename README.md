@@ -11,23 +11,38 @@
 [![Javadoc](https://javadoc.io/badge2/io.github.eschizoid/telescope-core/javadoc.svg?color=purple)](https://javadoc.io/doc/io.github.eschizoid/telescope-core)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**Typed navigation, immutable updates, and object mapping for Java records and POJOs.** Point at a field deep inside a
-nested structure with method references — `Order::customerName`, checked by `javac`, refactored by any IDE's standard
-rename — and get one reusable value that reads, immutably updates, converts, or lifts through an effect at that spot.
-It's an alternative to MapStruct when you also want reusable paths, deep updates, runtime composition, or a
-bidirectional mapper value:
+**Telescope's primitive is the reusable typed path** — a value, built from method references and checked by `javac`,
+that points at data anywhere inside a nested structure:
+
+```java
+static final Telescope<Company, String> EMAILS = Telescope.of(Company.class)
+  .each(Company::departments)
+  .each(Department::teams)
+  .each(Team::users)
+  .field(User::email);
+```
+
+Hold that value and the rest of the library follows from it: read through it, rebuild the whole tree through it
+immutably (`EMAILS.update(company, String::toLowerCase)`), collect or count every value it reaches, lift an update
+through an async or validation effect — and map between types, because a mapping is the same primitive applied across
+two shapes, each row pairing a source path with a target path:
 
 ```java
 Mapper<Order, OrderDto> mapper = Telescope.mapper(
   Order.class,
   OrderDto.class,
-  to(Order::customerName, OrderDto::fullName) // typed refs — javac checks them, the IDE refactors them
+  to(Order::customerName, OrderDto::fullName)
 );
 
 OrderDto dto  = mapper.forward(order); // same-name fields map automatically, nesting recurses
 Order back = mapper.backward(dto);     // structurally reversible rows run backward from the same definition
-mapper.explain();                      // and the mapper tells you what it maps — no generated source to read
+mapper.explain();                      // the mapping describes itself — it is a runtime value, not generated code
 ```
+
+That last line is the architectural difference with [MapStruct](https://mapstruct.org/) in a single call. MapStruct's
+abstraction is generated bean mapping — excellent at that job, and by design the mapping disappears into a generated
+class at compile time. Telescope's abstraction is the navigation value; mapping is one application of it, and the result
+stays a value: composable with `.then(...)`, reusable across call sites, able to explain and trace itself in production.
 
 <p align="center">
   <img src="img/head-to-head.gif" alt="The telescope-vs-MapStruct head-to-head test narrating itself: identical output, the default-policy unmapped-target case, a deep immutable update, and the mapper explaining and tracing itself." width="820" />
@@ -35,12 +50,12 @@ mapper.explain();                      // and the mapper tells you what it maps 
   <sub>The <a href="examples/mapstruct-vs-telescope/"><code>mapstruct-vs-telescope</code></a> test, narrating itself — real output, trimmed for width.</sub>
 </p>
 
-Works on Java records, POJOs, and Lombok `@Data` classes, on Java 21+. In the included JMH workloads (MapStruct 1.6.3,
-CI hardware — [methodology and both runs](docs/perf-mapstruct-comparison.md)), telescope's `@Focus` / `@Bridge` codegen
-lands in the same performance class as MapStruct's generated code, and the annotation-free runtime path converts within
-~1.3–4× of it depending on object shape. The runtime path also keeps working under GraalVM native-image
-([verified by a native binary in CI](docs/native-image.md)) — MapStruct, being codegen-only, has no runtime path to
-bring. Spring Boot starter and Quarkus extension ship as separate artifacts.
+One surface, two implementations, each answering a different moment. The runtime path composes paths and mappers on the
+fly — zero annotations, no build step — and keeps working under GraalVM native-image
+([verified by a native binary in CI](docs/native-image.md)). When a loop turns hot, `@Focus` / `@Bridge` codegen
+compiles the same shapes to direct calls, landing in the same performance class as MapStruct's generated code in the
+included JMH workloads ([measured below](#performance-measured)). Works on Java records, POJOs, and Lombok `@Data`
+classes, Java 21+; Spring Boot starter and Quarkus extension ship as separate artifacts.
 
 **The evidence:** a [migration coverage matrix](docs/mapstruct-parity.md) (29 MapStruct features audited — 13 fully
 covered, 16 partially, each with its honest limitation and `file:line` evidence), a
@@ -185,8 +200,8 @@ emails.count(company);    // how many
 
 ### Mapping
 
-Same tree, now translate `Company` to a partner-facing `CompanyDto` with a few renamed fields — one definition, both
-directions for the rows that are structurally reversible:
+Mapping is the navigation primitive applied across two shapes. Same tree, now translated to a partner-facing
+`CompanyDto` with a few renamed fields — one definition, both directions for the rows that are structurally reversible:
 
 ```java
 record AddressDto(String town, String postalCode) {}
@@ -333,13 +348,14 @@ Start with [`order-jpa/`](examples/springboot/order-jpa/) for the broadest view,
 
 ## How it compares to MapStruct
 
-MapStruct is a compile-time bean-mapping framework, and a mature one: whole-object conversion including nested graphs
-(dotted paths, automatic sub-mapping methods, collections, builders, multi-source methods, update mappings). Telescope
-overlaps it on mapping and then adds what a mapping framework doesn't have: reusable typed _paths_ — no way exists in
-MapStruct to point at `company.departments[].address.city` as a first-class value and read it, immutably update it, or
-lift it through an effect. Where the two overlap, the architectural difference is how fields are named: telescope uses
-method references (Java symbols, checked by `javac`, moved by any IDE's standard rename), MapStruct uses annotation
-strings (validated by its processor at compile time, refactorable with the
+MapStruct is an excellent compile-time bean mapper with a mature ecosystem and broad adoption: whole-object conversion
+including nested graphs (dotted paths, automatic sub-mapping methods, collections, builders, multi-source methods,
+update mappings). Nothing below argues otherwise — the comparison is about abstraction, not quality. Telescope overlaps
+it on mapping and then adds what a mapping framework doesn't have: reusable typed _paths_ — no way exists in MapStruct
+to point at `company.departments[].address.city` as a first-class value and read it, immutably update it, or lift it
+through an effect. Where the two overlap, the architectural difference is how fields are named: telescope uses method
+references (Java symbols, checked by `javac`, moved by any IDE's standard rename), MapStruct uses annotation strings
+(validated by its processor at compile time, refactorable with the
 [MapStruct IDEA plugin](https://mapstruct.org/documentation/ide-support/) per its documentation — the head-to-head
 module tests the `javac` behavior of both failure modes; IDE-plugin behavior is cited, not tested here. Dotted nested
 paths remain strings either way). The comparisons below pin MapStruct 1.6.3, the version the head-to-head module and
@@ -401,8 +417,9 @@ compiles and runs as a real native binary in CI on every substrate push plus wee
 
 #### The capability table
 
-Most rows read "telescope: first-class / MapStruct: different mechanism or out of scope" — the honest framing is that
-these are architecture differences, not impossibilities:
+Architecture differences, not impossibilities — and most rows trace to one root. A mapping held as a runtime value can
+be composed, reversed, lifted through effects, and interrogated after the fact; a mapping compiled into a generated
+class is complete at build time, by design:
 
 | Capability                         | telescope                                                             | MapStruct                                                        |
 | ---------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------- |
@@ -431,7 +448,8 @@ telescope idiom, its honest limitation, and `file:line` evidence.
 
 #### When telescope is the right pick
 
-- Your problem includes **deep navigation** alongside mapping, and you don't want a separate mapper for every level
+- Your problem includes **deep navigation** alongside mapping — the path value compounds with depth: every extra level
+  is one more hop on a value you already hold, not another block of rebuild code
 - You want **bidirectional from one definition** — `forward(...)` / `backward(...)` on one value, no second method
 - You need to lift a mapping or field update through an **effect** — `updateValidated`, `updateAsync`, `updateEither`,
   `updateOptional`
@@ -439,7 +457,7 @@ telescope idiom, its honest limitation, and `file:line` evidence.
 - You have a **sealed root** and want compile-checked exhaustiveness over the permits
 - You're navigating a mix of **records and POJOs** at any depth without materializing intermediate DTOs
 - You're deploying to **GraalVM native-image** and want mapping without a build step
-- You want one type doing reading, updating, mapping, and conversion — one mental model
+- You want one abstraction doing reading, updating, mapping, and validation — the path, one mental model
 
 Ready to try it? Write your next mapper as one `Telescope.mapper(...)` call and leave every existing MapStruct mapper
 alone — the [migration guide](docs/mapstruct-migration.md) covers coexistence whenever you want more.
