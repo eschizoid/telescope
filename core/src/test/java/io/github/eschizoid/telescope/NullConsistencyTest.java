@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import static io.github.eschizoid.telescope.mapping.Mapping.drop;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.List;
 import java.util.Map;
@@ -121,7 +122,7 @@ class NullConsistencyTest {
       final var mapper = Telescope.mapper(SrcWithRef.class, TgtNameOnly.class, drop(SrcWithRef::note));
       final var back = mapper.backward(new TgtNameOnly("bo"));
       assertEquals("bo", back.name());
-      assertEquals(null, back.note());
+      assertNull(back.note());
     }
   }
 }

@@ -78,7 +78,16 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           for f in README.md docs/codegen.md; do
             sed -i -E "s/(io\.github\.eschizoid:telescope-[a-z-]+:)[0-9]+\.[0-9]+\.[0-9]+/\1${VERSION}/g" "$f"
-            sed -i -E "s|(<version>)[0-9]+\.[0-9]+\.[0-9]+(</version>)|\1${VERSION}\2|g" "$f"
+            # XML <version> blocks: only the one directly following a telescope artifactId —
+            # a blanket replace would clobber unrelated pins (the Lombok processor path).
+            awk -v v="$VERSION" '
+              /<artifactId>telescope-/ { tele = 1; print; next }
+              tele && /<version>[0-9]+\.[0-9]+\.[0-9]+<\/version>/ {
+                sub(/<version>[0-9]+\.[0-9]+\.[0-9]+<\/version>/, "<version>" v "</version>")
+                tele = 0; print; next
+              }
+              { tele = 0; print }
+            ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
           done
           if ! git diff --quiet README.md docs/codegen.md; then
             git add README.md docs/codegen.md
