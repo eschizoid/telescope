@@ -1,9 +1,10 @@
-# telescope ↔ MapStruct — feature parity matrix
+# telescope ↔ MapStruct — migration coverage matrix
 
-An evidence-grounded audit of MapStruct's feature surface against telescope. Every row was produced by reading
-telescope's actual source and tests (citations below), then adversarially re-verified by a second pass that re-opened
-every citation — two verdicts were downgraded and two snippets corrected in that pass. Audited against MapStruct 1.6.3
-semantics and telescope `main`.
+An evidence-grounded audit of MapStruct's feature surface against telescope — a coverage audit, not a parity claim: a
+majority of rows are ⚠️ partial, each with its real limitation stated. Every row was produced by reading telescope's
+actual source and tests (citations below), then adversarially re-verified by a second pass that re-opened every citation
+— two verdicts were downgraded and two snippets corrected in that pass. Audited against MapStruct 1.6.3 semantics and
+telescope `main`.
 
 **Legend:** ✅ full — the use case is covered, possibly via a different idiom that is no worse · ⚠️ partial — the core
 use case works, with the real limitation stated in the row's notes · ❌ missing.
