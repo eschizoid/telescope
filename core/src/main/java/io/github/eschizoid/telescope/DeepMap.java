@@ -630,10 +630,12 @@ public final class DeepMap {
               PairingMessages.duplicateSourceRow(source.getSimpleName(), target.getSimpleName(), srcField)
             );
             // Register a backward-only step under the source name so the source-reconstructor
-            // (assembleIso's bySourceName loop) produces a placeholder value (null) for the
-            // dropped field. The step is NOT registered under byTargetName, so the forward
-            // direction omits the source field from the target map entirely.
-            bySourceName.put(srcField, new FieldStep(srcField, null, NULLING_ISO));
+            // (assembleIso's bySourceName loop) produces a placeholder for the dropped field:
+            // null for references, the JLS default for primitives (a null would NPE at the
+            // canonical constructor's unboxing). The step is NOT registered under byTargetName,
+            // so the forward direction omits the source field from the target map entirely.
+            final var droppedType = rawClassOf(srcRefl.genericType(source, srcField));
+            bySourceName.put(srcField, new FieldStep(srcField, null, placeholderIsoFor(droppedType, false)));
             if (trailOut != null) trailOut.add(new OpticNode.Skipped(srcField, OpticNode.Reason.DROPPED));
             yield false;
           }

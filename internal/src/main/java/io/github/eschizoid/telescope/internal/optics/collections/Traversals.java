@@ -41,17 +41,20 @@ public final class Traversals {
     return new Traversal<>() {
       @Override
       public Stream<A> getAll(final List<A> source) {
+        if (source == null) return Stream.empty();
         return source.stream();
       }
 
       @Override
       public boolean visitWhile(final List<A> source, final Predicate<? super A> visitor) {
+        if (source == null) return true;
         for (final var a : source) if (!visitor.test(a)) return false;
         return true;
       }
 
       @Override
       public List<A> modify(final List<A> source, final Function<? super A, ? extends A> f) {
+        if (source == null) return null;
         final var out = new ArrayList<A>(source.size());
         for (final var a : source) out.add(f.apply(a));
         return Collections.unmodifiableList(out);
@@ -66,17 +69,20 @@ public final class Traversals {
     return new Traversal<>() {
       @Override
       public Stream<A> getAll(final Set<A> source) {
+        if (source == null) return Stream.empty();
         return source.stream();
       }
 
       @Override
       public boolean visitWhile(final Set<A> source, final Predicate<? super A> visitor) {
+        if (source == null) return true;
         for (final var a : source) if (!visitor.test(a)) return false;
         return true;
       }
 
       @Override
       public Set<A> modify(final Set<A> source, final Function<? super A, ? extends A> f) {
+        if (source == null) return null;
         final var out = new LinkedHashSet<A>(source.size());
         for (final var a : source) out.add(f.apply(a));
         return Collections.unmodifiableSet(out);
@@ -91,17 +97,20 @@ public final class Traversals {
     return new Traversal<>() {
       @Override
       public Stream<V> getAll(final Map<K, V> source) {
+        if (source == null) return Stream.empty();
         return source.values().stream();
       }
 
       @Override
       public boolean visitWhile(final Map<K, V> source, final Predicate<? super V> visitor) {
+        if (source == null) return true;
         for (final var v : source.values()) if (!visitor.test(v)) return false;
         return true;
       }
 
       @Override
       public Map<K, V> modify(final Map<K, V> source, final Function<? super V, ? extends V> f) {
+        if (source == null) return null;
         final var out = new LinkedHashMap<K, V>(source.size());
         for (final var e : source.entrySet()) out.put(e.getKey(), f.apply(e.getValue()));
         return Collections.unmodifiableMap(out);
@@ -115,7 +124,12 @@ public final class Traversals {
    * Prism).
    */
   public static <A> Affine<Optional<A>, A> eachOptional() {
-    return Affine.of(source -> source, (source, a) -> source.isPresent() ? Optional.of(a) : source);
+    // A null Optional FIELD (not an empty Optional) focuses nothing, matching every other
+    // container traversal's null-source contract; the write side likewise leaves null alone.
+    return Affine.of(
+      source -> source == null ? Optional.empty() : source,
+      (source, a) -> source != null && source.isPresent() ? Optional.of(a) : source
+    );
   }
 
   /**

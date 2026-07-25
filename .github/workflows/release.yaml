@@ -70,6 +70,31 @@ jobs:
           echo "tagName=$TAG_VERSION" >> "$GITHUB_OUTPUT"
           echo "Releasing $RAW_VERSION (tag $TAG_VERSION)"
 
+      - name: Sync README install snippets to the released version
+        run: |
+          # The README pins the release version in its install snippets; rewrite every
+          # io.github.eschizoid:telescope-* coordinate and the Maven <version> block to the
+          # version just tagged, so the docs never trail the release.
+          VERSION="${{ steps.version.outputs.version }}"
+          for f in README.md docs/codegen.md; do
+            sed -i -E "s/(io\.github\.eschizoid:telescope-[a-z-]+:)[0-9]+\.[0-9]+\.[0-9]+/\1${VERSION}/g" "$f"
+            # XML <version> blocks: only the one directly following a telescope artifactId —
+            # a blanket replace would clobber unrelated pins (the Lombok processor path).
+            awk -v v="$VERSION" '
+              /<artifactId>telescope-/ { tele = 1; print; next }
+              tele && /<version>[0-9]+\.[0-9]+\.[0-9]+<\/version>/ {
+                sub(/<version>[0-9]+\.[0-9]+\.[0-9]+<\/version>/, "<version>" v "</version>")
+                tele = 0; print; next
+              }
+              { tele = 0; print }
+            ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          done
+          if ! git diff --quiet README.md docs/codegen.md; then
+            git add README.md docs/codegen.md
+            git commit -m "docs: bump README install snippets to ${VERSION}"
+            git push
+          fi
+
       - name: Build and publish artifacts
         # Single root `publish` task fans out to every subproject that applies maven-publish.
         # Matches the JReleaser stagingRepository discovery in build.gradle.kts — when a new
