@@ -340,8 +340,10 @@ MapStruct to point at `company.departments[].address.city` as a first-class valu
 lift it through an effect. Where the two overlap, the architectural difference is how fields are named: telescope uses
 method references (Java symbols, checked by `javac`, moved by any IDE's standard rename), MapStruct uses annotation
 strings (validated by its processor at compile time, refactorable with the
-[MapStruct IDEA plugin](https://mapstruct.org/documentation/ide-support/); dotted nested paths remain strings either
-way). The comparisons below pin MapStruct 1.6.3, the version the head-to-head module and benchmarks build against.
+[MapStruct IDEA plugin](https://mapstruct.org/documentation/ide-support/) per its documentation — the head-to-head
+module tests the `javac` behavior of both failure modes; IDE-plugin behavior is cited, not tested here. Dotted nested
+paths remain strings either way). The comparisons below pin MapStruct 1.6.3, the version the head-to-head module and
+benchmarks build against.
 
 To be precise about what a stale string costs, because the failure modes differ:
 

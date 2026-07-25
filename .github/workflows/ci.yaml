@@ -10,6 +10,32 @@ permissions:
   contents: read
 
 jobs:
+  docs:
+    name: Docs integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Local links resolve
+        run: |
+          # Every relative markdown link in README.md and docs/ must point at a real file.
+          fail=0
+          for f in README.md docs/*.md; do
+            dir=$(dirname "$f")
+            grep -oE '\]\(([^)#http][^)#]*)' "$f" | sed 's/](//' | while read -r target; do
+              [ -e "$dir/$target" ] || { echo "BROKEN: $f -> $target"; exit 1; }
+            done || fail=1
+          done
+          exit $fail
+      - name: Install snippets match the latest release
+        run: |
+          # The README's telescope coordinates must pin the latest tag's version.
+          VERSION=$(git describe --tags --abbrev=0 | tr -d v)
+          if ! grep -q "io.github.eschizoid:telescope-core:${VERSION}" README.md; then
+            echo "README install snippet does not pin ${VERSION} (latest tag)"; exit 1
+          fi
+
   build:
     runs-on: ubuntu-latest
 

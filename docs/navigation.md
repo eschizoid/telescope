@@ -340,8 +340,21 @@ What null does at every position on the surface, verified against the source:
 | `mapper.forward(null)`                           | null in, null out                                               |
 
 Telescope and Mapper values are immutable and thread-safe — build once, share freely, `static final` is the intended
-home. Errors: lambdas (vs method refs) are rejected when the path is built; mapper rows are validated at factory time;
-`fieldByName` typos surface at first use. `updateEither`/`updateValidated` do **not** catch exceptions — typed failure
-is for values your `fn` returns; a thrown exception propagates raw. The two `updateAsync` overloads differ on a sync
-throw from `fn`: the no-executor overload throws to the caller, the executor overload captures it in the returned
-future.
+home.
+
+## When errors surface
+
+The ladder, from earliest to latest:
+
+| Stage               | What is checked, what throws                                                                                                                                                                    |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `javac`             | accessor method-reference types (source and focus)                                                                                                                                              |
+| path build          | lambdas (vs method refs) rejected with a pointed `IllegalArgumentException`; record lens resolution                                                                                             |
+| mapper construction | row validation — duplicate claims, unmapped fields under strict `mapper(...)`, write-strategy feasibility (`IllegalArgumentException` / `IllegalStateException` with guidance)                  |
+| first use per class | class metadata resolution (cached after); `fieldByName` typos (`IllegalArgumentException` with the known-field list); JPMS access failures (`IllegalStateException` naming the missing `opens`) |
+| per operation       | an update fn returning null into a primitive slot (wrapped rebuild failure); anything your own fn throws                                                                                        |
+
+Two effect-specific rules worth committing to memory: `updateEither`/`updateValidated` do **not** catch exceptions —
+typed failure is for values your `fn` returns; a thrown exception propagates raw. And the two `updateAsync` overloads
+differ on a sync throw from `fn`: the no-executor overload throws to the caller, the executor overload captures it in
+the returned future.

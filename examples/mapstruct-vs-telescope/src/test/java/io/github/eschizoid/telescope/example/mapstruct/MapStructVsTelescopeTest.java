@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.example.mapstruct.domain.LineItem;
 import io.github.eschizoid.telescope.example.mapstruct.domain.Order;
 import io.github.eschizoid.telescope.example.mapstruct.mapstruct.OrderMapStructMapper;
 import io.github.eschizoid.telescope.example.mapstruct.mapstruct.SilentDropMapper;
+import io.github.eschizoid.telescope.example.mapstruct.mapstruct.StrictPolicyMapper;
 import io.github.eschizoid.telescope.example.mapstruct.telescope.TelescopeMappings;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
@@ -91,13 +92,30 @@ class MapStructVsTelescopeTest {
       "default unmappedTargetPolicy=WARN compiles and nulls an unmapped target (a source rename is the separate case — a compile error)"
     );
     log(
-      "Unmapped-target footgun — MapStruct's default policy nulls a target with no source:",
-      "contactEmail = " + dto.getContactEmail() + "  |  region = " + dto.getRegion() + "  (silently null)"
+      "Unmapped-target hazard — MapStruct's default policy warns at build, nulls at runtime:",
+      "contactEmail = " + dto.getContactEmail() + "  |  region = " + dto.getRegion() + "  (warned-then-null)"
     );
   }
 
   @Test
   @org.junit.jupiter.api.Order(4)
+  @DisplayName("Act 1b, the fair fight: unmappedTargetPolicy=ERROR forces the drop to be explicit")
+  void mapStructStrictPolicyMakesTheDropExplicit() {
+    // The same mapper shape under ReportingPolicy.ERROR does not compile until the unmapped
+    // target gets an explicit decision (here: ignore = true). Serious MapStruct setups run this
+    // config; the difference vs telescope's strict mapper(...) is the default, not the ceiling.
+    final var dto = StrictPolicyMapper.INSTANCE.toContactDto(new Customer("Ada", "ada@example.com"));
+
+    assertEquals("ada@example.com", dto.getContactEmail(), "the mapped field is fine");
+    assertNull(dto.getRegion(), "the drop still happens — but it is written in source, reviewed, not silent");
+    log(
+      "The fair fight — MapStruct hardened with unmappedTargetPolicy=ERROR:",
+      "the SilentDropMapper shape no longer compiles; the drop is an explicit ignore=true in source"
+    );
+  }
+
+  @Test
+  @org.junit.jupiter.api.Order(5)
   @DisplayName("Act 2: deep immutable update rebuilds the whole graph; the original is untouched")
   void deepUpdateRebuildsImmutably() {
     final var order = sampleOrder();
@@ -119,7 +137,7 @@ class MapStructVsTelescopeTest {
   }
 
   @Test
-  @org.junit.jupiter.api.Order(5)
+  @org.junit.jupiter.api.Order(6)
   @DisplayName("Act 3: the telescope mapper explains and traces itself; MapStruct is a black box")
   void introspectionExposesWhatTheMapperDoes() {
     final var order = sampleOrder();
