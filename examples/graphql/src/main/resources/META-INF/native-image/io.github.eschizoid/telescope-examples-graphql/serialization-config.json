@@ -1,6 +1,14 @@
 {
   "lambdaCapturingTypes": [
-    { "name": "io.github.eschizoid.telescope.examples.graphql.server.NativeVerify" }
+    {
+      "name": "io.github.eschizoid.telescope.examples.graphql.server.NativeVerify"
+    },
+    {
+      "name": "io.github.eschizoid.telescope.examples.graphql.model.UserTelescope"
+    },
+    {
+      "name": "io.github.eschizoid.telescope.examples.graphql.model.AddressTelescope"
+    }
   ],
   "types": [],
   "proxies": []

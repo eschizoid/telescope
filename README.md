@@ -340,8 +340,10 @@ MapStruct to point at `company.departments[].address.city` as a first-class valu
 lift it through an effect. Where the two overlap, the architectural difference is how fields are named: telescope uses
 method references (Java symbols, checked by `javac`, moved by any IDE's standard rename), MapStruct uses annotation
 strings (validated by its processor at compile time, refactorable with the
-[MapStruct IDEA plugin](https://mapstruct.org/documentation/ide-support/); dotted nested paths remain strings either
-way). The comparisons below pin MapStruct 1.6.3, the version the head-to-head module and benchmarks build against.
+[MapStruct IDEA plugin](https://mapstruct.org/documentation/ide-support/) per its documentation — the head-to-head
+module tests the `javac` behavior of both failure modes; IDE-plugin behavior is cited, not tested here. Dotted nested
+paths remain strings either way). The comparisons below pin MapStruct 1.6.3, the version the head-to-head module and
+benchmarks build against.
 
 To be precise about what a stale string costs, because the failure modes differ:
 
@@ -393,7 +395,7 @@ under GraalVM native-image without configuration. The difference is the runtime 
 telescope's keeps working inside a native image: `Telescope.mapper(...)` and `.field(User::name)`, no build step. Inside
 an image the substrate swaps its `LambdaMetafactory` accessors (runtime class definition, which native-image's closed
 world forbids) for plain `MethodHandle` closures; one `static final boolean` picks the branch. `telescope-core` carries
-its own native-image metadata; you register your own DTO types, same as any GraalVM app. An eight-capability verifier
+its own native-image metadata; you register your own DTO types, same as any GraalVM app. A nine-capability verifier
 compiles and runs as a real native binary in CI on every substrate push plus weekly. Setup and limits:
 [`docs/native-image.md`](docs/native-image.md).
 

@@ -238,3 +238,15 @@ sidesteps the JPMS constraint entirely. See
 
 **Classpath users (no `module-info.java`).** No `opens` needed — the JVM grants unnamed-module access automatically.
 This section is JPMS-only.
+
+## What runs reflectively, and when
+
+The precise ledger — "reflection-free" claims are scoped to these rows:
+
+| Path                      | Setup (one-time, cached)                                       | Steady-state dispatch                                        | Generated Java | Native-image                                                           |
+| ------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ | -------------- | ---------------------------------------------------------------------- |
+| Runtime record navigation | `getRecordComponents` + method-ref decode                      | `LambdaMetafactory`-built lambdas                            | none           | `MethodHandle` closures; app registers call-site class (serialization) |
+| Runtime POJO navigation   | getter/setter scans + method-ref decode                        | LMF getters/setters (`FIELDS` strategy uses `setAccessible`) | none           | same gate                                                              |
+| Runtime mapper            | reflective pair discovery, cached per type pair                | composed MethodHandle / LMF leaves                           | none           | verified by the CI native binary                                       |
+| `@Focus` / `@BeanFocus`   | one cached method-ref decode when a path object is first built | direct method-ref + constructor calls                        | yes            | generated navigator class goes in `serialization-config` (CI-verified) |
+| `@Bridge`                 | none (wraps a concrete generated function)                     | direct calls                                                 | yes            | zero-config, CI-verified                                               |

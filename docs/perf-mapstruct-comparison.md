@@ -26,7 +26,8 @@ results table and the "dispatch" section):
 
 Earlier smoke-confidence laptop runs reported a 2.9–3.6× forward gap, a "telescope-faster-on-backward" inversion, and a
 "static-slower-than-lattice" inversion — all three were JMH noise artifacts that clean CI hardware dissolved. The
-runtime path is a different conversation (~8–20× — convenience surface, not the hot-path lane).
+runtime path is a different conversation (~1.3–4× after the leaf-rebuild campaign — see the runtime tier in
+[benchmarks/README.md](../benchmarks/README.md); the ~8–20× figure predates it).
 
 ## Methodology
 
