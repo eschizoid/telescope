@@ -234,6 +234,59 @@ class OpticLawsTest {
   }
 
   @Nested
+  @DisplayName("fold laws hold for every optic (getAll/visitWhile lockstep)")
+  class FoldLawCoverage {
+
+    record Wrapper(List<String> items) {}
+
+    @Test
+    @DisplayName("every single-focus optic obeys the fold laws")
+    void singleFocusOptics() {
+      FoldLaws.assertFoldLaws(userName, ALICE); // Lens, non-null
+      FoldLaws.assertFoldLaws(userName, null); // Lens, null source (focuses nothing)
+      FoldLaws.assertFoldLaws(userIso, ALICE); // Iso (one focus, always)
+      final Prism<Object, String> stringCase = Prism.downcast(String.class);
+      FoldLaws.assertFoldLaws(stringCase, "hit"); // Prism hit
+      FoldLaws.assertFoldLaws(stringCase, 42); // Prism miss (no focuses)
+      final Affine<List<String>, String> head = Affine.of(
+        l -> l.isEmpty() ? Optional.empty() : Optional.of(l.get(0)),
+        (l, v) -> l
+      );
+      FoldLaws.assertFoldLaws(head, List.of("a", "b")); // Affine present
+      FoldLaws.assertFoldLaws(head, List.of()); // Affine absent
+    }
+
+    @Test
+    @DisplayName("every container traversal obeys the fold laws, including null and empty sources")
+    void containerTraversals() {
+      FoldLaws.assertFoldLaws(Traversals.<String>eachList(), List.of("a", "b", "c"));
+      FoldLaws.assertFoldLaws(Traversals.<String>eachList(), List.of());
+      FoldLaws.assertFoldLaws(Traversals.<String>eachList(), null);
+      FoldLaws.assertFoldLaws(Traversals.<String>eachSet(), new java.util.LinkedHashSet<>(List.of("x", "y")));
+      FoldLaws.assertFoldLaws(Traversals.<String>eachSet(), null);
+      FoldLaws.assertFoldLaws(Traversals.<String, Integer>eachMapValue(), java.util.Map.of("k", 1));
+      FoldLaws.assertFoldLaws(Traversals.<String, Integer>eachMapValue(), null);
+      FoldLaws.assertFoldLaws(Traversals.<List<String>, String>eachIterable(), List.of("a", "b"));
+      FoldLaws.assertFoldLaws(Traversals.<List<String>, String>eachIterable(), null);
+      FoldLaws.assertFoldLaws(Traversals.<String>eachOptional(), Optional.of("v"));
+      FoldLaws.assertFoldLaws(Traversals.<String>eachOptional(), Optional.empty());
+      FoldLaws.assertFoldLaws(Traversals.<String>eachOptional(), null);
+    }
+
+    @Test
+    @DisplayName("composed and filtered traversals obey the fold laws")
+    void composedShapes() {
+      final Traversal<Wrapper, String> items = Focus.<Wrapper, List<String>>lens(Wrapper::items, (w, l) ->
+        new Wrapper(l)
+      ).then(Traversals.eachList());
+      FoldLaws.assertFoldLaws(items, new Wrapper(List.of("a", "b", "c")));
+      FoldLaws.assertFoldLaws(items, new Wrapper(List.of()));
+      FoldLaws.assertFoldLaws(items.filter(s -> s.compareTo("a") > 0), new Wrapper(List.of("a", "b", "c")));
+      FoldLaws.assertFoldLaws(items.filter(s -> false), new Wrapper(List.of("a", "b")));
+    }
+  }
+
+  @Nested
   @DisplayName("visitWhile enumerates the same focuses as getAll")
   class VisitWhileEquivalence {
 
