@@ -144,12 +144,27 @@ public sealed class Telescope<
   // Package-private so that the conversion-builder classes (From, To, Mapper, …) — extracted to
   // sibling files to keep Telescope.java navigable — can construct Telescope instances without
   // needing us to expose internals through the JPMS export.
+  // The one shared identity chain: a Telescope whose chain IS this reference carries no pending
+  // .with()/.update(path, fn) edits. Reference identity is the detector — Function.identity()
+  // allocates a fresh lambda per call, so equality would be undecidable without the constant.
+  static final Function<Object, Object> IDENTITY_CHAIN = Function.identity();
+
+  @SuppressWarnings("unchecked")
+  private static <S> Function<S, S> identityChain() {
+    return (Function<S, S>) IDENTITY_CHAIN;
+  }
+
+  /** Whether this telescope carries pending chain edits that only {@link #apply} runs. */
+  final boolean hasPendingEdits() {
+    return chain != IDENTITY_CHAIN;
+  }
+
   Telescope(final Traversal<S, A> optic) {
-    this(optic, RecordFieldOptics.INSTANCE, Function.identity(), null, List.of(), null);
+    this(optic, RecordFieldOptics.INSTANCE, identityChain(), null, List.of(), null);
   }
 
   private Telescope(final Traversal<S, A> optic, final FieldOptics fieldOptics) {
-    this(optic, fieldOptics, Function.identity(), null, List.of(), null);
+    this(optic, fieldOptics, identityChain(), null, List.of(), null);
   }
 
   Telescope(final Traversal<S, A> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
@@ -248,7 +263,7 @@ public sealed class Telescope<
    * @see #ofBean(Class)
    */
   public static <S> Telescope<S, S> of(final Class<S> rootType) {
-    return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, Function.identity(), null, List.of(), List.of());
+    return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, identityChain(), null, List.of(), List.of());
   }
 
   /**
@@ -273,7 +288,7 @@ public sealed class Telescope<
   static <S, A> Telescope<S, A> mapped(final Iso<S, A> iso, final List<OpticNode> trail) {
     // The one boundary that takes a caller-owned list — copy it immutable so the constructor can
     // store every trail as-is.
-    return new Telescope<>(iso, RecordFieldOptics.INSTANCE, Function.identity(), null, List.copyOf(trail));
+    return new Telescope<>(iso, RecordFieldOptics.INSTANCE, identityChain(), null, List.copyOf(trail));
   }
 
   /**
@@ -340,22 +355,56 @@ public sealed class Telescope<
    * }</pre>
    */
   public static <S, X> ListTelescope<S, X> asList(final Telescope<S, List<X>> path) {
-    return new ListTelescope<>(path.optic, path.fieldOptics, path.chain);
+    // Preserve the promoted path's name/trail/hops — the promotion previously erased all three,
+    // leaving explain() blank on a path that was fully described a call earlier.
+    return new ListTelescope<>(
+      path.optic,
+      path.fieldOptics,
+      path.chain,
+      path.firstHopName,
+      path.trail,
+      path.hops,
+      ContainerHop.promotion()
+    );
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Set&lt;X&gt;} paths. */
   public static <S, X> SetTelescope<S, X> asSet(final Telescope<S, Set<X>> path) {
-    return new SetTelescope<>(path.optic, path.fieldOptics, path.chain);
+    return new SetTelescope<>(
+      path.optic,
+      path.fieldOptics,
+      path.chain,
+      path.firstHopName,
+      path.trail,
+      path.hops,
+      ContainerHop.promotion()
+    );
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Map&lt;K, V&gt;} paths. */
   public static <S, K, V> MapTelescope<S, K, V> asMap(final Telescope<S, Map<K, V>> path) {
-    return new MapTelescope<>(path.optic, path.fieldOptics, path.chain);
+    return new MapTelescope<>(
+      path.optic,
+      path.fieldOptics,
+      path.chain,
+      path.firstHopName,
+      path.trail,
+      path.hops,
+      ContainerHop.promotion()
+    );
   }
 
   /** Pre-built-fragment companion to {@link #asList} for {@code Optional&lt;X&gt;} paths. */
   public static <S, X> OptionalTelescope<S, X> asOptional(final Telescope<S, Optional<X>> path) {
-    return new OptionalTelescope<>(path.optic, path.fieldOptics, path.chain);
+    return new OptionalTelescope<>(
+      path.optic,
+      path.fieldOptics,
+      path.chain,
+      path.firstHopName,
+      path.trail,
+      path.hops,
+      ContainerHop.promotion()
+    );
   }
 
   /**
@@ -441,7 +490,7 @@ public sealed class Telescope<
    * both kinds and any cross-paradigm mix.
    */
   public static <P> Telescope<P, P> ofBean(final Class<P> pojoClass) {
-    return new Telescope<>(Iso.identity(), BeanFieldOptics.INSTANCE, Function.identity(), null, List.of(), List.of());
+    return new Telescope<>(Iso.identity(), BeanFieldOptics.INSTANCE, identityChain(), null, List.of(), List.of());
   }
 
   /**
@@ -487,7 +536,7 @@ public sealed class Telescope<
     return new Telescope<>(
       Lens.of(getter, setter),
       RecordFieldOptics.INSTANCE,
-      Function.identity(),
+      identityChain(),
       LambdaIntrospection.methodNameOf(getter)
     );
   }
@@ -900,9 +949,22 @@ public sealed class Telescope<
    * deps.each().field(Department::name).update(co, fn);
    * }</pre>
    */
+  @SuppressWarnings("unchecked")
   public <X> ListTelescope<S, X> list(final Accessor<A, List<X>> getter) {
     final Lens<A, List<X>> lens = lensForAccessor(getter);
-    return new ListTelescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
+    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var name = fieldNameOf(getter);
+    final var lensErased = (Traversal<Object, Object>) (Traversal<?, ?>) lens;
+    final var fieldHop = owner == null ? null : Fusion.Hop.field(owner, name, lensErased);
+    return new ListTelescope<>(
+      optic.then(lens),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Focus(name)),
+      plusHops(fieldHop),
+      new ContainerHop<>(trail, hops, owner, name, lensErased)
+    );
   }
 
   /**
@@ -913,9 +975,22 @@ public sealed class Telescope<
    * terminal {@link #set(Object, Object)} — they take different argument types, but the shared verb
    * load is real enough that disambiguation pays off at the call site.
    */
+  @SuppressWarnings("unchecked")
   public <X> SetTelescope<S, X> setField(final Accessor<A, Set<X>> getter) {
     final Lens<A, Set<X>> lens = lensForAccessor(getter);
-    return new SetTelescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
+    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var name = fieldNameOf(getter);
+    final var lensErased = (Traversal<Object, Object>) (Traversal<?, ?>) lens;
+    final var fieldHop = owner == null ? null : Fusion.Hop.field(owner, name, lensErased);
+    return new SetTelescope<>(
+      optic.then(lens),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Focus(name)),
+      plusHops(fieldHop),
+      new ContainerHop<>(trail, hops, owner, name, lensErased)
+    );
   }
 
   /**
@@ -927,9 +1002,22 @@ public sealed class Telescope<
    * io.github.eschizoid.telescope.mapping.MapStep...)} — those do conceptually different things and
    * share the same verb otherwise.
    */
+  @SuppressWarnings("unchecked")
   public <K, V> MapTelescope<S, K, V> mapField(final Accessor<A, Map<K, V>> getter) {
     final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
-    return new MapTelescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
+    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var name = fieldNameOf(getter);
+    final var lensErased = (Traversal<Object, Object>) (Traversal<?, ?>) lens;
+    final var fieldHop = owner == null ? null : Fusion.Hop.field(owner, name, lensErased);
+    return new MapTelescope<>(
+      optic.then(lens),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Focus(name)),
+      plusHops(fieldHop),
+      new ContainerHop<>(trail, hops, owner, name, lensErased)
+    );
   }
 
   /**
@@ -937,9 +1025,22 @@ public sealed class Telescope<
    * an {@link OptionalTelescope} carrying the optional type for later {@link
    * OptionalTelescope#present()} navigation.
    */
+  @SuppressWarnings("unchecked")
   public <X> OptionalTelescope<S, X> optional(final Accessor<A, Optional<X>> getter) {
     final Lens<A, Optional<X>> lens = lensForAccessor(getter);
-    return new OptionalTelescope<>(optic.then(lens), fieldOptics, chain, hopName(getter));
+    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var name = fieldNameOf(getter);
+    final var lensErased = (Traversal<Object, Object>) (Traversal<?, ?>) lens;
+    final var fieldHop = owner == null ? null : Fusion.Hop.field(owner, name, lensErased);
+    return new OptionalTelescope<>(
+      optic.then(lens),
+      fieldOptics,
+      chain,
+      hopName(getter),
+      plus(new OpticNode.Focus(name)),
+      plusHops(fieldHop),
+      new ContainerHop<>(trail, hops, owner, name, lensErased)
+    );
   }
 
   /**
@@ -1252,6 +1353,11 @@ public sealed class Telescope<
     // Both sides' trails are already immutable, so when one side is empty (common on codegen paths,
     // where the hop is appended after composition) reuse the other directly — no allocation. Only a
     // genuine two-sided join builds a fresh list.
+    if (next.hasPendingEdits()) throw new IllegalArgumentException(
+      "then(...) received a telescope carrying pending chain edits (built via .with(...) / " +
+        ".update(path, fn) / Telescope.all(...)); composition would silently drop them. " +
+        "Run them with .apply(source) first, or compose the pure paths and apply edits after."
+    );
     final List<OpticNode> joinedTrail;
     if (next.trail.isEmpty()) joinedTrail = trail;
     else if (trail.isEmpty()) joinedTrail = next.trail;
@@ -2254,22 +2360,91 @@ public sealed class Telescope<
    */
   public static final class ListTelescope<S, X> extends Telescope<S, List<X>> {
 
-    ListTelescope(final Traversal<S, List<X>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
-      super(optic, fieldOptics, chain);
-    }
+    // Provenance of the container hop, so each() can emit the SAME trail node and fusion hop the
+    // fused each(getter) form produces — the split form must not be invisible to explain()/fusion.
+    // Null owner marks a promotion (asList) of an arbitrary path: the promoted trail/hops are
+    // preserved as-is, and each() keeps the trail but degrades hops to null (identity unknown).
+    private final ContainerHop<S> origin;
 
     ListTelescope(
       final Traversal<S, List<X>> optic,
       final FieldOptics fieldOptics,
       final Function<S, S> chain,
-      final String firstHopName
+      final String firstHopName,
+      final List<OpticNode> trail,
+      final List<Fusion.Hop> hops,
+      final ContainerHop<S> origin
     ) {
-      super(optic, fieldOptics, chain, firstHopName);
+      super(optic, fieldOptics, chain, firstHopName, trail, hops);
+      this.origin = origin;
     }
 
     /** Step into list elements. Pure lattice composition; no reflection. */
     public Telescope<S, X> each() {
-      return new Telescope<>(this.optic.then(Traversals.eachList()), this.fieldOptics, this.chain, this.firstHopName);
+      return origin.descend(this, Traversals.eachList(), "each", "collection");
+    }
+  }
+
+  /**
+   * Provenance of a typed-container step ({@code list}/{@code setField}/{@code mapField}/{@code
+   * optional}): the pre-field trail/hops plus the field's owner, component name, and lens — enough
+   * for the container terminal to emit the exact trail node and fusion hop the fused {@code
+   * each(getter)} form produces. A promotion ({@code asList(...)} etc.) has no provenance: {@code
+   * descend} then preserves the promoted trail and degrades hops to null.
+   */
+  record ContainerHop<S>(
+    List<OpticNode> preTrail,
+    List<Fusion.Hop> preHops,
+    Class<?> owner,
+    String component,
+    Traversal<Object, Object> lens
+  ) {
+    static <S> ContainerHop<S> promotion() {
+      return new ContainerHop<>(null, null, null, null, null);
+    }
+
+    @SuppressWarnings("unchecked")
+    <A, E> Telescope<S, E> descend(
+      final Telescope<S, A> step,
+      final Traversal<?, ?> elements,
+      final String kind,
+      final String containerLabel
+    ) {
+      final var composed = step.optic.then((Traversal<A, E>) elements);
+      if (owner == null) {
+        // Promotion of an arbitrary path: keep the (possibly partial) trail, no fusion identity.
+        return new Telescope<>(composed, step.fieldOptics, step.chain, step.firstHopName, step.trail, null);
+      }
+      final var trailOut = new ArrayList<OpticNode>(preTrail.size() + 1);
+      trailOut.addAll(preTrail);
+      trailOut.add(new OpticNode.Traverse(component, containerLabel));
+      final var segment = (Traversal<Object, Object>) (Traversal<?, ?>) lens.then(
+        (Traversal<Object, Object>) (Traversal<?, ?>) elements
+      );
+      final var hop = Fusion.Hop.traverse(
+        owner,
+        component,
+        kind,
+        segment,
+        (Traversal<Object, Object>) (Traversal<?, ?>) elements
+      );
+      final List<Fusion.Hop> hopsOut;
+      if (preHops == null) {
+        hopsOut = null;
+      } else {
+        final var h = new ArrayList<Fusion.Hop>(preHops.size() + 1);
+        h.addAll(preHops);
+        h.add(hop);
+        hopsOut = Collections.unmodifiableList(h);
+      }
+      return new Telescope<>(
+        composed,
+        step.fieldOptics,
+        step.chain,
+        step.firstHopName,
+        Collections.unmodifiableList(trailOut),
+        hopsOut
+      );
     }
   }
 
@@ -2280,22 +2455,24 @@ public sealed class Telescope<
    */
   public static final class SetTelescope<S, X> extends Telescope<S, Set<X>> {
 
-    SetTelescope(final Traversal<S, Set<X>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
-      super(optic, fieldOptics, chain);
-    }
+    private final ContainerHop<S> origin;
 
     SetTelescope(
       final Traversal<S, Set<X>> optic,
       final FieldOptics fieldOptics,
       final Function<S, S> chain,
-      final String firstHopName
+      final String firstHopName,
+      final List<OpticNode> trail,
+      final List<Fusion.Hop> hops,
+      final ContainerHop<S> origin
     ) {
-      super(optic, fieldOptics, chain, firstHopName);
+      super(optic, fieldOptics, chain, firstHopName, trail, hops);
+      this.origin = origin;
     }
 
     /** Step into set elements. Output is iteration-order-preserving (LinkedHashSet). */
     public Telescope<S, X> each() {
-      return new Telescope<>(this.optic.then(Traversals.eachSet()), this.fieldOptics, this.chain, this.firstHopName);
+      return origin.descend(this, Traversals.eachSet(), "each", "collection");
     }
   }
 
@@ -2306,27 +2483,24 @@ public sealed class Telescope<
    */
   public static final class MapTelescope<S, K, V> extends Telescope<S, Map<K, V>> {
 
-    MapTelescope(final Traversal<S, Map<K, V>> optic, final FieldOptics fieldOptics, final Function<S, S> chain) {
-      super(optic, fieldOptics, chain);
-    }
+    private final ContainerHop<S> origin;
 
     MapTelescope(
       final Traversal<S, Map<K, V>> optic,
       final FieldOptics fieldOptics,
       final Function<S, S> chain,
-      final String firstHopName
+      final String firstHopName,
+      final List<OpticNode> trail,
+      final List<Fusion.Hop> hops,
+      final ContainerHop<S> origin
     ) {
-      super(optic, fieldOptics, chain, firstHopName);
+      super(optic, fieldOptics, chain, firstHopName, trail, hops);
+      this.origin = origin;
     }
 
     /** Step into map values; keys remain on the map. Pure lattice composition. */
     public Telescope<S, V> values() {
-      return new Telescope<>(
-        this.optic.then(Traversals.eachMapValue()),
-        this.fieldOptics,
-        this.chain,
-        this.firstHopName
-      );
+      return origin.descend(this, Traversals.eachMapValue(), "eachValue", "map values");
     }
   }
 
@@ -2337,31 +2511,24 @@ public sealed class Telescope<
    */
   public static final class OptionalTelescope<S, X> extends Telescope<S, Optional<X>> {
 
-    OptionalTelescope(
-      final Traversal<S, Optional<X>> optic,
-      final FieldOptics fieldOptics,
-      final Function<S, S> chain
-    ) {
-      super(optic, fieldOptics, chain);
-    }
+    private final ContainerHop<S> origin;
 
     OptionalTelescope(
       final Traversal<S, Optional<X>> optic,
       final FieldOptics fieldOptics,
       final Function<S, S> chain,
-      final String firstHopName
+      final String firstHopName,
+      final List<OpticNode> trail,
+      final List<Fusion.Hop> hops,
+      final ContainerHop<S> origin
     ) {
-      super(optic, fieldOptics, chain, firstHopName);
+      super(optic, fieldOptics, chain, firstHopName, trail, hops);
+      this.origin = origin;
     }
 
     /** Step into the Optional's payload. Empty Optional is a write no-op (Affine semantics). */
     public Telescope<S, X> present() {
-      return new Telescope<>(
-        this.optic.then(Traversals.eachOptional()),
-        this.fieldOptics,
-        this.chain,
-        this.firstHopName
-      );
+      return origin.descend(this, Traversals.eachOptional(), "whenPresent", "optional");
     }
   }
 

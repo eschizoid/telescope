@@ -43,6 +43,11 @@ public interface Edit<S> {
    *     Edit<S>})
    */
   static <S, X> Edit<S> over(final Telescope<S, X> path, final Function<X, X> fn) {
+    if (path.hasPendingEdits()) throw new IllegalArgumentException(
+      "over(...) received a telescope carrying pending chain edits (built via .with(...) / " +
+        ".update(path, fn) / Telescope.all(...)); the edit would run against the bare path and " +
+        "silently drop them. Run them with .apply(source) first, or pass the pure path."
+    );
     return new EditImpl<>(path, fn);
   }
 
