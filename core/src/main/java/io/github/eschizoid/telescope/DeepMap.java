@@ -5,7 +5,6 @@ import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.NullDefaults;
-import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
@@ -29,39 +28,21 @@ import io.github.eschizoid.telescope.mapping.TelescopeToTelescope;
 import io.github.eschizoid.telescope.mapping.TypedTransformTo;
 import io.github.eschizoid.telescope.mapping.Via;
 import io.github.eschizoid.telescope.mapping.WriteHint;
-import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Deque;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.PriorityQueue;
 import java.util.Set;
-import java.util.Stack;
-import java.util.TreeMap;
-import java.util.TreeSet;
-import java.util.Vector;
-import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CopyOnWriteArraySet;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Function;
-import java.util.function.Predicate;
-import java.util.function.Supplier;
 
 /**
  * Engine for {@link Telescope#map(Class, Class, MapStep...)} / {@link Telescope#mapper(Class,
@@ -635,7 +616,10 @@ public final class DeepMap {
             // canonical constructor's unboxing). The step is NOT registered under byTargetName,
             // so the forward direction omits the source field from the target map entirely.
             final var droppedType = rawClassOf(srcRefl.genericType(source, srcField));
-            bySourceName.put(srcField, new FieldStep(srcField, null, placeholderIsoFor(droppedType, false)));
+            bySourceName.put(
+              srcField,
+              new FieldStep(srcField, null, Placeholders.placeholderIsoFor(droppedType, false))
+            );
             if (trailOut != null) trailOut.add(new OpticNode.Skipped(srcField, OpticNode.Reason.DROPPED));
             yield false;
           }
@@ -741,7 +725,7 @@ public final class DeepMap {
             final var fieldType = rawClassOf(tgtRefl.genericType(target, name));
             byTargetName.putIfAbsent(
               name,
-              new FieldStep(null, name, placeholderIsoFor(fieldType, telescopeWritesTgt.contains(name)))
+              new FieldStep(null, name, Placeholders.placeholderIsoFor(fieldType, telescopeWritesTgt.contains(name)))
             );
             // Only truly-unpopulated fields are MISSING_SOURCE. A field a fixup writes (constant /
             // compute / nested-telescope row) is registered in telescopeWritesTgt and gets a real
@@ -793,14 +777,14 @@ public final class DeepMap {
         // backward-only placeholder so the source rebuilder produces null for this field; the
         // backward post-fixup will fill the real value from the target telescope.
         if (telescopeReadsSrc.contains(name)) {
-          bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
+          bySourceName.putIfAbsent(name, new FieldStep(name, null, Placeholders.NULLING_ISO));
           continue;
         }
         // Same permissive mode as the target side: when telescope rows are present, this is a
         // nested auto-recursed pair, OR the resolution is forward-only (lenient), source fields
         // with no consumer fall back to a NULLING placeholder rather than failing.
         if (!telescopeFixups.isEmpty() || inProgress.size() > 1 || lenient) {
-          bySourceName.putIfAbsent(name, new FieldStep(name, null, NULLING_ISO));
+          bySourceName.putIfAbsent(name, new FieldStep(name, null, Placeholders.NULLING_ISO));
           if (trailOut != null) trailOut.add(new OpticNode.UnusedSource(name));
           continue;
         }
@@ -818,280 +802,12 @@ public final class DeepMap {
       final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
       cache.put(
         key,
-        telescopeFixups.isEmpty() ? baseIso : wrapWithTelescopeFixups(baseIso, telescopeFixups, srcRefl, source)
+        telescopeFixups.isEmpty() ? baseIso : TelescopeFixups.wrap(baseIso, telescopeFixups, srcRefl, source)
       );
       if (topStepsOut != null) topStepsOut.putAll(byTargetName);
     } finally {
       inProgress.pop();
     }
-  }
-
-  /**
-   * Compose post-fixups on top of the base {@link Iso} produced by {@link #assembleIso}. Four
-   * telescope-based row shapes route through this single wrapper; each contributes a forward
-   * overlay and a backward overlay built from the lattice's public {@code Telescope.set} / {@code
-   * Telescope.read} (and {@code toList} / {@code updateIndexed} for the {@link
-   * TelescopeToTelescope.Kind#ZIP} case).
-   *
-   * <ul>
-   *   <li>{@link TelescopeTo} (flat src → nested tgt): forward {@code tgtT.set(t,
-   *       srcAcc.apply(s))}; backward rebuilds {@code s} with {@code sourceField} = {@code
-   *       tgtT.read(t)}.
-   *   <li>{@link FromTelescopeTo} (nested src → flat tgt): forward rebuilds {@code t} with {@code
-   *       targetField} = {@code srcT.read(s)}; backward rebuilds {@code s} via {@code srcT.set(s,
-   *       tgtAcc.apply(t))}.
-   *   <li>{@link TelescopeToTelescope} with {@link TelescopeToTelescope.Kind#BROADCAST} (nested ↔
-   *       nested, broadcast): forward {@code tgtT.set(t, srcT.read(s))}; backward {@code
-   *       srcT.set(s, tgtT.read(t))}. When either side is many-focus the lattice's intrinsic
-   *       broadcast / first-focus semantics apply — no extra machinery here.
-   *   <li>{@link TelescopeToTelescope} with {@link TelescopeToTelescope.Kind#ZIP} (nested ↔ nested,
-   *       positional N:N): forward reads {@code srcT.toList(s)} and writes positionally via {@code
-   *       tgtT.updateIndexed(t, ...)} with cardinality enforcement; backward mirrors.
-   * </ul>
-   *
-   * <p>All reads / writes go through the lattice's public {@link io.github.eschizoid.telescope
-   * .Telescope} surface — no new optic primitives, no Iso composition beyond the base.
-   */
-  private static <S, T> Iso<S, T> wrapWithTelescopeFixups(
-    final Iso<S, T> base,
-    final List<Mapping<?, ?>> fixups,
-    final Reflective srcRefl,
-    final Class<S> source
-  ) {
-    return Iso.of(
-      s -> applyForward(base.to(s), s, fixups),
-      t -> applyBackward(base.from(t), t, fixups, srcRefl, source)
-    );
-  }
-
-  @SuppressWarnings("unchecked")
-  private static <S, T> T applyForward(final T initial, final S s, final List<Mapping<?, ?>> fixups) {
-    T t = initial;
-    for (final var rawFx : fixups) {
-      // Conditional<A, B>(predicate, inner) gates the inner row's forward effect by the source
-      // predicate. When the predicate rejects the source, skip the row entirely — the target
-      // field keeps whatever the base structural Iso produced. Predicate cast widens the
-      // upper-bound wildcard `? super A` against the type-erased source `s`; safe because the
-      // mapper's Class<A> verifies s at runtime through the surrounding forward(...) entry.
-      final Mapping<?, ?> fx;
-      if (rawFx instanceof Conditional<?, ?> cond) {
-        final var predicate = (Predicate<Object>) cond.predicate();
-        final boolean accepted;
-        try {
-          accepted = predicate.test(s);
-        } catch (final Throwable predicateFailure) {
-          // Decorate user-predicate exceptions (including Errors like StackOverflowError on a
-          // self-recursive predicate, AssertionError on a `assert` in the body, and
-          // NoClassDefFoundError) with the row's inner-kind + source field breadcrumb so the
-          // failure points at the user's when(...) site, not at an opaque applyForward stack
-          // frame. Matches the self-diagnosing style of Mapping.zip's cardinality check below.
-          // Widened from RuntimeException to Throwable because the original catch let Errors
-          // propagate raw — the breadcrumb is even more valuable for those.
-          final var inner = cond.inner();
-          final var innerField = inner.sourceField() == null ? "<telescope>" : inner.sourceField();
-          // Include the failure CLASS name — predicate.test() commonly throws NPE on null
-          // navigation, where getMessage() returns null and "Predicate failure: null" tells the
-          // user nothing. The class name (NullPointerException, ClassCastException, etc.) carries
-          // the actionable signal even when the message is null.
-          final var failureType = predicateFailure.getClass().getSimpleName();
-          final var failureMsg = predicateFailure.getMessage();
-          throw new IllegalStateException(
-            "Mapping.when(...) predicate threw — inner=" +
-              inner.getClass().getSimpleName() +
-              " (sourceField=" +
-              innerField +
-              "). Predicate failure: " +
-              failureType +
-              (failureMsg == null ? "" : ": " + failureMsg),
-            predicateFailure
-          );
-        }
-        if (!accepted) continue;
-        fx = cond.inner();
-      } else {
-        fx = rawFx;
-      }
-      // Exhaustive over the sealed row family: a new permit must declare its forward effect here
-      // or the compiler rejects the switch — a telescope-shaped row can no longer be silently
-      // skipped by this dispatch. Structural rows never reach telescopeFixups (populateIso routes
-      // them to the field-claim tail), so their branches are fail-fast routing guards, not logic.
-      t = switch (fx) {
-        case TelescopeTo<?, ?, ?> r -> {
-          final var srcAcc = (Telescope.Accessor<S, Object>) r.srcAccessor();
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          yield tgtT.set(t, srcAcc.apply(s));
-        }
-        case FromTelescopeTo<?, ?, ?> r -> {
-          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
-          // The target side is a flat accessor; we need to rebuild t with the named target
-          // field
-          // overridden by srcT.read(s). Delegate to overrideTargetField, which uses the target
-          // Reflective.construct the same way the source-side path does in applyBackward.
-          yield overrideTargetField(t, r, srcT, s);
-        }
-        case TelescopeToTelescope<?, ?, ?> r -> {
-          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          if (r.kind() == TelescopeToTelescope.Kind.ZIP) {
-            final var values = srcT.toList(s);
-            final var targetCount = tgtT.count(t);
-            if (values.size() != targetCount) throw new IllegalStateException(
-              "Mapping.zip: source has " +
-                values.size() +
-                " focus(es), target has " +
-                targetCount +
-                " — cardinality must match for positional zip."
-            );
-            yield tgtT.updateIndexed(t, (i, _ignored) -> values.get(i));
-          }
-          // Lenient: when the source path resolves to an empty focus (null intermediate in a
-          // chained bean read, or an Affine miss further down the path), write null to the
-          // target
-          // field rather than throwing. Downstream type-default handling — where configured —
-          // takes over from there.
-          yield tgtT.set(t, srcT.find(s).orElse(null));
-        }
-        case Constant<?, ?, ?> r -> {
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          yield tgtT.set(t, r.value());
-        }
-        case Compute<?, ?, ?> r -> {
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          yield tgtT.set(t, r.supplier().get());
-        }
-        case Conditional<?, ?> __ -> throw new IllegalStateException(
-          "Conditional row survived peeling — routing regression in applyForward"
-        );
-        case SameTypedTo<?, ?, ?> __ -> throw structuralInFixups(__);
-        case TypedTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
-        case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
-        case Via<?, ?> __ -> throw structuralInFixups(__);
-        case Drop<?, ?, ?> __ -> throw structuralInFixups(__);
-      };
-    }
-    return t;
-  }
-
-  /**
-   * Fail-fast guard for structural rows reaching the telescope-fixup dispatch — a populateIso
-   * routing regression.
-   */
-  private static IllegalStateException structuralInFixups(final Mapping<?, ?> row) {
-    return new IllegalStateException(
-      row.getClass().getSimpleName() + " is a structural row and cannot reach the telescope-fixup dispatch"
-    );
-  }
-
-  @SuppressWarnings("unchecked")
-  private static <S, T> S applyBackward(
-    final S baseS,
-    final T t,
-    final List<Mapping<?, ?>> fixups,
-    final Reflective srcRefl,
-    final Class<S> source
-  ) {
-    // Collect per-field override values keyed by normalized source field name; the rebuild reads
-    // through srcRefl.construct and substitutes our overrides per name. Telescope-source fixups
-    // (FromTelescopeTo, TelescopeToTelescope) don't have a top-level source field —
-    // they apply via srcT.set on the rebuilt baseS, after the name-keyed rebuild finishes.
-    final var fieldOverrides = new HashMap<String, Object>();
-    for (final var fx : fixups) {
-      // Exhaustive over the sealed family: every permit declares its backward role in this pass
-      // explicitly — an override contribution, a documented skip, or a fail-fast routing guard.
-      switch (fx) {
-        case TelescopeTo<?, ?, ?> r -> {
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          fieldOverrides.put(srcRefl.normalize(r.sourceField()), tgtT.read(t));
-        }
-        // Conditional rows are forward-only by design — same retraction semantics as Constant /
-        // Compute. The source rebuild leaves the corresponding source field at the baseS value;
-        // forward(backward(t)) is intentionally asymmetric for predicate-gated rows.
-        case Conditional<?, ?> __ -> {
-        }
-        // Telescope-source fixups apply in the overlay pass after the name-keyed rebuild.
-        case FromTelescopeTo<?, ?, ?> __ -> {
-        }
-        case TelescopeToTelescope<?, ?, ?> __ -> {
-        }
-        // Forward-only injections: the source rebuild ignores their slots entirely.
-        case Constant<?, ?, ?> __ -> {
-        }
-        case Compute<?, ?, ?> __ -> {
-        }
-        case SameTypedTo<?, ?, ?> __ -> throw structuralInFixups(__);
-        case TypedTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
-        case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
-        case Via<?, ?> __ -> throw structuralInFixups(__);
-        case Drop<?, ?, ?> __ -> throw structuralInFixups(__);
-      }
-    }
-    S s = (S) srcRefl.construct(source, name ->
-      fieldOverrides.containsKey(name) ? fieldOverrides.get(name) : srcRefl.read(baseS, name)
-    );
-    // Telescope-source fixups overlay AFTER the name-keyed rebuild, via srcT.set on s.
-    for (final var fx : fixups) {
-      // Same exhaustive discipline as the override pass above.
-      s = switch (fx) {
-        case FromTelescopeTo<?, ?, ?> r -> {
-          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
-          final var tgtAcc = (Telescope.Accessor<T, Object>) r.tgtAccessor();
-          yield srcT.set(s, tgtAcc.apply(t));
-        }
-        case TelescopeToTelescope<?, ?, ?> r -> {
-          final var srcT = (Telescope<S, Object>) r.sourceTelescope();
-          final var tgtT = (Telescope<T, Object>) r.targetTelescope();
-          if (r.kind() == TelescopeToTelescope.Kind.ZIP) {
-            final var values = tgtT.toList(t);
-            final var sourceCount = srcT.count(s);
-            if (values.size() != sourceCount) throw new IllegalStateException(
-              "Mapping.zip: target has " +
-                values.size() +
-                " focus(es), source has " +
-                sourceCount +
-                " — cardinality must match for positional zip."
-            );
-            yield srcT.updateIndexed(s, (i, _ignored) -> values.get(i));
-          }
-          yield srcT.set(s, tgtT.read(t));
-        }
-        // TelescopeTo already applied through fieldOverrides in the rebuild above.
-        case TelescopeTo<?, ?, ?> __ -> s;
-        // Forward-only by design (see the override pass).
-        case Conditional<?, ?> __ -> s;
-        case Constant<?, ?, ?> __ -> s;
-        case Compute<?, ?, ?> __ -> s;
-        case SameTypedTo<?, ?, ?> __ -> throw structuralInFixups(__);
-        case TypedTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
-        case ForwardOnlyTransformTo<?, ?, ?, ?> __ -> throw structuralInFixups(__);
-        case Via<?, ?> __ -> throw structuralInFixups(__);
-        case Drop<?, ?, ?> __ -> throw structuralInFixups(__);
-      };
-    }
-    return s;
-  }
-
-  /**
-   * Forward overlay for {@link FromTelescopeTo} — rebuild the target with the named target field
-   * overridden by {@code srcTelescope.read(s)}. We can't construct a typed one-hop Telescope on the
-   * target side without knowing T's runtime class up-front (generics erased), so we use the target
-   * Reflective via the cached structural iso the same way the source-side path does.
-   */
-  @SuppressWarnings("unchecked")
-  private static <S, T> T overrideTargetField(
-    final T t,
-    final FromTelescopeTo<?, ?, ?> r,
-    final Telescope<S, Object> srcT,
-    final S s
-  ) {
-    final var tgtClass = (Class<T>) t.getClass();
-    final var tgtRefl = Reflective.of(tgtClass);
-    final var tgtField = tgtRefl.normalize(r.targetField());
-    // Lenient: when the source path resolves to an empty focus (null intermediate in a chained
-    // bean read, or an Affine miss further down the path), rebuild proceeds with null in the
-    // target field rather than aborting the mapper with NoSuchElementException. Downstream type-
-    // default handling — where configured — takes over from there.
-    final var newValue = srcT.find(s).orElse(null);
-    return (T) tgtRefl.construct(tgtClass, name -> name.equals(tgtField) ? newValue : tgtRefl.read(t, name));
   }
 
   // ---------- Per-component auto resolution ----------
@@ -1159,10 +875,10 @@ public final class DeepMap {
     //       no-arg constructor + `addAll` / `putAll`. The kind-discriminator and allocability
     //       gates live on the shared spec; the decision only fires when the copy is buildable.
     if (decision instanceof PairDecision.CollectionCopy) {
-      return collectionCopyIso((Class<?>) srcType, (Class<?>) tgtType);
+      return ContainerLifts.collectionCopyIso((Class<?>) srcType, (Class<?>) tgtType);
     }
     if (decision instanceof PairDecision.MapCopy) {
-      return mapCopyIso((Class<?>) srcType, (Class<?>) tgtType);
+      return ContainerLifts.mapCopyIso((Class<?>) srcType, (Class<?>) tgtType);
     }
 
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
@@ -1243,17 +959,17 @@ public final class DeepMap {
       // see the right shape directly — no extra reach-through — and treat every non-leaf shape the
       // same (plain Java loop).
       return switch (d.src().kind()) {
-        case LIST -> liftListIntoTargetRaw(
+        case LIST -> ContainerLifts.liftListIntoTargetRaw(
           eraseIso(elementIso),
           (Class<?>) d.src().rawType(),
           (Class<?>) d.tgt().rawType()
         );
-        case SET -> liftSetIntoTargetRaw(
+        case SET -> ContainerLifts.liftSetIntoTargetRaw(
           eraseIso(elementIso),
           (Class<?>) d.src().rawType(),
           (Class<?>) d.tgt().rawType()
         );
-        case MAP_VALUES -> liftMapIntoTargetRaw(
+        case MAP_VALUES -> ContainerLifts.liftMapIntoTargetRaw(
           eraseIso(elementIso),
           (Class<?>) d.src().rawType(),
           (Class<?>) d.tgt().rawType()
@@ -1389,17 +1105,17 @@ public final class DeepMap {
         );
       }
       return switch (srcShape.kind()) {
-        case LIST -> liftListIntoTargetRaw(
+        case LIST -> ContainerLifts.liftListIntoTargetRaw(
           eraseIso(elementIso),
           (Class<?>) srcShape.rawType(),
           (Class<?>) tgtShape.rawType()
         );
-        case SET -> liftSetIntoTargetRaw(
+        case SET -> ContainerLifts.liftSetIntoTargetRaw(
           eraseIso(elementIso),
           (Class<?>) srcShape.rawType(),
           (Class<?>) tgtShape.rawType()
         );
-        case MAP_VALUES -> liftMapIntoTargetRaw(
+        case MAP_VALUES -> ContainerLifts.liftMapIntoTargetRaw(
           eraseIso(elementIso),
           (Class<?>) srcShape.rawType(),
           (Class<?>) tgtShape.rawType()
@@ -1433,251 +1149,13 @@ public final class DeepMap {
   }
 
   /**
-   * Collection ↔ Collection element-copy Iso. The forward instantiates the target collection via
-   * {@link Beans#intermediateAllocator(Class)} (cached LMF-bound Supplier) and {@code addAll}'s the
-   * source; backward is symmetric. Returns {@code null} when either side has no usable allocator,
-   * letting the caller fall through to the next branch (typically the shape-mismatch IAE).
-   *
-   * <p>No element-type recursion: this branch fires on raw, non-parameterised subtypes (e.g. {@code
-   * class ImageUrls extends ArrayList<ImageUrl>}), where the raw class itself carries no runtime
-   * generic info. Users whose element types differ across sides should declare an explicit row.
-   */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Iso<?, ?> collectionCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
-    final var srcAlloc = Beans.intermediateAllocator(srcCls);
-    final var tgtAlloc = Beans.intermediateAllocator(tgtCls);
-    if (srcAlloc.get() == null || tgtAlloc.get() == null) return null;
-    return Iso.of(
-      src -> {
-        if (src == null) return null;
-        final var fresh = (Collection) tgtAlloc.get();
-        fresh.addAll((Collection<?>) src);
-        return fresh;
-      },
-      tgt -> {
-        if (tgt == null) return null;
-        final var fresh = (Collection) srcAlloc.get();
-        fresh.addAll((Collection<?>) tgt);
-        return fresh;
-      }
-    );
-  }
-
-  /** Map ↔ Map element-copy Iso. Mirror of {@link #collectionCopyIso} via {@code putAll}. */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Iso<?, ?> mapCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
-    final var srcAlloc = Beans.intermediateAllocator(srcCls);
-    final var tgtAlloc = Beans.intermediateAllocator(tgtCls);
-    if (srcAlloc.get() == null || tgtAlloc.get() == null) return null;
-    return Iso.of(
-      src -> {
-        if (src == null) return null;
-        final var fresh = (Map) tgtAlloc.get();
-        fresh.putAll((Map<?, ?>) src);
-        return fresh;
-      },
-      tgt -> {
-        if (tgt == null) return null;
-        final var fresh = (Map) srcAlloc.get();
-        fresh.putAll((Map<?, ?>) tgt);
-        return fresh;
-      }
-    );
-  }
-
-  /**
-   * List-level lift that writes into the target's concrete raw class. Element-wise forward /
-   * backward via the {@code elementIso}, allocating fresh source and target instances via {@link
-   * Beans#intermediateAllocator}. A {@code List<X> ↔ ArrayList<Y>} pair, or an {@code ArrayList<X>
-   * ↔ LinkedList<Y>} pair, produces a result whose runtime class matches the declared target raw
-   * class. Falls back to {@link ArrayList} for the raw {@link List} / {@link Collection} interface,
-   * where there's no concrete class to allocate.
-   */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Iso<?, ?> liftListIntoTargetRaw(
-    final Iso<Object, Object> elementIso,
-    final Class<?> srcRaw,
-    final Class<?> tgtRaw
-  ) {
-    final var srcAlloc = listAllocatorFor(srcRaw);
-    final var tgtAlloc = listAllocatorFor(tgtRaw);
-    // When the element is a composed-handle leaf, iterate with a MethodHandle loop over its raw
-    // element handle instead of dispatching elementIso.to(x) -> Function.apply per element. In a
-    // deep
-    // tree the shared Java-loop lambda's call site goes megamorphic across nesting levels and the
-    // JIT
-    // stops inlining the element conversion; a dedicated per-level loop handle stays monomorphic
-    // and
-    // inlines. Null for a scalar/array-leaf element; keep the plain Java loop for those.
-    final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
-    if (mh != null) return mh;
-    return Iso.of(
-      src -> {
-        if (src == null) return null;
-        final var fresh = (Collection) tgtAlloc.get();
-        for (final var x : (Collection<?>) src) fresh.add(elementIso.to(x));
-        return fresh;
-      },
-      tgt -> {
-        if (tgt == null) return null;
-        final var fresh = (Collection) srcAlloc.get();
-        for (final var y : (Collection<?>) tgt) fresh.add(elementIso.from(y));
-        return fresh;
-      }
-    );
-  }
-
-  /**
-   * Set-level lift that writes into the target's concrete raw class. Mirror of {@link
-   * #liftListIntoTargetRaw} for Sets. Falls back to {@link LinkedHashSet} (preserving forward
-   * iteration order) when the raw class is the {@link Set} interface itself.
-   */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Iso<?, ?> liftSetIntoTargetRaw(
-    final Iso<Object, Object> elementIso,
-    final Class<?> srcRaw,
-    final Class<?> tgtRaw
-  ) {
-    final var srcAlloc = setAllocatorFor(srcRaw);
-    final var tgtAlloc = setAllocatorFor(tgtRaw);
-    // Same MethodHandle-loop sharpening as the List lift (Set is also Collection.add). Null element
-    // Iso => keep the Java loop.
-    final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
-    if (mh != null) return mh;
-    return Iso.of(
-      src -> {
-        if (src == null) return null;
-        final var fresh = (Collection) tgtAlloc.get();
-        for (final var x : (Collection<?>) src) fresh.add(elementIso.to(x));
-        return fresh;
-      },
-      tgt -> {
-        if (tgt == null) return null;
-        final var fresh = (Collection) srcAlloc.get();
-        for (final var y : (Collection<?>) tgt) fresh.add(elementIso.from(y));
-        return fresh;
-      }
-    );
-  }
-
-  /**
-   * Map-level lift that writes into the target's concrete raw class. Mirror of {@link
-   * #liftListIntoTargetRaw} for Maps. Preserves source keys verbatim (matches {@link
-   * Iso#liftMapValues}); the calling site already ensured the key classes match. Falls back to
-   * {@link HashMap} when the raw class is the {@link Map} interface itself (see {@link
-   * #mapAllocatorFor}).
-   */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
-  private static Iso<?, ?> liftMapIntoTargetRaw(
-    final Iso<Object, Object> elementIso,
-    final Class<?> srcRaw,
-    final Class<?> tgtRaw
-  ) {
-    final var srcAlloc = mapAllocatorFor(srcRaw);
-    final var tgtAlloc = mapAllocatorFor(tgtRaw);
-    // MethodHandle entry-loop over the value element's raw handle when it is a composed-handle
-    // leaf;
-    // keys pass through verbatim. Null value Iso => keep the Java loop.
-    final var mh = MhIso.liftMap(elementIso, srcAlloc, tgtAlloc);
-    if (mh != null) return mh;
-    return Iso.of(
-      src -> {
-        if (src == null) return null;
-        final var fresh = (Map) tgtAlloc.get();
-        for (final var e : ((Map<?, ?>) src).entrySet()) fresh.put(e.getKey(), elementIso.to(e.getValue()));
-        return fresh;
-      },
-      tgt -> {
-        if (tgt == null) return null;
-        final var fresh = (Map) srcAlloc.get();
-        for (final var e : ((Map<?, ?>) tgt).entrySet()) fresh.put(e.getKey(), elementIso.from(e.getValue()));
-        return fresh;
-      }
-    );
-  }
-
-  // JDK collection classes live in java.base — `Beans.intermediateAllocator` can't bind them
-  // via LambdaMetafactory's privateLookupIn (java.base doesn't grant private lookup to app code).
-  // Hard-code the common JDK Collection / Map raws so the allocator works for the standard
-  // shapes, and fall back to `intermediateAllocator` for user-defined subclasses (where LMF DOES
-  // work via the user's own package).
-  private static Supplier<Object> listAllocatorFor(final Class<?> raw) {
-    if (raw == List.class || raw == Collection.class || raw == ArrayList.class) return ArrayList::new;
-    if (raw == LinkedList.class) return LinkedList::new;
-    if (raw == ArrayDeque.class) return ArrayDeque::new;
-    if (raw == Vector.class) return Vector::new;
-    if (raw == Stack.class) return Stack::new;
-    if (raw == PriorityQueue.class) return PriorityQueue::new;
-    if (raw == LinkedBlockingQueue.class) return LinkedBlockingQueue::new;
-    if (raw == CopyOnWriteArrayList.class) return CopyOnWriteArrayList::new;
-    final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return alloc;
-    // No usable allocator for a JDK java.base class we don't recognise. Falling back to ArrayList
-    // would silently write the wrong runtime class into the target field and CCE at the setter.
-    // Throw at plan-time with a precise diagnostic instead.
-    throw new IllegalStateException(
-      "Deep map: no allocator for List subtype " +
-        raw.getName() +
-        ". Add it to listAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
-        "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
-    );
-  }
-
-  private static Supplier<Object> setAllocatorFor(final Class<?> raw) {
-    if (raw == Set.class || raw == LinkedHashSet.class) return LinkedHashSet::new;
-    if (raw == HashSet.class) return HashSet::new;
-    if (raw == TreeSet.class) return TreeSet::new;
-    if (raw == ConcurrentSkipListSet.class) return ConcurrentSkipListSet::new;
-    if (raw == CopyOnWriteArraySet.class) return CopyOnWriteArraySet::new;
-    final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return alloc;
-    throw new IllegalStateException(
-      "Deep map: no allocator for Set subtype " +
-        raw.getName() +
-        ". Add it to setAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
-        "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
-    );
-  }
-
-  /**
-   * Map-side allocator. {@code IdentityHashMap} and {@code WeakHashMap} are accepted but carry
-   * different semantics from a plain {@code HashMap} ({@code IdentityHashMap} uses reference
-   * equality for keys, {@code WeakHashMap} GCs keys without strong references) — adopters needing
-   * preservation declare an explicit {@code Mapping.via(...)} row. {@code EnumMap} is rejected at
-   * plan-time because its no-arg constructor doesn't exist (it needs the {@code Class<K>} arg);
-   * adopters must use the codegen path or an explicit row.
-   */
-  private static Supplier<Object> mapAllocatorFor(final Class<?> raw) {
-    if (raw == Map.class || raw == HashMap.class) return HashMap::new;
-    if (raw == LinkedHashMap.class) return LinkedHashMap::new;
-    if (raw == TreeMap.class) return TreeMap::new;
-    if (raw == ConcurrentHashMap.class) return ConcurrentHashMap::new;
-    if (raw == ConcurrentSkipListMap.class) return ConcurrentSkipListMap::new;
-    if (raw == IdentityHashMap.class) return IdentityHashMap::new;
-    if (raw == WeakHashMap.class) return WeakHashMap::new;
-    if (raw == EnumMap.class) throw new IllegalStateException(
-      "Deep map: EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg " +
-        "constructor (it needs the Class<K> key class). Use the codegen path or supply an " +
-        "explicit `Mapping.via(...)` row that constructs the EnumMap with its key class."
-    );
-    final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return alloc;
-    throw new IllegalStateException(
-      "Deep map: no allocator for Map subtype " +
-        raw.getName() +
-        ". Add it to mapAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
-        "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
-    );
-  }
-
-  /**
    * Build the per-field Iso for a primitive ↔ wrapper pair. The Iso's {@code to} (forward)
    * substitutes the primitive default when the source value is null, so a wrapper-to-primitive
    * write never NPEs at the setter. {@code from} (backward) is symmetric.
    */
   private static Iso<Object, Object> primitiveWrapperIso(final Class<?> src, final Class<?> tgt) {
-    final var fwdDefault = tgt.isPrimitive() ? primitiveDefault(tgt) : null;
-    final var bwdDefault = src.isPrimitive() ? primitiveDefault(src) : null;
+    final var fwdDefault = tgt.isPrimitive() ? Placeholders.primitiveDefault(tgt) : null;
+    final var bwdDefault = src.isPrimitive() ? Placeholders.primitiveDefault(src) : null;
     return Iso.of(v -> v == null ? fwdDefault : v, v -> v == null ? bwdDefault : v);
   }
 
@@ -1947,116 +1425,6 @@ public final class DeepMap {
    * One per-component step: source/target field names + the {@link Iso} between their leaf types.
    */
   private record FieldStep(String sourceName, String targetName, Iso<?, ?> iso) {}
-
-  /**
-   * Placeholder Iso used by {@code Mapping.drop(srcAccessor)}'s backward pass — both directions
-   * return {@code null}. Only ever invoked on the backward pass for source-only fields that have no
-   * target counterpart; the forward direction skips the field entirely.
-   */
-  private static final Iso<Object, Object> NULLING_ISO = Iso.of(__ -> null, __ -> null);
-
-  /**
-   * Forward-only iso that materialises a fresh default-tree instance of {@code type} on every
-   * forward call. Used as the placeholder for telescope-row-claimed target fields that have no
-   * same-name source counterpart — the post-fixup overlay descends into the allocated instance and
-   * writes the leaf, so a fully-flat source can be lifted into a deeply-nested target without
-   * per-hop allocation glue.
-   *
-   * <p>Records recurse via their canonical constructor with default component values. Beans
-   * (JavaBean shape) get a fresh instance from their public no-arg constructor. Anything without a
-   * usable construction strategy falls back to {@code null} — the user will see the same downstream
-   * null the unannotated path produces today, no worse.
-   */
-  private static Iso<Object, Object> defaultAllocatorIso(final Class<?> type) {
-    return Iso.of(__ -> recursiveDefault(type), __ -> null);
-  }
-
-  /**
-   * Construct a default-tree instance of {@code type} — primitives get their JLS default (0, false,
-   * etc.), records recurse via their canonical constructor with the same scheme, beans get a fresh
-   * instance from their public no-arg constructor (uninitialised fields default to null/zero, which
-   * the telescope-row write then overwrites). Anything else returns {@code null}.
-   *
-   * <p>Cycles between record types can't arise in practice: each canonical ctor needs every other
-   * type already constructible, so a record cycle would fail at compile time. Bean cycles are
-   * possible in principle but the no-arg ctor doesn't recurse into fields, so a self-referencing
-   * bean is handled with a single allocation regardless of its field shape.
-   */
-  @SuppressWarnings({ "rawtypes", "unchecked" })
-  private static Object recursiveDefault(final Class<?> type) {
-    if (type.isPrimitive()) return primitiveDefault(type);
-    if (type.isRecord()) {
-      final var comps = type.getRecordComponents();
-      final var byName = new HashMap<String, Object>(comps.length);
-      for (final var comp : comps) byName.put(comp.getName(), recursiveDefault(comp.getType()));
-      return Records.construct((Class) type, byName::get);
-    }
-    // Bean intermediate: try the public no-arg ctor first, falling back to the static builder()
-    // pattern (Lombok @Builder, Immutables-style). Skip JDK scalars / containers entirely so the
-    // records path stays unchanged. Telescope-row writes go through the bean's setters at each
-    // hop, so each intermediate just needs to be non-null; the setters overwrite the
-    // default-initialised fields. If neither strategy works, the cached supplier yields null —
-    // same behaviour as before bean-intermediate support, but no per-call
-    // `getDeclaredConstructor` / `getMethod("builder")` reflection: both shapes are LMF-cached
-    // per class via {@link Beans#intermediateAllocator}.
-    if (beanIntermediateAllocatable(type)) {
-      return Beans.intermediateAllocator(type).get();
-    }
-    return null;
-  }
-
-  private static Object primitiveDefault(final Class<?> p) {
-    if (p == int.class) return 0;
-    if (p == long.class) return 0L;
-    if (p == boolean.class) return false;
-    if (p == double.class) return 0.0;
-    if (p == float.class) return 0.0f;
-    if (p == byte.class) return (byte) 0;
-    if (p == short.class) return (short) 0;
-    if (p == char.class) return (char) 0;
-    return null;
-  }
-
-  /**
-   * Type-aware placeholder Iso for the permissive-mode block in {@link #populateIso}. Picks the
-   * right "missing source field" filler based on the target field's type and whether a telescope
-   * row claims the field as its first hop.
-   */
-  private static Iso<Object, Object> placeholderIsoFor(
-    final Class<?> fieldType,
-    final boolean claimedByTelescopeWrite
-  ) {
-    if (fieldType == null) return NULLING_ISO;
-    if (claimedByTelescopeWrite && (fieldType.isRecord() || beanIntermediateAllocatable(fieldType))) {
-      return defaultAllocatorIso(fieldType);
-    }
-    if (fieldType.isPrimitive()) {
-      final var value = primitiveDefault(fieldType);
-      return Iso.of(__ -> value, __ -> value);
-    }
-    return NULLING_ISO;
-  }
-
-  // True when the bean is plausibly an intermediate-allocatable user-domain type — has either a
-  // public no-arg constructor or a static no-arg builder() method (Lombok @Builder / Immutables).
-  // Excludes JDK scalars / containers that happen to have public no-arg ctors we don't want to
-  // materialise as defaults.
-  private static boolean beanIntermediateAllocatable(final Class<?> type) {
-    if (type.isPrimitive() || type.isInterface() || type.isArray()) return false;
-    if (type == String.class || Number.class.isAssignableFrom(type) || type == Boolean.class) return false;
-    try {
-      final var ctor = type.getDeclaredConstructor();
-      if (Modifier.isPublic(ctor.getModifiers())) return true;
-    } catch (final NoSuchMethodException ignored) {
-      // try the builder path next
-    }
-    try {
-      final var builderMethod = type.getMethod("builder");
-      return Modifier.isStatic(builderMethod.getModifiers()) && Modifier.isPublic(builderMethod.getModifiers());
-    } catch (final NoSuchMethodException ignored) {
-      return false;
-    }
-  }
 
   /**
    * Strip generics from a {@link Type} to the raw {@link Class}, returning {@code null} for
