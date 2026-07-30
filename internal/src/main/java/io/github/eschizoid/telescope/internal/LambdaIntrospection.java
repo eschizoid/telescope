@@ -79,7 +79,10 @@ public final class LambdaIntrospection {
         "Expected a method reference (e.g. User::name, User::getName), not a lambda. Got: " +
           serialized.getImplMethodName()
       );
-      return Class.forName(serialized.getImplClass().replace('/', '.'));
+      // Resolve against the lambda's defining loader, not telescope's — under plugin/app-server
+      // deployments the impl class may be invisible to this library's loader.
+      final var implName = serialized.getImplClass().replace('/', '.');
+      return Class.forName(implName, false, lambda.getClass().getClassLoader());
     } catch (final ReflectiveOperationException e) {
       throw new IllegalArgumentException("Expected a method reference; got: " + lambda, e);
     }
