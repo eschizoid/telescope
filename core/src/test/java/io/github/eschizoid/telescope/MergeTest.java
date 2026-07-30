@@ -308,6 +308,19 @@ class MergeTest {
     }
 
     @Test
+    @DisplayName("into on a merge mapper throws like backward does — no NPE on the sentinel")
+    void intoThrowsLikeBackward() {
+      // A BEAN target passes into()'s record-immutability check and reaches the patch-table
+      // sentinel — pre-guard this NPE'd on the null table instead of throwing the honest UOE.
+      final var mapper = Telescope.merge(SettersProfile.class, from(Customer::id, SettersProfile::getId));
+      final var target = new SettersProfile();
+      final var ex = assertThrows(UnsupportedOperationException.class, () ->
+        mapper.into(target, Sources.of(new Customer("c", "e")))
+      );
+      assertTrue(ex.getMessage().contains("forward-only"), ex.getMessage());
+    }
+
+    @Test
     @DisplayName("patch on a merge mapper throws like backward does — no silent no-op")
     void patchThrowsLikeBackward() {
       final var mapper = Telescope.merge(Profile.class, from(Customer::id, Profile::id));

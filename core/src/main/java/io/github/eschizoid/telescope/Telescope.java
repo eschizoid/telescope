@@ -1756,7 +1756,7 @@ public sealed class Telescope<
     // visit would otherwise materialize a null root as [Indexed[0, null]] while toList says [].
     if (optic instanceof final Lens<S, A> lens) {
       if (source == null) return List.of();
-      return java.util.Collections.singletonList(new Indexed<>(0, lens.get(source)));
+      return Collections.singletonList(new Indexed<>(0, lens.get(source)));
     }
     if (optic instanceof final Affine<S, A> affine) {
       return affine
@@ -1767,7 +1767,7 @@ public sealed class Telescope<
     final var out = new ArrayList<Indexed<A>>();
     final var i = new int[] { 0 };
     optic.forEach(source, a -> out.add(new Indexed<>(i[0]++, a)));
-    return java.util.Collections.unmodifiableList(out);
+    return Collections.unmodifiableList(out);
   }
 
   /**

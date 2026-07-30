@@ -450,6 +450,12 @@ public final class Mapper<A, B> {
     // entity, defeating the "load-mutate-save" idiom; and (2) stage pointless reads for read-only
     // computed getters (e.g. getFullName() derived from firstName + lastName) whose writes would
     // silently no-op — work for a property the user never asked us to map.
+    // Same null-table sentinel as patch(): the producing factory does not support target-mutating
+    // operations at all (multi-source merge) — throw the UOE, don't NPE on the sentinel.
+    if (patchByTargetField == null) throw new UnsupportedOperationException(
+      "This mapper does not support into() — Telescope.merge produces a forward-only mapper " +
+        "(the multi-source case has no general inverse). Use Mapper.forward(...) only."
+    );
     final var staged = new LinkedHashMap<String, Object>(patchByTargetField.size());
     for (final var name : patchByTargetField.keySet()) {
       staged.put(name, targetRefl.read(produced, name));
