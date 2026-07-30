@@ -1726,7 +1726,8 @@ public sealed class Telescope<
    *     .toList(company);
    * }</pre>
    *
-   * <p>See {@link #toListIndexed} to pair each value with its position.
+   * <p>See {@link #toListIndexed} to pair each value with its position. The returned list is
+   * unmodifiable on every path shape.
    */
   public List<A> toList(final S source) {
     final var out = new ArrayList<A>();

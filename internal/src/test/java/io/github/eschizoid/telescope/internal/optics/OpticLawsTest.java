@@ -9,7 +9,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.optics.collections.Traversals;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -244,7 +246,8 @@ class OpticLawsTest {
     void singleFocusOptics() {
       FoldLaws.assertFoldLaws(userName, ALICE); // Lens, non-null
       FoldLaws.assertFoldLaws(userName, null); // Lens, null source (focuses nothing)
-      FoldLaws.assertFoldLaws(userIso, ALICE); // Iso (one focus, always)
+      FoldLaws.assertFoldLaws(userIso, ALICE); // Iso — one focus, always; null source omitted: Iso.to(null) is deliberately
+      // unguarded
       final Prism<Object, String> stringCase = Prism.downcast(String.class);
       FoldLaws.assertFoldLaws(stringCase, "hit"); // Prism hit
       FoldLaws.assertFoldLaws(stringCase, 42); // Prism miss (no focuses)
@@ -262,9 +265,9 @@ class OpticLawsTest {
       FoldLaws.assertFoldLaws(Traversals.<String>eachList(), List.of("a", "b", "c"));
       FoldLaws.assertFoldLaws(Traversals.<String>eachList(), List.of());
       FoldLaws.assertFoldLaws(Traversals.<String>eachList(), null);
-      FoldLaws.assertFoldLaws(Traversals.<String>eachSet(), new java.util.LinkedHashSet<>(List.of("x", "y")));
+      FoldLaws.assertFoldLaws(Traversals.<String>eachSet(), new LinkedHashSet<>(List.of("x", "y")));
       FoldLaws.assertFoldLaws(Traversals.<String>eachSet(), null);
-      FoldLaws.assertFoldLaws(Traversals.<String, Integer>eachMapValue(), java.util.Map.of("k", 1));
+      FoldLaws.assertFoldLaws(Traversals.<String, Integer>eachMapValue(), Map.of("k", 1));
       FoldLaws.assertFoldLaws(Traversals.<String, Integer>eachMapValue(), null);
       FoldLaws.assertFoldLaws(Traversals.<List<String>, String>eachIterable(), List.of("a", "b"));
       FoldLaws.assertFoldLaws(Traversals.<List<String>, String>eachIterable(), null);

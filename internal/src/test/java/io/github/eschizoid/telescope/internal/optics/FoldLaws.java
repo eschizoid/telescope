@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal.optics;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -45,7 +46,7 @@ final class FoldLaws {
     } else {
       assertEquals(1, seen.size(), "a false-returning visitor must stop after the first focus");
       assertEquals(streamed.get(0), seen.get(0), "the stopped-at focus is getAll's head");
-      assertEquals(false, fullyVisited, "a short-circuited visit must report the stop");
+      assertFalse(fullyVisited, "a short-circuited visit must report the stop");
     }
   }
 }

@@ -34,6 +34,12 @@ class ReadTerminalConsistencyTest {
 
   record Team(String label, List<User> users) {}
 
+  sealed interface Event permits Created, Updated {}
+
+  record Created(String id) implements Event {}
+
+  record Updated(String id, String diff) implements Event {}
+
   private static <S, A> void assertTerminalsAgree(final Telescope<S, A> t, final S source) {
     final var list = t.toList(source);
     final var indexed = t.toListIndexed(source);
@@ -100,6 +106,18 @@ class ReadTerminalConsistencyTest {
     }
 
     @Test
+    @DisplayName("genuine Affine path (.as narrow) — hit, miss, null root, null field")
+    void narrowPath() {
+      // whenPresent composes Lens.then(affine) into a Traversal; only .as(...) leaves a genuine
+      // Affine as the stored optic — this fixture is what exercises visitFocuses' Affine branch.
+      final var diff = Telescope.of(Event.class).as(Updated.class).field(Updated::diff);
+      assertTerminalsAgree(diff, null);
+      assertTerminalsAgree(diff, new Updated("e1", "d"));
+      assertTerminalsAgree(diff, new Created("e2"));
+      assertTerminalsAgree(diff, new Updated("e1", null));
+    }
+
+    @Test
     @DisplayName("filtered path — hit, miss, null root")
     void filteredPath() {
       final var longNames = Telescope.of(Team.class)
@@ -148,8 +166,9 @@ class ReadTerminalConsistencyTest {
     }
 
     @Test
-    @DisplayName("record paths, container steps, filters, narrows, and bean paths all agree")
+    @DisplayName("record paths, container steps, filters, bean paths, and fieldByName all agree")
     void allShapesAgree() {
+      assertFirstHopMatchesTrail(Telescope.ofBean(MutableUser.class).field(MutableUser::getName));
       assertFirstHopMatchesTrail(Telescope.of(User.class).field(User::name));
       assertFirstHopMatchesTrail(Telescope.of(User.class).field(User::address).field(Address::city));
       assertFirstHopMatchesTrail(Telescope.of(Team.class).each(Team::users).field(User::name));
@@ -161,6 +180,21 @@ class ReadTerminalConsistencyTest {
           .field(User::name)
       );
       assertFirstHopMatchesTrail(Telescope.of(Team.class).fieldByName("label"));
+    }
+
+    public static class MutableUser {
+
+      private String name;
+
+      public MutableUser() {}
+
+      public String getName() {
+        return name;
+      }
+
+      public void setName(final String name) {
+        this.name = name;
+      }
     }
   }
 }
