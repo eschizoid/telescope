@@ -161,7 +161,7 @@ public final class MhIso {
       THROW_CONVERSION = lk.findStatic(
         MhIso.class,
         "throwConversion",
-        MethodType.methodType(Object.class, Throwable.class, Object.class, Class.class, Class.class)
+        MethodType.methodType(Object.class, Throwable.class, Class.class, Class.class)
       );
     } catch (final ReflectiveOperationException e) {
       throw new ExceptionInInitializerError(e);
@@ -235,31 +235,14 @@ public final class MhIso {
    * per element, and label a per-element failure with {@link #sourceClass()} / {@link
    * #targetClass()}.
    */
-  private static final class Leaf<S, T> implements Iso<S, T> {
-
-    private final Class<S> sourceClass;
-    private final Class<T> targetClass;
-    private final Function<S, T> forward;
-    private final Function<T, S> backward;
-    private final MethodHandle rawFwd;
-    private final MethodHandle rawBwd;
-
-    Leaf(
-      final Class<S> sourceClass,
-      final Class<T> targetClass,
-      final Function<S, T> forward,
-      final Function<T, S> backward,
-      final MethodHandle rawFwd,
-      final MethodHandle rawBwd
-    ) {
-      this.sourceClass = sourceClass;
-      this.targetClass = targetClass;
-      this.forward = forward;
-      this.backward = backward;
-      this.rawFwd = rawFwd;
-      this.rawBwd = rawBwd;
-    }
-
+  private record Leaf<S, T>(
+    Class<S> sourceClass,
+    Class<T> targetClass,
+    Function<S, T> forward,
+    Function<T, S> backward,
+    MethodHandle rawFwd,
+    MethodHandle rawBwd
+  ) implements Iso<S, T> {
     @Override
     public T to(final S source) {
       return forward.apply(source);
@@ -276,14 +259,6 @@ public final class MhIso {
 
     MethodHandle rawBackward() {
       return rawBwd;
-    }
-
-    Class<S> sourceClass() {
-      return sourceClass;
-    }
-
-    Class<T> targetClass() {
-      return targetClass;
     }
   }
 
@@ -620,7 +595,10 @@ public final class MhIso {
    * so the fused handle stays one composed tree with no SAM boundary; the happy path pays nothing.
    */
   private static MethodHandle labelFailures(final MethodHandle raw, final Class<?> from, final Class<?> to) {
-    final MethodHandle handler = MethodHandles.insertArguments(THROW_CONVERSION, 2, from, to);
+    // THROW_CONVERSION is (Throwable, Class, Class) -> Object; binding from/to at positions 1,2
+    // leaves (Throwable) -> Object — a legal catchException handler (the handler may accept just
+    // the exception and an empty prefix of the target's parameters).
+    final MethodHandle handler = MethodHandles.insertArguments(THROW_CONVERSION, 1, from, to);
     return MethodHandles.catchException(
       raw.asType(MethodType.methodType(Object.class, Object.class)),
       Throwable.class,
@@ -629,11 +607,11 @@ public final class MhIso {
   }
 
   /**
-   * {@code (Throwable, Object) -> Object} catch handler (bound to {@code from}/{@code to}): always
-   * throws, relabelling the failure via {@link #rethrow}. The {@code Object} argument is the leaf's
-   * input, ignored — it only aligns the handler arity with the guarded handle.
+   * {@code (Throwable, Class, Class) -> Object} catch handler; {@code from}/{@code to} are bound as
+   * constants at combinator-build time, leaving a {@code (Throwable) -> Object} handler that always
+   * throws, relabelling the failure via {@link #rethrow}.
    */
-  private static Object throwConversion(final Throwable t, final Object input, final Class<?> from, final Class<?> to) {
+  private static Object throwConversion(final Throwable t, final Class<?> from, final Class<?> to) {
     throw rethrow(from, to, t);
   }
 

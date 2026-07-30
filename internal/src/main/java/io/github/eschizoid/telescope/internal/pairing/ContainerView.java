@@ -19,7 +19,7 @@ public record ContainerView<T>(ContainerView.Kind kind, T elementType, T keyType
   }
 
   public ContainerView {
-    if ((keyType != null) != (kind == Kind.MAP_VALUES)) {
+    if ((keyType == null) == (kind == Kind.MAP_VALUES)) {
       throw new IllegalArgumentException(
         "keyType is required for MAP_VALUES and forbidden otherwise (kind=" + kind + ")"
       );
