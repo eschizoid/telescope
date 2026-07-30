@@ -454,11 +454,21 @@ public sealed class Telescope<
   @SafeVarargs
   @SuppressWarnings("varargs")
   public static <S> Telescope<S, S> all(final Edit<S>... edits) {
+    // The normalizer's explain() trail is the concatenation of its edits' trails, in edit order —
+    // each edit's path already carries its full hop description; throwing that away left every
+    // multi-edit product explaining as empty.
+    final var trail = new ArrayList<OpticNode>();
+    for (final var e : edits) {
+      if (e instanceof EditImpl<S, ?> impl) trail.addAll(impl.path().trail);
+    }
+    final var joined = Collections.unmodifiableList(trail);
     final var fused = Fusion.fuse(edits);
-    if (fused != null) return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, fused);
+    if (fused != null) {
+      return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, fused, null, joined, null);
+    }
     Function<S, S> fold = Function.identity();
     for (final var e : edits) fold = fold.andThen(e::apply);
-    return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, fold);
+    return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, fold, null, joined, null);
   }
 
   /**

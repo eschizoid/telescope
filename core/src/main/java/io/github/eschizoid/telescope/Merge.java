@@ -5,6 +5,8 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Getter;
+import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.MergeStep;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -66,9 +68,22 @@ final class Merge {
       );
     };
 
-    // A null patch table signals "patch unsupported" — Mapper.patch then throws the same
+    // Surface the build-time slot decisions as the explain() trail: one Mapped row per bound
+    // component (SourceClass.field → target field), one MISSING_SOURCE skip per unbound one.
+    // Derived from the same plan the forward path runs on, so the report cannot drift.
+    final var names = targetRefl.names(target);
+    final var trail = new ArrayList<OpticNode>(names.length);
+    for (final var name : names) {
+      final var r = planByTgt.get(name);
+      if (r != null) {
+        trail.add(new OpticNode.Mapped(r.sourceClass().getSimpleName() + "." + r.srcName(), r.tgtName()));
+      } else {
+        trail.add(new OpticNode.Skipped(name, OpticNode.Reason.MISSING_SOURCE));
+      }
+    }
+    // A null patch table signals "patch unsupported" — Mapper.patch/into then throw the same
     // UnsupportedOperationException shape backward does, instead of silently no-op-ing.
-    return Mapper.create(forward, backward, Sources.class, target, null);
+    return Mapper.create(forward, backward, Sources.class, target, null, trail);
   }
 
   /**
@@ -187,7 +202,14 @@ final class Merge {
           "."
       );
       claimTarget(tgtName, index, claimedTgt);
-      out.add(new ResolvedStep(srcClass, srcAccessor, tgtName));
+      out.add(
+        new ResolvedStep(
+          srcClass,
+          srcAccessor,
+          PropertyNames.property(LambdaIntrospection.methodNameOf(r.src())),
+          tgtName
+        )
+      );
       return;
     }
     throw new IllegalStateException("unreachable: MergeStep is sealed");
@@ -231,7 +253,7 @@ final class Merge {
       );
       claimedTgt.add(name);
       final Getter<Object, Object> reader = src -> sourceRefl.read(src, name);
-      out.add(new ResolvedStep(sourceClass, reader, name));
+      out.add(new ResolvedStep(sourceClass, reader, name, name));
     }
   }
 
@@ -273,5 +295,5 @@ final class Merge {
   // ResolvedStep holds the row's per-call dispatch triple. `srcAccessor` is typed as the lattice's
   // `Getter<Object, Object>` rather than a raw `Function` — see CLAUDE.md's "Lattice-first" rule.
   // `sourceClass` keys into Sources.byClass at forward time.
-  record ResolvedStep(Class<?> sourceClass, Getter<Object, Object> srcAccessor, String tgtName) {}
+  record ResolvedStep(Class<?> sourceClass, Getter<Object, Object> srcAccessor, String srcName, String tgtName) {}
 }
