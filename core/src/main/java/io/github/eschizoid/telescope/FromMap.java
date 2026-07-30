@@ -8,8 +8,11 @@ import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
+import java.lang.reflect.RecordComponent;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
@@ -21,10 +24,11 @@ import java.util.function.Function;
  *
  * <p>Rows are matched to target components / properties once at build time, into positional arrays.
  * On the record path the per-call forward is fully positional: a source {@code Map.get} plus
- * converter per extracted slot, a JLS default per unmatched slot, and one cached
- * canonical-constructor invocation — no name lookup survives. On the bean path the writer's {@code
- * construct} contract stays name-driven, so one {@code name→index} lookup per property remains
- * (down from the two the old engine paid — the row map and the defaults map).
+ * converter per extracted slot, a type default per unmatched slot (the NullDefaults table: "" for
+ * String, empty containers — not bare null), and one cached canonical-constructor invocation — no
+ * name lookup survives. On the bean path the writer's {@code construct} contract stays name-driven,
+ * so one {@code name→index} lookup per property remains (down from the two the old engine paid —
+ * the row map and the defaults map).
  */
 final class FromMap {
 
@@ -44,6 +48,22 @@ final class FromMap {
         "Telescope.fromMap: duplicate extract row for target field '" + fieldName + "'"
       );
     }
+    // Fail loud on a row that matches no target component/property — the slot alignment below
+    // would otherwise silently ignore it (the extract key never read, the converter never run).
+    final var known = target.isRecord()
+      ? Arrays.stream(target.getRecordComponents()).map(RecordComponent::getName).toList()
+      : List.of(Beans.propertyNames(target));
+    for (final var fieldName : byField.keySet()) {
+      if (!known.contains(fieldName)) throw new IllegalArgumentException(
+        "Telescope.fromMap: extract row targets '" +
+          fieldName +
+          "', which is not a component/property of " +
+          target.getSimpleName() +
+          ". Known fields: " +
+          known +
+          "."
+      );
+    }
     final Function<Map<String, Object>, T> forward = target.isRecord()
       ? recordForward(target, byField)
       : beanForward(target, byField);
@@ -52,7 +72,7 @@ final class FromMap {
 
   /**
    * Record path — the full positional bind. Each canonical component resolves at build time to
-   * either its extract row (source key + converter) or its JLS default; the forward call fills a
+   * either its extract row (source key + converter) or its type default; the forward call fills a
    * positional args array and invokes the cached canonical-constructor handle via {@link
    * Records#construct(Class, Object[])}. No name-keyed dispatch survives to the hot path.
    */

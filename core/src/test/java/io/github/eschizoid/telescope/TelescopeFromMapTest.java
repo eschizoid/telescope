@@ -180,6 +180,17 @@ class TelescopeFromMapTest {
   class Validation {
 
     @Test
+    @DisplayName("an extract row targeting a non-component method is rejected at build time")
+    void unknownTargetRowIsRejected() {
+      // Pre-fix: such a row was silently ignored — key never read, converter never run.
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Telescope.fromMap(CaseListRequest.class, extract("k", CaseListRequest::toString, Object::toString))
+      );
+      assertTrue(ex.getMessage().contains("toString"), ex.getMessage());
+      assertTrue(ex.getMessage().contains("Known fields"), ex.getMessage());
+    }
+
+    @Test
     @DisplayName("two extract rows naming the same target component throw at factory construction")
     void duplicateExtractRowIsRejected() {
       // Without this check, the second row would silently win and the first row's converter

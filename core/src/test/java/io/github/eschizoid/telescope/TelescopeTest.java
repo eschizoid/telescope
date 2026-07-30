@@ -144,6 +144,37 @@ class TelescopeTest {
     }
 
     @Test
+    @DisplayName("toListIndexed agrees with toList on every null shape — same telescope, same answer")
+    void toListIndexedAgreesWithToList() {
+      // Pre-fix: toListIndexed bypassed the fast-path normalization, so an Iso-rooted telescope
+      // materialized a null root as [Indexed[0, null]] while toList said []. The two terminals
+      // must never disagree.
+      final var root = Telescope.of(User.class);
+      assertEquals(List.of(), root.toList(null));
+      assertEquals(List.of(), root.toListIndexed(null));
+
+      final var userName = Telescope.of(User.class).field(User::name);
+      assertEquals(List.of(), userName.toListIndexed(null));
+
+      final var nullFocus = new User(null, 30, null);
+      assertEquals(1, userName.toListIndexed(nullFocus).size());
+      assertNull(userName.toListIndexed(nullFocus).get(0).value());
+    }
+
+    @Test
+    @DisplayName("filter and as() keep the path's first-hop name for empty-read diagnostics")
+    void filterKeepsFirstHopName() {
+      // Pre-fix: filter()/as() reset firstHopName to null mid-path, so the NEXT hop falsely
+      // claimed first-hop status and the empty-read message named the wrong field.
+      final var adults = Telescope.of(Team.class)
+        .each(Team::users)
+        .filter(u -> u.age() >= 30)
+        .field(User::name);
+      final var ex = assertThrows(NoSuchElementException.class, () -> adults.read(new Team("t", List.of())));
+      assertTrue(ex.getMessage().contains("'users'"), ex.getMessage());
+    }
+
+    @Test
     @DisplayName("eachValue(getter) over a record's Map<K, V> updates every value")
     void eachOverMapValues() {
       record Index(Map<String, Integer> byKey) {}

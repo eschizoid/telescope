@@ -123,7 +123,8 @@ public final class Mapper<A, B> {
     this.sourceRefl = Reflective.of(sourceClass);
     this.targetRefl = Reflective.of(targetClass);
     // Defensive copy — patch behavior must not mutate after construction.
-    this.patchByTargetField = Map.copyOf(patchByTargetField);
+    // null = patch unsupported (see patch()); copyOf would NPE on the sentinel.
+    this.patchByTargetField = patchByTargetField == null ? null : Map.copyOf(patchByTargetField);
     this.preForward = preForward;
     this.postForward = postForward;
     this.preBackward = preBackward;
@@ -336,6 +337,14 @@ public final class Mapper<A, B> {
    */
   @SuppressWarnings("unchecked")
   public A patch(final A base, final B partial) {
+    // A null table means the producing factory does not support patching at all (multi-source
+    // merge); an EMPTY table means a legitimate mapper with no patchable rows. Conflating the two
+    // made merge's patch a silent no-op while its backward threw loudly — same contract, opposite
+    // failure modes.
+    if (patchByTargetField == null) throw new UnsupportedOperationException(
+      "This mapper does not support patch() — Telescope.merge produces a forward-only mapper " +
+        "(the multi-source case has no general inverse). Use Mapper.forward(...) only."
+    );
     if (base == null || partial == null) return base;
     if (patchByTargetField.isEmpty()) return base;
     final var patched = new HashMap<String, Object>();
@@ -441,6 +450,12 @@ public final class Mapper<A, B> {
     // entity, defeating the "load-mutate-save" idiom; and (2) stage pointless reads for read-only
     // computed getters (e.g. getFullName() derived from firstName + lastName) whose writes would
     // silently no-op — work for a property the user never asked us to map.
+    // Same null-table sentinel as patch(): the producing factory does not support target-mutating
+    // operations at all (multi-source merge) — throw the UOE, don't NPE on the sentinel.
+    if (patchByTargetField == null) throw new UnsupportedOperationException(
+      "This mapper does not support into() — Telescope.merge produces a forward-only mapper " +
+        "(the multi-source case has no general inverse). Use Mapper.forward(...) only."
+    );
     final var staged = new LinkedHashMap<String, Object>(patchByTargetField.size());
     for (final var name : patchByTargetField.keySet()) {
       staged.put(name, targetRefl.read(produced, name));

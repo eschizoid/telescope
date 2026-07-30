@@ -31,6 +31,18 @@ public final class PropertyNames {
   }
 
   /**
+   * The property behind a {@code set}-prefixed name, or {@code null} when the name is not
+   * setter-shaped: {@code setCity} → {@code city}, {@code setup} → {@code null}, {@code settle} →
+   * {@code null}. The uppercase-after-prefix rule is the same one {@link #afterGet} applies — a
+   * method that merely starts with the letters {@code set} is not a property setter.
+   */
+  public static String afterSet(final String name) {
+    if (name == null || name.length() <= 3 || !name.startsWith("set")) return null;
+    if (!Character.isUpperCase(name.charAt(3))) return null;
+    return decapitalize(name.substring(3));
+  }
+
+  /**
    * The property behind an {@code is}-prefixed name, or {@code null} when the name is not
    * getter-shaped: {@code isActive} → {@code active}, {@code isbn} → {@code null}.
    */

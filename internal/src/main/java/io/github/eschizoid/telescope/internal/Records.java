@@ -369,7 +369,9 @@ public final class Records {
       final MethodHandles.Lookup lookup
     ) {
       try {
-        return lookup.unreflectConstructor(ctor);
+        // asFixedArity for the same reason as buildCtorFn: MhIso composes this handle
+        // per-parameter with filterArguments, and a varargs-collector handle would re-collect.
+        return lookup.unreflectConstructor(ctor).asFixedArity();
       } catch (final IllegalAccessException e) {
         throw new IllegalStateException("Failed to build constructor handle for " + cls.getName(), e);
       }
@@ -472,8 +474,12 @@ public final class Records {
       final MethodHandles.Lookup lookup
     ) {
       try {
+        // asFixedArity: unreflecting a varargs canonical constructor yields a varargs-collector
+        // handle, and asSpreader on a collector re-collects the spread argument as a single
+        // element — every write on a `record R(int... xs)` then dies with a ClassCastException.
         final var spread = lookup
           .unreflectConstructor(ctor)
+          .asFixedArity()
           .asSpreader(Object[].class, ctor.getParameterCount())
           .asType(MethodType.methodType(Object.class, Object[].class));
         return args -> {

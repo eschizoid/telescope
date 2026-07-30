@@ -89,12 +89,20 @@ public final class ReflectionProps implements PropertySystem<Type> {
 
   @Override
   public Allocability copyAllocability(final Type src, final Type tgt) {
-    final var allocable =
-      src instanceof Class<?> srcCls &&
-      tgt instanceof Class<?> tgtCls &&
-      Beans.intermediateAllocator(srcCls).get() != null &&
-      Beans.intermediateAllocator(tgtCls).get() != null;
-    return allocable ? Allocability.ALLOCABLE : Allocability.NOT_ALLOCABLE;
+    // The allocator probe invokes a real constructor/builder; a type whose no-arg path throws is
+    // simply not allocable — the failure must resolve the decision, not escape mid-analysis.
+    // (The probe allocating at all is a known cost of proving constructibility; side-effectful
+    // constructors should not be intermediate-allocated anyway, and this catch keeps them out.)
+    try {
+      final var allocable =
+        src instanceof Class<?> srcCls &&
+        tgt instanceof Class<?> tgtCls &&
+        Beans.intermediateAllocator(srcCls).get() != null &&
+        Beans.intermediateAllocator(tgtCls).get() != null;
+      return allocable ? Allocability.ALLOCABLE : Allocability.NOT_ALLOCABLE;
+    } catch (final RuntimeException e) {
+      return Allocability.NOT_ALLOCABLE;
+    }
   }
 
   @Override

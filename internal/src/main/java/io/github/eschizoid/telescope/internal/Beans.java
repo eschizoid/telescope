@@ -472,7 +472,9 @@ public final class Beans {
     final var set = "set" + capitalize(name);
     Method setter = null;
     for (final var m : cls.getMethods()) {
-      if (m.getParameterCount() == 1 && m.getName().equals(set)) {
+      if (
+        m.getParameterCount() == 1 && m.getName().equals(set) && !Modifier.isStatic(m.getModifiers()) && !m.isBridge()
+      ) {
         setter = m;
         break;
       }
@@ -491,16 +493,30 @@ public final class Beans {
       // Native-image path: a MethodHandle closure, no runtime class synthesis — see MhAccessors.
       // asType relaxes the receiver to Object and unboxes a primitive param from the boxed value,
       // matching the auto-unbox the LMF instantiatedMethodType installs below.
-      if (NativeImage.IN_IMAGE) return MhAccessors.biConsumer(handle);
-      final var callSite = LambdaMetafactory.metafactory(
-        lookup,
-        "accept",
-        MethodType.methodType(BiConsumer.class),
-        MethodType.methodType(void.class, Object.class, Object.class),
-        handle,
-        MethodType.methodType(void.class, declaringClass, instantiatedParamType)
-      );
-      return (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+      final BiConsumer<Object, Object> base;
+      if (NativeImage.IN_IMAGE) {
+        base = MhAccessors.biConsumer(handle);
+      } else {
+        final var callSite = LambdaMetafactory.metafactory(
+          lookup,
+          "accept",
+          MethodType.methodType(BiConsumer.class),
+          MethodType.methodType(void.class, Object.class, Object.class),
+          handle,
+          MethodType.methodType(void.class, declaringClass, instantiatedParamType)
+        );
+        base = (BiConsumer<Object, Object>) callSite.getTarget().invoke();
+      }
+      // Same primitive-null guard as SettersWriter: null into a primitive setter must leave the
+      // field at its JLS default, not NPE at the unbox — Mapper.into must not crash on the input
+      // Mapper.forward silently defaults (same-mapper symmetry).
+      if (paramType.isPrimitive()) {
+        return (pojo, value) -> {
+          if (value == null) return;
+          base.accept(pojo, value);
+        };
+      }
+      return base;
     } catch (final Throwable t) {
       throw new RuntimeException("Failed to set '" + name + "' on " + cls.getName(), t);
     }
@@ -660,6 +676,12 @@ public final class Beans {
     final var map = new LinkedHashMap<String, Method>();
     for (final var m : cls.getMethods()) {
       if (m.getParameterCount() != 0 || m.getDeclaringClass() == Object.class) continue;
+      // Static getter-shaped methods (getInstance(), getLogger()) are not bean properties — and
+      // scanning one poisons the whole class: the eager LMF invoker build fails on the arity
+      // mismatch and takes every property down with it. Bridge/synthetic methods are the erased
+      // Object-typed duplicates of generic accessors; keeping them makes the winning method (and
+      // therefore the property TYPE) dependent on getMethods() order, which is unspecified.
+      if (Modifier.isStatic(m.getModifiers()) || m.isBridge() || m.isSynthetic()) continue;
       // Skip inherited methods declared in platform modules (java.*, jdk.*). A class extending
       // ArrayList would otherwise surface `isEmpty()` → property `empty` and the LMF binder
       // would then fail `privateLookupIn(ArrayList.class)` because `java.base` doesn't grant
@@ -1049,7 +1071,16 @@ public final class Beans {
 
   private static boolean hasAnySetter(final Class<?> cls) {
     for (final var m : cls.getMethods()) {
-      if (m.getParameterCount() == 1 && m.getName().length() > 3 && m.getName().startsWith("set")) return true;
+      // The shared setter-shape rule: setCity qualifies, setup/settle do not. Without it, an
+      // unrelated set*-named method flipped the write strategy to SETTERS, whose per-property
+      // no-ops then silently lost every field of a getter-only bean.
+      if (
+        m.getParameterCount() == 1 &&
+        !Modifier.isStatic(m.getModifiers()) &&
+        PropertyNames.afterSet(m.getName()) != null
+      ) {
+        return true;
+      }
     }
     return false;
   }

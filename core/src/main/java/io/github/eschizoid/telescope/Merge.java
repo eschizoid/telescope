@@ -66,7 +66,9 @@ final class Merge {
       );
     };
 
-    return Mapper.create(forward, backward, Sources.class, target, Map.of());
+    // A null patch table signals "patch unsupported" — Mapper.patch then throws the same
+    // UnsupportedOperationException shape backward does, instead of silently no-op-ing.
+    return Mapper.create(forward, backward, Sources.class, target, null);
   }
 
   /**
@@ -169,6 +171,21 @@ final class Merge {
       final Class<?> srcClass = LambdaIntrospection.implClassOf(r.src());
       final Getter<Object, Object> srcAccessor = asGetter(r.src());
       final String tgtName = targetRefl.normalize(LambdaIntrospection.methodNameOf(r.tgt()));
+      // Fail loud at build time when the target accessor is not a canonical component / writable
+      // property: the positional bind aligns rows by target name, so an unmatched row would never
+      // bind a slot — its source accessor never read, its source class never checked at forward
+      // time — a silent drop that also swallowed the missing-source diagnostic.
+      if (!List.of(targetRefl.names(targetClass)).contains(tgtName)) throw new IllegalArgumentException(
+        "Telescope.merge: step at index " +
+          index +
+          " targets '" +
+          tgtName +
+          "', which is not a settable component/property of " +
+          targetClass.getSimpleName() +
+          ". Known fields: " +
+          List.of(targetRefl.names(targetClass)) +
+          "."
+      );
       claimTarget(tgtName, index, claimedTgt);
       out.add(new ResolvedStep(srcClass, srcAccessor, tgtName));
       return;
