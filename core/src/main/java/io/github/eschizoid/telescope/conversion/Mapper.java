@@ -123,7 +123,8 @@ public final class Mapper<A, B> {
     this.sourceRefl = Reflective.of(sourceClass);
     this.targetRefl = Reflective.of(targetClass);
     // Defensive copy — patch behavior must not mutate after construction.
-    this.patchByTargetField = Map.copyOf(patchByTargetField);
+    // null = patch unsupported (see patch()); copyOf would NPE on the sentinel.
+    this.patchByTargetField = patchByTargetField == null ? null : Map.copyOf(patchByTargetField);
     this.preForward = preForward;
     this.postForward = postForward;
     this.preBackward = preBackward;
@@ -336,6 +337,14 @@ public final class Mapper<A, B> {
    */
   @SuppressWarnings("unchecked")
   public A patch(final A base, final B partial) {
+    // A null table means the producing factory does not support patching at all (multi-source
+    // merge); an EMPTY table means a legitimate mapper with no patchable rows. Conflating the two
+    // made merge's patch a silent no-op while its backward threw loudly — same contract, opposite
+    // failure modes.
+    if (patchByTargetField == null) throw new UnsupportedOperationException(
+      "This mapper does not support patch() — Telescope.merge produces a forward-only mapper " +
+        "(the multi-source case has no general inverse). Use Mapper.forward(...) only."
+    );
     if (base == null || partial == null) return base;
     if (patchByTargetField.isEmpty()) return base;
     final var patched = new HashMap<String, Object>();

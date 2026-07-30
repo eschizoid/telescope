@@ -969,7 +969,16 @@ public sealed class Telescope<
     // Records.fieldLens that fails at call time because the focus type isn't a record.
     final Lens<A, B> fieldLens =
       fieldOptics == BeanFieldOptics.INSTANCE ? Beans.fieldLens(fieldName) : Records.fieldLens(fieldName);
-    return new Telescope<>(optic.then(fieldLens), fieldOptics, chain, null, plus(new OpticNode.Focus(fieldName)));
+    // Propagate (or establish) the first-hop name: resetting it to null mid-path made the NEXT
+    // typed hop falsely claim first-hop status — wrong empty-read messages, and DeepMap routes
+    // telescope-mapping rows by this name. The string itself is a perfectly good first hop.
+    return new Telescope<>(
+      optic.then(fieldLens),
+      fieldOptics,
+      chain,
+      firstHopName != null ? firstHopName : fieldName,
+      plus(new OpticNode.Focus(fieldName))
+    );
   }
 
   /**
@@ -1133,7 +1142,7 @@ public sealed class Telescope<
       optic.then(prism),
       fieldOptics,
       chain,
-      null,
+      firstHopName,
       plus(new OpticNode.Narrow(subType.getSimpleName())),
       plusHops(Fusion.Hop.narrow(subType, (Traversal<Object, Object>) prism))
     );
@@ -1162,7 +1171,7 @@ public sealed class Telescope<
       optic.filter(predicate),
       fieldOptics,
       chain,
-      null,
+      firstHopName,
       plus(new OpticNode.Filter("predicate")),
       plusHops(Fusion.Hop.filter(predicate, (Traversal<Object, Object>) segment))
     );
@@ -1636,10 +1645,23 @@ public sealed class Telescope<
    * }</pre>
    */
   public List<Indexed<A>> toListIndexed(final S source) {
+    // Mirror toList's normalization exactly: the two terminals must agree on every input. The
+    // Lens branch also catches Iso-rooted telescopes (Iso IS-A Lens), whose unguarded identity
+    // visit would otherwise materialize a null root as [Indexed[0, null]] while toList says [].
+    if (optic instanceof final Lens<S, A> lens) {
+      if (source == null) return List.of();
+      return java.util.Collections.singletonList(new Indexed<>(0, lens.get(source)));
+    }
+    if (optic instanceof final Affine<S, A> affine) {
+      return affine
+        .getOption(source)
+        .map(a -> List.of(new Indexed<>(0, a)))
+        .orElseGet(List::of);
+    }
     final var out = new ArrayList<Indexed<A>>();
     final var i = new int[] { 0 };
     optic.forEach(source, a -> out.add(new Indexed<>(i[0]++, a)));
-    return List.copyOf(out);
+    return java.util.Collections.unmodifiableList(out);
   }
 
   /**

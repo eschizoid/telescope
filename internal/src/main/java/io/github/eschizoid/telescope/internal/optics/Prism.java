@@ -2,8 +2,6 @@ package io.github.eschizoid.telescope.internal.optics;
 
 import java.util.Optional;
 import java.util.function.Function;
-import java.util.function.Predicate;
-import java.util.stream.Stream;
 
 /**
  * At-most-one + reconstruct: focuses on at-most-one {@code A} inside an {@code S}, and given an
@@ -60,17 +58,8 @@ public interface Prism<S, A> extends Affine<S, A> {
     return reverseGet(f.apply(current.get()));
   }
 
-  @Override
-  default Stream<A> getAll(final S source) {
-    return getOption(source).stream();
-  }
-
-  /** Fold view: visit the focused value when the case matches, otherwise focus nothing. */
-  @Override
-  default boolean visitWhile(final S source, final Predicate<? super A> visitor) {
-    final var focus = getOption(source);
-    return focus.isEmpty() || visitor.test(focus.get());
-  }
+  // getAll / visitWhile are inherited from Affine unchanged — re-declaring the byte-identical
+  // defaults here only doubled the lockstep surface of the dual read primitives.
 
   /** Build a Prism from a partial getter and a reconstructor (must satisfy the round-trip law). */
   static <S, A> Prism<S, A> of(

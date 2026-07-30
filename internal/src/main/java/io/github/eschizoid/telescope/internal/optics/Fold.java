@@ -66,7 +66,14 @@ public interface Fold<S, A> {
     return out;
   }
 
-  /** First focused value matching {@code predicate}, or empty if none. */
+  /**
+   * First focused value matching {@code predicate}, or empty if none.
+   *
+   * <p><b>Null collapse.</b> {@link Optional} cannot carry {@code null}, so a null focus that
+   * matches the predicate (e.g. {@code Objects::isNull}) returns {@code empty} — indistinguishable
+   * from "no match" — while {@link #any} answers {@code true} for the same inputs. Callers that
+   * must distinguish a null match use {@link #visitWhile} directly.
+   */
   default Optional<A> findFirst(final S source, final Predicate<? super A> predicate) {
     final var box = new Object[1];
     final var found = !visitWhile(source, a -> {
