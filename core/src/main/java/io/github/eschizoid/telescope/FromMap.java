@@ -6,9 +6,11 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 import io.github.eschizoid.telescope.internal.NullDefaults;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
 import java.lang.reflect.RecordComponent;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -67,7 +69,20 @@ final class FromMap {
     final Function<Map<String, Object>, T> forward = target.isRecord()
       ? recordForward(target, byField)
       : beanForward(target, byField);
-    return ForwardMapper.create(forward, (Class<Map<String, Object>>) (Class<?>) Map.class, target);
+    // The slot alignment above already decided every component's fate — surface those decisions
+    // as the explain() trail instead of throwing them away: one Transformed row per extract
+    // (map key → component, through the row's converter), one MISSING_SOURCE skip per defaulted
+    // slot. The report is derived from the same data the forward path runs on, so it cannot drift.
+    final var trail = new ArrayList<OpticNode>(known.size());
+    for (final var comp : known) {
+      final var row = byField.get(comp);
+      if (row != null) {
+        trail.add(new OpticNode.Transformed(row.key(), comp, "map value", "converted"));
+      } else {
+        trail.add(new OpticNode.Skipped(comp, OpticNode.Reason.MISSING_SOURCE));
+      }
+    }
+    return ForwardMapper.create(forward, (Class<Map<String, Object>>) (Class<?>) Map.class, target, trail);
   }
 
   /**
