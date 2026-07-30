@@ -1726,17 +1726,38 @@ public sealed class Telescope<
    *     .toList(company);
    * }</pre>
    *
-   * <p>See {@link #toListIndexed} to pair each value with its position.
+   * <p>See {@link #toListIndexed} to pair each value with its position. The returned list is
+   * unmodifiable on every path shape.
    */
   public List<A> toList(final S source) {
-    if (optic instanceof final Lens<S, A> lens) {
-      if (source == null) return List.of();
-      return Collections.singletonList(lens.get(source));
-    }
+    final var out = new ArrayList<A>();
+    visitFocuses(source, a -> {
+      out.add(a);
+      return true;
+    });
+    return Collections.unmodifiableList(out);
+  }
+
+  /**
+   * The single normalization point for the eager read terminals ({@code toList} / {@code
+   * toListIndexed} / {@code count} / {@code exists}): a null root focuses nothing, a {@link Lens}
+   * (which includes every Iso-rooted telescope — {@code Iso} IS-A {@code Lens}) has exactly one
+   * focus whose value may itself be null, an {@link Affine} has zero or one, and a composed
+   * traversal walks its visitor. Every terminal routing through here CANNOT disagree with its
+   * siblings — the divergences this replaces (a null root materializing as {@code [Indexed[0,
+   * null]]} on one terminal and {@code []} on another) were each terminal re-implementing this
+   * table by hand. {@code read} / {@code find} keep their dedicated fast paths: they pull a lazy
+   * head, not an eager fold, and their Lens/Affine shortcuts carry real dispatch savings on the
+   * codegen-holder hot path.
+   */
+  private boolean visitFocuses(final S source, final Predicate<? super A> visitor) {
+    if (source == null) return true; // a null root focuses nothing, on every optic shape
+    if (optic instanceof final Lens<S, A> lens) return visitor.test(lens.get(source));
     if (optic instanceof final Affine<S, A> affine) {
-      return affine.getOption(source).map(List::of).orElseGet(List::of);
+      final var focus = affine.getOption(source);
+      return focus.isEmpty() || visitor.test(focus.get());
     }
-    return optic.toList(source);
+    return optic.visitWhile(source, visitor);
   }
 
   /**
@@ -1751,22 +1772,11 @@ public sealed class Telescope<
    * }</pre>
    */
   public List<Indexed<A>> toListIndexed(final S source) {
-    // Mirror toList's normalization exactly: the two terminals must agree on every input. The
-    // Lens branch also catches Iso-rooted telescopes (Iso IS-A Lens), whose unguarded identity
-    // visit would otherwise materialize a null root as [Indexed[0, null]] while toList says [].
-    if (optic instanceof final Lens<S, A> lens) {
-      if (source == null) return List.of();
-      return Collections.singletonList(new Indexed<>(0, lens.get(source)));
-    }
-    if (optic instanceof final Affine<S, A> affine) {
-      return affine
-        .getOption(source)
-        .map(a -> List.of(new Indexed<>(0, a)))
-        .orElseGet(List::of);
-    }
     final var out = new ArrayList<Indexed<A>>();
-    final var i = new int[] { 0 };
-    optic.forEach(source, a -> out.add(new Indexed<>(i[0]++, a)));
+    visitFocuses(source, a -> {
+      out.add(new Indexed<>(out.size(), a));
+      return true;
+    });
     return Collections.unmodifiableList(out);
   }
 
@@ -1782,13 +1792,12 @@ public sealed class Telescope<
    * nonzero (it stops at the first match).
    */
   public long count(final S source) {
-    if (optic instanceof Lens<S, A>) {
-      return source == null ? 0L : 1L;
-    }
-    if (optic instanceof final Affine<S, A> affine) {
-      return affine.getOption(source).isPresent() ? 1L : 0L;
-    }
-    return optic.count(source);
+    final var c = new long[1];
+    visitFocuses(source, a -> {
+      c[0]++;
+      return true;
+    });
+    return c[0];
   }
 
   /**
@@ -1796,16 +1805,10 @@ public sealed class Telescope<
    * #count}.
    */
   public boolean exists(final S source) {
-    if (optic instanceof Lens<S, A>) {
-      return source != null;
-    }
-    if (optic instanceof final Affine<S, A> affine) {
-      return affine.getOption(source).isPresent();
-    }
-    // A single false-returning visit stops at the first focus: visitWhile returns false iff at
-    // least one element was seen. Unlike Stream.findAny(), this tolerates a null focus (a null
-    // intermediate hop yields a one-element [null] traversal) instead of NPE-ing on Optional.of.
-    return !optic.visitWhile(source, a -> false);
+    // A single false-returning visit stops at the first focus: visitFocuses returns false iff at
+    // least one focus was seen — and, unlike Stream.findAny(), a null focus counts instead of
+    // NPE-ing on Optional.of.
+    return !visitFocuses(source, a -> false);
   }
 
   /**
