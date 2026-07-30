@@ -119,6 +119,31 @@ class TelescopeTest {
     }
 
     @Test
+    @DisplayName("a null focus behind a direct Lens is still materialized by toList")
+    void nullLensFocusToleratedByToList() {
+      final var userName = Telescope.of(User.class).field(User::name);
+      final var user = new User(null, 30, null);
+
+      assertTrue(userName.exists(user));
+      assertEquals(1L, userName.count(user));
+
+      final var focuses = userName.toList(user);
+      assertEquals(1, focuses.size());
+      assertNull(focuses.get(0));
+    }
+
+    @Test
+    @DisplayName("a null root behind a direct Lens has no read focus")
+    void nullLensRootHasNoReadFocus() {
+      final var userName = Telescope.of(User.class).field(User::name);
+
+      assertEquals(Optional.empty(), userName.find(null));
+      assertEquals(List.of(), userName.toList(null));
+      assertEquals(0L, userName.count(null));
+      assertFalse(userName.exists(null));
+    }
+
+    @Test
     @DisplayName("eachValue(getter) over a record's Map<K, V> updates every value")
     void eachOverMapValues() {
       record Index(Map<String, Integer> byKey) {}

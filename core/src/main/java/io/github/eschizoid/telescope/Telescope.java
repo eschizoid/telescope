@@ -1615,7 +1615,8 @@ public sealed class Telescope<
    */
   public List<A> toList(final S source) {
     if (optic instanceof final Lens<S, A> lens) {
-      return List.of(lens.get(source));
+      if (source == null) return List.of();
+      return Collections.singletonList(lens.get(source));
     }
     if (optic instanceof final Affine<S, A> affine) {
       return affine.getOption(source).map(List::of).orElseGet(List::of);
@@ -1654,7 +1655,7 @@ public sealed class Telescope<
    */
   public long count(final S source) {
     if (optic instanceof Lens<S, A>) {
-      return 1L;
+      return source == null ? 0L : 1L;
     }
     if (optic instanceof final Affine<S, A> affine) {
       return affine.getOption(source).isPresent() ? 1L : 0L;
@@ -1668,7 +1669,7 @@ public sealed class Telescope<
    */
   public boolean exists(final S source) {
     if (optic instanceof Lens<S, A>) {
-      return true;
+      return source != null;
     }
     if (optic instanceof final Affine<S, A> affine) {
       return affine.getOption(source).isPresent();

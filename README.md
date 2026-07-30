@@ -63,6 +63,20 @@ covered, 16 partially, each with its honest limitation and `file:line` evidence)
 [runnable head-to-head](examples/mapstruct-vs-telescope/) where each claim is a passing test. The
 [comparison](#how-it-compares-to-mapstruct) is below.
 
+## At a glance
+
+| Need                                      | Telescope gives you                                                                                       |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Deep reads and immutable updates          | One reusable `Telescope<S, A>` path: `read`, `find`, `toList`, `set`, `update`, `updateValidated`, more.  |
+| Mapping between records, POJOs, or both   | `Telescope.mapper(A.class, B.class, rows...)`, strict by default, bidirectional when rows are reversible. |
+| A gradual path from runtime to hot paths  | Start with zero annotations; move hot navigators/converters to `@Focus`, `@BeanFocus`, or `@Bridge`.      |
+| Production debugging without source dives | `explain()`, `trace(input)`, and opt-in `System.Logger` output from the same mapping value.               |
+| Native-image and framework integration    | GraalVM metadata in core, native verifier in CI, plus Spring Boot and Quarkus registry artifacts.         |
+
+If all you need is generated bean-to-bean mapping, MapStruct is still a strong choice. Telescope is for the cases where
+the path itself is valuable: deep updates, reusable navigation, effectful transforms, bidirectional mapping values, and
+runtime composition that can later be compiled down.
+
 ---
 
 ## Install
