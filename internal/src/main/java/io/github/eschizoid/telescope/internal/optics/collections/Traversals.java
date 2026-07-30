@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
@@ -127,7 +128,7 @@ public final class Traversals {
     // A null Optional FIELD (not an empty Optional) focuses nothing, matching every other
     // container traversal's null-source contract; the write side likewise leaves null alone.
     return Affine.of(
-      source -> source == null ? Optional.empty() : source,
+      source -> Objects.requireNonNullElse(source, Optional.empty()),
       (source, a) -> source != null && source.isPresent() ? Optional.of(a) : source
     );
   }
@@ -168,16 +169,22 @@ public final class Traversals {
 
       @Override
       public C modify(final C source, final Function<? super E, ? extends E> f) {
-        if (source == null) return null;
-        if (source instanceof final List<?> list) {
-          final var out = new ArrayList<E>(list.size());
-          for (final var e : source) out.add(f.apply(e));
-          return (C) Collections.unmodifiableList(out);
-        }
-        if (source instanceof final Set<?> set) {
-          final var out = new LinkedHashSet<E>(set.size());
-          for (final var e : source) out.add(f.apply(e));
-          return (C) Collections.unmodifiableSet(out);
+        switch (source) {
+          case null -> {
+            return null;
+          }
+          case final List<?> list -> {
+            final var out = new ArrayList<E>(list.size());
+            for (final var e : source) out.add(f.apply(e));
+            return (C) Collections.unmodifiableList(out);
+          }
+          case final Set<?> set -> {
+            final var out = new LinkedHashSet<E>(set.size());
+            for (final var e : source) out.add(f.apply(e));
+            return (C) Collections.unmodifiableSet(out);
+          }
+          default -> {
+          }
         }
         // No safe rebuild for other Iterable shapes — the (C) cast would succeed on a List but
         // throw ClassCastException downstream when callers store it into a field typed as e.g.
