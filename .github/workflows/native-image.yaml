@@ -53,7 +53,7 @@ jobs:
         run: native-image --version
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       # nativeRun builds the binary then executes it. Because NativeVerify calls System.exit(non-zero)
       # on any failed capability, a failing binary fails this step — no extra assertion needed.

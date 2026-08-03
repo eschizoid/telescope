@@ -51,7 +51,7 @@ jobs:
           cache: gradle
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v6.2.0
 
       - name: Build and test
         run: ./gradlew check --no-daemon --stacktrace
