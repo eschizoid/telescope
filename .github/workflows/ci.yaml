@@ -30,11 +30,18 @@ jobs:
           exit $fail
       - name: Install snippets match the latest release
         run: |
-          # The README's telescope coordinates must pin the latest tag's version.
-          VERSION=$(git describe --tags --abbrev=0 | tr -d v)
-          if ! grep -q "io.github.eschizoid:telescope-core:${VERSION}" README.md; then
-            echo "README install snippet does not pin ${VERSION} (latest tag)"; exit 1
+          # The README's telescope coordinates must pin the latest RELEASE version. Select the
+          # highest semver tag explicitly — `git describe` returns the closest reachable tag, which
+          # picks up rolling markers like `early-access` that are not releases at all. Strip only a
+          # leading "v" (`tr -d v` would eat any "v" in the string).
+          VERSION=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 | sed 's/^v//')
+          if [ -z "$VERSION" ]; then
+            echo "No release tag yet — nothing to check."; exit 0
           fi
+          if ! grep -q "io.github.eschizoid:telescope-core:${VERSION}" README.md; then
+            echo "README install snippet does not pin ${VERSION} (latest release tag)"; exit 1
+          fi
+          echo "README pins ${VERSION}"
 
   build:
     runs-on: ubuntu-latest

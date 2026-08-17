@@ -59,7 +59,7 @@ public final class PropertyNames {
    * nested-telescope variants return {@code null} by design rely on that.
    */
   public static String property(final String name) {
-    if (name == null) return name;
+    if (name == null) return null;
     final var get = afterGet(name);
     if (get != null) return get;
     final var is = afterIs(name);
