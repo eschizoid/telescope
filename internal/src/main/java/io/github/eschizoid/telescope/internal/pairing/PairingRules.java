@@ -108,13 +108,13 @@ public final class PairingRules<T> {
     if (args.isEmpty()) return null;
     final var raw = props.rawType(t);
     if (props.isSubtypeOf(raw, WellKnown.OPTIONAL)) {
-      return new ContainerView<>(ContainerView.Kind.OPTIONAL, args.get(0), null, raw);
+      return new ContainerView<>(ContainerView.Kind.OPTIONAL, args.getFirst(), null, raw);
     }
     if (props.isSubtypeOf(raw, WellKnown.LIST)) {
-      return new ContainerView<>(ContainerView.Kind.LIST, args.get(0), null, raw);
+      return new ContainerView<>(ContainerView.Kind.LIST, args.getFirst(), null, raw);
     }
     if (props.isSubtypeOf(raw, WellKnown.SET)) {
-      return new ContainerView<>(ContainerView.Kind.SET, args.get(0), null, raw);
+      return new ContainerView<>(ContainerView.Kind.SET, args.getFirst(), null, raw);
     }
     if (props.isSubtypeOf(raw, WellKnown.MAP)) {
       final var key = args.get(0);
