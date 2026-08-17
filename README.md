@@ -84,7 +84,7 @@ runtime composition that can later be compiled down.
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-  implementation("io.github.eschizoid:telescope-core:1.4.0")
+  implementation("io.github.eschizoid:telescope-core:1.5.0")
 }
 ```
 
@@ -93,7 +93,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.4.0</version>
+  <version>1.5.0</version>
 </dependency>
 ```
 
