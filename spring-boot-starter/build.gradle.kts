@@ -50,7 +50,7 @@ tasks.withType<Javadoc>().configureEach {
     }
 }
 
-val springBootVersion = "4.1.0"
+val springBootVersion = "4.1.1"
 
 dependencies {
     api(project(":core"))
