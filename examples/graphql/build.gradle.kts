@@ -1,6 +1,6 @@
 plugins {
     java
-    id("org.graalvm.buildtools.native") version "1.1.9"
+    id("org.graalvm.buildtools.native") version "1.1.10"
 }
 
 description = "telescope-examples-graphql — graphql-java + JDK HttpServer proving runtime Map→POJO via Telescope.fromMap"
