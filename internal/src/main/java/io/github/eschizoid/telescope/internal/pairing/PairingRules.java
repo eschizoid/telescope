@@ -104,22 +104,30 @@ public final class PairingRules<T> {
    * liftable container).
    */
   public ContainerView<T> containerViewOf(final T t) {
-    final var args = props.typeArguments(t);
-    if (args.isEmpty()) return null;
+    // Raw subclasses retain the explicit shallow-copy policy above. Parameterized subclasses
+    // must be viewed through the container supertype: their own parameters can be reordered,
+    // fixed, or unrelated to the element/key types.
+    if (props.typeArguments(t).isEmpty()) return null;
     final var raw = props.rawType(t);
-    if (props.isSubtypeOf(raw, WellKnown.OPTIONAL)) {
-      return new ContainerView<>(ContainerView.Kind.OPTIONAL, args.getFirst(), null, raw);
-    }
-    if (props.isSubtypeOf(raw, WellKnown.LIST)) {
-      return new ContainerView<>(ContainerView.Kind.LIST, args.getFirst(), null, raw);
-    }
-    if (props.isSubtypeOf(raw, WellKnown.SET)) {
-      return new ContainerView<>(ContainerView.Kind.SET, args.getFirst(), null, raw);
-    }
-    if (props.isSubtypeOf(raw, WellKnown.MAP)) {
-      final var key = args.get(0);
-      if (!props.isClassType(key)) return null;
-      return new ContainerView<>(ContainerView.Kind.MAP_VALUES, args.get(1), key, raw);
+    for (final var kind : List.of(WellKnown.OPTIONAL, WellKnown.LIST, WellKnown.SET, WellKnown.MAP)) {
+      if (!props.isSubtypeOf(raw, kind)) continue;
+      final var args = props.typeArgumentsAs(t, kind);
+      if (kind == WellKnown.MAP) {
+        if (args.size() != 2 || !props.isClassType(args.getFirst())) return null;
+        return new ContainerView<>(ContainerView.Kind.MAP_VALUES, args.get(1), args.getFirst(), raw);
+      }
+      if (args.size() != 1) return null;
+      return new ContainerView<>(
+        switch (kind) {
+          case OPTIONAL -> ContainerView.Kind.OPTIONAL;
+          case LIST -> ContainerView.Kind.LIST;
+          case SET -> ContainerView.Kind.SET;
+          default -> throw new AssertionError(kind);
+        },
+        args.getFirst(),
+        null,
+        raw
+      );
     }
     return null;
   }
