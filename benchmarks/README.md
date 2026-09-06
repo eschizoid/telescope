@@ -14,6 +14,12 @@ This module is not published. It depends on `:core` and `:codegen` and is only b
 Config (in `benchmarks/build.gradle.kts`): average time in nanoseconds, 3 warmup iterations, 5 measurement iterations, 1
 fork. Results are written to `benchmarks/build/results/jmh/`. A full run takes a few minutes.
 
+## Runtime allocation regression measurements
+
+See [the runtime mapper review measurements](../docs/perf-runtime-collections.md) for the cardinality benchmark, saved
+before/after JMH data, and an executable regression gate. These measure reused runtime mappers separately from mapper
+construction.
+
 ## What it measures
 
 The record benchmarks walk a `Company -> Department -> Address` tree and update the deeply-nested `Address::city`; the
