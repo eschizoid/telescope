@@ -85,6 +85,17 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public List<TypeMirror> typeArgumentsAs(final TypeMirror t, final WellKnown supertype) {
+    final var target = elements.getTypeElement(fqnOf(supertype));
+    if (target == null || !(t instanceof DeclaredType dt)) return List.of();
+    if (dt.asElement().equals(target)) return List.copyOf(dt.getTypeArguments());
+    for (final var parent : types.directSupertypes(t)) {
+      if (isSubtypeOf(parent, supertype)) return typeArgumentsAs(parent, supertype);
+    }
+    return List.of();
+  }
+
+  @Override
   public TypeMirror rawType(final TypeMirror t) {
     return types.erasure(t);
   }

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.Serializable;
+import java.lang.ref.WeakReference;
 import java.util.function.Function;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -19,6 +20,38 @@ import org.junit.jupiter.api.Test;
  * where a method reference was expected — wording is load-bearing, not cosmetic.
  */
 class LambdaIntrospectionTest {
+
+  @Test
+  void methodReferenceMetadataDoesNotPinAnApplicationClassLoader() throws Exception {
+    final var loader = exerciseIsolatedLoader();
+    // Explicit GC is enabled in the test JVM. A static strong-key map keeps this alive forever;
+    // a ClassValue permits unloading once both the reference and its defining class are unused.
+    for (int i = 0; i < 100 && loader.get() != null; i++) {
+      System.gc();
+      Thread.sleep(10);
+    }
+    org.junit.jupiter.api.Assertions.assertNull(loader.get(), "method-reference metadata pinned the loader");
+  }
+
+  private static WeakReference<ClassLoader> exerciseIsolatedLoader() throws Exception {
+    final String name = UnloadableReference.class.getName();
+    final byte[] bytes;
+    try (var stream = UnloadableReference.class.getResourceAsStream("UnloadableReference.class")) {
+      bytes = java.util.Objects.requireNonNull(stream).readAllBytes();
+    }
+    final var loader = new ClassLoader(null) {
+      @Override
+      protected Class<?> findClass(final String requested) throws ClassNotFoundException {
+        if (!requested.equals(name)) throw new ClassNotFoundException(requested);
+        return defineClass(requested, bytes, 0, bytes.length);
+      }
+    };
+    final var fixture = loader.loadClass(name);
+    final var reference = (Serializable) fixture.getMethod("create").invoke(null);
+    assertEquals("trim", LambdaIntrospection.methodNameOf(reference));
+    assertSame(String.class, LambdaIntrospection.implClassOf(reference));
+    return new WeakReference<>(loader);
+  }
 
   record User(String name) {}
 

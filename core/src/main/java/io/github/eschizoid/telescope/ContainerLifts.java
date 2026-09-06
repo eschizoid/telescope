@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
 import java.util.Stack;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -28,7 +30,7 @@ import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.function.Supplier;
+import java.util.function.Function;
 
 /**
  * Container-shape lifting for {@link DeepMap}: element-copy Isos for raw same-kind container
@@ -112,65 +114,82 @@ final class ContainerLifts {
     final Class<?> srcRaw,
     final Class<?> tgtRaw
   ) {
-    final var srcAlloc = listAllocatorFor(srcRaw);
-    final var tgtAlloc = listAllocatorFor(tgtRaw);
-    // When the element is a composed-handle leaf, iterate with a MethodHandle loop over its raw
-    // element handle instead of dispatching elementIso.to(x) -> Function.apply per element. In a
-    // deep
-    // tree the shared Java-loop lambda's call site goes megamorphic across nesting levels and the
-    // JIT
-    // stops inlining the element conversion; a dedicated per-level loop handle stays monomorphic
-    // and
-    // inlines. Null for a scalar/array-leaf element; keep the plain Java loop for those.
-    final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
-    if (mh != null) return mh;
-    return Iso.of(
-      src -> {
-        if (src == null) return null;
-        final var fresh = (Collection) tgtAlloc.get();
-        for (final var x : (Collection<?>) src) fresh.add(elementIso.to(x));
-        return fresh;
-      },
-      tgt -> {
-        if (tgt == null) return null;
-        final var fresh = (Collection) srcAlloc.get();
-        for (final var y : (Collection<?>) tgt) fresh.add(elementIso.from(y));
-        return fresh;
-      }
-    );
+    return liftCollectionIntoTargetRaw(elementIso, srcRaw, tgtRaw, false);
   }
 
-  /**
-   * Set-level lift that writes into the target's concrete raw class. Mirror of {@link
-   * #liftListIntoTargetRaw} for Sets. Falls back to {@link LinkedHashSet} (preserving forward
-   * iteration order) when the raw class is the {@link Set} interface itself.
-   */
-  @SuppressWarnings({ "unchecked", "rawtypes" })
+  /** Set counterpart; custom sorted comparators cannot safely consume a changed element type. */
   static Iso<?, ?> liftSetIntoTargetRaw(
     final Iso<Object, Object> elementIso,
     final Class<?> srcRaw,
     final Class<?> tgtRaw
   ) {
-    final var srcAlloc = setAllocatorFor(srcRaw);
-    final var tgtAlloc = setAllocatorFor(tgtRaw);
-    // Same MethodHandle-loop sharpening as the List lift (Set is also Collection.add). Null element
-    // Iso => keep the Java loop.
+    return liftCollectionIntoTargetRaw(elementIso, srcRaw, tgtRaw, true);
+  }
+
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Iso<?, ?> liftCollectionIntoTargetRaw(
+    final Iso<Object, Object> elementIso,
+    final Class<?> srcRaw,
+    final Class<?> tgtRaw,
+    final boolean set
+  ) {
+    final var srcAlloc = set ? setAllocatorFor(srcRaw) : listAllocatorFor(srcRaw);
+    final var tgtAlloc = set ? setAllocatorFor(tgtRaw) : listAllocatorFor(tgtRaw);
     final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
-    if (mh != null) return mh;
+    final Iso<Object, Object> loop =
+      mh != null
+        ? mh
+        : Iso.of(
+            src -> {
+              if (src == null) return null;
+              final var fresh = (Collection) tgtAlloc.apply(src);
+              for (final var x : (Collection<?>) src) fresh.add(elementIso.to(x));
+              return fresh;
+            },
+            tgt -> {
+              if (tgt == null) return null;
+              final var fresh = (Collection) srcAlloc.apply(tgt);
+              for (final var x : (Collection<?>) tgt) fresh.add(elementIso.from(x));
+              return fresh;
+            }
+          );
+    final boolean checkComparator = set && elementIso != Iso.<Object>identity();
+    final boolean finish = copyOnWrite(srcRaw) || copyOnWrite(tgtRaw);
+    if (!checkComparator && !finish) return loop;
     return Iso.of(
       src -> {
-        if (src == null) return null;
-        final var fresh = (Collection) tgtAlloc.get();
-        for (final var x : (Collection<?>) src) fresh.add(elementIso.to(x));
-        return fresh;
+        if (checkComparator) checkComparator(src);
+        return finishCollection(loop.to(src), tgtRaw);
       },
       tgt -> {
-        if (tgt == null) return null;
-        final var fresh = (Collection) srcAlloc.get();
-        for (final var y : (Collection<?>) tgt) fresh.add(elementIso.from(y));
-        return fresh;
+        if (checkComparator) checkComparator(tgt);
+        return finishCollection(loop.from(tgt), srcRaw);
       }
     );
+  }
+
+  private static void checkComparator(final Object input) {
+    if (input instanceof SortedSet<?> sorted && sorted.comparator() != null) {
+      throw new IllegalStateException(
+        "Deep map: a custom sorted-set comparator cannot be reused with changed " +
+          "element types. Supply an explicit Mapping.via(...) row with a target comparator."
+      );
+    }
+  }
+
+  private static boolean copyOnWrite(final Class<?> raw) {
+    return raw == CopyOnWriteArrayList.class || raw == CopyOnWriteArraySet.class;
+  }
+
+  private static Object finishCollection(final Object result, final Class<?> raw) {
+    if (result == null) return null;
+    if (
+      raw == CopyOnWriteArrayList.class && !(result instanceof CopyOnWriteArrayList<?>)
+    ) return new CopyOnWriteArrayList<>((Collection<?>) result);
+    if (
+      raw == CopyOnWriteArraySet.class && !(result instanceof CopyOnWriteArraySet<?>)
+    ) return new CopyOnWriteArraySet<>((Collection<?>) result);
+    return result;
   }
 
   /**
@@ -196,13 +215,13 @@ final class ContainerLifts {
     return Iso.of(
       src -> {
         if (src == null) return null;
-        final var fresh = (Map) tgtAlloc.get();
+        final var fresh = (Map) tgtAlloc.apply(src);
         for (final var e : ((Map<?, ?>) src).entrySet()) fresh.put(e.getKey(), elementIso.to(e.getValue()));
         return fresh;
       },
       tgt -> {
         if (tgt == null) return null;
-        final var fresh = (Map) srcAlloc.get();
+        final var fresh = (Map) srcAlloc.apply(tgt);
         for (final var e : ((Map<?, ?>) tgt).entrySet()) fresh.put(e.getKey(), elementIso.from(e.getValue()));
         return fresh;
       }
@@ -214,17 +233,21 @@ final class ContainerLifts {
   // Hard-code the common JDK Collection / Map raws so the allocator works for the standard
   // shapes, and fall back to `intermediateAllocator` for user-defined subclasses (where LMF DOES
   // work via the user's own package).
-  private static Supplier<Object> listAllocatorFor(final Class<?> raw) {
-    if (raw == List.class || raw == Collection.class || raw == ArrayList.class) return ArrayList::new;
-    if (raw == LinkedList.class) return LinkedList::new;
-    if (raw == ArrayDeque.class) return ArrayDeque::new;
-    if (raw == Vector.class) return Vector::new;
-    if (raw == Stack.class) return Stack::new;
-    if (raw == PriorityQueue.class) return PriorityQueue::new;
-    if (raw == LinkedBlockingQueue.class) return LinkedBlockingQueue::new;
-    if (raw == CopyOnWriteArrayList.class) return CopyOnWriteArrayList::new;
+  private static Function<Object, Object> listAllocatorFor(final Class<?> raw) {
+    if (raw == List.class || raw == Collection.class || raw == ArrayList.class) return input ->
+      new ArrayList<>(((Collection<?>) input).size());
+    if (raw == LinkedList.class) return ignored -> new LinkedList<>();
+    if (raw == ArrayDeque.class) return ignored -> new ArrayDeque<>();
+    if (raw == Vector.class) return ignored -> new Vector<>();
+    if (raw == Stack.class) return ignored -> new Stack<>();
+    if (raw == PriorityQueue.class) return ignored -> new PriorityQueue<>();
+    if (raw == LinkedBlockingQueue.class) return ignored -> new LinkedBlockingQueue<>();
+    if (raw == CopyOnWriteArrayList.class) return input -> {
+      final int size = ((Collection<?>) input).size();
+      return size <= 1 ? new CopyOnWriteArrayList<>() : new ArrayList<>(size);
+    };
     final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return alloc;
+    if (alloc.get() != null) return ignored -> alloc.get();
     // No usable allocator for a JDK java.base class we don't recognise. Falling back to ArrayList
     // would silently write the wrong runtime class into the target field and CCE at the setter.
     // Throw at plan-time with a precise diagnostic instead.
@@ -236,14 +259,18 @@ final class ContainerLifts {
     );
   }
 
-  private static Supplier<Object> setAllocatorFor(final Class<?> raw) {
-    if (raw == Set.class || raw == LinkedHashSet.class) return LinkedHashSet::new;
-    if (raw == HashSet.class) return HashSet::new;
-    if (raw == TreeSet.class) return TreeSet::new;
-    if (raw == ConcurrentSkipListSet.class) return ConcurrentSkipListSet::new;
-    if (raw == CopyOnWriteArraySet.class) return CopyOnWriteArraySet::new;
+  private static Function<Object, Object> setAllocatorFor(final Class<?> raw) {
+    if (raw == Set.class || raw == LinkedHashSet.class) return input ->
+      LinkedHashSet.newLinkedHashSet(((Collection<?>) input).size());
+    if (raw == HashSet.class) return input -> HashSet.newHashSet(((Collection<?>) input).size());
+    if (raw == TreeSet.class) return input -> new TreeSet<>(setComparator(input));
+    if (raw == ConcurrentSkipListSet.class) return input -> new ConcurrentSkipListSet<>(setComparator(input));
+    if (raw == CopyOnWriteArraySet.class) return input -> {
+      final int size = ((Collection<?>) input).size();
+      return size <= 1 ? new CopyOnWriteArraySet<>() : new ArrayList<>(size);
+    };
     final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return alloc;
+    if (alloc.get() != null) return ignored -> alloc.get();
     throw new IllegalStateException(
       "Deep map: no allocator for Set subtype " +
         raw.getName() +
@@ -260,26 +287,36 @@ final class ContainerLifts {
    * plan-time because its no-arg constructor doesn't exist (it needs the {@code Class<K>} arg);
    * adopters must use the codegen path or an explicit row.
    */
-  private static Supplier<Object> mapAllocatorFor(final Class<?> raw) {
-    if (raw == Map.class || raw == HashMap.class) return HashMap::new;
-    if (raw == LinkedHashMap.class) return LinkedHashMap::new;
-    if (raw == TreeMap.class) return TreeMap::new;
-    if (raw == ConcurrentHashMap.class) return ConcurrentHashMap::new;
-    if (raw == ConcurrentSkipListMap.class) return ConcurrentSkipListMap::new;
-    if (raw == IdentityHashMap.class) return IdentityHashMap::new;
-    if (raw == WeakHashMap.class) return WeakHashMap::new;
+  private static Function<Object, Object> mapAllocatorFor(final Class<?> raw) {
+    if (raw == Map.class || raw == HashMap.class) return input -> HashMap.newHashMap(((Map<?, ?>) input).size());
+    if (raw == LinkedHashMap.class) return input -> LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size());
+    if (raw == TreeMap.class) return input -> new TreeMap<>(mapComparator(input));
+    if (raw == ConcurrentHashMap.class) return input -> new ConcurrentHashMap<>(((Map<?, ?>) input).size());
+    if (raw == ConcurrentSkipListMap.class) return input -> new ConcurrentSkipListMap<>(mapComparator(input));
+    if (raw == IdentityHashMap.class) return input -> new IdentityHashMap<>(((Map<?, ?>) input).size());
+    if (raw == WeakHashMap.class) return ignored -> new WeakHashMap<>();
     if (raw == EnumMap.class) throw new IllegalStateException(
       "Deep map: EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg " +
         "constructor (it needs the Class<K> key class). Use the codegen path or supply an " +
         "explicit `Mapping.via(...)` row that constructs the EnumMap with its key class."
     );
     final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return alloc;
+    if (alloc.get() != null) return ignored -> alloc.get();
     throw new IllegalStateException(
       "Deep map: no allocator for Map subtype " +
         raw.getName() +
         ". Add it to mapAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
         "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
     );
+  }
+
+  @SuppressWarnings("unchecked")
+  private static java.util.Comparator<Object> mapComparator(final Object input) {
+    return input instanceof SortedMap<?, ?> sorted ? (java.util.Comparator<Object>) sorted.comparator() : null;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static java.util.Comparator<Object> setComparator(final Object input) {
+    return input instanceof SortedSet<?> sorted ? (java.util.Comparator<Object>) sorted.comparator() : null;
   }
 }
