@@ -2,8 +2,6 @@ package io.github.eschizoid.telescope.internal;
 
 import java.io.Serializable;
 import java.lang.invoke.SerializedLambda;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Reflective extraction of method-reference metadata via {@link SerializedLambda}. The runtime
@@ -24,8 +22,31 @@ public final class LambdaIntrospection {
 
   private LambdaIntrospection() {}
 
-  private static final Map<Class<?>, String> METHOD_NAME_CACHE = new ConcurrentHashMap<>();
-  private static final Map<Class<?>, Class<?>> IMPL_CLASS_CACHE = new ConcurrentHashMap<>();
+  // Values belong to the lambda class and disappear with its loader. Never retain the lambda
+  // instance or SerializedLambda: a bound method reference can capture an entire application graph.
+  private static final ClassValue<MetadataSlot> CACHE = new ClassValue<>() {
+    @Override
+    protected MetadataSlot computeValue(final Class<?> type) {
+      return new MetadataSlot();
+    }
+  };
+
+  private record Metadata(String methodName, String implName) {}
+
+  private static final class MetadataSlot {
+
+    private volatile Metadata metadata;
+    private volatile Class<?> implClass;
+
+    Metadata get(final Serializable lambda) {
+      final var cached = metadata;
+      if (cached != null) return cached;
+      synchronized (this) {
+        if (metadata == null) metadata = decode(lambda);
+        return metadata;
+      }
+    }
+  }
 
   /**
    * The impl method name of a Serializable method reference (e.g. {@code "name"} from {@code
@@ -36,10 +57,10 @@ public final class LambdaIntrospection {
    *     starts with {@code "lambda$"})
    */
   public static String methodNameOf(final Serializable lambda) {
-    return METHOD_NAME_CACHE.computeIfAbsent(lambda.getClass(), __ -> resolveMethodName(lambda));
+    return CACHE.get(lambda.getClass()).get(lambda).methodName();
   }
 
-  private static String resolveMethodName(final Serializable lambda) {
+  private static Metadata decode(final Serializable lambda) {
     try {
       final var writeReplace = lambda.getClass().getDeclaredMethod("writeReplace");
       writeReplace.setAccessible(true);
@@ -48,7 +69,7 @@ public final class LambdaIntrospection {
       if (name.startsWith("lambda$")) throw new IllegalArgumentException(
         "Expected a method reference (e.g. User::name, User::getName), not a lambda. Got: " + name
       );
-      return name;
+      return new Metadata(name, serialized.getImplClass().replace('/', '.'));
     } catch (final ReflectiveOperationException e) {
       throw new IllegalArgumentException(
         "Expected a method reference to a record component / bean property accessor",
@@ -67,24 +88,17 @@ public final class LambdaIntrospection {
    */
   @SuppressWarnings("unchecked")
   public static <A> Class<A> implClassOf(final Serializable lambda) {
-    return (Class<A>) IMPL_CLASS_CACHE.computeIfAbsent(lambda.getClass(), __ -> resolveImplClass(lambda));
-  }
-
-  private static Class<?> resolveImplClass(final Serializable lambda) {
-    try {
-      final var writeReplace = lambda.getClass().getDeclaredMethod("writeReplace");
-      writeReplace.setAccessible(true);
-      final var serialized = (SerializedLambda) writeReplace.invoke(lambda);
-      if (serialized.getImplMethodName().startsWith("lambda$")) throw new IllegalArgumentException(
-        "Expected a method reference (e.g. User::name, User::getName), not a lambda. Got: " +
-          serialized.getImplMethodName()
-      );
-      // Resolve against the lambda's defining loader, not telescope's — under plugin/app-server
-      // deployments the impl class may be invisible to this library's loader.
-      final var implName = serialized.getImplClass().replace('/', '.');
-      return Class.forName(implName, false, lambda.getClass().getClassLoader());
-    } catch (final ReflectiveOperationException e) {
-      throw new IllegalArgumentException("Expected a method reference; got: " + lambda, e);
+    final var slot = CACHE.get(lambda.getClass());
+    final var metadata = slot.get(lambda);
+    var result = slot.implClass;
+    if (result == null) {
+      try {
+        result = Class.forName(metadata.implName(), false, lambda.getClass().getClassLoader());
+        slot.implClass = result;
+      } catch (final ClassNotFoundException e) {
+        throw new IllegalArgumentException("Expected a method reference; got: " + lambda, e);
+      }
     }
+    return (Class<A>) result;
   }
 }
