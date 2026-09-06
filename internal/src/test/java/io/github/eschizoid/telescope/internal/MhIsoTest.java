@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import java.util.Arrays;
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -105,7 +107,42 @@ class MhIsoTest {
     final int[] bwd = { 0, 1 };
     final Iso<Object, Object>[] fwdIso = new Iso[] { identity, identity };
     final Iso<Object, Object>[] bwdIso = new Iso[] { identity, identity };
-    return MhIso.pair(source, target, fwd, fwdIso, bwd, bwdIso, identity);
+    return pair(source, target, fwd, fwdIso, bwd, bwdIso, identity);
+  }
+
+  private static List<String> names(final Class<?> type) {
+    return type.isRecord()
+      ? Arrays.stream(type.getRecordComponents()).map(java.lang.reflect.RecordComponent::getName).toList()
+      : List.of(Beans.propertyNames(type));
+  }
+
+  // Test inputs below use the readable logical order (name, age); translate to each side's slots.
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static <S, T> Iso<S, T> pair(
+    final Class<S> source,
+    final Class<T> target,
+    final int[] forward,
+    final Iso<Object, Object>[] fwdIso,
+    final int[] backward,
+    final Iso<Object, Object>[] bwdIso,
+    final Iso<Object, Object> identity
+  ) {
+    final var logical = List.of("name", "age");
+    final var srcNames = names(source);
+    final var tgtNames = names(target);
+    final int[] fwd = new int[2];
+    final int[] bwd = new int[2];
+    final Iso<Object, Object>[] fi = new Iso[2];
+    final Iso<Object, Object>[] bi = new Iso[2];
+    for (int i = 0; i < 2; i++) {
+      int t = logical.indexOf(tgtNames.get(i));
+      fwd[i] = forward[t] < 0 ? -1 : srcNames.indexOf(logical.get(forward[t]));
+      fi[i] = fwdIso[t];
+      int r = logical.indexOf(srcNames.get(i));
+      bwd[i] = backward[r] < 0 ? -1 : tgtNames.indexOf(logical.get(backward[r]));
+      bi[i] = bwdIso[r];
+    }
+    return MhIso.pair(source, target, fwd, fi, bwd, bi, identity);
   }
 
   @Nested
@@ -206,7 +243,7 @@ class MhIsoTest {
       final int[] bwd = { 0, 1 };
       final Iso<Object, Object>[] fwdIso = new Iso[] { upper, identity };
       final Iso<Object, Object>[] bwdIso = new Iso[] { upper, identity };
-      final Iso<RecUser, BeanUser> iso = MhIso.pair(RecUser.class, BeanUser.class, fwd, fwdIso, bwd, bwdIso, identity);
+      final Iso<RecUser, BeanUser> iso = pair(RecUser.class, BeanUser.class, fwd, fwdIso, bwd, bwdIso, identity);
       final var b = iso.to(new RecUser("dan", 7));
       assertEquals("DAN", b.getName());
       assertEquals(7, b.getAge());
@@ -225,7 +262,7 @@ class MhIsoTest {
       final int[] bwd = { 0, 1 };
       final Iso<Object, Object>[] fwdIso = new Iso[] { constant, identity };
       final Iso<Object, Object>[] bwdIso = new Iso[] { identity, identity };
-      final Iso<RecUser, BeanUser> iso = MhIso.pair(RecUser.class, BeanUser.class, fwd, fwdIso, bwd, bwdIso, identity);
+      final Iso<RecUser, BeanUser> iso = pair(RecUser.class, BeanUser.class, fwd, fwdIso, bwd, bwdIso, identity);
       final var b = iso.to(new RecUser("ignored", 9));
       assertEquals("CONST", b.getName());
       assertEquals(9, b.getAge());
@@ -244,7 +281,7 @@ class MhIsoTest {
       final int[] bwd = { 0, 1 };
       final Iso<Object, Object>[] fwdIso = new Iso[] { identity, nullify };
       final Iso<Object, Object>[] bwdIso = new Iso[] { identity, identity };
-      final Iso<RecUser, BeanUser> iso = MhIso.pair(RecUser.class, BeanUser.class, fwd, fwdIso, bwd, bwdIso, identity);
+      final Iso<RecUser, BeanUser> iso = pair(RecUser.class, BeanUser.class, fwd, fwdIso, bwd, bwdIso, identity);
       final var b = iso.to(new RecUser("zoe", 99));
       assertEquals("zoe", b.getName());
       assertEquals(0, b.getAge()); // skipped → JLS default, not an NPE
@@ -267,7 +304,7 @@ class MhIsoTest {
       final int[] bwd = { 0, 1 };
       final Iso<Object, Object>[] fwdIso = new Iso[] { boom, identity };
       final Iso<Object, Object>[] bwdIso = new Iso[] { identity, identity };
-      final Iso<RecUser, BeanUser> iso = MhIso.pair(RecUser.class, BeanUser.class, fwd, fwdIso, bwd, bwdIso, identity);
+      final Iso<RecUser, BeanUser> iso = pair(RecUser.class, BeanUser.class, fwd, fwdIso, bwd, bwdIso, identity);
       assertThrows(StackOverflowError.class, () -> iso.to(new RecUser("x", 1)));
     }
   }
