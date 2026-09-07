@@ -43,10 +43,14 @@ shows forward mapping; backward has the same allocation shape.
 | `Map`                  | 4,096 |    40,030.68 |   31,404.33 |     262,336 |    229,488 |
 | `Set`                  | 4,096 |    37,893.88 |   30,352.16 |     295,136 |    262,288 |
 
-Empty and singleton copy-on-write lists retain the previous allocation shape (56 B/op and 96 B/op) and statistically
-indistinguishable timing. The large copy-on-write result comes from mapping into a temporary pre-sized collection and
-performing one bulk copy into the final copy-on-write container, rather than copying its backing array after every
-`add`.
+Empty and singleton copy-on-write lists retain the previous allocation shape (56 B/op and 96 B/op); singleton inputs pay
+roughly 10 ns of finish-check overhead on some hardware — trivial in absolute terms, but not indistinguishable. The
+large copy-on-write result comes from mapping into a temporary pre-sized collection and performing one bulk copy into
+the final copy-on-write container, rather than copying its backing array after every `add`.
+
+A CI reproduction on GitHub Actions `ubuntu-latest` (same protocol, `gc` profiler) confirmed the shape: copy-on-write at
+4,096 elements improved 115× with the same 99.7% allocation cut, lists 1.3–1.75× with 29–40% less allocation, maps and
+sets 1.3–1.75× with 7–12% less.
 
 Treat the exact nanoseconds as machine-specific. The allocation reduction and the quadratic copy-on-write behavior are
 the durable result; rerun the command above on the target JVM and hardware before publishing a performance claim.
