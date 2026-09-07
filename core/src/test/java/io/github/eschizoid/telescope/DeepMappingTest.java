@@ -451,7 +451,7 @@ class DeepMappingTest {
     }
 
     @Test
-    @DisplayName("Value-level cycle in a bean graph severs at second encounter — no StackOverflowError")
+    @DisplayName("Value-level cycle in a bean graph severs at its first back-edge — no StackOverflowError")
     void valueCycleSeversCleanly() {
       // alice.ref → bob; bob.ref → alice. This is the literal-value cycle shape that bidirectional
       // Hibernate associations produce (entity.parent + entity.children pointing at the parent).
@@ -468,14 +468,8 @@ class DeepMappingTest {
       final var dto = mapper.forward(alice);
       assertEquals("alice", dto.getName());
       assertEquals("bob", dto.getRef().getName());
-      assertEquals("alice", dto.getRef().getRef().getName());
-      // Cycle severed on revisit — the inner alice→bob→alice→bob link collapses to null instead
-      // of recursing forever. The guard fires inside lazyCacheIso (the per-field recursive Iso);
-      // the top-level mapper.forward call doesn't go through the guard, so the cycle is finite
-      // but not the shortest possible (severing happens at the 4th level, not the 2nd). The graph
-      // is finite by construction; structure is lost on the second occurrence — acknowledged
-      // trade-off documented in the cycle guard's javadoc.
-      assertNull(dto.getRef().getRef().getRef(), "fourth encounter (bob revisited) should be severed");
+      // Root participates in the active path: the first back-edge to alice is severed.
+      assertNull(dto.getRef().getRef());
     }
 
     @Test

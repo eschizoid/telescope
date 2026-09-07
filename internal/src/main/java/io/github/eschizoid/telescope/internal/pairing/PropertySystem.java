@@ -79,6 +79,11 @@ public interface PropertySystem<T> {
   /** Type arguments when {@code t} is parameterized; empty list otherwise. */
   List<T> typeArguments(T t);
 
+  /**
+   * Actual arguments of the specified generic supertype, after substituting inherited variables.
+   */
+  List<T> typeArgumentsAs(T t, WellKnown supertype);
+
   /** The raw/erased class handle of {@code t} ({@code List<X>} → {@code List}). */
   T rawType(T t);
 

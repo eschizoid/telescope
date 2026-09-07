@@ -193,7 +193,14 @@ public final class DeepMap {
     topSteps.forEach((tgtName, step) ->
       patchTable.put(tgtName, new Mapper.PatchEntry(step.sourceName, v -> ((Iso<Object, Object>) step.iso).from(v)))
     );
-    return new Resolution<>(iso, patchTable, List.copyOf(trail));
+    final var rootKey = new TypePair(source, target);
+    final Iso<A, B> guarded = cyclicPairs.isEmpty()
+      ? iso
+      : Iso.of(
+          value -> inInvocation(FORWARD_SEEN, rootKey, value, iso::to),
+          value -> inInvocation(BACKWARD_SEEN, rootKey, value, iso::from)
+        );
+    return new Resolution<>(guarded, patchTable, List.copyOf(trail));
   }
 
   // ---------- Hint validation + writer eager construction ----------
@@ -1326,39 +1333,10 @@ public final class DeepMap {
 
   // ---------- Cycle-safe cache reader ----------
 
-  /**
-   * Per-thread identity-based seen sets for cycle interruption. The forward / backward maps are
-   * tracked separately so a forward call doesn't poison the backward traversal of the same object
-   * graph. {@link #lazyCacheIso} consults the matching set on entry: re-entry on the same instance
-   * returns {@code null}, snipping the cycle in the output graph rather than recursing forever.
-   *
-   * <p>This is a value-level guard on top of DeepMap's existing type-level cycle handling (the
-   * {@link TypePair} cache, which terminates {@code Iso} construction). Type-level guards stop the
-   * processor from re-entering an in-progress pair during build; the value-level guards here stop
-   * runtime traversal from recursing through a bidirectional persistence association (e.g.,
-   * Hibernate's {@code @ManyToOne manager} + {@code @OneToMany(mappedBy="manager") reports})
-   * forming a literal value cycle in the hydrated graph.
-   *
-   * <p><b>Semantics on revisit.</b> The first encounter of an instance traverses normally and
-   * records it in the seen set. A subsequent encounter on the same traversal returns {@code null} —
-   * the cycle is severed at the second occurrence. For a bidirectional self-association like {@code
-   * bob.manager == alice && alice.reports.contains(bob)}, this means the result is finite: the
-   * recursive {@code reports} list still includes the leaf entries, but {@code bob.manager
-   * .reports.contains(bob)} collapses to {@code bob.manager.reports} where the inner {@code bob}
-   * becomes {@code null}.
-   *
-   * <p>The seen sets clear when the outer {@link Iso#to} / {@link Iso#from} call unwinds, so
-   * subsequent independent {@code mapper.forward(otherTree)} invocations start fresh. The outermost
-   * guard belongs to whichever {@code lazyCacheIso} is reached first — re-entry into the same
-   * lazyCacheIso while still inside an outer call is what we're guarding against.
-   */
-  private static final ThreadLocal<IdentityHashMap<Object, Boolean>> FORWARD_SEEN = ThreadLocal.withInitial(
-    IdentityHashMap::new
-  );
+  /** Active identities per type pair, scoped to one public mapping invocation and direction. */
+  private static final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> FORWARD_SEEN = new ThreadLocal<>();
 
-  private static final ThreadLocal<IdentityHashMap<Object, Boolean>> BACKWARD_SEEN = ThreadLocal.withInitial(
-    IdentityHashMap::new
-  );
+  private static final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> BACKWARD_SEEN = new ThreadLocal<>();
 
   @SuppressWarnings("unchecked")
   private static Iso<?, ?> lazyCacheIso(
@@ -1386,29 +1364,46 @@ public final class DeepMap {
       );
     }
     return Iso.of(
-      v -> cycleSafe(FORWARD_SEEN, v, x -> ((Iso<Object, Object>) cache.get(key)).to(x)),
-      v -> cycleSafe(BACKWARD_SEEN, v, x -> ((Iso<Object, Object>) cache.get(key)).from(x))
+      v -> cycleSafe(FORWARD_SEEN, key, v, x -> ((Iso<Object, Object>) cache.get(key)).to(x)),
+      v -> cycleSafe(BACKWARD_SEEN, key, v, x -> ((Iso<Object, Object>) cache.get(key)).from(x))
     );
   }
 
-  /**
-   * Run {@code body} on {@code value} guarded by the per-thread identity-seen set in {@code
-   * seenRef}. Re-entry on the same instance returns {@code null} (cycle interruption). Cleans up
-   * the seen set when the outermost call unwinds so subsequent independent traversals start fresh.
-   */
-  private static <X, Y> Y cycleSafe(
-    final ThreadLocal<IdentityHashMap<Object, Boolean>> seenRef,
+  /** Reentrant public calls get independent paths; restore the caller even after an exception. */
+  private static <X, Y> Y inInvocation(
+    final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> ref,
+    final TypePair key,
     final X value,
     final Function<X, Y> body
   ) {
     if (value == null) return null;
-    final var seen = seenRef.get();
-    final boolean outermost = seen.isEmpty();
-    if (seen.put(value, Boolean.TRUE) != null) return null; // re-entry on this instance — sever the cycle
+    final var previous = ref.get();
+    ref.set(new HashMap<>());
+    try {
+      return cycleSafe(ref, key, value, body);
+    } finally {
+      if (previous == null) ref.remove();
+      else ref.set(previous);
+    }
+  }
+
+  /** Only an identity already on the active path is a cycle; siblings map independently. */
+  private static <X, Y> Y cycleSafe(
+    final ThreadLocal<Map<TypePair, IdentityHashMap<Object, Boolean>>> ref,
+    final TypePair key,
+    final X value,
+    final Function<X, Y> body
+  ) {
+    if (value == null) return null;
+    final var context = ref.get();
+    // A patch entry can invoke a nested Iso without going through the public root.
+    if (context == null) return inInvocation(ref, key, value, body);
+    final var active = context.computeIfAbsent(key, ignored -> new IdentityHashMap<>());
+    if (active.put(value, Boolean.TRUE) != null) return null;
     try {
       return body.apply(value);
     } finally {
-      if (outermost) seen.clear(); // independent next call starts fresh
+      active.remove(value);
     }
   }
 

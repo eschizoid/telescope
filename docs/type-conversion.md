@@ -40,6 +40,22 @@ Telescope.of(EntityPage.class)
 
 ## Deep recursive mapping (`Telescope.map(A.class, B.class, to(...)...)`)
 
+Runtime mapping cuts a cycle when an object is encountered again on the active recursion path, including the root. The
+back-edge becomes `null` (or an empty `Optional`). Shared objects in separate acyclic branches are mapped independently;
+their mapped copies do not share identity. Each public mapping invocation has independent tracking, including reentrant
+calls, and exceptions release that tracking. This replaces the earlier behavior that could turn a repeated sibling into
+`null` and expand the root twice.
+
+Parameterized container subclasses resolve their element/key types through their generic supertypes. For example,
+`StringMap<V> extends HashMap<String, V>` has a `String` key regardless of its own parameter count. Raw subclass pairs
+retain their existing shallow-copy behavior; use explicit rows when those element types differ.
+
+When mapping values into supported sorted maps, the input sorted map's comparator is retained because keys are
+unchanged. Mapping sorted-set elements to a different type cannot safely reuse a custom comparator: use an explicit
+`Mapping.via(...)` conversion that supplies the target comparator. Null containers continue to map to null. Standard
+list and hash-container lifts use input size for allocation; copy-on-write containers use bulk construction for larger
+inputs while retaining the small-input path for zero or one element.
+
 The recommended shape for record-to-record (and POJO↔POJO, and cross-paradigm) conversion: pass the source and target
 classes up front, then varargs of `MapStep` rows (`MapStep` is the sealed supertype of the `Mapping` field rows and the
 `WriteHint` / `NullHint` behavior hints — one varargs slot for all three). **Recursion is the default.** Same-named

@@ -19,6 +19,45 @@ import org.junit.jupiter.api.Test;
  */
 class MapperVerifierProcessorTest {
 
+  @Test
+  void containerSubclassArgumentsAreResolvedThroughTheGenericSupertype() {
+    final var compilation = verify(
+      """
+      package demo;
+      import java.util.*;
+      import io.github.eschizoid.telescope.Telescope;
+      class StringMap<V> extends HashMap<String,V> {}
+      class Reordered<V,K> extends HashMap<K,V> {}
+      class Tagged<Tag,E> extends ArrayList<E> {}
+      class Nested<E> extends Tagged<String,List<E>> {}
+      record Value(int n) {}
+      record ValueDto(int n) {}
+      record Src(StringMap<Value> fixed, Reordered<Value,String> reordered, Nested<Value> nested) {}
+      record Tgt(HashMap<String,ValueDto> fixed, Map<String,ValueDto> reordered, List<List<ValueDto>> nested) {}
+      class Holder { static final Object M = Telescope.mapper(Src.class,Tgt.class); }
+      """
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+  }
+
+  @Test
+  void inheritedMapKeyMismatchHasAFieldDiagnostic() {
+    final var compilation = verify(
+      """
+      package demo;
+      import java.util.*;
+      import io.github.eschizoid.telescope.Telescope;
+      class StringMap<V> extends HashMap<String,V> {}
+      record Src(StringMap<Integer> values) {}
+      record Tgt(HashMap<Long,Integer> values) {}
+      class Holder { static final Object M = Telescope.mapper(Src.class,Tgt.class); }
+      """
+    );
+    assertFalse(compilation.success());
+    assertTrue(compilation.hasError("values"), compilation::errorMessages);
+    assertTrue(compilation.hasError("key types"), compilation::errorMessages);
+  }
+
   private static ProcessorHarness.Compilation verify(final String code) {
     return verify(List.of(), code);
   }

@@ -23,6 +23,33 @@ import org.junit.jupiter.api.Test;
  */
 class ReflectionPropsTest {
 
+  static class ArraysOf<E> extends ArrayList<E[]> {
+
+    private static final long serialVersionUID = 1L;
+  }
+
+  static class NestedElements<E> extends ArrayList<List<E>> {
+
+    private static final long serialVersionUID = 1L;
+  }
+
+  record GenericArrays(ArraysOf<String> values) {}
+
+  record NestedStrings(NestedElements<String> values, List<List<String>> expected) {}
+
+  @Test
+  void substitutesArraysAndNestedParameterizedTypesWithStructuralEquality() {
+    final var props = new ReflectionProps();
+    final var arrays = GenericArrays.class.getRecordComponents()[0].getGenericType();
+    assertEquals(List.of(String[].class), props.typeArgumentsAs(arrays, WellKnown.LIST));
+    final var fields = NestedStrings.class.getRecordComponents();
+    final var actual = props.typeArgumentsAs(fields[0].getGenericType(), WellKnown.LIST).getFirst();
+    final var expected = props.typeArguments(fields[1].getGenericType()).getFirst();
+    assertEquals(expected, actual);
+    assertEquals(actual, expected);
+    assertEquals(expected.hashCode(), actual.hashCode());
+  }
+
   public static class Urls extends ArrayList<String> {
 
     @Serial

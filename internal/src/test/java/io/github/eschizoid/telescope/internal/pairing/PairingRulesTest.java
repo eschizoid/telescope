@@ -175,6 +175,11 @@ class PairingRulesTest {
     }
 
     @Override
+    public List<Type> typeArgumentsAs(final Type t, final WellKnown supertype) {
+      return delegate.typeArgumentsAs(t, supertype);
+    }
+
+    @Override
     public Type rawType(final Type t) {
       return delegate.rawType(t);
     }

@@ -10,7 +10,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * MethodHandle-combinator assembly of a structural conversion {@link Iso} where each side is a
@@ -127,7 +126,7 @@ public final class MhIso {
   private static final MethodHandle MAP_PUT; //            (Object, Object, Object) -> Object Map.put
   private static final MethodHandle ENTRY_KEY; //          (Object) -> Object        Map.Entry.getKey
   private static final MethodHandle ENTRY_VALUE; //        (Object) -> Object      Map.Entry.getValue
-  private static final MethodHandle SUPPLIER_GET; //       (Supplier) -> Object      Supplier.get
+  private static final MethodHandle ALLOCATE; // (Function, Object) -> Object
   // (Throwable, Object, Class, Class) -> Object : relabels a fused nested-conversion failure.
   private static final MethodHandle THROW_CONVERSION;
 
@@ -155,9 +154,7 @@ public final class MhIso {
       ENTRY_VALUE = lk
         .findVirtual(Map.Entry.class, "getValue", MethodType.methodType(Object.class))
         .asType(MethodType.methodType(Object.class, Object.class));
-      SUPPLIER_GET = lk
-        .findVirtual(Supplier.class, "get", MethodType.methodType(Object.class))
-        .asType(MethodType.methodType(Object.class, Supplier.class));
+      ALLOCATE = lk.findVirtual(Function.class, "apply", MethodType.methodType(Object.class, Object.class));
       THROW_CONVERSION = lk.findStatic(
         MhIso.class,
         "throwConversion",
@@ -501,8 +498,8 @@ public final class MhIso {
    */
   public static Iso<Object, Object> liftCollection(
     final Iso<Object, Object> elementIso,
-    final Supplier<Object> srcAlloc,
-    final Supplier<Object> tgtAlloc
+    final Function<Object, Object> srcAlloc,
+    final Function<Object, Object> tgtAlloc
   ) {
     if (Boolean.getBoolean(CONTAINER_DISABLE_PROPERTY)) return null;
     if (!(elementIso instanceof Leaf<?, ?> leaf)) return null;
@@ -527,8 +524,8 @@ public final class MhIso {
    */
   public static Iso<Object, Object> liftMap(
     final Iso<Object, Object> valueIso,
-    final Supplier<Object> srcAlloc,
-    final Supplier<Object> tgtAlloc
+    final Function<Object, Object> srcAlloc,
+    final Function<Object, Object> tgtAlloc
   ) {
     if (Boolean.getBoolean(CONTAINER_DISABLE_PROPERTY)) return null;
     if (!(valueIso instanceof Leaf<?, ?> leaf)) return null;
@@ -620,10 +617,10 @@ public final class MhIso {
    * the source, and {@code add(element(x))} for each. {@code element} is the null-guarded raw
    * handle.
    */
-  private static MethodHandle collectionLoop(final MethodHandle element, final Supplier<Object> tgtAlloc) {
-    // init : (Object srcColl) -> Object tgtColl  == fresh target collection, ignoring the source
-    // arg.
-    final MethodHandle init = MethodHandles.dropArguments(supplierGet(tgtAlloc), 0, Object.class);
+  private static MethodHandle collectionLoop(final MethodHandle element, final Function<Object, Object> tgtAlloc) {
+    // init : (Object srcColl) -> Object tgtColl  == fresh target collection using source
+    // size/comparator.
+    final MethodHandle init = ALLOCATE.bindTo(tgtAlloc);
     // add(acc, element(x)) as a void side effect: (Object acc, Object x) -> void.
     final MethodHandle mapped = MethodHandles.filterArguments(COLLECTION_ADD, 1, element);
     final MethodHandle addVoid = mapped.asType(mapped.type().changeReturnType(void.class));
@@ -642,11 +639,11 @@ public final class MhIso {
    * source's entry set, and {@code put(entry.key, element(entry.value))} for each. Keys pass
    * through unchanged.
    */
-  private static MethodHandle mapLoop(final MethodHandle element, final Supplier<Object> tgtAlloc) {
+  private static MethodHandle mapLoop(final MethodHandle element, final Function<Object, Object> tgtAlloc) {
     // iterator : (Object srcMap) -> Iterator over the entry set.
     final MethodHandle iterator = MethodHandles.filterReturnValue(MAP_ENTRYSET, ITERABLE_ITERATOR);
     // init : (Object srcMap) -> Object tgtMap.
-    final MethodHandle init = MethodHandles.dropArguments(supplierGet(tgtAlloc), 0, Object.class);
+    final MethodHandle init = ALLOCATE.bindTo(tgtAlloc);
     // put(acc, entry.key, element(entry.value)) as a void side effect.
     final MethodHandle valFromEntry = MethodHandles.filterReturnValue(ENTRY_VALUE, element);
     final MethodHandle putFromEntries = MethodHandles.filterArguments(MAP_PUT, 1, ENTRY_KEY, valFromEntry);
@@ -665,11 +662,6 @@ public final class MhIso {
     final MethodHandle body2 = MethodHandles.foldArguments(retAcc, putEntry);
     final MethodHandle body = MethodHandles.dropArguments(body2, 2, Object.class);
     return MethodHandles.iteratedLoop(iterator, init, body).asType(MethodType.methodType(Object.class, Object.class));
-  }
-
-  /** {@code () -> Object} bound to {@code alloc.get()}, as a MethodHandle for loop {@code init}. */
-  private static MethodHandle supplierGet(final Supplier<Object> alloc) {
-    return SUPPLIER_GET.bindTo(alloc);
   }
 
   private static RuntimeException rethrow(final Class<?> from, final Class<?> to, final Throwable e) {

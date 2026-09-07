@@ -1,13 +1,19 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 import io.github.eschizoid.telescope.internal.Beans;
+import java.lang.reflect.Array;
+import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
 import java.time.temporal.Temporal;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
@@ -79,6 +85,113 @@ public final class ReflectionProps implements PropertySystem<Type> {
   @Override
   public List<Type> typeArguments(final Type t) {
     return t instanceof ParameterizedType pt ? List.of(pt.getActualTypeArguments()) : List.of();
+  }
+
+  @Override
+  public List<Type> typeArgumentsAs(final Type t, final WellKnown supertype) {
+    return argumentsAs(t, classOf(supertype));
+  }
+
+  private List<Type> argumentsAs(final Type type, final Class<?> target) {
+    final var raw = rawType(type);
+    if (!(raw instanceof Class<?> cls) || !target.isAssignableFrom(cls)) return List.of();
+    if (cls == target) return typeArguments(type);
+    final var bindings = new HashMap<TypeVariable<?>, Type>();
+    bind(type, bindings);
+    for (final var parent : cls.getGenericInterfaces()) {
+      final var resolved = substitute(parent, bindings);
+      if (rawType(resolved) instanceof Class<?> c && target.isAssignableFrom(c)) {
+        return argumentsAs(resolved, target);
+      }
+    }
+    final var parent = cls.getGenericSuperclass();
+    return parent == null ? List.of() : argumentsAs(substitute(parent, bindings), target);
+  }
+
+  private static void bind(final Type type, final Map<TypeVariable<?>, Type> bindings) {
+    if (!(type instanceof ParameterizedType pt)) return;
+    bind(pt.getOwnerType(), bindings);
+    final var variables = ((Class<?>) pt.getRawType()).getTypeParameters();
+    final var arguments = pt.getActualTypeArguments();
+    for (int i = 0; i < variables.length; i++) bindings.put(variables[i], substitute(arguments[i], bindings));
+  }
+
+  private static Type substitute(final Type type, final Map<TypeVariable<?>, Type> bindings) {
+    if (type instanceof TypeVariable<?> variable) return bindings.getOrDefault(variable, variable);
+    if (type instanceof GenericArrayType array) {
+      final var component = substitute(array.getGenericComponentType(), bindings);
+      return component instanceof Class<?> cls ? Array.newInstance(cls, 0).getClass() : new ResolvedArray(component);
+    }
+    if (!(type instanceof ParameterizedType pt)) return type;
+    final var arguments = Arrays.stream(pt.getActualTypeArguments())
+      .map(t -> substitute(t, bindings))
+      .toList();
+    return new ResolvedType(pt.getRawType(), substitute(pt.getOwnerType(), bindings), arguments);
+  }
+
+  private record ResolvedArray(Type component) implements GenericArrayType {
+    @Override
+    public Type getGenericComponentType() {
+      return component;
+    }
+
+    @Override
+    public boolean equals(final Object other) {
+      return other instanceof GenericArrayType array && component.equals(array.getGenericComponentType());
+    }
+
+    @Override
+    public int hashCode() {
+      return component.hashCode();
+    }
+
+    @Override
+    public String getTypeName() {
+      return component.getTypeName() + "[]";
+    }
+  }
+
+  /** Structural equality with JDK ParameterizedType implementations, including nested arguments. */
+  private record ResolvedType(Type raw, Type owner, List<Type> arguments) implements ParameterizedType {
+    @Override
+    public Type getRawType() {
+      return raw;
+    }
+
+    @Override
+    public Type getOwnerType() {
+      return owner;
+    }
+
+    @Override
+    public Type[] getActualTypeArguments() {
+      return arguments.toArray(Type[]::new);
+    }
+
+    @Override
+    public boolean equals(final Object other) {
+      return (
+        other instanceof ParameterizedType pt &&
+        raw.equals(pt.getRawType()) &&
+        Objects.equals(owner, pt.getOwnerType()) &&
+        Arrays.equals(getActualTypeArguments(), pt.getActualTypeArguments())
+      );
+    }
+
+    @Override
+    public int hashCode() {
+      return Arrays.hashCode(getActualTypeArguments()) ^ Objects.hashCode(owner) ^ raw.hashCode();
+    }
+
+    @Override
+    public String getTypeName() {
+      return raw.getTypeName() + "<" + String.join(", ", arguments.stream().map(Type::getTypeName).toList()) + ">";
+    }
+
+    @Override
+    public String toString() {
+      return getTypeName();
+    }
   }
 
   @Override
