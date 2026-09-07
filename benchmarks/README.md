@@ -16,9 +16,9 @@ fork. Results are written to `benchmarks/build/results/jmh/`. A full run takes a
 
 ## Runtime allocation regression measurements
 
-See [the runtime mapper review measurements](../docs/perf-runtime-collections.md) for the cardinality benchmark, saved
-before/after JMH data, and an executable regression gate. These measure reused runtime mappers separately from mapper
-construction.
+See [the runtime container mapping measurements](../docs/perf-runtime-collections.md) for the cardinality benchmark,
+saved before/after JMH data, and an executable regression gate. These measure reused runtime mappers separately from
+mapper construction.
 
 ## What it measures
 

@@ -2,9 +2,18 @@ package io.github.eschizoid.telescope.benchmarks;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
-import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.annotations.Benchmark;
+import org.openjdk.jmh.annotations.Param;
+import org.openjdk.jmh.annotations.Scope;
+import org.openjdk.jmh.annotations.Setup;
+import org.openjdk.jmh.annotations.State;
 
 /** Reused runtime mappers: cardinality scaling and allocation, with setup excluded. */
 @State(Scope.Thread)
@@ -43,7 +52,7 @@ public class ContainerAllocationBenchmark {
   @Setup
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public void setup() {
-    var values = new ArrayList<Value>(size);
+    final var values = new ArrayList<Value>(size);
     for (int i = 0; i < size; i++) values.add(new Value(i));
     switch (kind) {
       case "LIST" -> {
@@ -55,8 +64,8 @@ public class ContainerAllocationBenchmark {
         source = new Copies(new CopyOnWriteArrayList<>(values));
       }
       case "MAP" -> {
-        var map = new LinkedHashMap<Integer, Value>();
-        for (var value : values) map.put(value.n(), value);
+        final var map = new LinkedHashMap<Integer, Value>();
+        for (final var value : values) map.put(value.n(), value);
         mapper = (Mapper) Telescope.mapper(Maps.class, MapsDto.class);
         source = new Maps(map);
       }

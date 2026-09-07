@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -112,7 +113,7 @@ class MhIsoTest {
 
   private static List<String> names(final Class<?> type) {
     return type.isRecord()
-      ? Arrays.stream(type.getRecordComponents()).map(java.lang.reflect.RecordComponent::getName).toList()
+      ? Arrays.stream(type.getRecordComponents()).map(RecordComponent::getName).toList()
       : List.of(Beans.propertyNames(type));
   }
 
@@ -135,10 +136,10 @@ class MhIsoTest {
     final Iso<Object, Object>[] fi = new Iso[2];
     final Iso<Object, Object>[] bi = new Iso[2];
     for (int i = 0; i < 2; i++) {
-      int t = logical.indexOf(tgtNames.get(i));
+      final int t = logical.indexOf(tgtNames.get(i));
       fwd[i] = forward[t] < 0 ? -1 : srcNames.indexOf(logical.get(forward[t]));
       fi[i] = fwdIso[t];
-      int r = logical.indexOf(srcNames.get(i));
+      final int r = logical.indexOf(srcNames.get(i));
       bwd[i] = backward[r] < 0 ? -1 : tgtNames.indexOf(logical.get(backward[r]));
       bi[i] = bwdIso[r];
     }

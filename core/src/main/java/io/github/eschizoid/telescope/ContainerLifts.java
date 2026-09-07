@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -311,12 +312,12 @@ final class ContainerLifts {
   }
 
   @SuppressWarnings("unchecked")
-  private static java.util.Comparator<Object> mapComparator(final Object input) {
-    return input instanceof SortedMap<?, ?> sorted ? (java.util.Comparator<Object>) sorted.comparator() : null;
+  private static Comparator<Object> mapComparator(final Object input) {
+    return input instanceof SortedMap<?, ?> sorted ? (Comparator<Object>) sorted.comparator() : null;
   }
 
   @SuppressWarnings("unchecked")
-  private static java.util.Comparator<Object> setComparator(final Object input) {
-    return input instanceof SortedSet<?> sorted ? (java.util.Comparator<Object>) sorted.comparator() : null;
+  private static Comparator<Object> setComparator(final Object input) {
+    return input instanceof SortedSet<?> sorted ? (Comparator<Object>) sorted.comparator() : null;
   }
 }

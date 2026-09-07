@@ -2,12 +2,14 @@ package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.Serializable;
 import java.lang.ref.WeakReference;
+import java.util.Objects;
 import java.util.function.Function;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -30,14 +32,14 @@ class LambdaIntrospectionTest {
       System.gc();
       Thread.sleep(10);
     }
-    org.junit.jupiter.api.Assertions.assertNull(loader.get(), "method-reference metadata pinned the loader");
+    assertNull(loader.get(), "method-reference metadata pinned the loader");
   }
 
   private static WeakReference<ClassLoader> exerciseIsolatedLoader() throws Exception {
     final String name = UnloadableReference.class.getName();
     final byte[] bytes;
     try (var stream = UnloadableReference.class.getResourceAsStream("UnloadableReference.class")) {
-      bytes = java.util.Objects.requireNonNull(stream).readAllBytes();
+      bytes = Objects.requireNonNull(stream).readAllBytes();
     }
     final var loader = new ClassLoader(null) {
       @Override

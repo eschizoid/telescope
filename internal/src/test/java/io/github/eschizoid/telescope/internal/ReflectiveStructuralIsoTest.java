@@ -128,7 +128,7 @@ class ReflectiveStructuralIsoTest {
     @DisplayName("Beans — round-trip via Object[] populates and reads positional slots")
     void beanRoundTrip() {
       final var iso = Reflective.BEANS.structuralIsoArr(UserPojo.class);
-      final var names = java.util.List.of(Beans.propertyNames(UserPojo.class));
+      final var names = List.of(Beans.propertyNames(UserPojo.class));
       final Object[] in = new Object[2];
       in[names.indexOf("name")] = "bob";
       in[names.indexOf("age")] = 25;
