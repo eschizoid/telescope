@@ -405,11 +405,11 @@ In the included JMH workloads (MapStruct 1.6.3, CI hardware, JDK 25 —
 [methodology, environment, and both runs](docs/perf-mapstruct-comparison.md)), telescope codegen and MapStruct codegen
 land in the same performance class:
 
-| Tier (codegen vs codegen)   | telescope vs MapStruct                                             |
-| --------------------------- | ------------------------------------------------------------------ |
-| flat (5 scalars)            | ~1.1× — 2.706 vs 2.418 ns/op                                      |
-| nested (one nested type)    | ~1.05× — 4.784 vs 4.561 ns/op                                     |
-| deep (3 levels + list hops) | ~1.07× — 48.545 vs 45.380 ns/op, same 376 B/op allocation floor |
+| Tier (codegen vs codegen)   | telescope vs MapStruct                                        |
+| --------------------------- | ------------------------------------------------------------- |
+| flat (5 scalars)            | ~1.1× — a fraction of a nanosecond                            |
+| nested (one nested type)    | ~1.2×                                                         |
+| deep (3 levels + list hops) | ~1.15× — a few ns on a ~50 ns conversion, same 376 B/op floor |
 
 No codegen? `Telescope.mapper(...)` composes each record/bean pair into a single MethodHandle: zero annotations, no
 build step, within ~1.3–4× of MapStruct in the same workloads (flat ~4×, nested ~2×, deep ~1.3–1.9× — closest where
