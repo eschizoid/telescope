@@ -9,6 +9,9 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.Function;
 
 /**
@@ -315,7 +318,12 @@ public final class Records {
     // compType[i]`;
     // `ctorHandle` has type `(compType[0], ..., compType[n]) -> cls`.
     MethodHandle[] accessorHandles,
-    MethodHandle ctorHandle
+    MethodHandle ctorHandle,
+    // Component name -> canonical position, resolved once per record class. Name-keyed reads are
+    // the entry point for the construct-with-reader-lambda shape (patch, merge backfill, field
+    // overrides), where every component of a rebuild resolves a name; a scan there would cost the
+    // square of the component count. The bean side keys its invokers the same way.
+    Map<String, Integer> indexByName
   ) {
     static RecordInfo of(final Class<?> cls) {
       if (!cls.isRecord()) throw new IllegalArgumentException("Not a record: " + cls.getName());
@@ -331,7 +339,17 @@ public final class Records {
         final var ctorFn = buildCtorFn(cls, ctor, lookup);
         final var accessorHandles = buildAccessorHandles(cls, comps, lookup);
         final var ctorHandle = buildCtorHandle(cls, ctor, lookup);
-        return new RecordInfo(comps, readers, ctor, ctorFn, accessorHandles, ctorHandle);
+        final var indexByName = HashMap.<String, Integer>newHashMap(comps.length);
+        for (var i = 0; i < comps.length; i++) indexByName.put(comps[i].getName(), i);
+        return new RecordInfo(
+          comps,
+          readers,
+          ctor,
+          ctorFn,
+          accessorHandles,
+          ctorHandle,
+          Collections.unmodifiableMap(indexByName)
+        );
       } catch (final NoSuchMethodException e) {
         throw new IllegalStateException("Cannot find canonical constructor for " + cls.getName(), e);
       }
@@ -494,11 +512,9 @@ public final class Records {
       }
     }
 
+    /** Canonical position of {@code name}, or {@code -1} when the record has no such component. */
     int indexOf(final String name) {
-      for (var i = 0; i < components.length; i++) {
-        if (components[i].getName().equals(name)) return i;
-      }
-      return -1;
+      return indexByName.getOrDefault(name, -1);
     }
   }
 }
