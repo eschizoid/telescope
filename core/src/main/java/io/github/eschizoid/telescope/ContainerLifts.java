@@ -238,10 +238,16 @@ final class ContainerLifts {
     if (raw == List.class || raw == Collection.class || raw == ArrayList.class) return input ->
       new ArrayList<>(((Collection<?>) input).size());
     if (raw == LinkedList.class) return ignored -> new LinkedList<>();
+    // Queue and Deque components never reach an allocator: PairingRules.containerViewOf recognises
+    // only Optional, List, Set and Map, so a component typed as one of these is rejected as an
+    // incompatible shape during resolution. The branches stay as a safety net for a future pairing
+    // rule, and deliberately skip source sizing that nothing can exercise.
     if (raw == ArrayDeque.class) return ignored -> new ArrayDeque<>();
-    if (raw == Vector.class) return ignored -> new Vector<>();
+    if (raw == Vector.class) return input -> new Vector<>(((Collection<?>) input).size());
     if (raw == Stack.class) return ignored -> new Stack<>();
     if (raw == PriorityQueue.class) return ignored -> new PriorityQueue<>();
+    // LinkedBlockingQueue's int argument is a hard capacity bound rather than a sizing hint, so a
+    // size-derived value would make the rebuilt queue reject every later offer.
     if (raw == LinkedBlockingQueue.class) return ignored -> new LinkedBlockingQueue<>();
     if (raw == CopyOnWriteArrayList.class) return input -> {
       final int size = ((Collection<?>) input).size();
@@ -295,7 +301,10 @@ final class ContainerLifts {
     if (raw == ConcurrentHashMap.class) return input -> new ConcurrentHashMap<>(((Map<?, ?>) input).size());
     if (raw == ConcurrentSkipListMap.class) return input -> new ConcurrentSkipListMap<>(mapComparator(input));
     if (raw == IdentityHashMap.class) return input -> new IdentityHashMap<>(((Map<?, ?>) input).size());
-    if (raw == WeakHashMap.class) return ignored -> new WeakHashMap<>();
+    // WeakHashMap ships no newWeakHashMap factory and its int argument is table capacity,
+    // so the element count has to be divided by the 0.75 load factor to size a table that
+    // holds them without a resize.
+    if (raw == WeakHashMap.class) return input -> new WeakHashMap<>(capacityFor(((Map<?, ?>) input).size()));
     if (raw == EnumMap.class) throw new IllegalStateException(
       "Deep map: EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg " +
         "constructor (it needs the Class<K> key class). Use the codegen path or supply an " +
@@ -309,6 +318,21 @@ final class ContainerLifts {
         ". Add it to mapAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
         "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
     );
+  }
+
+  /**
+   * Table capacity that holds {@code size} entries without a resize, for the hash containers whose
+   * int constructor takes a table capacity and that ship no {@code newXxx} sizing factory. The
+   * JDK's own factories apply the same division; this exists for the types that lack one.
+   *
+   * <p>A table built straight from an element count only resizes when that count exceeds {@code
+   * 0.75 * nextPowerOfTwo(count)} — the top quarter of each power-of-two band, so roughly half of
+   * all sizes are unaffected. When it does fire it costs one reallocation plus a rehash of
+   * everything already inserted, and the final table is the same size either way: this trades no
+   * memory for removing that resize.
+   */
+  private static int capacityFor(final int size) {
+    return (int) Math.ceil(size / 0.75d);
   }
 
   @SuppressWarnings("unchecked")
