@@ -59,6 +59,35 @@ public class LmfBenchmark {
   /** Tiny record for the Phase 1 LMF reader benchmark. */
   public record BenchRecord(String id, String name, int age) {}
 
+  /**
+   * Twenty components so a name-keyed read's cost is visible in the component count. The narrow
+   * {@link BenchRecord} cannot show it: with three components and the target at index 1, a
+   * name-to-position resolution that walks the components is indistinguishable from one that
+   * indexes straight to it. The row below reads the LAST component, where the two diverge most.
+   */
+  public record BenchWideRecord(
+    String c0,
+    String c1,
+    String c2,
+    String c3,
+    String c4,
+    String c5,
+    String c6,
+    String c7,
+    String c8,
+    String c9,
+    String c10,
+    String c11,
+    String c12,
+    String c13,
+    String c14,
+    String c15,
+    String c16,
+    String c17,
+    String c18,
+    String c19
+  ) {}
+
   /** Tiny POJO for the Phase 2 / Phase 3 LMF benchmarks. */
   public static final class BenchPojo {
 
@@ -103,6 +132,7 @@ public class LmfBenchmark {
   private static final int FANOUT = 8;
 
   private BenchRecord record;
+  private BenchWideRecord wideRecord;
   private BenchPojo pojo;
 
   // Pre-resolved SettersWriter so the per-call benchmark only times construct() — writer lookup
@@ -142,6 +172,28 @@ public class LmfBenchmark {
   @Setup
   public void setup() throws Exception {
     record = new BenchRecord("u1", "Alice", 30);
+    wideRecord = new BenchWideRecord(
+      "c0",
+      "c1",
+      "c2",
+      "c3",
+      "c4",
+      "c5",
+      "c6",
+      "c7",
+      "c8",
+      "c9",
+      "c10",
+      "c11",
+      "c12",
+      "c13",
+      "c14",
+      "c15",
+      "c16",
+      "c17",
+      "c18",
+      "c19"
+    );
     pojo = new BenchPojo();
     pojo.setId("u1");
     pojo.setName("Alice");
@@ -217,6 +269,22 @@ public class LmfBenchmark {
   @Benchmark
   public void recordComponentRead_handRolled(final Blackhole bh) {
     bh.consume(record.name());
+  }
+
+  /**
+   * Name-keyed read of the last of twenty components. Must track {@code recordComponentRead_lmf} on
+   * the three-component record: resolving a component name is a property of the name, not of how
+   * many components precede it. A row that grows with arity means the resolution walks.
+   */
+  @Benchmark
+  public void wideRecordLastComponentRead_lmf(final Blackhole bh) {
+    bh.consume(Records.read(wideRecord, "c19"));
+  }
+
+  /** Hand-rolled baseline for the wide-record read. */
+  @Benchmark
+  public void wideRecordLastComponentRead_handRolled(final Blackhole bh) {
+    bh.consume(wideRecord.c19());
   }
 
   /**
