@@ -239,7 +239,7 @@ final class ContainerLifts {
       new ArrayList<>(((Collection<?>) input).size());
     if (raw == LinkedList.class) return ignored -> new LinkedList<>();
     if (raw == ArrayDeque.class) return ignored -> new ArrayDeque<>();
-    if (raw == Vector.class) return ignored -> new Vector<>();
+    if (raw == Vector.class) return input -> new Vector<>(((Collection<?>) input).size());
     if (raw == Stack.class) return ignored -> new Stack<>();
     if (raw == PriorityQueue.class) return ignored -> new PriorityQueue<>();
     if (raw == LinkedBlockingQueue.class) return ignored -> new LinkedBlockingQueue<>();
@@ -295,7 +295,10 @@ final class ContainerLifts {
     if (raw == ConcurrentHashMap.class) return input -> new ConcurrentHashMap<>(((Map<?, ?>) input).size());
     if (raw == ConcurrentSkipListMap.class) return input -> new ConcurrentSkipListMap<>(mapComparator(input));
     if (raw == IdentityHashMap.class) return input -> new IdentityHashMap<>(((Map<?, ?>) input).size());
-    if (raw == WeakHashMap.class) return ignored -> new WeakHashMap<>();
+    // WeakHashMap ships no newWeakHashMap factory and its int argument is table capacity,
+    // so the element count has to be divided by the 0.75 load factor to size a table that
+    // holds them without a resize.
+    if (raw == WeakHashMap.class) return input -> new WeakHashMap<>(capacityFor(((Map<?, ?>) input).size()));
     if (raw == EnumMap.class) throw new IllegalStateException(
       "Deep map: EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg " +
         "constructor (it needs the Class<K> key class). Use the codegen path or supply an " +
@@ -309,6 +312,15 @@ final class ContainerLifts {
         ". Add it to mapAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
         "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
     );
+  }
+
+  /**
+   * Table capacity that holds {@code size} entries without a resize, for the hash containers whose
+   * int constructor takes capacity and that ship no {@code newXxx} sizing factory. The JDK's own
+   * factories apply the same division; this exists for the types that lack one.
+   */
+  private static int capacityFor(final int size) {
+    return (int) Math.ceil(size / 0.75d);
   }
 
   @SuppressWarnings("unchecked")
