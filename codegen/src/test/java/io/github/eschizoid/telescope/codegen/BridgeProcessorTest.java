@@ -24,6 +24,22 @@ class BridgeProcessorTest {
     return ProcessorHarness.compile(new BridgeProcessor(), sources);
   }
 
+  /**
+   * Non-overlapping occurrence count of {@code needle} in {@code haystack}. Used to pin the
+   * single-read guarantee: each source-field accessor appears exactly once in the generated method
+   * — every downstream duplication (null-guards, coalesces, Optional wrapping) happens over the
+   * hoisted {@code final} local, never over a repeated accessor call.
+   */
+  private static int occurrences(final String haystack, final String needle) {
+    int count = 0;
+    int from = 0;
+    while ((from = haystack.indexOf(needle, from)) >= 0) {
+      count++;
+      from += needle.length();
+    }
+    return count;
+  }
+
   @Nested
   @DisplayName("Happy path — type-pair combinations")
   class HappyPath {
@@ -77,8 +93,13 @@ class BridgeProcessorTest {
       assertTrue(generated.contains("return RecBridge.backward(t);"), generated);
       assertTrue(generated.contains("public static demo.Pojo forward(final demo.Rec s)"), generated);
       assertTrue(generated.contains("public static demo.Rec backward(final demo.Pojo t)"), generated);
-      assertTrue(generated.contains("new demo.Pojo(s.id(), s.email())"), generated);
-      assertTrue(generated.contains("new demo.Rec(t.getId(), t.getEmail())"), generated);
+      // Each source field is read exactly once into a final local; construction references locals.
+      assertTrue(generated.contains("final java.lang.String __fs_id = s.id();"), generated);
+      assertTrue(generated.contains("final java.lang.String __fs_email = s.email();"), generated);
+      assertTrue(generated.contains("new demo.Pojo(__fs_id, __fs_email)"), generated);
+      assertTrue(generated.contains("final java.lang.String __bt_id = t.getId();"), generated);
+      assertTrue(generated.contains("final java.lang.String __bt_email = t.getEmail();"), generated);
+      assertTrue(generated.contains("new demo.Rec(__bt_id, __bt_email)"), generated);
     }
 
     @Test
@@ -114,8 +135,13 @@ class BridgeProcessorTest {
       assertTrue(generated.contains("private static final class Fn implements BridgeFn<demo.A, demo.B>"), generated);
       assertTrue(generated.contains("return ABridge.forward(s);"), generated);
       assertTrue(generated.contains("return ABridge.backward(t);"), generated);
-      assertTrue(generated.contains("new demo.B(s.id(), s.score())"), generated);
-      assertTrue(generated.contains("new demo.A(t.id(), t.score())"), generated);
+      // Each source field is read exactly once into a final local; construction references locals.
+      assertTrue(generated.contains("final java.lang.String __fs_id = s.id();"), generated);
+      assertTrue(generated.contains("final int __fs_score = s.score();"), generated);
+      assertTrue(generated.contains("new demo.B(__fs_id, __fs_score)"), generated);
+      assertTrue(generated.contains("final java.lang.String __bt_id = t.id();"), generated);
+      assertTrue(generated.contains("final int __bt_score = t.score();"), generated);
+      assertTrue(generated.contains("new demo.A(__bt_id, __bt_score)"), generated);
     }
 
     @Test
@@ -161,10 +187,13 @@ class BridgeProcessorTest {
       assertTrue(generated.contains("private static final class Fn implements BridgeFn<demo.PA, demo.PB>"), generated);
       assertTrue(generated.contains("return PABridge.forward(s);"), generated);
       assertTrue(generated.contains("return PABridge.backward(t);"), generated);
+      // Each source field is read exactly once into a final local; setters consume the locals.
       assertTrue(generated.contains("new demo.PB()"), generated);
-      assertTrue(generated.contains("out.setId(s.getId())"), generated);
+      assertTrue(generated.contains("final java.lang.String __fs_id = s.getId();"), generated);
+      assertTrue(generated.contains("out.setId(__fs_id)"), generated);
       assertTrue(generated.contains("new demo.PA()"), generated);
-      assertTrue(generated.contains("out.setId(t.getId())"), generated);
+      assertTrue(generated.contains("final java.lang.String __bt_id = t.getId();"), generated);
+      assertTrue(generated.contains("out.setId(__bt_id)"), generated);
     }
   }
 
@@ -219,12 +248,15 @@ class BridgeProcessorTest {
         () -> "CustomerToCustomerDtoBridge not generated; saw " + compilation.generated().keySet()
       );
 
-      // OrderBridge.forward calls CustomerToCustomerDtoBridge.forward to convert the nested field.
-      assertTrue(orderBridge.contains("CustomerToCustomerDtoBridge.forward(s.customer())"), orderBridge);
-      assertTrue(orderBridge.contains("CustomerToCustomerDtoBridge.backward(t.customer())"), orderBridge);
+      // OrderBridge.forward reads the nested field once into a final local, then delegates the
+      // local to CustomerToCustomerDtoBridge.forward.
+      assertTrue(orderBridge.contains("final demo.Customer __fs_customer = s.customer();"), orderBridge);
+      assertTrue(orderBridge.contains("CustomerToCustomerDtoBridge.forward(__fs_customer)"), orderBridge);
+      assertTrue(orderBridge.contains("final demo.CustomerDto __bt_customer = t.customer();"), orderBridge);
+      assertTrue(orderBridge.contains("CustomerToCustomerDtoBridge.backward(__bt_customer)"), orderBridge);
       // The sub-bridge itself uses identity links for its same-typed name/email fields.
-      assertTrue(subBridge.contains("new demo.CustomerDto(s.name(), s.email())"), subBridge);
-      assertTrue(subBridge.contains("new demo.Customer(t.name(), t.email())"), subBridge);
+      assertTrue(subBridge.contains("new demo.CustomerDto(__fs_name, __fs_email)"), subBridge);
+      assertTrue(subBridge.contains("new demo.Customer(__bt_name, __bt_email)"), subBridge);
     }
 
     @Test
@@ -269,8 +301,11 @@ class BridgeProcessorTest {
       final var orderBridge = compilation.generated().get("demo.OrderBridge");
       assertNotNull(orderBridge);
       assertNotNull(compilation.generated().get("demo.LineItemToLineItemDtoBridge"));
-      assertTrue(orderBridge.contains("__fwd_items(s.items())"), orderBridge);
-      assertTrue(orderBridge.contains("__bwd_items(t.items())"), orderBridge);
+      // The container field is read once into a final local; the lift helper takes the local.
+      assertTrue(orderBridge.contains("final java.util.List<demo.LineItem> __fs_items = s.items();"), orderBridge);
+      assertTrue(orderBridge.contains("__fwd_items(__fs_items)"), orderBridge);
+      assertTrue(orderBridge.contains("final java.util.List<demo.LineItemDto> __bt_items = t.items();"), orderBridge);
+      assertTrue(orderBridge.contains("__bwd_items(__bt_items)"), orderBridge);
       assertTrue(orderBridge.contains("import java.util.ArrayList;"), orderBridge);
       assertTrue(orderBridge.contains("import java.util.List;"), orderBridge);
       assertTrue(
@@ -928,8 +963,11 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var catalog = compilation.generated().get("demo.CatalogBridge");
       assertNotNull(catalog);
-      assertTrue(catalog.contains("__fwd_tags(s.tags())"), catalog);
-      assertTrue(catalog.contains("__bwd_tags(t.tags())"), catalog);
+      // The container field is read once into a final local; the lift helper takes the local.
+      assertTrue(catalog.contains("final java.util.Set<demo.Tag> __fs_tags = s.tags();"), catalog);
+      assertTrue(catalog.contains("__fwd_tags(__fs_tags)"), catalog);
+      assertTrue(catalog.contains("final java.util.Set<demo.TagDto> __bt_tags = t.tags();"), catalog);
+      assertTrue(catalog.contains("__bwd_tags(__bt_tags)"), catalog);
       assertTrue(catalog.contains("import java.util.LinkedHashSet;"), catalog);
       assertTrue(catalog.contains("import java.util.Set;"), catalog);
       // newLinkedHashSet, not the int constructor: that argument is table capacity, so a table
@@ -981,16 +1019,23 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var user = compilation.generated().get("demo.UserBridge");
       assertNotNull(user);
-      // Both directions null-guard the Optional reference before .map(...), matching the runtime
-      // Iso.liftOptional (ox == null ? null : ox.map(...)).
+      // Both directions read the Optional once into a final local, then null-guard the LOCAL before
+      // .map(...), matching the runtime Iso.liftOptional (ox == null ? null : ox.map(...)). The
+      // guard duplicates only the local reference, never the accessor call.
+      assertTrue(user.contains("final java.util.Optional<demo.Profile> __fs_profile = s.profile();"), user);
       assertTrue(
-        user.contains("(s.profile() == null ? null : s.profile().map(ProfileToProfileDtoBridge::forward))"),
+        user.contains("(__fs_profile == null ? null : __fs_profile.map(ProfileToProfileDtoBridge::forward))"),
         user
       );
+      assertTrue(user.contains("final java.util.Optional<demo.ProfileDto> __bt_profile = t.profile();"), user);
       assertTrue(
-        user.contains("(t.profile() == null ? null : t.profile().map(ProfileToProfileDtoBridge::backward))"),
+        user.contains("(__bt_profile == null ? null : __bt_profile.map(ProfileToProfileDtoBridge::backward))"),
         user
       );
+      // The whole point of the hoist: the source accessor is invoked exactly once even though the
+      // null-guard shape names its operand twice.
+      assertTrue(occurrences(user, "s.profile()") == 1, user);
+      assertTrue(occurrences(user, "t.profile()") == 1, user);
     }
 
     @Test
@@ -1034,8 +1079,11 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var cart = compilation.generated().get("demo.CartBridge");
       assertNotNull(cart);
-      assertTrue(cart.contains("__fwd_items(s.items())"), cart);
-      assertTrue(cart.contains("__bwd_items(t.items())"), cart);
+      // The container field is read once into a final local; the lift helper takes the local.
+      assertTrue(cart.contains("final java.util.Map<java.lang.String,demo.LineItem> __fs_items = s.items();"), cart);
+      assertTrue(cart.contains("__fwd_items(__fs_items)"), cart);
+      assertTrue(cart.contains("final java.util.Map<java.lang.String,demo.LineItemDto> __bt_items = t.items();"), cart);
+      assertTrue(cart.contains("__bwd_items(__bt_items)"), cart);
       assertTrue(cart.contains("import java.util.HashMap;"), cart);
       assertTrue(cart.contains("import java.util.Map;"), cart);
       assertTrue(cart.contains("HashMap.<java.lang.String, demo.LineItemDto>newHashMap(src.size())"), cart);
@@ -1084,21 +1132,26 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var order = compilation.generated().get("demo.OrderBridge");
       assertNotNull(order);
-      // Forward (OPTIONAL_TO_NULLABLE) reads the source Optional, so it null-guards the reference
-      // before .map(...), matching the runtime Iso.liftOptionalToNullable (ox == null ? null :
-      // ...).
+      // Forward (OPTIONAL_TO_NULLABLE) reads the source Optional once into a final local, then
+      // null-guards the LOCAL before .map(...), matching the runtime Iso.liftOptionalToNullable
+      // (ox == null ? null : ...). The guard duplicates only the local, never the accessor call.
+      assertTrue(order.contains("final java.util.Optional<demo.Address> __fs_giftWrap = s.giftWrap();"), order);
       assertTrue(
         order.contains(
-          "(s.giftWrap() == null ? null : s.giftWrap().map(AddressToAddressEntityBridge::forward).orElse(null))"
+          "(__fs_giftWrap == null ? null : __fs_giftWrap.map(AddressToAddressEntityBridge::forward).orElse(null))"
         ),
         order
       );
-      // Backward: Optional.ofNullable(...) is already null-safe on the plain target value.
+      // Backward: Optional.ofNullable(...) is already null-safe on the hoisted plain target value.
       assertTrue(order.contains("import java.util.Optional;"), order);
+      assertTrue(order.contains("final demo.AddressEntity __bt_giftWrap = t.giftWrap();"), order);
       assertTrue(
-        order.contains("Optional.ofNullable(t.giftWrap()).map(AddressToAddressEntityBridge::backward)"),
+        order.contains("Optional.ofNullable(__bt_giftWrap).map(AddressToAddressEntityBridge::backward)"),
         order
       );
+      // Single-read guarantee: each source accessor is invoked exactly once.
+      assertTrue(occurrences(order, "s.giftWrap()") == 1, order);
+      assertTrue(occurrences(order, "t.giftWrap()") == 1, order);
     }
 
     @Test
@@ -1132,8 +1185,10 @@ class BridgeProcessorTest {
       assertNull(compilation.generated().get("demo.NodeToNodeDtoBridge")); // No auto-named dup.
       // Path through the Optional<Node> field references the same NodeBridge — runtime recursion
       // terminates on Optional.empty().
-      assertTrue(node.contains("s.child().map(NodeBridge::forward)"), node);
-      assertTrue(node.contains("t.child().map(NodeBridge::backward)"), node);
+      assertTrue(node.contains("final java.util.Optional<demo.Node> __fs_child = s.child();"), node);
+      assertTrue(node.contains("__fs_child.map(NodeBridge::forward)"), node);
+      assertTrue(node.contains("final java.util.Optional<demo.NodeDto> __bt_child = t.child();"), node);
+      assertTrue(node.contains("__bt_child.map(NodeBridge::backward)"), node);
     }
 
     @Test
@@ -1182,9 +1237,12 @@ class BridgeProcessorTest {
       assertNotNull(customerBridge, () -> "CustomerBridge not generated; saw " + compilation.generated().keySet());
       // No duplicate auto-generated sub-bridge.
       assertNull(compilation.generated().get("demo.CustomerToCustomerDtoBridge"));
-      // OrderBridge references the user-declared CustomerBridge by simple name.
-      assertTrue(orderBridge.contains("CustomerBridge.forward(s.customer())"), orderBridge);
-      assertTrue(orderBridge.contains("CustomerBridge.backward(t.customer())"), orderBridge);
+      // OrderBridge references the user-declared CustomerBridge by simple name, delegating the
+      // hoisted single-read local for the nested field.
+      assertTrue(orderBridge.contains("final demo.Customer __fs_customer = s.customer();"), orderBridge);
+      assertTrue(orderBridge.contains("CustomerBridge.forward(__fs_customer)"), orderBridge);
+      assertTrue(orderBridge.contains("final demo.CustomerDto __bt_customer = t.customer();"), orderBridge);
+      assertTrue(orderBridge.contains("CustomerBridge.backward(__bt_customer)"), orderBridge);
     }
   }
 
@@ -1816,10 +1874,14 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.OrderBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
-      // Forward: build OrderEntity from non-dropped source fields only — `payment` never appears.
-      assertTrue(bridge.contains("new demo.OrderEntity(s.id(), s.customer())"), bridge);
+      // Forward: build OrderEntity from non-dropped source fields only (read once into locals) —
+      // `payment` never appears.
+      assertTrue(bridge.contains("final java.lang.String __fs_id = s.id();"), bridge);
+      assertTrue(bridge.contains("final java.lang.String __fs_customer = s.customer();"), bridge);
+      assertTrue(bridge.contains("new demo.OrderEntity(__fs_id, __fs_customer)"), bridge);
+      assertFalse(bridge.contains("s.payment()"), bridge);
       // Backward: build Order with `null` for the dropped `payment` slot.
-      assertTrue(bridge.contains("new demo.Order(t.id(), t.customer(), null)"), bridge);
+      assertTrue(bridge.contains("new demo.Order(__bt_id, __bt_customer, null)"), bridge);
     }
 
     @Test
@@ -1847,8 +1909,10 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.ABridge");
       assertNotNull(bridge, () -> "ABridge missing; saw " + compilation.generated().keySet());
-      // age (int) → 0, active (boolean) → false in the backward rebuild.
-      assertTrue(bridge.contains("new demo.A(t.id(), 0, false)"), bridge);
+      // age (int) → 0, active (boolean) → false in the backward rebuild; the kept field is read
+      // once into a final local.
+      assertTrue(bridge.contains("final java.lang.String __bt_id = t.id();"), bridge);
+      assertTrue(bridge.contains("new demo.A(__bt_id, 0, false)"), bridge);
     }
 
     @Test
@@ -1914,10 +1978,12 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.OrderBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
-      // Forward: build OrderEntity reading source.orderNumber() into the referenceCode slot.
-      assertTrue(bridge.contains("new demo.OrderEntity(s.id(), s.orderNumber())"), bridge);
-      // Backward: build Order reading target.referenceCode() into the orderNumber slot.
-      assertTrue(bridge.contains("new demo.Order(t.id(), t.referenceCode())"), bridge);
+      // Forward: source.orderNumber() is read once into a local that fills the referenceCode slot.
+      assertTrue(bridge.contains("final java.lang.String __fs_orderNumber = s.orderNumber();"), bridge);
+      assertTrue(bridge.contains("new demo.OrderEntity(__fs_id, __fs_orderNumber)"), bridge);
+      // Backward: target.referenceCode() is read once into the orderNumber-slot local.
+      assertTrue(bridge.contains("final java.lang.String __bt_orderNumber = t.referenceCode();"), bridge);
+      assertTrue(bridge.contains("new demo.Order(__bt_id, __bt_orderNumber)"), bridge);
     }
 
     @Test
@@ -2062,10 +2128,12 @@ class BridgeProcessorTest {
         bridge.contains("private static final demo.CentsConverter __tx_unitPrice = new demo.CentsConverter();"),
         bridge
       );
-      // Forward routes the source field through .forward(...).
-      assertTrue(bridge.contains("new demo.LineItemEntity(s.id(), __tx_unitPrice.forward(s.unitPrice()))"), bridge);
-      // Backward routes the target field through .backward(...).
-      assertTrue(bridge.contains("new demo.LineItem(t.id(), __tx_unitPrice.backward(t.unitPrice()))"), bridge);
+      // Forward routes the hoisted single-read local through .forward(...).
+      assertTrue(bridge.contains("final java.math.BigDecimal __fs_unitPrice = s.unitPrice();"), bridge);
+      assertTrue(bridge.contains("new demo.LineItemEntity(__fs_id, __tx_unitPrice.forward(__fs_unitPrice))"), bridge);
+      // Backward routes the hoisted target-read local through .backward(...).
+      assertTrue(bridge.contains("final java.lang.Long __bt_unitPrice = t.unitPrice();"), bridge);
+      assertTrue(bridge.contains("new demo.LineItem(__bt_id, __tx_unitPrice.backward(__bt_unitPrice))"), bridge);
     }
 
     @Test
@@ -2113,12 +2181,13 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.AuditBridge");
       assertNotNull(bridge, () -> "AuditBridge missing; saw " + compilation.generated().keySet());
 
-      // Forward routes through the BridgeFn unchanged.
-      assertTrue(bridge.contains("new demo.AuditEntity(s.id(), __tx_createdAt.forward(s.createdAt()))"), bridge);
+      // Forward routes the hoisted single-read local through the BridgeFn.
+      assertTrue(bridge.contains("final java.time.Instant __fs_createdAt = s.createdAt();"), bridge);
+      assertTrue(bridge.contains("new demo.AuditEntity(__fs_id, __tx_createdAt.forward(__fs_createdAt))"), bridge);
       // Backward emits null (the reference-type zero-fill) for the forward-only slot — does NOT
-      // call __tx_createdAt.backward(t.createdAt()).
+      // read or convert t.createdAt() at all.
       assertTrue(
-        bridge.contains("new demo.Audit(t.id(), null)"),
+        bridge.contains("new demo.Audit(__bt_id, null)"),
         () -> "expected backward zero-fill for forwardOnly transform slot, saw: " + bridge
       );
       assertFalse(
@@ -2184,19 +2253,22 @@ class BridgeProcessorTest {
         () -> "qualifier dispatch must NOT instantiate the helper class; saw: " + bridge
       );
 
-      // Forward emits direct UsingClass.methodName(value) calls per qualified field.
+      // Forward emits direct UsingClass.methodName(local) calls per qualified field, each over the
+      // hoisted single-read local.
+      assertTrue(bridge.contains("final java.time.Instant __fs_expiresAt = s.expiresAt();"), bridge);
       assertTrue(
-        bridge.contains("demo.DateHelpers.expiry(s.expiresAt())"),
-        () -> "expected demo.DateHelpers.expiry(...) call; saw: " + bridge
+        bridge.contains("demo.DateHelpers.expiry(__fs_expiresAt)"),
+        () -> "expected demo.DateHelpers.expiry(...) call over the read local; saw: " + bridge
       );
+      assertTrue(bridge.contains("final java.time.Instant __fs_registeredAt = s.registeredAt();"), bridge);
       assertTrue(
-        bridge.contains("demo.DateHelpers.createdAt(s.registeredAt())"),
-        () -> "expected demo.DateHelpers.createdAt(...) call; saw: " + bridge
+        bridge.contains("demo.DateHelpers.createdAt(__fs_registeredAt)"),
+        () -> "expected demo.DateHelpers.createdAt(...) call over the read local; saw: " + bridge
       );
 
       // Qualifier dispatch is implicitly forward-only — backward zero-fills.
       assertTrue(
-        bridge.contains("new demo.UserEntity(t.id(), null, null)"),
+        bridge.contains("new demo.UserEntity(__bt_id, null, null)"),
         () -> "expected backward zero-fill on qualifier-dispatch slots; saw: " + bridge
       );
     }
@@ -2262,19 +2334,24 @@ class BridgeProcessorTest {
         bridge.contains("private static final demo.CentsConverter __tx_price = new demo.CentsConverter();"),
         bridge
       );
-      assertTrue(bridge.contains("__tx_price.forward(s.price())"), bridge);
-      assertTrue(bridge.contains("__tx_price.backward(t.price())"), bridge);
+      assertTrue(bridge.contains("__tx_price.forward(__fs_price)"), bridge);
+      assertTrue(bridge.contains("__tx_price.backward(__bt_price)"), bridge);
 
       // Qualifier dispatch: no __tx_createdAt, direct method call
       assertFalse(
         bridge.contains("__tx_createdAt"),
         () -> "qualifier field MUST NOT have a __tx_ singleton; saw: " + bridge
       );
-      assertTrue(bridge.contains("demo.Helpers.asIso(s.createdAt())"), bridge);
-      // Forward-only on qualifier slot — backward zero-fills the createdAt slot
+      assertTrue(bridge.contains("demo.Helpers.asIso(__fs_createdAt)"), bridge);
+      // Forward-only on qualifier slot — backward zero-fills the createdAt slot, neither reading
+      // nor converting the target's createdAt.
       assertFalse(
-        bridge.contains("Helpers.asIso(t.createdAt())"),
+        bridge.contains("Helpers.asIso(__bt_createdAt)"),
         () -> "backward must NOT call qualifier method; saw: " + bridge
+      );
+      assertFalse(
+        bridge.contains("t.createdAt()"),
+        () -> "backward must NOT read the qualifier-slot target field; saw: " + bridge
       );
     }
 
@@ -2470,10 +2547,12 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.LineItemBridge");
       assertNotNull(bridge, () -> "LineItemBridge missing; saw " + compilation.generated().keySet());
 
-      // Forward fills the target's `source` slot with the literal.
-      assertTrue(bridge.contains("new demo.LineItemEntity(s.id(), \"API\")"), bridge);
+      // Forward fills the target's `source` slot with the literal; the id read is hoisted.
+      assertTrue(bridge.contains("final java.lang.String __fs_id = s.id();"), bridge);
+      assertTrue(bridge.contains("new demo.LineItemEntity(__fs_id, \"API\")"), bridge);
       // Backward rebuilds LineItem from t.id() only — source is target-only, dropped on backward.
-      assertTrue(bridge.contains("new demo.LineItem(t.id())"), bridge);
+      assertTrue(bridge.contains("final java.lang.String __bt_id = t.id();"), bridge);
+      assertTrue(bridge.contains("new demo.LineItem(__bt_id)"), bridge);
     }
 
     @Test
@@ -2501,7 +2580,7 @@ class BridgeProcessorTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.ABridge");
-      assertTrue(bridge.contains("new demo.B(s.id(), 1)"), bridge);
+      assertTrue(bridge.contains("new demo.B(__fs_id, 1)"), bridge);
     }
 
     @Test
@@ -2529,7 +2608,7 @@ class BridgeProcessorTest {
 
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.ABridge");
-      assertTrue(bridge.contains("new demo.B(s.id(), null)"), bridge);
+      assertTrue(bridge.contains("new demo.B(__fs_id, null)"), bridge);
     }
 
     @Test
@@ -2634,9 +2713,10 @@ class BridgeProcessorTest {
         bridge.contains("private static final demo.NowSupplier __cp_createdAt = new demo.NowSupplier();"),
         bridge
       );
-      assertTrue(bridge.contains("new demo.B(s.id(), __cp_createdAt.get())"), bridge);
+      assertTrue(bridge.contains("new demo.B(__fs_id, __cp_createdAt.get())"), bridge);
       // Backward — A has no createdAt to recover, so the source rebuild only reads t.id().
-      assertTrue(bridge.contains("new demo.A(t.id())"), bridge);
+      assertTrue(bridge.contains("final java.lang.String __bt_id = t.id();"), bridge);
+      assertTrue(bridge.contains("new demo.A(__bt_id)"), bridge);
     }
 
     @Test
@@ -2702,15 +2782,25 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.AuditBridge");
       assertNotNull(bridge, () -> "AuditBridge missing; saw " + compilation.generated().keySet());
 
-      // Forward: source.businessUnit() flows into BOTH target columns positionally.
+      // Forward: one read of source.businessUnit() into a final local fans into BOTH target
+      // columns positionally — the accessor itself is never called twice.
       assertTrue(
-        bridge.contains("new demo.AuditEntity(s.businessUnit(), s.businessUnit())"),
-        () -> "forward must fan source into every target; saw: " + bridge
+        bridge.contains("final java.lang.String __fs_businessUnit = s.businessUnit();"),
+        () -> "forward must hoist the fanned source read into one local; saw: " + bridge
       );
+      assertTrue(
+        bridge.contains("new demo.AuditEntity(__fs_businessUnit, __fs_businessUnit)"),
+        () -> "forward must fan the single-read local into every target; saw: " + bridge
+      );
+      assertTrue(occurrences(bridge, "s.businessUnit()") == 1, bridge);
       // Backward: only the FIRST declared fan-out target (cretnUserId) reconstructs the source.
       assertTrue(
-        bridge.contains("new demo.Audit(t.cretnUserId())"),
+        bridge.contains("final java.lang.String __bt_businessUnit = t.cretnUserId();"),
         () -> "backward must read the primary fan-out target only; saw: " + bridge
+      );
+      assertTrue(
+        bridge.contains("new demo.Audit(__bt_businessUnit)"),
+        () -> "backward must rebuild from the primary fan-out local; saw: " + bridge
       );
     }
 
@@ -2842,13 +2932,19 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.UserBridge");
       assertNotNull(bridge, () -> "UserBridge missing; saw " + compilation.generated().keySet());
 
-      // Forward null-coalesces: source `region` null → "EMEA"; otherwise pass-through.
+      // Forward null-coalesces over the hoisted single-read local: `region` null → "EMEA";
+      // otherwise pass-through. The coalesce names its operand twice, but only as the local.
+      assertTrue(bridge.contains("final java.lang.String __fs_region = s.region();"), bridge);
       assertTrue(
-        bridge.contains("(s.region() == null ? \"EMEA\" : s.region())"),
-        () -> "expected null-coalesce on region forward, saw: " + bridge
+        bridge.contains("(__fs_region == null ? \"EMEA\" : __fs_region)"),
+        () -> "expected null-coalesce over the region local on forward, saw: " + bridge
       );
+      // One read per source field: the accessor appears exactly once even though the coalesce
+      // consumes the value twice.
+      assertTrue(occurrences(bridge, "s.region()") == 1, bridge);
       // Backward is identity — the default doesn't appear in backward expression.
-      assertTrue(bridge.contains("new demo.User(t.id(), t.region())"), bridge);
+      assertTrue(bridge.contains("final java.lang.String __bt_region = t.region();"), bridge);
+      assertTrue(bridge.contains("new demo.User(__bt_id, __bt_region)"), bridge);
     }
 
     @Test
@@ -2885,14 +2981,18 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.UserBridge");
       assertNotNull(bridge, () -> "UserBridge missing; saw " + compilation.generated().keySet());
 
-      // Forward: source.region null-coalesces to "EMEA", then writes into target.area (renamed).
+      // Forward: source.region is read once into a local; the null-coalesce to "EMEA" operates on
+      // the local and feeds the renamed target.area slot.
+      assertTrue(bridge.contains("final java.lang.String __fs_region = s.region();"), bridge);
       assertTrue(
-        bridge.contains("new demo.UserDto(s.id(), (s.region() == null ? \"EMEA\" : s.region()))"),
-        () -> "expected null-coalesce on region feeding renamed `area` slot, saw: " + bridge
+        bridge.contains("new demo.UserDto(__fs_id, (__fs_region == null ? \"EMEA\" : __fs_region))"),
+        () -> "expected null-coalesce over the region local feeding renamed `area` slot, saw: " + bridge
       );
+      assertTrue(occurrences(bridge, "s.region()") == 1, bridge);
       // Backward: target.area reads back into source.region (no default on backward).
+      assertTrue(bridge.contains("final java.lang.String __bt_region = t.area();"), bridge);
       assertTrue(
-        bridge.contains("new demo.User(t.id(), t.area())"),
+        bridge.contains("new demo.User(__bt_id, __bt_region)"),
         () -> "expected backward writes target.area into source.region, saw: " + bridge
       );
     }
@@ -2954,14 +3054,16 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.OrderBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
-      // Forward routes through the user-named bridge.
+      // Forward routes the hoisted single-read local through the user-named bridge.
+      assertTrue(bridge.contains("final demo.Address __fs_address = s.address();"), bridge);
       assertTrue(
-        bridge.contains("new demo.OrderDto(s.id(), demo.AddressBridge.forward(s.address()))"),
+        bridge.contains("new demo.OrderDto(__fs_id, demo.AddressBridge.forward(__fs_address))"),
         () -> "expected forward via AddressBridge, saw: " + bridge
       );
-      // Backward routes through the user-named bridge.
+      // Backward routes the hoisted target-read local through the user-named bridge.
+      assertTrue(bridge.contains("final demo.AddressDto __bt_address = t.address();"), bridge);
       assertTrue(
-        bridge.contains("new demo.Order(t.id(), demo.AddressBridge.backward(t.address()))"),
+        bridge.contains("new demo.Order(__bt_id, demo.AddressBridge.backward(__bt_address))"),
         () -> "expected backward via AddressBridge, saw: " + bridge
       );
       // No auto-sub-bridge AddressBridge2 / AddressToAddressDtoBridge was generated for this pair.
@@ -3525,9 +3627,12 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.PABridge");
       assertNotNull(bridge, () -> "PABridge missing; saw " + compilation.generated().keySet());
 
-      // Forward uses no-arg + setter path, NOT the builder.
+      // Forward uses no-arg + setter path, NOT the builder; the getter read is hoisted into one
+      // final local the setter consumes.
       assertTrue(
-        bridge.contains("final var out = new demo.PB()") && bridge.contains("out.setId(s.getId())"),
+        bridge.contains("final var out = new demo.PB()") &&
+          bridge.contains("final java.lang.String __fs_id = s.getId();") &&
+          bridge.contains("out.setId(__fs_id)"),
         () -> "expected SETTERS shape on forward, saw: " + bridge
       );
       assertFalse(bridge.contains("demo.PB.builder()"), "should not call builder() when SETTERS forced");
@@ -3955,14 +4060,18 @@ class BridgeProcessorTest {
       // null-coalesce on source.tag; @Transform: source.qty through __tx_qty.forward;
       // @ViaMapper: source.addr through AddressBridge.forward; @Compute: target.env from
       // EnvSupplier with no source involvement.
+      // Every kept source field is read exactly once into a __fs_ local; each modifier consumes
+      // its local, so duplication (the @Default coalesce) happens only over locals.
       assertTrue(
-        bridge.contains("s.name()") &&
-          bridge.contains("(s.tag() == null ? \"X\" : s.tag())") &&
-          bridge.contains("__tx_qty.forward(s.qty())") &&
-          bridge.contains("demo.AddressBridge.forward(s.addr())") &&
+        bridge.contains("final java.lang.String __fs_name = s.name();") &&
+          bridge.contains("final java.lang.String __fs_tag = s.tag();") &&
+          bridge.contains("(__fs_tag == null ? \"X\" : __fs_tag)") &&
+          bridge.contains("__tx_qty.forward(__fs_qty)") &&
+          bridge.contains("demo.AddressBridge.forward(__fs_addr)") &&
           bridge.contains("__cp_env.get()"),
         () -> "forward composition incomplete; saw: " + bridge
       );
+      assertTrue(occurrences(bridge, "s.tag()") == 1, () -> "s.tag() must be read exactly once; saw: " + bridge);
       assertFalse(bridge.contains("s.id()"), () -> "dropped source.id must not appear in forward; saw: " + bridge);
 
       // BACKWARD ───────────────────────────────────────────────────────────────────────────
@@ -3970,9 +4079,10 @@ class BridgeProcessorTest {
       // @Transform routes target.qty through __tx_qty.backward; @ViaMapper routes
       // target.addr through AddressBridge.backward; @Default does NOT apply on backward.
       assertTrue(
-        bridge.contains(
-          "new demo.Order(null, t.renamed(), t.tag(), __tx_qty.backward(t.qty()), demo.AddressBridge.backward(t.addr()))"
-        ),
+        bridge.contains("final java.lang.String __bt_name = t.renamed();") &&
+          bridge.contains(
+            "new demo.Order(null, __bt_name, __bt_tag, __tx_qty.backward(__bt_qty), demo.AddressBridge.backward(__bt_addr))"
+          ),
         () -> "backward composition off; saw: " + bridge
       );
 
@@ -4684,8 +4794,8 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.SrcECBridge");
       assertNotNull(bridge);
       assertTrue(
-        bridge.contains("new demo.DstEC(s.id(), s.score())"),
-        () -> "forward must call the matched ctor directly; saw:\n" + bridge
+        bridge.contains("new demo.DstEC(__fs_id, __fs_score)"),
+        () -> "forward must call the matched ctor directly over the hoisted read locals; saw:\n" + bridge
       );
       assertFalse(
         bridge.contains(".builder()"),
