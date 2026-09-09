@@ -84,7 +84,7 @@ public final class Traversals {
       @Override
       public Set<A> modify(final Set<A> source, final Function<? super A, ? extends A> f) {
         if (source == null) return null;
-        final var out = new LinkedHashSet<A>(source.size());
+        final var out = LinkedHashSet.<A>newLinkedHashSet(source.size());
         for (final var a : source) out.add(f.apply(a));
         return Collections.unmodifiableSet(out);
       }
@@ -112,7 +112,7 @@ public final class Traversals {
       @Override
       public Map<K, V> modify(final Map<K, V> source, final Function<? super V, ? extends V> f) {
         if (source == null) return null;
-        final var out = new LinkedHashMap<K, V>(source.size());
+        final var out = LinkedHashMap.<K, V>newLinkedHashMap(source.size());
         for (final var e : source.entrySet()) out.put(e.getKey(), f.apply(e.getValue()));
         return Collections.unmodifiableMap(out);
       }
@@ -179,7 +179,7 @@ public final class Traversals {
             return (C) Collections.unmodifiableList(out);
           }
           case final Set<?> set -> {
-            final var out = new LinkedHashSet<E>(set.size());
+            final var out = LinkedHashSet.<E>newLinkedHashSet(set.size());
             for (final var e : source) out.add(f.apply(e));
             return (C) Collections.unmodifiableSet(out);
           }

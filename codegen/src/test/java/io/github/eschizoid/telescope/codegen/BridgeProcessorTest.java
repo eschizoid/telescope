@@ -888,7 +888,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("Set<X> ↔ Set<Y> auto-lifts via a for-loop helper into a pre-sized LinkedHashSet")
+    @DisplayName("Set<X> ↔ Set<Y> auto-lifts via a for-loop helper into a LinkedHashSet sized for the source")
     void setContainerAutoLifts() {
       final var compilation = compile(
         source(
@@ -932,7 +932,9 @@ class BridgeProcessorTest {
       assertTrue(catalog.contains("__bwd_tags(t.tags())"), catalog);
       assertTrue(catalog.contains("import java.util.LinkedHashSet;"), catalog);
       assertTrue(catalog.contains("import java.util.Set;"), catalog);
-      assertTrue(catalog.contains("new LinkedHashSet<demo.TagDto>(src.size())"), catalog);
+      // newLinkedHashSet, not the int constructor: that argument is table capacity, so a table
+      // sized for n elements resizes on the nth insert at the 0.75 load factor.
+      assertTrue(catalog.contains("LinkedHashSet.<demo.TagDto>newLinkedHashSet(src.size())"), catalog);
       assertTrue(catalog.contains("TagToTagDtoBridge.forward(x)"), catalog);
       assertTrue(catalog.contains("TagToTagDtoBridge.backward(x)"), catalog);
     }
@@ -1035,7 +1037,7 @@ class BridgeProcessorTest {
       assertTrue(cart.contains("__bwd_items(t.items())"), cart);
       assertTrue(cart.contains("import java.util.HashMap;"), cart);
       assertTrue(cart.contains("import java.util.Map;"), cart);
-      assertTrue(cart.contains("new HashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
+      assertTrue(cart.contains("HashMap.<java.lang.String, demo.LineItemDto>newHashMap(src.size())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.forward(e.getValue())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.backward(e.getValue())"), cart);
     }
