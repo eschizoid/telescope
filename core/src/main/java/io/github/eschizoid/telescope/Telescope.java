@@ -16,7 +16,6 @@ import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Affine;
-import io.github.eschizoid.telescope.internal.optics.Fold;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
@@ -1658,10 +1657,12 @@ public sealed class Telescope<
   }
 
   /**
-   * Writes the first focus into {@code box[0]} and reports whether one existed. A found-null focus
-   * is therefore distinguishable from no focus at all — the distinction {@link Fold#findFirst}
-   * collapses and both {@link #read} and {@link #find} depend on, because a multi-hop bean path
-   * whose intermediate hop is null still focuses one null value.
+   * Writes the first focus into {@code box[0]} and reports whether one existed, keeping a
+   * found-null focus distinguishable from no focus at all. {@link #read} returns that null, so it
+   * needs the distinction — a multi-hop bean path whose intermediate hop is null still focuses one
+   * null value, and reporting it as absent would throw instead. {@link #find} maps both to {@link
+   * Optional#empty()} and is free to collapse them; it shares this helper for the walk, not for the
+   * distinction.
    *
    * <p>Visits exactly one focus. The visitor stops the walk on its first call, so the cost is the
    * depth of the path rather than the size of the focused tree.

@@ -126,11 +126,40 @@ class ReadShortCircuitTest {
       final var all = path.toList(org);
       final var found = path.find(org);
 
-      assertEquals(all.isEmpty(), found.isEmpty(), "find and toList must agree on emptiness");
+      // find collapses a null head to empty, so the terminals agree on emptiness only for a
+      // non-null head; count is the terminal that always tracks toList's size.
+      assertEquals(all.size(), path.count(org), "count and toList agree on cardinality");
       if (!all.isEmpty()) {
         assertEquals(all.getFirst(), found.orElseThrow(), "find returns the head of toList");
         assertEquals(all.getFirst(), path.read(org), "read returns the head of toList");
+      } else {
+        assertTrue(found.isEmpty(), "no focuses: find is empty");
       }
     }
+  }
+
+  @Test
+  @DisplayName("a filtered path answers with the first match, not the first focus")
+  void filterHeadIsTheFirstMatch() {
+    final var org = orgOf(50);
+    final var lastOnly = emails().filter(e -> e.equals("user49@example.com"));
+
+    LEAF_READS.set(0);
+    assertEquals("user49@example.com", lastOnly.read(org));
+    // Reaching the 50th focus reads 50 leaves; the point is that it stops there rather than
+    // completing the walk, and that a skipped focus never becomes the head.
+    assertEquals(50, LEAF_READS.get());
+    assertEquals("user49@example.com", lastOnly.find(org).orElseThrow());
+  }
+
+  @Test
+  @DisplayName("a filter that matches nothing has no head")
+  void filterMissHasNoHead() {
+    final var org = orgOf(50);
+    final var noMatch = emails().filter(e -> e.startsWith("nobody"));
+
+    assertThrows(NoSuchElementException.class, () -> noMatch.read(org));
+    assertTrue(noMatch.find(org).isEmpty());
+    assertFalse(noMatch.exists(org));
   }
 }

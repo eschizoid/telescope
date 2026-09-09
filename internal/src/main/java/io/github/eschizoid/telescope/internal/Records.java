@@ -9,7 +9,6 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
@@ -154,8 +153,10 @@ public final class Records {
    * @throws IllegalArgumentException if the name doesn't match a component on {@code recordClass}
    */
   public static Type componentType(final Class<?> recordClass, final String name) {
-    for (final var c : info(recordClass).components()) if (c.getName().equals(name)) return c.getGenericType();
-    throw noField(name, recordClass);
+    final var info = info(recordClass);
+    final var idx = info.indexOf(name);
+    if (idx < 0) throw noField(name, recordClass);
+    return info.components()[idx].getGenericType();
   }
 
   /**
@@ -341,15 +342,7 @@ public final class Records {
         final var ctorHandle = buildCtorHandle(cls, ctor, lookup);
         final var indexByName = HashMap.<String, Integer>newHashMap(comps.length);
         for (var i = 0; i < comps.length; i++) indexByName.put(comps[i].getName(), i);
-        return new RecordInfo(
-          comps,
-          readers,
-          ctor,
-          ctorFn,
-          accessorHandles,
-          ctorHandle,
-          Collections.unmodifiableMap(indexByName)
-        );
+        return new RecordInfo(comps, readers, ctor, ctorFn, accessorHandles, ctorHandle, indexByName);
       } catch (final NoSuchMethodException e) {
         throw new IllegalStateException("Cannot find canonical constructor for " + cls.getName(), e);
       }
