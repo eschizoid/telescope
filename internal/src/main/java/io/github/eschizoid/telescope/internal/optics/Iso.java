@@ -221,13 +221,13 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
     return of(
       xs -> {
         if (xs == null) return null;
-        final var out = LinkedHashSet.<Y>newLinkedHashSet(xs.size());
+        final var out = new LinkedHashSet<Y>(xs.size());
         for (final var x : xs) out.add(element.to(x));
         return out;
       },
       ys -> {
         if (ys == null) return null;
-        final var out = LinkedHashSet.<X>newLinkedHashSet(ys.size());
+        final var out = new LinkedHashSet<X>(ys.size());
         for (final var y : ys) out.add(element.from(y));
         return out;
       }
@@ -243,13 +243,13 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
     return of(
       mx -> {
         if (mx == null) return null;
-        final var out = LinkedHashMap.<K, Y>newLinkedHashMap(mx.size());
+        final var out = new LinkedHashMap<K, Y>(mx.size());
         for (final var entry : mx.entrySet()) out.put(entry.getKey(), value.to(entry.getValue()));
         return out;
       },
       my -> {
         if (my == null) return null;
-        final var out = LinkedHashMap.<K, X>newLinkedHashMap(my.size());
+        final var out = new LinkedHashMap<K, X>(my.size());
         for (final var entry : my.entrySet()) out.put(entry.getKey(), value.from(entry.getValue()));
         return out;
       }

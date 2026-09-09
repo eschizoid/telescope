@@ -82,7 +82,7 @@ public interface Getter<S, A> extends Fold<S, A> {
   static <X, Y> Getter<Set<X>, Set<Y>> liftSet(final Getter<X, Y> element) {
     return xs -> {
       if (xs == null) return null;
-      final var out = LinkedHashSet.<Y>newLinkedHashSet(xs.size());
+      final var out = new LinkedHashSet<Y>(xs.size());
       for (final var x : xs) out.add(element.get(x));
       return out;
     };
@@ -106,7 +106,7 @@ public interface Getter<S, A> extends Fold<S, A> {
   static <K, X, Y> Getter<Map<K, X>, Map<K, Y>> liftMapValues(final Getter<X, Y> element) {
     return xs -> {
       if (xs == null) return null;
-      final var out = LinkedHashMap.<K, Y>newLinkedHashMap(xs.size());
+      final var out = new LinkedHashMap<K, Y>(xs.size());
       for (final var e : xs.entrySet()) out.put(e.getKey(), element.get(e.getValue()));
       return out;
     };

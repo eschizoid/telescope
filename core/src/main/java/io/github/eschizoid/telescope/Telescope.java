@@ -16,7 +16,6 @@ import io.github.eschizoid.telescope.internal.MetadataHolderProbe;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.Reflective;
 import io.github.eschizoid.telescope.internal.optics.Affine;
-import io.github.eschizoid.telescope.internal.optics.Fold;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Prism;
@@ -1650,27 +1649,14 @@ public sealed class Telescope<
     if (optic instanceof final Affine<S, A> affine) {
       return affine.getOption(source).orElseThrow(this::noValue);
     }
-    final var box = new Object[1];
-    if (!firstFocus(source, box)) throw noValue();
-    @SuppressWarnings("unchecked")
-    final var head = (A) box[0];
-    return head;
-  }
-
-  /**
-   * Writes the first focus into {@code box[0]} and reports whether one existed. A found-null focus
-   * is therefore distinguishable from no focus at all — the distinction {@link Fold#findFirst}
-   * collapses and both {@link #read} and {@link #find} depend on, because a multi-hop bean path
-   * whose intermediate hop is null still focuses one null value.
-   *
-   * <p>Visits exactly one focus. The visitor stops the walk on its first call, so the cost is the
-   * depth of the path rather than the size of the focused tree.
-   */
-  private boolean firstFocus(final S source, final Object[] box) {
-    return !optic.visitWhile(source, a -> {
-      box[0] = a;
-      return false; // one focus is all a head-grab needs
-    });
+    // Stream.findFirst() routes through Optional.of(element), which NPEs on null. A Traversal
+    // can legitimately surface null elements when an intermediate hop of a multi-hop bean path
+    // is null — Beans.readProperty short-circuits to null on a null receiver, but the traversal
+    // still produces a one-element [null] stream. Use a stream iterator to grab the head in
+    // O(1) without materialising the rest, and preserve nulls explicitly.
+    final var it = optic.getAll(source).iterator();
+    if (!it.hasNext()) throw noValue();
+    return it.next();
   }
 
   /**
@@ -1704,11 +1690,10 @@ public sealed class Telescope<
     if (optic instanceof final Affine<S, A> affine) {
       return affine.getOption(source);
     }
-    final var box = new Object[1];
-    if (!firstFocus(source, box)) return Optional.empty();
-    @SuppressWarnings("unchecked")
-    final var head = (A) box[0];
-    return Optional.ofNullable(head);
+    // Mirror of #read: Stream.findFirst() NPEs on null elements. Use the iterator to keep
+    // the lookup O(1) and preserve the null-empty distinction via Optional.ofNullable.
+    final var it = optic.getAll(source).iterator();
+    return it.hasNext() ? Optional.ofNullable(it.next()) : Optional.empty();
   }
 
   /**
@@ -1771,9 +1756,9 @@ public sealed class Telescope<
    * traversal walks its visitor. Every terminal routing through here CANNOT disagree with its
    * siblings — the divergences this replaces (a null root materializing as {@code [Indexed[0,
    * null]]} on one terminal and {@code []} on another) were each terminal re-implementing this
-   * table by hand. {@code read} / {@code find} stop at their first focus rather than folding all of
-   * them, so they walk {@code visitWhile} through {@link #firstFocus} instead of routing here;
-   * their Lens/Affine shortcuts carry real dispatch savings on the codegen-holder hot path.
+   * table by hand. {@code read} / {@code find} keep their dedicated fast paths: they pull a lazy
+   * head, not an eager fold, and their Lens/Affine shortcuts carry real dispatch savings on the
+   * codegen-holder hot path.
    */
   private boolean visitFocuses(final S source, final Predicate<? super A> visitor) {
     if (source == null) return true; // a null root focuses nothing, on every optic shape

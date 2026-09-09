@@ -2290,30 +2290,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Allocation expression for a container that will be filled with {@code src.size()} elements.
-   *
-   * <p>{@code ArrayList}'s int constructor takes an exact element capacity, but the hash
-   * containers' takes a table capacity, and a table sized for n entries resizes on the nth insert
-   * at the default 0.75 load factor. Those route through the JDK's {@code newXxx} factories, which
-   * apply the load factor for the caller. A container with neither is filled from its default
-   * capacity.
-   *
-   * @param typeArgs the emitted type arguments, without angle brackets
-   */
-  private static String sizedAlloc(final String implFqn, final String typeArgs) {
-    final var simple = simpleName(implFqn);
-    return switch (implFqn) {
-      case "java.util.HashSet", "java.util.LinkedHashSet", "java.util.HashMap", "java.util.LinkedHashMap" -> simple +
-      ".<" +
-      typeArgs +
-      ">new" +
-      simple +
-      "(src.size())";
-      default -> "new " + simple + "<" + typeArgs + ">" + (hasPresizeCtor(implFqn) ? "(src.size())" : "()");
-    };
-  }
-
-  /**
    * For each named field pair (source.name has same name on both sides), decide how to convert.
    * Identity links pass the value through unchanged. Recursive links queue a sub-pair for emission
    * and reference its forward/backward methods. Returns {@code null} on a type mismatch that we
@@ -2970,7 +2946,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = simpleName(containerRawFqn(tgtContainer));
     final var paramRaw = simpleName(containerRawFqn(srcContainer));
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.LIST);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement));
+    final var alloc =
+      "new " + simpleName(implFqn) + "<" + tgtElement + ">" + (hasPresizeCtor(implFqn) ? "(src.size())" : "()");
     out.println();
     out.println(
       "  private static " +
@@ -3005,7 +2982,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = simpleName(containerRawFqn(tgtContainer));
     final var paramRaw = simpleName(containerRawFqn(srcContainer));
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.SET);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement));
+    final var alloc =
+      "new " + simpleName(implFqn) + "<" + tgtElement + ">" + (hasPresizeCtor(implFqn) ? "(src.size())" : "()");
     out.println();
     out.println(
       "  private static " +
@@ -3043,7 +3021,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = simpleName(containerRawFqn(tgtContainer));
     final var paramRaw = simpleName(containerRawFqn(srcContainer));
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES);
-    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue);
+    final var alloc =
+      "new " +
+      simpleName(implFqn) +
+      "<" +
+      keyType +
+      ", " +
+      tgtValue +
+      ">" +
+      (hasPresizeCtor(implFqn) ? "(src.size())" : "()");
     out.println();
     out.println(
       "  private static " +
