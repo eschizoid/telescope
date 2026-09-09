@@ -3,8 +3,8 @@ package io.github.eschizoid.telescope;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.ref.Reference;
 import java.util.ArrayList;
 import java.util.Vector;
 import java.util.WeakHashMap;
@@ -17,9 +17,9 @@ import org.junit.jupiter.api.Test;
  * then fail at the constructor or setter — and each survives a null container and an empty one, the
  * two shapes a sizing hint derived from the source has to tolerate.
  *
- * <p>Queue and Deque implementations are absent because they cannot be reached: the pairing rules
- * recognise only Optional, List, Set and Map, so such a component is rejected as an incompatible
- * shape before any container lift runs.
+ * <p>Queue and Deque implementations are absent because the sized allocators never see them: a
+ * container view is derived as LIST only for List subtypes, so those components either take the raw
+ * same-kind copy path or are rejected outright when their element types differ.
  */
 class ContainerKindMappingTest {
 
@@ -49,6 +49,9 @@ class ContainerKindMappingTest {
       final var mapped = mapper.forward(new VectorHolder(vectorOf(size)));
       assertInstanceOf(Vector.class, mapped.tags());
       assertEquals(size, mapped.tags().size());
+      // capacity, not size, is what distinguishes a source-sized rebuild from a default-capacity
+      // one: the no-arg constructor starts at ten and doubles, so it reports 10 or 20 here.
+      assertEquals(size, mapped.tags().capacity(), "the rebuilt Vector is sized from its source");
       if (size > 0) assertEquals(new TagDto("t0"), mapped.tags().getFirst());
       assertEquals(new VectorHolder(vectorOf(size)), mapper.backward(mapped));
     }
@@ -74,8 +77,26 @@ class ContainerKindMappingTest {
       assertInstanceOf(WeakHashMap.class, mapped.tags());
       assertEquals(size, mapped.tags().size());
       for (var i = 0; i < size; i++) assertEquals(new TagDto("t" + i), mapped.tags().get(keys.get(i)));
-      assertTrue(keys.size() == size, "keys stay reachable through the assertions");
+      Reference.reachabilityFence(keys);
     }
     assertNull(mapper.forward(new WeakHolder(null)).tags());
+  }
+
+  @Test
+  @DisplayName("capacityFor sizes a table that holds its element count without resizing")
+  void capacityForHoldsItsElementCount() {
+    // The containers this backs take a table capacity, so the count has to be divided by the load
+    // factor: a table given the count itself resizes once the count passes three quarters of the
+    // next power of two.
+    assertEquals(0, ContainerLifts.capacityFor(0));
+    assertEquals(2, ContainerLifts.capacityFor(1));
+    assertEquals(16, ContainerLifts.capacityFor(12));
+    assertEquals(23, ContainerLifts.capacityFor(17));
+
+    for (final var count : new int[] { 1, 12, 13, 16, 17, 100, 1000 }) {
+      final var table = new WeakHashMap<Integer, Integer>(ContainerLifts.capacityFor(count));
+      for (var i = 0; i < count; i++) table.put(i, i);
+      assertEquals(count, table.size(), "every entry survives the fill at count " + count);
+    }
   }
 }
