@@ -15,10 +15,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@code read} and {@code find} answer with the first focus and stop. The cost of a head-grab is
- * the depth of the path, never the size of the focused tree — a many-focus traversal must touch one
- * element, not all of them, and the terminals must keep agreeing with their eager siblings while
- * doing so.
+ * {@code read} and {@code find} answer with the first focus and stop, and keep agreeing with their
+ * eager siblings while doing so. On a path whose hops all produce focuses that is one leaf read no
+ * matter how many focuses the path has. A {@code filter} hop skips focuses without producing any,
+ * so a filtered path costs what reaching its first match costs — bounded by the match, not by the
+ * tree.
  */
 class ReadShortCircuitTest {
 
@@ -139,17 +140,25 @@ class ReadShortCircuitTest {
   }
 
   @Test
-  @DisplayName("a filtered path answers with the first match, not the first focus")
+  @DisplayName("a filtered path stops at its first match rather than completing the walk")
   void filterHeadIsTheFirstMatch() {
     final var org = orgOf(50);
-    final var lastOnly = emails().filter(e -> e.equals("user49@example.com"));
+    // The match sits at index 1 of 50: stopping there and walking the whole tree read a different
+    // number of leaves, which is what makes this a regression gate rather than a restatement of
+    // one-read-per-focus. A match at the last index would read 50 either way.
+    final var early = emails().filter(e -> e.equals("user1@example.com"));
 
     LEAF_READS.set(0);
-    assertEquals("user49@example.com", lastOnly.read(org));
-    // Reaching the 50th focus reads 50 leaves; the point is that it stops there rather than
-    // completing the walk, and that a skipped focus never becomes the head.
-    assertEquals(50, LEAF_READS.get());
-    assertEquals("user49@example.com", lastOnly.find(org).orElseThrow());
+    assertEquals("user1@example.com", early.read(org));
+    assertEquals(2, LEAF_READS.get(), "read stops at the match, having skipped exactly one focus");
+
+    LEAF_READS.set(0);
+    assertEquals("user1@example.com", early.find(org).orElseThrow());
+    assertEquals(2, LEAF_READS.get());
+
+    // A skipped focus never becomes the head, even when the match is last.
+    final var last = emails().filter(e -> e.equals("user49@example.com"));
+    assertEquals("user49@example.com", last.read(org));
   }
 
   @Test

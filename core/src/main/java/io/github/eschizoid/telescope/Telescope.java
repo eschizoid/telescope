@@ -1664,8 +1664,10 @@ public sealed class Telescope<
    * Optional#empty()} and is free to collapse them; it shares this helper for the walk, not for the
    * distinction.
    *
-   * <p>Visits exactly one focus. The visitor stops the walk on its first call, so the cost is the
-   * depth of the path rather than the size of the focused tree.
+   * <p>The visitor stops the walk on its first call, so a path whose hops all produce focuses costs
+   * the depth of the path rather than the size of the focused tree. A {@code filter} hop skips
+   * non-matching focuses without producing any, so a filtered path scans until its first match, and
+   * one that matches nothing scans every focus before reporting none.
    */
   private boolean firstFocus(final S source, final Object[] box) {
     return !optic.visitWhile(source, a -> {
