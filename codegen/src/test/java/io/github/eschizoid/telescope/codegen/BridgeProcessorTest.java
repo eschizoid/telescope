@@ -932,8 +932,9 @@ class BridgeProcessorTest {
       assertTrue(catalog.contains("__bwd_tags(t.tags())"), catalog);
       assertTrue(catalog.contains("import java.util.LinkedHashSet;"), catalog);
       assertTrue(catalog.contains("import java.util.Set;"), catalog);
-      // newLinkedHashSet, not the int constructor: that argument is table capacity, so a table
-      // sized for n elements resizes on the nth insert at the 0.75 load factor.
+      // newLinkedHashSet, not the int constructor: that argument is a table capacity, and a table
+      // built straight from an element count resizes once that count passes three quarters of the
+      // next power of two.
       assertTrue(catalog.contains("LinkedHashSet.<demo.TagDto>newLinkedHashSet(src.size())"), catalog);
       assertFalse(catalog.contains("new LinkedHashSet<demo.TagDto>(src.size())"), catalog);
       assertTrue(catalog.contains("TagToTagDtoBridge.forward(x)"), catalog);

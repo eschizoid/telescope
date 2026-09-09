@@ -2274,9 +2274,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return dot < 0 ? fqn : fqn.substring(dot + 1);
   }
 
-  // Whether the impl class exposes a capacity-presizing (int) constructor. The default impls do; an
-  // arbitrary concrete subtype (LinkedList, TreeSet, TreeMap, …) may not, so it is filled via the
-  // no-arg constructor instead.
   /**
    * Allocation expression for a container that will be filled with {@code src.size()} elements.
    *
