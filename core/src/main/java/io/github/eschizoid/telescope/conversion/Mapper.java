@@ -11,11 +11,11 @@ import io.github.eschizoid.telescope.mapping.MapStep;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -50,6 +50,7 @@ public final class Mapper<A, B> {
   private final Class<B> targetClass;
   private final Reflective sourceRefl;
   private final Reflective targetRefl;
+  private volatile IntoSlot[] intoSlots;
   private final Map<String, PatchEntry> patchByTargetField;
   // Folded hook chains — null = no hook. Composed by repeated calls to before*/after*. Each side
   // is a single Function/BiFunction reference at call time so HotSpot stays monomorphic regardless
@@ -456,14 +457,38 @@ public final class Mapper<A, B> {
       "This mapper does not support into() — Telescope.merge produces a forward-only mapper " +
         "(the multi-source case has no general inverse). Use Mapper.forward(...) only."
     );
-    final var staged = new LinkedHashMap<String, Object>(patchByTargetField.size());
-    for (final var name : patchByTargetField.keySet()) {
-      staged.put(name, targetRefl.read(produced, name));
-    }
-    for (final var e : staged.entrySet()) {
-      Beans.writeBeanProperty(target, e.getKey(), e.getValue());
-    }
+    final var slots = intoSlots();
+    final var staged = new Object[slots.length];
+    for (var i = 0; i < slots.length; i++) staged[i] = slots[i].read().apply(produced);
+    for (var i = 0; i < slots.length; i++) slots[i].write().accept(target, staged[i]);
     return target;
+  }
+
+  /** One target property's bound accessor pair, resolved once per mapper. */
+  private record IntoSlot(Function<Object, Object> read, BiConsumer<Object, Object> write) {}
+
+  /**
+   * The bound accessor pair for every property {@link #into} writes. Both sides are constant once
+   * the mapper exists — the target class is fixed and the patch table's keys are fixed — so
+   * resolving them per property per call re-paid two proxy unwraps, two {@code ClassValue} probes
+   * and two name lookups for work whose inputs never change.
+   *
+   * <p>Resolved on first use rather than at construction: a mapper whose target has no setters is
+   * legal as long as nobody calls {@code into}, and binding eagerly would reject it at build time.
+   * The race between two first callers is benign — both produce equivalent arrays, and publishing
+   * either is correct.
+   */
+  private IntoSlot[] intoSlots() {
+    final var cached = intoSlots;
+    if (cached != null) return cached;
+    final var names = patchByTargetField.keySet();
+    final var built = new IntoSlot[names.size()];
+    var i = 0;
+    for (final var name : names) {
+      built[i++] = new IntoSlot(Beans.capturedReader(targetClass, name), Beans.capturedWriter(targetClass, name));
+    }
+    intoSlots = built;
+    return built;
   }
 
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */

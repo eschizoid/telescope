@@ -408,6 +408,26 @@ public final class Beans {
   }
 
   /**
+   * Write-side sibling of {@link #capturedReader}: the cached {@link BiConsumer} for one property,
+   * resolved once so a caller writing the same property repeatedly pays the proxy unwrap, the
+   * {@link ClassValue} probe and the name lookup at bind time rather than per write.
+   *
+   * <p>Binding to {@code beanClass} rather than the runtime class is deliberate, for the reason
+   * {@link #capturedReader} documents: a Hibernate proxy subclass still writes correctly through a
+   * writer bound to the declared class, and binding once keeps the invoker cache from accumulating
+   * an entry per proxy subclass.
+   *
+   * <p>Throws {@link IllegalArgumentException} at build time if the named property has no setter.
+   */
+  public static BiConsumer<Object, Object> capturedWriter(final Class<?> beanClass, final String name) {
+    final var writer = SETTER_INVOKERS.get(beanClass).computeIfAbsent(name, n -> buildSetterInvoker(beanClass, n));
+    if (writer == null) throw new IllegalArgumentException(
+      "No setter for property '" + name + "' on " + beanClass.getName()
+    );
+    return writer;
+  }
+
+  /**
    * Read a bean property by name via its {@code getX()} / {@code isX()} accessor. Throws if no
    * getter matches {@code name}.
    *
