@@ -1566,39 +1566,52 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // the source name to look up the plan and read the source. When the source field has a
     // @Default, wrap the source read in a (s.x() == null ? <literal> : s.x()) coalesce so the
     // forward direction substitutes the default for null sources.
+    // Every source read is hoisted into one `final` local per field, and the conversion
+    // expression references the local. Several plan shapes substitute their read expression more
+    // than once (a null-guard plus the guarded use, a @Default coalesce), which is only sound when
+    // the expression is a plain accessor: a defensive-copy getter would copy twice, a lazy-loading
+    // proxy would resolve twice, and a volatile-backed getter can legally return null on the
+    // second load after a non-null first — turning the emitted null-guard into an NPE. Reading
+    // once into a local makes every downstream duplication a local reference. The patch emitter
+    // established the idiom with its __pp_ prelude.
+    final var forwardLocals = new LinkedHashMap<String, String>();
     final Function<String, String> readForward = targetName -> {
       if (parsedConstants.containsKey(targetName)) return parsedConstants.get(targetName);
       if (computes.containsKey(targetName)) return "__cp_" + targetName + ".get()";
       final var srcName = reverseRenames.getOrDefault(targetName, targetName);
-      final var rawRead = readExpr(source, "s", fieldByName(nonDroppedSourceFields, srcName));
+      final var sf = fieldByName(nonDroppedSourceFields, srcName);
+      final var local = "__fs_" + srcName;
+      forwardLocals.putIfAbsent(local, sf.type() + " " + local + " = " + readExpr(source, "s", sf) + ";");
       final var read = parsedDefaults.containsKey(srcName)
-        ? "(" + rawRead + " == null ? " + parsedDefaults.get(srcName) + " : " + rawRead + ")"
-        : rawRead;
+        ? "(" + local + " == null ? " + parsedDefaults.get(srcName) + " : " + local + ")"
+        : local;
       return applyForward(srcName, fieldPlans.get(srcName), read);
     };
     // readBackward is called with SOURCE field names. For drops AND forward-only transforms, emit
     // the type's zero value — both mechanisms have no defined backward and the source slot must be
     // filled with something. Otherwise forward-rename the source name to find the matching target
     // field for the read.
+    final var backwardLocals = new LinkedHashMap<String, String>();
     final Function<String, String> readBackward = sourceName -> {
       if (effectiveDrops.contains(sourceName)) return defaultLiteralFor(fieldByName(sourceFields, sourceName).type());
       if (forwardOnlyTransforms.contains(sourceName)) return defaultLiteralFor(
         fieldByName(sourceFields, sourceName).type()
       );
       final var tgtName = renames.getOrDefault(sourceName, sourceName);
-      return applyBackward(
-        sourceName,
-        fieldPlans.get(sourceName),
-        readExpr(target, "t", fieldByName(targetFields, tgtName))
-      );
+      final var tf = fieldByName(targetFields, tgtName);
+      final var local = "__bt_" + sourceName;
+      backwardLocals.putIfAbsent(local, tf.type() + " " + local + " = " + readExpr(target, "t", tf) + ";");
+      return applyBackward(sourceName, fieldPlans.get(sourceName), local);
     };
 
     // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
     // declaration rather than at `target` (which may be a third-party POJO with no annotation).
-    final var forwardBody = buildExpr(target, readForward, targetFields, writeStrategy, source);
-    if (forwardBody == null) return;
-    final var backwardBody = buildExpr(source, readBackward, sourceFields, writeStrategy, source);
-    if (backwardBody == null) return;
+    final var builtForward = buildExpr(target, readForward, targetFields, writeStrategy, source);
+    if (builtForward == null) return;
+    final var builtBackward = buildExpr(source, readBackward, sourceFields, writeStrategy, source);
+    if (builtBackward == null) return;
+    final var forwardBody = withPrelude(forwardLocals, builtForward);
+    final var backwardBody = withPrelude(backwardLocals, builtBackward);
     // Patch emits a sparse overlay: for each source field, read from `partial` (the user's
     // partially-populated target) when the target's component is non-null, else fall back to the
     // corresponding read on `base`. Primitive target components are always treated as
@@ -2002,6 +2015,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         );
       }
     );
+  }
+
+  /**
+   * Block form of {@code body} preceded by one {@code final} declaration per hoisted read. {@code
+   * body} arrives in {@link #buildExpr}'s two shapes: an expression, which gets wrapped in a block
+   * returning it, and an existing block (the setters write strategy emits one), whose brace the
+   * declarations are spliced behind — wrapping a block would emit {@code return { … };}.
+   */
+  private static String withPrelude(final LinkedHashMap<String, String> locals, final String body) {
+    if (locals.isEmpty()) return body;
+    final var sb = new StringBuilder("{ ");
+    for (final var decl : locals.values()) sb.append("final ").append(decl).append(" ");
+    if (body.startsWith("{")) return sb.append(body.substring(1).trim()).toString();
+    return sb.append("return ").append(body).append("; }").toString();
   }
 
   /**
