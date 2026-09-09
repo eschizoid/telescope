@@ -13,10 +13,10 @@ import org.junit.jupiter.api.Test;
  * hoisted read from an inlined one — a coalesce names its subject twice, so an emitter that
  * substitutes the read rather than a local reads twice and fails here. The plain and {@code
  * Optional} cases read once either way; they are here so the count is pinned for every shape the
- * fixture covers rather than only the shape that currently duplicates. A getter is not always a field load: one that returns a
- * defensive copy pays each extra read as a full copy, a lazy-loading proxy resolves again, and a
- * volatile-backed getter can legally return null on a second load after a non-null first — under
- * which a re-reading null-guard dereferences the second, null, result.
+ * fixture covers rather than only the shape that currently duplicates. A getter is not always a
+ * field load: one that returns a defensive copy pays each extra read as a full copy, a lazy-loading
+ * proxy resolves again, and a volatile-backed getter can legally return null on a second load after
+ * a non-null first — under which a re-reading null-guard dereferences the second, null, result.
  */
 class SingleReadPerSourceFieldTest {
 

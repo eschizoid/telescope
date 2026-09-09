@@ -7,9 +7,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Bean fixture whose getters count their invocations. The generated bridge must read each source
  * property exactly once per conversion: the {@code Optional} shape wraps its read and the plain
- * references feed setters, and a getter that copies, lazy-loads, or reads a volatile field is
- * only safe under exactly-once. The {@code @Default} coalesce is pinned on the record fixture —
- * bean sources do not receive the coalesce at all today.
+ * references feed setters, and a getter that copies, lazy-loads, or reads a volatile field is only
+ * safe under exactly-once. The {@code @Default} coalesce is pinned on the record fixture — bean
+ * sources do not receive the coalesce at all today.
  */
 @Bridge(CountingTarget.class)
 public class CountingSource {
