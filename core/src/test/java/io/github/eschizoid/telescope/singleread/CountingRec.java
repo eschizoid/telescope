@@ -10,7 +10,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 @Bridge(value = CountingRecTarget.class, defaults = @Default(field = "region", value = "EMEA"))
 public record CountingRec(String region) {
-
   public static final AtomicInteger REGION_READS = new AtomicInteger();
 
   @Override
