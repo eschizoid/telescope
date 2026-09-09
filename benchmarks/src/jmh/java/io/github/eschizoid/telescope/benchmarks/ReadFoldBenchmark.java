@@ -21,7 +21,10 @@ import org.openjdk.jmh.annotations.State;
  *
  * <p>How to read it: the telescope-vs-hand ratio per terminal is the available win. {@code
  * existsEarlyHit} additionally probes short-circuiting — if it costs the same as {@code
- * existsMiss}, the fold materializes everything before answering, which is its own finding.
+ * existsMiss}, the fold materializes everything before answering, which is its own finding. The
+ * {@code read} / {@code find} rows probe the same property for the head-grab terminals: they answer
+ * with one of the fixture's 100 focuses, so they belong next to {@code readHand}, not next to
+ * {@code toListTelescope}.
  *
  * <pre>{@code
  * ./gradlew :benchmarks:jmh -Pjmh.includes=ReadFoldBenchmark -Pjmh.fork=3   # fork >= 3 for gating reads
@@ -134,5 +137,32 @@ public class ReadFoldBenchmark {
       }
     }
     return false;
+  }
+
+  /**
+   * The head-grab gate. {@code read} and {@code find} answer with the first of this path's 100
+   * focuses, so both must cost what {@code readHand} costs — the depth of the path — and must not
+   * track {@code toListTelescope}, which visits every focus. A head row that scales with the
+   * fixture's cardinality is the regression this pair exists to catch.
+   */
+  @Benchmark
+  public String readTelescope() {
+    return emails.read(org);
+  }
+
+  @Benchmark
+  public String findTelescope() {
+    return emails.find(org).orElseThrow();
+  }
+
+  /** The loop floor for a head-grab: return at the first leaf. */
+  @Benchmark
+  public String readHand() {
+    for (final var team : org.teams()) {
+      for (final var user : team.users()) {
+        return user.email();
+      }
+    }
+    throw new IllegalStateException("fixture has no users");
   }
 }
