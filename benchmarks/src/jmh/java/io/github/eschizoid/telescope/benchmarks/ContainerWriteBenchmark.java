@@ -18,11 +18,15 @@ import org.openjdk.jmh.annotations.State;
  * the container lifts; these rows drive {@code .each(...)} / {@code .eachValue(...)} updates, which
  * rebuild through the traversal instead.
  *
- * <p>Cardinality is the dimension that matters. A hash table sized for n entries resizes on the nth
- * insert at the default load factor, so a rebuild that mis-sizes its table pays one full
- * reallocation plus a rehash of everything it has already inserted — invisible at small n, and
- * roughly a third of the cost by the tens of thousands. Each telescope row has a hand-written loop
- * beside it as the floor; the ratio between them is the whole signal.
+ * <p>Both rows size their table the same way, so the ratio between them is traversal overhead, not
+ * sizing — the sizing change itself is only visible by running this file against two builds. What
+ * this gate catches is a future regression in either dimension: a telescope row drifting away from
+ * its loop floor, or both drifting together.
+ *
+ * <p>The sizes deliberately straddle the power-of-two bands. A table built straight from an element
+ * count only resizes when that count exceeds three quarters of the next power of two, so a sweep of
+ * powers of two alone would sample only the band where a mis-sized table always resizes and never
+ * the roughly half of sizes where it never does.
  *
  * <pre>{@code
  * ./gradlew :benchmarks:jmh -Pjmh.includes=ContainerWriteBenchmark -Pjmh.profilers=gc
@@ -35,7 +39,7 @@ public class ContainerWriteBenchmark {
 
   public record TagMap(Map<String, String> tags) {}
 
-  @Param({ "16", "256", "4096", "32768" })
+  @Param({ "0", "1", "12", "16", "256", "3000", "4096", "32768" })
   public int size;
 
   private TagSet tagSet;

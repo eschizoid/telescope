@@ -238,10 +238,16 @@ final class ContainerLifts {
     if (raw == List.class || raw == Collection.class || raw == ArrayList.class) return input ->
       new ArrayList<>(((Collection<?>) input).size());
     if (raw == LinkedList.class) return ignored -> new LinkedList<>();
+    // Queue and Deque components never reach an allocator: PairingRules.containerViewOf recognises
+    // only Optional, List, Set and Map, so a component typed as one of these is rejected as an
+    // incompatible shape during resolution. The branches stay as a safety net for a future pairing
+    // rule, and deliberately skip source sizing that nothing can exercise.
     if (raw == ArrayDeque.class) return ignored -> new ArrayDeque<>();
     if (raw == Vector.class) return input -> new Vector<>(((Collection<?>) input).size());
     if (raw == Stack.class) return ignored -> new Stack<>();
     if (raw == PriorityQueue.class) return ignored -> new PriorityQueue<>();
+    // LinkedBlockingQueue's int argument is a hard capacity bound rather than a sizing hint, so a
+    // size-derived value would make the rebuilt queue reject every later offer.
     if (raw == LinkedBlockingQueue.class) return ignored -> new LinkedBlockingQueue<>();
     if (raw == CopyOnWriteArrayList.class) return input -> {
       final int size = ((Collection<?>) input).size();
@@ -316,8 +322,14 @@ final class ContainerLifts {
 
   /**
    * Table capacity that holds {@code size} entries without a resize, for the hash containers whose
-   * int constructor takes capacity and that ship no {@code newXxx} sizing factory. The JDK's own
-   * factories apply the same division; this exists for the types that lack one.
+   * int constructor takes a table capacity and that ship no {@code newXxx} sizing factory. The
+   * JDK's own factories apply the same division; this exists for the types that lack one.
+   *
+   * <p>A table built straight from an element count only resizes when that count exceeds {@code
+   * 0.75 * nextPowerOfTwo(count)} — the top quarter of each power-of-two band, so roughly half of
+   * all sizes are unaffected. When it does fire it costs one reallocation plus a rehash of
+   * everything already inserted, and the final table is the same size either way: this trades no
+   * memory for removing that resize.
    */
   private static int capacityFor(final int size) {
     return (int) Math.ceil(size / 0.75d);

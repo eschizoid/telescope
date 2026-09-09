@@ -2277,26 +2277,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // Whether the impl class exposes a capacity-presizing (int) constructor. The default impls do; an
   // arbitrary concrete subtype (LinkedList, TreeSet, TreeMap, …) may not, so it is filled via the
   // no-arg constructor instead.
-  private static boolean hasPresizeCtor(final String implFqn) {
-    return switch (implFqn) {
-      case
-        "java.util.ArrayList",
-        "java.util.HashSet",
-        "java.util.LinkedHashSet",
-        "java.util.HashMap",
-        "java.util.LinkedHashMap" -> true;
-      default -> false;
-    };
-  }
-
   /**
    * Allocation expression for a container that will be filled with {@code src.size()} elements.
    *
    * <p>{@code ArrayList}'s int constructor takes an exact element capacity, but the hash
-   * containers' takes a table capacity, and a table sized for n entries resizes on the nth insert
-   * at the default 0.75 load factor. Those route through the JDK's {@code newXxx} factories, which
-   * apply the load factor for the caller. A container with neither is filled from its default
-   * capacity.
+   * containers' takes a table capacity: a table built straight from an element count resizes
+   * whenever that count exceeds {@code 0.75 * nextPowerOfTwo(count)}, costing one reallocation plus
+   * a rehash of everything already inserted. Those route through the JDK's {@code newXxx}
+   * factories, which apply the load factor for the caller. A container with neither is filled from
+   * its default capacity.
    *
    * @param typeArgs the emitted type arguments, without angle brackets
    */
@@ -2309,7 +2298,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       ">new" +
       simple +
       "(src.size())";
-      default -> "new " + simple + "<" + typeArgs + ">" + (hasPresizeCtor(implFqn) ? "(src.size())" : "()");
+      case "java.util.ArrayList" -> "new " + simple + "<" + typeArgs + ">(src.size())";
+      default -> "new " + simple + "<" + typeArgs + ">()";
     };
   }
 
