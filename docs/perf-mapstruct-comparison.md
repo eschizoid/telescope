@@ -170,9 +170,8 @@ would remove only that, for only the narrow case of hot-looping the composable v
 
 The lesson stands: **smoke runs lie, and one CI run can too.** Run 1's 1.04× nested looked like a headline until run 2
 returned 1.42× on the same branch — the nested MapStruct baseline is JMH-noisy (±0.35). Laptop smoke runs earlier
-produced a 2.9–3.6× "forward gap", a "telescope-faster-on-backward" claim, and a "static-slower-than-lattice" inversion,
-all wrong — though R3 above measures that same inversion on nested with disjoint bands, so the shape is not exclusively
-a laptop artifact. Trust the numbers that reproduce across runs: flat ~1.07×, deep 1.07×–1.19×, and `BRIDGE_FN` at the
+produced a 2.9–3.6× "forward gap" that clean CI hardware dissolved, plus two claims that survived it — see the bottom
+line for which. Trust the numbers that reproduce across runs: flat ~1.07×, deep 1.07×–1.19×, and `BRIDGE_FN` at the
 floor.
 
 ## So is there a real gap?
@@ -260,8 +259,9 @@ adopter-gated on a real deep-tier hot loop that measures it.
 
 Two things in this document's history are worth keeping visible. Of the three claims a laptop produced, only the
 2.9-3.6x forward gap dissolved on clean CI hardware. The other two survived it: R3 measured the
-static-slower-than-lattice inversion on nested with disjoint bands, and telescope does measure faster than MapStruct on
-nested backward — 5.355 against 5.983 ns, disjoint — though not on flat or deep backward, which is what makes the
+static-slower-than-lattice inversion on nested with disjoint bands, and telescope codegen measures faster than MapStruct
+on nested backward on the `benchmarks/README` run — 5.355 against 5.983 ns, disjoint — where this document's Run 1 table
+shows the same direction at 0.99× without resolving it. Flat and deep backward go the other way, which is what makes the
 blanket wording fail rather than the claim. And every tier here was List-only until recently, which let a sizing defect
 in the container emitter ship green — the container rows exist so that class of defect fails a measurement rather than
 passing one.
