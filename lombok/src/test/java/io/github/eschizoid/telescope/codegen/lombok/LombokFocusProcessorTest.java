@@ -75,16 +75,18 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("Lombok-emitted <X>Telescope is visible to same-module same-round consumers (no round-deferred limit)")
+    @DisplayName("a same-module consumer can reference the emitted <X>Telescope by direct import")
     void sameRoundConsumerCanReferenceEmittedPath() {
-      // SameRoundConsumer is in src/test/java alongside DataUser. Both go through the same javac
-      // compilation pass with LombokFocusProcessor on the annotation-processor classpath. The
-      // consumer references DataUserTelescope directly — if this class were loaded at all (it is,
-      // by
-      // this test), the consumer compiled, meaning the navigator symbol resolved during the
-      // consumer's
-      // own binding phase. That's the regression guard against re-introducing the
-      // processingOver()-only emission pattern.
+      // SameRoundConsumer is in src/test/java alongside DataUser, both compiled in one javac pass
+      // with LombokFocusProcessor on the annotation-processor classpath, and it references
+      // DataUserTelescope by direct import rather than by name. Loading this class at all proves
+      // the consumer compiled, so the navigator symbol resolved during its binding phase and the
+      // generated surface is usable through the typed API rather than only reflectively.
+      //
+      // This does NOT gate emission order: a test-source consumer resolves a navigator emitted in
+      // the final round just as well, so deferring every target to processingOver() leaves this
+      // green. Only a MAIN-source consumer distinguishes them, which is what the direct
+      // references in examples/library's LombokDemo hold in place.
       final var result = SameRoundConsumer.shoutEmail(new DataUser("u-1", "alice@example.com"));
       assertEquals("u-1", result.getId());
       assertEquals("ALICE@EXAMPLE.COM", result.getEmail());
