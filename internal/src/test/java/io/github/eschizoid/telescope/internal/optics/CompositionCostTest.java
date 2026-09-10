@@ -79,6 +79,22 @@ class CompositionCostTest {
   }
 
   @Test
+  @DisplayName("a chain rooted at an Iso reads each level once too")
+  void isoRootedChainIsLinear() {
+    // Iso.then(Lens) produces a Lens as well and carries the same hazard — but only when the lens
+    // it wraps is itself composed. A plain lens's set performs no read, so an Iso over one costs
+    // the same either way; the second read appears once the inner set has to rebuild through a
+    // level of its own. Compose the inner chain first, then root it at the Iso.
+    final var reads = new AtomicInteger();
+    final Iso<Level, Level> identity = Iso.of(level -> level, level -> level);
+    final var path = identity.then(innerLens(reads).then(leafLens(reads)));
+
+    path.modify(nest(1), leaf -> leaf + 1);
+
+    assertEquals(2, reads.get(), "the inner hop and the leaf, once each");
+  }
+
+  @Test
   @DisplayName("the composed write still produces the right value")
   void valueIsUnchangedByTheCostFix() {
     final var reads = new AtomicInteger();
