@@ -21,9 +21,9 @@ import org.junit.jupiter.params.provider.MethodSource;
  * effect and the build stays green — the failure mode a declaration-site restriction converts into
  * a compile error.
  *
- * <p>Each case supplies that annotation's own required elements. Passing the wrong ones would make
- * javac reject the source for a missing attribute instead, which fails the compile without ever
- * reaching the applicability check the test exists to pin.
+ * <p>Each case supplies that annotation's own required elements, so the compile fails for
+ * applicability and nothing else. The two assertions in the parameterized test below are what hold
+ * a case to that; the note there says which one catches what.
  *
  * <p>These compile through the full javac pipeline rather than {@code -proc:only} for the sake of
  * the attribute-value case: under processing-only the emitted bridge body is never attributed, so a
@@ -71,8 +71,8 @@ class ModifierAnnotationTargetTest {
     // Exactly one diagnostic, so nothing but applicability failed. The two assertions catch
     // different mis-specifications: leaving a required element unsupplied suppresses the
     // applicability diagnostic entirely, so only the substring assertion above sees that, while
-    // a stray attribute name or a wrong value type is reported alongside it, so only this count
-    // does.
+    // a stray name alongside complete required elements, or a wrong value type, is reported
+    // beside it, so only this count does.
     assertEquals(
       1,
       compilation.errors().size(),
