@@ -241,9 +241,9 @@ difference between same-tier rows is the dispatch path. Reproducible: re-run the
 | deep   | bean → record |     48.68 ± 0.106 |             55.04 ± 0.522 |                    54.71 ± 0.375 |              90.1 ± 2.5\* |
 | deep   | record → bean |     48.54 ± 0.273 |             54.81 ± 0.418 |                                — |              95.0 ± 2.5\* |
 
-> **This table predates the current figures and has no container tier.** Where it disagrees with the text below, the
-> text is the more recent measurement (Actions run 34470676359);
-> [`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md) carries the full current set.
+> **This table predates the current figures and has no container tier.**
+> [`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md) carries the current set, with the per-tier
+> ranges and which of them hold between runs.
 
 \* The nested and deep runtime cells were re-measured on a laptop after two lattice sharpenings landed. **Deep** — the
 container-element MethodHandle loop (a nested `List`/`Set`/`Map` element loops over the leaf's raw handle instead of
@@ -277,12 +277,12 @@ cycle is possible; cyclic SCCs keep the full guard).
 
 #### What the numbers say
 
-**Codegen-for-codegen, telescope and MapStruct are the same performance class — a tie at realistic depth.** On flat
-(3.155 vs 3.362 ns) telescope is **~1.07×**, ~0.2 ns absolute; on deep (62.38 vs 66.57 ns) **~1.07× — ~4 ns on a ~62 ns
-op** on the most recent run, 1.07×–1.19× across runs. The nested single-hop tier swings 1.04×–1.46× run-to-run — its
-MapStruct baseline is JMH-noisy (±0.35) — so it's a framework-overhead microbench, not a number to publish. The deeper
-the tree, the more the per-level conversion work dominates the fixed dispatch overhead; at the flat scale you're
-choosing on API and capability, not nanoseconds.
+**Codegen-for-codegen, telescope and MapStruct are the same performance class.** The current figures, with the per-tier
+ranges and which of them are stable across runs, live in the headline table of
+[`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md); this section explains the shape rather than
+restating them. Flat is settled and close. Deep and nested are ranges, and nested's MapStruct baseline is JMH-noisy
+enough that no single figure is worth publishing. The deeper the tree, the more the per-level conversion work dominates
+the fixed dispatch overhead; at the flat scale you're choosing on API and capability, not nanoseconds.
 
 The gap decomposes into a tiny dispatch tax plus the generated body. The `static` column (zero-dispatch
 `<Source>Bridge.forward(s)`) is the floor; the `BRIDGE.read` lattice path sits a sub-nanosecond wrapper tax above it
@@ -294,34 +294,35 @@ shapes (`static` / `BRIDGE_FN` / `BRIDGE.read` / MapStruct) at each tier, plus t
 Where the flat-tier gap comes from. MapStruct emits one hand-templated method body per pair, fully monomorphic, and the
 JIT inlines the whole conversion into a single basic block. Telescope's `@Bridge` codegen emits the same shape — a
 direct constructor call — wrapped in a `Telescope` for composability. On a flat ~3 ns conversion that composability
-costs ~0.2 ns total; on deep, where element-by-element list conversion dominates and the workload climbs past 50 ns, it
-is a ~1.07× tie on the most recent run, 1.07×–1.19× across runs. If you're in a tight inner loop that doesn't need
-composition, call `<Source>Bridge.forward(s)` — or the directly-callable `BRIDGE_FN` constant — and pay the
-zero-dispatch floor.
+costs a fraction of a nanosecond; on deep, where element-by-element list conversion dominates and the workload climbs
+past 50 ns, it is the same sub-nanosecond tax against a far larger row. What remains of the deep gap over MapStruct is
+generated-body work rather than composability; the comparison doc's headline table carries the per-run ratio and the
+across-run range. If you're in a tight inner loop that doesn't need composition, call `<Source>Bridge.forward(s)` — or
+the directly-callable `BRIDGE_FN` constant — and pay the zero-dispatch floor.
 
 Runtime conversion (`Telescope.mapper(...)`) composes each record/bean pair into a single MethodHandle (see above), so
 the hot path is one `invokeExact` through the fused handle rather than an `Object[]` gather with boxed per-field
-dispatch. That lands the forward direction at **~3.3× MapStruct on flat, ~2.7× on nested, ~1.3× on deep**, and
-~1.04–1.06× on hash-container fields. Nested and deep both used to trail far worse (~6.2× and ~4.4×); two lattice
-sharpenings closed them. The container-element MethodHandle loop (a nested `List`/`Set`/`Map` element loops over the
-leaf's raw handle instead of dispatching `Iso.to` → `Function.apply` per element, which also un-megamorphizes the shared
-lift call site) roughly halved deep — same-machine 205 → 90 ns. Full-tree fusion (a scalar nested-pair slot inlines the
-sub-leaf's raw handle directly into the parent's composed handle, so the whole acyclic subtree collapses to one
-`invokeExact`) did the same for nested — 25 → 15 ns. The backward (record → bean) direction — previously the
-pathological case (allocate a bean, then N boxed setter calls, ~48× MapStruct on flat) — is now **~3.5× on flat** via
-the unboxed setter-fold, matching forward instead of trailing it. Allocation drops to the result-object floor (flat 32
-B/op, the array + every primitive box gone). Sub-microsecond everywhere. Reach for codegen on the hottest paths; the
-runtime path is now within ~1.04–3.3× of MapStruct with **no annotations and no build step** — closest where the
-per-call conversion work is largest, which is the deep tier and the hash-container fields — close enough for most
-service code, and `@Bridge` codegen is there when a loop turns hot.
+dispatch. The resulting ratios against MapStruct are in the comparison doc's headline section; what matters here is that
+nested and deep both used to trail far worse (~6.2× and ~4.4×) and two lattice sharpenings closed them. The
+container-element MethodHandle loop (a nested `List`/`Set`/`Map` element loops over the leaf's raw handle instead of
+dispatching `Iso.to` → `Function.apply` per element, which also un-megamorphizes the shared lift call site) roughly
+halved deep — same-machine 205 → 90 ns. Full-tree fusion (a scalar nested-pair slot inlines the sub-leaf's raw handle
+directly into the parent's composed handle, so the whole acyclic subtree collapses to one `invokeExact`) did the same
+for nested — 25 → 15 ns. The backward (record → bean) direction — previously the pathological case (allocate a bean,
+then N boxed setter calls, ~48× MapStruct on flat) — is now **~3.5× on flat** via the unboxed setter-fold, matching
+forward instead of trailing it. Allocation drops to the result-object floor (flat 32 B/op, the array + every primitive
+box gone). Sub-microsecond everywhere. Reach for codegen on the hottest paths; the runtime path is now within ~1.04–3.3×
+of MapStruct with **no annotations and no build step** — closest where the per-call conversion work is largest, which is
+the deep tier and the hash-container fields — close enough for most service code, and `@Bridge` codegen is there when a
+loop turns hot.
 
-All four columns in that table are from the same run; the codegen/MapStruct ratios reproduce across confirming runs
-within error (the runtime rows carry wider bands but the same magnitude).
+Every cell in that table but the four footnote-marked runtime ones is from a single CI run; the codegen/MapStruct ratios
+reproduce across confirming runs within error (the runtime rows carry wider bands but the same magnitude).
 
 A quick decision guide. If the problem is "convert this entity to this DTO and back, both directions known at build
-time, no nested-list iteration, only scalars," MapStruct's bytecode is ~1.07× faster on the row (3.155 vs 3.362 ns, ~0.2
-ns absolute). On realistic deep workloads — nested records with list-of-records inside — telescope codegen matches
-MapStruct.
+time, no nested-list iteration, only scalars," MapStruct's bytecode is marginally faster on the row — a fraction of a
+nanosecond; [the comparison doc](../docs/perf-mapstruct-comparison.md) carries the figure. On realistic deep workloads —
+nested records with list-of-records inside — telescope codegen matches MapStruct.
 
 Where MapStruct stops being an option entirely: sealed-narrow paradigm hop, effectful update (`updateAsync`,
 `updateValidated`), JPA cycle handling, Hibernate `LAZY` proxy unwrap, deep navigation as a primitive. These are out of
