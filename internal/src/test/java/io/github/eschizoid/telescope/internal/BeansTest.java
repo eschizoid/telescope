@@ -1209,14 +1209,14 @@ class BeansTest {
   }
 
   @Nested
-  @DisplayName("writeBeanProperty — single-property write through cached LMF setter invoker")
-  class WriteBeanProperty {
+  @DisplayName("capturedWriter — single-property write through cached LMF setter invoker")
+  class CapturedWriter {
 
     @Test
     @DisplayName("happy path: writes a reference-typed property and the getter reflects the new value")
     void writesReferenceTypedProperty() {
       final var pojo = new NoArgSetters();
-      Beans.writeBeanProperty(pojo, "name", "alice");
+      Beans.capturedWriter(NoArgSetters.class, "name").accept(pojo, "alice");
       assertEquals("alice", pojo.getName());
     }
 
@@ -1225,9 +1225,9 @@ class BeansTest {
     void primitiveSetterUnboxesBoxedSource() {
       // The cached invoker is built from a BiConsumer<Object, Object> SAM whose instantiated
       // method type is (Cls, Integer) -> void. LMF generates the unbox bridge to setX(int) —
-      // this test exercises that bridge end-to-end via writeBeanProperty's public surface.
+      // this exercises that bridge end-to-end.
       final var pojo = new NoArgSetters();
-      Beans.writeBeanProperty(pojo, "score", 42);
+      Beans.capturedWriter(NoArgSetters.class, "score").accept(pojo, 42);
       assertEquals(42, pojo.getScore());
     }
 
@@ -1238,17 +1238,15 @@ class BeansTest {
       // gets a no-op BiConsumer rather than throwing — Mapper.into(target, source) would
       // otherwise blow up on a property pair that Mapper.forward (via SettersWriter) silently
       // skipped, producing an asymmetric same-mapper contract. NoArgFields has a `name` field
-      // and getter but no setter; writeBeanProperty must succeed silently and leave the field
-      // at its JLS default (here: null).
+      // and getter but no setter; the write must succeed silently and leave the field at its JLS
+      // default (here: null).
       final var pojo = new NoArgFields();
-      Beans.writeBeanProperty(pojo, "name", "ignored");
+      Beans.capturedWriter(NoArgFields.class, "name").accept(pojo, "ignored");
       assertNull(pojo.name);
     }
 
     @Test
-    @DisplayName(
-      "inherited setter: writeBeanProperty routes through the parent's declaring class for" + " privateLookupIn"
-    )
+    @DisplayName("inherited setter: the writer routes through the parent's declaring class for" + " privateLookupIn")
     void inheritedSetterRoutesThroughDeclaringClass() {
       // ChildBean inherits setId(String) from ParentBean. The LMF invoker must resolve a Lookup
       // against ParentBean (where setId is declared) rather than ChildBean — using the child's
@@ -1256,7 +1254,7 @@ class BeansTest {
       // directives. Pins the inheritance-correctness contract for the write path, mirroring the
       // SettersWriter test of the same shape.
       final var pojo = new ChildBean();
-      Beans.writeBeanProperty(pojo, "id", "parent-id");
+      Beans.capturedWriter(ChildBean.class, "id").accept(pojo, "parent-id");
       assertEquals("parent-id", pojo.getId());
     }
   }

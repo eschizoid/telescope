@@ -82,12 +82,12 @@ public final class Beans {
     }
   };
 
-  // Per-class setter-invoker cache for {@link #writeBeanProperty}. Mirrors the GETTER_INVOKERS
+  // Per-class setter-invoker cache for {@link #capturedWriter}. Mirrors the GETTER_INVOKERS
   // shape: ClassValue at the class layer, ConcurrentHashMap at the per-property layer for lazy
   // single-property resolution (one Method scan + LMF compile per (cls, name) the in-place
-  // mutation path actually visits). Separate from SettersWriter's per-instance setterInvokers so
-  // the public Beans.writeBeanProperty helper doesn't require the no-arg constructor SettersWriter
-  // demands (in-place mutation needs setters, not a ctor — Mapper.into is given the target).
+  // mutation path actually visits). Separate from SettersWriter's per-instance setterInvokers
+  // because binding a writer for in-place mutation needs setters but no no-arg constructor — the
+  // caller supplies the already-constructed target.
   private static final ClassValue<Map<String, BiConsumer<Object, Object>>> SETTER_INVOKERS = new ClassValue<>() {
     @Override
     protected Map<String, BiConsumer<Object, Object>> computeValue(final Class<?> type) {
@@ -413,10 +413,10 @@ public final class Beans {
    * {@link ClassValue} probe and the name lookup at bind time rather than per write.
    *
    * <p>Unlike {@link #capturedReader}, a name with no matching setter is <em>not</em> an error: it
-   * yields the same no-op writer {@link #writeBeanProperty} would have used, so a getter-only or
-   * computed property is skipped rather than throwing. That asymmetry is deliberate and matches
-   * what the rebuild strategies already do for an unwritable property — see {@code
-   * buildSetterInvoker}. Callers wanting a name checked must check it themselves.
+   * yields a no-op writer, so a getter-only or computed property is skipped rather than throwing.
+   * That asymmetry is deliberate and matches what the rebuild strategies already do for an
+   * unwritable property — see {@code buildSetterInvoker}. Callers wanting a name checked must check
+   * it themselves.
    *
    * <p>Pass the class the write will actually target. Binding to a declared supertype silently
    * skips a property whose setter exists only on the concrete subclass, which is the ordinary shape
@@ -480,12 +480,6 @@ public final class Beans {
    * @throws IllegalStateException via {@link MethodHandles#privateLookupIn} when the setter's
    *     declaring class lives in a closed-package module without an {@code opens} directive
    */
-  public static void writeBeanProperty(final Object pojo, final String name, final Object value) {
-    final var beanClass = persistentClassOf(pojo);
-    final var setter = SETTER_INVOKERS.get(beanClass).computeIfAbsent(name, n -> buildSetterInvoker(beanClass, n));
-    setter.accept(pojo, value);
-  }
-
   @SuppressWarnings("unchecked")
   private static BiConsumer<Object, Object> buildSetterInvoker(final Class<?> cls, final String name) {
     final var set = "set" + capitalize(name);
@@ -1490,7 +1484,7 @@ public final class Beans {
           break;
         }
       }
-      // Align with SettersWriter and the static {@code writeBeanProperty} path — when a target
+      // Align with SettersWriter and the captured-writer path — when a target
       // property has no matching builder setter (getter-only on the target POJO, computed-only
       // value, etc.), silently skip rather than throw. The names array passed to
       // {@code construct(...)} is derived from the target's getter set, not from a user-
