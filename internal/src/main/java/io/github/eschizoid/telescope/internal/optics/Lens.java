@@ -182,6 +182,15 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
       public S set(final S source, final B value) {
         return self.set(source, next.set(self.get(source), value));
       }
+
+      // Without this, modify falls to Lens's default — set(source, f.apply(get(source))) — and the
+      // set above reads the outer focus a second time. Composed that way, one modify at depth d
+      // costs d(d+1)/2 leaf reads instead of d. Delegating to the outer modify keeps it linear, the
+      // way Affine and Traversal already do for their compositions.
+      @Override
+      public S modify(final S source, final Function<? super B, ? extends B> f) {
+        return self.modify(source, a -> next.modify(a, f));
+      }
     };
   }
 
@@ -197,6 +206,13 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
       @Override
       public S set(final S source, final B value) {
         return self.set(source, next.from(value));
+      }
+
+      // Same reason as the Lens pairing above: route through the outer modify so the outer focus
+      // is read once. An Iso needs no read of its own — it converts in both directions.
+      @Override
+      public S modify(final S source, final Function<? super B, ? extends B> f) {
+        return self.modify(source, a -> next.from(f.apply(next.to(a))));
       }
     };
   }

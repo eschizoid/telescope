@@ -302,6 +302,13 @@ public interface Iso<A, B> extends Lens<A, B>, Prism<A, B> {
       public A set(final A source, final C value) {
         return self.from(next.set(self.to(source), value));
       }
+
+      // The set above converts and reads; Lens's default modify would then read again through get.
+      // Converting once and delegating to the inner modify keeps a composed write linear in depth.
+      @Override
+      public A modify(final A source, final Function<? super C, ? extends C> f) {
+        return self.from(next.modify(self.to(source), f));
+      }
     };
   }
 
