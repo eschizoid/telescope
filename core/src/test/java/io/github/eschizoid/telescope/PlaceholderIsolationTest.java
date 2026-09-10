@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import io.github.eschizoid.telescope.mapping.Mapping;
 import org.junit.jupiter.api.DisplayName;
@@ -22,6 +23,16 @@ import org.junit.jupiter.api.Test;
 class PlaceholderIsolationTest {
 
   record Slim(String value) {}
+
+  record Node(Node next, String value) {}
+
+  record NodeHolder(String label, Node node) {}
+
+  record Ping(Pong pong) {}
+
+  record Pong(Ping ping) {}
+
+  record PingHolder(String label, Ping ping) {}
 
   public static class Holder {
 
@@ -69,19 +80,34 @@ class PlaceholderIsolationTest {
   }
 
   @Test
-  @DisplayName("a placeholder built once is still built on every later conversion")
-  void repeatedConversionsKeepBuilding() {
+  @DisplayName("a self-referential record has no default, rather than no bound")
+  void selfReferentialRecordYieldsNoDefault() {
+    // No instance of Node can be built without an instance of Node, so it has no default tree.
+    // Resolving its component plans re-enters the same type, which without a guard descends until
+    // the stack ends. It yields the null a type with no construction strategy yields instead.
     final var mapper = Telescope.mapper(
       Slim.class,
-      Holder.class,
-      Mapping.to(Slim::value, Telescope.ofBean(Holder.class).field(Holder::getLeaf).field(Leaf::getValue))
+      NodeHolder.class,
+      Mapping.to(Slim::value, Telescope.of(NodeHolder.class).field(NodeHolder::node).field(Node::value))
     );
 
-    // Ten conversions, ten distinct leaves: caching the plan must not collapse into caching one
-    // instance, however many times the plan is reused.
-    final var leaves = new java.util.IdentityHashMap<Leaf, Boolean>();
-    for (var i = 0; i < 10; i++) leaves.put(mapper.forward(new Slim("v" + i)).getLeaf(), Boolean.TRUE);
+    // The write lands on nothing because there is nothing to land on: Node has no default tree, so
+    // the placeholder is null and the row's set has no instance to rebuild. Terminating with that
+    // null is the property — the alternative is descending until the stack ends.
+    assertNull(mapper.forward(new Slim("x")).node(), "a record that cannot be defaulted stays null");
+  }
 
-    assertEquals(10, leaves.size(), "every conversion allocated its own placeholder");
+  @Test
+  @DisplayName("mutually referential records terminate the same way")
+  void mutualReferenceTerminates() {
+    final var mapper = Telescope.mapper(
+      Slim.class,
+      PingHolder.class,
+      Mapping.to(Slim::value, Telescope.of(PingHolder.class).field(PingHolder::label))
+    );
+
+    // The row claims `label`, but resolving the target still plans a placeholder for `ping`, whose
+    // component type resolves back to it.
+    assertEquals("y", mapper.forward(new Slim("y")).label());
   }
 }

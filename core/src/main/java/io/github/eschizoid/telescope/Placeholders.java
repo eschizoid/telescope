@@ -4,6 +4,8 @@ import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.lang.reflect.Modifier;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -41,7 +43,7 @@ final class Placeholders {
    */
   static Iso<Object, Object> placeholderIsoFor(final Class<?> fieldType, final boolean claimedByTelescopeWrite) {
     if (fieldType == null) return NULLING_ISO;
-    if (claimedByTelescopeWrite && (fieldType.isRecord() || beanIntermediateAllocatable(fieldType))) {
+    if (claimedByTelescopeWrite && (fieldType.isRecord() || BEAN_ALLOCATABLE.get(fieldType))) {
       return defaultAllocatorIso(fieldType);
     }
     if (fieldType.isPrimitive()) {
@@ -67,25 +69,33 @@ final class Placeholders {
     return Iso.of(__ -> recursiveDefault(type), __ -> null);
   }
 
-  /**
-   * Construct a default-tree instance of {@code type} — primitives get their JLS default (0, false,
-   * etc.), records recurse via their canonical constructor with the same scheme, beans get a fresh
-   * instance from their public no-arg constructor (uninitialised fields default to null/zero, which
-   * the telescope-row write then overwrites). Anything else returns {@code null}.
-   *
-   * <p>Cycles between record types can't arise in practice: each canonical ctor needs every other
-   * type already constructible, so a record cycle would fail at compile time. Bean cycles are
-   * possible in principle but the no-arg ctor doesn't recurse into fields, so a self-referencing
-   * bean is handled with a single allocation regardless of its field shape.
-   */
+  /** A default-tree instance of {@code type}, built from its cached plan. */
   private static Object recursiveDefault(final Class<?> type) {
     return PLANS.get(type).get();
   }
 
   /**
-   * The default-tree plan for a type, resolved once per class. Everything reflective about building
-   * a default lives here — the component list, the primitive lookup, and the constructor probe — so
-   * a conversion pays a supplier call per component rather than re-deriving the shape.
+   * Whether a type has a usable intermediate-construction strategy. Cached because the probe costs
+   * two thrown exceptions for a type with neither a no-arg constructor nor a {@code builder()} —
+   * {@code LocalDate}, {@code UUID}, most JDK value types — and both the plan and the placeholder
+   * factory need the answer.
+   */
+  private static final ClassValue<Boolean> BEAN_ALLOCATABLE = new ClassValue<>() {
+    @Override
+    protected Boolean computeValue(final Class<?> type) {
+      return beanIntermediateAllocatable(type);
+    }
+  };
+
+  /** Types whose plan is mid-resolution on this thread, so a self-reference can be recognised. */
+  private static final ThreadLocal<Set<Class<?>>> IN_PROGRESS = ThreadLocal.withInitial(HashSet::new);
+
+  /**
+   * The default-tree plan for a type, resolved once per class: primitives yield their JLS default,
+   * records their canonical constructor filled with the same scheme, beans a fresh instance from a
+   * public no-arg constructor or a static {@code builder()}, and anything else {@code null}.
+   * Everything reflective lives here — the component list, the primitive lookup, the constructor
+   * probe — so a conversion pays a supplier call per component rather than re-deriving the shape.
    *
    * <p>The plan is cached, not the value. Today's write paths rebuild rather than mutate, so a
    * shared instance would not be observable through them — but a default is a mutable object handed
@@ -107,32 +117,39 @@ final class Placeholders {
       return () -> value;
     }
     if (type.isRecord()) {
-      // Canonical order, so the component plans fill a positional array directly. Records cannot
-      // form a construction cycle — every canonical constructor needs its component types already
-      // constructible — so resolving a component's plan here cannot re-enter this type.
-      final var comps = type.getRecordComponents();
-      final var parts = (Supplier<Object>[]) new Supplier<?>[comps.length];
-      for (var i = 0; i < comps.length; i++) parts[i] = PLANS.get(comps[i].getType());
-      return () -> {
-        final var args = new Object[parts.length];
-        for (var i = 0; i < parts.length; i++) args[i] = parts[i].get();
-        return Records.construct((Class) type, args);
-      };
+      // A record CAN reference itself, directly or mutually — `record Node(Node next, String v)`
+      // compiles — and no instance of one can be constructed without an instance of it, so it has
+      // no default. Resolving component plans would otherwise re-enter this type forever, so a
+      // type already being resolved on this thread yields the same null a type with no usable
+      // construction strategy yields.
+      if (!IN_PROGRESS.get().add(type)) return () -> null;
+      try {
+        return recordPlan(type);
+      } finally {
+        IN_PROGRESS.get().remove(type);
+      }
     }
-    // Bean intermediate: try the public no-arg ctor first, falling back to the static builder()
-    // pattern (Lombok @Builder, Immutables-style). Skip JDK scalars / containers entirely so the
-    // records path stays unchanged. Telescope-row writes go through the bean's setters at each
-    // hop, so each intermediate just needs to be non-null; the setters overwrite the
-    // default-initialised fields. If neither strategy works, the cached supplier yields null —
-    // same behaviour as before bean-intermediate support, but no per-call
-    // `getDeclaredConstructor` / `getMethod("builder")` reflection: both shapes are LMF-cached
-    // per class via {@link Beans#intermediateAllocator}.
-    // The allocator is already cached per class and hands back a fresh instance per call, which a
-    // bean intermediate needs: telescope-row writes go through its setters, so two conversions
-    // must not share one. The probe that decides whether a type has a usable strategy costs two
-    // thrown exceptions for a type with neither, and it runs here rather than per conversion.
-    if (beanIntermediateAllocatable(type)) return Beans.intermediateAllocator(type)::get;
+    // Bean intermediate: a public no-arg constructor, or a static builder() (Lombok @Builder,
+    // Immutables). JDK scalars and containers are excluded so the records path is unchanged. A
+    // telescope-row write goes through the bean's setters at each hop, so an intermediate only has
+    // to be non-null and fresh — the allocator is cached per class and hands back a new instance
+    // per call, which two conversions writing through the same type both need. A type with neither
+    // strategy yields null, the same filler the unannotated path produces.
+    if (BEAN_ALLOCATABLE.get(type)) return Beans.intermediateAllocator(type)::get;
     return () -> null;
+  }
+
+  /** Component plans in canonical order, filling a positional argument array per call. */
+  @SuppressWarnings({ "rawtypes", "unchecked" })
+  private static Supplier<Object> recordPlan(final Class<?> type) {
+    final var comps = type.getRecordComponents();
+    final var parts = (Supplier<Object>[]) new Supplier<?>[comps.length];
+    for (var i = 0; i < comps.length; i++) parts[i] = PLANS.get(comps[i].getType());
+    return () -> {
+      final var args = new Object[parts.length];
+      for (var i = 0; i < parts.length; i++) args[i] = parts[i].get();
+      return Records.construct((Class) type, args);
+    };
   }
 
   static Object primitiveDefault(final Class<?> p) {
