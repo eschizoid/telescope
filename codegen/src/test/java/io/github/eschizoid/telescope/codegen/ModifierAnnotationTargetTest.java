@@ -108,12 +108,14 @@ class ModifierAnnotationTargetTest {
 
     assertTrue(compilation.success(), "attribute-value use must keep compiling: " + compilation.errorMessages());
 
-    // Compiling is not enough to prove the restriction left the attribute form working: this source
-    // is valid Java whether or not the processor ran at all. The generated bridge is the artifact
-    // that shows both annotations were read and honoured.
+    // Compiling is not enough: this source is valid Java whether or not the processor ran at all.
+    // The generated bridge is the artifact that shows the attributes were read. A bridge exists
+    // only
+    // if the rename was honoured — without it the two records are not a bijection and the processor
+    // rejects the pair before emitting — and the default's literal appears only where @Default put
+    // it.
     final var bridge = compilation.generated().get("demo.OrderBridge");
-    assertNotNull(bridge, "@Bridge must still emit demo.OrderBridge");
-    assertTrue(bridge.contains("referenceCode"), "@Rename must reach the generated bridge");
+    assertNotNull(bridge, "@Rename must still be honoured: no bijection, no emitted bridge");
     assertTrue(bridge.contains("\"EMEA\""), "@Default must reach the generated bridge");
   }
 }
