@@ -530,12 +530,13 @@ The runtime entry points are `Telescope.of(...)` and `Telescope.ofBean(...)` res
 
 Reflection is used for **discovery** — finding components, getters, setters, builders. Hot-path **dispatch** is a
 `LambdaMetafactory`-built SAM on the JVM, and a `MethodHandle` closure (`MhAccessors`) inside a native image, where LMF
-cannot define a class. `MhIso` is separate and runs on both: it fuses a structural conversion's reads and rebuild into
-one composed handle rather than dispatching per call.
+cannot define a class. `MhIso` is separate and runs on both: it composes a structural conversion's component reads and
+its rebuild into a single `(S) -> T` handle, replacing the array leaf's per-component `Function` calls and `Object[]`
+boxing.
 
 ADR-0005 is the live decision and ADR-0003 is the constraint it refines — raw `MethodHandle.invoke` per-call dispatch
-stays rejected by both. What survives from ADR-0003 is that rejection and the reflective discovery substrate; its
-dispatch call was narrowed by ADR-0005 and qualified by ADR-0015, and its figures predate both.
+stays rejected by both. What still binds from ADR-0003 is that rejection; ADR-0005 narrowed the rest, keeping reflection
+for discovery and swapping the dispatch primitive, and ADR-0015 qualified it under AOT. ADR-0003's figures predate both.
 
 ### Runtime and codegen are separate strategies, not unified
 
