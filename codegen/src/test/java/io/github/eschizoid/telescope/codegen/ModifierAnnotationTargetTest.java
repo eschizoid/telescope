@@ -68,10 +68,11 @@ class ModifierAnnotationTargetTest {
       compilation.hasError("not applicable"),
       "javac should reject @" + annotation + " as inapplicable, got: " + compilation.errorMessages()
     );
-    // Exactly one diagnostic, so nothing but applicability failed. javac reaches the target check
-    // only once an annotation's element values are complete and resolvable — a wrong or missing
-    // attribute replaces this diagnostic rather than adding to it, which is why the substring
-    // assertion above is what catches a mis-specified case.
+    // Exactly one diagnostic, so nothing but applicability failed. The two assertions catch
+    // different mis-specifications: leaving a required element unsupplied suppresses the
+    // applicability diagnostic entirely, so only the substring assertion above sees that, while
+    // a stray attribute name or a wrong value type is reported alongside it, so only this count
+    // does.
     assertEquals(
       1,
       compilation.errors().size(),
@@ -80,7 +81,7 @@ class ModifierAnnotationTargetTest {
   }
 
   @Test
-  @DisplayName("the same annotations still reach the generated bridge as @Bridge attribute values")
+  @DisplayName("@Default and @Rename still reach the generated bridge as @Bridge attribute values")
   void memberValueUseStillCompiles() {
     final var compilation = compile(
       ProcessorHarness.source(
@@ -109,13 +110,13 @@ class ModifierAnnotationTargetTest {
 
     assertTrue(compilation.success(), "attribute-value use must keep compiling: " + compilation.errorMessages());
 
-    // Compiling is not enough: this source is valid Java whether or not the processor ran at all.
-    // The generated bridge is the artifact that shows the attributes were read. A bridge exists
-    // only if the rename was honoured — without it the two records are not a bijection and the
-    // processor rejects the pair before emitting — and the default's literal appears only where
-    // @Default put it.
+    // Compiling is not enough: this source is valid Java whether or not the processor ran at all,
+    // so the generated bridge is the artifact that shows the attributes were read. A missing
+    // bridge means the processor emitted nothing; the rename failing instead breaks the bijection,
+    // which the processor reports as an error the success assertion above already catches. The
+    // default's literal appears only where @Default put it.
     final var bridge = compilation.generated().get("demo.OrderBridge");
-    assertNotNull(bridge, "@Rename must still be honoured: no bijection, no emitted bridge");
+    assertNotNull(bridge, "the processor must emit a bridge for the annotated pair");
     assertTrue(bridge.contains("\"EMEA\""), "@Default must reach the generated bridge");
   }
 }
