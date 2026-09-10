@@ -333,7 +333,7 @@ When a type carries **both** `@Focus`/`@BeanFocus` **and** `@Bridge(Target.class
 Out-of-tree consumer of `AbstractTelescopeProcessor`. Detects `@lombok.Data`, `@lombok.Value`, `@lombok.Builder` by
 string FQN and emits the same `<X>Telescope<R>` navigator shape as `:codegen`.
 
-### The round-deferred-emission gotcha
+### The Lombok round-ordering gotcha
 
 **Don't process a Lombok-annotated class in round 1.** Lombok installs lazy AST visitors during processor init that
 patch class declarations on traversal. Round 1's `Elements.getAllMembers()` on a `@Data` class sees the un-patched
@@ -408,8 +408,8 @@ integration tests where order matters.
 
 ### `:lombok` tests — file-based integration via Gradle
 
-The in-memory harness **does not work for Lombok** (see the round-deferred-emission note above). Lombok integration
-tests live as real files in `lombok/src/test/java/io/github/eschizoid/telescope/codegen/lombok/`:
+The in-memory harness **does not work for Lombok** (see the round-ordering note above). Lombok integration tests live as
+real files in `lombok/src/test/java/io/github/eschizoid/telescope/codegen/lombok/`:
 
 - `fixtures/DataUser.java`, `BuilderUser.java`, `ValueBuilderUser.java`, `DataTeam.java` — real Lombok-annotated POJOs
   that get compiled by Gradle's standard `compileTestJava` pipeline with both Lombok and `LombokFocusProcessor` on the
@@ -485,7 +485,7 @@ rewrites. Tested at both layers: `OpticLawsTest` in `:internal` proves the optic
 behaviour.
 
 The history — function registry, then a full Monocle port, then a regression that threw the lattice away, then the
-two-layer settlement — is written up in a series of blog posts linked from the README.
+two-layer settlement — is written up in a series of blog posts by the author.
 
 ---
 
@@ -543,10 +543,13 @@ Runtime path uses `SerializedLambda` to recover field names; codegen path emits 
 equivalent `Telescope` values but reach them differently. ADR-0004 captures why we don't try to unify the rebuild path.
 See `docs/adr/0004-runtime-and-codegen-strategy-separate.md`.
 
-### Round-deferred Lombok emission
+### Reading Lombok-synthesised members
 
-`LombokFocusProcessor` collects targets every round and only emits on `processingOver()` so Lombok's lazy AST patches
-have all fired. Documented above; applies to any future Lombok-touching processor.
+A processor must not read them in round one, before Lombok's lazy AST patches have fired. `LombokFocusProcessor` retries
+every round and emits as soon as the bean surface reads complete, because deferring everything left its output
+unresolvable from same-module main code; `BridgeProcessor` and `FromMapProcessor` defer only their Lombok-triggered
+targets to `processingOver()`. Detailed in the `:lombok` section above; applies to any future processor that reads
+synthesised members.
 
 ### Bridge constants emit in the source's package
 
@@ -635,8 +638,10 @@ Collected because each of these has cost a round of review or a red build more t
   returns non-null then null. Hoist into a local; `BridgeProcessor.withPrelude` is the idiom.
 - **`getAll` and `visitWhile` enumerate the same focuses, and `visitWhile` is the one that stops.** Anything that
   answers with one focus, or that folds eagerly, should ride `visitWhile`. `FoldLaws` pins the equivalence.
-- **Lombok-touching processors must defer emission to `processingOver()`.** Lombok's AST patches may not have fired in
-  round one, so member lookups return an un-patched view.
+- **Lombok-touching processors must not read synthesised members in round one** — the patches may not have fired, so the
+  lookup returns an un-patched view. Retry every round and emit once the surface reads complete
+  (`LombokFocusProcessor`), or defer the Lombok-triggered targets to `processingOver()` (`BridgeProcessor`,
+  `FromMapProcessor`).
 - **Every runtime `LambdaMetafactory` site needs the `NativeImage.IN_IMAGE` branch** to its `MhAccessors` equivalent, or
   the native-image workflow goes red.
 - **Spotless for Java runs google-java-format first and prettier last.** Running only one of them leaves violations the
