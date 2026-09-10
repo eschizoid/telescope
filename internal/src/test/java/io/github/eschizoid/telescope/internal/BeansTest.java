@@ -1234,7 +1234,7 @@ class BeansTest {
     @Test
     @DisplayName("getter-only / no-setter property silently no-ops (matches MapStruct's @MappingTarget" + " contract)")
     void getterOnlyPropertyIsSilentNoOp() {
-      // Documented contract at Beans.buildSetterInvoker: a property with no setX(value) method
+      // Documented contract on Beans.capturedWriter: a property with no setX(value) method
       // gets a no-op BiConsumer rather than throwing — Mapper.into(target, source) would
       // otherwise blow up on a property pair that Mapper.forward (via SettersWriter) silently
       // skipped, producing an asymmetric same-mapper contract. NoArgFields has a `name` field
@@ -1248,12 +1248,12 @@ class BeansTest {
     @Test
     @DisplayName("inherited setter: a setter declared on the superclass is discovered and the write" + " lands")
     void inheritedSetterIsDiscoveredAndWrites() {
+      // What this pins is discovery and that the write reaches the parent's private field:
       // ChildBean inherits setId(String) from ParentBean, so the name scan has to reach a method
-      // the child does not declare: getMethods() surfaces it, and the invoker is built against the
-      // setter's declaring class so a parent in a separately-opened package still resolves.
-      // Both classes sit in this package, so the test cannot distinguish which class the Lookup
-      // was taken against — that would need a two-module fixture. What it pins is discovery and
-      // that the write reaches the parent's private field.
+      // the child does not declare, and getMethods() surfaces it. The invoker is built against the
+      // setter's declaring class so a parent in a separately-opened package still resolves — but
+      // both classes sit in this package, so the test cannot distinguish which class the Lookup
+      // was taken against. That would need a two-module fixture.
       final var pojo = new ChildBean();
       Beans.capturedWriter(ChildBean.class, "id").accept(pojo, "parent-id");
       assertEquals("parent-id", pojo.getId());
