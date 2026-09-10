@@ -412,19 +412,18 @@ public final class Beans {
    * resolved once so a caller writing the same property repeatedly pays the proxy unwrap, the
    * {@link ClassValue} probe and the name lookup at bind time rather than per write.
    *
-   * <p>Binding to {@code beanClass} rather than the runtime class is deliberate, for the reason
-   * {@link #capturedReader} documents: a Hibernate proxy subclass still writes correctly through a
-   * writer bound to the declared class, and binding once keeps the invoker cache from accumulating
-   * an entry per proxy subclass.
+   * <p>Unlike {@link #capturedReader}, a name with no matching setter is <em>not</em> an error: it
+   * yields the same no-op writer {@link #writeBeanProperty} would have used, so a getter-only or
+   * computed property is skipped rather than throwing. That asymmetry is deliberate and matches
+   * what the rebuild strategies already do for an unwritable property — see {@code
+   * buildSetterInvoker}. Callers wanting a name checked must check it themselves.
    *
-   * <p>Throws {@link IllegalArgumentException} at build time if the named property has no setter.
+   * <p>Pass the class the write will actually target. Binding to a declared supertype silently
+   * skips a property whose setter exists only on the concrete subclass, which is the ordinary shape
+   * for an entity hierarchy.
    */
   public static BiConsumer<Object, Object> capturedWriter(final Class<?> beanClass, final String name) {
-    final var writer = SETTER_INVOKERS.get(beanClass).computeIfAbsent(name, n -> buildSetterInvoker(beanClass, n));
-    if (writer == null) throw new IllegalArgumentException(
-      "No setter for property '" + name + "' on " + beanClass.getName()
-    );
-    return writer;
+    return SETTER_INVOKERS.get(beanClass).computeIfAbsent(name, n -> buildSetterInvoker(beanClass, n));
   }
 
   /**
