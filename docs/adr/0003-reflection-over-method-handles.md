@@ -11,10 +11,13 @@ Method.invoke; modern JIT can fold it").
 
 > **Amendment (2026-09-10, after ADR-0005 and ADR-0015).** The figures below predate both. ADR-0005 narrowed this
 > decision — reflection stays for discovery, while the hot-path dispatch primitive became a `LambdaMetafactory`-built
-> functional interface — and ADR-0015 qualified it under AOT, where `MhAccessors` reaches fields, properties and
-> constructors through `MethodHandle.invokeExact` because LMF cannot define a class inside an image. What still binds
-> from this ADR is its rejection of raw per-call `MethodHandle.invoke` as the dispatch primitive, which ADR-0005 rejects
-> again on its own evidence. Read the numbers here as the state before that work.
+> functional interface — and ADR-0015 qualified it under AOT, where `MhAccessors` reaches record components, bean
+> properties and constructors through `MethodHandle.invokeExact` because LMF cannot define a class inside an image. The
+> exception is not AOT-only: on a stock JVM, field writes (`putField`) and the all-args constructor's spread adapter
+> also go through cached `MethodHandle`s, because LMF structurally cannot bind those handle kinds. What still binds from
+> this ADR is its rejection of raw per-call `MethodHandle.invoke` as the dispatch primitive, which ADR-0005 rejects
+> again, on the added ground that raw dispatch lacks the JIT-inlinable functional-interface shape. Read the numbers here
+> as the state before that work.
 
 ## Decision
 
