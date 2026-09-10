@@ -341,11 +341,12 @@ member list (no synthesised getters / setters / builder) → "no readable proper
 Two shapes handle it, and which one a processor needs depends on whether its output has to be resolvable from
 same-module main code. `LombokFocusProcessor` retries every round and emits as soon as the bean surface reads complete
 (`emitBeanNavigatorIfReady`), using `processingOver()` only to turn a target that never became readable into a
-diagnostic rather than silence — nothing is emitted there. Deferring emission itself to that round is what breaks: a
-navigator emitted only then does not exist yet when same-module main code is resolved, which `examples/library`'s
-`LombokDemo` holds in place by importing the generated navigators directly. `BridgeProcessor` and `FromMapProcessor`
-defer only the targets carrying a Lombok trigger, to `processingOver()`. **Any future processor reading synthesised
-members of Lombok-annotated types must do one or the other; reading them in round one gets an un-patched view.**
+diagnostic rather than silence — nothing is emitted there. Deferring emission itself to that round is what breaks **for
+this processor**: a navigator emitted only then does not exist yet when same-module main code is resolved, which
+`examples/library`'s `LombokDemo` holds in place by importing the generated navigators directly. `BridgeProcessor` and
+`FromMapProcessor` defer only the targets carrying a Lombok trigger, to `processingOver()`. **Any future processor
+reading synthesised members of Lombok-annotated types must do one or the other; reading them in round one gets an
+un-patched view.**
 
 The in-memory `ProcessorHarness` (`:codegen` testFixtures) can't reproduce this — Lombok's javac hooks don't install in
 the in-process `JavaCompiler.CompilationTask` flow. Lombok integration tests must use Gradle's standard
