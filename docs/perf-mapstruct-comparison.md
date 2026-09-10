@@ -142,8 +142,7 @@ The `*_codegen_static_forward` (zero dispatch), `*_bridgefn_forward` (one interf
 | R3 deep   |                    66.27 |             69.22\* |                   66.57 |     0.30 ns | no (±0.27–0.52)  |
 
 \* R3 deep's `BRIDGE_FN` carries a ±5.3 ns band against `static forward`'s ±0.27 — about twenty times wider — so that
-one cell neither confirms nor contradicts the floor claim below. Every other `BRIDGE_FN` cell sits within a band
-comparable to its row's.
+one cell neither confirms nor contradicts the floor claim below.
 
 R1's bands are 2–27× wider than the others' and every one of its rows reads "no" — too wide to resolve any of these
 gaps. R2 resolves all three tiers; R3 resolves flat and nested but not deep. Where both resolve they agree on flat and
@@ -272,11 +271,12 @@ stable across runs and which are ranges; the short version is that flat is settl
 two container shapes tie on time while telescope allocates less on the Map shape.
 
 On dispatch, one half is settled and one is not. `BRIDGE_FN` is the floor — it tracks the zero-dispatch static call on
-every tier and every run bar one cell whose band is too wide to say, because the JIT inlines the monomorphic hop. The
-full-lattice `BRIDGE.read` carries a sub-nanosecond wrapper tax wherever it resolves at all, but its size and even its
-sign move between runs, so how it scales with depth is provisional and only the magnitude is durable. Both proposed
-remediations are settled either way: one shipped and reached the floor, and the other would remove only that tax, which
-the generated body dwarfs on deep — the one tier where the residual is big enough to be worth chasing.
+every tier and every run within error, because the JIT inlines the monomorphic hop — though on R3 deep only on a band
+too wide to say much. The full-lattice `BRIDGE.read` carries a sub-nanosecond wrapper tax wherever it resolves at all,
+but its size and even its sign move between runs, so how it scales with depth is provisional and only the magnitude is
+durable. Both proposed remediations are settled either way: one shipped and reached the floor, and the other would
+remove only that tax, which the generated body dwarfs on deep — the one tier where the residual is big enough to be
+worth chasing.
 
 What remains over MapStruct on deep is generated-body work rather than dispatch — the zero-dispatch floor is itself
 above parity — and closing it means matching MapStruct's inlined body. That stays adopter-gated on a real deep-tier hot
