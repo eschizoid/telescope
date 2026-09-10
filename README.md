@@ -401,20 +401,21 @@ To be precise about what a stale string costs, because the failure modes differ:
 
 #### Performance, measured
 
-In the included JMH workloads (MapStruct 1.6.3, CI hardware, JDK 25 —
-[methodology, environment, and both runs](docs/perf-mapstruct-comparison.md)), telescope codegen and MapStruct codegen
-land in the same performance class:
+In the included JMH workloads (MapStruct 1.6.3, CI hardware, JDK 25 — all figures from one run, so they are comparable;
+[methodology and history](docs/perf-mapstruct-comparison.md)), telescope codegen and MapStruct codegen land in the same
+performance class:
 
-| Tier (codegen vs codegen)   | telescope vs MapStruct                                        |
-| --------------------------- | ------------------------------------------------------------- |
-| flat (5 scalars)            | ~1.1× — a fraction of a nanosecond                            |
-| nested (one nested type)    | ~1.2×                                                         |
-| deep (3 levels + list hops) | ~1.15× — a few ns on a ~50 ns conversion, same 376 B/op floor |
+| Tier (codegen vs codegen)   | telescope vs MapStruct                                          |
+| --------------------------- | --------------------------------------------------------------- |
+| flat (5 scalars)            | ~1.07× — a fifth of a nanosecond                                |
+| nested (one nested type)    | 1.04×–1.42× across runs — a microbenchmark, not a service shape |
+| deep (3 levels + list hops) | ~1.07× — 4 ns on a 62 ns conversion, same 376 B/op floor        |
+| Set or Map field, 100 items | a tie on time, and ~11% less allocated on the Map shape         |
 
 No codegen? `Telescope.mapper(...)` composes each record/bean pair into a single MethodHandle: zero annotations, no
-build step, within ~1.3–4× of MapStruct in the same workloads (flat ~4×, nested ~2×, deep ~1.3–1.9× — closest where
-trees are deepest). That's sub-microsecond conversion; whether it's fast enough is your call, and when a loop turns hot,
-`@Bridge` puts you back in the codegen class. Reproduce any of it from the
+build step, within ~1.3–3.3× of MapStruct in the same workloads (flat ~3.3×, nested ~2.7×, deep ~1.3× — closest where
+trees are deepest, and a tie on container fields). That's sub-microsecond conversion; whether it's fast enough is your
+call, and when a loop turns hot, `@Bridge` puts you back in the codegen class. Reproduce any of it from the
 [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action; the full matrix is in
 [`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison-apples-to-apples).
 

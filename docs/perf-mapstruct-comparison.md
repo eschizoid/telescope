@@ -5,29 +5,36 @@ and propose remediations where the gap is structural.
 
 ## Headline finding
 
-**Telescope codegen is at effective MapStruct parity: ~1.07× flat and ~1.15× deep forward, both stable across two CI
-runs.** The realistic deep tier — 3-level nesting + list hops — is a ~1.15× near-tie (1.19× / 1.14× across the two
-runs), and flat is ~1.07× (1.065× / 1.072×). The nested-tier ratio is JMH-noisy run-to-run (1.04× then 1.42×; the
-`nested_mapstruct_forward` baseline carries a wide ±0.35 band), so no single nested figure is publishable — call it
-near-parity and lean on the stable flat/deep numbers. The deep residual is **mostly generated-body work, not dispatch**:
-the zero-dispatch `static forward` floor is itself ~1.12× on deep (~5.6 ns of the ~6.3 ns gap), with the lattice wrapper
-~0.8 ns on top.
+**Telescope codegen is in MapStruct's performance class, and on a hash container it allocates less.** From a single CI
+run so every figure below is comparable — separate runs land on runners of different speeds, which has produced
+misleading ratios here before.
 
-Two dispatch-shape claims from earlier revisions of this doc were **measured and settled** across both runs (see the
-results table and the "dispatch" section):
+| Tier (forward, codegen vs codegen)  | MapStruct | telescope | ratio | allocation              |
+| ----------------------------------- | --------: | --------: | ----: | ----------------------- |
+| flat (5 scalars)                    |  3.155 ns |  3.362 ns | 1.07x | 32 B/op both            |
+| nested (one nested type)            |  4.361 ns |  5.604 ns | 1.29x | 48 B/op both            |
+| deep (3 levels + 2 list hops)       | 62.378 ns | 66.572 ns | 1.07x | 376 B/op both           |
+| container, Map-valued (100 entries) | 1261.7 ns | 1243.5 ns |   tie | **7,528 vs 6,712 B/op** |
+| container, Set-valued (100 entries) | 1454.8 ns | 1444.7 ns |   tie | 7,576 B/op both         |
 
-- **`BRIDGE_FN` sits at the zero-dispatch floor.** The one-interface-hop constant measures within error of
-  `static forward` on every tier in both runs (run 2 flat: `BRIDGE_FN` == `static forward` to three digits). It is the
-  fastest a passable mapper value can be — there is nothing to recover past it.
-- **The full-lattice `BRIDGE.read` adds a ≤0.8 ns wrapper tax that grows with depth** — 0.14 ns (flat) → 0.31 ns
-  (nested) → 0.77 ns (deep) on the tight-band run, each outside the error bands. The proposed type-specialized subclass
-  (remediation #2 below) exists only to shave that off the _composable_ value — but `BRIDGE_FN` already ships the floor
-  as a passable value, and on deep the tax is swamped by the body gap, so **it is not worth building.**
+Read the two container rows carefully. Their confidence intervals overlap, so **the timings are a tie, not a win** —
+telescope's mean is marginally lower and that means nothing. What is real is the allocation: 6,712 against 7,528 bytes
+per operation on the Map tier, about 11% less, and allocation is deterministic rather than hardware-dependent.
 
-Earlier smoke-confidence laptop runs reported a 2.9–3.6× forward gap, a "telescope-faster-on-backward" inversion, and a
-"static-slower-than-lattice" inversion — all three were JMH noise artifacts that clean CI hardware dissolved. The
-runtime path is a different conversation (~1.3–4× after the leaf-rebuild campaign — see the runtime tier in
-[benchmarks/README.md](../benchmarks/README.md); the ~8–20× figure predates it).
+The scalar tiers are unchanged in character: a 0.2 ns difference on flat, 4 ns on a 62 ns deep conversion, and both
+outside their error bars so the ratios are real rather than noise. Nested remains the unstable one — measured at 1.04x,
+1.42x, 1.20x, 1.21x and now 1.29x across five runs of the same benchmark. It is a framework-overhead microbenchmark
+rather than a service-shaped workload; treat flat and deep as the publishable figures and nested as a range.
+
+Runtime tier, same run: flat 3.34x, nested 2.66x, deep 1.27x of MapStruct. That tier has no MapStruct equivalent to
+compare against — it is what you get with no annotations and no build step.
+
+### What the container tier is for
+
+It did not exist until recently, and its absence is why a defect shipped: every tier here was List-only, a list has no
+hash table, and the Bridge emitter was sizing Set and Map rebuilds by element count rather than table capacity. Every
+benchmark was green while generated bridges allocated more than the reflective path they exist to beat. The tier was
+added so that class of defect fails a measurement instead of passing one.
 
 ## Methodology
 
@@ -50,7 +57,11 @@ Four call shapes per tier:
 - **`*_telescope_runtime_*`** — `Telescope.mapper(BeanCls.class, RecCls.class).forward/backward`. The runtime
   structural-Iso build path (no codegen).
 
-## Results — two CI-reproducible runs (GitHub Actions `ubuntu-latest`, 3W + 5I × 3s @ 1 fork)
+## Results — earlier CI runs
+
+> The tables in this section predate the current headline and are kept for the dispatch analysis that follows, which
+> they are the evidence for. Where they disagree with the headline table, the headline is the current measurement. Both
+> were GitHub Actions `ubuntu-latest`, 3 warmup + 5 iterations at 3s, single fork.
 
 Two runs of the manual `Benchmarks` workflow on dedicated runners, taken because the first run's nested ratio looked too
 good to publish on one sample. Absolute numbers differ between the runs (different runner generation) — read the ratios
@@ -194,16 +205,21 @@ residual.
 
 ## Bottom line
 
-Telescope codegen is at **effective MapStruct parity — ~1.07× flat and ~1.15× deep forward, both stable across two CI
-runs** (nested is near-parity but JMH-noisy run-to-run, 1.04×–1.42×, so no single figure is publishable). On dispatch,
-**`BRIDGE_FN` is the floor**: it tracks the zero-dispatch `static forward` within error on every tier (identical on
-run-2 flat), because the JIT inlines the monomorphic hop. The full-lattice `BRIDGE.read` carries a wrapper tax that
-grows with depth — 0.14 → 0.31 → 0.77 ns across flat/nested/deep on the tight run, each outside the error band. That
-settles both proposed remediations: `BRIDGE_FN` shipped and lands at the floor (ergonomic _and_ marginally the fast
-value), and the type-specialized subclass would remove only that ≤0.8 ns tax from the composable `BRIDGE.read` —
-**declined**, since on deep (where the tax is largest) it is swamped ~7:1 by the body gap. The only real gap over
-MapStruct is ~5.6 ns of generated-body work on the deep tier (`static forward` alone is ~1.12×), not dispatch; closing
-it means matching MapStruct's inlined body, adopter-gated on a real deep-tier hot loop. The 2.9–3.6× forward "gap", the
-"telescope faster on backward" claim, and the "static slower than lattice" inversion from laptop smoke runs were all JMH
-noise. Measuring the dispatch claim to a conclusion — through two runs, not one — and declining the optimization it
-implied, is the deliverable here.
+Telescope codegen is in MapStruct's performance class: 1.07x flat, 1.07x deep, and a tie on both hash-container tiers
+where it also allocates about 11% less on the Map shape. Nested stays the unstable measurement — five runs of the same
+benchmark have produced 1.04x, 1.42x, 1.20x, 1.21x and 1.29x — so it is reported as a range rather than a figure.
+
+On dispatch the question is settled. `BRIDGE_FN` is the floor: it tracks the zero-dispatch `static forward` within error
+on every tier, because the JIT inlines the monomorphic hop. The full-lattice `BRIDGE.read` carries a wrapper tax that
+grows with depth, 0.14 to 0.77 ns across the three scalar tiers, each outside its error band. That settles both proposed
+remediations — `BRIDGE_FN` shipped and lands at the floor, and the type-specialized subclass would remove only that
+sub-nanosecond tax, swamped roughly seven to one by the body gap on deep. Declined.
+
+What remains over MapStruct on the deep tier is a few nanoseconds of generated-body work rather than dispatch —
+`static forward` alone is above parity — and closing it means matching MapStruct's inlined body. That stays
+adopter-gated on a real deep-tier hot loop that measures it.
+
+Two things in this document's history are worth keeping visible. The 2.9-3.6x forward gap, the telescope-faster-on-
+backward claim, and the static-slower-than-lattice inversion were all laptop noise that clean CI hardware dissolved. And
+every tier here was List-only until recently, which let a sizing defect in the container emitter ship green — the
+container rows exist so that class of defect fails a measurement rather than passing one.
