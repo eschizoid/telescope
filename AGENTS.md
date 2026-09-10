@@ -11,9 +11,8 @@ verifies mapper pairings at compile time. Read the mantras before the module map
 
 ## Project mantras (must-honour on every PR)
 
-1. **No inline FQN names in code.** Always add an `import` and use the simple name. The repo was swept clean in a
-   dedicated pass and stays that way by review; reintroducing them is a regression. Includes `java.util.LinkedHashMap`
-   in method bodies, `javax.lang.model.SourceVersion` in processors, etc. — _add the import_.
+1. **No inline FQN names in code.** Always add an `import` and use the simple name. This holds everywhere, including
+   `java.util.LinkedHashMap` in a method body and `javax.lang.model.SourceVersion` in a processor — _add the import_.
 2. **Zero reflection unless unavoidable.** Reach for the cached `LambdaMetafactory`-built `Function` / `BiConsumer` /
    `Supplier` substrate first (see `:internal/Beans.java`, `:internal/Records.java`). Only fall through to raw
    `Method.invoke` / `Constructor.newInstance` when the LMF path genuinely doesn't apply.
@@ -83,7 +82,8 @@ AGENTS.md              this file
 ```
 
 All modules use Java package `io.github.eschizoid.telescope` (starters live under `.quarkus` / `.spring`); Maven group
-is `io.github.eschizoid`. **Don't reintroduce the unowned `org.telescope` package** (issue #1 in the repo).
+is `io.github.eschizoid`. **Don't reintroduce the unowned `org.telescope` package** — the group is not ours to publish
+under.
 
 Published artifacts (group `io.github.eschizoid`): `telescope-core` (main entry), `telescope-internal` (substrate;
 published for runtime bytecode, not for direct depend-on), `telescope-codegen`, `telescope-lombok`, `telescope-quarkus`,
@@ -138,7 +138,7 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
   sequential when an edit is user-implemented rather than built by `over(...)`, when a path carries no hop record
   (`fieldByName`, bridge hops, `from/to/using`, custom lenses), when one path is a strict prefix of another, or when a
   trie node would branch on anything but same-owner, pairwise-distinct components.
-- **Write — multi-edit chain (alternative):** fluent shape pre-dating `Telescope.all(...)`, kept for inline paths.
+- **Write — multi-edit chain (alternative):** the inline-path shape, for edits built up in place rather than as rows.
   - `update(Telescope<S, X>, Function<X, X>)` — pre-built path; equivalent end-state to `over(...)` but accumulated
     inline.
   - `with(Function<A, A>)` — inline-path trailing edit on a chain already navigated.
@@ -247,9 +247,8 @@ from "compile-checked" to "runtime-checked" is a regression.
   take `Accessor` method refs.
 - **Typed-container navigation**: `.list` / `.setField` / `.mapField` / `.optional` return `ListTelescope` /
   `SetTelescope` / `MapTelescope` / `OptionalTelescope` whose typed terminal (`.each()` / `.values()` / `.present()`)
-  descends without runtime container dispatch. `setField` / `mapField` were renamed from `.set` / `.map` (1.0) to avoid
-  cognitive collision with the write terminal `set(S, A)` and the static `Telescope.map(Class, Class, ...)`
-  deep-conversion factory.
+  descends without runtime container dispatch. `setField` / `mapField` carry the `Field` suffix so they do not collide
+  with the write terminal `set(S, A)` or the static `Telescope.map(Class, Class, ...)` deep-conversion factory.
 - **Write — single-shot**: `.set`, `.update(S, fn)`, `.updateIndexed`, plus the four effectful `update*` variants.
 - **Write — multi-edit**: `.with(Function<A, A>)`, `.apply(S)`. `javac` rejects type-mismatched fn at compile time.
 - **Read**: `read` / `find` / `toList` / `toListIndexed` / `count` / `exists`.
@@ -341,8 +340,8 @@ member list (no synthesised getters / setters / builder) → "no readable proper
 
 Two shapes handle it, and which one a processor needs depends on whether its output has to be resolvable from
 same-module main code. `LombokFocusProcessor` retries every round and emits as soon as the bean surface reads complete
-(`emitBeanNavigatorIfReady`), using `processingOver()` only as a last-resort drain — deferring everything meant the
-emitted navigator did not exist when same-module main code was resolved. `BridgeProcessor` and `FromMapProcessor` defer
+(`emitBeanNavigatorIfReady`), using `processingOver()` only as a last-resort drain: a navigator emitted only in the
+final round does not exist yet when same-module main code is resolved. `BridgeProcessor` and `FromMapProcessor` defer
 only the targets carrying a Lombok trigger, to `processingOver()`. **Any future processor reading synthesised members of
 Lombok-annotated types must do one or the other; reading them in round one gets an un-patched view.**
 
@@ -469,10 +468,10 @@ nanoseconds as machine-specific; ratios within one run are the durable part.
 
 ### Coverage is the thing that decays
 
-Every defect found in the repository's performance audit lived on a path no benchmark exercised — reads on a navigation
-path, name resolution on a wide record, hash-container writes, in-place `into`. The benchmarked paths were fine, which
-is the point: coverage decays silently while the numbers keep looking healthy. When adding a benchmark, prefer a
-dimension nothing else varies (cardinality, arity, path depth) over another variant of a shape already covered.
+A green benchmark suite says nothing about the paths it does not run, and an unbenchmarked path is where a performance
+defect survives: the numbers keep looking healthy because the numbers are measuring somewhere else. When adding a
+benchmark, prefer a dimension nothing else varies (cardinality, arity, path depth) over another variant of a shape
+already covered.
 
 ---
 
@@ -483,9 +482,6 @@ Proven optic types (Haskell `lens` → Scala Monocle → Arrow Optics) inside; o
 traversals, and codegen all landed by extending `internal/optics` and surfacing new methods on `Telescope` — no core
 rewrites. Tested at both layers: `OpticLawsTest` in `:internal` proves the optic laws, the `:core` suites prove DSL
 behaviour.
-
-The history — function registry, then a full Monocle port, then a regression that threw the lattice away, then the
-two-layer settlement — is written up in a series of blog posts by the author.
 
 ---
 
@@ -532,10 +528,9 @@ The runtime entry points are `Telescope.of(...)` and `Telescope.ofBean(...)` res
 
 ### Reflection for discovery, generated dispatch for the hot path
 
-ADR-0003 originally chose plain reflection over MethodHandles; ADR-0005 refined it, and the refinement is what ships.
-Reflection is retained for **discovery** — finding components, getters, setters, builders. Hot-path **dispatch** is a
-`LambdaMetafactory`-built SAM on the JVM, and a `MethodHandle` closure (`MhAccessors`, `MhIso`) inside a native image
-where LMF cannot define a class. Read 0003 as history and 0005 as the live decision; 0003's figures predate both.
+Reflection is used for **discovery** — finding components, getters, setters, builders. Hot-path **dispatch** is a
+`LambdaMetafactory`-built SAM on the JVM, and a `MethodHandle` closure (`MhAccessors`, `MhIso`) inside a native image,
+where LMF cannot define a class. ADR-0005 is the live decision; ADR-0003 records the superseded one.
 
 ### Runtime and codegen are separate strategies, not unified
 
@@ -546,7 +541,7 @@ See `docs/adr/0004-runtime-and-codegen-strategy-separate.md`.
 ### Reading Lombok-synthesised members
 
 A processor must not read them in round one, before Lombok's lazy AST patches have fired. `LombokFocusProcessor` retries
-every round and emits as soon as the bean surface reads complete, because deferring everything left its output
+every round and emits as soon as the bean surface reads complete, because output emitted only in the final round is
 unresolvable from same-module main code; `BridgeProcessor` and `FromMapProcessor` defer only their Lombok-triggered
 targets to `processingOver()`. Detailed in the `:lombok` section above; applies to any future processor that reads
 synthesised members.
@@ -586,11 +581,11 @@ native binary (nine capabilities) is the regression gate — on every substrate 
    fluent surface). Runtime sites short-circuit via `ClassValue<Optional<HolderRef>>` probe — constant on hit, LMF on
    miss. Phased (A emit, B runtime probe, C deep-mapping use). For annotated types, only remaining runtime reflection is
    `SerializedLambda` decode.
-7. **0007 — Cross-module `@Bridge` carrier.** (Accepted, shipped #149.) `@Bridge` on a third "carrier" class with
-   explicit `source`/`target`. Closes the split-module MapStruct-parity gap.
-8. **0008 — `Telescope.fromMap(...)` for untyped sources.** (Accepted, shipped #150.) Forward-only factory;
+7. **0007 — Cross-module `@Bridge` carrier.** (Accepted, shipped.) `@Bridge` on a third "carrier" class with explicit
+   `source`/`target`. Closes the split-module MapStruct-parity gap.
+8. **0008 — `Telescope.fromMap(...)` for untyped sources.** (Accepted, shipped.) Forward-only factory;
    `extract(key, accessor, converter)` rows; lenient default.
-9. **0009 — `@Bridge(lenient = true)`.** (Accepted, shipped #148.) Codegen sibling of Enh 9's `mapperForward` lenient
+9. **0009 — `@Bridge(lenient = true)`.** (Accepted, shipped.) Codegen sibling of Enh 9's `mapperForward` lenient
    default. Opt-in flag; partial-Iso when on.
 10. **0010 — `@FromMap` codegen.** (Accepted, shipped.) Reflection-free `Map<String, Object> → record` ingestion —
     codegen sibling of ADR-0008's runtime `fromMap`.
@@ -603,12 +598,12 @@ native binary (nine capabilities) is the regression gate — on every substrate 
     `OpticReport`, `Trace`, `TraceLimits`.
 14. **0014 — Auto-logging explain()/trace() via `System.Logger`.** (Accepted.) Flip a log level and mappers narrate; no
     logging dependency added.
-15. **0015 — Native-image AOT support for the runtime path.** (Accepted, shipped #250; qualifies ADR-0005 under AOT.)
-    Wall B (runtime `LambdaMetafactory` class definition, forbidden by AOT) fixed in the substrate:
-    `NativeImage.IN_IMAGE` gates every accessor builder to `MhAccessors` `MethodHandle` closures inside an image, LMF
-    stays the JVM hot path. Wall A (`SerializedLambda`) = app-level `serialization-config`. Core ships its own
-    `native-image.properties`; a planned `telescope-graalvm` Feature module was dropped as unnecessary (amendment). The
-    `:examples:graphql` `NativeVerify` binary (nine capabilities) is the CI regression gate.
+15. **0015 — Native-image AOT support for the runtime path.** (Accepted, shipped; qualifies ADR-0005 under AOT.) Wall B
+    (runtime `LambdaMetafactory` class definition, forbidden by AOT) fixed in the substrate: `NativeImage.IN_IMAGE`
+    gates every accessor builder to `MhAccessors` `MethodHandle` closures inside an image, LMF stays the JVM hot path.
+    Wall A (`SerializedLambda`) = app-level `serialization-config`. Core ships its own `native-image.properties`; no
+    separate `telescope-graalvm` Feature module is needed. The `:examples:graphql` `NativeVerify` binary (nine
+    capabilities) is the CI regression gate.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
@@ -624,9 +619,9 @@ a measurement, and a proposed verification, which makes them the easiest ones to
 Whatever you pick up, the two things a reviewer will ask for are the ones the mantras name: a measurement with a
 control, and a test that fails on the unfixed code.
 
-## Recurring traps
+## Traps
 
-Collected because each of these has cost a round of review or a red build more than once.
+Each of these is a property of the platform or of this codebase that reads the opposite way at a glance.
 
 - **A hash container's `int` constructor takes a table capacity, not an element count.** `new HashSet<>(n)` filled with
   `n` elements resizes once `n` exceeds three quarters of the smallest power of two **at least** `n` — the top quarter
