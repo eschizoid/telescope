@@ -188,12 +188,12 @@ public class OrderMappers {
    *       should not) carry. Without this row the strict deep-mapper rejects the unmapped source.
    *   <li>{@code writeBeans(SETTERS)} — Lombok's {@code @Data}-synthesised setters are the right
    *       construction strategy for every nested bean target ({@code PartnerShippingLabel}, {@code
-   *       Customer}, {@code Address}). Telescope-lombok's emitted Path is used implicitly via the
-   *       holder-probe fast path; no explicit Path navigation needed at this call site.
+   *       Customer}, {@code Address}). Telescope-lombok's emitted navigator is used implicitly via
+   *       the holder-probe fast path; no explicit navigation needed at this call site.
    *   <li>Same-name {@code Order.customer ↔ PartnerShippingLabel.customer}, {@code
    *       shippingAddress}, {@code billingAddress}, and {@code giftWrap} all auto-recurse. The
    *       {@code Optional<Address> ↔ nullable PartnerShippingLabel.Address} bridge fires for {@code
-   *       giftWrap} (see v0.4.1 CHANGELOG — {@code Iso.liftOptionalToNullable}).
+   *       giftWrap}, via {@code Iso.liftOptionalToNullable}.
    * </ul>
    */
   @Bean

@@ -47,11 +47,12 @@ verifies mapper pairings at compile time. Read the mantras before the module map
   opposite: one line per paragraph, because GitHub's comment renderer turns a single newline into a line break. Commit
   messages wrap at ~72 columns, since they are read in terminals.
 - **No bug or issue numbers in source comments.** Describe the behaviour in its own terms; cross-references live in the
-  PR body and the release notes. There is no `CHANGELOG.md` — JReleaser builds the notes for each release from
-  conventional-commit subjects (`changelog { preset = "conventional-commits" }` in the root `build.gradle.kts`), which
-  is why the **subject** of a squash merge is load-bearing and the body is not. A breaking change needs a `!` in the
-  subject and a `BREAKING CHANGE:` footer, and the release has to be dispatched as `minor` or `major` — nothing infers
-  the bump from the commits.
+  PR body and the release notes. There is no `CHANGELOG.md` — JReleaser generates the notes for each release
+  (`preset.set("conventional-commits")` in the root `build.gradle.kts`). The preset categorises on the **subject**
+  alone, so the subject of a squash merge decides whether a change appears in the notes at all and what text they show;
+  the body is read only for a `BREAKING CHANGE:` footer and `Co-authored-by:` trailers. Mark a breaking change both ways
+  — the `!` in the subject flags it, the footer supplies the text the notes render — and dispatch the release as `minor`
+  or `major`, because nothing infers the bump from the commits.
 
 ---
 
