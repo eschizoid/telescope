@@ -415,9 +415,9 @@ performance class:
 No codegen? `Telescope.mapper(...)` composes each record/bean pair into a single MethodHandle: zero annotations, no
 build step, within ~1.04–3.3× of MapStruct in the same workloads (flat ~3.3×, nested ~2.7×, deep ~1.3×, container fields
 ~1.04–1.06× — the ratio narrows as the work per call grows: a fixed ~7 ns per-call cost is essentially the whole gap on
-flat and nested, and the container shapes add a sub-nanosecond per-element cost on top, so the absolute gap grows while
-the ratio falls). That's sub-microsecond conversion; whether it's fast enough is your call, and when a loop turns hot,
-`@Bridge` puts you back in the codegen class. Reproduce any of it from the
+flat and nested, and the deep and container shapes add roughly 0.4–1.2 ns per converted element on top, so the absolute
+gap grows while the ratio falls). That's sub-microsecond conversion; whether it's fast enough is your call, and when a
+loop turns hot, `@Bridge` puts you back in the codegen class. Reproduce any of it from the
 [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action; the full matrix is in
 [`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison-apples-to-apples).
 

@@ -310,8 +310,11 @@ runtime path is now within ~1.04–3.3× of MapStruct with **no annotations and 
 per-call conversion work is largest, which is the deep tier and the hash-container fields — close enough for most
 service code, and `@Bridge` codegen is there when a loop turns hot.
 
-All four columns above are from the same run; the codegen/MapStruct ratios reproduce across confirming runs within error
-(the runtime rows carry wider bands but the same magnitude).
+The table above predates the current headline figures and has no container rows; where it disagrees with the prose
+below, the prose is the more recent measurement (Actions run 34470676359) and
+[`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md) carries the full current set. All four
+columns in it are from the same run; the codegen/MapStruct ratios reproduce across confirming runs within error (the
+runtime rows carry wider bands but the same magnitude).
 
 A quick decision guide. If the problem is "convert this entity to this DTO and back, both directions known at build
 time, no nested-list iteration, only scalars," MapStruct's bytecode is ~1.07× faster on the row (3.17 vs 3.39 ns, ~0.2

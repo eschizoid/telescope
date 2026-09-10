@@ -9,17 +9,17 @@ and propose remediations where the gap is structural.
 run so every figure below is comparable — separate runs land on runners of different speeds, which has produced
 misleading ratios here before.
 
-| Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio | across runs   | allocation              |
-| ----------------------------------- | ---------------: | ---------------: | ----: | ------------- | ----------------------- |
-| flat (5 scalars)                    | 3.155 ± 0.019 ns | 3.362 ± 0.011 ns | 1.07x | ~1.07x stable | 32 B/op both            |
-| nested (one nested type)            | 4.361 ± 0.045 ns | 5.604 ± 0.033 ns | 1.29x | 1.04x–1.46x   | 48 B/op both            |
-| deep (3 levels + 2 list hops)       |  62.38 ± 0.18 ns |  66.57 ± 0.52 ns | 1.07x | 1.07x–1.19x   | 376 B/op both           |
-| container, Map-valued (100 entries) |     1262 ± 11 ns |     1244 ± 10 ns |   tie | measured once | **7,528 vs 6,712 B/op** |
-| container, Set-valued (100 entries) |     1455 ± 21 ns |      1445 ± 9 ns |   tie | measured once | 7,576 B/op both         |
+| Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio | across runs            | allocation              |
+| ----------------------------------- | ---------------: | ---------------: | ----: | ---------------------- | ----------------------- |
+| flat (5 scalars)                    | 3.155 ± 0.019 ns | 3.362 ± 0.011 ns | 1.07x | ~1.07x (one run 1.13x) | 32 B/op both            |
+| nested (one nested type)            | 4.361 ± 0.045 ns | 5.604 ± 0.033 ns | 1.29x | 1.04x–1.46x            | 48 B/op both            |
+| deep (3 levels + 2 list hops)       |  62.38 ± 0.18 ns |  66.57 ± 0.52 ns | 1.07x | 1.07x–1.19x            | 376 B/op both           |
+| container, Map-valued (100 entries) |     1262 ± 11 ns |     1244 ± 10 ns |   tie | measured once          | **7,528 vs 6,712 B/op** |
+| container, Set-valued (100 entries) |     1455 ± 21 ns |      1445 ± 9 ns |   tie | measured once          | 7,576 B/op both         |
 
-The `ratio` column is this run alone, so every figure in it is comparable with every other. The `across runs` column is
-what keeps a single cell from travelling out of context: only flat holds its value between runs, and the container tiers
-exist on one run so far.
+GitHub Actions run 34470676359, `ubuntu-latest`, 10 measured iterations. The `ratio` column is this run alone, so every
+figure in it is comparable with every other. The `across runs` column is what keeps a single cell from travelling out of
+context: only flat holds its value between runs, and the container tiers exist on one run so far.
 
 Read the two container rows carefully — telescope's mean is marginally lower on both, and on neither does that mean it
 won. On Set the intervals overlap almost entirely (telescope's sits inside MapStruct's), which is a clean tie. On Map
@@ -32,8 +32,8 @@ outside their error bars, so each ratio is real within its own run. Only flat is
 ~1.07x. Deep is not: this run's 1.07x is the low end of a 1.07x–1.19x spread whose middle sits nearer 1.14x, so read it
 as a range too, and read this run as its optimistic edge. Nested is the widest of the three — 1.04x to 1.46x across CI
 runs of this benchmark (the 1.46x end from Actions run 34148517680; this run is 34470676359), landing at 1.29x here. It
-is a framework-overhead microbenchmark rather than a service-shaped workload; treat flat and deep as the publishable
-figures and nested as a range.
+is a framework-overhead microbenchmark rather than a service-shaped workload; treat flat as the publishable figure, and
+deep and nested as ranges.
 
 Runtime tier, same run: flat 3.34x, nested 2.66x, deep 1.27x, and 1.04x–1.06x on the two container shapes. MapStruct has
 no equivalent to this tier — it is what you get with no annotations and no build step — so these ratios say what the
@@ -195,22 +195,23 @@ about 7:1. Either way the wrapper is not what an adopter would be paying for. Wh
 
 `public static final BridgeFn<S, T> BRIDGE_FN = new Fn();` ships per generated bridge (asserted in
 `BridgeProcessorTest`). It gives adopters a passable one-hop mapper value instead of a static method. The benchmark
-tables above show it measures **at the `static forward` floor** in both runs (run 2 flat: identical at 3.183) — the JIT
-inlines the monomorphic hop to the raw static call, so it is the fastest passable value there is. It is _faster_ than
-`BRIDGE.read` by the ≤0.8 ns lattice-wrapper tax (largest on deep), so it is both the ergonomic value (a `BridgeFn` you
-can pass around) and, marginally, the fast one.
+tables above show it measures **at the `static forward` floor** on every run (run 2 flat: identical at 3.183) — the JIT
+inlines the monomorphic hop to the raw static call, so it is the fastest passable value there is. Against `BRIDGE.read`
+it is usually the faster of the two by the sub-nanosecond lattice-wrapper tax, though not always: on R3 nested the
+lattice value measured below it with disjoint bands. So it is the ergonomic value (a `BridgeFn` you can pass around)
+and, on most rows, marginally the fast one.
 
 ### 2. Type-specialized bridge subclass whose `read(S)` is the inlined body — **measured and declined**
 
 The idea was to emit a `Telescope`/bridge subclass that removes the `BridgeFn` field and the `invokeinterface` wrapper
 so `read(S)` _is_ the generated body. The data shrinks the premise to nothing worth building: the wrapper tax it would
-remove is ≤0.8 ns (the `BRIDGE.read − static forward` gap, largest on deep), and it applies **only to the composable
-`BRIDGE.read` value** — adopters who want the floor already have `BRIDGE_FN`, which sits there. Worse, on the deep tier
-where the tax is largest (~0.8 ns) it is swamped ~7:1 by the generated-body gap (~5.6 ns), so removing it barely moves
-the ratio. It would add ~100 LOC of `BridgeProcessor` complexity to shave ≤0.8 ns off one of two already-shipped call
-shapes. **Not building it.** The only thing that would move the deep number vs MapStruct is matching its generated
-_body_ (fewer null-guards, inlined leaf conversions) — a separate, finer optimization, adopter-gated on someone actually
-hitting the deep tier above 100M ops/sec.
+remove is sub-nanosecond wherever it resolves at all, and it applies **only to the composable `BRIDGE.read` value** —
+adopters who want the floor already have `BRIDGE_FN`, which sits there. Worse, on R2's deep tier, where the tax was at
+its largest (~0.8 ns), the generated-body gap (~5.6 ns) led it about 7:1; on R3's deep tier the tax does not separate
+from zero at all. Either way removing it barely moves the ratio. It would add ~100 LOC of `BridgeProcessor` complexity
+to shave ≤0.8 ns off one of two already-shipped call shapes. **Not building it.** The only thing that would move the
+deep number vs MapStruct is matching its generated _body_ (fewer null-guards, inlined leaf conversions) — a separate,
+finer optimization, adopter-gated on someone actually hitting the deep tier above 100M ops/sec.
 
 ### 3. The CI-reproducible matrix is the baseline
 
@@ -224,10 +225,14 @@ residual.
 - **`BRIDGE_FN` benchmarked across all three tiers** (`nested_*_bridgefn_forward`, `deep_*_bridgefn_forward`; flat
   already existed). This is what lets the forward tables compare all four call shapes — static, one-hop, lattice,
   MapStruct — on each run and pin `BRIDGE_FN` to the floor.
-- **This analysis doc, corrected against two runs.** Prior revisions claimed a ~0.3–0.7 ns lattice slice and proposed
-  two remediations to close it; a first fresh run then over-corrected to "dispatch is free everywhere". A confirmation
-  run settled it: `BRIDGE_FN` is the floor, the lattice wrapper is a sub-nanosecond tax, and the nested ratio is
-  JMH-noisy. The doc records the reproducible parity result and the measured-and-declined subclass decision.
+- **The container tier**, Set- and Map-valued, which is where this revision's actual finding lives: a tie on time and
+  about 11% less allocated on the Map shape. Every tier before it was List-only, which is how a sizing defect in the
+  container emitter shipped green.
+- **This analysis doc, corrected against three runs.** Prior revisions claimed a ~0.3–0.7 ns lattice slice and proposed
+  two remediations to close it; a first fresh run then over-corrected to "dispatch is free everywhere". What is settled
+  now is one half of that: `BRIDGE_FN` is the floor on every run, and the nested ratio is JMH-noisy. The lattice
+  wrapper's tax is sub-nanosecond wherever it resolves, but its depth-scaling did not survive the third run and is
+  marked provisional. The doc records the parity result, the ranges, and the measured-and-declined subclass decision.
 - **No production code changed.** `BRIDGE_FN` already ships; the codegen is at parity as-is.
 
 ## Bottom line
@@ -251,7 +256,8 @@ What remains over MapStruct on the deep tier is a few nanoseconds of generated-b
 `static forward` alone is above parity — and closing it means matching MapStruct's inlined body. That stays
 adopter-gated on a real deep-tier hot loop that measures it.
 
-Two things in this document's history are worth keeping visible. The 2.9-3.6x forward gap, the telescope-faster-on-
-backward claim, and the static-slower-than-lattice inversion were all laptop noise that clean CI hardware dissolved. And
-every tier here was List-only until recently, which let a sizing defect in the container emitter ship green — the
-container rows exist so that class of defect fails a measurement rather than passing one.
+Two things in this document's history are worth keeping visible. The 2.9-3.6x forward gap and the
+telescope-faster-on-backward claim were laptop noise that clean CI hardware dissolved; the static-slower-than-lattice
+inversion was not, since R3 later measured it on nested with disjoint bands. And every tier here was List-only until
+recently, which let a sizing defect in the container emitter ship green — the container rows exist so that class of
+defect fails a measurement rather than passing one.
