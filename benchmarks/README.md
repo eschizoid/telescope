@@ -295,9 +295,10 @@ Where the flat-tier gap comes from. MapStruct emits one hand-templated method bo
 JIT inlines the whole conversion into a single basic block. Telescope's `@Bridge` codegen emits the same shape — a
 direct constructor call — wrapped in a `Telescope` for composability. On a flat ~3 ns conversion that composability
 costs a fraction of a nanosecond; on deep, where element-by-element list conversion dominates and the workload climbs
-past 50 ns, it is a few percent — the comparison doc's headline table carries the per-run ratio and the across-run
-range. If you're in a tight inner loop that doesn't need composition, call `<Source>Bridge.forward(s)` — or the
-directly-callable `BRIDGE_FN` constant — and pay the zero-dispatch floor.
+past 50 ns, it is the same sub-nanosecond tax against a far larger row. What remains of the deep gap over MapStruct is
+generated-body work rather than composability; the comparison doc's headline table carries the per-run ratio and the
+across-run range. If you're in a tight inner loop that doesn't need composition, call `<Source>Bridge.forward(s)` — or
+the directly-callable `BRIDGE_FN` constant — and pay the zero-dispatch floor.
 
 Runtime conversion (`Telescope.mapper(...)`) composes each record/bean pair into a single MethodHandle (see above), so
 the hot path is one `invokeExact` through the fused handle rather than an `Object[]` gather with boxed per-field
@@ -315,9 +316,8 @@ of MapStruct with **no annotations and no build step** — closest where the per
 the deep tier and the hash-container fields — close enough for most service code, and `@Bridge` codegen is there when a
 loop turns hot.
 
-The codegen columns in that table are from one run, and its footnote marks the runtime cells that are not; the
-codegen/MapStruct ratios reproduce across confirming runs within error (the runtime rows carry wider bands but the same
-magnitude).
+Every cell in that table but the four footnote-marked runtime ones is from a single CI run; the codegen/MapStruct ratios
+reproduce across confirming runs within error (the runtime rows carry wider bands but the same magnitude).
 
 A quick decision guide. If the problem is "convert this entity to this DTO and back, both directions known at build
 time, no nested-list iteration, only scalars," MapStruct's bytecode is marginally faster on the row — a fraction of a
