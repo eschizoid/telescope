@@ -536,7 +536,8 @@ boxing.
 
 ADR-0005 is the live decision and ADR-0003 is the constraint it refines — raw `MethodHandle.invoke` per-call dispatch
 stays rejected by both. What still binds from ADR-0003 is that rejection; ADR-0005 narrowed the rest, keeping reflection
-for discovery and swapping the dispatch primitive, and ADR-0015 qualified it under AOT. ADR-0003's figures predate both.
+for discovery and swapping the dispatch primitive, and ADR-0015 qualified that swap under AOT. ADR-0003's figures
+predate both.
 
 ### Runtime and codegen are separate strategies, not unified
 
