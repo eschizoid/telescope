@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.annotations;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
 /**
  * A single source-to-target field-name remapping for a {@link Bridge}. Used in the {@code renames}
@@ -40,6 +41,7 @@ import java.lang.annotation.RetentionPolicy;
  * mirrors the runtime fan-out semantics enabled in {@code Telescope.mapper(...)}.
  */
 @Retention(RetentionPolicy.SOURCE)
+@Target({})
 public @interface Rename {
   /** The field name on the {@link Bridge} source. */
   String source();

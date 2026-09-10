@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.annotations;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
 /**
  * An explicit nested-bridge override for one source field at {@link Bridge} codegen time. Mirrors
@@ -49,6 +50,7 @@ import java.lang.annotation.RetentionPolicy;
  * Bridge#defaults()} for the same pair — pick one mechanism per field.
  */
 @Retention(RetentionPolicy.SOURCE)
+@Target({})
 public @interface ViaMapper {
   /**
    * Source field name whose conversion routes through {@link #using()}. Must name a real field on

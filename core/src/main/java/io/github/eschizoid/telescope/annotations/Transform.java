@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.annotations;
 import io.github.eschizoid.telescope.conversion.BridgeFn;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
 /**
  * A per-field typed conversion attached to a {@link Bridge}. The named source field is read, passed
@@ -47,6 +48,7 @@ import java.lang.annotation.RetentionPolicy;
  * only semantics, same "this slot's backward is undefined" contract.
  */
 @Retention(RetentionPolicy.SOURCE)
+@Target({})
 public @interface Transform {
   /**
    * Source field name to route through the {@link #using()} {@link BridgeFn}. Must name a real
