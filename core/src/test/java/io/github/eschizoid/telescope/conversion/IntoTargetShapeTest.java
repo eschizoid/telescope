@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.conversion;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
@@ -83,7 +84,11 @@ class IntoTargetShapeTest {
 
     final var returned = mapper.into(target, new Dto("ORD-2", "mapped"));
 
-    assertEquals(target, returned, "into returns the same reference it was given");
+    assertSame(target, returned, "into returns the same reference it was given");
     assertNull(target.getId(), "a mapped property is written null rather than left alone");
+    // The null path resolves its own writers, so it needs the same subclass reach the mapped path
+    // has: asserting only a base-declared property would pass with writers bound to the supertype.
+    assertTrue(target.labelWritten(), "the subclass setter is reached on the null path too");
+    assertNull(target.getLabel());
   }
 }

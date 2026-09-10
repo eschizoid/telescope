@@ -496,6 +496,12 @@ public final class Mapper<A, B> {
    *
    * <p>The race between two callers is benign: both build equivalent arrays for the same class
    * pair, and publishing either is correct.
+   *
+   * <p>One slot assumes a caller passes targets of one concrete class, which is the ordinary shape.
+   * A caller alternating across an entity hierarchy misses every time and rebinds per call — still
+   * faster than resolving per property per call, but it turns this field into a volatile store on
+   * every call, and a mapper is a shared singleton in both framework starters. Key the memo by
+   * class if that pattern ever shows up in a profile.
    */
   private IntoSlot[] intoSlots(final Class<?> readClass, final Class<?> writeClass) {
     final var cached = intoPlan;
