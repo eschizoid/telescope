@@ -1,6 +1,10 @@
 /**
  * Compile-time markers consumed by the telescope annotation processors. Exported as part of the
- * library's public API so user code can apply them on records and beans.
+ * library's public API. The entry points ({@code @Focus}, {@code @BeanFocus}, {@code @Bridge},
+ * {@code @FromMap}, {@code @UncheckedMapping}) go on a declaration; the per-field modifiers
+ * ({@code @Default}, {@code @Rename}, {@code @Transform}, {@code @Constant}, {@code @Compute},
+ * {@code @ViaMapper}) are only meaningful inside a {@code @Bridge} attribute and declare no
+ * applicable declaration target, so javac rejects them anywhere else.
  *
  * <ul>
  *   <li>{@link io.github.eschizoid.telescope.annotations.Focus} — applied to a record. The {@code

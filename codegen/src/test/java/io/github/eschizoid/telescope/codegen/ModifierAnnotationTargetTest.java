@@ -1,6 +1,8 @@
 package io.github.eschizoid.telescope.codegen;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
@@ -23,8 +25,9 @@ import org.junit.jupiter.params.provider.MethodSource;
  * javac reject the source for a missing attribute instead, which fails the compile without ever
  * reaching the applicability check the test exists to pin.
  *
- * <p>These compile through the full javac pipeline rather than {@code -proc:only}: applicability is
- * checked during attribution, which the annotation-processing-only mode skips.
+ * <p>These compile through the full javac pipeline rather than {@code -proc:only} for the sake of
+ * the attribute-value case: under processing-only the emitted bridge body is never attributed, so a
+ * bridge that generated uncompilable code would still pass.
  */
 class ModifierAnnotationTargetTest {
 
@@ -63,12 +66,20 @@ class ModifierAnnotationTargetTest {
     assertFalse(compilation.success(), "@" + annotation + " on a type declaration must not compile");
     assertTrue(
       compilation.hasError("not applicable"),
-      "javac should reject @" + annotation + " as inapplicable, got: " + compilation.errors()
+      "javac should reject @" + annotation + " as inapplicable, got: " + compilation.errorMessages()
+    );
+    // One diagnostic, so the compile failed for applicability and nothing else. A case whose
+    // attributes did not match its annotation would also emit a missing-attribute error, and the
+    // substring assertion above would still pass.
+    assertEquals(
+      1,
+      compilation.errors().size(),
+      "expected only the applicability error, got: " + compilation.errorMessages()
     );
   }
 
   @Test
-  @DisplayName("the same annotations still compile as @Bridge attribute values")
+  @DisplayName("the same annotations still reach the generated bridge as @Bridge attribute values")
   void memberValueUseStillCompiles() {
     final var compilation = compile(
       ProcessorHarness.source(
@@ -95,6 +106,14 @@ class ModifierAnnotationTargetTest {
       )
     );
 
-    assertTrue(compilation.success(), "attribute-value use must keep compiling: " + compilation.errors());
+    assertTrue(compilation.success(), "attribute-value use must keep compiling: " + compilation.errorMessages());
+
+    // Compiling is not enough to prove the restriction left the attribute form working: this source
+    // is valid Java whether or not the processor ran at all. The generated bridge is the artifact
+    // that shows both annotations were read and honoured.
+    final var bridge = compilation.generated().get("demo.OrderBridge");
+    assertNotNull(bridge, "@Bridge must still emit demo.OrderBridge");
+    assertTrue(bridge.contains("referenceCode"), "@Rename must reach the generated bridge");
+    assertTrue(bridge.contains("\"EMEA\""), "@Default must reach the generated bridge");
   }
 }
