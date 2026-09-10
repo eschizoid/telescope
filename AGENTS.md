@@ -529,10 +529,13 @@ The runtime entry points are `Telescope.of(...)` and `Telescope.ofBean(...)` res
 ### Reflection for discovery, generated dispatch for the hot path
 
 Reflection is used for **discovery** — finding components, getters, setters, builders. Hot-path **dispatch** is a
-`LambdaMetafactory`-built SAM on the JVM, and a `MethodHandle` closure (`MhAccessors`, `MhIso`) inside a native image,
-where LMF cannot define a class. ADR-0005 is the live decision and ADR-0003 is the constraint it refines — raw
-`MethodHandle.invoke` per-call dispatch stays rejected by both. ADR-0003's figures predate the LMF migration, so read
-its numbers as history and its decision as current.
+`LambdaMetafactory`-built SAM on the JVM, and a `MethodHandle` closure (`MhAccessors`) inside a native image, where LMF
+cannot define a class. `MhIso` is separate and runs on both: it fuses a structural conversion's reads and rebuild into
+one composed handle rather than dispatching per call.
+
+ADR-0005 is the live decision and ADR-0003 is the constraint it refines — raw `MethodHandle.invoke` per-call dispatch
+stays rejected by both. What survives from ADR-0003 is that rejection and the reflective discovery substrate; its
+dispatch call was narrowed by ADR-0005 and qualified by ADR-0015, and its figures predate both.
 
 ### Runtime and codegen are separate strategies, not unified
 
@@ -613,8 +616,8 @@ burying the rationale in a code comment.
 ## Roadmap and open work
 
 Shipped work is recorded in `git log`, the CHANGELOG, and the ADR index above; it is not duplicated here. Open work
-lives in the issue tracker, labelled `performance` where a measured mechanism is already attached. Those issues each
-carry a mechanism, a measurement, and a proposed verification, which makes them the easiest ones to pick up cold.
+lives in the issue tracker, labelled `performance`. Those issues each carry a mechanism, a measurement, and a proposed
+verification, which makes them the easiest ones to pick up cold.
 
 Whatever you pick up, the two things a reviewer will ask for are the ones the mantras name: a measurement with a
 control, and a test that fails on the unfixed code.
