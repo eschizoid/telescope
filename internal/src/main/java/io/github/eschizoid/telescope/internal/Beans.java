@@ -410,9 +410,11 @@ public final class Beans {
   /**
    * Write-side sibling of {@link #capturedReader}: the cached {@link BiConsumer} for one property,
    * resolved once so a caller writing the same property repeatedly pays the {@link ClassValue}
-   * probe and the name lookup at bind time rather than per write. Dispatch is through a {@link
-   * LambdaMetafactory}-bound {@link BiConsumer} — one virtual call the JIT inlines, no {@link
-   * Method#invoke}, no per-call argument array.
+   * probe and the name lookup at bind time rather than per write. Dispatch is a {@link
+   * LambdaMetafactory}-bound {@link BiConsumer} the JIT inlines — no {@link Method#invoke}, no
+   * per-call argument array. For a primitive-typed property that bound writer is wrapped in a null
+   * guard, so a null value is skipped rather than unboxed and the target property keeps its current
+   * value.
    *
    * <p>Used by {@code Mapper.into(target, source)} — the {@code @MappingTarget} equivalent — for
    * in-place mutation of an existing target. Unlike {@link #settersWriter(Class)} it does NOT
