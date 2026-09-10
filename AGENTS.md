@@ -256,7 +256,7 @@ from "compile-checked" to "runtime-checked" is a regression.
 ### ⚠️ Runtime-checked (two documented escape hatches)
 
 - `.fieldByName(String)` — late-bound field name (config-driven paths). String IS the contract. Wrong name → runtime
-  `IllegalArgumentException`. Renamed from `.field(String)` so the call site signals the runtime nature.
+  `IllegalArgumentException`. The `ByName` suffix is what signals the runtime nature at the call site.
 - `.fieldByName(String, Class<B>)` — same as above with an inline `Class<B>` for `var`-friendly inference. The
   `Class<B>` is **not validated** against the actual field type at compile OR runtime; it's pure inference sugar, same
   pattern as `Telescope.of(Class<S>)`. Honest javadoc says so.
@@ -479,8 +479,8 @@ already covered.
 
 Proven optic types (Haskell `lens` → Scala Monocle → Arrow Optics) inside; one DSL class outside. Users write
 `Telescope.of(...).each(...).field(...)` without ever naming Affine / Lens / Prism. Effectful update, indexed
-traversals, and codegen all landed by extending `internal/optics` and surfacing new methods on `Telescope` — no core
-rewrites. Tested at both layers: `OpticLawsTest` in `:internal` proves the optic laws, the `:core` suites prove DSL
+traversals, and codegen each extend `internal/optics` and surface new methods on `Telescope`; none requires a core
+rewrite. Tested at both layers: `OpticLawsTest` in `:internal` proves the optic laws, the `:core` suites prove DSL
 behaviour.
 
 ---
@@ -530,7 +530,9 @@ The runtime entry points are `Telescope.of(...)` and `Telescope.ofBean(...)` res
 
 Reflection is used for **discovery** — finding components, getters, setters, builders. Hot-path **dispatch** is a
 `LambdaMetafactory`-built SAM on the JVM, and a `MethodHandle` closure (`MhAccessors`, `MhIso`) inside a native image,
-where LMF cannot define a class. ADR-0005 is the live decision; ADR-0003 records the superseded one.
+where LMF cannot define a class. ADR-0005 is the live decision and ADR-0003 is the constraint it refines — raw
+`MethodHandle.invoke` per-call dispatch stays rejected by both. ADR-0003's figures predate the LMF migration, so read
+its numbers as history and its decision as current.
 
 ### Runtime and codegen are separate strategies, not unified
 
@@ -573,19 +575,17 @@ native binary (nine capabilities) is the regression gate — on every substrate 
 3. **0003 — Reflection over MethodHandles.** Perf trade-off.
 4. **0004 — Runtime and codegen are separate strategies.** Why we don't unify the rebuild path.
 5. **0005 — LambdaMetafactory over MethodHandle.invoke.** Refines ADR-0003: keep reflective discovery; swap hot-path
-   dispatch primitive to `LambdaMetafactory`-built `Function`/`BiConsumer`/`Supplier` so the JIT inlines through. Landed
-   in phases: record readers first, then bean getters, bean setters, builder writers, and the rebuild path.
+   dispatch primitive to `LambdaMetafactory`-built `Function`/`BiConsumer`/`Supplier` so the JIT inlines through.
 6. **0006 — Codegen ↔ runtime 1:1 lookup via sibling metadata holder.** Extends ADR-0004, refines ADR-0005:
    `FocusProcessor`/`BeanFocusProcessor` emit sibling `<X>FieldOptics` with `public static final Telescope<X, ...>`
    constants per field (distinct from the `<X>Telescope` navigator — the holder is the runtime-probe target, not the
    fluent surface). Runtime sites short-circuit via `ClassValue<Optional<HolderRef>>` probe — constant on hit, LMF on
-   miss. Phased (A emit, B runtime probe, C deep-mapping use). For annotated types, only remaining runtime reflection is
-   `SerializedLambda` decode.
+   miss. For annotated types, the only remaining runtime reflection is `SerializedLambda` decode.
 7. **0007 — Cross-module `@Bridge` carrier.** (Accepted, shipped.) `@Bridge` on a third "carrier" class with explicit
    `source`/`target`. Closes the split-module MapStruct-parity gap.
 8. **0008 — `Telescope.fromMap(...)` for untyped sources.** (Accepted, shipped.) Forward-only factory;
    `extract(key, accessor, converter)` rows; lenient default.
-9. **0009 — `@Bridge(lenient = true)`.** (Accepted, shipped.) Codegen sibling of Enh 9's `mapperForward` lenient
+9. **0009 — `@Bridge(lenient = true)`.** (Accepted, shipped.) Codegen sibling of the runtime `mapperForward` lenient
    default. Opt-in flag; partial-Iso when on.
 10. **0010 — `@FromMap` codegen.** (Accepted, shipped.) Reflection-free `Map<String, Object> → record` ingestion —
     codegen sibling of ADR-0008's runtime `fromMap`.
@@ -613,8 +613,8 @@ burying the rationale in a code comment.
 ## Roadmap and open work
 
 Shipped work is recorded in `git log`, the CHANGELOG, and the ADR index above; it is not duplicated here. Open work
-lives in the issue tracker, labelled `performance` where it came out of the audit. Those issues each carry a mechanism,
-a measurement, and a proposed verification, which makes them the easiest ones to pick up cold.
+lives in the issue tracker, labelled `performance` where a measured mechanism is already attached. Those issues each
+carry a mechanism, a measurement, and a proposed verification, which makes them the easiest ones to pick up cold.
 
 Whatever you pick up, the two things a reviewer will ask for are the ones the mantras name: a measurement with a
 control, and a test that fails on the unfixed code.
