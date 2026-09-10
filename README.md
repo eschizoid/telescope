@@ -401,7 +401,8 @@ To be precise about what a stale string costs, because the failure modes differ:
 
 #### Performance, measured
 
-In the included JMH workloads (MapStruct 1.6.3, CI hardware, JDK 25 — all figures from one run, so they are comparable;
+In the included JMH workloads (MapStruct 1.6.3, CI hardware, JDK 25 — single-run figures are comparable with each other,
+and the ranges are what the same benchmark has produced across runs;
 [methodology and history](docs/perf-mapstruct-comparison.md)), telescope codegen and MapStruct codegen land in the same
 performance class:
 

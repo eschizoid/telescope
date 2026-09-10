@@ -5,9 +5,9 @@ and propose remediations where the gap is structural.
 
 ## Headline finding
 
-**Telescope codegen is in MapStruct's performance class, and on a hash container it allocates less.** From a single CI
-run so every figure below is comparable — separate runs land on runners of different speeds, which has produced
-misleading ratios here before.
+**Telescope codegen is in MapStruct's performance class, and on a hash container it allocates less.** The `ratio` column
+comes from a single CI run, so its figures are comparable with each other — separate runs land on runners of different
+speeds, and a ratio built from two of them is not a measurement.
 
 | Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio | across runs            | allocation              |
 | ----------------------------------- | ---------------: | ---------------: | ----: | ---------------------- | ----------------------- |
@@ -115,13 +115,13 @@ outside its error band. So `BRIDGE_FN` is the floor; the lattice wrapper is a sm
 nesting depth; and the deep residual over MapStruct is mostly the generated body (`static forward` alone is ~1.12× on
 deep, ~5.6 ns of the ~6.3 ns gap).
 
-Runtime path forward, **as measured on these two runs and since superseded** — the tier now lands at ~3.3× / ~2.7× /
-~1.3×, see the headline: flat 40.14, nested 64.37, deep 315.23 ns/op — ~16× / ~14× / ~8× of MapStruct. The backward
-direction stays higher (flat 108.31, nested 148.63, deep 626.39) because building a bean (allocate + N setters) is
-structurally heavier than a record's canonical-ctor invoke and its read side was already optimal. The runtime path goes
-through a structural-Iso build per `Telescope.mapper(...)` call site and a reflective dispatch chain on every
-invocation; it's not in the dethrone-MapStruct lane, it's the convenience surface for "I don't want to write codegen for
-this one mapper".
+**The whole of the following paragraph is superseded** — the runtime tier now lands at ~3.3× / ~2.7× / ~1.3× and
+~1.04–1.06× on containers, and backward no longer trails forward. It is kept because the dispatch analysis below was
+written against it. As measured on these two runs: forward flat 40.14, nested 64.37, deep 315.23 ns/op — ~16× / ~14× /
+~8× of MapStruct — with backward higher still (flat 108.31, nested 148.63, deep 626.39), because building a bean
+(allocate + N setters) is structurally heavier than a record's canonical-ctor invoke. At those numbers the runtime path
+was the convenience surface for "I don't want to write codegen for this one mapper" rather than a contender; the lattice
+sharpenings that closed the gap are recorded in `benchmarks/README.md`.
 
 ## Dispatch — `BRIDGE_FN` is the floor, and the lattice wrapper is a sub-nanosecond tax
 
@@ -148,7 +148,7 @@ disagree on nested, which is itself the finding. Two things hold:
 First, **`BRIDGE_FN` tracks the `static forward` floor within error on every tier**: identical on R2 flat (both 3.183),
 tied on R2 nested (5.896 vs 5.902), and on R2 deep its ±0.675 band overlaps static (52.586 − 0.675 = 51.91 ≈ static
 51.92). The one-interface-hop constant is monomorphic (one concrete `Fn` per bridge) and the JIT inlines it to the raw
-static call — it is the floor, there is nothing faster to reach.
+static call. On R1 and R2 nothing measures below it; R3 nested is the one row where the lattice value does.
 
 Second, **the full-lattice `BRIDGE.read` sits a small wrapper tax above that floor** — on R2, 0.14 ns (flat) → 0.31 ns
 (nested) → 0.77 ns (deep), each outside the tight error bands, which read as the lattice composition depth showing
@@ -156,16 +156,16 @@ through: more nesting, more `Iso.then(...)` hops the wrapper carries.
 
 **R3 does not reproduce that climb, so treat the depth-scaling as provisional.** On the same clean CI hardware it
 measures +0.20 ns on flat (real), −0.31 ns on nested — the lattice value _below_ the static floor, outside the bands,
-which is the "static-slower-than-lattice" inversion the lesson below files under laptop noise — and +0.30 ns on deep,
-inside the bands and therefore not a measurement at all. What survives all three runs is the magnitude: the tax is under
-a nanosecond wherever it is resolvable, and on deep it is dwarfed by the generated-body gap anyway (see next section).
-What does not survive is the monotonic ordering.
+which is the "static-slower-than-lattice" shape the lesson below separates from the genuine laptop artifacts — and +0.30
+ns on deep, inside the bands and therefore not a measurement at all. What survives all three runs is the magnitude: the
+tax is under a nanosecond wherever it is resolvable, and on deep it is dwarfed by the generated-body gap anyway (see
+next section). What does not survive is the monotonic ordering.
 
 An earlier run reported a ~0.3–0.7 ns "lattice slice" and proposed closing it by emitting a directly-callable
 `BRIDGE_FN` constant. `BRIDGE_FN` shipped (#182) — and it lands at the `static forward` floor, so an adopter who wants
 the fastest passable value already has it. The tax that remains sits only on the _composable_ `BRIDGE.read` value and is
-≤0.8 ns; the type-specialized subclass (remediation #2) would remove only that, for only the narrow case of hot-looping
-the composable value while refusing to switch to `BRIDGE_FN`. Not worth it.
+sub-nanosecond wherever it resolves at all; the type-specialized subclass (remediation #2) would remove only that, for
+only the narrow case of hot-looping the composable value while refusing to switch to `BRIDGE_FN`. Not worth it.
 
 The lesson stands: **smoke runs lie, and one CI run can too.** Run 1's 1.04× nested looked like a headline until run 2
 returned 1.42× on the same branch — the nested MapStruct baseline is JMH-noisy (±0.35). Laptop smoke runs earlier
@@ -195,11 +195,12 @@ about 7:1. Either way the wrapper is not what an adopter would be paying for. Wh
 
 `public static final BridgeFn<S, T> BRIDGE_FN = new Fn();` ships per generated bridge (asserted in
 `BridgeProcessorTest`). It gives adopters a passable one-hop mapper value instead of a static method. The benchmark
-tables above show it measures **at the `static forward` floor** on every run (run 2 flat: identical at 3.183) — the JIT
-inlines the monomorphic hop to the raw static call, so it is the fastest passable value there is. Against `BRIDGE.read`
-it is usually the faster of the two by the sub-nanosecond lattice-wrapper tax, though not always: on R3 nested the
-lattice value measured below it with disjoint bands. So it is the ergonomic value (a `BridgeFn` you can pass around)
-and, on most rows, marginally the fast one.
+tables above show it measures **at the `static forward` floor** on every run (run 2 flat: identical at 3.183; on R3 deep
+only within a ±5.3 ns band, so that cell settles little either way) — the JIT inlines the monomorphic hop to the raw
+static call, so it is the fastest passable value there is. Against `BRIDGE.read` it is usually the faster of the two by
+the sub-nanosecond lattice-wrapper tax, though not always: on R3 nested the lattice value measured below it with
+disjoint bands. So it is the ergonomic value (a `BridgeFn` you can pass around) and, on most rows, marginally the fast
+one.
 
 ### 2. Type-specialized bridge subclass whose `read(S)` is the inlined body — **measured and declined**
 
@@ -209,9 +210,9 @@ remove is sub-nanosecond wherever it resolves at all, and it applies **only to t
 adopters who want the floor already have `BRIDGE_FN`, which sits there. Worse, on R2's deep tier, where the tax was at
 its largest (~0.8 ns), the generated-body gap (~5.6 ns) led it about 7:1; on R3's deep tier the tax does not separate
 from zero at all. Either way removing it barely moves the ratio. It would add ~100 LOC of `BridgeProcessor` complexity
-to shave ≤0.8 ns off one of two already-shipped call shapes. **Not building it.** The only thing that would move the
-deep number vs MapStruct is matching its generated _body_ (fewer null-guards, inlined leaf conversions) — a separate,
-finer optimization, adopter-gated on someone actually hitting the deep tier above 100M ops/sec.
+to shave a sub-nanosecond tax off one of two already-shipped call shapes. **Not building it.** The only thing that would
+move the deep number vs MapStruct is matching its generated _body_ (fewer null-guards, inlined leaf conversions) — a
+separate, finer optimization, adopter-gated on someone actually hitting the deep tier above 100M ops/sec.
 
 ### 3. The CI-reproducible matrix is the baseline
 

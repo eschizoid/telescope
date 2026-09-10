@@ -241,6 +241,10 @@ difference between same-tier rows is the dispatch path. Reproducible: re-run the
 | deep   | bean → record |     48.68 ± 0.106 |             55.04 ± 0.522 |                    54.71 ± 0.375 |              90.1 ± 2.5\* |
 | deep   | record → bean |     48.54 ± 0.273 |             54.81 ± 0.418 |                                — |              95.0 ± 2.5\* |
 
+> **This table predates the current figures and has no container tier.** Where it disagrees with the text below, the
+> text is the more recent measurement (Actions run 34470676359);
+> [`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md) carries the full current set.
+
 \* The nested and deep runtime cells were re-measured on a laptop after two lattice sharpenings landed. **Deep** — the
 container-element MethodHandle loop (a nested `List`/`Set`/`Map` element loops over the leaf's raw handle instead of
 dispatching `Iso.to` per element): same-machine A/B main **205.4 / 207.2 ns** → **90.1 / 95.0 ns** (**~2.2×**), from
@@ -310,14 +314,11 @@ runtime path is now within ~1.04–3.3× of MapStruct with **no annotations and 
 per-call conversion work is largest, which is the deep tier and the hash-container fields — close enough for most
 service code, and `@Bridge` codegen is there when a loop turns hot.
 
-The table above predates the current headline figures and has no container rows; where it disagrees with the prose
-below, the prose is the more recent measurement (Actions run 34470676359) and
-[`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md) carries the full current set. All four
-columns in it are from the same run; the codegen/MapStruct ratios reproduce across confirming runs within error (the
-runtime rows carry wider bands but the same magnitude).
+All four columns in that table are from the same run; the codegen/MapStruct ratios reproduce across confirming runs
+within error (the runtime rows carry wider bands but the same magnitude).
 
 A quick decision guide. If the problem is "convert this entity to this DTO and back, both directions known at build
-time, no nested-list iteration, only scalars," MapStruct's bytecode is ~1.07× faster on the row (3.17 vs 3.39 ns, ~0.2
+time, no nested-list iteration, only scalars," MapStruct's bytecode is ~1.07× faster on the row (3.155 vs 3.362 ns, ~0.2
 ns absolute). On realistic deep workloads — nested records with list-of-records inside — telescope codegen matches
 MapStruct.
 
@@ -326,8 +327,8 @@ Where MapStruct stops being an option entirely: sealed-narrow paradigm hop, effe
 scope for a mapping-only model and demoed end-to-end in `examples/springboot/`. Capability wins, not perf wins, but
 they're the reason you'd pick telescope in the first place.
 
-Even the slowest telescope row — deep runtime backward at ~0.87 μs — is fine for typical request handling. One or a few
-conversions per request, not millions per second.
+Even the slowest telescope row — a hundred-element Set converted through the runtime path, ~1.5 μs — is fine for typical
+request handling. One or a few conversions per request, not millions per second.
 
 One implementation note: the telescope `_codegen_backward` rows use `BRIDGE.set(placeholderBean, rec)`, which discards
 the placeholder and invokes the underlying `iso.from(rec)`. The `set` wrapper adds a small constant overhead vs a direct
