@@ -47,7 +47,11 @@ verifies mapper pairings at compile time. Read the mantras before the module map
   opposite: one line per paragraph, because GitHub's comment renderer turns a single newline into a line break. Commit
   messages wrap at ~72 columns, since they are read in terminals.
 - **No bug or issue numbers in source comments.** Describe the behaviour in its own terms; cross-references live in the
-  PR and the CHANGELOG.
+  PR body and the release notes. There is no `CHANGELOG.md` — JReleaser builds the notes for each release from
+  conventional-commit subjects (`changelog { preset = "conventional-commits" }` in the root `build.gradle.kts`), which
+  is why the **subject** of a squash merge is load-bearing and the body is not. A breaking change needs a `!` in the
+  subject and a `BREAKING CHANGE:` footer, and the release has to be dispatched as `minor` or `major` — nothing infers
+  the bump from the commits.
 
 ---
 
@@ -617,9 +621,9 @@ burying the rationale in a code comment.
 
 ## Roadmap and open work
 
-Shipped work is recorded in `git log`, the CHANGELOG, and the ADR index above; it is not duplicated here. Open work
-lives in the issue tracker, labelled `performance`. Those issues each carry a mechanism, a measurement, and a proposed
-verification, which makes them the easiest ones to pick up cold.
+Shipped work is recorded in `git log`, the generated release notes, and the ADR index above; it is not duplicated here.
+Open work lives in the issue tracker, labelled `performance`. Those issues each carry a mechanism, a measurement, and a
+proposed verification, which makes them the easiest ones to pick up cold.
 
 Whatever you pick up, the two things a reviewer will ask for are the ones the mantras name: a measurement with a
 control, and a test that fails on the unfixed code.
