@@ -409,18 +409,28 @@ public final class Beans {
 
   /**
    * Write-side sibling of {@link #capturedReader}: the cached {@link BiConsumer} for one property,
-   * resolved once so a caller writing the same property repeatedly pays the proxy unwrap, the
-   * {@link ClassValue} probe and the name lookup at bind time rather than per write.
+   * resolved once so a caller writing the same property repeatedly pays the {@link ClassValue}
+   * probe and the name lookup at bind time rather than per write. Dispatch is through a {@link
+   * LambdaMetafactory}-bound {@link BiConsumer}, the same hot-path posture as {@link
+   * #readProperty(Object, String)}.
+   *
+   * <p>Used by {@code Mapper.into(target, source)} — the {@code @MappingTarget} equivalent — for
+   * in-place mutation of an existing target. Unlike {@link #settersWriter(Class)} it does NOT
+   * require a no-arg constructor: the caller supplies the already-constructed target, so only the
+   * setters need to be public.
    *
    * <p>Unlike {@link #capturedReader}, a name with no matching setter is <em>not</em> an error: it
    * yields a no-op writer, so a getter-only or computed property is skipped rather than throwing.
-   * That asymmetry is deliberate and matches what the rebuild strategies already do for an
-   * unwritable property — see {@code buildSetterInvoker}. Callers wanting a name checked must check
-   * it themselves.
+   * That asymmetry is deliberate and matches both what the rebuild strategies do for an unwritable
+   * property and MapStruct's {@code @MappingTarget} semantics, so such a property never breaks an
+   * otherwise valid mapping. Callers wanting a name checked must check it themselves.
    *
    * <p>Pass the class the write will actually target. Binding to a declared supertype silently
    * skips a property whose setter exists only on the concrete subclass, which is the ordinary shape
    * for an entity hierarchy.
+   *
+   * @throws IllegalStateException via {@link MethodHandles#privateLookupIn} when the setter's
+   *     declaring class lives in a closed-package module without an {@code opens} directive
    */
   public static BiConsumer<Object, Object> capturedWriter(final Class<?> beanClass, final String name) {
     return SETTER_INVOKERS.get(beanClass).computeIfAbsent(name, n -> buildSetterInvoker(beanClass, n));
@@ -461,25 +471,6 @@ public final class Beans {
     return reader.apply(pojo);
   }
 
-  /**
-   * Write {@code value} into the {@code name} property of an existing bean via its public {@code
-   * setX(value)} setter. The setter is resolved once and cached per {@code (pojo.getClass(), name)}
-   * via {@code ClassValue<ConcurrentHashMap>}, then dispatched through a {@link LambdaMetafactory}
-   * -bound {@link BiConsumer} — same hot-path posture as {@link #readProperty(Object, String)}.
-   *
-   * <p>Used by {@code Mapper.into(target, source)} — the {@code @MappingTarget} equivalent — for
-   * in-place mutation of an existing target instance. Unlike {@link #settersWriter(Class)}, this
-   * helper does NOT require a no-arg constructor on the target's class: the user supplies the
-   * already-constructed target. Only the setters need to be public.
-   *
-   * <p>Properties without a public {@code setX} setter are silently skipped — matches both {@link
-   * SettersWriter} (used by {@code Mapper.forward}) and MapStruct's {@code @MappingTarget}
-   * semantics so a getter-only / computed / immutable target property never breaks an otherwise
-   * valid mapping.
-   *
-   * @throws IllegalStateException via {@link MethodHandles#privateLookupIn} when the setter's
-   *     declaring class lives in a closed-package module without an {@code opens} directive
-   */
   @SuppressWarnings("unchecked")
   private static BiConsumer<Object, Object> buildSetterInvoker(final Class<?> cls, final String name) {
     final var set = "set" + capitalize(name);
@@ -521,7 +512,7 @@ public final class Beans {
         base = (BiConsumer<Object, Object>) callSite.getTarget().invoke();
       }
       // Same primitive-null guard as SettersWriter: null into a primitive setter must leave the
-      // field at its JLS default, not NPE at the unbox — Mapper.into must not crash on the input
+      // target property unchanged, not NPE at the unbox — Mapper.into must not crash on the input
       // Mapper.forward silently defaults (same-mapper symmetry).
       if (paramType.isPrimitive()) {
         return (pojo, value) -> {
@@ -1484,9 +1475,9 @@ public final class Beans {
           break;
         }
       }
-      // Align with SettersWriter and the captured-writer path — when a target
-      // property has no matching builder setter (getter-only on the target POJO, computed-only
-      // value, etc.), silently skip rather than throw. The names array passed to
+      // Align with SettersWriter and the captured-writer path — when a target property has no
+      // matching builder setter (getter-only on the target POJO, computed-only value, etc.),
+      // silently skip rather than throw. The names array passed to
       // {@code construct(...)} is derived from the target's getter set, not from a user-
       // authored builder name list, so an asymmetric writer contract here would diverge from
       // {@code Mapper.forward} (via SettersWriter) on POJOs that happen to expose a static

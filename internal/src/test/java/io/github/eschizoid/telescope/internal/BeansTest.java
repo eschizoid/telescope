@@ -1246,13 +1246,14 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("inherited setter: the writer routes through the parent's declaring class for" + " privateLookupIn")
-    void inheritedSetterRoutesThroughDeclaringClass() {
-      // ChildBean inherits setId(String) from ParentBean. The LMF invoker must resolve a Lookup
-      // against ParentBean (where setId is declared) rather than ChildBean — using the child's
-      // class would fail at privateLookupIn when the two live in modules with different opens
-      // directives. Pins the inheritance-correctness contract for the write path, mirroring the
-      // SettersWriter test of the same shape.
+    @DisplayName("inherited setter: a setter declared on the superclass is discovered and the write" + " lands")
+    void inheritedSetterIsDiscoveredAndWrites() {
+      // ChildBean inherits setId(String) from ParentBean, so the name scan has to reach a method
+      // the child does not declare: getMethods() surfaces it, and the invoker is built against the
+      // setter's declaring class so a parent in a separately-opened package still resolves.
+      // Both classes sit in this package, so the test cannot distinguish which class the Lookup
+      // was taken against — that would need a two-module fixture. What it pins is discovery and
+      // that the write reaches the parent's private field.
       final var pojo = new ChildBean();
       Beans.capturedWriter(ChildBean.class, "id").accept(pojo, "parent-id");
       assertEquals("parent-id", pojo.getId());

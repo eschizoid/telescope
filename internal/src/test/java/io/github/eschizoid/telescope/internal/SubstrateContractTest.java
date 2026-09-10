@@ -119,7 +119,7 @@ class SubstrateContractTest {
   }
 
   @Nested
-  @DisplayName("null into a primitive setter leaves the JLS default — patch matches forward")
+  @DisplayName("null into a primitive setter leaves the existing value — patch matches forward")
   class PrimitiveNullWrite {
 
     public static class Counter {
