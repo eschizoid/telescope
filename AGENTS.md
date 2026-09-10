@@ -133,9 +133,11 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
 - **Write — multi-edit (recommended):** `Telescope.all(Edit<S>...)` folds N edits into one reusable normalizer.
   `Edit.over(Telescope<S, X>, Function<X, X>)` builds each row (static-import `over`). One `over(...)` per arg line —
   count visible at a glance, no chain blur. Internally folds into the same `chain: Function<S, S>` accumulator that
-  `.with(...)` uses. Edits whose paths are provably order-free fuse into one structural pass through the `Fusion` engine
-  (prefix-trie sharing plus sibling slot fusion); overlapping paths, runtime-checked navigation, and custom edits fall
-  back to the sequential fold.
+  `.with(...)` uses. Edits fuse into one structural pass through the `Fusion` engine — prefix-trie sharing plus sibling
+  slot fusion — and equal full paths fuse by composing their leaf functions in edit order. The fold falls back to
+  sequential when an edit is user-implemented rather than built by `over(...)`, when a path carries no hop record
+  (`fieldByName`, bridge hops, `from/to/using`, custom lenses), when one path is a strict prefix of another, or when a
+  trie node would branch on anything but same-owner, pairwise-distinct components.
 - **Write — multi-edit chain (alternative):** fluent shape pre-dating `Telescope.all(...)`, kept for inline paths.
   - `update(Telescope<S, X>, Function<X, X>)` — pre-built path; equivalent end-state to `over(...)` but accumulated
     inline.
@@ -148,9 +150,10 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
   classes are mandatory head arguments, never inferred. **Same-name backfill is the default, not a row** — passing no
   rows at all recurses the pair and lines every component up by name; rows are overrides layered on top. `MapStep` is
   the sealed varargs type (`permits Mapping, WriteHint, NullHint`), and the row factories are `to`, `via`, `drop`,
-  `toOneWay`, `constant`, `compute`, `when`, `enumTo`, `toOrElse`, `zip`. Sibling `Telescope.mapper(...)` returns
-  `Mapper<A, B>` for patch/nestability. The fluent alternative is `Telescope.mapperBuilder(A.class, B.class)` with
-  `.add(...)` / `.inherit(...)` then `.build()` or `.buildTelescope()`. Symmetrical with `Telescope.all(Edit<S>...)`.
+  `toOneWay`, `constant`, `compute`, `when`, `enumTo`, `toOrElse`, `toOrElseGet`, `zip`. Sibling `Telescope.mapper(...)`
+  returns `Mapper<A, B>` for patch/nestability. The fluent alternative is `Telescope.mapperBuilder(A.class, B.class)`
+  with `.add(...)` / `.inherit(...)` then `.build()` or `.buildTelescope()`. Symmetrical with
+  `Telescope.all(Edit<S>...)`.
   - **Class inference internals:** `Mapping#sourceClass()` / `targetClass()` use `LambdaIntrospection.implClassOf`
     (`:internal`'s `SerializedLambda` helper — the one place for the decode).
 - **Indexed chain:** `withIndex()` → `WithIndex<S, A>` for indexed traversal terminals.
@@ -179,10 +182,10 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
 | `optics/collections/Traversals.java`                 | runtime dispatch for List / Set / Iterable / Map values / Optional                                                                                                                                                            |
 | `optics/Kind.java`, `Applicative.java`               | HKT-emulation for effectful update (see next section)                                                                                                                                                                         |
 
-Each optic except `Setter` and `Fold` exposes `.then(Other)` for composition (a write-only and a read-only weakening
-have nothing to compose through). Composition picks the most-specific result type; the lattice's resolution rules are in
-the composition table further down. The lattice is what makes the public DSL composable without users seeing optic
-types.
+Each optic except `Setter` and `Fold` exposes `.then(Other)` for composition — composition lives on the read+write
+optics, and `Getter` is the one weakening that still composes, read-side only. Composition picks the most-specific
+result type; the lattice's resolution rules are in the composition table further down. The lattice is what makes the
+public DSL composable without users seeing optic types.
 
 `:internal`'s `module-info.java` qualified-exports every `internal.*` package to `io.github.eschizoid.telescope` only
 (`pairing` also to the codegen module for the compile-time verifier) — JPMS enforces the boundary; downstream modules
@@ -450,6 +453,7 @@ Allocation (`-Pjmh.profilers=gc`) is deterministic and does not have this proble
 | `ReadFoldBenchmark`                                              | multi-focus read terminals, and the `read` / `find` head-grab against a loop floor |
 | `ContainerAllocationBenchmark`                                   | mapper container conversion across cardinality                                     |
 | `ContainerWriteBenchmark`                                        | `.each()` / `.eachValue()` rebuilds across cardinality                             |
+| `IntoBenchmark`                                                  | `Mapper.into` against `forward`, at five and twenty properties                     |
 | `LmfBenchmark`                                                   | the dispatch substrate: LMF vs reflection vs hand-rolled                           |
 | `EffectfulTraversalBenchmark`                                    | `updateOptional` and `updateValidated` against a pure update                       |
 | `MergeBenchmark`, `FromMapBenchmark`, `MultiEditBenchmark`       | the positional-bind and fusion engines                                             |

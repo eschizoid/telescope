@@ -30,6 +30,7 @@ import io.github.eschizoid.telescope.mapping.ForwardOnlyTransformTo;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
 import io.github.eschizoid.telescope.mapping.MapStep;
 import io.github.eschizoid.telescope.mapping.Mapping;
+import io.github.eschizoid.telescope.mapping.MergeStep;
 import io.github.eschizoid.telescope.runtime.instances.CompletableFutureK;
 import io.github.eschizoid.telescope.runtime.instances.EitherK;
 import io.github.eschizoid.telescope.runtime.instances.OptionalK;
@@ -714,13 +715,13 @@ public sealed class Telescope<
             target.getSimpleName() +
             ", ...) cannot accept a Mapping.toOneWay(...) row for field '" +
             r.targetField() +
-            "' — Mapping.toOneWay(...) is forward-only and would silently corrupt Mapper.backward / Mapper.patch. " +
-            "Use Telescope.mapperForward(" +
+            "' — Mapping.toOneWay(...) is forward-only and would silently corrupt" +
+            " Mapper.backward / Mapper.patch. Use Telescope.mapperForward(" +
             source.getSimpleName() +
             ", " +
             target.getSimpleName() +
-            ", ...) for a typed forward-only result, or Mapping.to(src, tgt, forward, backward) for " +
-            "an explicit bidirectional row."
+            ", ...) for a typed forward-only result, or Mapping.to(src, tgt, forward," +
+            " backward) for an explicit bidirectional row."
         );
       }
     }
@@ -849,10 +850,9 @@ public sealed class Telescope<
 
   /**
    * Forward-only N-source mapper that reads from any number of source objects (one per distinct
-   * runtime class) and assembles a single target. Each {@link
-   * io.github.eschizoid.telescope.mapping.MergeStep MergeStep} row identifies its source by the
-   * accessor's declaring class (via {@code SerializedLambda} inference) and binds it to a target
-   * component by name.
+   * runtime class) and assembles a single target. Each {@link MergeStep} row identifies its source
+   * by the accessor's declaring class (via {@code SerializedLambda} inference) and binds it to a
+   * target component by name.
    *
    * <pre>{@code
    * Mapper<Sources, Profile> mapper = Telescope.merge(Profile.class,
@@ -891,17 +891,14 @@ public sealed class Telescope<
    * @param steps the per-component correspondences
    * @return a {@code Mapper} whose {@code forward} reads from {@link Sources} and assembles the
    *     target; whose {@code backward} throws {@link UnsupportedOperationException}
-   * @see io.github.eschizoid.telescope.mapping.MergeStep#from(Accessor, Accessor)
-   * @see io.github.eschizoid.telescope.mapping.MergeStep#auto(Class)
+   * @see MergeStep#from(Accessor, Accessor)
+   * @see MergeStep#auto(Class)
    * @see Sources#of(Object[])
    * @see Sources#builder()
    */
   @SafeVarargs
   @SuppressWarnings("varargs")
-  public static <T> Mapper<Sources, T> merge(
-    final Class<T> target,
-    final io.github.eschizoid.telescope.mapping.MergeStep<T>... steps
-  ) {
+  public static <T> Mapper<Sources, T> merge(final Class<T> target, final MergeStep<T>... steps) {
     return Merge.build(target, steps);
   }
 
@@ -1364,9 +1361,10 @@ public sealed class Telescope<
     // where the hop is appended after composition) reuse the other directly — no allocation. Only a
     // genuine two-sided join builds a fresh list.
     if (next.hasPendingEdits()) throw new IllegalArgumentException(
-      "then(...) received a telescope carrying pending chain edits (built via .with(...) / " +
-        ".update(path, fn) / Telescope.all(...)); composition would silently drop them. " +
-        "Run them with .apply(source) first, or compose the pure paths and apply edits after."
+      "then(...) received a telescope carrying pending chain edits (built via .with(...) /" +
+        " .update(path, fn) / Telescope.all(...)); composition would silently drop them." +
+        " Run them with .apply(source) first, or compose the pure paths and apply edits" +
+        " after."
     );
     final List<OpticNode> joinedTrail;
     if (next.trail.isEmpty()) joinedTrail = trail;
