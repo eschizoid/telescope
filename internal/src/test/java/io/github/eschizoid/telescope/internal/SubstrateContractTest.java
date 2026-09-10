@@ -119,7 +119,7 @@ class SubstrateContractTest {
   }
 
   @Nested
-  @DisplayName("null into a primitive setter leaves the JLS default — patch matches forward")
+  @DisplayName("null into a primitive setter is skipped rather than unboxed — patch matches forward")
   class PrimitiveNullWrite {
 
     public static class Counter {
@@ -138,11 +138,16 @@ class SubstrateContractTest {
     }
 
     @Test
-    @DisplayName("writeBeanProperty(bean, primitiveProp, null) is a no-op, not an NPE")
+    @DisplayName("writing null into a primitive-typed property is a no-op, not an NPE")
     void nullIntoPrimitiveIsNoOp() {
       final var counter = new Counter();
       counter.setCount(7);
-      Beans.writeBeanProperty(counter, "count", null); // pre-fix: NPE at the unbox
+      // A null reaching a setX(int) would unbox and throw; both write paths guard and skip
+      // instead. What they observe differs: forward rebuilds from a fresh instance, so the
+      // property lands on the JLS default (pinned by setNullOnPrimitiveSubstitutesJlsDefault),
+      // while patch mutates in place, so the prior value survives. The shared contract is that
+      // neither NPEs.
+      Beans.capturedWriter(Counter.class, "count").accept(counter, null);
       assertEquals(7, counter.getCount());
     }
   }
