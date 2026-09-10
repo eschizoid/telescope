@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.annotations;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
 /**
  * A null-coalescing default for a source field at {@link Bridge} codegen time. Mirrors MapStruct's
@@ -46,6 +47,7 @@ import java.lang.annotation.RetentionPolicy;
  * source shape if the slot can be absent.
  */
 @Retention(RetentionPolicy.SOURCE)
+@Target({})
 public @interface Default {
   /**
    * Source field name whose null value triggers the substitution. Must name a real field on the

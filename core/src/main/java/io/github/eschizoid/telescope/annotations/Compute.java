@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.annotations;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 import java.util.function.Supplier;
 
 /**
@@ -35,6 +36,7 @@ import java.util.function.Supplier;
  * enforced at compile time.
  */
 @Retention(RetentionPolicy.SOURCE)
+@Target({})
 public @interface Compute {
   /**
    * Target field name receiving the computed value. Must name a real field on the {@link Bridge}

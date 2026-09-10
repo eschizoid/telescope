@@ -1,16 +1,21 @@
 /**
  * Compile-time markers consumed by the telescope annotation processors. Exported as part of the
- * library's public API so user code can apply them on records and beans.
+ * library's public API. The entry points ({@code @Focus}, {@code @BeanFocus}, {@code @Bridge},
+ * {@code @FromMap}) go on a declaration, as does {@code @UncheckedMapping}, which suppresses
+ * verification rather than generating anything; the per-field modifiers ({@code @Default},
+ * {@code @Rename}, {@code @Transform}, {@code @Constant}, {@code @Compute}, {@code @ViaMapper}) are
+ * only meaningful inside a {@code @Bridge} attribute and declare no applicable declaration target,
+ * so javac rejects them anywhere else.
  *
  * <ul>
  *   <li>{@link io.github.eschizoid.telescope.annotations.Focus} — applied to a record. The {@code
- *       :codegen} processor emits a sibling {@code <Record>Path<R>} navigator plus a {@code
- *       <Record>Telescope} metadata holder, eliminating the per-field reflection cost of {@code
+ *       :codegen} processor emits a sibling {@code <Record>Telescope<R>} navigator plus a {@code
+ *       <Record>FieldOptics} metadata holder, eliminating the per-field reflection cost of {@code
  *       .field(...)}.
  *   <li>{@link io.github.eschizoid.telescope.annotations.BeanFocus} — the POJO counterpart of
- *       {@code @Focus}. Drives generation of {@code <Bean>Path<R>} navigators for getter/setter
- *       beans (including Lombok {@code @Data} / {@code @Value} / {@code @Builder} classes via the
- *       {@code :lombok} processor).
+ *       {@code @Focus}. Drives generation of {@code <Bean>Telescope<R>} navigators for
+ *       getter/setter beans (including Lombok {@code @Data} / {@code @Value} / {@code @Builder}
+ *       classes via the {@code :lombok} processor).
  *   <li>{@link io.github.eschizoid.telescope.annotations.Bridge} — applied to a record or class
  *       (model-anchored) or a carrier class (carrier form, {@code source = X, target = Y}) to
  *       generate a reflection-free, compile-checked bridge; the codegen counterpart of the deep

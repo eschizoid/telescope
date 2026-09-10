@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.annotations;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
 /**
  * A literal value injected into a target field at {@link Bridge} codegen time. Mirrors MapStruct's
@@ -39,6 +40,7 @@ import java.lang.annotation.RetentionPolicy;
  * time.
  */
 @Retention(RetentionPolicy.SOURCE)
+@Target({})
 public @interface Constant {
   /**
    * Target field name receiving the constant. Must name a real field on the {@link Bridge} target.
