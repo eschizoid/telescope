@@ -9,32 +9,36 @@ and propose remediations where the gap is structural.
 run so every figure below is comparable — separate runs land on runners of different speeds, which has produced
 misleading ratios here before.
 
-| Tier (forward, codegen vs codegen)  | MapStruct | telescope | ratio | allocation              |
-| ----------------------------------- | --------: | --------: | ----: | ----------------------- |
-| flat (5 scalars)                    |  3.155 ns |  3.362 ns | 1.07x | 32 B/op both            |
-| nested (one nested type)            |  4.361 ns |  5.604 ns | 1.29x | 48 B/op both            |
-| deep (3 levels + 2 list hops)       | 62.378 ns | 66.572 ns | 1.07x | 376 B/op both           |
-| container, Map-valued (100 entries) | 1261.7 ns | 1243.5 ns |   tie | **7,528 vs 6,712 B/op** |
-| container, Set-valued (100 entries) | 1454.8 ns | 1444.7 ns |   tie | 7,576 B/op both         |
+| Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio | allocation              |
+| ----------------------------------- | ---------------: | ---------------: | ----: | ----------------------- |
+| flat (5 scalars)                    | 3.155 ± 0.019 ns | 3.362 ± 0.011 ns | 1.07x | 32 B/op both            |
+| nested (one nested type)            | 4.361 ± 0.045 ns | 5.604 ± 0.033 ns | 1.29x | 48 B/op both            |
+| deep (3 levels + 2 list hops)       |  62.38 ± 0.18 ns |  66.57 ± 0.52 ns | 1.07x | 376 B/op both           |
+| container, Map-valued (100 entries) |     1262 ± 11 ns |     1244 ± 10 ns |   tie | **7,528 vs 6,712 B/op** |
+| container, Set-valued (100 entries) |     1455 ± 21 ns |      1445 ± 9 ns |   tie | 7,576 B/op both         |
 
-Read the two container rows carefully. Their confidence intervals overlap, so **the timings are a tie, not a win** —
-telescope's mean is marginally lower and that means nothing. What is real is the allocation: 6,712 against 7,528 bytes
-per operation on the Map tier, about 11% less, and allocation is deterministic rather than hardware-dependent.
+Read the two container rows carefully — telescope's mean is marginally lower on both, and on neither does that mean it
+won. On Set the intervals overlap almost entirely (telescope's sits inside MapStruct's), which is a clean tie. On Map
+they overlap by under 3 ns, so call it a tie but not a settled one: tighter bands could separate them either way. What
+is real on that row is the allocation — 6,712 against 7,528 bytes per operation, about 11% less — and allocation is
+deterministic rather than hardware-dependent, which makes it the durable result.
 
 The scalar tiers are unchanged in character: a 0.2 ns difference on flat, 4 ns on a 62 ns deep conversion, and both
-outside their error bars so the ratios are real rather than noise. Nested remains the unstable one — measured at 1.04x,
-1.42x, 1.20x, 1.21x and now 1.29x across five runs of the same benchmark. It is a framework-overhead microbenchmark
+outside their error bars so the ratios are real rather than noise. Nested remains the unstable one — across CI runs of
+this benchmark it has ranged from 1.04x to 1.46x, and it lands at 1.29x here. It is a framework-overhead microbenchmark
 rather than a service-shaped workload; treat flat and deep as the publishable figures and nested as a range.
 
-Runtime tier, same run: flat 3.34x, nested 2.66x, deep 1.27x of MapStruct. That tier has no MapStruct equivalent to
-compare against — it is what you get with no annotations and no build step.
+Runtime tier, same run: flat 3.34x, nested 2.66x, deep 1.27x, and 1.04x–1.06x on the two container shapes. MapStruct has
+no equivalent to this tier — it is what you get with no annotations and no build step — so these ratios say what the
+convenience costs, not who wins.
 
 ### What the container tier is for
 
 It did not exist until recently, and its absence is why a defect shipped: every tier here was List-only, a list has no
-hash table, and the Bridge emitter was sizing Set and Map rebuilds by element count rather than table capacity. Every
-benchmark was green while generated bridges allocated more than the reflective path they exist to beat. The tier was
-added so that class of defect fails a measurement instead of passing one.
+hash table, and the Bridge emitter passed the source element count straight into the hash container's `int` constructor
+— which takes a table capacity, not an element count. Every benchmark was green while generated bridges allocated more
+than the reflective path they exist to beat. The tier was added so that class of defect fails a measurement instead of
+passing one.
 
 ## Methodology
 
@@ -92,14 +96,16 @@ three tiers (earlier revisions measured it on flat only).
 | nested | 5.079 ± 0.468 |        5.023 ± 1.219 |             0.99× |
 | deep   | 42.11 ± 1.575 |        49.54 ± 1.312 |             1.18× |
 
-**What reproduces, and what doesn't.** Flat (1.065× / 1.072×) and deep (1.185× / 1.137×) are stable — publishable at
-~1.07× and ~1.15×. Nested swings 1.043× → 1.424×: the `nested_mapstruct_forward` baseline carries a wide ±0.35 band both
-runs, so the nested ratio is a JMH-noisy figure, not a real regression or improvement — don't publish a single number
-for it. On the dispatch spread, both runs agree: `BRIDGE_FN` tracks `static forward` within error (run 2 flat: identical
-at 3.183), while `BRIDGE.read` sits a wrapper tax above the floor that grows with depth — 0.14 → 0.31 → 0.77 ns across
-flat/nested/deep on the tight-band run, each outside its error band. So `BRIDGE_FN` is the floor; the lattice wrapper is
-a small (≤0.8 ns) tax that scales with nesting depth; and the deep residual over MapStruct is mostly the generated body
-(`static forward` alone is ~1.12× on deep, ~5.6 ns of the ~6.3 ns gap).
+**What reproduces, and what doesn't** — as read at the time, from these two runs alone. Flat (1.065× / 1.072×) and deep
+(1.185× / 1.137×) are stable across the pair; deep has since come down to ~1.07× on the headline run, so treat ~1.15× as
+the figure these two runs supported rather than the current one. Nested swings 1.043× → 1.424×: the
+`nested_mapstruct_forward` baseline carries a wide ±0.35 band both runs, so the nested ratio is a JMH-noisy figure, not
+a real regression or improvement — don't publish a single number for it. On the dispatch spread, both runs agree:
+`BRIDGE_FN` tracks `static forward` within error (run 2 flat: identical at 3.183), while `BRIDGE.read` sits a wrapper
+tax above the floor that grows with depth — 0.14 → 0.31 → 0.77 ns across flat/nested/deep on the tight-band run, each
+outside its error band. So `BRIDGE_FN` is the floor; the lattice wrapper is a small (≤0.8 ns) tax that scales with
+nesting depth; and the deep residual over MapStruct is mostly the generated body (`static forward` alone is ~1.12× on
+deep, ~5.6 ns of the ~6.3 ns gap).
 
 Runtime path forward: flat 40.14, nested 64.37, deep 315.23 ns/op — ~16× / ~14× / ~8× of MapStruct. The backward
 direction stays higher (flat 108.31, nested 148.63, deep 626.39) because building a bean (allocate + N setters) is
@@ -108,7 +114,7 @@ through a structural-Iso build per `Telescope.mapper(...)` call site and a refle
 invocation; it's not in the dethrone-MapStruct lane, it's the convenience surface for "I don't want to write codegen for
 this one mapper".
 
-## Dispatch — `BRIDGE_FN` is the floor, the lattice wrapper is a ≤0.8 ns tax that scales with depth
+## Dispatch — `BRIDGE_FN` is the floor, and the lattice wrapper is a sub-nanosecond tax
 
 The `*_codegen_static_forward` (zero dispatch), `*_bridgefn_forward` (one interface hop), and `*_codegen_forward`
 (`BRIDGE.read`, full lattice) benchmarks isolate the dispatch cost by call shape. The `wrapper tax` column is the raw
@@ -122,6 +128,9 @@ The `*_codegen_static_forward` (zero dispatch), `*_bridgefn_forward` (one interf
 | R2 nested |                    5.902 |               5.896 |                   6.207 |     0.31 ns | yes (±0.04–0.09) |
 | R1 deep   |                    47.40 |               48.41 |                   47.72 |     0.32 ns | no (±1.5–3.2)    |
 | R2 deep   |                    51.92 |               52.59 |                   52.68 |     0.77 ns | yes (±0.12–0.16) |
+| R3 flat   |                    3.161 |               3.162 |                   3.362 |     0.20 ns | yes (±0.01–0.03) |
+| R3 nested |                    5.913 |               5.908 |                   5.604 |    −0.31 ns | yes (±0.03)      |
+| R3 deep   |                    66.27 |               69.22 |                   66.57 |     0.30 ns | no (±0.27–0.52)  |
 
 Read the tight-band run (R2) — its bands are 3–30× narrower, so it's the one that resolves anything. Two things hold:
 
@@ -130,12 +139,16 @@ tied on R2 nested (5.896 vs 5.902), and on R2 deep its ±0.675 band overlaps sta
 51.92). The one-interface-hop constant is monomorphic (one concrete `Fn` per bridge) and the JIT inlines it to the raw
 static call — it is the floor, there is nothing faster to reach.
 
-Second, **the full-lattice `BRIDGE.read` sits a wrapper tax above that floor, and the tax grows with depth**: on R2 it
-is 0.14 ns (flat) → 0.31 ns (nested) → 0.77 ns (deep), each outside the tight error bands. That monotonic climb is the
-lattice composition depth showing through — more nesting, more `Iso.then(...)` hops the wrapper carries. It stays small
-in absolute terms (≤0.8 ns), and on deep it is dwarfed by the ~5.6 ns generated-body gap anyway (see next section). On
-the wide-band R1 run the same gaps sit inside the noise, so R1 alone couldn't see them — which is exactly why we ran
-twice.
+Second, **the full-lattice `BRIDGE.read` sits a small wrapper tax above that floor** — on R2, 0.14 ns (flat) → 0.31 ns
+(nested) → 0.77 ns (deep), each outside the tight error bands, which read as the lattice composition depth showing
+through: more nesting, more `Iso.then(...)` hops the wrapper carries.
+
+**R3 does not reproduce that climb, so treat the depth-scaling as provisional.** On the same clean CI hardware it
+measures +0.20 ns on flat (real), −0.31 ns on nested — the lattice value _below_ the static floor, outside the bands,
+which is the "static-slower-than-lattice" inversion the lesson below files under laptop noise — and +0.30 ns on deep,
+inside the bands and therefore not a measurement at all. What survives all three runs is the magnitude: the tax is under
+a nanosecond wherever it is resolvable, and on deep it is dwarfed by the generated-body gap anyway (see next section).
+What does not survive is the monotonic ordering.
 
 An earlier run reported a ~0.3–0.7 ns "lattice slice" and proposed closing it by emitting a directly-callable
 `BRIDGE_FN` constant. `BRIDGE_FN` shipped (#182) — and it lands at the `static forward` floor, so an adopter who wants
@@ -146,19 +159,22 @@ the composable value while refusing to switch to `BRIDGE_FN`. Not worth it.
 The lesson stands: **smoke runs lie, and one CI run can too.** Run 1's 1.04× nested looked like a headline until run 2
 returned 1.42× on the same branch — the nested MapStruct baseline is JMH-noisy (±0.35). Laptop smoke runs earlier
 produced a 2.9–3.6× "forward gap", a "telescope-faster-on-backward" claim, and a "static-slower-than-lattice" inversion,
-all wrong. Trust the numbers that reproduce across runs: flat ~1.07×, deep ~1.15×, and `BRIDGE_FN` at the floor.
+all wrong — though R3 above measures that same inversion on nested with disjoint bands, so the shape is not exclusively
+a laptop artifact. Trust the numbers that reproduce across runs: flat ~1.07×, deep ~1.07×–1.15×, and `BRIDGE_FN` at the
+floor.
 
 ## So is there a real gap?
 
-**A small one, only on deep: ~1.15× forward, and it is mostly not dispatch.** Flat is ~1.07× (both runs). The deep
-`BRIDGE.read` gap is ~6.3 ns, and it splits: the zero-dispatch `static forward` floor is _already_ ~1.12× on deep (~5.6
-ns, the generated **body** — six leaf conversions, two list allocations, and per-field null-guards vs MapStruct's
-directly-inlined field sequence), with the lattice wrapper adding ~0.8 ns on top. Body dominates ~7:1. Whether it
-matters to an adopter:
+**A small one on deep, and it is mostly not dispatch.** On the headline run deep is ~1.07× forward — a 4.19 ns gap on a
+62 ns conversion — down from the ~1.15× the two earlier runs supported. The split is the durable part: the zero-dispatch
+`static forward` floor is _already_ ~1.06× on deep (3.90 ns of the 4.19, the generated **body** — six leaf conversions,
+two list allocations, and per-field null-guards vs MapStruct's directly-inlined field sequence), with the lattice
+wrapper adding the remainder. Body dominates by roughly 13:1 here and ~7:1 on the earlier runs; either way the wrapper
+is not what an adopter would be paying for. Whether it matters at all:
 
 - At <10M ops/sec on a hot mapper: invisible against application work.
-- At >100M ops/sec on the deep tier: a ~6 ns per-call structural cost — measurable on a flame graph, rarely dominant.
-- On flat: no gap to speak of (~1.07×). On nested the ratio is JMH-noisy run-to-run (1.04×–1.42×) — near-parity, but the
+- At >100M ops/sec on the deep tier: a ~4 ns per-call structural cost — measurable on a flame graph, rarely dominant.
+- On flat: no gap to speak of (~1.07×). On nested the ratio is JMH-noisy run-to-run (1.04×–1.46×) — near-parity, but the
   noisy MapStruct baseline means no single figure is trustworthy.
 
 ## Remediations — status
@@ -198,22 +214,23 @@ residual.
   MapStruct — on each run and pin `BRIDGE_FN` to the floor.
 - **This analysis doc, corrected against two runs.** Prior revisions claimed a ~0.3–0.7 ns lattice slice and proposed
   two remediations to close it; a first fresh run then over-corrected to "dispatch is free everywhere". A confirmation
-  run settled it: `BRIDGE_FN` is the floor, the lattice wrapper is a ≤0.8 ns tax that grows with nesting depth, and the
-  nested ratio is JMH-noisy. The doc records the reproducible parity result and the measured-and-declined subclass
-  decision.
+  run settled it: `BRIDGE_FN` is the floor, the lattice wrapper is a sub-nanosecond tax, and the nested ratio is
+  JMH-noisy. The doc records the reproducible parity result and the measured-and-declined subclass decision.
 - **No production code changed.** `BRIDGE_FN` already ships; the codegen is at parity as-is.
 
 ## Bottom line
 
 Telescope codegen is in MapStruct's performance class: 1.07x flat, 1.07x deep, and a tie on both hash-container tiers
-where it also allocates about 11% less on the Map shape. Nested stays the unstable measurement — five runs of the same
-benchmark have produced 1.04x, 1.42x, 1.20x, 1.21x and 1.29x — so it is reported as a range rather than a figure.
+where it also allocates about 11% less on the Map shape. Nested stays the unstable measurement — across CI runs of this
+benchmark it has ranged from 1.04x to 1.46x — so it is reported as a range rather than a figure.
 
-On dispatch the question is settled. `BRIDGE_FN` is the floor: it tracks the zero-dispatch `static forward` within error
-on every tier, because the JIT inlines the monomorphic hop. The full-lattice `BRIDGE.read` carries a wrapper tax that
-grows with depth, 0.14 to 0.77 ns across the three scalar tiers, each outside its error band. That settles both proposed
-remediations — `BRIDGE_FN` shipped and lands at the floor, and the type-specialized subclass would remove only that
-sub-nanosecond tax, swamped roughly seven to one by the body gap on deep. Declined.
+On dispatch, one half is settled and one is not. `BRIDGE_FN` is the floor: it tracks the zero-dispatch `static forward`
+within error on every tier and on every run, because the JIT inlines the monomorphic hop. The full-lattice `BRIDGE.read`
+carries a wrapper tax under a nanosecond wherever it resolves at all — but its size and even its sign move between runs
+(R2 read 0.14 → 0.31 → 0.77 ns with depth; R3 read +0.20, −0.31, and an unresolvable +0.30), so the depth-scaling story
+is provisional and the magnitude is the only durable part. Either way both proposed remediations are settled:
+`BRIDGE_FN` shipped and lands at the floor, and the type-specialized subclass would remove only that sub-nanosecond tax,
+swamped an order of magnitude over by the body gap on deep. Declined.
 
 What remains over MapStruct on the deep tier is a few nanoseconds of generated-body work rather than dispatch —
 `static forward` alone is above parity — and closing it means matching MapStruct's inlined body. That stays

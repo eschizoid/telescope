@@ -413,9 +413,9 @@ performance class:
 | Set or Map field, 100 items | a tie on time, and ~11% less allocated on the Map shape         |
 
 No codegen? `Telescope.mapper(...)` composes each record/bean pair into a single MethodHandle: zero annotations, no
-build step, within ~1.3–3.3× of MapStruct in the same workloads (flat ~3.3×, nested ~2.7×, deep ~1.3× — closest where
-trees are deepest, and a tie on container fields). That's sub-microsecond conversion; whether it's fast enough is your
-call, and when a loop turns hot, `@Bridge` puts you back in the codegen class. Reproduce any of it from the
+build step, within ~1.04–3.3× of MapStruct in the same workloads (flat ~3.3×, nested ~2.7×, deep ~1.3×, container fields
+~1.04–1.06× — the gap closes as the work per call grows). That's sub-microsecond conversion; whether it's fast enough is
+your call, and when a loop turns hot, `@Bridge` puts you back in the codegen class. Reproduce any of it from the
 [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action; the full matrix is in
 [`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison-apples-to-apples).
 
