@@ -77,7 +77,7 @@ public class PartnerShippingLabel {
   /**
    * Optional gift-wrap address; mirrors {@code Order.giftWrap} ({@code Optional<Address>} on the
    * record side). The {@code Optional} ↔ nullable bridge in {@code DeepMap.autoIso} handles the
-   * cross-paradigm conversion (see v0.4.1 CHANGELOG).
+   * cross-paradigm conversion.
    */
   @JsonProperty("gift_wrap")
   private PartnerAddress giftWrap;
