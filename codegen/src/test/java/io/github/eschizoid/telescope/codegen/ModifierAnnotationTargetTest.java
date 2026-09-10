@@ -68,9 +68,10 @@ class ModifierAnnotationTargetTest {
       compilation.hasError("not applicable"),
       "javac should reject @" + annotation + " as inapplicable, got: " + compilation.errorMessages()
     );
-    // One diagnostic, so the compile failed for applicability and nothing else. A case whose
-    // attributes did not match its annotation would also emit a missing-attribute error, and the
-    // substring assertion above would still pass.
+    // Exactly one diagnostic, so nothing but applicability failed. javac reaches the target check
+    // only once an annotation's element values are complete and resolvable — a wrong or missing
+    // attribute replaces this diagnostic rather than adding to it, which is why the substring
+    // assertion above is what catches a mis-specified case.
     assertEquals(
       1,
       compilation.errors().size(),
@@ -110,10 +111,9 @@ class ModifierAnnotationTargetTest {
 
     // Compiling is not enough: this source is valid Java whether or not the processor ran at all.
     // The generated bridge is the artifact that shows the attributes were read. A bridge exists
-    // only
-    // if the rename was honoured — without it the two records are not a bijection and the processor
-    // rejects the pair before emitting — and the default's literal appears only where @Default put
-    // it.
+    // only if the rename was honoured — without it the two records are not a bijection and the
+    // processor rejects the pair before emitting — and the default's literal appears only where
+    // @Default put it.
     final var bridge = compilation.generated().get("demo.OrderBridge");
     assertNotNull(bridge, "@Rename must still be honoured: no bijection, no emitted bridge");
     assertTrue(bridge.contains("\"EMEA\""), "@Default must reach the generated bridge");
