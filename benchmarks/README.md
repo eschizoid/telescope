@@ -295,8 +295,9 @@ Where the flat-tier gap comes from. MapStruct emits one hand-templated method bo
 JIT inlines the whole conversion into a single basic block. Telescope's `@Bridge` codegen emits the same shape — a
 direct constructor call — wrapped in a `Telescope` for composability. On a flat ~3 ns conversion that composability
 costs ~0.2 ns total; on deep, where element-by-element list conversion dominates and the workload climbs past 50 ns, it
-is a ~1.07× tie. If you're in a tight inner loop that doesn't need composition, call `<Source>Bridge.forward(s)` — or
-the directly-callable `BRIDGE_FN` constant — and pay the zero-dispatch floor.
+is a ~1.07× tie on the most recent run, 1.07×–1.19× across runs. If you're in a tight inner loop that doesn't need
+composition, call `<Source>Bridge.forward(s)` — or the directly-callable `BRIDGE_FN` constant — and pay the
+zero-dispatch floor.
 
 Runtime conversion (`Telescope.mapper(...)`) composes each record/bean pair into a single MethodHandle (see above), so
 the hot path is one `invokeExact` through the fused handle rather than an `Object[]` gather with boxed per-field
@@ -327,8 +328,9 @@ Where MapStruct stops being an option entirely: sealed-narrow paradigm hop, effe
 scope for a mapping-only model and demoed end-to-end in `examples/springboot/`. Capability wins, not perf wins, but
 they're the reason you'd pick telescope in the first place.
 
-Even the slowest telescope row — a hundred-element Set converted through the runtime path, ~1.5 μs — is fine for typical
-request handling. One or a few conversions per request, not millions per second.
+Even the slowest telescope row — a hundred-element Set rebuilt backward through the codegen bridge, ~3.2 μs, where
+MapStruct is ~3.1 μs on the same shape — is fine for typical request handling. One or a few conversions per request, not
+millions per second.
 
 One implementation note: the telescope `_codegen_backward` rows use `BRIDGE.set(placeholderBean, rec)`, which discards
 the placeholder and invokes the underlying `iso.from(rec)`. The `set` wrapper adds a small constant overhead vs a direct

@@ -5,9 +5,9 @@ and propose remediations where the gap is structural.
 
 ## Headline finding
 
-**Telescope codegen is in MapStruct's performance class, and on a hash container it allocates less.** The `ratio` column
-comes from a single CI run, so its figures are comparable with each other — separate runs land on runners of different
-speeds, and a ratio built from two of them is not a measurement.
+**Telescope codegen is in MapStruct's performance class, and on a hash container it allocates less.** Separate runs land
+on runners of different speeds, so a ratio built from two of them is not a measurement — hence the two columns below,
+read as the caption describes.
 
 | Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio | across runs            | allocation              |
 | ----------------------------------- | ---------------: | ---------------: | ----: | ---------------------- | ----------------------- |
@@ -163,9 +163,10 @@ next section). What does not survive is the monotonic ordering.
 
 An earlier run reported a ~0.3–0.7 ns "lattice slice" and proposed closing it by emitting a directly-callable
 `BRIDGE_FN` constant. `BRIDGE_FN` shipped (#182) — and it lands at the `static forward` floor, so an adopter who wants
-the fastest passable value already has it. The tax that remains sits only on the _composable_ `BRIDGE.read` value and is
-sub-nanosecond wherever it resolves at all; the type-specialized subclass (remediation #2) would remove only that, for
-only the narrow case of hot-looping the composable value while refusing to switch to `BRIDGE_FN`. Not worth it.
+the fastest passable value already has it on every row but R3 nested. The tax that remains sits only on the _composable_
+`BRIDGE.read` value and is sub-nanosecond wherever it resolves at all; the type-specialized subclass (remediation #2)
+would remove only that, for only the narrow case of hot-looping the composable value while refusing to switch to
+`BRIDGE_FN`. Not worth it.
 
 The lesson stands: **smoke runs lie, and one CI run can too.** Run 1's 1.04× nested looked like a headline until run 2
 returned 1.42× on the same branch — the nested MapStruct baseline is JMH-noisy (±0.35). Laptop smoke runs earlier
@@ -257,8 +258,10 @@ What remains over MapStruct on the deep tier is a few nanoseconds of generated-b
 `static forward` alone is above parity — and closing it means matching MapStruct's inlined body. That stays
 adopter-gated on a real deep-tier hot loop that measures it.
 
-Two things in this document's history are worth keeping visible. The 2.9-3.6x forward gap and the
-telescope-faster-on-backward claim were laptop noise that clean CI hardware dissolved; the static-slower-than-lattice
-inversion was not, since R3 later measured it on nested with disjoint bands. And every tier here was List-only until
-recently, which let a sizing defect in the container emitter ship green — the container rows exist so that class of
-defect fails a measurement rather than passing one.
+Two things in this document's history are worth keeping visible. Of the three claims a laptop produced, only the
+2.9-3.6x forward gap dissolved on clean CI hardware. The other two survived it: R3 measured the
+static-slower-than-lattice inversion on nested with disjoint bands, and telescope does measure faster than MapStruct on
+nested backward — 5.355 against 5.983 ns, disjoint — though not on flat or deep backward, which is what makes the
+blanket wording fail rather than the claim. And every tier here was List-only until recently, which let a sizing defect
+in the container emitter ship green — the container rows exist so that class of defect fails a measurement rather than
+passing one.
