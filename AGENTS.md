@@ -49,13 +49,15 @@ verifies mapper pairings at compile time. Read the mantras before the module map
 - **No bug or issue numbers in source comments.** Describe the behaviour in its own terms; cross-references live in the
   PR body and the release notes. There is no `CHANGELOG.md` — JReleaser generates the notes for each release
   (`preset.set("conventional-commits")` in the root `build.gradle.kts`). The preset categorises on the **subject**
-  alone, so the subject of a squash merge decides which section a change lands under and how it reads; a subject
-  matching no `type:` prefix still appears, unheaded below a rule, as its raw title. The body is read too — for a
-  `BREAKING CHANGE:` footer, for issue references (any ` #123`, which the entry renders as `, closes #123`), and for
-  `Co-authored-by:` lines, which feed the Contributors block. The issue reference is how a cross-reference kept out of a
-  source comment reaches the notes. Mark a breaking change both ways — the `!` in the subject flags it, the footer
-  supplies the text the notes render — and dispatch the release as `minor` or `major`, because nothing infers the bump
-  from the commits.
+  alone, so the subject of a squash merge decides which section a change lands under and how it reads. A subject whose
+  `type:` is not one the preset names still parses as conventional and renders its description, but lands below a rule
+  with no heading; a subject with no `type:` prefix at all lands there as its raw title. The body is read too — for a
+  `BREAKING CHANGE:` footer and for `Co-authored-by:` lines, which feed the Contributors block. Issue references are
+  picked up from the whole message, subject included: any `#123` preceded by a non-alphanumeric character renders as
+  `, closes #123` on the entry, so the `(#N)` GitHub appends to a squash subject already carries the cross-reference a
+  source comment must not. Mark a breaking change both ways — the `!` in the subject flags it, the footer supplies the
+  text the notes render — and dispatch the release as `minor` or `major`, because nothing infers the bump from the
+  commits.
 
 ---
 
