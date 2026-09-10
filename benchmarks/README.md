@@ -275,10 +275,10 @@ cycle is possible; cyclic SCCs keep the full guard).
 
 **Codegen-for-codegen, telescope and MapStruct are the same performance class — a tie at realistic depth.** On flat
 (3.155 vs 3.362 ns) telescope is **~1.07×**, ~0.2 ns absolute; on deep (62.38 vs 66.57 ns) **~1.07× — ~4 ns on a ~62 ns
-op**, stable across CI runs. The nested single-hop tier swings 1.04×–1.46× run-to-run — its MapStruct baseline is
-JMH-noisy (±0.35) — so it's a framework-overhead microbench, not a number to publish. The deeper the tree, the more the
-per-level conversion work dominates the fixed dispatch overhead; at the flat scale you're choosing on API and
-capability, not nanoseconds.
+op** on the most recent run, 1.07×–1.19× across runs. The nested single-hop tier swings 1.04×–1.46× run-to-run — its
+MapStruct baseline is JMH-noisy (±0.35) — so it's a framework-overhead microbench, not a number to publish. The deeper
+the tree, the more the per-level conversion work dominates the fixed dispatch overhead; at the flat scale you're
+choosing on API and capability, not nanoseconds.
 
 The gap decomposes into a tiny dispatch tax plus the generated body. The `static` column (zero-dispatch
 `<Source>Bridge.forward(s)`) is the floor; the `BRIDGE.read` lattice path sits a sub-nanosecond wrapper tax above it
@@ -306,9 +306,9 @@ sub-leaf's raw handle directly into the parent's composed handle, so the whole a
 pathological case (allocate a bean, then N boxed setter calls, ~48× MapStruct on flat) — is now **~3.5× on flat** via
 the unboxed setter-fold, matching forward instead of trailing it. Allocation drops to the result-object floor (flat 32
 B/op, the array + every primitive box gone). Sub-microsecond everywhere. Reach for codegen on the hottest paths; the
-runtime path is now within ~1.3–4× of MapStruct with **no annotations and no build step** — and closest exactly where it
-matters most, on the deep container-heavy trees — close enough for most service code, and `@Bridge` codegen is there
-when a loop turns hot.
+runtime path is now within ~1.04–3.3× of MapStruct with **no annotations and no build step** — closest where the
+per-call conversion work is largest, which is the deep tier and the hash-container fields — close enough for most
+service code, and `@Bridge` codegen is there when a loop turns hot.
 
 All four columns above are from the same run; the codegen/MapStruct ratios reproduce across confirming runs within error
 (the runtime rows carry wider bands but the same magnitude).
