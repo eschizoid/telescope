@@ -35,8 +35,7 @@ import javax.lang.model.element.TypeElement;
  * processing ends is run through the emit path on {@link RoundEnvironment#processingOver} anyway,
  * where the empty property list surfaces as a <em>no readable properties</em> diagnostic rather
  * than as silence. Deferring every target to that final round would be simpler and is wrong: a
- * navigator emitted only then does not exist yet when same-module main code is resolved, which
- * {@code examples/library}'s direct references to the generated navigators hold in place.
+ * navigator emitted only then does not exist yet when same-module main code is resolved.
  */
 @SupportedAnnotationTypes({ "lombok.Data", "lombok.Value", "lombok.Builder" })
 @SupportedSourceVersion(SourceVersion.RELEASE_21)
@@ -73,8 +72,7 @@ public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
     // *generated* sources are themselves compiled, by which point Lombok has long finished. A
     // round where Lombok has not yet run emits nothing useful and a later round retries: the
     // `beanProperties()` query on an un-patched @Data returns empty, which
-    // `emitBeanNavigatorIfReady`
-    // treats as not-ready.
+    // `emitBeanNavigatorIfReady` treats as not-ready.
     for (final var pojo : List.copyOf(pending)) {
       if (emitBeanNavigatorIfReady(pojo)) pending.remove(pojo);
     }
