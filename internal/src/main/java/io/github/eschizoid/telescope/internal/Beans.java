@@ -408,6 +408,25 @@ public final class Beans {
   }
 
   /**
+   * Write-side sibling of {@link #capturedReader}: the cached {@link BiConsumer} for one property,
+   * resolved once so a caller writing the same property repeatedly pays the proxy unwrap, the
+   * {@link ClassValue} probe and the name lookup at bind time rather than per write.
+   *
+   * <p>Unlike {@link #capturedReader}, a name with no matching setter is <em>not</em> an error: it
+   * yields the same no-op writer {@link #writeBeanProperty} would have used, so a getter-only or
+   * computed property is skipped rather than throwing. That asymmetry is deliberate and matches
+   * what the rebuild strategies already do for an unwritable property — see {@code
+   * buildSetterInvoker}. Callers wanting a name checked must check it themselves.
+   *
+   * <p>Pass the class the write will actually target. Binding to a declared supertype silently
+   * skips a property whose setter exists only on the concrete subclass, which is the ordinary shape
+   * for an entity hierarchy.
+   */
+  public static BiConsumer<Object, Object> capturedWriter(final Class<?> beanClass, final String name) {
+    return SETTER_INVOKERS.get(beanClass).computeIfAbsent(name, n -> buildSetterInvoker(beanClass, n));
+  }
+
+  /**
    * Read a bean property by name via its {@code getX()} / {@code isX()} accessor. Throws if no
    * getter matches {@code name}.
    *

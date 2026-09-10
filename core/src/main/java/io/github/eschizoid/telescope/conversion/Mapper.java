@@ -11,11 +11,11 @@ import io.github.eschizoid.telescope.mapping.MapStep;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
@@ -50,6 +50,7 @@ public final class Mapper<A, B> {
   private final Class<B> targetClass;
   private final Reflective sourceRefl;
   private final Reflective targetRefl;
+  private volatile IntoPlan intoPlan;
   private final Map<String, PatchEntry> patchByTargetField;
   // Folded hook chains — null = no hook. Composed by repeated calls to before*/after*. Each side
   // is a single Function/BiFunction reference at call time so HotSpot stays monomorphic regardless
@@ -456,14 +457,63 @@ public final class Mapper<A, B> {
       "This mapper does not support into() — Telescope.merge produces a forward-only mapper " +
         "(the multi-source case has no general inverse). Use Mapper.forward(...) only."
     );
-    final var staged = new LinkedHashMap<String, Object>(patchByTargetField.size());
-    for (final var name : patchByTargetField.keySet()) {
-      staged.put(name, targetRefl.read(produced, name));
+    // Writers bind to the target's persistent class, not the declared one: a mapper declared
+    // against a base or @MappedSuperclass type is routinely handed a concrete subclass, and the
+    // setter that matters may exist only there. persistentClassOf collapses a proxy back to its
+    // entity class so the cache stays one entry per real class.
+    final var writeClass = Beans.persistentClassOf(target);
+    if (produced == null) {
+      // preForward and postForward may map to null by contract, and a null product wrote null to
+      // every mapped property rather than failing. Readers are never bound here: there is nothing
+      // to read from.
+      for (final var name : patchByTargetField.keySet()) Beans.capturedWriter(writeClass, name).accept(target, null);
+      return target;
     }
-    for (final var e : staged.entrySet()) {
-      Beans.writeBeanProperty(target, e.getKey(), e.getValue());
-    }
+    final var slots = intoSlots(Beans.persistentClassOf(produced), writeClass);
+    final var staged = new Object[slots.length];
+    for (var i = 0; i < slots.length; i++) staged[i] = slots[i].read().apply(produced);
+    for (var i = 0; i < slots.length; i++) slots[i].write().accept(target, staged[i]);
     return target;
+  }
+
+  /** One target property's bound accessor pair, resolved once per mapper. */
+  private record IntoSlot(Function<Object, Object> read, BiConsumer<Object, Object> write) {}
+
+  /** The class pair a bound slot array is valid for, alongside the array. */
+  private record IntoPlan(Class<?> readClass, Class<?> writeClass, IntoSlot[] slots) {}
+
+  /**
+   * The bound accessor pair for every property {@link #into} writes. The patch table's keys are
+   * fixed for the life of the mapper, so the only thing that can vary between calls is the pair of
+   * runtime classes — and in the overwhelming case it does not vary at all. One memoised plan
+   * therefore serves every call, and resolving accessors per property per call re-paid two proxy
+   * unwraps, two {@code ClassValue} probes and two name lookups for constant work.
+   *
+   * <p>Resolved on use rather than at construction because a record target reaches construction
+   * routinely — {@code Telescope.mapper(Dto.class, SomeRecord.class)} is ordinary — and a record's
+   * accessors are not bean getters, so binding eagerly would fail at build time for a mapper whose
+   * {@code into} is never called and correctly rejects records anyway.
+   *
+   * <p>The race between two callers is benign: both build equivalent arrays for the same class
+   * pair, and publishing either is correct.
+   *
+   * <p>One slot assumes a caller passes targets of one concrete class, which is the ordinary shape.
+   * A caller alternating across an entity hierarchy misses every time and rebinds per call — still
+   * faster than resolving per property per call, but it turns this field into a volatile store on
+   * every call, and a mapper is a shared singleton in both framework starters. Key the memo by
+   * class if that pattern ever shows up in a profile.
+   */
+  private IntoSlot[] intoSlots(final Class<?> readClass, final Class<?> writeClass) {
+    final var cached = intoPlan;
+    if (cached != null && cached.readClass() == readClass && cached.writeClass() == writeClass) return cached.slots();
+    final var names = patchByTargetField.keySet();
+    final var built = new IntoSlot[names.size()];
+    var i = 0;
+    for (final var name : names) {
+      built[i++] = new IntoSlot(Beans.capturedReader(readClass, name), Beans.capturedWriter(writeClass, name));
+    }
+    intoPlan = new IntoPlan(readClass, writeClass, built);
+    return built;
   }
 
   /** Backward conversion {@code B → A}. See {@link #forward(Object)}. */
