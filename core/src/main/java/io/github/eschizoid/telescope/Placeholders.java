@@ -4,7 +4,7 @@ import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.lang.reflect.Modifier;
-import java.util.HashMap;
+import java.util.function.Supplier;
 
 /**
  * Placeholder / default-value machinery for {@link DeepMap}'s permissive modes. When a target field
@@ -78,14 +78,46 @@ final class Placeholders {
    * possible in principle but the no-arg ctor doesn't recurse into fields, so a self-referencing
    * bean is handled with a single allocation regardless of its field shape.
    */
-  @SuppressWarnings({ "rawtypes", "unchecked" })
   private static Object recursiveDefault(final Class<?> type) {
-    if (type.isPrimitive()) return primitiveDefault(type);
+    return PLANS.get(type).get();
+  }
+
+  /**
+   * The default-tree plan for a type, resolved once per class. Everything reflective about building
+   * a default lives here — the component list, the primitive lookup, and the constructor probe — so
+   * a conversion pays a supplier call per component rather than re-deriving the shape.
+   *
+   * <p>The plan is cached, not the value. Today's write paths rebuild rather than mutate, so a
+   * shared instance would not be observable through them — but a default is a mutable object handed
+   * to arbitrary downstream writes on any thread, and one shared across every conversion of a type
+   * is a hazard waiting for the first write path that does mutate in place. Building per call costs
+   * one allocation and removes the question.
+   */
+  private static final ClassValue<Supplier<Object>> PLANS = new ClassValue<>() {
+    @Override
+    protected Supplier<Object> computeValue(final Class<?> type) {
+      return planFor(type);
+    }
+  };
+
+  @SuppressWarnings({ "rawtypes", "unchecked" })
+  private static Supplier<Object> planFor(final Class<?> type) {
+    if (type.isPrimitive()) {
+      final var value = primitiveDefault(type);
+      return () -> value;
+    }
     if (type.isRecord()) {
+      // Canonical order, so the component plans fill a positional array directly. Records cannot
+      // form a construction cycle — every canonical constructor needs its component types already
+      // constructible — so resolving a component's plan here cannot re-enter this type.
       final var comps = type.getRecordComponents();
-      final var byName = new HashMap<String, Object>(comps.length);
-      for (final var comp : comps) byName.put(comp.getName(), recursiveDefault(comp.getType()));
-      return Records.construct((Class) type, byName::get);
+      final var parts = (Supplier<Object>[]) new Supplier<?>[comps.length];
+      for (var i = 0; i < comps.length; i++) parts[i] = PLANS.get(comps[i].getType());
+      return () -> {
+        final var args = new Object[parts.length];
+        for (var i = 0; i < parts.length; i++) args[i] = parts[i].get();
+        return Records.construct((Class) type, args);
+      };
     }
     // Bean intermediate: try the public no-arg ctor first, falling back to the static builder()
     // pattern (Lombok @Builder, Immutables-style). Skip JDK scalars / containers entirely so the
@@ -95,10 +127,12 @@ final class Placeholders {
     // same behaviour as before bean-intermediate support, but no per-call
     // `getDeclaredConstructor` / `getMethod("builder")` reflection: both shapes are LMF-cached
     // per class via {@link Beans#intermediateAllocator}.
-    if (beanIntermediateAllocatable(type)) {
-      return Beans.intermediateAllocator(type).get();
-    }
-    return null;
+    // The allocator is already cached per class and hands back a fresh instance per call, which a
+    // bean intermediate needs: telescope-row writes go through its setters, so two conversions
+    // must not share one. The probe that decides whether a type has a usable strategy costs two
+    // thrown exceptions for a type with neither, and it runs here rather than per conversion.
+    if (beanIntermediateAllocatable(type)) return Beans.intermediateAllocator(type)::get;
+    return () -> null;
   }
 
   static Object primitiveDefault(final Class<?> p) {
