@@ -176,11 +176,11 @@ tax is under a nanosecond wherever it is resolvable, and on deep it is small aga
 (see [So is there a real gap?](#so-is-there-a-real-gap)). What does not survive is the monotonic ordering.
 
 An earlier run reported a ~0.3–0.7 ns "lattice slice" and proposed closing it by emitting a directly-callable
-`BRIDGE_FN` constant. `BRIDGE_FN` shipped (#182) — and it lands at the `static forward` floor, so an adopter who wants
-the fastest passable value already has it on every row but R3 nested. The tax that remains sits only on the _composable_
-`BRIDGE.read` value and is sub-nanosecond wherever it resolves at all; the type-specialized subclass (remediation #2)
-would remove only that, for only the narrow case of hot-looping the composable value while refusing to switch to
-`BRIDGE_FN`. Not worth it.
+`BRIDGE_FN` constant. `BRIDGE_FN` shipped (#182) — and on flat and nested it lands at the `static forward` floor, so an
+adopter who wants the fastest passable value has it on every row there but R3 nested. On deep, run 4 puts it ~7 ns above
+the floor. The tax that remains sits only on the _composable_ `BRIDGE.read` value and is sub-nanosecond wherever it
+resolves at all; the type-specialized subclass (remediation #2) would remove only that, for only the narrow case of
+hot-looping the composable value while refusing to switch to `BRIDGE_FN`. Not worth it.
 
 The lesson stands: **smoke runs lie, and one CI run can too.** Run 1's 1.04× nested looked like a headline until run 2
 returned 1.42× on the same branch — the nested MapStruct baseline is JMH-noisy (±0.35). Laptop smoke runs earlier
@@ -265,9 +265,10 @@ Whether the gap matters at all:
 
 `public static final BridgeFn<S, T> BRIDGE_FN = new Fn();` ships per generated bridge (asserted in
 `BridgeProcessorTest`). It gives adopters a passable one-hop mapper value instead of a static method. The benchmark
-tables above show it measures **at the `static forward` floor** on every run (with the one weak cell the dispatch table
-footnotes: R3 deep's ±5.3 ns band settles little either way) — the JIT inlines the monomorphic hop to the raw static
-call, so it is the fastest passable value there is. Against `BRIDGE.read` it is usually the faster of the two by the
+tables above show it measures **at the `static forward` floor on flat and nested** — the JIT inlines the monomorphic hop
+to the raw static call, so on those tiers it is the fastest passable value there is. Deep is the exception and the only
+run that resolves it disagrees: run 4 puts `BRIDGE_FN` ~7 ns above the floor with disjoint bands, where R1, R2 and R3
+all carried bands too wide to separate the two. Against `BRIDGE.read` it is usually the faster of the two by the
 sub-nanosecond lattice-wrapper tax, though not always: on R3 nested the lattice value measured below it with disjoint
 bands. So it is the ergonomic value (a `BridgeFn` you can pass around) and, on most rows, marginally the fast one.
 
@@ -295,7 +296,7 @@ residual.
 
 - **`BRIDGE_FN` benchmarked across all three tiers** (`nested_*_bridgefn_forward`, `deep_*_bridgefn_forward`; flat
   already existed). This is what lets the forward tables compare all four call shapes — static, one-hop, lattice,
-  MapStruct — on each run and pin `BRIDGE_FN` to the floor.
+  MapStruct — on each run, which is what later let run 4 separate `BRIDGE_FN` from the floor on deep.
 - **The container tier**, Set- and Map-valued, which is where this revision's actual finding lives — see the headline
   table for the figures and [What the container tier is for](#what-the-container-tier-is-for) for why it was added.
 - **This analysis doc, corrected against three runs.** What each correction retracted is recorded under
@@ -321,7 +322,8 @@ dispatch table above carries both runs so the disagreement stays visible.
 
 **An earlier revision proposed closing a ~0.3–0.7 ns "lattice slice"** by emitting a directly-callable constant, and a
 first fresh run then over-corrected the other way to "dispatch is free everywhere". `BRIDGE_FN` shipped and lands at the
-floor, so that half is done; the Remediations section above records why the second proposal was declined.
+floor on flat and nested, so that half is done; the Remediations section above records why the second proposal was
+declined.
 
 **The deep residual was attributed to the generated body**, as "six leaf conversions, two list allocations and per-field
 null-guards against MapStruct's directly-inlined field sequence". A line-by-line read of the two generated classes found
@@ -335,8 +337,8 @@ until run 4, which measured it ~7 ns _above_ the floor with disjoint bands — s
 that support it.
 
 **Deep was briefly published as ~1.07× flat-out.** The number is this run's measurement and still stands in the headline
-table; what was wrong was presenting it as deep's figure rather than as the low end of a 1.07×–1.19× spread. The
-`across runs` column is the honest form.
+table; what was wrong was presenting it as deep's figure rather than as one end of a spread, now 1.06×–1.19× with run
+4's 1.059× at the bottom. The `across runs` column is the honest form.
 
 ## Bottom line
 
@@ -344,13 +346,13 @@ Telescope codegen is in MapStruct's performance class. The headline table has th
 stable across runs and which are ranges; the short version is that flat is settled, deep and nested are ranges, and the
 two container shapes tie on time while telescope allocates less on the Map shape.
 
-On dispatch, one half is settled and one is not. `BRIDGE_FN` is the floor — it tracks the zero-dispatch static call on
-every tier and every run within error, because the JIT inlines the monomorphic hop — though on R3 deep only on a band
-too wide to say much. The full-lattice `BRIDGE.read` carries a sub-nanosecond wrapper tax wherever it resolves at all,
-but its size and even its sign move between runs, so how it scales with depth is provisional and only the magnitude is
-durable. Both proposed remediations are settled either way: one shipped and reached the floor on flat and nested, and
-the other would remove only that tax, which is small against the deep residual — the one tier where the residual is big
-enough to be worth chasing.
+On dispatch, one half is settled on two tiers of three. `BRIDGE_FN` is the floor on flat and nested — it tracks the
+zero-dispatch static call there on every run within error, because the JIT inlines the monomorphic hop. On deep the only
+run whose bands resolve it puts it ~7 ns above the floor instead. The full-lattice `BRIDGE.read` carries a
+sub-nanosecond wrapper tax wherever it resolves at all, but its size and even its sign move between runs, so how it
+scales with depth is provisional and only the magnitude is durable. Both proposed remediations are settled either way:
+one shipped and reached the floor on flat and nested, and the other would remove only that tax, which is small against
+the deep residual — the one tier where the residual is big enough to be worth chasing.
 
 What remains over MapStruct on deep forward is not dispatch — the zero-dispatch floor is itself above parity — and it is
 the emitted bodies are not doing more work either: the two are equivalent in source and bytecode and allocate
