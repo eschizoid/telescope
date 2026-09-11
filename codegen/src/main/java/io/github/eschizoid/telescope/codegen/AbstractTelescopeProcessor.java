@@ -898,8 +898,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       pojo,
       out -> {
         emitPathClassHeader(out, pathName, pojoName);
-        for (final var p : props) {
-          emitBeanPropertyMethod(out, pojoName, props, setters, useBuilder, p, navigableAnnotations);
+        for (var i = 0; i < props.size(); i++) {
+          emitBeanPropertyMethod(out, pojoName, props, setters, useBuilder, i, navigableAnnotations);
         }
         final var bridgeTarget = bridgeTargetFqn(pojo);
         if (bridgeTarget != null) emitBridgeHop(out, pojoName, bridgeTarget);
@@ -1143,19 +1143,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final List<Prop> props,
     final String[] setters,
     final boolean useBuilder,
-    final Prop target,
+    final int propertyIndex,
     final Set<String> navigableAnnotations
   ) {
+    final var target = props.get(propertyIndex);
     final var lensArgs =
       pojoName + "::" + target.getter() + ", " + beanRebuild(target, props, setters, useBuilder, pojoName);
-    var index = 0;
-    for (var i = 0; i < props.size(); i++) {
-      if (props.get(i).name().equals(target.name())) {
-        index = i;
-        break;
-      }
-    }
-    emitNavigatorMethod(out, pojoName, index, target.name(), target.type(), lensArgs, navigableAnnotations);
+    emitNavigatorMethod(out, pojoName, propertyIndex, target.name(), target.type(), lensArgs, navigableAnnotations);
   }
 
   private void emitBeanStep(

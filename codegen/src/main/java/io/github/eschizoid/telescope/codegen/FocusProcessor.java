@@ -132,7 +132,13 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
       recordType,
       out -> {
         emitPathClassHeader(out, pathName, recordName);
-        for (final var comp : components) emitComponentMethod(out, recordName, components, comp);
+        for (var i = 0; i < components.size(); i++) emitComponentMethod(
+          out,
+          recordName,
+          components,
+          i,
+          components.get(i)
+        );
         final var bridgeTarget = bridgeTargetFqn(recordType);
         if (bridgeTarget != null) emitBridgeHop(out, recordName, bridgeTarget);
         emitTelescopeForwarders(out, recordName);
@@ -237,18 +243,12 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
     final PrintWriter out,
     final String recordName,
     final List<? extends RecordComponentElement> components,
+    final int componentIndex,
     final RecordComponentElement comp
   ) {
     final var compName = comp.getSimpleName().toString();
     final var lensArgs = recordName + "::" + compName + ", " + canonicalSetter(recordName, components, compName);
-    var index = 0;
-    for (var i = 0; i < components.size(); i++) {
-      if (components.get(i).getSimpleName().toString().equals(compName)) {
-        index = i;
-        break;
-      }
-    }
-    emitNavigatorMethod(out, recordName, index, compName, comp.asType(), lensArgs, FOCUS_ONLY);
+    emitNavigatorMethod(out, recordName, componentIndex, compName, comp.asType(), lensArgs, FOCUS_ONLY);
   }
 
   // Container-step emission for an @Focus record's collection-shaped component. All shared logic

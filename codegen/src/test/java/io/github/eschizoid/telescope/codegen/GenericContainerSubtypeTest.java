@@ -19,9 +19,9 @@ import org.junit.jupiter.api.Test;
  * else unless it declares more. Both facts the raw path already respects have to hold here too.
  *
  * <p>Every case compiles through the full pipeline, which matters here specifically: the defect is
- * an allocation expression, and {@code -proc:only} attributes a generated source's signatures but
- * not its bodies. A body that cannot compile still reports success there, so every assertion below
- * would hold vacuously.
+ * an allocation expression. {@code -proc:only} completes declarations and stops before method
+ * bodies and field initializers — of any source, not only a generated one — so an expression that
+ * cannot compile still reports success there and every assertion below would hold vacuously.
  */
 class GenericContainerSubtypeTest {
 

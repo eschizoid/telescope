@@ -22,13 +22,21 @@ import org.junit.jupiter.api.Test;
  * is not. The second half is what pins the improvement — a processor that reported the cause and
  * emitted the broken artifact anyway would satisfy the first assertion alone.
  *
- * <p>These compile through the full pipeline. {@code -proc:only} does attribute the signatures and
- * type references of a generated source, so a name collision would surface there too — but it stops
- * before the bodies, and asserting on the whole compilation is what keeps a case from depending on
- * which half of the file its error happens to land in.
+ * <p>These compile through the full pipeline, and for one of them that is load-bearing rather than
+ * tidy. {@code -proc:only} completes declarations — so it resolves the types in a signature — and
+ * stops before method bodies and field initializers. A holder taking the navigator's own name is a
+ * duplicate class and is caught at Enter either way; a holder shadowing the navigated type's name
+ * still resolves to a legal type in every signature, and breaks only inside the initializer, where
+ * processing-only never looks.
  */
 class GeneratedNameCollisionTest {
 
+  /**
+   * Runs the full pipeline, not {@code -proc:only}. Retargeting this at the processing-only harness
+   * would leave {@link #holderStepsAsideFromTheSourceTypeName()} passing while testing nothing: the
+   * shadowed name resolves in every signature and fails only inside a field initializer, which
+   * processing-only never attributes.
+   */
   private static Compilation compile(final Processor processor, final JavaFileObject... sources) {
     return ProcessorHarness.compileFully(List.of(processor), List.of(), sources);
   }
