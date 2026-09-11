@@ -2286,14 +2286,18 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Transform accepts a widening BridgeFn and a boxed primitive pair")
+    @DisplayName(
+      "@Transform accepts the conversions the emitted call relies on — widening, boxing, and" +
+        " unboxing-plus-widening"
+    )
     void transformAcceptsWideningAndBoxedPairs() {
       // Assignability models the boxing the source read needs and the unboxing-plus-widening the
       // target write needs, so the declared field types are what to compare — boxing either side
       // first would discard the second. The two asymmetric rows are forward-only: widening and
       // unboxing-plus-widening run one way, so the emitted backward would not compile, and the
       // check must accept the direction that exists rather than the pair as a whole. The boxed
-      // int row is bidirectional because boxing reverses.
+      // int row is bidirectional because int boxes to Integer and Integer unboxes to int on both
+      // sides of the row, so both directions perform the same pair of conversions.
       final var compilation = compileAttributed(
         source(
           "demo.WideFn",
