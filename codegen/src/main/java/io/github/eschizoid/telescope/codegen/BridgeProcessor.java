@@ -1209,9 +1209,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (args.size() == 2 && tfField != null) {
           final var tfType = tfField.type();
           final var types = processingEnv.getTypeUtils();
-          // Assignability already models boxing and unboxing-plus-widening in both directions, so
-          // the raw field types are what to compare — boxing either side first would discard the
-          // conversions the emitted call relies on.
+          // Assignability models the boxing the source read needs and the unboxing-plus-widening
+          // the target write needs, so the declared field types are what to compare — boxing
+          // either side first would discard the second.
           if (
             !types.isAssignable(sfType, erasedBound(args.get(0))) ||
             !types.isAssignable(erasedBound(args.get(1)), tfType)

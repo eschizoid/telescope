@@ -2150,7 +2150,7 @@ class BridgeProcessorTest {
       // The emitter instantiates the fn raw, so a type-variable argument erases to its bound and
       // the call accepts anything assignable to that. Both shapes below compile, and the fit test
       // must not reject them for having a variable where a concrete type could stand.
-      final var compilation = compile(
+      final var compilation = compileAttributed(
         source(
           "demo.RenderFn",
           """
@@ -2288,12 +2288,13 @@ class BridgeProcessorTest {
     @Test
     @DisplayName("@Transform accepts a widening BridgeFn and a boxed primitive pair")
     void transformAcceptsWideningAndBoxedPairs() {
-      // Assignability already models the conversions the emitted call relies on: a
-      // BridgeFn<CharSequence, String> consumes a String field by widening, BridgeFn<Integer,
-      // Integer> reaches an int field by boxing and unboxing, and a BridgeFn returning Integer
-      // reaches a long field by unboxing plus a widening primitive conversion. Comparing boxed
-      // types instead of the declared ones would lose that last one.
-      final var compilation = compile(
+      // Assignability models the boxing the source read needs and the unboxing-plus-widening the
+      // target write needs, so the declared field types are what to compare — boxing either side
+      // first would discard the second. The two asymmetric rows are forward-only: widening and
+      // unboxing-plus-widening run one way, so the emitted backward would not compile, and the
+      // check must accept the direction that exists rather than the pair as a whole. The boxed
+      // int row is bidirectional because boxing reverses.
+      final var compilation = compileAttributed(
         source(
           "demo.WideFn",
           """
@@ -2337,9 +2338,9 @@ class BridgeProcessorTest {
           import io.github.eschizoid.telescope.annotations.Bridge;
           import io.github.eschizoid.telescope.annotations.Transform;
           @Bridge(value = demo.Tgt.class, transforms = {
-            @Transform(field = "label", using = demo.WideFn.class),
+            @Transform(field = "label", using = demo.WideFn.class, forwardOnly = true),
             @Transform(field = "count", using = demo.BoxFn.class),
-            @Transform(field = "size", using = demo.SizeFn.class)
+            @Transform(field = "size", using = demo.SizeFn.class, forwardOnly = true)
           })
           public record Src(String label, int count, String size) {}
           """
