@@ -3084,17 +3084,23 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.OrderBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
-      // Forward routes the hoisted single-read local through the user-named bridge.
+      // Forward routes the hoisted single-read local through the user-named bridge, null-gated:
+      // a user class carries no null-tolerance guarantee, unlike auto-derived sub-bridges whose
+      // generated forward opens with its own guard. Both mentions reference the local.
       assertTrue(bridge.contains("final demo.Address __fs_address = s.address();"), bridge);
       assertTrue(
-        bridge.contains("new demo.OrderDto(__fs_id, demo.AddressBridge.forward(__fs_address))"),
-        () -> "expected forward via AddressBridge, saw: " + bridge
+        bridge.contains(
+          "new demo.OrderDto(__fs_id, (__fs_address == null ? null :" + " demo.AddressBridge.forward(__fs_address)))"
+        ),
+        () -> "expected null-gated forward via AddressBridge, saw: " + bridge
       );
-      // Backward routes the hoisted target-read local through the user-named bridge.
+      // Backward routes the hoisted target-read local through the user-named bridge, same gate.
       assertTrue(bridge.contains("final demo.AddressDto __bt_address = t.address();"), bridge);
       assertTrue(
-        bridge.contains("new demo.Order(__bt_id, demo.AddressBridge.backward(__bt_address))"),
-        () -> "expected backward via AddressBridge, saw: " + bridge
+        bridge.contains(
+          "new demo.Order(__bt_id, (__bt_address == null ? null :" + " demo.AddressBridge.backward(__bt_address)))"
+        ),
+        () -> "expected null-gated backward via AddressBridge, saw: " + bridge
       );
       // No auto-sub-bridge AddressBridge2 / AddressToAddressDtoBridge was generated for this pair.
       assertNull(compilation.generated().get("demo.AddressToAddressDtoBridge"));
@@ -4096,7 +4102,7 @@ class BridgeProcessorTest {
           bridge.contains("final java.lang.String __fs_tag = s.tag();") &&
           bridge.contains("(__fs_tag == null ? \"X\" : __fs_tag)") &&
           bridge.contains("__tx_qty.forward(__fs_qty)") &&
-          bridge.contains("demo.AddressBridge.forward(__fs_addr)") &&
+          bridge.contains("(__fs_addr == null ? null : demo.AddressBridge.forward(__fs_addr))") &&
           bridge.contains("__cp_env.get()"),
         () -> "forward composition incomplete; saw: " + bridge
       );
@@ -4111,7 +4117,7 @@ class BridgeProcessorTest {
         bridge.contains("final java.lang.String __bt_name = t.renamed();") &&
           bridge.contains(
             "new demo.Order(null, __bt_name, __bt_tag, __tx_qty.backward(__bt_qty)," +
-              " demo.AddressBridge.backward(__bt_addr))"
+              " (__bt_addr == null ? null : demo.AddressBridge.backward(__bt_addr)))"
           ),
         () -> "backward composition off; saw: " + bridge
       );
