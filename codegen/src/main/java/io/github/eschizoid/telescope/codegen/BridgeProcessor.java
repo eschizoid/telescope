@@ -1803,7 +1803,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // target).
     if (carrierEl != null) emitBridgeProvider(source, target, bridgeName, pkg);
 
-    final var imports = new TreeSet<>(importsFor(fieldPlans, sourceFields, targetFields, renames, pkg));
+    final var imports = new TreeSet<>(importsFor(fieldPlans, sourceFields, targetFields, renames));
     imports.add("io.github.eschizoid.telescope.Telescope");
     imports.add("io.github.eschizoid.telescope.conversion.BridgeFn");
     writeClass(
@@ -2952,14 +2952,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Map<String, FieldPlan> fieldPlans,
     final List<Field> sourceFields,
     final List<Field> targetFields,
-    final Map<String, String> renames,
-    final String parentPkg
+    final Map<String, String> renames
   ) {
     final var imports = new TreeSet<String>();
     for (final var entry : fieldPlans.entrySet()) {
       final var plan = entry.getValue();
       // Raw-container helpers render every container/element TYPE by fully-qualified name, so they
-      // need no container-type imports (only the sub-bridge import handled above).
+      // need no container-type imports.
       if (plan.rawContainer()) continue;
       switch (plan.kind()) {
         // A container field needs both the declared raw of each side (the helper return / param
@@ -3233,8 +3232,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * one — and a parent referencing both by simple name cannot resolve either, whichever package
    * each lives in. Qualifying every sub-bridge outside the parent's own package removes the
    * ambiguity at the reference rather than at the name: the emitted expression names exactly one
-   * class, and the file needs no import for it. This is the only mechanism — a name carrying a dot
-   * is emitted verbatim, so nothing downstream imports a sub-bridge.
+   * class, and the file needs no import for it. This is the mechanism for field and element
+   * sub-bridges; sealed per-case references are qualified at their own emission site. No generated
+   * file imports a generated bridge.
    */
   private String subBridgeReference(
     final TypeElement subSource,
@@ -3245,7 +3245,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A carrier-form pair is emitted as <Carrier>Bridge in the carrier's package, so both halves
     // of the reference differ from the source-anchored case and the carrier is what to ask.
     final var subPair = new TypePair(subSource.getQualifiedName().toString(), subTarget.getQualifiedName().toString());
-    final var subCfg = configsByPair.get(subPair);
+    // A Lombok-deferred pair's config is held in deferredConfigs until the final round, while the
+    // parent's reference is written when the parent is planned — read both, or a deferred
+    // carrier's pair falls back to the source-anchored name and points at a class nothing emits.
+    // Both maps are filled in the same element loop, before any draining, so this adds no ordering
+    // assumption of its own.
+    final var subCfg = configsByPair.containsKey(subPair) ? configsByPair.get(subPair) : deferredConfigs.get(subPair);
     final var carrierEl =
       subCfg == null || subCfg.carrierFq() == null
         ? null
