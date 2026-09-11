@@ -22,8 +22,10 @@ import org.junit.jupiter.api.Test;
  * is not. The second half is what pins the improvement — a processor that reported the cause and
  * emitted the broken artifact anyway would satisfy the first assertion alone.
  *
- * <p>Compilation attributes the generated sources, so an error inside them is observable; under
- * {@code -proc:only} javac never visits them and the negative assertions would hold vacuously.
+ * <p>These compile through the full pipeline. {@code -proc:only} does attribute the signatures and
+ * type references of a generated source, so a name collision would surface there too — but it stops
+ * before the bodies, and asserting on the whole compilation is what keeps a case from depending on
+ * which half of the file its error happens to land in.
  */
 class GeneratedNameCollisionTest {
 

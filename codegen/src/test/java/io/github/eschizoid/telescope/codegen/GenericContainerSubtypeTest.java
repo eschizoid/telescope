@@ -18,9 +18,10 @@ import org.junit.jupiter.api.Test;
  * <p>Java does not inherit constructors, so such a subtype has its implicit no-arg one and nothing
  * else unless it declares more. Both facts the raw path already respects have to hold here too.
  *
- * <p>Every case compiles through the full pipeline. Under {@code -proc:only} javac never attributes
- * the generated source, so an allocation that cannot compile still reports success and every
- * assertion below would hold vacuously.
+ * <p>Every case compiles through the full pipeline, which matters here specifically: the defect is
+ * an allocation expression, and {@code -proc:only} attributes a generated source's signatures but
+ * not its bodies. A body that cannot compile still reports success there, so every assertion below
+ * would hold vacuously.
  */
 class GenericContainerSubtypeTest {
 
