@@ -1760,7 +1760,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Sparse-overlay patch: read non-null fields of `partial` (a partially-populated target)
         // and apply them onto `base`. Mirrors the runtime Mapper#patch(base, partial) semantics.
         // Reference target components null-gate to base; primitive components autobox to non-null
-        // and are always overlaid; nested RECURSE plans recursively patch all the way down.
+        // and are always overlaid; nested components are written whole through the sub-bridge's
+        // backward when the partial slot is non-null.
         out.println(
           "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
         );

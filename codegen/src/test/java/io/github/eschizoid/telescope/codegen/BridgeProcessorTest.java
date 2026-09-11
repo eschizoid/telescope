@@ -3440,7 +3440,7 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName("@Default + @ViaMapper on one field is rejected, so no combined patch shape exists")
-    void patchDefaultAndRecurseUsesCondLocal() {
+    void defaultPlusViaMapperOnOneFieldIsRejected() {
       final var compilation = compile(
         source(
           "demo.AddressBridge",
@@ -3473,10 +3473,9 @@ class BridgeProcessorTest {
         source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
       );
 
-      // The @Default + @ViaMapper combination is rejected by VM2 — confirms the validation we
-      // just added catches this case. The fact that we can't even compile this combination
-      // means the quadruple-evaluation bug from the round-3 review is unreachable through
-      // valid annotations. The validation IS the fix for P5-T2.
+      // @Default and @ViaMapper on one field have no defined composition — the default is a
+      // null-coalesce on the raw value, the via bridge owns the whole conversion — so the pair
+      // is rejected at build rather than given an arbitrary ordering.
       assertFalse(compilation.success(), "@Default + @ViaMapper should be rejected (VM2)");
       assertTrue(
         compilation.hasError("appears in both viaMappers and defaults"),
