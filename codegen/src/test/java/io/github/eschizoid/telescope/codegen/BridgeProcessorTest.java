@@ -2137,9 +2137,9 @@ class BridgeProcessorTest {
     @DisplayName("@Transform on a raw generic BridgeFn is rejected by name instead of inside the generated" + " file")
     void transformWithRawGenericBridgeFnRejectedByName() {
       // An annotation can only carry a raw class literal, so a BridgeFn<T, T> implementor reaches
-      // the emitter with its variables unresolved and its forward returns Object. Before the
-      // check this surfaced as "incompatible types: Object cannot be converted to String" inside
-      // the generated file; it is now named at the @Bridge declaration, arguments and all.
+      // the emitter with its variables unresolved and its forward returns Object. Without the
+      // arguments named at the declaration, the mismatch is only visible as an incompatible-types
+      // error inside the generated file.
       final var compilation = compile(
         source(
           "demo.IdFn",
