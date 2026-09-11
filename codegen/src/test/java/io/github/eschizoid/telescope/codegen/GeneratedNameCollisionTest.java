@@ -420,6 +420,11 @@ class GeneratedNameCollisionTest {
     // reports success, so the names have to differ before the component name does. Property names
     // really can differ only in case: decapitalisation keeps a leading acronym, so getUrl and
     // getURL yield url and URL.
+    //
+    // The assertion is on the names rather than on two files existing, because the case-folding
+    // behaviour belongs to the filesystem: on a case-sensitive one no two names can collide and a
+    // file-counting test would hold no matter what was emitted. Distinct-after-folding is the
+    // property that decides the outcome on every filesystem.
     final var compilation = compile(
       new FocusProcessor(),
       source(
