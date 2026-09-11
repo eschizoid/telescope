@@ -2465,16 +2465,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * @param typeArgs the emitted type arguments, without angle brackets
    */
   private static String sizedAlloc(final String implFqn, final String typeArgs) {
-    final var simple = simpleName(implFqn);
+    return sizedAlloc(implFqn, typeArgs, simpleName(implFqn));
+  }
+
+  /**
+   * As above, naming the class as {@code rendered} at the call site: the simple name where the
+   * emitting helper's file imports it, the fully-qualified name where it does not. Only the JDK
+   * default impls can be sized — a user subtype declares no sized constructor (constructors are not
+   * inherited), and one it declares itself carries whatever meaning its author gave the argument.
+   */
+  private static String sizedAlloc(final String implFqn, final String typeArgs, final String rendered) {
     return switch (implFqn) {
-      case "java.util.HashSet", "java.util.LinkedHashSet", "java.util.HashMap", "java.util.LinkedHashMap" -> simple +
+      case "java.util.HashSet", "java.util.LinkedHashSet", "java.util.HashMap", "java.util.LinkedHashMap" -> rendered +
       ".<" +
       typeArgs +
       ">new" +
-      simple +
+      simpleName(implFqn) +
       "(src.size())";
-      case "java.util.ArrayList" -> "new " + simple + "<" + typeArgs + ">(src.size())";
-      default -> "new " + simple + "<" + typeArgs + ">()";
+      case "java.util.ArrayList" -> "new " + rendered + "<" + typeArgs + ">(src.size())";
+      default -> "new " + rendered + "<" + typeArgs + ">()";
     };
   }
 
@@ -3036,9 +3045,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   // Emit one direction of a raw Collection/Map subtype container helper. Every type is rendered
-  // fully-qualified (no imports needed). The output collection is allocated via its no-arg
-  // constructor (a Collection/Map subtype does not inherit the JDK copy constructor) and filled by
-  // addAll/putAll for an identity element or an element-bridging loop otherwise.
+  // fully-qualified (no imports needed). The output is filled by addAll/putAll for an identity
+  // element, or by an element-bridging loop otherwise.
   private void emitRawContainerHelper(
     final PrintWriter out,
     final String name,
@@ -3089,10 +3097,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   // Allocation expression for a raw-container output: the target's concrete class (the subtype
-  // itself
-  // when instantiable, else the interface's default impl), with a diamond only when that class is
-  // generic. A non-generic subtype (`class ImageUrls extends ArrayList<ImageUrl>`) takes no type
-  // arguments; the default impl for a generic interface field takes the field's element args.
+  // itself when instantiable, else the interface's default impl), with a diamond only when that
+  // class is generic. A non-generic subtype (`class ImageUrls extends ArrayList<ImageUrl>`) takes
+  // no type arguments; the default impl for a generic interface field takes the field's element
+  // args.
+  //
+  // Only the JDK default impls are sized from the source. Java does not inherit constructors, so a
+  // subtype declaring nothing but its implicit no-arg one has no sized constructor to call, and a
+  // subtype that declares an `(int)` constructor gives the argument whatever meaning it chose --
+  // a page number reads exactly like a capacity from here. Filling such a subtype through addAll
+  // or putAll still lets the JDK size it in one step where those methods presize.
   private String rawAllocExpr(final TypeMirror container, final FieldPlan.Kind kind) {
     final var implFqn = concreteImplFqn(container, kind);
     final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
@@ -3100,10 +3114,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (!generic) return "new " + implFqn + "()";
     if (kind == FieldPlan.Kind.MAP_VALUES) {
       final var args = containerViewArgs(container, "java.util.Map");
-      return "new " + implFqn + "<" + args.get(0) + ", " + args.get(1) + ">()";
+      return sizedAlloc(implFqn, args.get(0) + ", " + args.get(1), implFqn);
     }
     final var args = containerViewArgs(container, kind == FieldPlan.Kind.SET ? "java.util.Set" : "java.util.List");
-    return "new " + implFqn + "<" + args.getFirst() + ">()";
+    return sizedAlloc(implFqn, args.getFirst().toString(), implFqn);
   }
 
   private void emitListHelper(
