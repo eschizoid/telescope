@@ -26,7 +26,7 @@ class MetadataHolderProbeShapeCheckTest {
 
     @Test
     @DisplayName(
-      "HolderRef.constructor() round-trips a sibling FieldOptics's construct(Function) via LambdaMetafactory"
+      "HolderRef.constructor() round-trips a sibling FieldOptics's construct(Function) via" + " LambdaMetafactory"
     )
     void constructorRoundTrip() {
       // The holder-probe contract: probeFor returns a HolderRef whose `constructor` is a cached
@@ -62,7 +62,7 @@ class MetadataHolderProbeShapeCheckTest {
   class ShapeCheck {
 
     @Test
-    @DisplayName("Missing constants() method throws IllegalStateException naming the missing method + re-run hint")
+    @DisplayName("Missing constants() method throws IllegalStateException naming the missing method + re-run" + " hint")
     void missingConstantsMethod() {
       // Real scenario: adopter upgrades the runtime but their build cache still has an older holder
       // shape — FieldOptics from an older codegen that didn't emit constants(). The diagnostic must
@@ -127,11 +127,11 @@ class MetadataHolderProbeShapeCheckTest {
     @Test
     @DisplayName("construct(Function) returning the wrong type is rejected at probe time, not at first use")
     void wrongConstructReturnType() {
-      // The assignability check at line 167 of MetadataHolderProbe catches a malformed construct
-      // (returns Object instead of Target). Without it, the LMF bind succeeds but adopters would
-      // get a ClassCastException at first use — opaque stack trace, no hint at the codegen bug.
-      // Pinning the plan-time rejection guards against a future "trust the codegen" simplification
-      // that drops the check.
+      // A holder whose construct(Function) returns Object rather than the target binds through
+      // LambdaMetafactory without complaint, so nothing surfaces until the first use — and then as
+      // a ClassCastException with no hint at the codegen that caused it. The probe rejects it at
+      // bind time instead, by checking construct's return type against the target. Pinning that
+      // guards it against a later "trust the codegen" simplification.
       final var ex = assertThrows(IllegalStateException.class, () ->
         MetadataHolderProbe.probeFor(HolderWrongConstructReturn.class)
       );
