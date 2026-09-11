@@ -2506,19 +2506,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Whether this side's container can be built by handing its constructor the source container,
-   * which is what the inline identity copy does. This is a property of the class, not of its
-   * package: most JDK containers offer such a constructor and {@code java.util.Stack} does not,
-   * while a subtype has one only where it declares one, because constructors are not inherited.
+   * Whether this side's container can be built by handing {@code argument} to its constructor,
+   * which is what the inline identity copy does. The test is directional: a constructor that takes
+   * a {@code Collection} accepts any of them, while one narrowed to {@code ArrayList} does not
+   * accept a {@code List}, and only the value actually being passed decides which. It is also a
+   * property of the class rather than of its package — most JDK containers offer such a constructor
+   * and {@code java.util.Stack} does not, while a subtype has one only where it declares one,
+   * because constructors are not inherited.
    */
-  private boolean hasCopyConstructor(final TypeMirror container, final FieldPlan.Kind kind) {
+  private boolean hasCopyConstructorAccepting(
+    final TypeMirror container,
+    final FieldPlan.Kind kind,
+    final TypeMirror argument
+  ) {
     final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
     if (implEl == null) return false;
-    final var accepts = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.Map" : "java.util.Collection";
+    final var types = processingEnv.getTypeUtils();
     for (final var ctor : ElementFilter.constructorsIn(implEl.getEnclosedElements())) {
       if (!ctor.getModifiers().contains(Modifier.PUBLIC)) continue;
       final var params = ctor.getParameters();
-      if (params.size() == 1 && assignableToRaw(params.getFirst().asType(), accepts)) return true;
+      if (
+        params.size() == 1 && types.isAssignable(types.erasure(argument), types.erasure(params.getFirst().asType()))
+      ) return true;
     }
     return false;
   }
@@ -2692,8 +2701,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Where either side cannot be built that way, route to the self-contained helper, which
         // allocates no-arg and fills — the treatment a raw subtype already gets.
         if (isContainerKind(subPlan.kind())) {
+          // Forward hands the source container to the target's constructor and backward does the
+          // reverse, so each side is asked about the value it will actually receive.
           final var needsHelper =
-            !hasCopyConstructor(sf.type(), subPlan.kind()) || !hasCopyConstructor(tf.type(), subPlan.kind());
+            !hasCopyConstructorAccepting(tf.type(), subPlan.kind(), sf.type()) ||
+            !hasCopyConstructorAccepting(sf.type(), subPlan.kind(), tf.type());
           if (needsHelper) {
             final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), subPlan.kind());
             if (badAlloc != null) {

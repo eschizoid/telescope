@@ -131,6 +131,49 @@ class GenericContainerSubtypeTest {
   }
 
   @Test
+  @DisplayName("a constructor narrower than the value being passed does not count as a copy constructor")
+  void narrowedCopyConstructorIsNotUsable() {
+    // Having a single-argument constructor that takes *a* collection is not the same as being able
+    // to take *this* collection: backward hands a List to the source's constructor, and one
+    // declared to take an ArrayList cannot accept it.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.Narrow",
+        """
+        package demo;
+        import java.util.ArrayList;
+        public class Narrow<T> extends ArrayList<T> {
+          public Narrow(final ArrayList<T> c) { super(c); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.NwSrc",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.NwDst.class)
+        public record NwSrc(demo.Narrow<String> items) {}
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.NwDst",
+        "package demo; import java.util.List; public record NwDst(List<String> items) {}"
+      )
+    );
+
+    assertFalse(compilation.success(), "the narrowed constructor cannot take a List");
+    assertTrue(
+      compilation.hasError("no public no-arg constructor"),
+      () -> "it should be reported the way any unallocatable container is: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("cannot infer type arguments"),
+      () -> "javac inside generated code is the failure mode being replaced: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
   @DisplayName("a JDK container without a copy constructor is filled rather than copy-constructed")
   void jdkContainerLackingACopyConstructorIsFilled() {
     // java.util.Stack has no (Collection) constructor, so the package a class lives in does not
