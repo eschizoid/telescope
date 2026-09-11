@@ -2062,10 +2062,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("      .exhaustive();");
         out.println();
         out.println("  public static " + targetFq + " forward(final " + sourceFq + " s) {");
+        // Null in -> null out, the same contract the field-sequence bridges emit. Match
+        // dispatches
+        // on the runtime class, which a null does not have, so without this the umbrella reports
+        // an
+        // unmatched case for a value every other generated bridge passes straight through.
+        out.println("    if (s == null) return null;");
         out.println("    return FORWARD.apply(s);");
         out.println("  }");
         out.println();
         out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
+        out.println("    if (t == null) return null;");
         out.println("    return BACKWARD.apply(t);");
         out.println("  }");
         out.println();
