@@ -2280,15 +2280,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // table.
     String fwdContainerImpl,
     String bwdContainerImpl,
-    // LIST/SET/MAP_VALUES only: true when the field is a raw (non-generic) Collection/Map subtype
-    // on
-    // at least one side (e.g. `class ImageUrls extends ArrayList<ImageUrl>`, or a generic
-    // interface
-    // paired with such a subtype). The element type lives in the supertype, the subtype is
-    // allocated
-    // via its no-arg constructor (subclasses don't inherit the JDK copy ctor), so these route to
-    // the
-    // self-contained raw helpers instead of the generic copy-ctor inline path.
+    // LIST/SET/MAP_VALUES only: true when at least one side is allocated as a Collection/Map type
+    // the adopter wrote rather than a JDK class — a raw subtype (`class ImageUrls extends
+    // ArrayList<ImageUrl>`, whose element type lives in the supertype) or a generic one (`class
+    // MyList<T> extends ArrayList<T>`). Either is allocated via its no-arg constructor, because
+    // subclasses do not inherit the JDK copy ctor, so both route to the self-contained helpers
+    // instead of the inline copy-ctor path.
     boolean rawContainer,
     // RECURSE only: true when subBridgeName is a user-supplied @ViaMapper class rather than an
     // auto-derived sub-bridge. Auto-derived bridges open their forward/backward with a null
@@ -2324,6 +2321,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         fwdImpl,
         bwdImpl,
         false,
+        userSuppliedBridge
+      );
+    }
+
+    FieldPlan asRawContainer() {
+      return new FieldPlan(
+        kind,
+        subBridgeName,
+        qualifierMethod,
+        fwdNullDefault,
+        bwdNullDefault,
+        fwdContainerImpl,
+        bwdContainerImpl,
+        true,
         userSuppliedBridge
       );
     }
@@ -2490,6 +2501,70 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return ((TypeElement) ((DeclaredType) container).asElement()).getQualifiedName().toString();
   }
 
+  /**
+   * Why a container field cannot be emitted, and what the author can do about it. Every route but
+   * the inline identity copy allocates no-arg, so a class without that constructor cannot be built.
+   * The remedy depends on who owns the class: adding a constructor is only advice the author can
+   * act on for a type they wrote.
+   */
+  private static String unallocatableContainerMessage(
+    final TypeElement source,
+    final TypeElement target,
+    final String fieldName,
+    final String badAlloc
+  ) {
+    return (
+      "@Bridge " +
+      source.getSimpleName() +
+      " -> " +
+      target.getSimpleName() +
+      ": field '" +
+      fieldName +
+      "' container type '" +
+      badAlloc +
+      "' has no public no-arg constructor — codegen allocates it directly. " +
+      (badAlloc.startsWith("java.")
+        ? "Declare the field as a type that has one, or supply an explicit @ViaMapper"
+        : "Add a no-arg constructor, or use the runtime mapper with an explicit row") +
+      " for this field."
+    );
+  }
+
+  private static boolean isContainerKind(final FieldPlan.Kind kind) {
+    return kind == FieldPlan.Kind.LIST || kind == FieldPlan.Kind.SET || kind == FieldPlan.Kind.MAP_VALUES;
+  }
+
+  /**
+   * Whether this side's container can be built by handing {@code argument} to its constructor,
+   * which is what the inline identity copy does. The test is directional: a constructor that takes
+   * a {@code Collection} accepts any of them, while one narrowed to {@code ArrayList} does not
+   * accept a {@code List}, and only the value actually being passed decides which. It is also a
+   * property of the class rather than of its package — most JDK containers offer such a constructor
+   * and {@code java.util.Stack} does not, while a subtype has one only where it declares one,
+   * because constructors are not inherited.
+   *
+   * <p>The comparison is by erasure, which is what lets a parameter written {@code Collection<?
+   * extends T>} match at all: its type variable is unresolved here. A constructor sharing an
+   * erasure with the argument but not its type argument therefore reads as usable.
+   */
+  private boolean hasCopyConstructorAccepting(
+    final TypeMirror container,
+    final FieldPlan.Kind kind,
+    final TypeMirror argument
+  ) {
+    final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
+    if (implEl == null) return false;
+    final var types = processingEnv.getTypeUtils();
+    for (final var ctor : ElementFilter.constructorsIn(implEl.getEnclosedElements())) {
+      if (!ctor.getModifiers().contains(Modifier.PUBLIC)) continue;
+      final var params = ctor.getParameters();
+      if (
+        params.size() == 1 && types.isAssignable(types.erasure(argument), types.erasure(params.getFirst().asType()))
+      ) return true;
+    }
+    return false;
+  }
+
   // FQN of the concrete, instantiable class to allocate for a container field of the given declared
   // type — the declared subtype itself when it is an instantiable class (ArrayList, TreeSet,
   // TreeMap, …), else the default impl for the interface family. The interface-family defaults
@@ -2653,6 +2728,34 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           parentPkg
         );
         if (subPlan == null) return null;
+        // Only one of the container routes copy-constructs. The inline copy hands the source
+        // container to the output's constructor and is reachable solely when the element type is
+        // identity; every other route — the self-contained helper for identity elements, the
+        // element-bridging helpers for the rest — allocates no-arg and fills. So the constructor a
+        // container must offer depends on the route it takes, and the route depends on its
+        // elements. Forward hands the source to the target's constructor and backward does the
+        // reverse, so each side is asked about the value it will actually receive.
+        if (isContainerKind(subPlan.kind())) {
+          final var elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(subPlan.subBridgeName());
+          final var inlineCopy =
+            elementIdentity &&
+            hasCopyConstructorAccepting(tf.type(), subPlan.kind(), sf.type()) &&
+            hasCopyConstructorAccepting(sf.type(), subPlan.kind(), tf.type());
+          if (!inlineCopy) {
+            final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), subPlan.kind());
+            if (badAlloc != null) {
+              error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
+              return null;
+            }
+            // Identity elements have no helper of their own, so they take the self-contained one.
+            // Bridged elements already route to emitListHelper / emitSetHelper / emitMapHelper,
+            // which allocate the same way — they only needed the allocation checked first.
+            if (elementIdentity) {
+              plans.put(sf.name(), subPlan.asRawContainer());
+              continue;
+            }
+          }
+        }
         // Attach the concrete-impl class the inline identity-element copy allocates: the target's
         // class on forward, the source's on backward — so a field typed as a concrete subtype
         // (LinkedList, TreeSet, …) is rebuilt as that class, not the default impl.
@@ -2699,20 +2802,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // here with a telescope-authored diagnostic instead.
         final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), srcRaw.kind());
         if (badAlloc != null) {
-          error(
-            source,
-            "@Bridge " +
-              source.getSimpleName() +
-              " -> " +
-              target.getSimpleName() +
-              ": field '" +
-              sf.name() +
-              "' container type '" +
-              badAlloc +
-              "' has no public no-arg constructor — codegen allocates it directly. Add a" +
-              " no-arg constructor, or use the runtime mapper with an explicit row for this" +
-              " field."
-          );
+          error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
           return null;
         }
         final var subPlan = planElementSubBridge(
@@ -3095,8 +3185,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var plan = entry.getValue();
       final var srcType = fieldByName(sourceFields, fieldName).type();
       final var tgtType = fieldByName(targetFields, renames.getOrDefault(fieldName, fieldName)).type();
-      // Raw Collection/Map subtype containers get the self-contained helper even for identity
-      // elements (the inline copy-ctor path is invalid for a non-generic subtype).
+      // A container allocated as a type the adopter wrote gets the self-contained helper even for
+      // identity elements: the inline copy-ctor path needs a copy constructor, and a subtype does
+      // not inherit one. Whether it kept its own type parameter makes no difference to that.
       if (plan.rawContainer()) {
         emitRawContainerHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan, "forward");
         emitRawContainerHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan, "backward");
