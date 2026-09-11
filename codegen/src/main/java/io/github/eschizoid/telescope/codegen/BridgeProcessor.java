@@ -1597,7 +1597,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var read = parsedDefaults.containsKey(srcName)
         ? "(" + local + " == null ? " + parsedDefaults.get(srcName) + " : " + local + ")"
         : local;
-      return applyForward(srcName, fieldPlans.get(srcName), read);
+      final var plan = fieldPlans.get(srcName);
+      // A @ViaMapper bridge is user code with no guaranteed null tolerance — auto-derived
+      // sub-bridges open with their own null guard, a user class may not — so the call is
+      // null-gated here. Both mentions reference the hoisted local, so nothing is re-read.
+      if (plan.userSuppliedBridge()) {
+        return "(" + local + " == null ? null : " + applyForward(srcName, plan, read) + ")";
+      }
+      return applyForward(srcName, plan, read);
     };
     // readBackward is called with SOURCE field names. For drops AND forward-only transforms, emit
     // the type's zero value — both mechanisms have no defined backward and the source slot must be
@@ -1613,7 +1620,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var tf = fieldByName(targetFields, tgtName);
       final var local = "__bt_" + sourceName;
       backwardLocals.putIfAbsent(local, tf.type() + " " + local + " = " + readExpr(target, "t", tf) + ";");
-      return applyBackward(sourceName, fieldPlans.get(sourceName), local);
+      final var plan = fieldPlans.get(sourceName);
+      // Same user-bridge null gate as readForward, for the same reason.
+      if (plan.userSuppliedBridge()) {
+        return "(" + local + " == null ? null : " + applyBackward(sourceName, plan, local) + ")";
+      }
+      return applyBackward(sourceName, plan, local);
     };
 
     // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
@@ -2108,7 +2120,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // via its no-arg constructor (subclasses don't inherit the JDK copy ctor), so these route to
     // the
     // self-contained raw helpers instead of the generic copy-ctor inline path.
-    boolean rawContainer
+    boolean rawContainer,
+    // RECURSE only: true when subBridgeName is a user-supplied @ViaMapper class rather than an
+    // auto-derived sub-bridge. Auto-derived bridges open their forward/backward with a null
+    // guard; a user class carries no such guarantee, so the caller emits the guard.
+    boolean userSuppliedBridge
   ) {
     enum Kind {
       IDENTITY,
@@ -2124,7 +2140,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
 
     static FieldPlan identity() {
-      return new FieldPlan(Kind.IDENTITY, null, null, null, null, null, null, false);
+      return new FieldPlan(Kind.IDENTITY, null, null, null, null, null, null, false, false);
     }
 
     // Attach the concrete-impl class names for a LIST/SET/MAP_VALUES plan — the classes the inline
@@ -2138,7 +2154,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         bwdNullDefault,
         fwdImpl,
         bwdImpl,
-        false
+        false,
+        userSuppliedBridge
       );
     }
 
@@ -2146,7 +2163,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // applyForward/applyBackward route to the self-contained raw helpers (no-arg ctor + addAll /
     // element loop) rather than the generic copy-ctor inline path.
     static FieldPlan rawContainer(final Kind kind, final String subBridgeName) {
-      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null, null, null, true);
+      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null, null, null, true, false);
     }
 
     // Primitive ↔ boxed wrapper. The direction that writes the primitive side null-coalesces a null
@@ -2154,15 +2171,41 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // (null is a legal wrapper value). Exactly one of the two defaults is non-null for any given
     // pair. Matches the runtime DeepMap.primitiveWrapperIso.
     static FieldPlan primWrapper(final String fwdNullDefault, final String bwdNullDefault) {
-      return new FieldPlan(Kind.PRIM_WRAPPER, null, null, fwdNullDefault, bwdNullDefault, null, null, false);
+      return new FieldPlan(Kind.PRIM_WRAPPER, null, null, fwdNullDefault, bwdNullDefault, null, null, false, false);
     }
 
     static FieldPlan recurse(final String subBridgeName) {
-      return new FieldPlan(Kind.RECURSE, Objects.requireNonNull(subBridgeName), null, null, null, null, null, false);
+      return new FieldPlan(
+        Kind.RECURSE,
+        Objects.requireNonNull(subBridgeName),
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        false
+      );
+    }
+
+    // A RECURSE plan whose bridge is the user's @ViaMapper class rather than an auto-derived
+    // sub-bridge — the caller must null-guard the conversion call.
+    static FieldPlan viaBridge(final String subBridgeName) {
+      return new FieldPlan(
+        Kind.RECURSE,
+        Objects.requireNonNull(subBridgeName),
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        true
+      );
     }
 
     static FieldPlan ofKind(final Kind kind, final String subBridgeName) {
-      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null, null, null, false);
+      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null, null, null, false, false);
     }
 
     // Qualifier-dispatch TRANSFORM variant: the `using` class hosts a named static method, NOT a
@@ -2177,6 +2220,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         null,
         null,
         null,
+        false,
         false
       );
     }
@@ -2367,7 +2411,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // applyBackward already emit `<class>.forward(...)` / `<class>.backward(...)` for RECURSE,
       // so no new dispatch arm is needed.
       if (viaMappers.containsKey(sf.name())) {
-        plans.put(sf.name(), FieldPlan.recurse(viaMappers.get(sf.name())));
+        plans.put(sf.name(), FieldPlan.viaBridge(viaMappers.get(sf.name())));
         continue;
       }
       final var tf = fieldByName(targetFields, renames.getOrDefault(sf.name(), sf.name()));
