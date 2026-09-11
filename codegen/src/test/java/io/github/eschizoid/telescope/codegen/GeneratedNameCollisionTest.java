@@ -1,7 +1,9 @@
 package io.github.eschizoid.telescope.codegen;
 
 import static io.github.eschizoid.telescope.codegen.ProcessorHarness.source;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
@@ -20,11 +22,21 @@ import org.junit.jupiter.api.Test;
  * is not. The second half is what pins the improvement — a processor that reported the cause and
  * emitted the broken artifact anyway would satisfy the first assertion alone.
  *
- * <p>Compilation attributes the generated sources, so an error inside them is observable; under
- * {@code -proc:only} javac never visits them and the negative assertions would hold vacuously.
+ * <p>These compile through the full pipeline, and for one of them that is load-bearing rather than
+ * tidy. {@code -proc:only} completes declarations — so it resolves the types in a signature — and
+ * stops before method bodies and field initializers. A holder taking the navigator's own name is a
+ * duplicate class and is caught at Enter either way; a holder shadowing the navigated type's name
+ * still resolves to a legal type in every signature, and breaks only inside the initializer, where
+ * processing-only never looks.
  */
 class GeneratedNameCollisionTest {
 
+  /**
+   * Runs the full pipeline, not {@code -proc:only}. Retargeting this at the processing-only harness
+   * would leave {@link #holderStepsAsideFromTheSourceTypeName()} passing while testing nothing: the
+   * shadowed name resolves in every signature and fails only inside a field initializer, which
+   * processing-only never attributes.
+   */
   private static Compilation compile(final Processor processor, final JavaFileObject... sources) {
     return ProcessorHarness.compileFully(List.of(processor), List.of(), sources);
   }
@@ -408,6 +420,102 @@ class GeneratedNameCollisionTest {
       () -> "the multi-target source is emitted under its long name, so the call must use it; saw " + parent
     );
     assertTrue(compilation.generated().containsKey("demo.AToBBridge"), "the long-named sub-bridge is what is written");
+  }
+
+  @Test
+  @DisplayName("per-field holder names differ under case folding, not only under comparison")
+  void holderNamesSurviveCaseFolding() {
+    // Each holder is emitted as a nested class, so it becomes a class file of its own. Two whose
+    // names differ only in case overwrite each other on a case-insensitive filesystem while javac
+    // reports success, so the names have to differ before the component name does. Property names
+    // really can differ only in case: decapitalisation keeps a leading acronym, so getUrl and
+    // getURL yield url and URL.
+    //
+    // The assertion is on the names rather than on two files existing, because the case-folding
+    // behaviour belongs to the filesystem: on a case-sensitive one no two names can collide and a
+    // file-counting test would hold no matter what was emitted. Distinct-after-folding is the
+    // property that decides the outcome on every filesystem.
+    final var compilation = compile(
+      new FocusProcessor(),
+      source(
+        "demo.CaseRec",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Focus;
+        @Focus
+        public record CaseRec(String x, String X) {}
+        """
+      )
+    );
+
+    assertTrue(compilation.success(), () -> "both components are legal Java: " + compilation.errorMessages());
+    final var navigator = compilation.generated().get("demo.CaseRecTelescope");
+    assertNotNull(navigator);
+    final var holders = java.util.regex.Pattern.compile("private static final class (\\S+) \\{")
+      .matcher(navigator)
+      .results()
+      .map(m -> m.group(1))
+      .toList();
+    assertEquals(2, holders.size(), () -> "one holder per component: " + holders);
+    assertEquals(
+      2,
+      holders
+        .stream()
+        .map(h -> h.toLowerCase(java.util.Locale.ROOT))
+        .distinct()
+        .count(),
+      () -> "these collapse to one class file on a case-insensitive filesystem: " + holders
+    );
+  }
+
+  @Test
+  @DisplayName("a holder steps aside when its name would be the navigator's own")
+  void holderStepsAsideFromTheNavigatorName() {
+    // A member class may not carry its enclosing class's simple name (JLS 8.1), and the navigator
+    // for Optic_0_x is Optic_0_xTelescope — which is what the holder for a component named
+    // xTelescope at index 0 would otherwise be called.
+    final var compilation = compile(
+      new FocusProcessor(),
+      source(
+        "demo.Optic_0_x",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Focus;
+        @Focus
+        public record Optic_0_x(String xTelescope, int other) {}
+        """
+      )
+    );
+
+    assertTrue(
+      compilation.success(),
+      () -> "the holder must not take the navigator's own name: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a holder steps aside when its name would be the navigated type's own")
+  void holderStepsAsideFromTheSourceTypeName() {
+    // A holder is a member type, so its simple name shadows a top-level type of the same name
+    // throughout the navigator — including inside sibling holders, which spell the navigated type
+    // by simple name.
+    final var compilation = compile(
+      new FocusProcessor(),
+      source(
+        "demo.Optic_0_thing",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Focus;
+        @Focus
+        public record Optic_0_thing(String thing, int other) {}
+        """
+      )
+    );
+
+    assertTrue(
+      compilation.success(),
+      () -> "the navigated type must stay reachable from every holder: " + compilation.errorMessages()
+    );
   }
 
   @Test

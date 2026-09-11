@@ -898,8 +898,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       pojo,
       out -> {
         emitPathClassHeader(out, pathName, pojoName);
-        for (final var p : props) {
-          emitBeanPropertyMethod(out, pojoName, props, setters, useBuilder, p, navigableAnnotations);
+        for (var i = 0; i < props.size(); i++) {
+          emitBeanPropertyMethod(out, pojoName, props, setters, useBuilder, i, navigableAnnotations);
         }
         final var bridgeTarget = bridgeTargetFqn(pojo);
         if (bridgeTarget != null) emitBridgeHop(out, pojoName, bridgeTarget);
@@ -1143,12 +1143,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final List<Prop> props,
     final String[] setters,
     final boolean useBuilder,
-    final Prop target,
+    final int propertyIndex,
     final Set<String> navigableAnnotations
   ) {
+    final var target = props.get(propertyIndex);
     final var lensArgs =
       pojoName + "::" + target.getter() + ", " + beanRebuild(target, props, setters, useBuilder, pojoName);
-    emitNavigatorMethod(out, pojoName, target.name(), target.type(), lensArgs, navigableAnnotations);
+    emitNavigatorMethod(out, pojoName, propertyIndex, target.name(), target.type(), lensArgs, navigableAnnotations);
   }
 
   private void emitBeanStep(
@@ -1263,6 +1264,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   protected void emitNavigatorMethod(
     final PrintWriter out,
     final String enclosingSimpleName,
+    final int componentIndex,
     final String componentName,
     final TypeMirror componentType,
     final String lensArgs,
@@ -1273,29 +1275,69 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // via lens/then, which the SerializedLambda-decoding field(...) hop-recording never sees. A
     // container field records NO Focus here: the step's each() records a single Traverse instead,
     // matching a hand-written .each(...).
-    final var focusHop = ".hop(new OpticNode.Focus(\"" + componentName + "\"))";
+    // The lens and the Focus node are the same values on every call, so they are built once in a
+    // per-field holder rather than per navigation. The holder is nested and private, which is what
+    // keeps one field's initializer from deciding another's fate: a class-level static would put
+    // every field in one <clinit>, where a single unresolvable type takes them all down.
+    // `path` still varies per call, so composing it is not hoistable and is left alone.
+    // A nested holder is a class file of its own, so two holders whose names differ only in case
+    // overwrite each other on a case-insensitive filesystem — javac reports success and the
+    // earlier-declared accessor dies at run time. Property names really can differ that way:
+    // decapitalisation keeps a leading acronym, so getUrl and getURL yield url and URL. The index
+    // makes the names differ before the component name does, which case folding cannot collapse.
+    // A holder is a member type, so its simple name shadows whatever else that name resolves to
+    // inside the navigator. Two names qualify. One is the first segment of the navigated type's
+    // reference, which is dotted for a nested source — the lens bodies resolve that segment, not
+    // the whole reference. The other is the navigator's own class name, which a member class may
+    // not repeat at all. Where the holder would take either, it steps aside.
+    var holder = "Optic_" + componentIndex + "_" + componentName;
+    final var dot = enclosingSimpleName.indexOf('.');
+    final var outerSegment = dot < 0 ? enclosingSimpleName : enclosingSimpleName.substring(0, dot);
+    final var navigatorName = enclosingSimpleName.replace(".", "") + "Telescope";
+    while (holder.equals(outerSegment) || holder.equals(navigatorName)) {
+      holder = holder + "_";
+    }
+    final var componentTypeStr = shortenStdImports(boxedType(componentType));
     final var shape = traversalKind(componentType);
+    final var subFq = navigableType(componentType, navigableAnnotations);
+    final var recordsFocus = shape == null;
+    out.println("  private static final class " + holder + " {");
+    out.println();
+    out.println("    private " + holder + "() {}");
+    out.println();
+    out.println(
+      "    private static final Telescope<" +
+        enclosingSimpleName +
+        ", " +
+        componentTypeStr +
+        "> LENS = Telescope.lens(" +
+        lensArgs +
+        ");"
+    );
+    if (recordsFocus) {
+      out.println();
+      out.println("    private static final OpticNode HOP = new OpticNode.Focus(\"" + componentName + "\");");
+    }
+    out.println("  }");
+    out.println();
+    final var focusHop = recordsFocus ? ".hop(" + holder + ".HOP)" : "";
     if (shape != null) {
       final var stepName = enclosingSimpleName + capitalize(componentName) + "Step";
       out.println("  public " + stepName + "<R> " + componentName + "() {");
-      out.println("    return new " + stepName + "<>(path.then(Telescope.lens(" + lensArgs + ")));");
+      out.println("    return new " + stepName + "<>(path.then(" + holder + ".LENS));");
       out.println("  }");
       out.println();
       return;
     }
-    final var subFq = navigableType(componentType, navigableAnnotations);
     if (subFq != null) {
       out.println("  public " + subFq + "Telescope<R> " + componentName + "() {");
-      out.println(
-        "    return new " + subFq + "Telescope<>(path.then(Telescope.lens(" + lensArgs + "))" + focusHop + ");"
-      );
+      out.println("    return new " + subFq + "Telescope<>(path.then(" + holder + ".LENS)" + focusHop + ");");
       out.println("  }");
       out.println();
       return;
     }
-    final var typeStr = shortenStdImports(boxedType(componentType));
-    out.println("  public Telescope<R, " + typeStr + "> " + componentName + "() {");
-    out.println("    return path.then(Telescope.lens(" + lensArgs + "))" + focusHop + ";");
+    out.println("  public Telescope<R, " + componentTypeStr + "> " + componentName + "() {");
+    out.println("    return path.then(" + holder + ".LENS)" + focusHop + ";");
     out.println("  }");
     out.println();
   }
