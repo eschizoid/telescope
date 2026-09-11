@@ -191,6 +191,106 @@ class DiagnosticWordingTest {
   }
 
   @Test
+  @DisplayName("an abstract target is reported, and no bridge is emitted for it")
+  void abstractTargetIsReported() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.ASrc",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.ADst.class)
+        public record ASrc(String name) {}
+        """
+      ),
+      ProcessorHarness.source("demo.ADst", "package demo; public abstract class ADst { public String name; }")
+    );
+
+    assertFalse(compilation.success(), "an abstract target has no constructor to rebuild through");
+    assertTrue(
+      compilation.hasError("@Bridge target ADst is abstract"),
+      () -> "the cause should be named where the annotation is: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("is abstract; cannot be instantiated"),
+      () -> "javac's error inside generated code is what this replaces: " + compilation.errorMessages()
+    );
+    assertTrue(
+      compilation.generated().isEmpty(),
+      () -> "nothing should be written: " + compilation.generated().keySet()
+    );
+  }
+
+  @Test
+  @DisplayName("an abstract source is reported too, since backward rebuilds it")
+  void abstractSourceIsReported() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.BSrc",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.BDst.class)
+        public abstract class BSrc { public String name; }
+        """
+      ),
+      ProcessorHarness.source("demo.BDst", "package demo; public record BDst(String name) {}")
+    );
+
+    assertFalse(compilation.success(), "an abstract source cannot be rebuilt on backward");
+    assertTrue(
+      compilation.hasError("@Bridge source BSrc is abstract"),
+      () -> "the source side needs its own diagnostic: " + compilation.errorMessages()
+    );
+    assertTrue(
+      compilation.generated().isEmpty(),
+      () -> "nothing should be written: " + compilation.generated().keySet()
+    );
+  }
+
+  @Test
+  @DisplayName("an abstract type reached as a nested sub-pair is reported, not emitted against")
+  void abstractNestedSubPairIsReported() {
+    // The declared pair is concrete on both sides; the abstract type is discovered while planning
+    // the nested field, which is a different code path from the annotation scan.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.NRoot",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.NRootDto.class)
+        public record NRoot(demo.NLeaf leaf) {}
+        """
+      ),
+      ProcessorHarness.source("demo.NRootDto", "package demo; public record NRootDto(demo.NAbsLeaf leaf) {}"),
+      ProcessorHarness.source("demo.NLeaf", "package demo; public record NLeaf(String v) {}"),
+      ProcessorHarness.source(
+        "demo.NAbsLeaf",
+        """
+        package demo;
+        // Pairs cleanly by name, so the only thing wrong with it is that it cannot be constructed.
+        public abstract class NAbsLeaf {
+          private String v;
+          public String getV() { return v; }
+          public void setV(final String v) { this.v = v; }
+        }
+        """
+      )
+    );
+
+    assertFalse(compilation.success(), "an abstract nested target has no constructor to rebuild through");
+    assertTrue(
+      compilation.hasError("which is abstract and has no constructor to rebuild through"),
+      () -> "the nested path needs its own diagnostic, naming the field: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("is abstract; cannot be instantiated"),
+      () -> "javac inside generated code is the failure mode being replaced: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
   @DisplayName("a lenient bridge writes null into an unmatched collection slot, as the javadoc says")
   void lenientUnmatchedCollectionIsWrittenNull() {
     final var compilation = compile(

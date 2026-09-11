@@ -661,7 +661,7 @@ class BridgeProcessorTest {
         " interface default"
     )
     void mixedGenericAndRawCollectionElementBridges() {
-      final var compilation = compile(
+      final var compilation = compileAttributed(
         source(
           "demo.MixOrder",
           """
@@ -708,7 +708,7 @@ class BridgeProcessorTest {
       "mixed generic↔raw Map: Map<K, V> ↔ raw HashMap subtype, backward allocates the two-arg" + " default impl"
     )
     void mixedGenericAndRawMapElementBridges() {
-      final var compilation = compile(
+      final var compilation = compileAttributed(
         source(
           "demo.MMixOrder",
           """
