@@ -93,6 +93,31 @@ class MapIterationOrderTest {
   }
 
   @Test
+  @DisplayName("a field declared as a concrete map class keeps that class, on both paths")
+  void declaredConcreteMapFieldsKeepTheirDeclaredClass() {
+    final HashMap<String, Leaf> hashed = new HashMap<>();
+    final LinkedHashMap<String, Leaf> ordered = new LinkedHashMap<>();
+    for (final var key : KEYS) {
+      hashed.put(key, new Leaf(key));
+      ordered.put(key, new Leaf(key));
+    }
+    final var source = new ConcreteMapSource(hashed, ordered);
+
+    final var codegen = ConcreteMapSourceBridge.forward(source);
+    final var runtime = Telescope.mapper(ConcreteMapSource.class, ConcreteMapTarget.class).forward(source);
+
+    // A declared class is not the family default, in either direction of the change: the HashMap
+    // field must not pick up the new default, and the LinkedHashMap field must not be read as
+    // having asked for it.
+    assertEquals(HashMap.class, codegen.hashed().getClass());
+    assertEquals(HashMap.class, runtime.hashed().getClass());
+    assertEquals(LinkedHashMap.class, codegen.ordered().getClass());
+    assertEquals(LinkedHashMap.class, runtime.ordered().getClass());
+    assertEquals(KEYS, new ArrayList<>(codegen.ordered().keySet()));
+    assertEquals(new LeafDto("zulu"), codegen.hashed().get("zulu"));
+  }
+
+  @Test
   @DisplayName("backward keeps it as well, on both paths")
   void bothPathsPreserveOrderBackward() {
     final var target = MapOrderSourceBridge.forward(source());
