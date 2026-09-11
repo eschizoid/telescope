@@ -284,11 +284,12 @@ restating them. Flat is settled and close. Deep and nested are ranges, and neste
 enough that no single figure is worth publishing. The deeper the tree, the more the per-level conversion work dominates
 the fixed dispatch overhead; at the flat scale you're choosing on API and capability, not nanoseconds.
 
-The gap decomposes into a tiny dispatch tax plus the generated body. The `static` column (zero-dispatch
-`<Source>Bridge.forward(s)`) is the floor; the `BRIDGE.read` lattice path sits a sub-nanosecond wrapper tax above it
-(its size, and on one run its sign, move between runs — see the doc), and on deep the residual over MapStruct is mostly
-the generated body — six leaf conversions and two list allocations — not dispatch. The full decomposition, all four call
-shapes (`static` / `BRIDGE_FN` / `BRIDGE.read` / MapStruct) at each tier, plus the JMH-artifact history, lives in
+The gap is not mostly dispatch. The `static` column (zero-dispatch `<Source>Bridge.forward(s)`) is the floor; the
+`BRIDGE.read` lattice path sits a sub-nanosecond wrapper tax above it (its size, and on one run its sign, move between
+runs — see the doc), and on deep the residual over MapStruct sits below that floor. What it _is_ has no established
+mechanism — the two generated bodies are equivalent in source and bytecode and allocate identically — and the doc's "So
+is there a real gap?" section is the one place that says so. The full decomposition, all four call shapes (`static` /
+`BRIDGE_FN` / `BRIDGE.read` / MapStruct) at each tier, plus the JMH-artifact history, lives in
 [`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md).
 
 Where the flat-tier gap comes from. MapStruct emits one hand-templated method body per pair, fully monomorphic, and the
@@ -296,9 +297,10 @@ JIT inlines the whole conversion into a single basic block. Telescope's `@Bridge
 direct constructor call — wrapped in a `Telescope` for composability. On a flat ~3 ns conversion that composability
 costs a fraction of a nanosecond; on deep, where element-by-element list conversion dominates and the workload climbs
 past 50 ns, it is the same sub-nanosecond tax against a far larger row. What remains of the deep gap over MapStruct is
-generated-body work rather than composability; the comparison doc's headline table carries the per-run ratio and the
-across-run range. If you're in a tight inner loop that doesn't need composition, call `<Source>Bridge.forward(s)` — or
-the directly-callable `BRIDGE_FN` constant — and pay the zero-dispatch floor.
+not composability, and not the emitted body doing more work either; the comparison doc carries the per-run ratio, the
+across-run range, and what the residual has been ruled down to. If you're in a tight inner loop that doesn't need
+composition, call `<Source>Bridge.forward(s)` — or the directly-callable `BRIDGE_FN` constant — and pay the
+zero-dispatch floor.
 
 Runtime conversion (`Telescope.mapper(...)`) composes each record/bean pair into a single MethodHandle (see above), so
 the hot path is one `invokeExact` through the fused handle rather than an `Object[]` gather with boxed per-field
