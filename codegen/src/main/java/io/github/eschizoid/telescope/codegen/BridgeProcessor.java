@@ -76,6 +76,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.Bridge";
   private static final String BRIDGES_ANNOTATION = "io.github.eschizoid.telescope.annotations.Bridges";
+  private static final String BRIDGE_FN_FQN = "io.github.eschizoid.telescope.conversion.BridgeFn";
 
   // A named field on either side: a record component or a POJO getter-property, with its type.
   private record Field(String name, TypeMirror type) {}
@@ -1173,6 +1174,67 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (drops.contains(t)) {
         error(source, "@Bridge field \"" + t + "\" appears in both transforms and drops — pick one.");
         return;
+      }
+      // BridgeFn-shape transforms (no `method` qualifier): the using class's BridgeFn type
+      // arguments must fit the field pair, or the emitted __tx_ call sites reference javac
+      // errors inside a generated file the user never wrote. This catches the forward
+      // direction; a backward mismatch, a raw BridgeFn supertype (no arguments to compare)
+      // and a renamed field all still surface inside the generated file.
+      //
+      // Renamed fields are skipped because the target slot is looked up by the source name,
+      // which a rename has moved — and the pairing is rejected a few loops down anyway.
+      final var txMethod = cfg.transformMethods().get(t);
+      if ((txMethod == null || txMethod.isEmpty()) && !renames.containsKey(t)) {
+        final var usingEl = processingEnv.getElementUtils().getTypeElement(transforms.get(t));
+        final var fn = usingEl == null ? null : bridgeFnInstantiation(usingEl.asType());
+        if (fn == null) {
+          error(
+            source,
+            "@Transform field=\"" + t + "\" `using` class " + transforms.get(t) + " does not implement BridgeFn"
+          );
+          return;
+        }
+        final var args = fn.getTypeArguments();
+        final var sfType = sourceFields
+          .stream()
+          .filter(f -> f.name().equals(t))
+          .findFirst()
+          .orElseThrow()
+          .type();
+        final var tfField = targetFields
+          .stream()
+          .filter(f -> f.name().equals(t))
+          .findFirst()
+          .orElse(null);
+        if (args.size() == 2 && tfField != null) {
+          final var tfType = tfField.type();
+          final var types = processingEnv.getTypeUtils();
+          // Assignability models the boxing the source read needs and the unboxing-plus-widening
+          // the target write needs, so the declared field types are what to compare — boxing
+          // either side first would discard the second.
+          if (
+            !types.isAssignable(sfType, erasedBound(args.get(0))) ||
+            !types.isAssignable(erasedBound(args.get(1)), tfType)
+          ) {
+            error(
+              source,
+              "@Transform field=\"" +
+                t +
+                "\" does not fit: the field pair is " +
+                sfType +
+                " -> " +
+                tfType +
+                " but " +
+                transforms.get(t) +
+                " implements BridgeFn<" +
+                args.get(0) +
+                ", " +
+                args.get(1) +
+                ">"
+            );
+            return;
+          }
+        }
       }
     }
 
@@ -2707,6 +2769,34 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // than emitting `new null<>(...)`.
   private static String requireImpl(final String impl, final String fieldName) {
     return Objects.requireNonNull(impl, "container impl not attached for field '" + fieldName + "'");
+  }
+
+  // The BridgeFn<A, B> instantiation in `usingType`'s supertype closure, or null when the class
+  // does not implement BridgeFn at all. The erasure comparison finds the interface regardless of
+  // how many levels up the hierarchy it sits.
+  private DeclaredType bridgeFnInstantiation(final TypeMirror usingType) {
+    final var types = processingEnv.getTypeUtils();
+    final var fnEl = processingEnv.getElementUtils().getTypeElement(BRIDGE_FN_FQN);
+    if (fnEl == null) return null;
+    final var erasedFn = types.erasure(fnEl.asType());
+    final Deque<TypeMirror> work = new ArrayDeque<>();
+    work.add(usingType);
+    final var seen = new HashSet<String>();
+    while (!work.isEmpty()) {
+      final var t = work.poll();
+      if (t.getKind() != TypeKind.DECLARED) continue;
+      if (!seen.add(t.toString())) continue;
+      if (types.isSameType(types.erasure(t), erasedFn)) return (DeclaredType) t;
+      work.addAll(types.directSupertypes(t));
+    }
+    return null;
+  }
+
+  // A type-variable argument stands for whatever the emitter's raw call site erases it to, so the
+  // fit test compares against that bound; every other type passes through unchanged.
+  private TypeMirror erasedBound(final TypeMirror t) {
+    if (t.getKind() != TypeKind.TYPEVAR) return t;
+    return processingEnv.getTypeUtils().erasure(t);
   }
 
   private String applyForward(final String fieldName, final FieldPlan plan, final String readExpr) {
