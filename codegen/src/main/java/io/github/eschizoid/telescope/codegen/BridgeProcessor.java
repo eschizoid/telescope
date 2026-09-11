@@ -2501,6 +2501,35 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return ((TypeElement) ((DeclaredType) container).asElement()).getQualifiedName().toString();
   }
 
+  /**
+   * Why a container field cannot be emitted, and what the author can do about it. Every route but
+   * the inline identity copy allocates no-arg, so a class without that constructor cannot be built.
+   * The remedy depends on who owns the class: adding a constructor is only advice the author can
+   * act on for a type they wrote.
+   */
+  private static String unallocatableContainerMessage(
+    final TypeElement source,
+    final TypeElement target,
+    final String fieldName,
+    final String badAlloc
+  ) {
+    return (
+      "@Bridge " +
+      source.getSimpleName() +
+      " -> " +
+      target.getSimpleName() +
+      ": field '" +
+      fieldName +
+      "' container type '" +
+      badAlloc +
+      "' has no public no-arg constructor — codegen allocates it directly. " +
+      (badAlloc.startsWith("java.")
+        ? "Declare the field as a type that has one, or supply an explicit @ViaMapper"
+        : "Add a no-arg constructor, or use the runtime mapper with an explicit row") +
+      " for this field."
+    );
+  }
+
   private static boolean isContainerKind(final FieldPlan.Kind kind) {
     return kind == FieldPlan.Kind.LIST || kind == FieldPlan.Kind.SET || kind == FieldPlan.Kind.MAP_VALUES;
   }
@@ -2715,20 +2744,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           if (!inlineCopy) {
             final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), subPlan.kind());
             if (badAlloc != null) {
-              error(
-                source,
-                "@Bridge " +
-                  source.getSimpleName() +
-                  " -> " +
-                  target.getSimpleName() +
-                  ": field '" +
-                  sf.name() +
-                  "' container type '" +
-                  badAlloc +
-                  "' has no public no-arg constructor — codegen allocates it directly. Add a" +
-                  " no-arg constructor, or use the runtime mapper with an explicit row for" +
-                  " this field."
-              );
+              error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
               return null;
             }
             // Identity elements have no helper of their own, so they take the self-contained one.
@@ -2786,20 +2802,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // here with a telescope-authored diagnostic instead.
         final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), srcRaw.kind());
         if (badAlloc != null) {
-          error(
-            source,
-            "@Bridge " +
-              source.getSimpleName() +
-              " -> " +
-              target.getSimpleName() +
-              ": field '" +
-              sf.name() +
-              "' container type '" +
-              badAlloc +
-              "' has no public no-arg constructor — codegen allocates it directly. Add a" +
-              " no-arg constructor, or use the runtime mapper with an explicit row for this" +
-              " field."
-          );
+          error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
           return null;
         }
         final var subPlan = planElementSubBridge(
