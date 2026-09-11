@@ -105,8 +105,9 @@ across all rows per tier, so the engines time the SAME work — only the convers
 **How to read the rows:**
 
 - `_mapstruct_*` vs `_telescope_codegen_*` is the closest comparison — both bind at compile time and emit direct
-  bytecode. Any delta is the cost of telescope's lattice composition vs MapStruct's hand-templated method body. Usually
-  small and dominated by JIT inlining.
+  bytecode. On flat and nested any delta is the cost of telescope's lattice composition against MapStruct's
+  hand-templated method body; on deep the residual sits below the first dispatch hop and has no established mechanism.
+  Usually small and dominated by JIT inlining.
 - `_telescope_runtime_*` establishes the upper bound on telescope when the consumer opts out of codegen entirely. The
   gap to `_telescope_codegen_*` is what `@Bridge` buys.
 
@@ -256,8 +257,9 @@ refreshes on the next benchmark workflow run.
 Tight error bands on the codegen/MapStruct rows (±0.01–0.35 ns) — the dedicated CI runner with no competing workload
 gives cleaner data than a laptop. The `static` column calls the codegen-emitted `<Source>Bridge.forward(s)` directly,
 bypassing the `Telescope` lattice; it isolates the lattice-dispatch tax. A directly-callable `BRIDGE_FN` constant (one
-interface hop, omitted here for width) lands at the `static` floor — the full four-call-shape breakdown and the
-dispatch-tax decomposition live in [`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md).
+interface hop, omitted here for width) lands at the `static` floor on flat and nested, and above it on deep — the full
+four-call-shape breakdown and the dispatch-tax decomposition live in
+[`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md).
 
 #### How the runtime path stays fast
 
@@ -287,9 +289,9 @@ the fixed dispatch overhead; at the flat scale you're choosing on API and capabi
 The gap is not mostly dispatch. The `static` column (zero-dispatch `<Source>Bridge.forward(s)`) is the floor; the
 `BRIDGE.read` lattice path sits a sub-nanosecond wrapper tax above it (its size, and on one run its sign, move between
 runs — see the doc), and on deep the residual over MapStruct sits below that floor. What it _is_ has no established
-mechanism — the two generated bodies are equivalent in source and bytecode and allocate identically — and the doc's "So
-is there a real gap?" section is the one place that says so. The full decomposition, all four call shapes (`static` /
-`BRIDGE_FN` / `BRIDGE.read` / MapStruct) at each tier, plus the JMH-artifact history, lives in
+mechanism — the two generated bodies do the same work, with the same guards on the same paths and the same allocations —
+and the doc's "So is there a real gap?" section is where that is characterised. The full decomposition, all four call
+shapes (`static` / `BRIDGE_FN` / `BRIDGE.read` / MapStruct) at each tier, plus the JMH-artifact history, lives in
 [`docs/perf-mapstruct-comparison.md`](../docs/perf-mapstruct-comparison.md).
 
 Where the flat-tier gap comes from. MapStruct emits one hand-templated method body per pair, fully monomorphic, and the
@@ -299,8 +301,9 @@ costs a fraction of a nanosecond; on deep, where element-by-element list convers
 past 50 ns, it is the same sub-nanosecond tax against a far larger row. What remains of the deep gap over MapStruct is
 not composability, and not the emitted body doing more work either; the comparison doc carries the per-run ratio, the
 across-run range, and what the residual has been ruled down to. If you're in a tight inner loop that doesn't need
-composition, call `<Source>Bridge.forward(s)` — or the directly-callable `BRIDGE_FN` constant — and pay the
-zero-dispatch floor.
+composition, call `<Source>Bridge.forward(s)` and pay the zero-dispatch floor. The directly-callable `BRIDGE_FN`
+constant is the same floor on flat and nested, but the one run that resolves it on deep puts it about 7 ns above — so on
+the deep tier prefer the static call.
 
 Runtime conversion (`Telescope.mapper(...)`) composes each record/bean pair into a single MethodHandle (see above), so
 the hot path is one `invokeExact` through the fused handle rather than an `Object[]` gather with boxed per-field
