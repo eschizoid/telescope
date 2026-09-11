@@ -137,6 +137,60 @@ class DiagnosticWordingTest {
   }
 
   @Test
+  @DisplayName("a multi-character value for a char field says so, naming its annotation")
+  void multiCharConstantIsRejected() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.MSrc",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Constant;
+        @Bridge(value = demo.MDst.class, constants = @Constant(field = "initial", value = "xy"))
+        public record MSrc(String name) {}
+        """
+      ),
+      ProcessorHarness.source("demo.MDst", "package demo; public record MDst(String name, char initial) {}")
+    );
+
+    assertFalse(compilation.success(), "two characters do not fit a char");
+    assertTrue(
+      compilation.hasError("@Constant value=\"xy\" must be a single character"),
+      () -> "the char arm reports through the same caller-supplied name: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a taken navigator name reports the same way a taken bridge name does")
+  void takenNavigatorNameSaysWhatToRename() {
+    // The navigator and the metadata holder are written by different emitters than the bridge, so
+    // each carries its own copy of the failure path.
+    final var compilation = ProcessorHarness.compileFully(
+      List.of(new FocusProcessor()),
+      List.of(),
+      ProcessorHarness.source(
+        "demo.FSrc",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Focus;
+        @Focus
+        public record FSrc(String name) {}
+        """
+      ),
+      ProcessorHarness.source("demo.FSrcTelescope", "package demo; public final class FSrcTelescope {}"),
+      // The metadata holder is written by the utility-class emitter, a third copy of the
+      // path.
+      ProcessorHarness.source("demo.FSrcFieldOptics", "package demo; public final class FSrcFieldOptics {}")
+    );
+
+    assertFalse(compilation.success(), "the processor cannot write over a hand-written navigator");
+    assertTrue(
+      compilation.hasError("that name is already taken"),
+      () -> "every emitter should phrase this the same way: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
   @DisplayName("a lenient bridge writes null into an unmatched collection slot, as the javadoc says")
   void lenientUnmatchedCollectionIsWrittenNull() {
     final var compilation = compile(
