@@ -5,17 +5,17 @@ and propose remediations where the gap is structural.
 
 ## Headline finding
 
-**Telescope codegen is in MapStruct's performance class, and on a hash container it allocates less.** Separate runs land
-on runners of different speeds, so a ratio built from two of them is not a measurement — hence the two columns below,
-read as the caption describes.
+**Telescope codegen is in MapStruct's performance class, and allocates what MapStruct allocates on every tier
+measured.** Separate runs land on runners of different speeds, so a ratio built from two of them is not a measurement —
+hence the two columns below, read as the caption describes.
 
-| Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio | across runs            | allocation              |
-| ----------------------------------- | ---------------: | ---------------: | ----: | ---------------------- | ----------------------- |
-| flat (5 scalars)                    | 3.155 ± 0.019 ns | 3.362 ± 0.011 ns | 1.07x | ~1.07x (one run 1.13x) | 32 B/op both            |
-| nested (one nested type)            | 4.361 ± 0.045 ns | 5.604 ± 0.033 ns | 1.29x | 1.04x–1.46x            | 48 B/op both            |
-| deep (3 levels + 2 list hops)       |  62.38 ± 0.18 ns |  66.57 ± 0.52 ns | 1.07x | 1.06x–1.19x            | 376 B/op both           |
-| container, Map-valued (100 entries) |     1262 ± 11 ns |     1244 ± 10 ns |   tie | measured once          | **7,528 vs 6,712 B/op** |
-| container, Set-valued (100 entries) |     1455 ± 21 ns |      1445 ± 9 ns |   tie | measured once          | 7,576 B/op both         |
+| Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio | across runs            | allocation        |
+| ----------------------------------- | ---------------: | ---------------: | ----: | ---------------------- | ----------------- |
+| flat (5 scalars)                    | 3.155 ± 0.019 ns | 3.362 ± 0.011 ns | 1.07x | ~1.07x (one run 1.13x) | 32 B/op both      |
+| nested (one nested type)            | 4.361 ± 0.045 ns | 5.604 ± 0.033 ns | 1.29x | 1.04x–1.46x            | 48 B/op both      |
+| deep (3 levels + 2 list hops)       |  62.38 ± 0.18 ns |  66.57 ± 0.52 ns | 1.07x | 1.06x–1.19x            | 376 B/op both     |
+| container, Map-valued (100 entries) |     1262 ± 11 ns |     1244 ± 10 ns |   tie | measured once          | 7,528 B/op both\* |
+| container, Set-valued (100 entries) |     1455 ± 21 ns |      1445 ± 9 ns |   tie | measured once          | 7,576 B/op both   |
 
 GitHub Actions run 34470676359, `ubuntu-latest`, 10 measured iterations. The `ratio` column is this run alone, so every
 figure in it is comparable with every other. The `across runs` column is what keeps a single cell from travelling out of
@@ -23,9 +23,14 @@ context: only flat holds its value between runs, and the container tiers exist o
 
 Read the two container rows carefully — telescope's mean is marginally lower on both, and on neither does that mean it
 won. On Set the intervals overlap almost entirely (telescope's sits inside MapStruct's), which is a clean tie. On Map
-they overlap by under 3 ns, so call it a tie but not a settled one: tighter bands could separate them either way. What
-is real on that row is the allocation — 6,712 against 7,528 bytes per operation, about 11% less — and allocation is
-deterministic rather than hardware-dependent, which makes it the durable result.
+they overlap by under 3 ns, so call it a tie but not a settled one: tighter bands could separate them either way.
+
+\* The Map row once carried an allocation win — 6,712 against 7,528 bytes per operation — and it was not one. An
+interface-typed `Map` field rebuilt as a `HashMap` where MapStruct builds a `LinkedHashMap`, so the two sides were
+building different containers and the cheaper one was being read as the better result. Telescope now builds the same
+container, its allocation lands on MapStruct's figure exactly, and an ordered source keeps its order across the
+conversion. The timings in this row predate that change and need a re-run before they are quoted again; the allocation
+figure does not, because allocation is deterministic rather than hardware-dependent.
 
 The scalar tiers are unchanged in character: a 0.2 ns difference on flat, 4 ns on a 62 ns deep conversion, and both
 outside their error bars, so each ratio is real within its own run. Only flat is also stable across runs, clustering at
@@ -297,8 +302,9 @@ residual.
 - **`BRIDGE_FN` benchmarked across all three tiers** (`nested_*_bridgefn_forward`, `deep_*_bridgefn_forward`; flat
   already existed). This is what lets the forward tables compare all four call shapes — static, one-hop, lattice,
   MapStruct — on each run, which is what later let run 4 separate `BRIDGE_FN` from the floor on deep.
-- **The container tier**, Set- and Map-valued, which is where this revision's actual finding lives — see the headline
-  table for the figures and [What the container tier is for](#what-the-container-tier-is-for) for why it was added.
+- **The container tier**, Set- and Map-valued — see the headline table for the figures and
+  [What the container tier is for](#what-the-container-tier-is-for) for why it was added. It was published carrying an
+  allocation win on the Map shape; the footnote on that row records what became of it.
 - **This analysis doc, corrected against three runs.** What each correction retracted is recorded under
   [Superseded and retracted](#superseded-and-retracted) rather than restated here.
 - **No production code changed.** `BRIDGE_FN` already ships; the codegen is at parity as-is.
@@ -344,7 +350,7 @@ table; what was wrong was presenting it as deep's figure rather than as one end 
 
 Telescope codegen is in MapStruct's performance class. The headline table has the figures and says which of them are
 stable across runs and which are ranges; the short version is that flat is settled, deep and nested are ranges, and the
-two container shapes tie on time while telescope allocates less on the Map shape.
+two container shapes tie on time and allocate identically.
 
 On dispatch, one half is settled on two tiers of three. `BRIDGE_FN` is the floor on flat and nested — it tracks the
 zero-dispatch static call there on every run within error, because the JIT inlines the monomorphic hop. On deep the only
