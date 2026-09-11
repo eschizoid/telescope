@@ -2280,15 +2280,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // table.
     String fwdContainerImpl,
     String bwdContainerImpl,
-    // LIST/SET/MAP_VALUES only: true when the field is a raw (non-generic) Collection/Map subtype
-    // on
-    // at least one side (e.g. `class ImageUrls extends ArrayList<ImageUrl>`, or a generic
-    // interface
-    // paired with such a subtype). The element type lives in the supertype, the subtype is
-    // allocated
-    // via its no-arg constructor (subclasses don't inherit the JDK copy ctor), so these route to
-    // the
-    // self-contained raw helpers instead of the generic copy-ctor inline path.
+    // LIST/SET/MAP_VALUES only: true when at least one side is allocated as a Collection/Map type
+    // the adopter wrote rather than a JDK class — a raw subtype (`class ImageUrls extends
+    // ArrayList<ImageUrl>`, whose element type lives in the supertype) or a generic one (`class
+    // MyList<T> extends ArrayList<T>`). Either is allocated via its no-arg constructor, because
+    // subclasses do not inherit the JDK copy ctor, so both route to the self-contained helpers
+    // instead of the inline copy-ctor path.
     boolean rawContainer,
     // RECURSE only: true when subBridgeName is a user-supplied @ViaMapper class rather than an
     // auto-derived sub-bridge. Auto-derived bridges open their forward/backward with a null
@@ -2324,6 +2321,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         fwdImpl,
         bwdImpl,
         false,
+        userSuppliedBridge
+      );
+    }
+
+    FieldPlan asRawContainer() {
+      return new FieldPlan(
+        kind,
+        subBridgeName,
+        qualifierMethod,
+        fwdNullDefault,
+        bwdNullDefault,
+        fwdContainerImpl,
+        bwdContainerImpl,
+        true,
         userSuppliedBridge
       );
     }
@@ -2499,6 +2510,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // interface-typed field. The two hash families default to their insertion-ordered form because a
   // conversion that is not asked to reorder should not: an ordered source behind an interface-typed
   // field keeps its order across the rebuild.
+  private static boolean isContainerKind(final FieldPlan.Kind kind) {
+    return kind == FieldPlan.Kind.LIST || kind == FieldPlan.Kind.SET || kind == FieldPlan.Kind.MAP_VALUES;
+  }
+
+  /**
+   * Whether this side's container is allocated as a type the adopter wrote rather than a JDK class.
+   * A JDK container offers a copy constructor; a subtype of one does not inherit it, so the two are
+   * allocated differently and only the JDK side can be copy-constructed inline.
+   */
+  private static boolean isUserContainerImpl(final TypeMirror container, final FieldPlan.Kind kind) {
+    return !concreteImplFqn(container, kind).startsWith("java.");
+  }
+
   private static String concreteImplFqn(final TypeMirror container, final FieldPlan.Kind kind) {
     final var el = (TypeElement) ((DeclaredType) container).asElement();
     if (el.getKind() == ElementKind.CLASS && !el.getModifiers().contains(Modifier.ABSTRACT)) {
@@ -2656,6 +2680,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Attach the concrete-impl class the inline identity-element copy allocates: the target's
         // class on forward, the source's on backward — so a field typed as a concrete subtype
         // (LinkedList, TreeSet, …) is rebuilt as that class, not the default impl.
+        // A user subtype declares no copy constructor, because Java does not inherit them, so the
+        // inline identity copy is invalid for it whether or not it kept its own type parameter.
+        // Route it to the self-contained helper, which allocates no-arg and fills — the same
+        // treatment a raw subtype already gets, and for the same reason.
+        if (isContainerKind(subPlan.kind())) {
+          final var userSubtype =
+            isUserContainerImpl(sf.type(), subPlan.kind()) || isUserContainerImpl(tf.type(), subPlan.kind());
+          if (userSubtype) {
+            final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), subPlan.kind());
+            if (badAlloc != null) {
+              error(
+                source,
+                "@Bridge " +
+                  source.getSimpleName() +
+                  " -> " +
+                  target.getSimpleName() +
+                  ": field '" +
+                  sf.name() +
+                  "' container type '" +
+                  badAlloc +
+                  "' has no public no-arg constructor — codegen allocates it directly. Add a" +
+                  " no-arg constructor, or use the runtime mapper with an explicit row for" +
+                  " this field."
+              );
+              return null;
+            }
+            plans.put(sf.name(), subPlan.asRawContainer());
+            continue;
+          }
+        }
         final var withImpls = switch (subPlan.kind()) {
           case LIST, SET, MAP_VALUES -> subPlan.withContainerImpls(
             simpleName(concreteImplFqn(tf.type(), subPlan.kind())),
@@ -3095,8 +3149,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var plan = entry.getValue();
       final var srcType = fieldByName(sourceFields, fieldName).type();
       final var tgtType = fieldByName(targetFields, renames.getOrDefault(fieldName, fieldName)).type();
-      // Raw Collection/Map subtype containers get the self-contained helper even for identity
-      // elements (the inline copy-ctor path is invalid for a non-generic subtype).
+      // A container allocated as a type the adopter wrote gets the self-contained helper even for
+      // identity elements: the inline copy-ctor path needs a copy constructor, and a subtype does
+      // not inherit one. Whether it kept its own type parameter makes no difference to that.
       if (plan.rawContainer()) {
         emitRawContainerHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan, "forward");
         emitRawContainerHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan, "backward");
