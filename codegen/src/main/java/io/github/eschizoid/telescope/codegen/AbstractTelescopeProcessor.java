@@ -1148,7 +1148,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   ) {
     final var lensArgs =
       pojoName + "::" + target.getter() + ", " + beanRebuild(target, props, setters, useBuilder, pojoName);
-    emitNavigatorMethod(out, pojoName, target.name(), target.type(), lensArgs, navigableAnnotations);
+    var index = 0;
+    for (var i = 0; i < props.size(); i++) {
+      if (props.get(i).name().equals(target.name())) {
+        index = i;
+        break;
+      }
+    }
+    emitNavigatorMethod(out, pojoName, index, target.name(), target.type(), lensArgs, navigableAnnotations);
   }
 
   private void emitBeanStep(
@@ -1263,6 +1270,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   protected void emitNavigatorMethod(
     final PrintWriter out,
     final String enclosingSimpleName,
+    final int componentIndex,
     final String componentName,
     final TypeMirror componentType,
     final String lensArgs,
@@ -1278,7 +1286,15 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // keeps one field's initializer from deciding another's fate: a class-level static would put
     // every field in one <clinit>, where a single unresolvable type takes them all down.
     // `path` still varies per call, so composing it is not hoistable and is left alone.
-    final var holder = "Optic_" + componentName;
+    // A nested holder is a class file of its own, so two holders whose names differ only in case
+    // overwrite each other on a case-insensitive filesystem — javac reports success and the
+    // earlier-declared accessor dies at run time. Property names really can differ that way:
+    // decapitalisation keeps a leading acronym, so getUrl and getURL yield url and URL. The index
+    // makes the names differ before the component name does, which case folding cannot collapse.
+    // A holder also shadows a same-named top-level type throughout the navigator, so where it
+    // would take the source type's own name it steps aside.
+    var holder = "Optic_" + componentIndex + "_" + componentName;
+    if (holder.equals(enclosingSimpleName)) holder = holder + "_";
     final var componentTypeStr = shortenStdImports(boxedType(componentType));
     final var shape = traversalKind(componentType);
     final var subFq = navigableType(componentType, navigableAnnotations);

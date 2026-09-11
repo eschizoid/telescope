@@ -241,7 +241,14 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
   ) {
     final var compName = comp.getSimpleName().toString();
     final var lensArgs = recordName + "::" + compName + ", " + canonicalSetter(recordName, components, compName);
-    emitNavigatorMethod(out, recordName, compName, comp.asType(), lensArgs, FOCUS_ONLY);
+    var index = 0;
+    for (var i = 0; i < components.size(); i++) {
+      if (components.get(i).getSimpleName().toString().equals(compName)) {
+        index = i;
+        break;
+      }
+    }
+    emitNavigatorMethod(out, recordName, index, compName, comp.asType(), lensArgs, FOCUS_ONLY);
   }
 
   // Container-step emission for an @Focus record's collection-shaped component. All shared logic
