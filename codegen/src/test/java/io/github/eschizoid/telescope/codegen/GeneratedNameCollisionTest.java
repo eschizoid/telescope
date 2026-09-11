@@ -289,6 +289,86 @@ class GeneratedNameCollisionTest {
   }
 
   @Test
+  @DisplayName("a carrier-declared sub-pair held back for Lombok is still referenced by the carrier's name")
+  void deferredCarrierSubPairIsReferencedByTheCarrierBridge() {
+    // A pair whose types carry a Lombok trigger is held back until the final round, while the
+    // parent's reference is written when the parent is planned. The trigger is matched by
+    // annotation name, so a stub lombok.Data drives the real deferral without Lombok on the
+    // classpath — and the POJOs carry explicit accessors, so nothing here reads a synthesised
+    // member, which is the part an in-memory compilation genuinely cannot reproduce.
+    final var compilation = compile(
+      new BridgeProcessor(),
+      source(
+        "lombok.Data",
+        """
+        package lombok;
+        import java.lang.annotation.ElementType;
+        import java.lang.annotation.Retention;
+        import java.lang.annotation.RetentionPolicy;
+        import java.lang.annotation.Target;
+        @Retention(RetentionPolicy.SOURCE)
+        @Target(ElementType.TYPE)
+        public @interface Data {}
+        """
+      ),
+      source(
+        "q.Item",
+        """
+        package q;
+        @lombok.Data
+        public class Item {
+          private String id;
+          public Item() {}
+          public String getId() { return id; }
+          public void setId(final String v) { this.id = v; }
+        }
+        """
+      ),
+      source(
+        "q.ItemDto",
+        """
+        package q;
+        @lombok.Data
+        public class ItemDto {
+          private String id;
+          public ItemDto() {}
+          public String getId() { return id; }
+          public void setId(final String v) { this.id = v; }
+        }
+        """
+      ),
+      source(
+        "carrier.ItemCarrier",
+        """
+        package carrier;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(source = q.Item.class, target = q.ItemDto.class)
+        public final class ItemCarrier {}
+        """
+      ),
+      source(
+        "p.Root",
+        """
+        package p;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(p.RootDto.class) public record Root(q.Item item) {}
+        """
+      ),
+      source("p.RootDto", "package p; public record RootDto(q.ItemDto item) {}")
+    );
+
+    assertTrue(
+      compilation.success(),
+      () -> "a deferred carrier's pair must still resolve; saw " + compilation.errorMessages()
+    );
+    final var bridge = compilation.generated().get("p.RootBridge");
+    assertTrue(
+      bridge != null && bridge.contains("carrier.ItemCarrierBridge"),
+      () -> "the parent must call the carrier's bridge, not a source-anchored name; saw " + bridge
+    );
+  }
+
+  @Test
   @DisplayName("two pairs whose auto-derived bridge names collide are named at the declaration")
   void collidingAutoBridgeNamesAreReported() {
     // a.MoneyA -> b.MoneyB and a.MoneyA -> c.MoneyB both derive MoneyAToMoneyBBridge in package a,
