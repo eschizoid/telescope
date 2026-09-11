@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Consumer;
 import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.FilerException;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
@@ -86,8 +87,28 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         out.println("}");
       }
     } catch (final IOException e) {
-      error(origin, "Failed to write " + qualifiedName + ": " + e.getMessage());
+      error(origin, writeFailureMessage(qualifiedName, e));
     }
+  }
+
+  /**
+   * Phrase a failed emission. A {@link FilerException} for a name already taken is the one case
+   * with an action attached: some other type in the compilation already owns the name the processor
+   * derives, and the fix is to change a name rather than to read a stack trace. Every other {@code
+   * IOException} is a genuine write failure and is reported as it arrives.
+   */
+  private static String writeFailureMessage(final String qualifiedName, final IOException e) {
+    if (e instanceof FilerException) {
+      return (
+        "Cannot generate " +
+        qualifiedName +
+        " — that name is already taken in this compilation. Rename the existing type, or rename" +
+        " the source or target so the derived name differs. (" +
+        e.getMessage() +
+        ")"
+      );
+    }
+    return "Failed to write " + qualifiedName + ": " + e.getMessage();
   }
 
   /**
@@ -664,7 +685,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         out.println("}");
       }
     } catch (final IOException e) {
-      error(origin, "Failed to write " + qualifiedName + ": " + e.getMessage());
+      error(origin, writeFailureMessage(qualifiedName, e));
     }
   }
 
@@ -738,7 +759,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         out.println("}");
       }
     } catch (final IOException e) {
-      error(origin, "Failed to write " + qualifiedName + ": " + e.getMessage());
+      error(origin, writeFailureMessage(qualifiedName, e));
     }
   }
 

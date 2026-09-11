@@ -333,6 +333,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           error(element, "@Bridge target must be a top-level type");
           continue;
         }
+        // An interface is a declared type, so it reaches here like any other; without this it pairs
+        // against an empty component list and is reported as a bijection failure, which describes
+        // the symptom and not the cause. Only a sealed one is a target: it names its permits, and
+        // each permit is what carries components and a constructor.
+        if (targetEl.getKind() == ElementKind.INTERFACE && !targetEl.getModifiers().contains(Modifier.SEALED)) {
+          error(
+            element,
+            "@Bridge target " +
+              targetEl.getSimpleName() +
+              " is an interface with no permits. A plain interface has no components to pair" +
+              " and no constructor to rebuild — name the implementation type instead, or seal" +
+              " the interface and give each permit its own @Bridge."
+          );
+          continue;
+        }
         final TypeElement sourceEl = carrierForm
           ? (TypeElement) ((DeclaredType) sourceMirror).asElement()
           : (TypeElement) element;
@@ -932,11 +947,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return Map.of();
   }
 
-  // Parse a @Constant string value against the target field's declared type. Returns the
-  // Java-source literal expression to emit at the field's ctor-arg position, or null when the
-  // value can't be represented at that type (the caller already reported via error()).
+  // Parse an annotation's string value against a field's declared type. Returns the Java-source
+  // literal expression to emit at the field's ctor-arg position, or null when the value can't be
+  // represented at that type (the caller already reported via error()). Both @Constant and @Default
+  // carry a string value parsed this way, so the caller passes its own name for the diagnostic:
+  // naming the wrong one sends the reader to an annotation their source does not contain.
   private String parseConstantLiteral(
     final Element origin,
+    final String annotation,
     final String fieldName,
     final String value,
     final TypeMirror type
@@ -950,28 +968,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           return "\"" + escapeJavaString(value) + "\"";
         }
         case "java.lang.Boolean" -> {
-          return parseBooleanOrError(origin, fieldName, value, "Boolean");
+          return parseBooleanOrError(origin, annotation, fieldName, value, "Boolean");
         }
         case "java.lang.Integer" -> {
-          return parseIntegralOrError(origin, fieldName, value, "Integer", "");
+          return parseIntegralOrError(origin, annotation, fieldName, value, "Integer", "");
         }
         case "java.lang.Long" -> {
-          return parseIntegralOrError(origin, fieldName, value, "Long", "L");
+          return parseIntegralOrError(origin, annotation, fieldName, value, "Long", "L");
         }
         case "java.lang.Short" -> {
-          return castIntegralOrError(origin, fieldName, value, "Short", "short");
+          return castIntegralOrError(origin, annotation, fieldName, value, "Short", "short");
         }
         case "java.lang.Byte" -> {
-          return castIntegralOrError(origin, fieldName, value, "Byte", "byte");
+          return castIntegralOrError(origin, annotation, fieldName, value, "Byte", "byte");
         }
         case "java.lang.Double" -> {
-          return parseFloatingOrError(origin, fieldName, value, "Double", "");
+          return parseFloatingOrError(origin, annotation, fieldName, value, "Double", "");
         }
         case "java.lang.Float" -> {
-          return parseFloatingOrError(origin, fieldName, value, "Float", "f");
+          return parseFloatingOrError(origin, annotation, fieldName, value, "Float", "f");
         }
         case "java.lang.Character" -> {
-          return parseCharOrError(origin, fieldName, value);
+          return parseCharOrError(origin, annotation, fieldName, value);
         }
         default -> {
         }
@@ -979,20 +997,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     if (kind.isPrimitive()) {
       return switch (kind) {
-        case BOOLEAN -> parseBooleanOrError(origin, fieldName, value, "boolean");
-        case INT -> parseIntegralOrError(origin, fieldName, value, "int", "");
-        case LONG -> parseIntegralOrError(origin, fieldName, value, "long", "L");
-        case SHORT -> castIntegralOrError(origin, fieldName, value, "short", "short");
-        case BYTE -> castIntegralOrError(origin, fieldName, value, "byte", "byte");
-        case DOUBLE -> parseFloatingOrError(origin, fieldName, value, "double", "");
-        case FLOAT -> parseFloatingOrError(origin, fieldName, value, "float", "f");
-        case CHAR -> parseCharOrError(origin, fieldName, value);
+        case BOOLEAN -> parseBooleanOrError(origin, annotation, fieldName, value, "boolean");
+        case INT -> parseIntegralOrError(origin, annotation, fieldName, value, "int", "");
+        case LONG -> parseIntegralOrError(origin, annotation, fieldName, value, "long", "L");
+        case SHORT -> castIntegralOrError(origin, annotation, fieldName, value, "short", "short");
+        case BYTE -> castIntegralOrError(origin, annotation, fieldName, value, "byte", "byte");
+        case DOUBLE -> parseFloatingOrError(origin, annotation, fieldName, value, "double", "");
+        case FLOAT -> parseFloatingOrError(origin, annotation, fieldName, value, "float", "f");
+        case CHAR -> parseCharOrError(origin, annotation, fieldName, value);
         default -> null;
       };
     }
     error(
       origin,
-      "@Constant value cannot be parsed at the target field \"" +
+      annotation +
+        " value cannot be parsed at the target field \"" +
         fieldName +
         "\" of type " +
         type +
@@ -1004,6 +1023,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   private String parseBooleanOrError(
     final Element origin,
+    final String annotation,
     final String fieldName,
     final String value,
     final String displayType
@@ -1012,13 +1032,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if ("false".equals(value)) return "false";
     error(
       origin,
-      "@Constant value=\"" + value + "\" is not a valid " + displayType + " literal at field \"" + fieldName + "\""
+      annotation + " value=\"" + value + "\" is not a valid " + displayType + " literal at field \"" + fieldName + "\""
     );
     return null;
   }
 
   private String parseIntegralOrError(
     final Element origin,
+    final String annotation,
     final String fieldName,
     final String value,
     final String displayType,
@@ -1030,7 +1051,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     } catch (final NumberFormatException e) {
       error(
         origin,
-        "@Constant value=\"" + value + "\" is not a valid " + displayType + " literal at field \"" + fieldName + "\""
+        annotation +
+          " value=\"" +
+          value +
+          "\" is not a valid " +
+          displayType +
+          " literal at field \"" +
+          fieldName +
+          "\""
       );
       return null;
     }
@@ -1039,6 +1067,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   private String castIntegralOrError(
     final Element origin,
+    final String annotation,
     final String fieldName,
     final String value,
     final String displayType,
@@ -1050,7 +1079,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     } catch (final NumberFormatException e) {
       error(
         origin,
-        "@Constant value=\"" + value + "\" is not a valid " + displayType + " literal at field \"" + fieldName + "\""
+        annotation +
+          " value=\"" +
+          value +
+          "\" is not a valid " +
+          displayType +
+          " literal at field \"" +
+          fieldName +
+          "\""
       );
       return null;
     }
@@ -1059,6 +1095,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   private String parseFloatingOrError(
     final Element origin,
+    final String annotation,
     final String fieldName,
     final String value,
     final String displayType,
@@ -1070,16 +1107,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     } catch (final NumberFormatException e) {
       error(
         origin,
-        "@Constant value=\"" + value + "\" is not a valid " + displayType + " literal at field \"" + fieldName + "\""
+        annotation +
+          " value=\"" +
+          value +
+          "\" is not a valid " +
+          displayType +
+          " literal at field \"" +
+          fieldName +
+          "\""
       );
       return null;
     }
     return value + suffix;
   }
 
-  private String parseCharOrError(final Element origin, final String fieldName, final String value) {
+  private String parseCharOrError(
+    final Element origin,
+    final String annotation,
+    final String fieldName,
+    final String value
+  ) {
     if (value.length() != 1) {
-      error(origin, "@Constant value=\"" + value + "\" must be a single character at field \"" + fieldName + "\"");
+      error(origin, annotation + " value=\"" + value + "\" must be a single character at field \"" + fieldName + "\"");
       return null;
     }
     final var c = value.charAt(0);
@@ -1492,7 +1541,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         );
         return;
       }
-      final var lit = parseConstantLiteral(source, fieldName, e.getValue(), sf.type());
+      final var lit = parseConstantLiteral(source, "@Default", fieldName, e.getValue(), sf.type());
       if (lit == null) return;
       parsedDefaults.put(fieldName, lit);
     }
@@ -1525,7 +1574,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         );
         return;
       }
-      final var lit = parseConstantLiteral(source, fieldName, e.getValue(), tf.type());
+      final var lit = parseConstantLiteral(source, "@Constant", fieldName, e.getValue(), tf.type());
       if (lit == null) return;
       parsedConstants.put(fieldName, lit);
       injectedTargetFields.add(fieldName);
