@@ -87,6 +87,8 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
     // emitted as a typed constant also cannot be named in the navigator's type parameters, and a
     // component colliding with a navigator method makes the navigator uncompilable — emitting
     // either artifact anyway hands the author a javac error inside a file they never wrote.
+    final var hopTarget = bridgeTargetFqn(recordType);
+    final var reservedHop = hopTarget == null ? Set.<String>of() : Set.of("as" + simpleNameOf(hopTarget));
     if (
       hasReservedPropertyName(
         recordType,
@@ -94,7 +96,8 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
         components
           .stream()
           .map(c -> c.getSimpleName().toString())
-          .toList()
+          .toList(),
+        reservedHop
       )
     ) return;
     for (final var comp : components) {

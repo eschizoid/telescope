@@ -91,10 +91,15 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * The zero-argument methods every generated navigator declares for itself. A property of the same
-   * name emits a second method with the same erasure, so the generated file does not compile — and
-   * javac reports it against the generated source, which the author never wrote. A property
-   * matching a forwarder that takes arguments is fine: those overload cleanly.
+   * The zero-argument methods every generated navigator declares for itself, whatever type it
+   * navigates. A property of the same name emits a second method with the same erasure, so the
+   * generated file does not compile — and javac reports it against the generated source, which the
+   * author never wrote. A property matching a forwarder that takes arguments is fine: those
+   * overload cleanly.
+   *
+   * <p>A navigator for a type that also carries {@code @Bridge} declares one more zero-argument
+   * method, {@code as<Target>()}, whose name depends on that target. It cannot live in this set, so
+   * callers pass it through {@code alsoReserved}.
    */
   private static final Set<String> RESERVED_NAVIGATOR_METHODS = Set.of("of", "get", "explain");
 
@@ -102,15 +107,16 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * Reports any property whose name would collide with a method the navigator declares for itself,
    * and answers whether emission should be abandoned for this type. Callers check before writing
    * the navigator: emitting it anyway leaves the author with a javac error inside a file they
-   * cannot edit.
+   * cannot edit. {@code alsoReserved} carries the names that depend on the type being emitted.
    */
   protected boolean hasReservedPropertyName(
     final Element site,
     final String triggerLabel,
-    final List<String> propertyNames
+    final List<String> propertyNames,
+    final Set<String> alsoReserved
   ) {
     for (final var name : propertyNames) {
-      if (RESERVED_NAVIGATOR_METHODS.contains(name)) {
+      if (RESERVED_NAVIGATOR_METHODS.contains(name) || alsoReserved.contains(name)) {
         error(
           site,
           triggerLabel +
@@ -793,7 +799,28 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       error(pojo, triggerLabel + ": " + pojo.getQualifiedName() + " has no readable properties (getX()/isX())");
       return;
     }
-    if (hasReservedPropertyName(pojo, triggerLabel, props.stream().map(Prop::name).toList())) return;
+    final var hopTarget = bridgeTargetFqn(pojo);
+    final var reservedHop = hopTarget == null ? Set.<String>of() : Set.of("as" + simpleNameOf(hopTarget));
+    if (hasReservedPropertyName(pojo, triggerLabel, props.stream().map(Prop::name).toList(), reservedHop)) return;
+    // Both artifacts are rejected together, before either is written: a property that cannot be
+    // emitted as a typed constant also cannot be named in the navigator's type parameters, so
+    // emitting the navigator anyway hands the author a javac error inside a file they never wrote.
+    for (final var p : props) {
+      if (!isEmittableAsTypedConstant(p.type())) {
+        error(
+          pojo,
+          triggerLabel +
+            ": cannot emit metadata constant for property '" +
+            p.name() +
+            "' of type '" +
+            p.type() +
+            "' — generics with wildcard or self-referential bounds are not supported. Remove " +
+            triggerLabel +
+            " from this class to use the runtime path."
+        );
+        return;
+      }
+    }
 
     final var builder = staticBuilderMethod(pojo);
     final var builderType =
@@ -883,9 +910,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var holderName = pojoBaseName + "FieldOptics";
     final var qualifiedHolder = pkg.isEmpty() ? holderName : pkg + "." + holderName;
 
-    // Reject up-front: any un-emittable property type kills the whole holder for this POJO
-    // (the per-POJO holder is the unit of regeneration, mixed-quality holders would mask the
-    // gap). The Path navigator is unaffected — it has its own type handling.
+    // The caller has already rejected any POJO carrying an un-emittable property, before either
+    // artifact was written. This loop is the holder's own guard for callers that reach it by
+    // another route.
     for (final var p : props) {
       if (!isEmittableAsTypedConstant(p.type())) {
         error(
