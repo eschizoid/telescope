@@ -2109,6 +2109,47 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("@Transform with a BridgeFn whose type arguments do not fit the field pair is rejected at" + " build")
+    void transformWithMisfittingBridgeFnRejected() {
+      // Without the check, the bridge is emitted anyway and the mismatch surfaces as raw
+      // incompatible-types errors inside the generated file — code the user never wrote. The
+      // diagnostic must land on the @Bridge declaration and name the field pair and the
+      // BridgeFn's actual arguments.
+      final var compilation = compile(
+        source(
+          "demo.BadFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class BadFn implements BridgeFn<Integer, Long> {
+            public BadFn() {}
+            @Override public Long forward(Integer x) { return x.longValue(); }
+            @Override public Integer backward(Long c) { return c.intValue(); }
+          }
+          """
+        ),
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "label", using = demo.BadFn.class) })
+          public record Src(String id, String label) {}
+          """
+        ),
+        source("demo.Tgt", "package demo; public record Tgt(String id, String label) {}")
+      );
+
+      assertFalse(compilation.success(), "a misfitting BridgeFn must not compile");
+      assertTrue(
+        compilation.hasError("does not fit") && compilation.hasError("BridgeFn<java.lang.Integer, java.lang.Long>"),
+        () ->
+          "expected a diagnostic naming the field pair and the BridgeFn arguments; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
     @DisplayName("@Transform per-field conversion routes through the BridgeFn class in both directions")
     void transformRoutesThroughBridgeFn() {
       final var compilation = compile(
