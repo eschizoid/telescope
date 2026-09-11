@@ -697,7 +697,10 @@ class BridgeProcessorTest {
       assertNotNull(compilation.generated().get("demo.MixSrcToMixDstBridge"));
       // forward allocates the concrete subtype; backward allocates the interface's default impl.
       assertTrue(bridge.contains("new demo.MixWrap()"), bridge);
-      assertTrue(bridge.contains("new java.util.ArrayList<demo.MixSrc>()"), bridge);
+      // The interface side is a JDK default impl, so it is allocated sized; the raw subtype on
+      // the other side cannot be, having no constructor that takes a size.
+      assertTrue(bridge.contains("new java.util.ArrayList<demo.MixSrc>(src.size())"), bridge);
+      assertFalse(bridge.contains("new java.util.ArrayList<demo.MixSrc>()"), bridge);
     }
 
     @Test
@@ -742,7 +745,11 @@ class BridgeProcessorTest {
       // forward allocates the concrete subtype; backward allocates the Map interface's two-arg
       // default.
       assertTrue(bridge.contains("new demo.MMixWrap()"), bridge);
-      assertTrue(bridge.contains("new java.util.LinkedHashMap<java.lang.String, demo.MMixSrc>()"), bridge);
+      assertTrue(
+        bridge.contains("java.util.LinkedHashMap.<java.lang.String," + " demo.MMixSrc>newLinkedHashMap(src.size())"),
+        bridge
+      );
+      assertFalse(bridge.contains("new java.util.LinkedHashMap<java.lang.String, demo.MMixSrc>()"), bridge);
     }
 
     @Test
