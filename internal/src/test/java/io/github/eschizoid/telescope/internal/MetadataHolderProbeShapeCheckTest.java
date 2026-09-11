@@ -26,7 +26,7 @@ class MetadataHolderProbeShapeCheckTest {
 
     @Test
     @DisplayName(
-      "HolderRef.constructor() round-trips a sibling FieldOptics's construct(Function) via LambdaMetafactory"
+      "HolderRef.constructor() round-trips a sibling FieldOptics's construct(Function) via" + " LambdaMetafactory"
     )
     void constructorRoundTrip() {
       // The holder-probe contract: probeFor returns a HolderRef whose `constructor` is a cached
@@ -62,7 +62,28 @@ class MetadataHolderProbeShapeCheckTest {
   class ShapeCheck {
 
     @Test
-    @DisplayName("Missing constants() method throws IllegalStateException naming the missing method + re-run hint")
+    @DisplayName("A holder whose initializer cannot complete degrades to the reflective path")
+    void holderThatCannotInitializeDegrades() {
+      // The holder skips the reflective build; it is an optimization, not a dependency. A type
+      // present when the holder was compiled and absent at run time takes the initializer down,
+      // and because the holder builds every field's constant in that one initializer it takes
+      // every field of its owner with it. Answering empty is the same answer given when no holder
+      // is on the classpath, and it leaves the caller with a slower path rather than no path.
+      assertTrue(
+        MetadataHolderProbe.probeFor(HolderFailingInit.class).isEmpty(),
+        "an uninitializable holder must read as absent, not propagate"
+      );
+
+      // Cached, and the second read is the one that arrives as NoClassDefFoundError rather than
+      // ExceptionInInitializerError — the JVM marks the class erroneous after the first attempt.
+      assertTrue(
+        MetadataHolderProbe.probeFor(HolderFailingInit.class).isEmpty(),
+        "the answer must hold on a second read, where the error arrives in its other form"
+      );
+    }
+
+    @Test
+    @DisplayName("Missing constants() method throws IllegalStateException naming the missing method + re-run" + " hint")
     void missingConstantsMethod() {
       // Real scenario: adopter upgrades the runtime but their build cache still has an older holder
       // shape — FieldOptics from an older codegen that didn't emit constants(). The diagnostic must

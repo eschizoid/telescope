@@ -94,6 +94,13 @@ public final class MetadataHolderProbe {
       return Optional.of(new HolderRef(holder, constants, constructor));
     } catch (final ClassNotFoundException e) {
       return Optional.empty();
+    } catch (final LinkageError e) {
+      // The holder exists to skip the reflective build, so it is an optimization and not a
+      // dependency: one that cannot initialize is a reason to take the slower path, the same answer
+      // already given when no holder is on the classpath at all. A type present when the holder was
+      // compiled and absent at run time arrives here, and it carries every field of its owner with
+      // it, because the holder builds them all in one initializer.
+      return Optional.empty();
     } catch (final ReflectiveOperationException e) {
       throw new IllegalStateException("Failed to probe metadata holder " + holderName, e);
     }
@@ -124,8 +131,8 @@ public final class MetadataHolderProbe {
       throw new IllegalStateException(
         "Metadata holder " +
           holder.getName() +
-          " has a `constants()` method but its shape is wrong (must be `public static Map<...>`). " +
-          "Re-run the @Focus / @BeanFocus processor."
+          " has a `constants()` method but its shape is wrong (must be `public static" +
+          " Map<...>`). Re-run the @Focus / @BeanFocus processor."
       );
     }
     final var result = (Map<String, Object>) method.invoke(null);
@@ -157,7 +164,8 @@ public final class MetadataHolderProbe {
           holder.getName() +
           " is missing the required `public static " +
           target.getSimpleName() +
-          " construct(Function<String, Object>)` method. Re-run the @Focus / @BeanFocus processor.",
+          " construct(Function<String, Object>)` method. Re-run the @Focus / @BeanFocus" +
+          " processor.",
         e
       );
     }
@@ -169,9 +177,11 @@ public final class MetadataHolderProbe {
       throw new IllegalStateException(
         "Metadata holder " +
           holder.getName() +
-          " has a `construct(Function)` method but its shape is wrong (must be `public static " +
+          " has a `construct(Function)` method but its shape is wrong (must be `public static" +
+          " " +
           target.getSimpleName() +
-          " construct(Function<String, Object>)`). Re-run the @Focus / @BeanFocus processor."
+          " construct(Function<String, Object>)`). Re-run the @Focus / @BeanFocus" +
+          " processor."
       );
     }
     try {
