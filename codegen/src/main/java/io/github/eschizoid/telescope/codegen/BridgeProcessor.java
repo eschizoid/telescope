@@ -2958,20 +2958,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var imports = new TreeSet<String>();
     for (final var entry : fieldPlans.entrySet()) {
       final var plan = entry.getValue();
-      // A field plan that references a sub-bridge by simple name resolves for free when the
-      // sub-bridge is emitted in this bridge's own package (the common single-package case). When
-      // it
-      // isn't — a cross-package sub-pair, e.g. a DB-entity field bridged to a same-simple-name BO
-      // type in another package — the simple name is unresolvable; import the sub-bridge's FQN.
-      // This
-      // applies to raw-container plans too (their helper also calls the sub-bridge by simple name),
-      // so it runs before the raw-container short-circuit below.
-      final var subImport = crossPackageSubBridgeImport(
-        plan,
-        fieldByName(sourceFields, entry.getKey()).type(),
-        parentPkg
-      );
-      if (subImport != null) imports.add(subImport);
       // Raw-container helpers render every container/element TYPE by fully-qualified name, so they
       // need no container-type imports (only the sub-bridge import handled above).
       if (plan.rawContainer()) continue;
@@ -2994,48 +2980,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
     return imports;
-  }
-
-  /**
-   * The FQN to import for {@code plan}'s sub-bridge when it lives in a different package than
-   * {@code parentPkg}, or {@code null} when the plan references no sub-bridge, the element passes
-   * through (identity), or the sub-bridge shares this bridge's package (simple name already
-   * resolves). The sub-bridge is emitted in the source sub-element's package, so that package plus
-   * the plan's simple sub-bridge name is the import.
-   */
-  private String crossPackageSubBridgeImport(
-    final FieldPlan plan,
-    final TypeMirror srcFieldType,
-    final String parentPkg
-  ) {
-    final var sub = plan.subBridgeName();
-    if (sub == null || IDENTITY_ELEMENT_SENTINEL.equals(sub)) return null;
-    // A @ViaMapper / qualifier sub-bridge name is already a fully-qualified user class (e.g.
-    // `mapper.AddressBridge`); the body emits it verbatim, so it resolves on its own and needs no
-    // import. Only auto-generated bridge names (a bare simple name, no dot) need the cross-package
-    // import — prepending a package to a name that already has one yields a bogus import.
-    if (sub.indexOf('.') >= 0) return null;
-    final var subElement = switch (plan.kind()) {
-      case RECURSE, NULLABLE_TO_OPTIONAL -> srcFieldType;
-      case LIST, SET, MAP_VALUES, OPTIONAL, OPTIONAL_TO_NULLABLE -> {
-        // A raw Collection/Map subtype field (`class CxDocs extends ArrayList<CxDoc>`) carries
-        // its
-        // element in the supertype, so containerShapeOf returns null — fall back to the raw
-        // shape,
-        // mirroring how planFields derives the element for the same field.
-        final var shape = containerShapeOf(srcFieldType);
-        yield shape != null
-          ? shape.elementType()
-          : rawContainerShapeOf(srcFieldType) != null
-            ? rawContainerShapeOf(srcFieldType).elementType()
-            : null;
-      }
-      default -> null;
-    };
-    if (!(subElement instanceof DeclaredType dt) || !(dt.asElement() instanceof TypeElement te)) return null;
-    final var subPkg = processingEnv.getElementUtils().getPackageOf(te).getQualifiedName().toString();
-    if (subPkg.isEmpty() || subPkg.equals(parentPkg)) return null;
-    return subPkg + "." + sub;
   }
 
   /**
@@ -3289,7 +3233,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * one — and a parent referencing both by simple name cannot resolve either, whichever package
    * each lives in. Qualifying every sub-bridge outside the parent's own package removes the
    * ambiguity at the reference rather than at the name: the emitted expression names exactly one
-   * class, and the file needs no import for it.
+   * class, and the file needs no import for it. This is the only mechanism — a name carrying a dot
+   * is emitted verbatim, so nothing downstream imports a sub-bridge.
    */
   private String subBridgeReference(
     final TypeElement subSource,
@@ -3297,8 +3242,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final boolean userDeclared,
     final String parentPkg
   ) {
-    final var simple = bridgeClassName(subSource, subTarget, userDeclared);
-    final var subPkg = processingEnv.getElementUtils().getPackageOf(subSource).getQualifiedName().toString();
+    // A carrier-form pair is emitted as <Carrier>Bridge in the carrier's package, so both halves
+    // of the reference differ from the source-anchored case and the carrier is what to ask.
+    final var subPair = new TypePair(subSource.getQualifiedName().toString(), subTarget.getQualifiedName().toString());
+    final var subCfg = configsByPair.get(subPair);
+    final var carrierEl =
+      subCfg == null || subCfg.carrierFq() == null
+        ? null
+        : processingEnv.getElementUtils().getTypeElement(subCfg.carrierFq());
+    final var simple =
+      carrierEl != null ? carrierEl.getSimpleName() + "Bridge" : bridgeClassName(subSource, subTarget, userDeclared);
+    final var owner = carrierEl != null ? carrierEl : subSource;
+    final var subPkg = processingEnv.getElementUtils().getPackageOf(owner).getQualifiedName().toString();
     if (subPkg.isEmpty() || subPkg.equals(parentPkg)) return simple;
     return subPkg + "." + simple;
   }

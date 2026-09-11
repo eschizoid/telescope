@@ -248,6 +248,47 @@ class GeneratedNameCollisionTest {
   }
 
   @Test
+  @DisplayName("a carrier-declared sub-bridge is referenced by its carrier's package and name")
+  void carrierDeclaredSubBridgeIsReferencedByItsCarrier() {
+    // A carrier-form pair is emitted as <Carrier>Bridge in the carrier's package, so a parent
+    // reaching it by recursion must name both halves from the carrier rather than from the pair's
+    // source — which is neither the class's package nor its name.
+    final var compilation = compile(
+      new BridgeProcessor(),
+      source("q.Item", "package q; public record Item(String sku) {}"),
+      source("q.ItemDto", "package q; public record ItemDto(String sku) {}"),
+      source(
+        "carrier.ItemCarrier",
+        """
+        package carrier;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(source = q.Item.class, target = q.ItemDto.class)
+        public final class ItemCarrier {}
+        """
+      ),
+      source(
+        "p.Root",
+        """
+        package p;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(p.RootDto.class) public record Root(q.Item item) {}
+        """
+      ),
+      source("p.RootDto", "package p; public record RootDto(q.ItemDto item) {}")
+    );
+
+    assertTrue(
+      compilation.success(),
+      () -> "the carrier's bridge must be referenced where it is emitted; saw " + compilation.errorMessages()
+    );
+    final var bridge = compilation.generated().get("p.RootBridge");
+    assertTrue(
+      bridge != null && bridge.contains("carrier.ItemCarrierBridge"),
+      () -> "expected the carrier's package and name in the reference; saw " + bridge
+    );
+  }
+
+  @Test
   @DisplayName("two pairs whose auto-derived bridge names collide are named at the declaration")
   void collidingAutoBridgeNamesAreReported() {
     // a.MoneyA -> b.MoneyB and a.MoneyA -> c.MoneyB both derive MoneyAToMoneyBBridge in package a,
