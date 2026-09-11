@@ -45,7 +45,7 @@ class BridgeProcessorTest {
   class HappyPath {
 
     @Test
-    @DisplayName("record -> POJO: forward builds the POJO via its name-matched constructor; backward the record")
+    @DisplayName("record -> POJO: forward builds the POJO via its name-matched constructor; backward the" + " record")
     void recordToPojo() {
       final var compilation = compile(
         source(
@@ -81,7 +81,9 @@ class BridgeProcessorTest {
         () -> "expected a directly-callable BRIDGE_FN constant; saw " + generated
       );
       assertTrue(
-        generated.contains("public static final Telescope<demo.Rec, demo.Pojo> BRIDGE = Telescope.bridge(BRIDGE_FN);"),
+        generated.contains(
+          "public static final Telescope<demo.Rec, demo.Pojo> BRIDGE =" + " Telescope.bridge(BRIDGE_FN);"
+        ),
         () -> "BRIDGE should wrap the shared BRIDGE_FN constant; saw " + generated
       );
       assertTrue(generated.contains("import io.github.eschizoid.telescope.conversion.BridgeFn;"), generated);
@@ -129,7 +131,7 @@ class BridgeProcessorTest {
       assertNotNull(generated, () -> "ABridge not generated; saw " + compilation.generated().keySet());
 
       assertTrue(
-        generated.contains("public static final Telescope<demo.A, demo.B> BRIDGE = Telescope.bridge(BRIDGE_FN);"),
+        generated.contains("public static final Telescope<demo.A, demo.B> BRIDGE =" + " Telescope.bridge(BRIDGE_FN);"),
         generated
       );
       assertTrue(generated.contains("private static final class Fn implements BridgeFn<demo.A, demo.B>"), generated);
@@ -181,7 +183,9 @@ class BridgeProcessorTest {
       assertNotNull(generated, () -> "PABridge not generated; saw " + compilation.generated().keySet());
 
       assertTrue(
-        generated.contains("public static final Telescope<demo.PA, demo.PB> BRIDGE = Telescope.bridge(BRIDGE_FN);"),
+        generated.contains(
+          "public static final Telescope<demo.PA, demo.PB> BRIDGE =" + " Telescope.bridge(BRIDGE_FN);"
+        ),
         generated
       );
       assertTrue(generated.contains("private static final class Fn implements BridgeFn<demo.PA, demo.PB>"), generated);
@@ -319,7 +323,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "a field declared as a concrete List subtype (LinkedList<Y>) auto-lifts and the helper allocates that concrete class"
+      "a field declared as a concrete List subtype (LinkedList<Y>) auto-lifts and the helper" +
+        " allocates that concrete class"
     )
     void concreteListSubtypeFieldAllocatesTargetClass() {
       // The runtime ContainerShape accepts any List subtype via isAssignableFrom and allocates the
@@ -370,7 +375,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "a user-defined raw collection-subtype field (class Wrap extends ArrayList<Elem>) element-bridges into a fresh target wrapper"
+      "a user-defined raw collection-subtype field (class Wrap extends ArrayList<Elem>)" +
+        " element-bridges into a fresh target wrapper"
     )
     void rawCollectionSubtypeFieldElementBridges() {
       // The adopter shape: a custom collection wrapper `class Wrap extends ArrayList<Elem>` whose
@@ -444,7 +450,9 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("raw collection-subtype with identity elements copies via addAll into a fresh wrapper (no sub-bridge)")
+    @DisplayName(
+      "raw collection-subtype with identity elements copies via addAll into a fresh wrapper (no" + " sub-bridge)"
+    )
     void rawCollectionSubtypeIdentityElementCopiesViaAddAll() {
       final var compilation = compile(
         source(
@@ -638,7 +646,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "mixed generic↔raw: List<X> ↔ raw ArrayList subtype element-bridges, backward allocates the interface default"
+      "mixed generic↔raw: List<X> ↔ raw ArrayList subtype element-bridges, backward allocates the" +
+        " interface default"
     )
     void mixedGenericAndRawCollectionElementBridges() {
       final var compilation = compile(
@@ -681,7 +690,9 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("mixed generic↔raw Map: Map<K, V> ↔ raw HashMap subtype, backward allocates the two-arg default impl")
+    @DisplayName(
+      "mixed generic↔raw Map: Map<K, V> ↔ raw HashMap subtype, backward allocates the two-arg" + " default impl"
+    )
     void mixedGenericAndRawMapElementBridges() {
       final var compilation = compile(
         source(
@@ -724,7 +735,9 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("a raw collection subtype with no public no-arg constructor is rejected with a telescope diagnostic")
+    @DisplayName(
+      "a raw collection subtype with no public no-arg constructor is rejected with a telescope" + " diagnostic"
+    )
     void rawCollectionSubtypeWithoutNoArgCtorIsRejected() {
       // The raw helper allocates `new Wrap()`; a subtype that hides the no-arg ctor would fail in
       // the
@@ -822,7 +835,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "identity element, concrete List subtype: List<String> ↔ LinkedList<String> emits an inline copy into each side's concrete class"
+      "identity element, concrete List subtype: List<String> ↔ LinkedList<String> emits an inline" +
+        " copy into each side's concrete class"
     )
     void identityElementConcreteListEmitsInlineConcreteCopy() {
       final var compilation = compile(
@@ -857,7 +871,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "identity element, concrete Set subtype: Set<String> ↔ TreeSet<String> emits an inline copy into each side's concrete class"
+      "identity element, concrete Set subtype: Set<String> ↔ TreeSet<String> emits an inline copy" +
+        " into each side's concrete class"
     )
     void identityElementConcreteSetEmitsInlineConcreteCopy() {
       final var compilation = compile(
@@ -890,7 +905,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "identity value, concrete Map subtype: Map<String, String> ↔ TreeMap<String, String> emits an inline copy into each side's concrete class"
+      "identity value, concrete Map subtype: Map<String, String> ↔ TreeMap<String, String> emits" +
+        " an inline copy into each side's concrete class"
     )
     void identityValueConcreteMapEmitsInlineConcreteCopy() {
       final var compilation = compile(
@@ -923,7 +939,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("Set<X> ↔ Set<Y> auto-lifts via a for-loop helper into a LinkedHashSet sized for the source")
+    @DisplayName("Set<X> ↔ Set<Y> auto-lifts via a for-loop helper into a LinkedHashSet sized for the" + " source")
     void setContainerAutoLifts() {
       final var compilation = compile(
         source(
@@ -1025,12 +1041,12 @@ class BridgeProcessorTest {
       // guard duplicates only the local reference, never the accessor call.
       assertTrue(user.contains("final java.util.Optional<demo.Profile> __fs_profile = s.profile();"), user);
       assertTrue(
-        user.contains("(__fs_profile == null ? null : __fs_profile.map(ProfileToProfileDtoBridge::forward))"),
+        user.contains("(__fs_profile == null ? null :" + " __fs_profile.map(ProfileToProfileDtoBridge::forward))"),
         user
       );
       assertTrue(user.contains("final java.util.Optional<demo.ProfileDto> __bt_profile = t.profile();"), user);
       assertTrue(
-        user.contains("(__bt_profile == null ? null : __bt_profile.map(ProfileToProfileDtoBridge::backward))"),
+        user.contains("(__bt_profile == null ? null :" + " __bt_profile.map(ProfileToProfileDtoBridge::backward))"),
         user
       );
       // The whole point of the hoist: the source accessor is invoked exactly once even though the
@@ -1139,7 +1155,7 @@ class BridgeProcessorTest {
       assertTrue(order.contains("final java.util.Optional<demo.Address> __fs_giftWrap = s.giftWrap();"), order);
       assertTrue(
         order.contains(
-          "(__fs_giftWrap == null ? null : __fs_giftWrap.map(AddressToAddressEntityBridge::forward).orElse(null))"
+          "(__fs_giftWrap == null ? null :" + " __fs_giftWrap.map(AddressToAddressEntityBridge::forward).orElse(null))"
         ),
         order
       );
@@ -1156,7 +1172,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("Self-referencing types compile-recurse exactly once via the seen-set; runtime recursion is fine")
+    @DisplayName("Self-referencing types compile-recurse exactly once via the seen-set; runtime recursion is" + " fine")
     void cyclicTypeEmitsOnce() {
       final var compilation = compile(
         source(
@@ -1193,7 +1209,9 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("a user-declared @Bridge on the sub-pair is honoured — no duplicate emission, simple-name reference")
+    @DisplayName(
+      "a user-declared @Bridge on the sub-pair is honoured — no duplicate emission, simple-name" + " reference"
+    )
     void userDeclaredSubBridgeWins() {
       final var compilation = compile(
         source(
@@ -1299,7 +1317,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "a kind-mismatched Collection-subtype pair (List subtype vs Set subtype) is not bean-introspected — clean diagnostic, not 'no setter for empty'"
+      "a kind-mismatched Collection-subtype pair (List subtype vs Set subtype) is not" +
+        " bean-introspected — clean diagnostic, not 'no setter for empty'"
     )
     void kindMismatchedCollectionSubtypesAreNotBeanIntrospected() {
       // Same-kind Collection/Map subtype pairs are element-bridged (see DeepRecursion). A
@@ -1356,7 +1375,9 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("a kind-mismatched Map-subtype pair (Map subtype vs List subtype) is not bean-introspected either")
+    @DisplayName(
+      "a kind-mismatched Map-subtype pair (Map subtype vs List subtype) is not bean-introspected" + " either"
+    )
     void kindMismatchedMapSubtypeIsNotBeanIntrospected() {
       // Map subtype vs List subtype — kind mismatch, not element-bridgeable. Pins the
       // `java.util.Map` clause of the isReflectableDeclared exclusion guarding the HashMap `empty`
@@ -1471,7 +1492,9 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Bridge with an unresolvable target class emits a precise diagnostic instead of a ClassCastException")
+    @DisplayName(
+      "@Bridge with an unresolvable target class emits a precise diagnostic instead of a" + " ClassCastException"
+    )
     void unresolvableTargetEmitsPreciseDiagnostic() {
       // When the @Bridge target lives in a module the annotated compilation unit can't see,
       // javac's AnnotationValue.getValue() returns the target FQN as a String rather than a
@@ -1504,7 +1527,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "sealed interface ↔ sealed interface emits an exhaustive Match over permits that delegates to per-case bridges"
+      "sealed interface ↔ sealed interface emits an exhaustive Match over permits that delegates" +
+        " to per-case bridges"
     )
     void sealedToSealed() {
       final var compilation = compile(
@@ -1603,13 +1627,16 @@ class BridgeProcessorTest {
       assertTrue(sealedBridge.contains(".exhaustive();"), sealedBridge);
       // The Function<S, T> static fields are what the forward/backward methods delegate to.
       assertTrue(
-        sealedBridge.contains("private static final Function<demo.payment.Payment, demo.bean.PaymentEntity> FORWARD ="),
+        sealedBridge.contains(
+          "private static final Function<demo.payment.Payment, demo.bean.PaymentEntity> FORWARD" + " ="
+        ),
         sealedBridge
       );
       // The umbrella BRIDGE constant exposes the composed Telescope at the sealed-root level.
       assertTrue(
         sealedBridge.contains(
-          "public static final Telescope<demo.payment.Payment, demo.bean.PaymentEntity> BRIDGE = Telescope.bridge(BRIDGE_FN);"
+          "public static final Telescope<demo.payment.Payment, demo.bean.PaymentEntity> BRIDGE" +
+            " = Telescope.bridge(BRIDGE_FN);"
         ),
         sealedBridge
       );
@@ -1806,13 +1833,13 @@ class BridgeProcessorTest {
 
       assertTrue(
         entityBridge.contains(
-          "public static final Telescope<demo.Product, demo.ProductEntity> BRIDGE = Telescope.bridge(BRIDGE_FN);"
+          "public static final Telescope<demo.Product, demo.ProductEntity> BRIDGE =" + " Telescope.bridge(BRIDGE_FN);"
         ),
         entityBridge
       );
       assertTrue(
         dtoBridge.contains(
-          "public static final Telescope<demo.Product, demo.ProductDto> BRIDGE = Telescope.bridge(BRIDGE_FN);"
+          "public static final Telescope<demo.Product, demo.ProductDto> BRIDGE =" + " Telescope.bridge(BRIDGE_FN);"
         ),
         dtoBridge
       );
@@ -2126,7 +2153,7 @@ class BridgeProcessorTest {
 
       // Static instance of the user's BridgeFn.
       assertTrue(
-        bridge.contains("private static final demo.CentsConverter __tx_unitPrice = new demo.CentsConverter();"),
+        bridge.contains("private static final demo.CentsConverter __tx_unitPrice = new" + " demo.CentsConverter();"),
         bridge
       );
       // Forward routes the hoisted single-read local through .forward(...).
@@ -2138,7 +2165,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Transform(forwardOnly=true) — backward zero-fills the slot, BridgeFn.backward is never invoked")
+    @DisplayName("@Transform(forwardOnly=true) — backward zero-fills the slot, BridgeFn.backward is never" + " invoked")
     void transformForwardOnlyEmitsZeroFill() {
       final var compilation = compile(
         source(
@@ -2199,7 +2226,7 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "@Transform(method = \"...\") — qualifier dispatch emits direct static-method call, no BridgeFn instance"
+      "@Transform(method = \"...\") — qualifier dispatch emits direct static-method call, no" + " BridgeFn instance"
     )
     void transformQualifierDispatchEmitsDirectStaticCall() {
       final var compilation = compile(
@@ -2754,7 +2781,9 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Rename(forwardOnly=true) fan-out: one source feeds multiple targets; backward reads primary only")
+    @DisplayName(
+      "@Rename(forwardOnly=true) fan-out: one source feeds multiple targets; backward reads" + " primary only"
+    )
     void forwardOnlyFanoutEmitsMultiTargetWrite() {
       final var compilation = compile(
         source(
@@ -2950,7 +2979,7 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "GAP-1: @Default + @Rename on the same source field compose — null-coalesce feeds the renamed target slot"
+      "GAP-1: @Default + @Rename on the same source field compose — null-coalesce feeds the" + " renamed target slot"
     )
     void defaultAndRenameOnSameFieldCompose() {
       // The two modifiers operate on different axes: @Default null-coalesces the SOURCE read,
@@ -3072,8 +3101,8 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("GAP-3: @ViaMapper patch() delegates to user bridge's patch(base, partial) — not backward(partial)")
-    void viaMapperPatchDelegatesToUserBridgePatch() {
+    @DisplayName("@ViaMapper patch() writes the slot whole through the user bridge's backward")
+    void viaMapperPatchWritesWholeThroughUserBridgeBackward() {
       final var compilation = compile(
         source(
           "demo.AddressBridge",
@@ -3110,18 +3139,19 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.OrderBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
-      // The patch body must recursively patch through the user-named AddressBridge — not
-      // call .backward(__pp_address) which would discard `base.address()` state. Locks in
-      // the P5 sparse-overlay semantics for @ViaMapper-governed fields, parallel to the
-      // auto-sub-bridge RECURSE path covered by patchRecursesIntoNestedSubBridges.
+      // A non-null partial slot is written WHOLE: Mapper#patch documents whole-value writes
+      // for nested components, and the runtime patch table applies every non-null partial
+      // value through the row's backward, @ViaMapper rows included. Delegating to the user
+      // bridge's patch would deep-merge, and its base == null guard would silently drop the
+      // partial's value whenever the base slot is null. The user bridge's own patch method
+      // (present in the fixture) stays compilable; the parent simply never routes through it.
       assertTrue(
-        bridge.contains("demo.AddressBridge.patch(base.address(), __pp_address)"),
-        () -> "expected AddressBridge.patch(base.address(), __pp_address), saw: " + bridge
+        bridge.contains("(__pp_address != null ? demo.AddressBridge.backward(__pp_address) :" + " base.address())"),
+        () -> "expected null-gated whole-value write via AddressBridge.backward, saw: " + bridge
       );
-      // Negative: backward(__pp_address) would mean the base sub-component state is lost.
       assertFalse(
-        bridge.contains("demo.AddressBridge.backward(__pp_address)"),
-        () -> "patch must not fall through to backward(...) on @ViaMapper fields; saw: " + bridge
+        bridge.contains("demo.AddressBridge.patch(base.address()"),
+        () -> "patch must not sub-patch @ViaMapper fields; saw: " + bridge
       );
     }
 
@@ -3274,8 +3304,8 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("P5-3/P5-4: nested RECURSE fields recursively patch, not full-backward")
-    void patchRecursesIntoNestedSubBridges() {
+    @DisplayName("nested RECURSE fields patch whole-value through the sub-bridge's backward")
+    void patchWritesNestedFieldsWholeThroughSubBridgeBackward() {
       final var compilation = compile(
         source(
           "demo.Order",
@@ -3301,10 +3331,12 @@ class BridgeProcessorTest {
       final var bridge = compilation.generated().get("demo.OrderBridge");
       assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
 
-      // The nested customer slot should call SubBridge.patch(base.customer(), __pp_customer) —
-      // recursive patch — not SubBridge.backward(...) which would full-rebuild the customer and
-      // discard any sub-fields the partial doesn't carry. __pp_customer is the P5-DBL local that
-      // ensures partial.customer() is only evaluated once per patch call (matters for bean getters
+      // A non-null partial nested slot is written WHOLE through the sub-bridge's backward:
+      // Mapper#patch documents whole-value writes for nested components, and the runtime patch
+      // table applies every non-null partial value through the row's backward. A recursive
+      // sub-patch would deep-merge, and its base == null guard would silently drop the
+      // partial's value whenever the base slot is null. __pp_customer is the P5-DBL local that
+      // ensures partial.customer() is evaluated once per patch call (matters for bean getters
       // with side effects).
       final var subBridge = "CustomerToCustomerDtoBridge";
       assertTrue(
@@ -3312,20 +3344,19 @@ class BridgeProcessorTest {
         () -> "expected __pp_customer local declaration, saw: " + bridge
       );
       assertTrue(
-        bridge.contains(subBridge + ".patch(base.customer(), __pp_customer)"),
-        () -> "expected nested patch delegation via __pp_customer, saw: " + bridge
+        bridge.contains("(__pp_customer != null ? " + subBridge + ".backward(__pp_customer) : base.customer())"),
+        () -> "expected null-gated whole-value write via the sub-bridge backward, saw: " + bridge
       );
-      // Null-gate references the local on both sides — no re-evaluation of partial.customer().
-      assertTrue(
-        bridge.contains(
-          "(__pp_customer != null ? " + subBridge + ".patch(base.customer(), __pp_customer) : base.customer())"
-        ),
-        () -> "expected null-gate referencing __pp_customer, saw: " + bridge
+      assertFalse(
+        bridge.contains(subBridge + ".patch(base.customer()"),
+        () -> "patch must not sub-patch nested slots; saw: " + bridge
       );
     }
 
     @Test
-    @DisplayName("P5-T1: sealed @Bridge umbrella emits patch with case-matching dispatch + no-op mismatch fallback")
+    @DisplayName(
+      "P5-T1: sealed @Bridge umbrella emits patch with case-matching dispatch + no-op mismatch" + " fallback"
+    )
     void sealedPatchDispatchesByCase() {
       final var compilation = compile(
         source(
@@ -3364,11 +3395,11 @@ class BridgeProcessorTest {
         ),
         source(
           "demo.CreditCardEntity",
-          "package demo; public record CreditCardEntity(String pan) implements demo.PaymentEntity {}"
+          "package demo; public record CreditCardEntity(String pan) implements" + " demo.PaymentEntity {}"
         ),
         source(
           "demo.BankTransferEntity",
-          "package demo; public record BankTransferEntity(String iban) implements demo.PaymentEntity {}"
+          "package demo; public record BankTransferEntity(String iban) implements" + " demo.PaymentEntity {}"
         )
       );
 
@@ -3378,7 +3409,9 @@ class BridgeProcessorTest {
 
       // Sealed umbrella patch signature.
       assertTrue(
-        bridge.contains("public static demo.Payment patch(final demo.Payment base, final demo.PaymentEntity partial)"),
+        bridge.contains(
+          "public static demo.Payment patch(final demo.Payment base, final demo.PaymentEntity" + " partial)"
+        ),
         () -> "expected sealed patch signature, saw: " + bridge
       );
       // Null guard.
@@ -3388,11 +3421,13 @@ class BridgeProcessorTest {
       );
       // Case-matching dispatch for both permits.
       assertTrue(
-        bridge.contains("if (base instanceof demo.CreditCard sb && partial instanceof demo.CreditCardEntity tp)"),
+        bridge.contains("if (base instanceof demo.CreditCard sb && partial instanceof demo.CreditCardEntity" + " tp)"),
         () -> "expected CreditCard case dispatch, saw: " + bridge
       );
       assertTrue(
-        bridge.contains("if (base instanceof demo.BankTransfer sb && partial instanceof demo.BankTransferEntity tp)"),
+        bridge.contains(
+          "if (base instanceof demo.BankTransfer sb && partial instanceof" + " demo.BankTransferEntity tp)"
+        ),
         () -> "expected BankTransfer case dispatch, saw: " + bridge
       );
       // P5-SLD: case mismatch is a no-op (return base), NOT a backward type-switch.
@@ -3404,7 +3439,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("P5-T2: @Default + RECURSE patch emits __cond_ local to avoid quadruple-evaluation")
+    @DisplayName("@Default + @ViaMapper on one field is rejected, so no combined patch shape exists")
     void patchDefaultAndRecurseUsesCondLocal() {
       final var compilation = compile(
         source(
@@ -3450,14 +3485,13 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("P5-T4: @Default on a List<X> source field in patch declares __cond_ with the container type")
-    void patchDefaultOnContainerField() {
-      // @Default on a container source field exercises a different applyBackward arm than the
-      // scalar RECURSE path covered by patchDefaultAndRecurseUsesCondLocal. The __cond_ local
-      // declaration must use the source field's container type (List<E>), and the conditional
-      // must remain type-compatible — applyBackward for an identity-element LIST returns the
-      // defensive-copy expression, which is also List<E>-typed. This pins the type-rendering
-      // contract for container patches.
+    @DisplayName("@Default on a container source field emits no coalesce in patch")
+    void patchAppliesNoDefaultCoalesceOnContainerFields() {
+      // @Default is a forward-direction null-coalesce; patch never applies it, so a container
+      // slot null in both partial and base stays null rather than resurrecting the default.
+      // The container arm matters because applyBackward for an identity-element LIST returns
+      // the defensive-copy expression — the conditional must stay type-compatible without any
+      // coalesce wrapper around it.
       final var compilation = compile(
         source(
           "demo.Cart",
@@ -3492,18 +3526,12 @@ class BridgeProcessorTest {
         bridge.contains("__pp_items = partial.items()"),
         () -> "expected __pp_items local from partial.items(), saw: " + bridge
       );
-      // __cond_items must be typed to the source field's container type. The bare type token
-      // varies by TypeMirror#toString implementation (List vs java.util.List) — accept either
-      // shape, but require the variable name and assignment.
+      // The slot is the plain null-gate with no default machinery anywhere in the body.
       assertTrue(
-        bridge.contains("__cond_items =") && bridge.contains("(__pp_items != null"),
-        () -> "expected __cond_items conditional bound to __pp_items ternary, saw: " + bridge
+        bridge.contains("(__pp_items != null") && bridge.contains(": base.items())"),
+        () -> "expected the plain __pp_items null-gate falling back to base.items(), saw: " + bridge
       );
-      // The null-coalesce against the default must reference __cond_items, not re-evaluate.
-      assertTrue(
-        bridge.contains("(__cond_items == null ? null : __cond_items)"),
-        () -> "expected default null-coalesce through __cond_items, saw: " + bridge
-      );
+      assertFalse(bridge.contains("__cond_"), () -> "patch must not emit a @Default coalesce local, saw: " + bridge);
     }
 
     @Test
@@ -3583,7 +3611,7 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "@Bridge(writeStrategy = SETTERS) forces the no-arg+setters strategy on a POJO that also has a builder"
+      "@Bridge(writeStrategy = SETTERS) forces the no-arg+setters strategy on a POJO that also" + " has a builder"
     )
     void writeStrategyForcesSetters() {
       final var compilation = compile(
@@ -3640,7 +3668,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("P5-T5: patch() for SETTERS-strategy POJO source emits { __pp_ locals; new + setters; return }")
+    @DisplayName("P5-T5: patch() for SETTERS-strategy POJO source emits { __pp_ locals; new + setters;" + " return }")
     void patchEmitsSparseOverlayForSettersPojo() {
       // Source is a POJO with ONLY a public no-arg ctor + setters — no name-matched public ctor,
       // no builder() — so backward/patch is forced down the SETTERS branch of buildExpr. This
@@ -3719,7 +3747,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("GAP-2: patch() for BUILDER-strategy POJO source chains builder().field(__pp_? : base).build()")
+    @DisplayName("GAP-2: patch() for BUILDER-strategy POJO source chains builder().field(__pp_? :" + " base).build()")
     void patchEmitsSparseOverlayForBuilderPojo() {
       // Source is a POJO with ONLY a static builder() — no name-matched public ctor — so the
       // backward/patch direction is forced down the BUILDER branch of buildExpr. This pins the
@@ -3802,7 +3830,7 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("@Bridge(writeStrategy = CONSTRUCTOR) on a POJO without name-matched ctor is a precise error")
+    @DisplayName("@Bridge(writeStrategy = CONSTRUCTOR) on a POJO without name-matched ctor is a precise" + " error")
     void writeStrategyConstructorMismatchRejected() {
       final var compilation = compile(
         source(
@@ -3846,7 +3874,8 @@ class BridgeProcessorTest {
       assertTrue(
         compilation.errorMessages().contains("demo.PA") && compilation.errorMessages().contains("demo.PB"),
         () ->
-          "WS1: error must name both source (PA — annotation site) and target (PB) classes; saw " +
+          "WS1: error must name both source (PA — annotation site) and target (PB) classes; saw" +
+          " " +
           compilation.errorMessages()
       );
     }
@@ -3973,7 +4002,7 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "KITCHEN: drops + @Rename + @Default + @Transform + @ViaMapper + @Compute compose end-to-end with patch"
+      "KITCHEN: drops + @Rename + @Default + @Transform + @ViaMapper + @Compute compose" + " end-to-end with patch"
     )
     void kitchenSinkAllModifiersCompose() {
       // Exercises every modifier on a single @Bridge declaration. The goal isn't coverage of
@@ -4082,7 +4111,8 @@ class BridgeProcessorTest {
       assertTrue(
         bridge.contains("final java.lang.String __bt_name = t.renamed();") &&
           bridge.contains(
-            "new demo.Order(null, __bt_name, __bt_tag, __tx_qty.backward(__bt_qty), demo.AddressBridge.backward(__bt_addr))"
+            "new demo.Order(null, __bt_name, __bt_tag, __tx_qty.backward(__bt_qty)," +
+              " demo.AddressBridge.backward(__bt_addr))"
           ),
         () -> "backward composition off; saw: " + bridge
       );
@@ -4090,7 +4120,7 @@ class BridgeProcessorTest {
       // PATCH ──────────────────────────────────────────────────────────────────────────────
       // Dropped + computed slots read from base; renamed source uses __pp_name from
       // partial.renamed(); @Transform threads through __tx_qty.backward(__pp_qty); @ViaMapper
-      // delegates to AddressBridge.patch(base.addr(), __pp_addr); @Default emits __cond_tag.
+      // writes whole via AddressBridge.backward(__pp_addr); @Default never fires in patch.
       assertTrue(
         bridge.contains("__pp_name = partial.renamed()"),
         () -> "expected __pp_name from partial.renamed(); saw: " + bridge
@@ -4099,12 +4129,13 @@ class BridgeProcessorTest {
       assertTrue(bridge.contains("__pp_addr = partial.addr()"), () -> "expected __pp_addr local; saw: " + bridge);
       assertTrue(bridge.contains("__pp_tag = partial.tag()"), () -> "expected __pp_tag local; saw: " + bridge);
       assertTrue(
-        bridge.contains("__cond_tag =") && bridge.contains("(__cond_tag == null ? \"X\" : __cond_tag)"),
-        () -> "expected __cond_tag default coalesce; saw: " + bridge
+        bridge.contains("(__pp_tag != null ? __pp_tag : base.tag())"),
+        () -> "expected the plain null-gate on tag with no default coalesce; saw: " + bridge
       );
+      assertFalse(bridge.contains("__cond_"), () -> "patch must not emit @Default coalesce locals; saw: " + bridge);
       assertTrue(
-        bridge.contains("demo.AddressBridge.patch(base.addr(), __pp_addr)"),
-        () -> "expected @ViaMapper patch routing; saw: " + bridge
+        bridge.contains("(__pp_addr != null ? demo.AddressBridge.backward(__pp_addr) : base.addr())"),
+        () -> "expected null-gated whole-value write via AddressBridge.backward; saw: " + bridge
       );
       assertTrue(
         bridge.contains("__tx_qty.backward(__pp_qty)"),
@@ -4458,12 +4489,14 @@ class BridgeProcessorTest {
       );
       assertTrue(
         bridge.contains("Telescope<modela.UserEntity, modelb.UserDto>"),
-        () -> "BRIDGE constant should be typed Telescope<Source, Target> referencing both modules; saw:\n" + bridge
+        () -> "BRIDGE constant should be typed Telescope<Source, Target> referencing both modules;" + " saw:\n" + bridge
       );
     }
 
     @Test
-    @DisplayName("carrier form: emits a BridgeProvider + META-INF/services so it's discoverable by (source, target)")
+    @DisplayName(
+      "carrier form: emits a BridgeProvider + META-INF/services so it's discoverable by (source," + " target)"
+    )
     void carrierEmitsServiceLoaderProvider() {
       // A carrier bridge lives in the carrier's package, which the source-keyed runtime probe can't
       // reach. The processor registers it as a ServiceLoader provider so mapperForward discovers it
@@ -4514,7 +4547,7 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "model-anchored form emits no provider/services — it's already name-discoverable in the source's package"
+      "model-anchored form emits no provider/services — it's already name-discoverable in the" + " source's package"
     )
     void modelAnchoredEmitsNoProvider() {
       final var compilation = compile(
@@ -4546,7 +4579,9 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("adopter shape: carrier + lenient + sibling @Rename + a raw collection-subtype field, all together")
+    @DisplayName(
+      "adopter shape: carrier + lenient + sibling @Rename + a raw collection-subtype field, all" + " together"
+    )
     void carrierLenientRenameWithRawCollectionField() {
       // Faithful reproduction of the reported scenario: a carrier @Bridge with lenient = true and a
       // @Rename on a scalar sibling, where the bean target also nests a custom collection wrapper
@@ -4570,7 +4605,7 @@ class BridgeProcessorTest {
         ),
         source(
           "modela.SrcUrls",
-          "package modela; import java.util.ArrayList; public class SrcUrls extends ArrayList<modela.SrcUrl> {}"
+          "package modela; import java.util.ArrayList; public class SrcUrls extends" + " ArrayList<modela.SrcUrl> {}"
         ),
         source("modela.SrcUrl", "package modela; public record SrcUrl(String url) {}"),
         source(
@@ -4592,7 +4627,7 @@ class BridgeProcessorTest {
         ),
         source(
           "modelb.DstUrls",
-          "package modelb; import java.util.ArrayList; public class DstUrls extends ArrayList<modelb.DstUrl> {}"
+          "package modelb; import java.util.ArrayList; public class DstUrls extends" + " ArrayList<modelb.DstUrl> {}"
         ),
         source("modelb.DstUrl", "package modelb; public record DstUrl(String url) {}"),
         source(
@@ -4747,7 +4782,9 @@ class BridgeProcessorTest {
   class ExplicitWriteStrategy {
 
     @Test
-    @DisplayName("writeStrategy = CONSTRUCTOR succeeds on a POJO that also has a builder() — picks ctor, not builder")
+    @DisplayName(
+      "writeStrategy = CONSTRUCTOR succeeds on a POJO that also has a builder() — picks ctor, not" + " builder"
+    )
     void explicitConstructorWinsOverAvailableBuilder() {
       // AUTO probes CONSTRUCTOR before BUILDER, so picking CONSTRUCTOR explicitly produces the
       // same generated code on this fixture. The behavioural pin: if a future refactor swaps the
@@ -4800,13 +4837,13 @@ class BridgeProcessorTest {
       );
       assertFalse(
         bridge.contains(".builder()"),
-        () -> "explicit CONSTRUCTOR must NOT fall through to BUILDER even when builder() exists; saw:\n" + bridge
+        () -> "explicit CONSTRUCTOR must NOT fall through to BUILDER even when builder() exists;" + " saw:\n" + bridge
       );
     }
 
     @Test
     @DisplayName(
-      "writeStrategy = BUILDER fails with a per-field diagnostic when the builder lacks a method for one field"
+      "writeStrategy = BUILDER fails with a per-field diagnostic when the builder lacks a method" + " for one field"
     )
     void builderMissingPerFieldMethodRejected() {
       // Real-world shape: a Lombok @Builder where one field's name was changed but the builder
@@ -4861,7 +4898,7 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "sealed source subtype carrying multiple @Bridges, none targeting the sealed-target permits, is rejected"
+      "sealed source subtype carrying multiple @Bridges, none targeting the sealed-target" + " permits, is rejected"
     )
     void multiBridgeSubtypeWithNoMatchingPermitRejected() {
       // A subtype of a @Bridge'd sealed source can legitimately carry multiple @Bridge
@@ -4927,11 +4964,11 @@ class BridgeProcessorTest {
         ),
         source(
           "demo.EmptySealedDst",
-          "package demo; public sealed interface EmptySealedDst permits demo.EmptySealedDstCase {}"
+          "package demo; public sealed interface EmptySealedDst permits" + " demo.EmptySealedDstCase {}"
         ),
         source(
           "demo.EmptySealedDstCase",
-          "package demo; public record EmptySealedDstCase(String id) implements EmptySealedDst {}"
+          "package demo; public record EmptySealedDstCase(String id) implements" + " EmptySealedDst {}"
         )
       );
 
@@ -4949,7 +4986,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "carrier form: source = NestedType.class is rejected with the same top-level diagnostic as the model-anchored form"
+      "carrier form: source = NestedType.class is rejected with the same top-level diagnostic as" +
+        " the model-anchored form"
     )
     void carrierWithNestedSourceRejected() {
       // The model-anchored nested-rejection test (`nestedIsRejected`) pins the target-side guard.
@@ -4991,7 +5029,7 @@ class BridgeProcessorTest {
   class PrimitiveWrapperBridging {
 
     @Test
-    @DisplayName("a boolean field bridged to a Boolean field compiles and emits a bridge instead of erroring")
+    @DisplayName("a boolean field bridged to a Boolean field compiles and emits a bridge instead of" + " erroring")
     void primitiveToWrapperFieldAutoBridges() {
       final var compilation = compile(
         source(
@@ -5058,7 +5096,7 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "a lenient parent whose nested target sub-type has an extra field compiles (sub-pair inherits lenient)"
+      "a lenient parent whose nested target sub-type has an extra field compiles (sub-pair" + " inherits lenient)"
     )
     void lenientPropagatesIntoNestedSubPair() {
       final var compilation = compile(
@@ -5153,7 +5191,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "lenient propagates into a CONTAINER-ELEMENT sub-pair (List<Elem> whose element target has an extra field compiles)"
+      "lenient propagates into a CONTAINER-ELEMENT sub-pair (List<Elem> whose element target has" +
+        " an extra field compiles)"
     )
     void lenientPropagatesIntoContainerElementSubPair() {
       // The runtime treats every nested auto-recursed pair as lenient, including container element

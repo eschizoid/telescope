@@ -262,7 +262,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           if (rawCarrierTarget == null || isVoidSentinel(rawCarrierTarget)) {
             error(
               element,
-              "@Bridge: source = ... requires target = ... on the same annotation (carrier form needs both sides)."
+              "@Bridge: source = ... requires target = ... on the same annotation (carrier form" + " needs both sides)."
             );
             continue;
           }
@@ -589,8 +589,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               element,
               "@Rename source \"" +
                 src +
-                "\" appears twice in the renames list — set forwardOnly = true on every conflicting" +
-                " entry to opt into forward-only fan-out"
+                "\" appears twice in the renames list — set forwardOnly = true on every" +
+                " conflicting entry to opt into forward-only fan-out"
             );
             return null;
           }
@@ -654,7 +654,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (using == null || using.getKind() != TypeKind.DECLARED) {
           error(
             element,
-            "@Transform `using` must be a class (BridgeFn implementor, or any class when `method` is set)"
+            "@Transform `using` must be a class (BridgeFn implementor, or any class when `method`" + " is set)"
           );
           return null;
         }
@@ -710,7 +710,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 usingEl.getQualifiedName() +
                 "." +
                 method +
-                "(<one arg>) does not exist. Add a public static method with exactly one parameter."
+                "(<one arg>) does not exist. Add a public static method with exactly one" +
+                " parameter."
             );
             return null;
           }
@@ -729,7 +730,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 usingEl.getQualifiedName() +
                 "." +
                 method +
-                "(...) exists but is not static. Qualifier dispatch emits a static-method call; mark it `public static`."
+                "(...) exists but is not static. Qualifier dispatch emits a static-method" +
+                " call; mark it `public static`."
             );
             return null;
           }
@@ -980,7 +982,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         fieldName +
         "\" of type " +
         type +
-        " — supported types are String, primitives and their boxed equivalents, and the literal \"null\" for reference types"
+        " — supported types are String, primitives and their boxed equivalents, and the" +
+        " literal \"null\" for reference types"
     );
     return null;
   }
@@ -1264,7 +1267,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           source,
           "@Bridge field \"" +
             e.getKey() +
-            "\" appears in both renames and transforms — pick one (the transform consumes the source field; the target slot name comes from the bijection, not @Rename)."
+            "\" appears in both renames and transforms — pick one (the transform consumes the" +
+            " source field; the target slot name comes from the bijection, not @Rename)."
         );
         return;
       }
@@ -1309,8 +1313,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               extraTgt +
               "\" is " +
               extraType +
-              ". Forward-only fan-out writes the same source value into every target; all targets must" +
-              " share the same type."
+              ". Forward-only fan-out writes the same source value into every target; all" +
+              " targets must share the same type."
           );
           return;
         }
@@ -1363,7 +1367,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             fieldName +
             "\" has primitive type " +
             sf.type() +
-            " — primitives cannot be null, so the default would never fire. Use the wrapper type or rework the source shape."
+            " — primitives cannot be null, so the default would never fire. Use the wrapper" +
+            " type or rework the source shape."
         );
         return;
       }
@@ -1372,7 +1377,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           source,
           "@Bridge field \"" +
             fieldName +
-            "\" appears in both defaults and drops — pick one (drop discards, default substitutes when null)."
+            "\" appears in both defaults and drops — pick one (drop discards, default" +
+            " substitutes when null)."
         );
         return;
       }
@@ -1385,7 +1391,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           source,
           "@Bridge field \"" +
             fieldName +
-            "\" appears in both defaults and transforms — pick one (use a transform that handles null internally, or remove the default)."
+            "\" appears in both defaults and transforms — pick one (use a transform that" +
+            " handles null internally, or remove the default)."
         );
         return;
       }
@@ -1446,7 +1453,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           source,
           "@Bridge target \"" +
             fieldName +
-            "\" appears in both constants and computes — pick one (constants inject a literal; computes inject a Supplier result)."
+            "\" appears in both constants and computes — pick one (constants inject a" +
+            " literal; computes inject a Supplier result)."
         );
         return;
       }
@@ -1467,7 +1475,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             source,
             "@Bridge field \"" +
               fieldName +
-              "\" appears in both computes (target slot) and defaults — pick one (compute supplies the slot from a Supplier; the default would never fire)."
+              "\" appears in both computes (target slot) and defaults — pick one (compute" +
+              " supplies the slot from a Supplier; the default would never fire)."
           );
           return;
         }
@@ -1476,7 +1485,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             source,
             "@Bridge field \"" +
               fieldName +
-              "\" appears in both computes (target slot) and transforms — pick one (compute supplies the slot from a Supplier; the source-side transform would never be consumed)."
+              "\" appears in both computes (target slot) and transforms — pick one (compute" +
+              " supplies the slot from a Supplier; the source-side transform would never be" +
+              " consumed)."
           );
           return;
         }
@@ -1485,7 +1496,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             source,
             "@Bridge field \"" +
               fieldName +
-              "\" appears in both computes (target slot) and viaMappers — pick one (compute supplies the slot from a Supplier; the via-mapper would never be invoked)."
+              "\" appears in both computes (target slot) and viaMappers — pick one (compute" +
+              " supplies the slot from a Supplier; the via-mapper would never be invoked)."
           );
           return;
         }
@@ -1617,11 +1629,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // corresponding read on `base`. Primitive target components are always treated as
     // patch-present (matching runtime Mapper#patch semantics: a boxed primitive is never null).
     //
-    // P5-DBL: each reference-type source slot needs its partial.field() value referenced THREE
-    // times (null-check + patch call + @Default outer wrap). Calling partial.<getter>() that many
-    // times is safe for record accessors but unsafe for bean getters with side effects (lazy-init,
-    // audit logging, counters). Same for SubBridge.patch(...) on RECURSE fields when @Default is
-    // configured. We avoid double-evaluation by precomputing one local per source field in a
+    // P5-DBL: each reference-type source slot references its partial.field() value twice
+    // (null-check + convert call). Calling partial.<getter>() that many times is safe for record
+    // accessors but unsafe for bean getters with side effects (lazy-init, audit logging,
+    // counters). We avoid double-evaluation by precomputing one local per source field in a
     // prelude block, then referencing the locals in the conditional. The prelude is collected
     // here as patchLocals (declarations) keyed by source field name.
     final var patchLocals = new LinkedHashMap<String, String>();
@@ -1640,26 +1651,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // Reference-type slots: precompute partial.<getter>() once into __pp_<sourceName>.
       final var pLocal = "__pp_" + sourceName;
       patchLocals.put(pLocal, tf.type() + " " + pLocal + " = " + partialReadExpr + ";");
-      // P5-3: nested RECURSE plans use SubBridge.patch(base.field, partial.field) — recursive
-      // patch all the way down so a sparse partial only overlays non-null sub-components.
-      final String partialRead;
-      if (plan.kind() == FieldPlan.Kind.RECURSE) {
-        partialRead = plan.subBridgeName() + ".patch(" + baseRead + ", " + pLocal + ")";
-      } else {
-        partialRead = applyBackward(sourceName, plan, pLocal);
-      }
-      // P5-5 + P5-DBL: when a @Default is configured, the outer null-coalesce needs to
-      // reference
-      // the conditional's result without re-evaluating the entire ternary. Precompute via a
-      // second
-      // local __cond_<sourceName> so the @Default check sees a single value.
-      final var conditional = "(" + pLocal + " != null ? " + partialRead + " : " + baseRead + ")";
-      if (parsedDefaults.containsKey(sourceName)) {
-        final var cLocal = "__cond_" + sourceName;
-        patchLocals.put(cLocal, sf.type() + " " + cLocal + " = " + conditional + ";");
-        return "(" + cLocal + " == null ? " + parsedDefaults.get(sourceName) + " : " + cLocal + ")";
-      }
-      return conditional;
+      // A non-null partial slot is written WHOLE: every plan routes through applyBackward, so a
+      // nested component converts via the sub-bridge's backward rather than a recursive
+      // sub-patch. Mapper#patch documents whole-value writes for nested components, and a
+      // sub-patch would both deep-merge and — because its base == null guard returns base —
+      // silently drop the partial's value whenever the base slot is null.
+      final var partialRead = applyBackward(sourceName, plan, pLocal);
+      // @Default is a forward-direction null-coalesce and is never applied here: a slot null in
+      // both partial and base stays null rather than resurrecting the default on a field the
+      // caller never wrote.
+      return "(" + pLocal + " != null ? " + partialRead + " : " + baseRead + ")";
     };
     final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source);
     if (patchInner == null) return;
@@ -1784,10 +1785,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("  }");
         out.println();
         out.println(
-          "  /** Directly-callable mapper value — one interface hop, MapStruct's {@code INSTANCE.toRec(s)} cost."
+          "  /** Directly-callable mapper value — one interface hop, MapStruct's {@code" + " INSTANCE.toRec(s)} cost."
         );
         out.println(
-          "   * Call {@code BRIDGE_FN.forward(s)} / {@code .backward(t)} in a hot loop; use {@code BRIDGE} for the"
+          "   * Call {@code BRIDGE_FN.forward(s)} / {@code .backward(t)} in a hot loop; use" + " {@code BRIDGE} for the"
         );
         out.println("   * composable lattice value. */");
         out.println("  public static final BridgeFn<" + sourceFq + ", " + targetFq + "> BRIDGE_FN = new Fn();");
@@ -2003,10 +2004,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("  }");
         out.println();
         out.println(
-          "  /** Directly-callable mapper value — one interface hop, MapStruct's {@code INSTANCE.toRec(s)} cost."
+          "  /** Directly-callable mapper value — one interface hop, MapStruct's {@code" + " INSTANCE.toRec(s)} cost."
         );
         out.println(
-          "   * Call {@code BRIDGE_FN.forward(s)} / {@code .backward(t)} in a hot loop; use {@code BRIDGE} for the"
+          "   * Call {@code BRIDGE_FN.forward(s)} / {@code .backward(t)} in a hot loop; use" + " {@code BRIDGE} for the"
         );
         out.println("   * composable lattice value. */");
         out.println("  public static final BridgeFn<" + sourceFq + ", " + targetFq + "> BRIDGE_FN = new Fn();");
@@ -2482,8 +2483,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               sf.name() +
               "' container type '" +
               badAlloc +
-              "' has no public no-arg constructor — codegen allocates it directly. Add a no-arg " +
-              "constructor, or use the runtime mapper with an explicit row for this field."
+              "' has no public no-arg constructor — codegen allocates it directly. Add a" +
+              " no-arg constructor, or use the runtime mapper with an explicit row for this" +
+              " field."
           );
           return null;
         }
@@ -2578,8 +2580,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           sf.type() +
           " vs " +
           tf.type() +
-          ") and no auto-bridge could be derived. Both sides must be records/classes telescope can " +
-          "introspect (or the same type), or matching containers thereof."
+          ") and no auto-bridge could be derived. Both sides must be records/classes" +
+          " telescope can introspect (or the same type), or matching containers thereof."
       );
       return null;
     }
@@ -2643,7 +2645,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         srcElement +
         " vs " +
         tgtElement +
-        "). Element types must match exactly or both be records/classes telescope can introspect."
+        "). Element types must match exactly or both be records/classes telescope can" +
+        " introspect."
     );
     return null;
   }
@@ -3296,7 +3299,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             annotationSite.getQualifiedName() +
             " (target " +
             toFq +
-            "): no public constructor whose parameter names match the bridge fields. Switch to AUTO, BUILDER, or SETTERS, or add a name-matched constructor."
+            "): no public constructor whose parameter names match the bridge fields. Switch" +
+            " to AUTO, BUILDER, or SETTERS, or add a name-matched constructor."
         );
         return null;
       }
@@ -3334,7 +3338,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             annotationSite.getQualifiedName() +
             " (target " +
             toFq +
-            "): no static builder() method returning a builder class. Switch to AUTO, CONSTRUCTOR, or SETTERS, or add a builder()."
+            "): no static builder() method returning a builder class. Switch to AUTO," +
+            " CONSTRUCTOR, or SETTERS, or add a builder()."
         );
         return null;
       }
@@ -3364,7 +3369,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             annotationSite.getQualifiedName() +
             " (target " +
             toFq +
-            "): no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add a no-arg constructor."
+            "): no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add" +
+            " a no-arg constructor."
         );
         return null;
       }
@@ -3374,8 +3380,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       annotationSite,
       "@Bridge: " +
         toFq +
-        " has no usable construction strategy — needs a record canonical constructor, a constructor " +
-        "whose parameter names match the fields, a static builder(), or a no-arg constructor with setters"
+        " has no usable construction strategy — needs a record canonical constructor, a" +
+        " constructor whose parameter names match the fields, a static builder(), or a no-arg" +
+        " constructor with setters"
     );
     return null;
   }
