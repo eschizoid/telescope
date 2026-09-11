@@ -355,6 +355,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           error(element, "@Bridge source must be a top-level type");
           continue;
         }
+        // An abstract class reaches here as an ordinary CLASS, so the kind check above lets it
+        // through and the rebuild emits a constructor call javac refuses. Both sides rebuild — the
+        // target on forward, the source on backward — so both are checked.
+        final var abstractDeclared = firstAbstractSide(sourceEl, targetEl);
+        if (abstractDeclared != null) {
+          error(
+            element,
+            "@Bridge " +
+              (abstractDeclared == sourceEl ? "source " : "target ") +
+              abstractDeclared.getSimpleName() +
+              " is abstract, so the rebuild has no constructor to call. Name a concrete" +
+              " subtype, or seal it and give each permit its own @Bridge."
+          );
+          continue;
+        }
         final var pair = new TypePair(sourceFq, targetEl.getQualifiedName().toString());
         userDeclared.add(pair);
         final var drops = dropsFromMirror(bridgeAm);
@@ -450,6 +465,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       configsByPair.clear();
       lenientPairs.clear();
       bridgeProviders.clear();
+      bridgeNameOwner.clear();
     }
     return true;
   }
@@ -2767,6 +2783,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           subSourceEl.getQualifiedName().toString(),
           subTargetEl.getQualifiedName().toString()
         );
+        final var abstractSub = firstAbstractSide(subSourceEl, subTargetEl);
+        if (abstractSub != null) {
+          error(
+            source,
+            "@Bridge field \"" +
+              sf.name() +
+              "\" needs a sub-bridge for " +
+              abstractSub.getSimpleName() +
+              ", which is abstract and has no constructor to rebuild through. Name a concrete" +
+              " type for that field, or give it an explicit @ViaMapper."
+          );
+          return null;
+        }
         // Sub-pairs whose source or target carries a Lombok-synthesizing annotation must wait for
         // processingOver() — same rationale as the top-level deferral. shouldDeferSubPair returns
         // false while inDeferredDrain is true, so the deferred drain itself doesn't re-defer.
@@ -3130,7 +3159,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // The first of the two raw-container fields whose concrete allocation class lacks a public no-arg
   // constructor (the generated `new <impl>()` would not compile), or null when both are
   // allocatable.
-  // The JDK default impls (ArrayList / LinkedHashSet / HashMap) always qualify; only a user subtype
+  // The JDK default impls (ArrayList / LinkedHashSet / LinkedHashMap) always qualify; only a user
+  // subtype
   // can hide its no-arg ctor.
   private String firstNonAllocatableContainer(
     final TypeMirror srcContainer,
@@ -3288,6 +3318,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * <Source>Bridge}; auto-generated sub-pairs use {@code <Source>To<Target>Bridge} so they don't
    * collide with a user-declared {@code <Source>Bridge} that points at a different target.
    */
+  /**
+   * The first of the two sides that is an abstract class, or {@code null} when both can be
+   * constructed. A rebuild calls a constructor and an abstract class has none to call, so the pair
+   * is refused here rather than emitted and left for javac to reject inside a file the author never
+   * wrote. An interface is handled separately; this is the class case the kind check lets through.
+   */
+  private static TypeElement firstAbstractSide(final TypeElement source, final TypeElement target) {
+    for (final var el : List.of(source, target)) {
+      if (el.getKind() == ElementKind.CLASS && el.getModifiers().contains(Modifier.ABSTRACT)) return el;
+    }
+    return null;
+  }
+
   private static String bridgeClassName(
     final TypeElement source,
     final TypeElement target,
@@ -3326,8 +3369,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       subCfg == null || subCfg.carrierFq() == null
         ? null
         : processingEnv.getElementUtils().getTypeElement(subCfg.carrierFq());
+    // A source carrying more than one @Bridge target is emitted under the long name for every one
+    // of them, because the short name can belong to only one pair. Both emission sites apply that
+    // term, so a reference that omits it names a class nothing writes.
+    final var shortName = userDeclared && !multiTargetSources.contains(subSource.getQualifiedName().toString());
     final var simple =
-      carrierEl != null ? carrierEl.getSimpleName() + "Bridge" : bridgeClassName(subSource, subTarget, userDeclared);
+      carrierEl != null ? carrierEl.getSimpleName() + "Bridge" : bridgeClassName(subSource, subTarget, shortName);
     final var owner = carrierEl != null ? carrierEl : subSource;
     final var subPkg = processingEnv.getElementUtils().getPackageOf(owner).getQualifiedName().toString();
     if (subPkg.isEmpty() || subPkg.equals(parentPkg)) return simple;

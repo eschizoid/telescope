@@ -369,6 +369,48 @@ class GeneratedNameCollisionTest {
   }
 
   @Test
+  @DisplayName("a multi-target source is referenced by the long name it is actually emitted under")
+  void multiTargetSubBridgeIsReferencedByItsEmittedName() {
+    // A source with two @Bridge targets cannot use the short name for either, because the short
+    // name can belong to only one pair. The parent has to call whichever name was written.
+    final var compilation = compile(
+      new BridgeProcessor(),
+      source(
+        "demo.A",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.B.class)
+        @Bridge(demo.C.class)
+        public record A(String v) {}
+        """
+      ),
+      source("demo.B", "package demo; public record B(String v) {}"),
+      source("demo.C", "package demo; public record C(String v) {}"),
+      source(
+        "demo.P",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.PDto.class) public record P(demo.A a) {}
+        """
+      ),
+      source("demo.PDto", "package demo; public record PDto(demo.B a) {}")
+    );
+
+    assertTrue(
+      compilation.success(),
+      () -> "the parent must call a sub-bridge that exists; saw " + compilation.errorMessages()
+    );
+    final var parent = compilation.generated().get("demo.PBridge");
+    assertTrue(
+      parent != null && parent.contains("AToBBridge"),
+      () -> "the multi-target source is emitted under its long name, so the call must use it; saw " + parent
+    );
+    assertTrue(compilation.generated().containsKey("demo.AToBBridge"), "the long-named sub-bridge is what is written");
+  }
+
+  @Test
   @DisplayName("two pairs whose auto-derived bridge names collide are named at the declaration")
   void collidingAutoBridgeNamesAreReported() {
     // a.MoneyA -> b.MoneyB and a.MoneyA -> c.MoneyB both derive MoneyAToMoneyBBridge in package a,
