@@ -76,6 +76,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.Bridge";
   private static final String BRIDGES_ANNOTATION = "io.github.eschizoid.telescope.annotations.Bridges";
+  private static final String BRIDGE_FN_FQN = "io.github.eschizoid.telescope.conversion.BridgeFn";
 
   // A named field on either side: a record component or a POJO getter-property, with its type.
   private record Field(String name, TypeMirror type) {}
@@ -1176,11 +1177,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       // BridgeFn-shape transforms (no `method` qualifier): the using class's BridgeFn type
       // arguments must fit the field pair, or the emitted __tx_ call sites reference javac
-      // errors inside a generated file the user never wrote. Only the forward direction is
-      // checked — it binds for every transform shape, forward-only included — and a raw
-      // BridgeFn supertype carries no arguments to check.
+      // errors inside a generated file the user never wrote. This catches the forward
+      // direction; a backward mismatch, a raw BridgeFn supertype (no arguments to compare)
+      // and a renamed field all still surface inside the generated file.
+      //
+      // Renamed fields are skipped because the target slot is looked up by the source name,
+      // which a rename has moved — and the pairing is rejected a few loops down anyway.
       final var txMethod = cfg.transformMethods().get(t);
-      if (txMethod == null || txMethod.isEmpty()) {
+      if ((txMethod == null || txMethod.isEmpty()) && !renames.containsKey(t)) {
         final var usingEl = processingEnv.getElementUtils().getTypeElement(transforms.get(t));
         final var fn = usingEl == null ? null : bridgeFnInstantiation(usingEl.asType());
         if (fn == null) {
@@ -1191,23 +1195,27 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           return;
         }
         final var args = fn.getTypeArguments();
-        final var sfType = boxed(
-          sourceFields
-            .stream()
-            .filter(f -> f.name().equals(t))
-            .findFirst()
-            .orElseThrow()
-            .type()
-        );
+        final var sfType = sourceFields
+          .stream()
+          .filter(f -> f.name().equals(t))
+          .findFirst()
+          .orElseThrow()
+          .type();
         final var tfField = targetFields
           .stream()
           .filter(f -> f.name().equals(t))
           .findFirst()
           .orElse(null);
         if (args.size() == 2 && tfField != null) {
-          final var tfType = boxed(tfField.type());
+          final var tfType = tfField.type();
           final var types = processingEnv.getTypeUtils();
-          if (!types.isAssignable(sfType, args.get(0)) || !types.isAssignable(args.get(1), tfType)) {
+          // Assignability already models boxing and unboxing-plus-widening in both directions, so
+          // the raw field types are what to compare — boxing either side first would discard the
+          // conversions the emitted call relies on.
+          if (
+            !types.isAssignable(sfType, erasedBound(args.get(0))) ||
+            !types.isAssignable(erasedBound(args.get(1)), tfType)
+          ) {
             error(
               source,
               "@Transform field=\"" +
@@ -2768,9 +2776,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // how many levels up the hierarchy it sits.
   private DeclaredType bridgeFnInstantiation(final TypeMirror usingType) {
     final var types = processingEnv.getTypeUtils();
-    final var fnEl = processingEnv
-      .getElementUtils()
-      .getTypeElement("io.github.eschizoid.telescope.conversion.BridgeFn");
+    final var fnEl = processingEnv.getElementUtils().getTypeElement(BRIDGE_FN_FQN);
     if (fnEl == null) return null;
     final var erasedFn = types.erasure(fnEl.asType());
     final Deque<TypeMirror> work = new ArrayDeque<>();
@@ -2786,11 +2792,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return null;
   }
 
-  // A primitive boxed to its wrapper, so assignability against BridgeFn's reference-typed
-  // arguments compares like with like; reference types pass through.
-  private TypeMirror boxed(final TypeMirror t) {
-    if (!t.getKind().isPrimitive()) return t;
-    return processingEnv.getTypeUtils().boxedClass((PrimitiveType) t).asType();
+  // A type-variable argument stands for whatever the emitter's raw call site erases it to, so the
+  // fit test compares against that bound; every other type passes through unchanged.
+  private TypeMirror erasedBound(final TypeMirror t) {
+    if (t.getKind() != TypeKind.TYPEVAR) return t;
+    return processingEnv.getTypeUtils().erasure(t);
   }
 
   private String applyForward(final String fieldName, final FieldPlan plan, final String readExpr) {

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
+import java.util.List;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -22,6 +23,16 @@ class BridgeProcessorTest {
 
   private static Compilation compile(final JavaFileObject... sources) {
     return ProcessorHarness.compile(new BridgeProcessor(), sources);
+  }
+
+  /**
+   * Compiles through the full javac pipeline, so the generated source is attributed and an
+   * expression-level error inside it is observable. {@link #compile} runs {@code -proc:only}, where
+   * Attr never visits the generated file — an assertion about a generated-file type error holds
+   * vacuously there.
+   */
+  private static Compilation compileAttributed(final JavaFileObject... sources) {
+    return ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
   }
 
   /**
@@ -2134,13 +2145,68 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("@Transform accepts a type-variable BridgeFn whose erased bound fits the field pair")
+    void transformAcceptsTypeVariableBridgeFnThatFits() {
+      // The emitter instantiates the fn raw, so a type-variable argument erases to its bound and
+      // the call accepts anything assignable to that. Both shapes below compile, and the fit test
+      // must not reject them for having a variable where a concrete type could stand.
+      final var compilation = compile(
+        source(
+          "demo.RenderFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class RenderFn<T> implements BridgeFn<T, String> {
+            public RenderFn() {}
+            @Override public String forward(T t) { return String.valueOf(t); }
+            @Override public T backward(String s) { throw new UnsupportedOperationException(); }
+          }
+          """
+        ),
+        source(
+          "demo.IdFn2",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class IdFn2<T> implements BridgeFn<T, T> {
+            public IdFn2() {}
+            @Override public T forward(T t) { return t; }
+            @Override public T backward(T t) { return t; }
+          }
+          """
+        ),
+        source(
+          "demo.SrcG",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.TgtG.class, transforms = {
+            @Transform(field = "payload", using = demo.RenderFn.class, forwardOnly = true),
+            @Transform(field = "label", using = demo.IdFn2.class)
+          })
+          public record SrcG(Object payload, Object label) {}
+          """
+        ),
+        source("demo.TgtG", "package demo; public record TgtG(String payload, Object label) {}")
+      );
+
+      assertTrue(
+        compilation.success(),
+        () -> "a type-variable BridgeFn whose bound fits must be accepted: " + compilation.errorMessages()
+      );
+      assertNotNull(compilation.generated().get("demo.SrcGBridge"));
+    }
+
+    @Test
     @DisplayName("@Transform on a raw generic BridgeFn is rejected by name instead of inside the generated" + " file")
     void transformWithRawGenericBridgeFnRejectedByName() {
-      // An annotation can only carry a raw class literal, so a BridgeFn<T, T> implementor reaches
-      // the emitter with its variables unresolved and its forward returns Object. Without the
-      // arguments named at the declaration, the mismatch is only visible as an incompatible-types
-      // error inside the generated file.
-      final var compilation = compile(
+      // An annotation carries only a raw class literal, so the emitter instantiates the fn raw and
+      // its forward erases to the type variable's bound — Object here. That fits an Object-typed
+      // slot and not a String one, so this pair is named at the declaration; the sibling test
+      // covers the pairs it does fit. Attributed compilation, so the generated-file error this
+      // replaces would be observable if it were still what the user saw.
+      final var compilation = compileAttributed(
         source(
           "demo.IdFn",
           """
@@ -2222,8 +2288,11 @@ class BridgeProcessorTest {
     @Test
     @DisplayName("@Transform accepts a widening BridgeFn and a boxed primitive pair")
     void transformAcceptsWideningAndBoxedPairs() {
-      // Assignability, not identity: a BridgeFn<CharSequence, String> consumes a String field, and
-      // an int field is boxed before comparison so BridgeFn<Integer, Integer> fits it.
+      // Assignability already models the conversions the emitted call relies on: a
+      // BridgeFn<CharSequence, String> consumes a String field by widening, BridgeFn<Integer,
+      // Integer> reaches an int field by boxing and unboxing, and a BridgeFn returning Integer
+      // reaches a long field by unboxing plus a widening primitive conversion. Comparing boxed
+      // types instead of the declared ones would lose that last one.
       final var compilation = compile(
         source(
           "demo.WideFn",
@@ -2250,6 +2319,18 @@ class BridgeProcessorTest {
           """
         ),
         source(
+          "demo.SizeFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class SizeFn implements BridgeFn<String, Integer> {
+            public SizeFn() {}
+            @Override public Integer forward(String s) { return s.length(); }
+            @Override public String backward(Integer n) { return "x".repeat(n); }
+          }
+          """
+        ),
+        source(
           "demo.Src",
           """
           package demo;
@@ -2257,12 +2338,13 @@ class BridgeProcessorTest {
           import io.github.eschizoid.telescope.annotations.Transform;
           @Bridge(value = demo.Tgt.class, transforms = {
             @Transform(field = "label", using = demo.WideFn.class),
-            @Transform(field = "count", using = demo.BoxFn.class)
+            @Transform(field = "count", using = demo.BoxFn.class),
+            @Transform(field = "size", using = demo.SizeFn.class)
           })
-          public record Src(String label, int count) {}
+          public record Src(String label, int count, String size) {}
           """
         ),
-        source("demo.Tgt", "package demo; public record Tgt(String label, int count) {}")
+        source("demo.Tgt", "package demo; public record Tgt(String label, int count, long size) {}")
       );
 
       assertTrue(
