@@ -2501,6 +2501,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return ((TypeElement) ((DeclaredType) container).asElement()).getQualifiedName().toString();
   }
 
+  private static boolean isContainerKind(final FieldPlan.Kind kind) {
+    return kind == FieldPlan.Kind.LIST || kind == FieldPlan.Kind.SET || kind == FieldPlan.Kind.MAP_VALUES;
+  }
+
+  /**
+   * Whether this side's container can be built by handing its constructor the source container,
+   * which is what the inline identity copy does. This is a property of the class, not of its
+   * package: most JDK containers offer such a constructor and {@code java.util.Stack} does not,
+   * while a subtype has one only where it declares one, because constructors are not inherited.
+   */
+  private boolean hasCopyConstructor(final TypeMirror container, final FieldPlan.Kind kind) {
+    final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
+    if (implEl == null) return false;
+    final var accepts = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.Map" : "java.util.Collection";
+    for (final var ctor : ElementFilter.constructorsIn(implEl.getEnclosedElements())) {
+      if (!ctor.getModifiers().contains(Modifier.PUBLIC)) continue;
+      final var params = ctor.getParameters();
+      if (params.size() == 1 && assignableToRaw(params.getFirst().asType(), accepts)) return true;
+    }
+    return false;
+  }
+
   // FQN of the concrete, instantiable class to allocate for a container field of the given declared
   // type — the declared subtype itself when it is an instantiable class (ArrayList, TreeSet,
   // TreeMap, …), else the default impl for the interface family. The interface-family defaults
@@ -2510,19 +2532,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // interface-typed field. The two hash families default to their insertion-ordered form because a
   // conversion that is not asked to reorder should not: an ordered source behind an interface-typed
   // field keeps its order across the rebuild.
-  private static boolean isContainerKind(final FieldPlan.Kind kind) {
-    return kind == FieldPlan.Kind.LIST || kind == FieldPlan.Kind.SET || kind == FieldPlan.Kind.MAP_VALUES;
-  }
-
-  /**
-   * Whether this side's container is allocated as a type the adopter wrote rather than a JDK class.
-   * A JDK container offers a copy constructor; a subtype of one does not inherit it, so the two are
-   * allocated differently and only the JDK side can be copy-constructed inline.
-   */
-  private static boolean isUserContainerImpl(final TypeMirror container, final FieldPlan.Kind kind) {
-    return !concreteImplFqn(container, kind).startsWith("java.");
-  }
-
   private static String concreteImplFqn(final TypeMirror container, final FieldPlan.Kind kind) {
     final var el = (TypeElement) ((DeclaredType) container).asElement();
     if (el.getKind() == ElementKind.CLASS && !el.getModifiers().contains(Modifier.ABSTRACT)) {
@@ -2677,17 +2686,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           parentPkg
         );
         if (subPlan == null) return null;
-        // Attach the concrete-impl class the inline identity-element copy allocates: the target's
-        // class on forward, the source's on backward — so a field typed as a concrete subtype
-        // (LinkedList, TreeSet, …) is rebuilt as that class, not the default impl.
-        // A user subtype declares no copy constructor, because Java does not inherit them, so the
-        // inline identity copy is invalid for it whether or not it kept its own type parameter.
-        // Route it to the self-contained helper, which allocates no-arg and fills — the same
-        // treatment a raw subtype already gets, and for the same reason.
+        // The inline identity copy hands the source container to the output's constructor, so it is
+        // available only where that constructor exists. A subtype has one where it declares one,
+        // constructors not being inherited, and a handful of JDK containers lack one outright.
+        // Where either side cannot be built that way, route to the self-contained helper, which
+        // allocates no-arg and fills — the treatment a raw subtype already gets.
         if (isContainerKind(subPlan.kind())) {
-          final var userSubtype =
-            isUserContainerImpl(sf.type(), subPlan.kind()) || isUserContainerImpl(tf.type(), subPlan.kind());
-          if (userSubtype) {
+          final var needsHelper =
+            !hasCopyConstructor(sf.type(), subPlan.kind()) || !hasCopyConstructor(tf.type(), subPlan.kind());
+          if (needsHelper) {
             final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), subPlan.kind());
             if (badAlloc != null) {
               error(
@@ -2710,6 +2717,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             continue;
           }
         }
+        // Attach the concrete-impl class the inline identity-element copy allocates: the target's
+        // class on forward, the source's on backward — so a field typed as a concrete subtype
+        // (LinkedList, TreeSet, …) is rebuilt as that class, not the default impl.
         final var withImpls = switch (subPlan.kind()) {
           case LIST, SET, MAP_VALUES -> subPlan.withContainerImpls(
             simpleName(concreteImplFqn(tf.type(), subPlan.kind())),

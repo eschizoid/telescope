@@ -91,6 +91,106 @@ class GenericContainerSubtypeTest {
   }
 
   @Test
+  @DisplayName("a subtype that declares a copy constructor keeps the inline copy that uses it")
+  void subtypeDeclaringACopyConstructorStillCopies() {
+    // Constructors are not inherited, but they can be declared. A subtype offering the one the
+    // inline copy needs has no reason to be routed anywhere else — and no reason to be asked for a
+    // no-arg constructor it does not have.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.CopyList",
+        """
+        package demo;
+        import java.util.ArrayList;
+        import java.util.Collection;
+        public class CopyList<T> extends ArrayList<T> {
+          public CopyList(final Collection<? extends T> c) { super(c); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.CSrc",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.CDst.class)
+        public record CSrc(demo.CopyList<String> items) {}
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.CDst",
+        "package demo; import java.util.List; public record CDst(List<String> items) {}"
+      )
+    );
+
+    assertTrue(compilation.success(), () -> "a declared copy constructor is usable: " + compilation.errorMessages());
+    assertFalse(
+      compilation.errorMessages().contains("no public no-arg constructor"),
+      () -> "it was never asked for a no-arg constructor: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a JDK container without a copy constructor is filled rather than copy-constructed")
+  void jdkContainerLackingACopyConstructorIsFilled() {
+    // java.util.Stack has no (Collection) constructor, so the package a class lives in does not
+    // decide this; the constructor it declares does.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.KSrc3",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import java.util.Stack;
+        @Bridge(demo.KDst3.class)
+        public record KSrc3(Stack<String> items) {}
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.KDst3",
+        "package demo; import java.util.List; public record KDst3(List<String> items) {}"
+      )
+    );
+
+    assertTrue(compilation.success(), () -> "the generated source must compile: " + compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("the Set and Map kinds are repaired too, not only List")
+  void genericSubtypeSetAndMapCompile() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.MySet",
+        "package demo; import java.util.HashSet; public class MySet<T> extends HashSet<T>" + " {}"
+      ),
+      ProcessorHarness.source(
+        "demo.MyMap",
+        "package demo; import java.util.HashMap; public class MyMap<K, V> extends" + " HashMap<K, V> {}"
+      ),
+      ProcessorHarness.source(
+        "demo.SMSrc",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.SMDst.class)
+        public record SMSrc(demo.MySet<String> tags, demo.MyMap<String, String> byKey) {}
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.SMDst",
+        """
+        package demo;
+        import java.util.Map;
+        import java.util.Set;
+        public record SMDst(Set<String> tags, Map<String, String> byKey) {}
+        """
+      )
+    );
+
+    assertTrue(compilation.success(), () -> "the generated source must compile: " + compilation.errorMessages());
+  }
+
+  @Test
   @DisplayName("a generic subtype with no usable constructor is reported, not emitted against")
   void genericSubtypeWithoutNoArgCtorIsReported() {
     final var compilation = compile(
