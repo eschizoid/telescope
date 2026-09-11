@@ -459,6 +459,31 @@ class GeneratedNameCollisionTest {
   }
 
   @Test
+  @DisplayName("a holder steps aside when its name would be the navigator's own")
+  void holderStepsAsideFromTheNavigatorName() {
+    // A member class may not carry its enclosing class's simple name (JLS 8.1), and the navigator
+    // for Optic_0_x is Optic_0_xTelescope — which is what the holder for a component named
+    // xTelescope at index 0 would otherwise be called.
+    final var compilation = compile(
+      new FocusProcessor(),
+      source(
+        "demo.Optic_0_x",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Focus;
+        @Focus
+        public record Optic_0_x(String xTelescope, int other) {}
+        """
+      )
+    );
+
+    assertTrue(
+      compilation.success(),
+      () -> "the holder must not take the navigator's own name: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
   @DisplayName("a holder steps aside when its name would be the navigated type's own")
   void holderStepsAsideFromTheSourceTypeName() {
     // A holder is a member type, so its simple name shadows a top-level type of the same name

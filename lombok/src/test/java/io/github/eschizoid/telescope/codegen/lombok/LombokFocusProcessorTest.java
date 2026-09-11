@@ -9,6 +9,7 @@ import io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderAlertRequest
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.BuilderUser;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.DataAlertRequest;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUser;
+import io.github.eschizoid.telescope.codegen.lombok.fixtures.Optic_0_label;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.SameRoundConsumer;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -93,6 +94,27 @@ class LombokFocusProcessorTest {
     }
 
     @Test
+    @DisplayName("A nested class named after a per-field holder still yields a usable navigator")
+    void nestedOuterNamedAfterAHolderStillNavigates() throws Exception {
+      // Each field's optics live in a member class of the navigator, so that name shadows whatever
+      // else it resolves to there — including the outer segment of the navigated type's own
+      // reference, which a nested source spells as Outer.Inner. Only Lombok accepts a nested
+      // source, so this shape cannot be reached from the in-memory harness.
+      final var navigator = Class.forName(
+        "io.github.eschizoid.telescope.codegen.lombok.fixtures.Optic_0_labelInnerTelescope"
+      );
+      assertNotNull(navigator);
+
+      final var of = navigator.getMethod("of");
+      final var label = navigator.getMethod("label");
+      final var value = new Optic_0_label.Inner("hello");
+      final var path = label.invoke(of.invoke(null));
+      final var read = path.getClass().getMethod("read", Object.class);
+
+      assertEquals("hello", read.invoke(path, value));
+    }
+
+    @Test
     @DisplayName("Nested static @Data class yields a flattened-name navigator at package level")
     void nestedStaticDataClassEmitsFlattenedPath() throws Exception {
       // OuterWithNested holds a nested static @Data Inner. The processor should emit the navigator
@@ -122,7 +144,7 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("@Data POJO with List<@Data> emits a container step whose each() returns the element's navigator")
+    @DisplayName("@Data POJO with List<@Data> emits a container step whose each() returns the element's" + " navigator")
     void containerStepDescendsIntoSubPath() throws Exception {
       final var teamPath = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataTeamTelescope");
       assertNotNull(teamPath);
@@ -149,7 +171,7 @@ class LombokFocusProcessorTest {
 
     @Test
     @DisplayName(
-      "@Data POJO yields a DataUserFieldOptics holder with public static final Telescope constants per property"
+      "@Data POJO yields a DataUserFieldOptics holder with public static final Telescope" + " constants per property"
     )
     void dataHolder() throws Exception {
       final var holder = Class.forName("io.github.eschizoid.telescope.codegen.lombok.fixtures.DataUserFieldOptics");
@@ -261,7 +283,9 @@ class LombokFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("@Builder POJO with primitive int: construct() chain substitutes JLS default on null entry, no NPE")
+    @DisplayName(
+      "@Builder POJO with primitive int: construct() chain substitutes JLS default on null entry," + " no NPE"
+    )
     void builderHolderConstructNullPrimitive() throws Exception {
       // Builder-strategy rebuild: the generated construct() chains the static builder() with one
       // .x(...) per property. Primitive properties must take the instanceof-pattern null-guard

@@ -1291,10 +1291,18 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // earlier-declared accessor dies at run time. Property names really can differ that way:
     // decapitalisation keeps a leading acronym, so getUrl and getURL yield url and URL. The index
     // makes the names differ before the component name does, which case folding cannot collapse.
-    // A holder also shadows a same-named top-level type throughout the navigator, so where it
-    // would take the source type's own name it steps aside.
+    // A holder is a member type, so its simple name shadows whatever else that name resolves to
+    // inside the navigator. Two names qualify. One is the first segment of the navigated type's
+    // reference, which is dotted for a nested source — the lens bodies resolve that segment, not
+    // the whole reference. The other is the navigator's own class name, which a member class may
+    // not repeat at all. Where the holder would take either, it steps aside.
     var holder = "Optic_" + componentIndex + "_" + componentName;
-    if (holder.equals(enclosingSimpleName)) holder = holder + "_";
+    final var dot = enclosingSimpleName.indexOf('.');
+    final var outerSegment = dot < 0 ? enclosingSimpleName : enclosingSimpleName.substring(0, dot);
+    final var navigatorName = enclosingSimpleName.replace(".", "") + "Telescope";
+    while (holder.equals(outerSegment) || holder.equals(navigatorName)) {
+      holder = holder + "_";
+    }
     final var componentTypeStr = shortenStdImports(boxedType(componentType));
     final var shape = traversalKind(componentType);
     final var subFq = navigableType(componentType, navigableAnnotations);
