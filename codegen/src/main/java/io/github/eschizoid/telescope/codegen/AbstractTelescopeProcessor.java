@@ -1273,29 +1273,53 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // via lens/then, which the SerializedLambda-decoding field(...) hop-recording never sees. A
     // container field records NO Focus here: the step's each() records a single Traverse instead,
     // matching a hand-written .each(...).
-    final var focusHop = ".hop(new OpticNode.Focus(\"" + componentName + "\"))";
+    // The lens and the Focus node are the same values on every call, so they are built once in a
+    // per-field holder rather than per navigation. The holder is nested and private, which is what
+    // keeps one field's initializer from deciding another's fate: a class-level static would put
+    // every field in one <clinit>, where a single unresolvable type takes them all down.
+    // `path` still varies per call, so composing it is not hoistable and is left alone.
+    final var holder = "Optic_" + componentName;
+    final var componentTypeStr = shortenStdImports(boxedType(componentType));
     final var shape = traversalKind(componentType);
+    final var subFq = navigableType(componentType, navigableAnnotations);
+    final var recordsFocus = shape == null;
+    out.println("  private static final class " + holder + " {");
+    out.println();
+    out.println("    private " + holder + "() {}");
+    out.println();
+    out.println(
+      "    private static final Telescope<" +
+        enclosingSimpleName +
+        ", " +
+        componentTypeStr +
+        "> LENS = Telescope.lens(" +
+        lensArgs +
+        ");"
+    );
+    if (recordsFocus) {
+      out.println();
+      out.println("    private static final OpticNode HOP = new OpticNode.Focus(\"" + componentName + "\");");
+    }
+    out.println("  }");
+    out.println();
+    final var focusHop = recordsFocus ? ".hop(" + holder + ".HOP)" : "";
     if (shape != null) {
       final var stepName = enclosingSimpleName + capitalize(componentName) + "Step";
       out.println("  public " + stepName + "<R> " + componentName + "() {");
-      out.println("    return new " + stepName + "<>(path.then(Telescope.lens(" + lensArgs + ")));");
+      out.println("    return new " + stepName + "<>(path.then(" + holder + ".LENS));");
       out.println("  }");
       out.println();
       return;
     }
-    final var subFq = navigableType(componentType, navigableAnnotations);
     if (subFq != null) {
       out.println("  public " + subFq + "Telescope<R> " + componentName + "() {");
-      out.println(
-        "    return new " + subFq + "Telescope<>(path.then(Telescope.lens(" + lensArgs + "))" + focusHop + ");"
-      );
+      out.println("    return new " + subFq + "Telescope<>(path.then(" + holder + ".LENS)" + focusHop + ");");
       out.println("  }");
       out.println();
       return;
     }
-    final var typeStr = shortenStdImports(boxedType(componentType));
-    out.println("  public Telescope<R, " + typeStr + "> " + componentName + "() {");
-    out.println("    return path.then(Telescope.lens(" + lensArgs + "))" + focusHop + ";");
+    out.println("  public Telescope<R, " + componentTypeStr + "> " + componentName + "() {");
+    out.println("    return path.then(" + holder + ".LENS)" + focusHop + ";");
     out.println("  }");
     out.println();
   }
