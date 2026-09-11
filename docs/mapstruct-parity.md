@@ -347,7 +347,7 @@ including nested containers like `List<Optional<X>>` and `Map<K,List<X>>`. Bidir
 honesty caveat: auto-lift requires SAME-kind containers on both sides (PairingRules.java:79 — srcView.kind() ==
 tgtView.kind()); MapStruct's List -> Set cross-kind copy needs an explicit to(src, tgt, fwd, bwd) row in telescope.
 Target concrete class (ArrayList/LinkedList/CopyOnWriteArrayList/...) is honored via listAllocatorFor
-(DeepMap.java:1441-1461).
+(`ContainerLifts.listAllocatorFor`).
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:65-73 (engine javadoc:
 List/Set/Map-values/Optional lift the element Iso, containers nest to any depth), DeepMap.java:1093-1124 (LiftContainer
@@ -385,12 +385,11 @@ transform over the entire Map. No per-key/per-value format sugar like @MapMappin
 hand-written stream/collect transform row. Target Map concrete type is honored; EnumMap targets are rejected with a
 precise error (needs an explicit row).
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:1116-1120 (MAP_VALUES lift), 1405-1434
-(liftMapIntoTargetRaw: 'Preserves source keys verbatim'), 1238-1246 (via(...) throws when Map key types differ: 'Key
-types must match exactly; auto-lifting preserves the source keys'), 1487-1508 (mapAllocatorFor:
-HashMap/LinkedHashMap/TreeMap/ConcurrentHashMap/...; EnumMap rejected at plan time);
-internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java:80-91 (mismatched key types ->
-Incompatible), 119-122 (non-class key type arg means the Map is not treated as liftable);
+<sub>Evidence: `DeepMap`'s MAP_VALUES lift; `ContainerLifts.liftMapIntoTargetRaw` ('Preserves source keys verbatim');
+`DeepMap`'s via(...) rejection when Map key types differ ('Key types must match exactly; auto-lifting preserves the
+source keys'); `ContainerLifts.mapAllocatorFor` (HashMap/LinkedHashMap/TreeMap/ConcurrentHashMap/...; EnumMap rejected
+at plan time); internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java:80-91 (mismatched
+key types -> Incompatible), 119-122 (non-class key type arg means the Map is not treated as liftable);
 core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:172-174 (Map values recursed, keys preserved),
 280-289 (`Map<K, List<Record>>` auto-lifts);
 core/src/test/java/io/github/eschizoid/telescope/DeepMapCoverageTest.java:77,152 (key-type mismatch rejection

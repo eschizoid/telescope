@@ -410,8 +410,8 @@ performance class:
 | --------------------------- | ------------------------------------------------------------------- |
 | flat (5 scalars)            | ~1.07× — a fifth of a nanosecond                                    |
 | nested (one nested type)    | 1.04×–1.46× across runs — a microbenchmark, not a service shape     |
-| deep (3 levels + list hops) | 1.06×–1.19× across runs — 4 ns on a 62 ns conversion at the low end |
-| Set or Map field, 100 items | a tie on time, and the same allocation                              |
+| deep (3 levels + list hops) | 1.06×–1.18× across runs — 4 ns on a 62 ns conversion at the low end |
+| Set or Map field, 100 items | the same allocation; timings pending a re-run                       |
 
 No codegen? `Telescope.mapper(...)` composes each record/bean pair into a single MethodHandle: zero annotations, no
 build step, within ~1.04–3.3× of MapStruct in the same workloads (flat ~3.3×, nested ~2.7×, deep ~1.3×, container fields
