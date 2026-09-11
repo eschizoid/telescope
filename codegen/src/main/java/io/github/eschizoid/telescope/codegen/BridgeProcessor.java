@@ -2513,6 +2513,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * property of the class rather than of its package — most JDK containers offer such a constructor
    * and {@code java.util.Stack} does not, while a subtype has one only where it declares one,
    * because constructors are not inherited.
+   *
+   * <p>The comparison is by erasure, which is what lets a parameter written {@code Collection<?
+   * extends T>} match at all: its type variable is unresolved here. A constructor sharing an
+   * erasure with the argument but not its type argument therefore reads as usable.
    */
   private boolean hasCopyConstructorAccepting(
     final TypeMirror container,
@@ -2695,18 +2699,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           parentPkg
         );
         if (subPlan == null) return null;
-        // The inline identity copy hands the source container to the output's constructor, so it is
-        // available only where that constructor exists. A subtype has one where it declares one,
-        // constructors not being inherited, and a handful of JDK containers lack one outright.
-        // Where either side cannot be built that way, route to the self-contained helper, which
-        // allocates no-arg and fills — the treatment a raw subtype already gets.
+        // Only one of the container routes copy-constructs. The inline copy hands the source
+        // container to the output's constructor and is reachable solely when the element type is
+        // identity; every other route — the self-contained helper for identity elements, the
+        // element-bridging helpers for the rest — allocates no-arg and fills. So the constructor a
+        // container must offer depends on the route it takes, and the route depends on its
+        // elements. Forward hands the source to the target's constructor and backward does the
+        // reverse, so each side is asked about the value it will actually receive.
         if (isContainerKind(subPlan.kind())) {
-          // Forward hands the source container to the target's constructor and backward does the
-          // reverse, so each side is asked about the value it will actually receive.
-          final var needsHelper =
-            !hasCopyConstructorAccepting(tf.type(), subPlan.kind(), sf.type()) ||
-            !hasCopyConstructorAccepting(sf.type(), subPlan.kind(), tf.type());
-          if (needsHelper) {
+          final var elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(subPlan.subBridgeName());
+          final var inlineCopy =
+            elementIdentity &&
+            hasCopyConstructorAccepting(tf.type(), subPlan.kind(), sf.type()) &&
+            hasCopyConstructorAccepting(sf.type(), subPlan.kind(), tf.type());
+          if (!inlineCopy) {
             final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), subPlan.kind());
             if (badAlloc != null) {
               error(
@@ -2725,8 +2731,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               );
               return null;
             }
-            plans.put(sf.name(), subPlan.asRawContainer());
-            continue;
+            // Identity elements have no helper of their own, so they take the self-contained one.
+            // Bridged elements already route to emitListHelper / emitSetHelper / emitMapHelper,
+            // which allocate the same way — they only needed the allocation checked first.
+            if (elementIdentity) {
+              plans.put(sf.name(), subPlan.asRawContainer());
+              continue;
+            }
           }
         }
         // Attach the concrete-impl class the inline identity-element copy allocates: the target's

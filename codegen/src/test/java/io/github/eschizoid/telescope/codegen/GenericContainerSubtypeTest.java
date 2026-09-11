@@ -131,6 +131,53 @@ class GenericContainerSubtypeTest {
   }
 
   @Test
+  @DisplayName("a copy constructor does not help when the elements need bridging")
+  void copyConstructorDoesNotCoverTheBridgedElementRoute() {
+    // The inline copy is reachable only for identity elements. Once the elements need converting
+    // the emission allocates no-arg and fills, so a class offering only a copy constructor cannot
+    // serve that route — and a wrapper holding convertible elements is the ordinary bridge case,
+    // not an exotic one.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.CopyList2",
+        """
+        package demo;
+        import java.util.ArrayList;
+        import java.util.Collection;
+        public class CopyList2<T> extends ArrayList<T> {
+          public CopyList2(final Collection<? extends T> c) { super(c); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.DSrc",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.DDst.class)
+        public record DSrc(demo.CopyList2<demo.DElem> items) {}
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.DDst",
+        "package demo; import java.util.List; public record DDst(List<demo.DElemDto> items)" + " {}"
+      ),
+      ProcessorHarness.source("demo.DElem", "package demo; public record DElem(String v) {}"),
+      ProcessorHarness.source("demo.DElemDto", "package demo; public record DElemDto(String v) {}")
+    );
+
+    assertFalse(compilation.success(), "the bridged-element route cannot use a copy constructor");
+    assertTrue(
+      compilation.hasError("no public no-arg constructor"),
+      () -> "the allocation the route performs is what should be reported: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("cannot be applied to given types"),
+      () -> "javac inside generated code is the failure mode being replaced: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
   @DisplayName("a constructor narrower than the value being passed does not count as a copy constructor")
   void narrowedCopyConstructorIsNotUsable() {
     // Having a single-argument constructor that takes *a* collection is not the same as being able
