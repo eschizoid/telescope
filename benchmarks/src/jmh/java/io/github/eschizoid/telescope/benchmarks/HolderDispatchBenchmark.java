@@ -104,10 +104,11 @@ public class HolderDispatchBenchmark {
     fieldLmf = Telescope.of(BenchPlainRec.class).field(BenchPlainRec::name);
 
     // Direct holder-constant baseline: read the generated `name` constant from
-    // `BenchHolderRecTelescope` via reflection. This is the same Telescope value `Telescope.of(X)
-    // .field(X::name)` resolves to via the holder probe — but accessed without the probe so the
-    // benchmark measures the dispatch primitive, not the probe overhead.
-    final var holderClass = Class.forName(BenchHolderRec.class.getName() + "Telescope");
+    // `BenchHolderRecFieldOptics` via reflection — the metadata holder carries the per-field
+    // constants; the `<X>Telescope` navigator has only methods. This is the same Telescope value
+    // `Telescope.of(X).field(X::name)` resolves to via the holder probe — but accessed without the
+    // probe so the benchmark measures the dispatch primitive, not the probe overhead.
+    final var holderClass = Class.forName(BenchHolderRec.class.getName() + "FieldOptics");
     @SuppressWarnings("unchecked")
     final var directConstant = (Telescope<BenchHolderRec, String>) holderClass.getField("name").get(null);
     fieldHolderConstant = directConstant;
