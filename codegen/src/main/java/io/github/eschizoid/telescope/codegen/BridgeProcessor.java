@@ -189,6 +189,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // package-agnostic registry. Cleared after the write so a reused instance starts clean.
   private final Set<String> bridgeProviders = new LinkedHashSet<>();
 
+  /**
+   * Which pair claimed each generated bridge FQN. Auto-derived names are built from the two simple
+   * names, so two pairs emitting into the same package from same-simple-named types land on one FQN
+   * — the second write is a FilerException reported against whichever file the Filer was given,
+   * which need not be one the author annotated. Holding the first claimant lets the clash be
+   * reported against the pair that caused it.
+   *
+   * <p>The sibling case — pairs in different packages deriving the same simple name — yields
+   * distinct FQNs, so nothing collides here; it is resolved where the parent references them, in
+   * {@link #subBridgeReference}.
+   */
+  private final Map<String, TypePair> bridgeNameOwner = new HashMap<>();
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var anno = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
@@ -1140,6 +1153,27 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       carrierEl != null ? carrierEl.getSimpleName() + "Bridge" : bridgeClassName(source, target, useShortName);
     final var qualifiedBridge = pkg.isEmpty() ? bridgeName : pkg + "." + bridgeName;
 
+    final var nameOwner = bridgeNameOwner.putIfAbsent(qualifiedBridge, thisPair);
+    if (nameOwner != null && !nameOwner.equals(thisPair)) {
+      error(
+        source,
+        "@Bridge: the generated bridge name " +
+          qualifiedBridge +
+          " is claimed by two different type pairs — " +
+          nameOwner.sourceFq() +
+          " -> " +
+          nameOwner.targetFq() +
+          " and " +
+          sourceFq +
+          " -> " +
+          targetFq +
+          ". Auto-derived names use the simple names, so types sharing a simple name across" +
+          " packages collide. Declare an explicit @Bridge on one of the pairs, or rename a" +
+          " type."
+      );
+      return;
+    }
+
     final var sourceFields = fieldsOf(source);
     final var targetFields = fieldsOf(target);
     final var cfg = configsByPair.getOrDefault(thisPair, BridgeConfig.EMPTY);
@@ -1630,7 +1664,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       pending,
       seen,
       userDeclared,
-      lenient
+      lenient,
+      pkg
     );
     if (fieldPlans == null) return;
 
@@ -1768,7 +1803,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // target).
     if (carrierEl != null) emitBridgeProvider(source, target, bridgeName, pkg);
 
-    final var imports = new TreeSet<>(importsFor(fieldPlans, sourceFields, targetFields, renames, pkg));
+    final var imports = new TreeSet<>(importsFor(fieldPlans, sourceFields, targetFields, renames));
     imports.add("io.github.eschizoid.telescope.Telescope");
     imports.add("io.github.eschizoid.telescope.conversion.BridgeFn");
     writeClass(
@@ -2453,7 +2488,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
     final Set<TypePair> userDeclared,
-    final boolean lenient
+    final boolean lenient,
+    final String parentPkg
   ) {
     final var plans = new LinkedHashMap<String, FieldPlan>();
     for (final var sf : sourceFields) {
@@ -2531,7 +2567,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           pending,
           seen,
           userDeclared,
-          lenient
+          lenient,
+          parentPkg
         );
         if (subPlan == null) return null;
         // Attach the concrete-impl class the inline identity-element copy allocates: the target's
@@ -2606,7 +2643,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           pending,
           seen,
           userDeclared,
-          lenient
+          lenient,
+          parentPkg
         );
         if (subPlan == null) return null;
         plans.put(sf.name(), FieldPlan.rawContainer(subPlan.kind(), subPlan.subBridgeName()));
@@ -2625,7 +2663,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           pending,
           seen,
           userDeclared,
-          lenient
+          lenient,
+          parentPkg
         );
         if (subPlan == null) return null;
         plans.put(sf.name(), subPlan);
@@ -2642,7 +2681,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           pending,
           seen,
           userDeclared,
-          lenient
+          lenient,
+          parentPkg
         );
         if (subPlan == null) return null;
         plans.put(sf.name(), subPlan);
@@ -2671,7 +2711,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Leniency propagates: a lenient parent's nested sub-pair is itself lenient, so its
         // bijection check is skipped and unmatched nested-target fields take JLS defaults.
         if (lenient) lenientPairs.add(subPair);
-        final var subBridgeName = bridgeClassName(subSourceEl, subTargetEl, userDeclared.contains(subPair));
+        final var subBridgeName = subBridgeReference(
+          subSourceEl,
+          subTargetEl,
+          userDeclared.contains(subPair),
+          parentPkg
+        );
         plans.put(sf.name(), FieldPlan.recurse(subBridgeName));
         continue;
       }
@@ -2711,7 +2756,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
     final Set<TypePair> userDeclared,
-    final boolean lenient
+    final boolean lenient,
+    final String parentPkg
   ) {
     if (isSameType(srcElement, tgtElement)) {
       // Container kind matters (lift), but no sub-bridge — the element passes through. Use a
@@ -2737,7 +2783,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       // Leniency propagates into the element pair too, matching the scalar sub-pair path.
       if (lenient) lenientPairs.add(subPair);
-      final var subBridgeName = bridgeClassName(subSourceEl, subTargetEl, userDeclared.contains(subPair));
+      final var subBridgeName = subBridgeReference(subSourceEl, subTargetEl, userDeclared.contains(subPair), parentPkg);
       return FieldPlan.ofKind(kind, subBridgeName);
     }
     error(
@@ -2906,28 +2952,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Map<String, FieldPlan> fieldPlans,
     final List<Field> sourceFields,
     final List<Field> targetFields,
-    final Map<String, String> renames,
-    final String parentPkg
+    final Map<String, String> renames
   ) {
     final var imports = new TreeSet<String>();
     for (final var entry : fieldPlans.entrySet()) {
       final var plan = entry.getValue();
-      // A field plan that references a sub-bridge by simple name resolves for free when the
-      // sub-bridge is emitted in this bridge's own package (the common single-package case). When
-      // it
-      // isn't — a cross-package sub-pair, e.g. a DB-entity field bridged to a same-simple-name BO
-      // type in another package — the simple name is unresolvable; import the sub-bridge's FQN.
-      // This
-      // applies to raw-container plans too (their helper also calls the sub-bridge by simple name),
-      // so it runs before the raw-container short-circuit below.
-      final var subImport = crossPackageSubBridgeImport(
-        plan,
-        fieldByName(sourceFields, entry.getKey()).type(),
-        parentPkg
-      );
-      if (subImport != null) imports.add(subImport);
       // Raw-container helpers render every container/element TYPE by fully-qualified name, so they
-      // need no container-type imports (only the sub-bridge import handled above).
+      // need no container-type imports.
       if (plan.rawContainer()) continue;
       switch (plan.kind()) {
         // A container field needs both the declared raw of each side (the helper return / param
@@ -2948,48 +2979,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     }
     return imports;
-  }
-
-  /**
-   * The FQN to import for {@code plan}'s sub-bridge when it lives in a different package than
-   * {@code parentPkg}, or {@code null} when the plan references no sub-bridge, the element passes
-   * through (identity), or the sub-bridge shares this bridge's package (simple name already
-   * resolves). The sub-bridge is emitted in the source sub-element's package, so that package plus
-   * the plan's simple sub-bridge name is the import.
-   */
-  private String crossPackageSubBridgeImport(
-    final FieldPlan plan,
-    final TypeMirror srcFieldType,
-    final String parentPkg
-  ) {
-    final var sub = plan.subBridgeName();
-    if (sub == null || IDENTITY_ELEMENT_SENTINEL.equals(sub)) return null;
-    // A @ViaMapper / qualifier sub-bridge name is already a fully-qualified user class (e.g.
-    // `mapper.AddressBridge`); the body emits it verbatim, so it resolves on its own and needs no
-    // import. Only auto-generated bridge names (a bare simple name, no dot) need the cross-package
-    // import — prepending a package to a name that already has one yields a bogus import.
-    if (sub.indexOf('.') >= 0) return null;
-    final var subElement = switch (plan.kind()) {
-      case RECURSE, NULLABLE_TO_OPTIONAL -> srcFieldType;
-      case LIST, SET, MAP_VALUES, OPTIONAL, OPTIONAL_TO_NULLABLE -> {
-        // A raw Collection/Map subtype field (`class CxDocs extends ArrayList<CxDoc>`) carries
-        // its
-        // element in the supertype, so containerShapeOf returns null — fall back to the raw
-        // shape,
-        // mirroring how planFields derives the element for the same field.
-        final var shape = containerShapeOf(srcFieldType);
-        yield shape != null
-          ? shape.elementType()
-          : rawContainerShapeOf(srcFieldType) != null
-            ? rawContainerShapeOf(srcFieldType).elementType()
-            : null;
-      }
-      default -> null;
-    };
-    if (!(subElement instanceof DeclaredType dt) || !(dt.asElement() instanceof TypeElement te)) return null;
-    final var subPkg = processingEnv.getElementUtils().getPackageOf(te).getQualifiedName().toString();
-    if (subPkg.isEmpty() || subPkg.equals(parentPkg)) return null;
-    return subPkg + "." + sub;
   }
 
   /**
@@ -3235,6 +3224,43 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     if (userDeclared) return source.getSimpleName() + "Bridge";
     return source.getSimpleName() + "To" + target.getSimpleName() + "Bridge";
+  }
+
+  /**
+   * The name a parent bridge should call a sub-bridge by. Auto-derived names are built from the two
+   * simple names, so two sub-pairs whose types share simple names across packages derive the same
+   * one — and a parent referencing both by simple name cannot resolve either, whichever package
+   * each lives in. Qualifying every sub-bridge outside the parent's own package removes the
+   * ambiguity at the reference rather than at the name: the emitted expression names exactly one
+   * class, and the file needs no import for it. This is the mechanism for field and element
+   * sub-bridges; sealed per-case references are qualified at their own emission site. No generated
+   * file imports a generated bridge.
+   */
+  private String subBridgeReference(
+    final TypeElement subSource,
+    final TypeElement subTarget,
+    final boolean userDeclared,
+    final String parentPkg
+  ) {
+    // A carrier-form pair is emitted as <Carrier>Bridge in the carrier's package, so both halves
+    // of the reference differ from the source-anchored case and the carrier is what to ask.
+    final var subPair = new TypePair(subSource.getQualifiedName().toString(), subTarget.getQualifiedName().toString());
+    // A Lombok-deferred pair's config is held in deferredConfigs until the final round, while the
+    // parent's reference is written when the parent is planned — read both, or a deferred
+    // carrier's pair falls back to the source-anchored name and points at a class nothing emits.
+    // Both maps are filled in the same element loop, before any draining, so this adds no ordering
+    // assumption of its own.
+    final var subCfg = configsByPair.containsKey(subPair) ? configsByPair.get(subPair) : deferredConfigs.get(subPair);
+    final var carrierEl =
+      subCfg == null || subCfg.carrierFq() == null
+        ? null
+        : processingEnv.getElementUtils().getTypeElement(subCfg.carrierFq());
+    final var simple =
+      carrierEl != null ? carrierEl.getSimpleName() + "Bridge" : bridgeClassName(subSource, subTarget, userDeclared);
+    final var owner = carrierEl != null ? carrierEl : subSource;
+    final var subPkg = processingEnv.getElementUtils().getPackageOf(owner).getQualifiedName().toString();
+    if (subPkg.isEmpty() || subPkg.equals(parentPkg)) return simple;
+    return subPkg + "." + simple;
   }
 
   /**
