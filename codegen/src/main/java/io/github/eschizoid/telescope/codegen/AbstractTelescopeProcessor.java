@@ -90,6 +90,43 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     }
   }
 
+  /**
+   * The zero-argument methods every generated navigator declares for itself. A property of the same
+   * name emits a second method with the same erasure, so the generated file does not compile — and
+   * javac reports it against the generated source, which the author never wrote. A property
+   * matching a forwarder that takes arguments is fine: those overload cleanly.
+   */
+  private static final Set<String> RESERVED_NAVIGATOR_METHODS = Set.of("of", "get", "explain");
+
+  /**
+   * Reports any property whose name would collide with a method the navigator declares for itself,
+   * and answers whether emission should be abandoned for this type. Callers check before writing
+   * the navigator: emitting it anyway leaves the author with a javac error inside a file they
+   * cannot edit.
+   */
+  protected boolean hasReservedPropertyName(
+    final Element site,
+    final String triggerLabel,
+    final List<String> propertyNames
+  ) {
+    for (final var name : propertyNames) {
+      if (RESERVED_NAVIGATOR_METHODS.contains(name)) {
+        error(
+          site,
+          triggerLabel +
+            ": property '" +
+            name +
+            "' collides with the generated navigator's own " +
+            name +
+            "() method. Rename the property, or drop the annotation and use the runtime" +
+            " path."
+        );
+        return true;
+      }
+    }
+    return false;
+  }
+
   protected void error(final Element element, final String message) {
     processingEnv.getMessager().printMessage(Diagnostic.Kind.ERROR, message, element);
   }
@@ -756,6 +793,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       error(pojo, triggerLabel + ": " + pojo.getQualifiedName() + " has no readable properties (getX()/isX())");
       return;
     }
+    if (hasReservedPropertyName(pojo, triggerLabel, props.stream().map(Prop::name).toList())) return;
 
     final var builder = staticBuilderMethod(pojo);
     final var builderType =

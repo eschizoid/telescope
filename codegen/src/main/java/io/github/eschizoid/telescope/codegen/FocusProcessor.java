@@ -83,6 +83,35 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
     final var qualifiedPath = pkg.isEmpty() ? pathName : pkg + "." + pathName;
     final List<? extends RecordComponentElement> components = recordType.getRecordComponents();
 
+    // Both artifacts are rejected together, before either is written. A component that cannot be
+    // emitted as a typed constant also cannot be named in the navigator's type parameters, and a
+    // component colliding with a navigator method makes the navigator uncompilable — emitting
+    // either artifact anyway hands the author a javac error inside a file they never wrote.
+    if (
+      hasReservedPropertyName(
+        recordType,
+        "@Focus",
+        components
+          .stream()
+          .map(c -> c.getSimpleName().toString())
+          .toList()
+      )
+    ) return;
+    for (final var comp : components) {
+      if (!isEmittableAsTypedConstant(comp.asType())) {
+        error(
+          recordType,
+          "@Focus: cannot emit metadata constant for component '" +
+            comp.getSimpleName() +
+            "' of type '" +
+            comp.asType() +
+            "' — generics with wildcard or self-referential bounds are not supported. Remove " +
+            "@Focus from this record to use the runtime path."
+        );
+        return;
+      }
+    }
+
     // First, emit one container-step class per collection-shaped component (each goes in its own
     // top-level source file because each is public and Java permits at most one public top-level
     // type per file).
@@ -124,24 +153,6 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
   ) {
     final var holderName = recordName + "FieldOptics";
     final var qualifiedHolder = pkg.isEmpty() ? holderName : pkg + "." + holderName;
-
-    // Reject up-front: any un-emittable component type kills the whole holder for this record
-    // (the per-record holder is the unit of regeneration, mixed-quality holders would mask the
-    // gap). The Path navigator is unaffected — it has its own type handling.
-    for (final var comp : components) {
-      if (!isEmittableAsTypedConstant(comp.asType())) {
-        error(
-          recordType,
-          "@Focus: cannot emit metadata constant for component '" +
-            comp.getSimpleName() +
-            "' of type '" +
-            comp.asType() +
-            "' — generics with wildcard or self-referential bounds are not supported. Remove " +
-            "@Focus from this record to use the runtime path."
-        );
-        return;
-      }
-    }
 
     final Set<String> extraImports = new LinkedHashSet<>();
     for (final var comp : components) collectStdImports(comp.asType(), extraImports);

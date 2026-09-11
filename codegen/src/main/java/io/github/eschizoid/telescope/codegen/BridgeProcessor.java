@@ -189,6 +189,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // package-agnostic registry. Cleared after the write so a reused instance starts clean.
   private final Set<String> bridgeProviders = new LinkedHashSet<>();
 
+  /**
+   * Which pair claimed each generated bridge FQN. Auto-derived names are built from the two simple
+   * names, so two pairs whose types share simple names across different packages flatten to the
+   * same FQN — the second write is a FilerException reported against whichever file the Filer was
+   * given, which need not be one the author annotated. Holding the first claimant lets the clash be
+   * reported against the pair that caused it.
+   */
+  private final Map<String, TypePair> bridgeNameOwner = new HashMap<>();
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var anno = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
@@ -1139,6 +1148,27 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var bridgeName =
       carrierEl != null ? carrierEl.getSimpleName() + "Bridge" : bridgeClassName(source, target, useShortName);
     final var qualifiedBridge = pkg.isEmpty() ? bridgeName : pkg + "." + bridgeName;
+
+    final var nameOwner = bridgeNameOwner.putIfAbsent(qualifiedBridge, thisPair);
+    if (nameOwner != null && !nameOwner.equals(thisPair)) {
+      error(
+        source,
+        "@Bridge: the generated bridge name " +
+          qualifiedBridge +
+          " is claimed by two different type pairs — " +
+          nameOwner.sourceFq() +
+          " -> " +
+          nameOwner.targetFq() +
+          " and " +
+          sourceFq +
+          " -> " +
+          targetFq +
+          ". Auto-derived names use the simple names, so types sharing a simple name across" +
+          " packages collide. Declare an explicit @Bridge on one of the pairs, or rename a" +
+          " type."
+      );
+      return;
+    }
 
     final var sourceFields = fieldsOf(source);
     final var targetFields = fieldsOf(target);
