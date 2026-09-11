@@ -2109,6 +2109,170 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("@Transform whose using class is not a BridgeFn at all is rejected with a targeted message")
+    void transformWithNonBridgeFnClassRejected() {
+      final var compilation = compile(
+        source("demo.NotAnFn", "package demo; public final class NotAnFn { public NotAnFn() {} }"),
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "label", using = demo.NotAnFn.class) })
+          public record Src(String id, String label) {}
+          """
+        ),
+        source("demo.Tgt", "package demo; public record Tgt(String id, String label) {}")
+      );
+
+      assertFalse(compilation.success(), "a non-BridgeFn using class must not compile");
+      assertTrue(
+        compilation.hasError("does not implement BridgeFn"),
+        () -> "expected a targeted non-BridgeFn diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Transform on a raw generic BridgeFn is rejected by name instead of inside the generated" + " file")
+    void transformWithRawGenericBridgeFnRejectedByName() {
+      // An annotation can only carry a raw class literal, so a BridgeFn<T, T> implementor reaches
+      // the emitter with its variables unresolved and its forward returns Object. Before the
+      // check this surfaced as "incompatible types: Object cannot be converted to String" inside
+      // the generated file; it is now named at the @Bridge declaration, arguments and all.
+      final var compilation = compile(
+        source(
+          "demo.IdFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class IdFn<T> implements BridgeFn<T, T> {
+            public IdFn() {}
+            @Override public T forward(T t) { return t; }
+            @Override public T backward(T t) { return t; }
+          }
+          """
+        ),
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "label", using = demo.IdFn.class) })
+          public record Src(String label) {}
+          """
+        ),
+        source("demo.Tgt", "package demo; public record Tgt(String label) {}")
+      );
+
+      assertFalse(compilation.success(), "a raw generic BridgeFn must not compile");
+      assertTrue(
+        compilation.hasError("does not fit") && compilation.hasError("BridgeFn<T, T>"),
+        () -> "expected the diagnostic to name the unresolved arguments; saw " + compilation.errorMessages()
+      );
+      assertFalse(
+        compilation.hasError("cannot be converted to"),
+        () -> "the raw generated-code error must not be what the user sees; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("@Transform accepts a BridgeFn reached through an intermediate abstract class")
+    void transformAcceptsBridgeFnThroughIntermediateSupertype() {
+      // The validator walks the supertype closure rather than the direct interfaces, so an
+      // implementor several levels up still resolves its BridgeFn arguments.
+      final var compilation = compile(
+        source(
+          "demo.AbstractLen",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public abstract class AbstractLen implements BridgeFn<String, Integer> {}
+          """
+        ),
+        source(
+          "demo.LenFn",
+          """
+          package demo;
+          public final class LenFn extends AbstractLen {
+            public LenFn() {}
+            @Override public Integer forward(String s) { return s.length(); }
+            @Override public String backward(Integer n) { return "x".repeat(n); }
+          }
+          """
+        ),
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "label", using = demo.LenFn.class) })
+          public record Src(String id, String label) {}
+          """
+        ),
+        source("demo.Tgt", "package demo; public record Tgt(String id, Integer label) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "inherited BridgeFn must be accepted: " + compilation.errorMessages());
+      assertNotNull(compilation.generated().get("demo.SrcBridge"));
+    }
+
+    @Test
+    @DisplayName("@Transform accepts a widening BridgeFn and a boxed primitive pair")
+    void transformAcceptsWideningAndBoxedPairs() {
+      // Assignability, not identity: a BridgeFn<CharSequence, String> consumes a String field, and
+      // an int field is boxed before comparison so BridgeFn<Integer, Integer> fits it.
+      final var compilation = compile(
+        source(
+          "demo.WideFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class WideFn implements BridgeFn<CharSequence, String> {
+            public WideFn() {}
+            @Override public String forward(CharSequence c) { return c.toString(); }
+            @Override public CharSequence backward(String s) { return s; }
+          }
+          """
+        ),
+        source(
+          "demo.BoxFn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class BoxFn implements BridgeFn<Integer, Integer> {
+            public BoxFn() {}
+            @Override public Integer forward(Integer n) { return n + 1; }
+            @Override public Integer backward(Integer n) { return n - 1; }
+          }
+          """
+        ),
+        source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.Tgt.class, transforms = {
+            @Transform(field = "label", using = demo.WideFn.class),
+            @Transform(field = "count", using = demo.BoxFn.class)
+          })
+          public record Src(String label, int count) {}
+          """
+        ),
+        source("demo.Tgt", "package demo; public record Tgt(String label, int count) {}")
+      );
+
+      assertTrue(
+        compilation.success(),
+        () -> "widening and boxed BridgeFn pairs must be accepted: " + compilation.errorMessages()
+      );
+      assertNotNull(compilation.generated().get("demo.SrcBridge"));
+    }
+
+    @Test
     @DisplayName("@Transform with a BridgeFn whose type arguments do not fit the field pair is rejected at" + " build")
     void transformWithMisfittingBridgeFnRejected() {
       // Without the check, the bridge is emitted anyway and the mismatch surfaces as raw
