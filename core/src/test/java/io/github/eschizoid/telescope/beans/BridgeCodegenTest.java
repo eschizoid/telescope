@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
@@ -120,7 +119,8 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "primitive ↔ wrapper backward with a null wrapper null-defaults to the primitive's JLS default (parity with runtime primitiveWrapperIso)"
+    "primitive ↔ wrapper backward with a null wrapper null-defaults to the primitive's JLS" +
+      " default (parity with runtime primitiveWrapperIso)"
   )
   void primitiveWrapperBackwardNullUnboxDefaults() {
     // A null wrapper on the backward (unbox) direction must coalesce to the primitive's JLS default
@@ -135,7 +135,8 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "primitive ↔ wrapper forward with a null wrapper source null-defaults the primitive target (the other direction's wiring)"
+    "primitive ↔ wrapper forward with a null wrapper source null-defaults the primitive target" +
+      " (the other direction's wiring)"
   )
   void primitiveWrapperForwardNullDefaults() {
     // Reverse orientation: wrapper source, primitive target — so the FORWARD (read) direction
@@ -151,7 +152,8 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "Optional bridge: a null Optional reference passes through as null instead of NPE (parity with Iso.liftOptional)"
+    "Optional bridge: a null Optional reference passes through as null instead of NPE (parity" +
+      " with Iso.liftOptional)"
   )
   void optionalNullReferencePassesThrough() {
     // A null Optional field reference (not Optional.empty()) must not NPE on the generated
@@ -178,7 +180,7 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "nullable→Optional bridge: a null Optional target reference passes through backward as null instead of NPE"
+    "nullable→Optional bridge: a null Optional target reference passes through backward as null" + " instead of NPE"
   )
   void nullableToOptionalBackwardNullGuard() {
     // NtoOSrc.maybe is a plain (nullable) OptElem; NtoODst.maybe is Optional<OptElemBO>. The
@@ -195,7 +197,7 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "container bridge: a null element passes through as null instead of NPE (parity with the runtime element Iso)"
+    "container bridge: a null element passes through as null instead of NPE (parity with the" + " runtime element Iso)"
   )
   void containerNullElementPassesThrough() {
     // A null element inside a bridged List must map to null, not NPE on subBridge.forward(null).
@@ -216,7 +218,9 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "concrete container subtype: a LinkedList<Y> target field is bridged element-wise and rebuilt as a LinkedList, not the default ArrayList (parity with the runtime container allocation table)"
+    "concrete container subtype: a LinkedList<Y> target field is bridged element-wise and rebuilt" +
+      " as a LinkedList, not the default ArrayList (parity with the runtime container" +
+      " allocation table)"
   )
   void concreteListSubtypeRebuildsAsTargetClass() {
     final var src = new ConcreteListSrc(Arrays.asList(new OptElem("a"), new OptElem("b")));
@@ -230,7 +234,8 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "concrete container subtype with identity elements: a List<String> ↔ LinkedList<String> copies inline into the target's concrete class"
+    "concrete container subtype with identity elements: a List<String> ↔ LinkedList<String>" +
+      " copies inline into the target's concrete class"
   )
   void concreteListSubtypeIdentityElementCopiesIntoTargetClass() {
     final var src = new IdListSrc(Arrays.asList("x", "y"));
@@ -241,7 +246,7 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "concrete Set subtype: a TreeSet<String> target is rebuilt as a TreeSet via the no-presize copy constructor"
+    "concrete Set subtype: a TreeSet<String> target is rebuilt as a TreeSet via the no-presize" + " copy constructor"
   )
   void concreteSetSubtypeRebuildsAsTreeSet() {
     // Seed an insertion-ordered (unsorted) source so the [a, b, c] result proves the TreeSet's sort
@@ -254,7 +259,7 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "concrete Map subtype: a TreeMap<String, Y> target bridges values element-wise and is rebuilt as a TreeMap"
+    "concrete Map subtype: a TreeMap<String, Y> target bridges values element-wise and is rebuilt" + " as a TreeMap"
   )
   void concreteMapSubtypeRebuildsAsTreeMap() {
     final Map<String, OptElem> in = new LinkedHashMap<>();
@@ -268,7 +273,8 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "backward concrete container: a LinkedList<String> source field is rebuilt as a LinkedList on the backward pass"
+    "backward concrete container: a LinkedList<String> source field is rebuilt as a LinkedList on" +
+      " the backward pass"
   )
   void backwardConcreteContainerRebuildsAsSourceClass() {
     final var src = new BwdConcreteSrc(new LinkedList<>(Arrays.asList("x", "y")));
@@ -280,7 +286,8 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "raw collection-subtype field (class Wrap extends ArrayList<Elem>) element-bridges end-to-end into a fresh target wrapper"
+    "raw collection-subtype field (class Wrap extends ArrayList<Elem>) element-bridges end-to-end" +
+      " into a fresh target wrapper"
   )
   void rawCollectionSubtypeBridgesEndToEnd() {
     // The adopter's shape: a custom ArrayList wrapper whose distinct element record needs bridging.
@@ -304,7 +311,8 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "raw collection-subtype field on a BEAN parent (setter rebuild) element-bridges end-to-end — the adopter's @Data shape"
+    "raw collection-subtype field on a BEAN parent (setter rebuild) element-bridges end-to-end —" +
+      " the adopter's @Data shape"
   )
   void rawCollectionSubtypeOnBeanParentBridgesEndToEnd() {
     // The adopter's parent was a @Data bean, not a record: the rebuild routes the raw helper's
@@ -323,7 +331,8 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "raw Map-subtype field (class Wrap extends HashMap<K, Elem>) element-bridges values, preserves keys, end-to-end"
+    "raw Map-subtype field (class Wrap extends HashMap<K, Elem>) element-bridges values," +
+      " preserves keys, end-to-end"
   )
   void rawMapSubtypeBridgesEndToEnd() {
     // Distinct emit path from the List case: entrySet/put + a two-type-arg allocation. Proves the
@@ -359,7 +368,8 @@ class BridgeCodegenTest {
 
   @Test
   @DisplayName(
-    "bare Map<K,V> default: codegen and the runtime reflective mapper allocate the SAME concrete class (HashMap) — cross-strategy parity on the interface-family default"
+    "bare Map<K,V> default: codegen and the runtime reflective mapper allocate the SAME concrete" +
+      " class (LinkedHashMap) — cross-strategy parity on the interface-family default"
   )
   void bareMapDefaultMatchesRuntimeConcreteClass() {
     final Map<String, OptElem> in = new LinkedHashMap<>();
@@ -369,9 +379,12 @@ class BridgeCodegenTest {
     final var viaCodegen = BareMapSrcBridge.BRIDGE.read(new BareMapSrc(in));
     final var viaRuntime = Telescope.mapper(BareMapSrc.class, BareMapDst.class).forward(new BareMapSrc(in));
 
-    // Both must land on the runtime allocator's bare-Map default (HashMap), or an adopter switching
-    // strategies gets a different runtime class for the same field — the seam this audit closes.
-    assertEquals(HashMap.class, viaCodegen.byKey().getClass(), "codegen allocates the runtime default impl");
+    // Both must land on the runtime allocator's bare-Map default, or an adopter switching
+    // strategies
+    // gets a different runtime class for the same field. The default is the insertion-ordered one,
+    // so
+    // an ordered source behind an interface-typed field survives either path.
+    assertEquals(LinkedHashMap.class, viaCodegen.byKey().getClass(), "codegen allocates the runtime default impl");
     assertEquals(
       viaRuntime.byKey().getClass(),
       viaCodegen.byKey().getClass(),

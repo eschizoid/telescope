@@ -2428,11 +2428,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // FQN of the concrete, instantiable class to allocate for a container field of the given declared
   // type — the declared subtype itself when it is an instantiable class (ArrayList, TreeSet,
   // TreeMap, …), else the default impl for the interface family. The interface-family defaults
-  // match
-  // the runtime DeepMap allocators for the bare interface raws: List → ArrayList
-  // (listAllocatorFor),
-  // Set → LinkedHashSet (setAllocatorFor), Map → HashMap (mapAllocatorFor), so codegen and the
-  // reflective path produce the same runtime class for an interface-typed field.
+  // match the runtime DeepMap allocators for the bare interface raws: List → ArrayList
+  // (listAllocatorFor), Set → LinkedHashSet (setAllocatorFor), Map → LinkedHashMap
+  // (mapAllocatorFor), so codegen and the reflective path produce the same runtime class for an
+  // interface-typed field. The two hash families default to their insertion-ordered form because a
+  // conversion that is not asked to reorder should not: an ordered source behind an interface-typed
+  // field keeps its order across the rebuild.
   private static String concreteImplFqn(final TypeMirror container, final FieldPlan.Kind kind) {
     final var el = (TypeElement) ((DeclaredType) container).asElement();
     if (el.getKind() == ElementKind.CLASS && !el.getModifiers().contains(Modifier.ABSTRACT)) {
@@ -2441,7 +2442,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return switch (kind) {
       case LIST -> "java.util.ArrayList";
       case SET -> "java.util.LinkedHashSet";
-      case MAP_VALUES -> "java.util.HashMap";
+      case MAP_VALUES -> "java.util.LinkedHashMap";
       default -> throw new IllegalStateException("not a collection/map kind: " + kind);
     };
   }

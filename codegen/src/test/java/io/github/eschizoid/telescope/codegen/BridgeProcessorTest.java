@@ -742,7 +742,7 @@ class BridgeProcessorTest {
       // forward allocates the concrete subtype; backward allocates the Map interface's two-arg
       // default.
       assertTrue(bridge.contains("new demo.MMixWrap()"), bridge);
-      assertTrue(bridge.contains("new java.util.HashMap<java.lang.String, demo.MMixSrc>()"), bridge);
+      assertTrue(bridge.contains("new java.util.LinkedHashMap<java.lang.String, demo.MMixSrc>()"), bridge);
     }
 
     @Test
@@ -944,9 +944,10 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.IMOrderBridge");
       assertNotNull(bridge);
-      // Forward into the target TreeMap; backward into the source's default HashMap.
+      // Forward into the target TreeMap; backward into the Map interface's insertion-ordered
+      // default.
       assertTrue(bridge.contains("new TreeMap<>("), bridge);
-      assertTrue(bridge.contains("new HashMap<>("), bridge);
+      assertTrue(bridge.contains("new LinkedHashMap<>("), bridge);
     }
 
     @Test
@@ -1112,10 +1113,10 @@ class BridgeProcessorTest {
       assertTrue(cart.contains("__fwd_items(__fs_items)"), cart);
       assertTrue(cart.contains("final java.util.Map<java.lang.String,demo.LineItemDto> __bt_items = t.items();"), cart);
       assertTrue(cart.contains("__bwd_items(__bt_items)"), cart);
-      assertTrue(cart.contains("import java.util.HashMap;"), cart);
+      assertTrue(cart.contains("import java.util.LinkedHashMap;"), cart);
       assertTrue(cart.contains("import java.util.Map;"), cart);
-      assertTrue(cart.contains("HashMap.<java.lang.String, demo.LineItemDto>newHashMap(src.size())"), cart);
-      assertFalse(cart.contains("new HashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
+      assertTrue(cart.contains("LinkedHashMap.<java.lang.String, demo.LineItemDto>newLinkedHashMap(src.size())"), cart);
+      assertFalse(cart.contains("new LinkedHashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.forward(e.getValue())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.backward(e.getValue())"), cart);
     }

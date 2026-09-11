@@ -290,16 +290,22 @@ final class ContainerLifts {
   }
 
   /**
-   * Map-side allocator. {@code IdentityHashMap} and {@code WeakHashMap} are accepted but carry
-   * different semantics from a plain {@code HashMap} ({@code IdentityHashMap} uses reference
-   * equality for keys, {@code WeakHashMap} GCs keys without strong references) — adopters needing
-   * preservation declare an explicit {@code Mapping.via(...)} row. {@code EnumMap} is rejected at
-   * plan-time because its no-arg constructor doesn't exist (it needs the {@code Class<K>} arg);
-   * adopters must use the codegen path or an explicit row.
+   * Map-side allocator. A bare {@code Map} rebuilds as a {@code LinkedHashMap}, so an ordered
+   * source behind an interface-typed field keeps its iteration order across the conversion, and the
+   * Map side matches the Set side, which has always rebuilt as a {@code LinkedHashSet}. A field
+   * declared as {@code HashMap} asked for that class specifically and still gets it.
+   *
+   * <p>{@code IdentityHashMap} and {@code WeakHashMap} are accepted but carry different semantics
+   * from a plain {@code HashMap} ({@code IdentityHashMap} uses reference equality for keys, {@code
+   * WeakHashMap} GCs keys without strong references) — adopters needing preservation declare an
+   * explicit {@code Mapping.via(...)} row. {@code EnumMap} is rejected at plan-time because its
+   * no-arg constructor doesn't exist (it needs the {@code Class<K>} arg); adopters must use the
+   * codegen path or an explicit row.
    */
   private static Function<Object, Object> mapAllocatorFor(final Class<?> raw) {
-    if (raw == Map.class || raw == HashMap.class) return input -> HashMap.newHashMap(((Map<?, ?>) input).size());
-    if (raw == LinkedHashMap.class) return input -> LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size());
+    if (raw == HashMap.class) return input -> HashMap.newHashMap(((Map<?, ?>) input).size());
+    if (raw == Map.class || raw == LinkedHashMap.class) return input ->
+      LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size());
     if (raw == TreeMap.class) return input -> new TreeMap<>(mapComparator(input));
     if (raw == ConcurrentHashMap.class) return input -> new ConcurrentHashMap<>(((Map<?, ?>) input).size());
     if (raw == ConcurrentSkipListMap.class) return input -> new ConcurrentSkipListMap<>(mapComparator(input));
