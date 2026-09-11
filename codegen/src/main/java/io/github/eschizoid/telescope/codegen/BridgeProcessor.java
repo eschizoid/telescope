@@ -191,10 +191,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * Which pair claimed each generated bridge FQN. Auto-derived names are built from the two simple
-   * names, so two pairs whose types share simple names across different packages flatten to the
-   * same FQN — the second write is a FilerException reported against whichever file the Filer was
-   * given, which need not be one the author annotated. Holding the first claimant lets the clash be
+   * names, so two pairs emitting into the same package from same-simple-named types land on one FQN
+   * — the second write is a FilerException reported against whichever file the Filer was given,
+   * which need not be one the author annotated. Holding the first claimant lets the clash be
    * reported against the pair that caused it.
+   *
+   * <p>The sibling case — pairs in different packages deriving the same simple name — yields
+   * distinct FQNs, so nothing collides here; it is resolved where the parent references them, in
+   * {@link #subBridgeReference}.
    */
   private final Map<String, TypePair> bridgeNameOwner = new HashMap<>();
 
@@ -1660,7 +1664,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       pending,
       seen,
       userDeclared,
-      lenient
+      lenient,
+      pkg
     );
     if (fieldPlans == null) return;
 
@@ -2483,7 +2488,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
     final Set<TypePair> userDeclared,
-    final boolean lenient
+    final boolean lenient,
+    final String parentPkg
   ) {
     final var plans = new LinkedHashMap<String, FieldPlan>();
     for (final var sf : sourceFields) {
@@ -2561,7 +2567,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           pending,
           seen,
           userDeclared,
-          lenient
+          lenient,
+          parentPkg
         );
         if (subPlan == null) return null;
         // Attach the concrete-impl class the inline identity-element copy allocates: the target's
@@ -2636,7 +2643,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           pending,
           seen,
           userDeclared,
-          lenient
+          lenient,
+          parentPkg
         );
         if (subPlan == null) return null;
         plans.put(sf.name(), FieldPlan.rawContainer(subPlan.kind(), subPlan.subBridgeName()));
@@ -2655,7 +2663,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           pending,
           seen,
           userDeclared,
-          lenient
+          lenient,
+          parentPkg
         );
         if (subPlan == null) return null;
         plans.put(sf.name(), subPlan);
@@ -2672,7 +2681,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           pending,
           seen,
           userDeclared,
-          lenient
+          lenient,
+          parentPkg
         );
         if (subPlan == null) return null;
         plans.put(sf.name(), subPlan);
@@ -2701,7 +2711,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Leniency propagates: a lenient parent's nested sub-pair is itself lenient, so its
         // bijection check is skipped and unmatched nested-target fields take JLS defaults.
         if (lenient) lenientPairs.add(subPair);
-        final var subBridgeName = bridgeClassName(subSourceEl, subTargetEl, userDeclared.contains(subPair));
+        final var subBridgeName = subBridgeReference(
+          subSourceEl,
+          subTargetEl,
+          userDeclared.contains(subPair),
+          parentPkg
+        );
         plans.put(sf.name(), FieldPlan.recurse(subBridgeName));
         continue;
       }
@@ -2741,7 +2756,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Deque<TypePair> pending,
     final Set<TypePair> seen,
     final Set<TypePair> userDeclared,
-    final boolean lenient
+    final boolean lenient,
+    final String parentPkg
   ) {
     if (isSameType(srcElement, tgtElement)) {
       // Container kind matters (lift), but no sub-bridge — the element passes through. Use a
@@ -2767,7 +2783,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       // Leniency propagates into the element pair too, matching the scalar sub-pair path.
       if (lenient) lenientPairs.add(subPair);
-      final var subBridgeName = bridgeClassName(subSourceEl, subTargetEl, userDeclared.contains(subPair));
+      final var subBridgeName = subBridgeReference(subSourceEl, subTargetEl, userDeclared.contains(subPair), parentPkg);
       return FieldPlan.ofKind(kind, subBridgeName);
     }
     error(
@@ -3265,6 +3281,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     if (userDeclared) return source.getSimpleName() + "Bridge";
     return source.getSimpleName() + "To" + target.getSimpleName() + "Bridge";
+  }
+
+  /**
+   * The name a parent bridge should call a sub-bridge by. Auto-derived names are built from the two
+   * simple names, so two sub-pairs whose types share simple names across packages derive the same
+   * one — and a parent referencing both by simple name cannot resolve either, whichever package
+   * each lives in. Qualifying every sub-bridge outside the parent's own package removes the
+   * ambiguity at the reference rather than at the name: the emitted expression names exactly one
+   * class, and the file needs no import for it.
+   */
+  private String subBridgeReference(
+    final TypeElement subSource,
+    final TypeElement subTarget,
+    final boolean userDeclared,
+    final String parentPkg
+  ) {
+    final var simple = bridgeClassName(subSource, subTarget, userDeclared);
+    final var subPkg = processingEnv.getElementUtils().getPackageOf(subSource).getQualifiedName().toString();
+    if (subPkg.isEmpty() || subPkg.equals(parentPkg)) return simple;
+    return subPkg + "." + simple;
   }
 
   /**

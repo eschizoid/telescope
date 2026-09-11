@@ -213,6 +213,41 @@ class GeneratedNameCollisionTest {
   }
 
   @Test
+  @DisplayName("sub-bridges sharing a simple name across packages are referenced without ambiguity")
+  void subBridgesSharingASimpleNameAcrossPackagesResolve() {
+    // a.User -> a.UserDto and b.User -> b.UserDto each derive UserToUserDtoBridge, in their own
+    // packages. The FQNs differ, so this is not a name clash the emitter can refuse — the parent
+    // has to reference both, and referencing them by simple name would leave one unresolvable and
+    // hand the other's forward a value of the wrong type.
+    final var compilation = compile(
+      new BridgeProcessor(),
+      source("a.User", "package a; public record User(String name) {}"),
+      source("a.UserDto", "package a; public record UserDto(String name) {}"),
+      source("b.User", "package b; public record User(String name) {}"),
+      source("b.UserDto", "package b; public record UserDto(String name) {}"),
+      source(
+        "demo.Root",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.RootDto.class) public record Root(a.User user, b.User other) {}
+        """
+      ),
+      source("demo.RootDto", "package demo; public record RootDto(a.UserDto user, b.UserDto other) {}")
+    );
+
+    assertTrue(
+      compilation.success(),
+      () -> "both sub-bridges must be referenced unambiguously; saw " + compilation.errorMessages()
+    );
+    final var bridge = compilation.generated().get("demo.RootBridge");
+    assertTrue(
+      bridge != null && bridge.contains("a.UserToUserDtoBridge") && bridge.contains("b.UserToUserDtoBridge"),
+      () -> "each sub-bridge must be named by its own package; saw " + bridge
+    );
+  }
+
+  @Test
   @DisplayName("two pairs whose auto-derived bridge names collide are named at the declaration")
   void collidingAutoBridgeNamesAreReported() {
     // a.MoneyA -> b.MoneyB and a.MoneyA -> c.MoneyB both derive MoneyAToMoneyBBridge in package a,
