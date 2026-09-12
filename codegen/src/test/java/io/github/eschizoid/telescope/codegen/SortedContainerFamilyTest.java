@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.codegen;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
@@ -89,14 +88,18 @@ class SortedContainerFamilyTest {
   }
 
   @Test
-  @DisplayName("a sorted set whose element type changes is refused, not silently reordered")
-  void sortedSetWithChangingElementsIsRefused() {
+  @DisplayName("a set that converts its elements guards the custom comparator it cannot carry")
+  void changingElementsGuardsACustomComparator() {
+    // Natural ordering carries over untouched, so refusing every sorted set would reject programs
+    // the reflective path accepts. The check is on the comparator and it is made on the value,
+    // because a field declared as a plain Set can hold a sorted one.
     final var compilation = compile(pair("java.util.SortedSet<demo.SA> items", "java.util.SortedSet<demo.SB> items"));
 
-    assertFalse(compilation.success(), "nothing can order the rebuilt set");
+    assertTrue(compilation.success(), () -> "natural ordering is fine: " + compilation.errorMessages());
+    final var bridge = compilation.generated().get("demo.FSrcBridge");
     assertTrue(
-      compilation.hasError("sorted set whose element type changes"),
-      () -> "the reason is the comparator, and the message should say so: " + compilation.errorMessages()
+      bridge != null && bridge.contains("__sorted.comparator() != null"),
+      () -> "the rebuild must refuse a comparator it cannot reuse; saw " + bridge
     );
   }
 

@@ -2774,30 +2774,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             error(source, unassignableContainerMessage(source, target, sf.name(), unassignable));
             return null;
           }
-          // A sorted set orders by a comparator over its elements. Converting the elements leaves
-          // nothing that can order the result, so the rebuild would fall back to natural ordering —
-          // silently reordering where the elements are comparable, and throwing on the first insert
-          // where they are not. Refused rather than emitted, the way a container that cannot be
-          // constructed at all is.
-          if (
-            subPlan.kind() == FieldPlan.Kind.SET &&
-            !IDENTITY_ELEMENT_SENTINEL.equals(subPlan.subBridgeName()) &&
-            (assignableToRaw(sf.type(), "java.util.SortedSet") || assignableToRaw(tf.type(), "java.util.SortedSet"))
-          ) {
-            error(
-              source,
-              "@Bridge " +
-                source.getSimpleName() +
-                " -> " +
-                target.getSimpleName() +
-                ": field '" +
-                sf.name() +
-                "' is a sorted set whose element type changes, so the comparator ordering it" +
-                " cannot order the result. Keep the element type, or supply an explicit" +
-                " @ViaMapper for this field."
-            );
-            return null;
-          }
           final var elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(subPlan.subBridgeName());
           final var inlineCopy =
             elementIdentity &&
@@ -3277,6 +3253,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println();
     out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
     out.println("    if (src == null) return null;");
+    final var rawGuard = orderingGuard(plan.kind(), IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName()));
+    if (!rawGuard.isEmpty()) out.println(rawGuard);
     out.println(
       "    final var out = " +
         rawAllocExpr(tgtContainer, srcContainer, plan.kind(), IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) +
@@ -3369,6 +3347,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         : "";
       default -> "";
     };
+  }
+
+  /**
+   * The check a set rebuild has to make before converting its elements, or empty when it has none
+   * to make. A custom comparator orders the source's element type and cannot order the target's, so
+   * reusing it is impossible and ignoring it would silently reorder. Natural ordering carries over
+   * untouched, which is why the test is on the comparator rather than on sortedness.
+   *
+   * <p>The test is on the value rather than the declared type, because a field declared as a plain
+   * {@code Set} can hold a sorted one. That is what the reflective path checks, and the two are
+   * meant to accept the same programs.
+   */
+  private static String orderingGuard(final FieldPlan.Kind kind, final boolean elementsPreserved) {
+    if (kind != FieldPlan.Kind.SET || elementsPreserved) return "";
+    return (
+      "    if (src instanceof java.util.SortedSet<?> __sorted && __sorted.comparator() !=" +
+      " null) throw new IllegalStateException(\n" +
+      "      \"Deep map: a custom sorted-set comparator cannot be reused with changed" +
+      " \"\n" +
+      "        + \"element types. Supply an explicit Mapping.via(...) row with a target" +
+      " comparator.\");"
+    );
   }
 
   // Allocation expression for a raw-container output: the target's concrete class (the subtype
@@ -3468,6 +3468,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
+    out.println(orderingGuard(FieldPlan.Kind.SET, false));
     out.println("    final var out = " + alloc + ";");
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");

@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.bridgexpkg.sortedcmp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.Comparator;
@@ -36,6 +37,32 @@ class SortedComparatorTest {
 
     assertNotNull(converted.byKey().comparator(), "without it, a non-comparable key cannot be inserted at all");
     assertEquals(List.of("a", "b"), converted.byKey().keySet().stream().map(SortKey::id).toList());
+  }
+
+  @Test
+  @DisplayName("both paths refuse a custom set comparator they cannot reuse, with the same message")
+  void bothPathsRefuseACustomSetComparator() {
+    final var items = new java.util.TreeSet<CmpA>(Comparator.comparing(CmpA::v));
+    items.add(new CmpA("a"));
+    final var src = new SetSrc(items);
+
+    final var fromCodegen = assertThrows(IllegalStateException.class, () -> SetSrcBridge.forward(src));
+    final var fromRuntime = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(SetSrc.class, SetDst.class).forward(src)
+    );
+
+    assertEquals(fromRuntime.getMessage(), fromCodegen.getMessage());
+  }
+
+  @Test
+  @DisplayName("a naturally ordered set converts on both paths, since nothing is lost")
+  void naturalOrderingConvertsOnBothPaths() {
+    // The guard is on the comparator, not on sortedness, so a sorted set that orders naturally is
+    // accepted — refusing it would reject programs the reflective path takes.
+    final var src = new SetSrc(new java.util.TreeSet<>(java.util.List.of(new CmpA("a"))));
+
+    assertNotNull(SetSrcBridge.forward(src));
+    assertNotNull(Telescope.mapper(SetSrc.class, SetDst.class).forward(src));
   }
 
   @Test
