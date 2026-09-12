@@ -8,6 +8,8 @@ import io.github.eschizoid.telescope.Telescope;
 import java.util.Comparator;
 import java.util.List;
 import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -44,7 +46,7 @@ class SortedComparatorTest {
   void concurrentMapResolvesOnBothPaths() {
     // The third family added to both allocation tables. SortedMap covers the sorted arm; without
     // this the concurrent arm is added to the runtime table and never executed by any test.
-    final var byKey = new java.util.concurrent.ConcurrentHashMap<String, CmpA>();
+    final var byKey = new ConcurrentHashMap<String, CmpA>();
     byKey.put("a", new CmpA("first"));
     final var src = new ConcSrc(byKey);
 
@@ -58,7 +60,7 @@ class SortedComparatorTest {
   @Test
   @DisplayName("both paths refuse a custom set comparator they cannot reuse, with the same message")
   void bothPathsRefuseACustomSetComparator() {
-    final var items = new java.util.TreeSet<CmpA>(Comparator.comparing(CmpA::v));
+    final var items = new TreeSet<CmpA>(Comparator.comparing(CmpA::v));
     items.add(new CmpA("a"));
     final var src = new SetSrc(items);
 
@@ -75,7 +77,7 @@ class SortedComparatorTest {
   void naturalOrderingConvertsOnBothPaths() {
     // The guard is on the comparator, not on sortedness, so a sorted set that orders naturally is
     // accepted — refusing it would reject programs the reflective path takes.
-    final var src = new SetSrc(new java.util.TreeSet<>(java.util.List.of(new CmpA("a"))));
+    final var src = new SetSrc(new TreeSet<>(List.of(new CmpA("a"))));
 
     assertNotNull(SetSrcBridge.forward(src));
     assertNotNull(Telescope.mapper(SetSrc.class, SetDst.class).forward(src));

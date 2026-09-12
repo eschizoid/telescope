@@ -3491,7 +3491,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES);
-    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue, orderingArg(srcContainer, implFqn, true));
+    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue, orderingArg(srcContainer, implFqn, false));
     out.println();
     out.println(
       "  private static " +

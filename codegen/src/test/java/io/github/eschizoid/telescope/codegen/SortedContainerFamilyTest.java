@@ -104,6 +104,40 @@ class SortedContainerFamilyTest {
   }
 
   @Test
+  @DisplayName("the route that allocates empty and fills guards the comparator too, not just the generic one")
+  void rawSubtypeRouteGuardsTheComparator() {
+    // Two routes rebuild a set. Where both sides are generic containers the JDK copy constructor
+    // runs; where either side is a raw subtype a self-contained helper allocates empty and fills.
+    // They are separate emissions, so a guard proven on one says nothing about the other, and this
+    // is the second: a raw target subtype whose elements are bridged rather than carried across.
+    final var compilation = compile(
+      ProcessorHarness.source("demo.SA", "package demo; public record SA(String v) {}"),
+      ProcessorHarness.source("demo.SB", "package demo; public record SB(String v) {}"),
+      ProcessorHarness.source(
+        "demo.NamesB",
+        "package demo; import java.util.TreeSet; public class NamesB extends TreeSet<demo.SB> {}"
+      ),
+      ProcessorHarness.source(
+        "demo.BSrc",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(demo.BDst.class)
+        public record BSrc(java.util.SortedSet<demo.SA> items) {}
+        """
+      ),
+      ProcessorHarness.source("demo.BDst", "package demo; public record BDst(demo.NamesB items) {}")
+    );
+
+    assertTrue(compilation.success(), () -> "bridged elements into a raw subtype: " + compilation.errorMessages());
+    final var bridge = compilation.generated().get("demo.BSrcBridge");
+    assertTrue(
+      bridge != null && bridge.contains("__sorted.comparator() != null"),
+      () -> "the fill route converts elements, so it cannot reuse the ordering either; saw " + bridge
+    );
+  }
+
+  @Test
   @DisplayName("a sorted set keeps its comparator on the route that allocates empty and fills")
   void sortedSetCarriesItsComparator() {
     // Where the two sides are plain generic containers the inline copy runs, and the JDK's own
