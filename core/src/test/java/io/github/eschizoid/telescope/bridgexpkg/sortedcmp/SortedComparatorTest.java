@@ -40,6 +40,22 @@ class SortedComparatorTest {
   }
 
   @Test
+  @DisplayName("a ConcurrentMap-declared field resolves on both paths too")
+  void concurrentMapResolvesOnBothPaths() {
+    // The third family added to both allocation tables. SortedMap covers the sorted arm; without
+    // this the concurrent arm is added to the runtime table and never executed by any test.
+    final var byKey = new java.util.concurrent.ConcurrentHashMap<String, CmpA>();
+    byKey.put("a", new CmpA("first"));
+    final var src = new ConcSrc(byKey);
+
+    final var codegen = ConcSrcBridge.forward(src);
+    final var runtime = Telescope.mapper(ConcSrc.class, ConcDst.class).forward(src);
+
+    assertEquals(codegen.byKey().getClass(), runtime.byKey().getClass());
+    assertEquals(new CmpB("first"), runtime.byKey().get("a"));
+  }
+
+  @Test
   @DisplayName("both paths refuse a custom set comparator they cannot reuse, with the same message")
   void bothPathsRefuseACustomSetComparator() {
     final var items = new java.util.TreeSet<CmpA>(Comparator.comparing(CmpA::v));
