@@ -390,10 +390,10 @@ public sealed class Telescope<
    * four fixed-container companions this one has no single container to name.
    *
    * <p>Reading and writing are not symmetric here, and the asymmetry is the surprising part. Every
-   * {@code Iterable} enumerates, so {@code read}, {@code toList} and {@code count} work whatever the
-   * source is. A write has to rebuild, and the element traversal rebuilds only a {@code List} or a
-   * {@code Set} source, rejecting any other at update time. A path validated with {@code toList()}
-   * can therefore still throw on {@code update}. A model that uses a {@code Queue} or a
+   * {@code Iterable} enumerates, so {@code read}, {@code toList} and {@code count} work whatever
+   * the source is. A write has to rebuild, and the element traversal rebuilds only a {@code List}
+   * or a {@code Set} source, rejecting any other at update time. A path validated with {@code
+   * toList()} can therefore still throw on {@code update}. A model that uses a {@code Queue} or a
    * {@code Deque} should declare the component as {@code List&lt;X&gt;} or {@code Set&lt;X&gt;} so
    * the fixed-container companions apply instead.
    *
