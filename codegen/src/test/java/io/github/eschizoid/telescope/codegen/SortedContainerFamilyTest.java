@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
@@ -84,6 +85,25 @@ class SortedContainerFamilyTest {
     assertTrue(
       bridge != null && bridge.contains(expectedImpl),
       () -> label + " should allocate " + expectedImpl + "; saw " + bridge
+    );
+  }
+
+  @Test
+  @DisplayName("a plain map into a sorted target allocates natural ordering, having none to carry")
+  void unsortedSourceCarriesNoOrdering() {
+    // The ordering argument is read off the source, so a source that is not sorted has none to
+    // give. Emitting the read anyway would name a method a plain Map does not declare, which is
+    // why this asserts on the compile as well as on the text.
+    final var compilation = compile(
+      pair("java.util.Map<String, demo.SA> items", "java.util.SortedMap<String, demo.SB> items")
+    );
+
+    assertTrue(compilation.success(), () -> "a plain map is a valid sorted-map source: " + compilation.errorMessages());
+    final var bridge = compilation.generated().get("demo.FSrcBridge");
+    assertTrue(bridge != null && bridge.contains("java.util.TreeMap"), () -> "sorted target allocates a TreeMap");
+    assertFalse(
+      bridge.contains("src.comparator()"),
+      () -> "there is no comparator on the source to read; saw " + bridge
     );
   }
 
