@@ -2502,6 +2502,31 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * Why a container field cannot be emitted when nothing telescope can construct is of its declared
+   * type. Naming a concrete type is the only fix the author can apply, since the type itself is
+   * what rules out every candidate.
+   */
+  private static String unassignableContainerMessage(
+    final TypeElement source,
+    final TypeElement target,
+    final String fieldName,
+    final String container
+  ) {
+    return (
+      "@Bridge " +
+      source.getSimpleName() +
+      " -> " +
+      target.getSimpleName() +
+      ": field '" +
+      fieldName +
+      "' is declared as '" +
+      container +
+      "', which telescope cannot construct — the class it would allocate is not of that type." +
+      " Declare the field as a concrete container, or supply an explicit @ViaMapper for it."
+    );
+  }
+
+  /**
    * Why a container field cannot be emitted, and what the author can do about it. Every route but
    * the inline identity copy allocates no-arg, so a class without that constructor cannot be built.
    * The remedy depends on who owns the class: adding a constructor is only advice the author can
@@ -2736,6 +2761,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // elements. Forward hands the source to the target's constructor and backward does the
         // reverse, so each side is asked about the value it will actually receive.
         if (isContainerKind(subPlan.kind())) {
+          // Whatever route the container takes, it allocates a class that has to BE the declared
+          // type. That is decided before the route is, so it is asked first.
+          final var unassignable = firstUnassignableContainer(sf.type(), tf.type(), subPlan.kind());
+          if (unassignable != null) {
+            error(source, unassignableContainerMessage(source, target, sf.name(), unassignable));
+            return null;
+          }
           final var elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(subPlan.subBridgeName());
           final var inlineCopy =
             elementIdentity &&
@@ -2761,8 +2793,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // (LinkedList, TreeSet, …) is rebuilt as that class, not the default impl.
         final var withImpls = switch (subPlan.kind()) {
           case LIST, SET, MAP_VALUES -> subPlan.withContainerImpls(
-            simpleName(concreteImplFqn(tf.type(), subPlan.kind())),
-            simpleName(concreteImplFqn(sf.type(), subPlan.kind()))
+            concreteImplFqn(tf.type(), subPlan.kind()),
+            concreteImplFqn(sf.type(), subPlan.kind())
           );
           default -> subPlan;
         };
@@ -2800,6 +2832,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // subtype that hides it (`class Wrap extends ArrayList<X> { Wrap(int cap) {} }`) would make
         // the generated `new Wrap()` fail in the consumer's build with a raw javac error; reject it
         // here with a telescope-authored diagnostic instead.
+        final var unassignableRaw = firstUnassignableContainer(sf.type(), tf.type(), srcRaw.kind());
+        if (unassignableRaw != null) {
+          error(source, unassignableContainerMessage(source, target, sf.name(), unassignableRaw));
+          return null;
+        }
         final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), srcRaw.kind());
         if (badAlloc != null) {
           error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
@@ -3150,13 +3187,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // types and the inline copy) and the concrete impl each side allocates. For the common
         // interface-typed field this is {List, ArrayList} etc., unchanged; a concrete subtype adds
         // its own class (LinkedList, TreeSet, …).
+        // A container's raw type and its allocation class are rendered fully qualified, so they
+        // need no import — and importing them would reintroduce the collision two subtypes of the
+        // same simple name in different packages otherwise cause.
         case LIST, SET, MAP_VALUES -> {
-          final var srcType = fieldByName(sourceFields, entry.getKey()).type();
-          final var tgtType = fieldByName(targetFields, renames.getOrDefault(entry.getKey(), entry.getKey())).type();
-          for (final var t : List.of(srcType, tgtType)) {
-            imports.add(containerRawFqn(t));
-            imports.add(concreteImplFqn(t, plan.kind()));
-          }
         }
         case OPTIONAL_TO_NULLABLE, NULLABLE_TO_OPTIONAL -> imports.add("java.util.Optional");
         default -> {
@@ -3253,6 +3287,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // The JDK default impls (ArrayList / LinkedHashSet / LinkedHashMap) always qualify; only a user
   // subtype
   // can hide its no-arg ctor.
+  /**
+   * The first of the two container types whose chosen allocation class cannot be assigned to it, or
+   * null when both fit. Picking a class and being able to name it are separate obligations from
+   * being able to assign it: an interface or abstract type the adopter wrote falls through to the
+   * family default, which is instantiable and has the right shape and is still not that type.
+   */
+  private String firstUnassignableContainer(
+    final TypeMirror srcContainer,
+    final TypeMirror tgtContainer,
+    final FieldPlan.Kind kind
+  ) {
+    final var types = processingEnv.getTypeUtils();
+    for (final var container : List.of(srcContainer, tgtContainer)) {
+      final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
+      if (implEl == null) continue;
+      if (!types.isAssignable(types.erasure(implEl.asType()), types.erasure(container))) {
+        return container.toString();
+      }
+    }
+    return null;
+  }
+
   private String firstNonAllocatableContainer(
     final TypeMirror srcContainer,
     final TypeMirror tgtContainer,
@@ -3300,10 +3356,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().getFirst();
     final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
-    final var returnRaw = simpleName(containerRawFqn(tgtContainer));
-    final var paramRaw = simpleName(containerRawFqn(srcContainer));
+    final var returnRaw = containerRawFqn(tgtContainer);
+    final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.LIST);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement));
+    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement), implFqn);
     out.println();
     out.println(
       "  private static " +
@@ -3335,10 +3391,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().getFirst();
     final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
-    final var returnRaw = simpleName(containerRawFqn(tgtContainer));
-    final var paramRaw = simpleName(containerRawFqn(srcContainer));
+    final var returnRaw = containerRawFqn(tgtContainer);
+    final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.SET);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement));
+    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement), implFqn);
     out.println();
     out.println(
       "  private static " +
@@ -3373,10 +3429,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var keyType = srcArgs.get(0);
     final var srcValue = srcArgs.get(1);
     final var tgtValue = tgtArgs.get(1);
-    final var returnRaw = simpleName(containerRawFqn(tgtContainer));
-    final var paramRaw = simpleName(containerRawFqn(srcContainer));
+    final var returnRaw = containerRawFqn(tgtContainer);
+    final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES);
-    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue);
+    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue, implFqn);
     out.println();
     out.println(
       "  private static " +
@@ -3405,11 +3461,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Compute the bridge class name. User-declared pairs use the original convention {@code
-   * <Source>Bridge}; auto-generated sub-pairs use {@code <Source>To<Target>Bridge} so they don't
-   * collide with a user-declared {@code <Source>Bridge} that points at a different target.
-   */
-  /**
    * The first of the two sides that is an abstract class, or {@code null} when both can be
    * constructed. A rebuild calls a constructor and an abstract class has none to call, so the pair
    * is refused here rather than emitted and left for javac to reject inside a file the author never
@@ -3422,6 +3473,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return null;
   }
 
+  /**
+   * Compute the bridge class name. User-declared pairs use the original convention {@code
+   * <Source>Bridge}; auto-generated sub-pairs use {@code <Source>To<Target>Bridge} so they don't
+   * collide with a user-declared {@code <Source>Bridge} that points at a different target.
+   */
   private static String bridgeClassName(
     final TypeElement source,
     final TypeElement target,
