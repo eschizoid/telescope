@@ -71,6 +71,41 @@ class GeneratedCodeReachabilityTest {
       );
   }
 
+  @ParameterizedTest(name = "{0}")
+  @ValueSource(strings = { "java.util.Deque<String> items", "java.util.Queue<String> items" })
+  @DisplayName("a leaf no rebuild can produce is emitted with a warning rather than in silence")
+  void unwritableIterableLeafWarns(final String leaf) {
+    // The step still reads, so refusing to emit would take away a working capability. What it
+    // cannot do is write, and the one moment that is knowable is here rather than at update time.
+    final var compilation = compile(record(leaf));
+
+    assertTrue(compilation.success(), () -> leaf + " still reads, so it must still compile");
+    final var warned = compilation
+      .diagnostics()
+      .stream()
+      .anyMatch(d -> d.getMessage(null).contains("updating through it throws"));
+    assertTrue(warned, () -> "no warning for a leaf that cannot be written: " + compilation.diagnostics());
+  }
+
+  @Test
+  @DisplayName("a leaf a rebuild can produce is emitted without that warning")
+  void writableIterableLeafIsSilent() {
+    // The control. Collection and Iterable both admit an ArrayList, so a write through them lands
+    // somewhere -- without this, a warning emitted for every iterable leaf would pass the test
+    // above.
+    Stream.of("java.util.Collection<String> items", "Iterable<String> items")
+      .map(leaf -> compile(record(leaf)))
+      .forEach(c ->
+        assertFalse(
+          c
+            .diagnostics()
+            .stream()
+            .anyMatch(d -> d.getMessage(null).contains("updating through it throws")),
+          () -> "a writable leaf must not warn: " + c.diagnostics()
+        )
+      );
+  }
+
   @Test
   @DisplayName("the container leaf with no fixed container reaches its elements through the public factory")
   void iterableLeafUsesThePublicFactory() {

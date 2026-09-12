@@ -389,10 +389,18 @@ public sealed class Telescope<
    * {@code Iterable&lt;X&gt;}. The container type stays on the type parameter, because unlike the
    * four fixed-container companions this one has no single container to name.
    *
-   * <p>The element traversal rebuilds a {@code List} or a {@code Set} source and rejects any other
-   * {@code Iterable} at update time, since there is no general way to rebuild one. A model that
-   * uses a {@code Queue} or a {@code Deque} should declare the component as {@code List&lt;X&gt;}
-   * or {@code Set&lt;X&gt;} so the fixed-container companions apply instead.
+   * <p>Reading and writing are not symmetric here, and the asymmetry is the surprising part. Every
+   * {@code Iterable} enumerates, so {@code read}, {@code toList} and {@code count} work whatever the
+   * source is. A write has to rebuild, and the element traversal rebuilds only a {@code List} or a
+   * {@code Set} source, rejecting any other at update time. A path validated with {@code toList()}
+   * can therefore still throw on {@code update}. A model that uses a {@code Queue} or a
+   * {@code Deque} should declare the component as {@code List&lt;X&gt;} or {@code Set&lt;X&gt;} so
+   * the fixed-container companions apply instead.
+   *
+   * <p>The bound admits a path focused at a concrete container class ({@code ArrayList&lt;X&gt;}),
+   * which the fixed-container companions cannot accept because {@code Telescope} is invariant in
+   * its focus. Reads work; a write fails, because the rebuild produces the interface's default
+   * implementation and that cannot be stored back into a field declared at the subclass.
    */
   public static <S, C extends Iterable<X>, X> IterableTelescope<S, C, X> asIterable(final Telescope<S, C> path) {
     return new IterableTelescope<>(
