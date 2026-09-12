@@ -321,13 +321,19 @@ class BridgeProcessorTest {
       assertTrue(orderBridge.contains("__fwd_items(__fs_items)"), orderBridge);
       assertTrue(orderBridge.contains("final java.util.List<demo.LineItemDto> __bt_items = t.items();"), orderBridge);
       assertTrue(orderBridge.contains("__bwd_items(__bt_items)"), orderBridge);
-      assertTrue(orderBridge.contains("import java.util.ArrayList;"), orderBridge);
-      assertTrue(orderBridge.contains("import java.util.List;"), orderBridge);
+      // A container helper renders every type fully qualified, so it imports none of them — not the
+      // allocation class and not the declared raw. Pinning the raw as well as the impl states the
+      // invariant directly; a colliding pair failing downstream only catches it once two of them
+      // exist in one bridge.
+      assertFalse(orderBridge.contains("import java.util.ArrayList;"), orderBridge);
+      assertFalse(orderBridge.contains("import java.util.List;"), orderBridge);
       assertTrue(
-        orderBridge.contains("private static List<demo.LineItemDto> __fwd_items(final List<demo.LineItem> src)"),
+        orderBridge.contains(
+          "private static java.util.List<demo.LineItemDto> __fwd_items(final" + " java.util.List<demo.LineItem> src)"
+        ),
         orderBridge
       );
-      assertTrue(orderBridge.contains("new ArrayList<demo.LineItemDto>(src.size())"), orderBridge);
+      assertTrue(orderBridge.contains("new java.util.ArrayList<demo.LineItemDto>(src.size())"), orderBridge);
       assertTrue(orderBridge.contains("LineItemToLineItemDtoBridge.forward(x)"), orderBridge);
       assertTrue(orderBridge.contains("LineItemToLineItemDtoBridge.backward(x)"), orderBridge);
     }
@@ -381,7 +387,7 @@ class BridgeProcessorTest {
       assertNotNull(bridge);
       // The forward helper writes the target's concrete class (LinkedList), not the default
       // ArrayList, and its return type is the target's declared concrete type.
-      assertTrue(bridge.contains("new LinkedList<demo.LLItemDto>"), bridge);
+      assertTrue(bridge.contains("new java.util.LinkedList<demo.LLItemDto>"), bridge);
     }
 
     @Test
@@ -883,8 +889,8 @@ class BridgeProcessorTest {
       assertNotNull(bridge);
       // Identity element → no helper; an inline copy into the target's LinkedList (forward) and the
       // source's default ArrayList (backward).
-      assertTrue(bridge.contains("new LinkedList<>("), bridge);
-      assertTrue(bridge.contains("new ArrayList<>("), bridge);
+      assertTrue(bridge.contains("new java.util.LinkedList<>("), bridge);
+      assertTrue(bridge.contains("new java.util.ArrayList<>("), bridge);
     }
 
     @Test
@@ -917,8 +923,8 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.ISOrderBridge");
       assertNotNull(bridge);
-      assertTrue(bridge.contains("new TreeSet<>("), bridge);
-      assertTrue(bridge.contains("new LinkedHashSet<>("), bridge);
+      assertTrue(bridge.contains("new java.util.TreeSet<>("), bridge);
+      assertTrue(bridge.contains("new java.util.LinkedHashSet<>("), bridge);
     }
 
     @Test
@@ -953,8 +959,8 @@ class BridgeProcessorTest {
       assertNotNull(bridge);
       // Forward into the target TreeMap; backward into the Map interface's insertion-ordered
       // default.
-      assertTrue(bridge.contains("new TreeMap<>("), bridge);
-      assertTrue(bridge.contains("new LinkedHashMap<>("), bridge);
+      assertTrue(bridge.contains("new java.util.TreeMap<>("), bridge);
+      assertTrue(bridge.contains("new java.util.LinkedHashMap<>("), bridge);
     }
 
     @Test
@@ -1003,13 +1009,12 @@ class BridgeProcessorTest {
       assertTrue(catalog.contains("__fwd_tags(__fs_tags)"), catalog);
       assertTrue(catalog.contains("final java.util.Set<demo.TagDto> __bt_tags = t.tags();"), catalog);
       assertTrue(catalog.contains("__bwd_tags(__bt_tags)"), catalog);
-      assertTrue(catalog.contains("import java.util.LinkedHashSet;"), catalog);
-      assertTrue(catalog.contains("import java.util.Set;"), catalog);
+      assertFalse(catalog.contains("import java.util.LinkedHashSet;"), catalog);
       // newLinkedHashSet, not the int constructor: that argument is a table capacity, and a table
       // built straight from an element count resizes once that count passes three quarters of the
       // next power of two.
-      assertTrue(catalog.contains("LinkedHashSet.<demo.TagDto>newLinkedHashSet(src.size())"), catalog);
-      assertFalse(catalog.contains("new LinkedHashSet<demo.TagDto>(src.size())"), catalog);
+      assertTrue(catalog.contains("java.util.LinkedHashSet.<demo.TagDto>newLinkedHashSet(src.size())"), catalog);
+      assertFalse(catalog.contains("new java.util.LinkedHashSet<demo.TagDto>(src.size())"), catalog);
       assertTrue(catalog.contains("TagToTagDtoBridge.forward(x)"), catalog);
       assertTrue(catalog.contains("TagToTagDtoBridge.backward(x)"), catalog);
     }
@@ -1120,10 +1125,12 @@ class BridgeProcessorTest {
       assertTrue(cart.contains("__fwd_items(__fs_items)"), cart);
       assertTrue(cart.contains("final java.util.Map<java.lang.String,demo.LineItemDto> __bt_items = t.items();"), cart);
       assertTrue(cart.contains("__bwd_items(__bt_items)"), cart);
-      assertTrue(cart.contains("import java.util.LinkedHashMap;"), cart);
-      assertTrue(cart.contains("import java.util.Map;"), cart);
-      assertTrue(cart.contains("LinkedHashMap.<java.lang.String, demo.LineItemDto>newLinkedHashMap(src.size())"), cart);
-      assertFalse(cart.contains("new LinkedHashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
+      assertFalse(cart.contains("import java.util.LinkedHashMap;"), cart);
+      assertTrue(
+        cart.contains("java.util.LinkedHashMap.<java.lang.String," + " demo.LineItemDto>newLinkedHashMap(src.size())"),
+        cart
+      );
+      assertFalse(cart.contains("new java.util.LinkedHashMap<java.lang.String, demo.LineItemDto>(src.size())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.forward(e.getValue())"), cart);
       assertTrue(cart.contains("LineItemToLineItemDtoBridge.backward(e.getValue())"), cart);
     }

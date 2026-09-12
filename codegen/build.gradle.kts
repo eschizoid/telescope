@@ -27,7 +27,10 @@ java {
 tasks.withType<JavaCompile>().configureEach {
     options.release = 21
     options.encoding = "UTF-8"
-    options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-parameters"))
+    // -Werror because one of these warnings earns its keep here: a javadoc block left above the
+    // wrong member after an insertion is reported as dangling, and that is the only automatic
+    // signal for a comment that has drifted off the thing it documents. Advisory, it scrolls past.
+    options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-parameters", "-Werror"))
 }
 
 tasks.withType<Test>().configureEach {
