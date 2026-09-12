@@ -2593,22 +2593,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // FQN of the concrete, instantiable class to allocate for a container field of the given declared
   // type — the declared subtype itself when it is an instantiable class (ArrayList, TreeSet,
   // TreeMap, …), else the default impl for the interface family. The interface-family defaults
-  // match the runtime DeepMap allocators for the bare interface raws: List → ArrayList
-  // (listAllocatorFor), Set → LinkedHashSet (setAllocatorFor), Map → LinkedHashMap
-  // (mapAllocatorFor), so codegen and the reflective path produce the same runtime class for an
-  // interface-typed field. The two hash families default to their insertion-ordered form because a
-  // conversion that is not asked to reorder should not: an ordered source behind an interface-typed
-  // field keeps its order across the rebuild.
+  // match the runtime allocators in ContainerLifts for every interface raw either of them names,
+  // so codegen and the reflective path produce the same runtime class for an interface-typed field.
+  // Adding a family to one table without the other compiles under @Bridge and throws under
+  // mapper(...), which is the swap the two paths exist to make interchangeable.
+  //
+  // The two plain hash families default to their insertion-ordered form because a conversion that
+  // is not asked to reorder should not: an ordered source behind an interface-typed field keeps its
+  // order across the rebuild. The sorted and concurrent interfaces name a contract no hash
+  // container keeps at all, so each takes the implementation that keeps it.
   private static String concreteImplFqn(final TypeMirror container, final FieldPlan.Kind kind) {
     final var el = (TypeElement) ((DeclaredType) container).asElement();
     if (el.getKind() == ElementKind.CLASS && !el.getModifiers().contains(Modifier.ABSTRACT)) {
       return el.getQualifiedName().toString();
     }
-    return switch (kind) {
-      case LIST -> "java.util.ArrayList";
-      case SET -> "java.util.LinkedHashSet";
-      case MAP_VALUES -> "java.util.LinkedHashMap";
-      default -> throw new IllegalStateException("not a collection/map kind: " + kind);
+    // A rebuild into a LinkedHashMap satisfies a SortedMap-typed field and silently drops its
+    // ordering, which is why the family decides the impl before the kind does.
+    final var declared = el.getQualifiedName().toString();
+    return switch (declared) {
+      case "java.util.SortedSet", "java.util.NavigableSet" -> "java.util.TreeSet";
+      case "java.util.SortedMap", "java.util.NavigableMap" -> "java.util.TreeMap";
+      case "java.util.concurrent.ConcurrentMap" -> "java.util.concurrent.ConcurrentHashMap";
+      default -> switch (kind) {
+        case LIST -> "java.util.ArrayList";
+        case SET -> "java.util.LinkedHashSet";
+        case MAP_VALUES -> "java.util.LinkedHashMap";
+        default -> throw new IllegalStateException("not a collection/map kind: " + kind);
+      };
     };
   }
 
@@ -2632,8 +2643,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * author gave the argument.
    *
    * @param typeArgs the emitted type arguments, without angle brackets
+   * @param ordering the constructor argument carrying a sorted container's ordering, empty for
+   *     every impl that has none to carry
    */
-  private static String sizedAlloc(final String implFqn, final String typeArgs) {
+  private static String sizedAlloc(final String implFqn, final String typeArgs, final String ordering) {
     return switch (implFqn) {
       case "java.util.HashSet", "java.util.LinkedHashSet", "java.util.HashMap", "java.util.LinkedHashMap" -> implFqn +
       ".<" +
@@ -2642,7 +2655,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       simpleName(implFqn) +
       "(src.size())";
       case "java.util.ArrayList" -> "new " + implFqn + "<" + typeArgs + ">(src.size())";
-      default -> "new " + implFqn + "<" + typeArgs + ">()";
+      default -> "new " + implFqn + "<" + typeArgs + ">(" + ordering + ")";
     };
   }
 
@@ -3241,7 +3254,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println();
     out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
     out.println("    if (src == null) return null;");
-    out.println("    final var out = " + rawAllocExpr(tgtContainer, plan.kind()) + ";");
+    emitOrderingGuard(out, plan.kind(), identity);
+    out.println("    final var out = " + rawAllocExpr(tgtContainer, srcContainer, plan.kind(), identity) + ";");
     if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
       if (identity) {
         out.println("    out.putAll(src);");
@@ -3300,6 +3314,73 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return null;
   }
 
+  /**
+   * The constructor argument that carries a sorted container's ordering across the rebuild, or
+   * empty when there is none that can be carried. A sorted container orders by its comparator, and
+   * a rebuild that drops one does not merely reorder: where the keys implement no natural ordering
+   * it throws on the first insert, though the source it was built from worked.
+   *
+   * <p>Only a sorted map's comparator transfers. It orders the keys, and a bridged map's keys are
+   * required to match on both sides, so the comparator fits the rebuilt map exactly. A sorted set's
+   * orders the elements, which are what the bridge converts — a comparator over the source's
+   * element type cannot order the target's, and there is nothing to translate it with.
+   */
+  private String orderingArg(final TypeMirror srcContainer, final String implFqn, final boolean elementsPreserved) {
+    return switch (implFqn) {
+      // A map's comparator orders its keys, and a bridged map's keys must match on both sides, so
+      // it fits the rebuilt map whatever happens to the values.
+      case "java.util.TreeMap", "java.util.concurrent.ConcurrentSkipListMap" -> assignableToRaw(
+        srcContainer,
+        "java.util.SortedMap"
+      )
+        ? "src.comparator()"
+        : "";
+      // A set's orders its elements, so it fits only while those stay the same type. Where they do
+      // not, there is no comparator to carry and the pair is refused rather than reordered.
+      case "java.util.TreeSet", "java.util.concurrent.ConcurrentSkipListSet" -> elementsPreserved &&
+      assignableToRaw(srcContainer, "java.util.SortedSet")
+        ? "src.comparator()"
+        : "";
+      default -> "";
+    };
+  }
+
+  /**
+   * The check a set rebuild has to make before converting its elements, or empty when it has none
+   * to make. A custom comparator orders the source's element type and cannot order the target's, so
+   * reusing it is impossible and ignoring it would silently reorder. Natural ordering carries over
+   * untouched, which is why the test is on the comparator rather than on sortedness.
+   *
+   * <p>The test is on the value rather than the declared type, because a field declared as a plain
+   * {@code Set} can hold a sorted one. That is what the reflective path checks, and the two are
+   * meant to accept the same programs.
+   */
+  private static String orderingGuard(final FieldPlan.Kind kind, final boolean elementsPreserved) {
+    if (kind != FieldPlan.Kind.SET || elementsPreserved) return "";
+    return (
+      "    if (src instanceof java.util.SortedSet<?> __sorted && __sorted.comparator() !=" +
+      " null) throw new IllegalStateException(\n" +
+      "      \"Deep map: a custom sorted-set comparator cannot be reused with changed" +
+      " \"\n" +
+      "        + \"element types. Supply an explicit Mapping.via(...) row with a target" +
+      " comparator.\");"
+    );
+  }
+
+  /**
+   * Writes the guard above the line that allocates the rebuilt container, and nothing where the
+   * rebuild has none to make. Both set rebuilds emit through here, so whether a guard appears is
+   * one decision rather than one per call site.
+   */
+  private static void emitOrderingGuard(
+    final PrintWriter out,
+    final FieldPlan.Kind kind,
+    final boolean elementsPreserved
+  ) {
+    final var guard = orderingGuard(kind, elementsPreserved);
+    if (!guard.isEmpty()) out.println(guard);
+  }
+
   // Allocation expression for a raw-container output: the target's concrete class (the subtype
   // itself when instantiable, else the interface's default impl), with a diamond only when that
   // class is generic. A non-generic subtype (`class ImageUrls extends ArrayList<ImageUrl>`) takes
@@ -3311,17 +3392,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // subtype that declares an `(int)` constructor gives the argument whatever meaning it chose --
   // a page number reads exactly like a capacity from here. Filling such a subtype through addAll
   // or putAll still lets the JDK size it in one step where those methods presize.
-  private String rawAllocExpr(final TypeMirror container, final FieldPlan.Kind kind) {
+  private String rawAllocExpr(
+    final TypeMirror container,
+    final TypeMirror srcContainer,
+    final FieldPlan.Kind kind,
+    final boolean elementsPreserved
+  ) {
     final var implFqn = concreteImplFqn(container, kind);
     final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
     final var generic = implEl != null && !implEl.getTypeParameters().isEmpty();
     if (!generic) return "new " + implFqn + "()";
     if (kind == FieldPlan.Kind.MAP_VALUES) {
       final var args = containerViewArgs(container, "java.util.Map");
-      return sizedAlloc(implFqn, args.get(0) + ", " + args.get(1));
+      return sizedAlloc(
+        implFqn,
+        args.get(0) + ", " + args.get(1),
+        orderingArg(srcContainer, implFqn, elementsPreserved)
+      );
     }
     final var args = containerViewArgs(container, kind == FieldPlan.Kind.SET ? "java.util.Set" : "java.util.List");
-    return sizedAlloc(implFqn, args.getFirst().toString());
+    return sizedAlloc(implFqn, args.getFirst().toString(), orderingArg(srcContainer, implFqn, elementsPreserved));
   }
 
   private void emitListHelper(
@@ -3337,7 +3427,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.LIST);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement));
+    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement), orderingArg(srcContainer, implFqn, false));
     out.println();
     out.println(
       "  private static " +
@@ -3372,7 +3462,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.SET);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement));
+    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement), orderingArg(srcContainer, implFqn, false));
     out.println();
     out.println(
       "  private static " +
@@ -3388,6 +3478,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
+    emitOrderingGuard(out, FieldPlan.Kind.SET, false);
     out.println("    final var out = " + alloc + ";");
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
@@ -3410,7 +3501,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES);
-    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue);
+    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue, orderingArg(srcContainer, implFqn, false));
     out.println();
     out.println(
       "  private static " +
