@@ -84,6 +84,7 @@ public sealed class Telescope<
   Telescope.SetTelescope,
   Telescope.MapTelescope,
   Telescope.OptionalTelescope,
+  Telescope.IterableTelescope,
   Telescope.BridgeTelescope {
 
   /**
@@ -372,6 +373,37 @@ public sealed class Telescope<
   /** Pre-built-fragment companion to {@link #asList} for {@code Set&lt;X&gt;} paths. */
   public static <S, X> SetTelescope<S, X> asSet(final Telescope<S, Set<X>> path) {
     return new SetTelescope<>(
+      path.optic,
+      path.fieldOptics,
+      path.chain,
+      path.firstHopName,
+      path.trail,
+      path.hops,
+      ContainerHop.promotion()
+    );
+  }
+
+  /**
+   * Pre-built-fragment companion to {@link #asList} for a path whose focus is an {@code Iterable}
+   * that is neither a {@code List} nor a {@code Set} — a {@code Collection&lt;X&gt;} or a bare
+   * {@code Iterable&lt;X&gt;}. The container type stays on the type parameter, because unlike the
+   * four fixed-container companions this one has no single container to name.
+   *
+   * <p>Reading and writing are not symmetric here, and the asymmetry is the surprising part. Every
+   * {@code Iterable} enumerates, so {@code read}, {@code toList} and {@code count} work whatever
+   * the source is. A write has to rebuild, and the element traversal rebuilds only a {@code List}
+   * or a {@code Set} source, rejecting any other at update time. A path validated with {@code
+   * toList()} can therefore still throw on {@code update}. A model that uses a {@code Queue} or a
+   * {@code Deque} should declare the component as {@code List&lt;X&gt;} or {@code Set&lt;X&gt;} so
+   * the fixed-container companions apply instead.
+   *
+   * <p>The bound admits a path focused at a concrete container class ({@code ArrayList&lt;X&gt;}),
+   * which the fixed-container companions cannot accept because {@code Telescope} is invariant in
+   * its focus. Reads work; a write fails, because the rebuild produces the interface's default
+   * implementation and that cannot be stored back into a field declared at the subclass.
+   */
+  public static <S, C extends Iterable<X>, X> IterableTelescope<S, C, X> asIterable(final Telescope<S, C> path) {
+    return new IterableTelescope<>(
       path.optic,
       path.fieldOptics,
       path.chain,
@@ -2502,6 +2534,39 @@ public sealed class Telescope<
     /** Step into set elements. Output is iteration-order-preserving (LinkedHashSet). */
     public Telescope<S, X> each() {
       return origin.descend(this, Traversals.eachSet(), "each", "collection");
+    }
+  }
+
+  /**
+   * A {@link Telescope} whose focus is an {@code Iterable&lt;X&gt;} that is neither a {@code List}
+   * nor a {@code Set}. Adds a compile-checked {@link #each()} terminal that descends into the
+   * elements via {@link Traversals#eachIterable()}, which dispatches on the runtime class to pick
+   * the rebuild shape.
+   *
+   * <p>Carries the container type as {@code C} so the declared type survives the step. The four
+   * fixed-container companions each name their container outright; this one stands for every
+   * remaining {@code Iterable} shape and so cannot.
+   */
+  public static final class IterableTelescope<S, C extends Iterable<X>, X> extends Telescope<S, C> {
+
+    private final ContainerHop<S> origin;
+
+    IterableTelescope(
+      final Traversal<S, C> optic,
+      final FieldOptics fieldOptics,
+      final Function<S, S> chain,
+      final String firstHopName,
+      final List<OpticNode> trail,
+      final List<Fusion.Hop> hops,
+      final ContainerHop<S> origin
+    ) {
+      super(optic, fieldOptics, chain, firstHopName, trail, hops);
+      this.origin = origin;
+    }
+
+    /** Step into the elements. The rebuild preserves a List or Set source and rejects any other. */
+    public Telescope<S, X> each() {
+      return origin.descend(this, Traversals.eachIterable(), "each", "collection");
     }
   }
 

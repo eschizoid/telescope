@@ -8,10 +8,12 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.FilerException;
 import javax.lang.model.element.Element;
@@ -222,8 +224,13 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * {@code "iterable"}) used to pick which {@code Telescope.asX(...)} static factory the codegen
    * emits. Returned by {@link #traversalKind}; {@code null} when the type isn't a traversable
    * container.
+   *
+   * @param rebuildable whether a write through this step can succeed. The polymorphic iterable
+   *     traversal rebuilds a {@code List} or a {@code Set}, so a declared type that can hold
+   *     neither -- a {@code Deque}, a {@code Queue}, an adopter's own {@code Iterable} subtype --
+   *     reads correctly and throws on update. Always true for the four typed kinds.
    */
-  protected record TraversalShape(String elementType, String stepMethod, String containerKind) {}
+  protected record TraversalShape(String elementType, String stepMethod, String containerKind, boolean rebuildable) {}
 
   /**
    * The traversal shape of a collection-shaped {@code type}, or {@code null} if it isn't
@@ -244,31 +251,46 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final var map = elements.getTypeElement("java.util.Map");
     if (map != null && types.isAssignable(erasure, types.erasure(map.asType()))) {
       final var elem = concreteArg(args, 1);
-      return elem == null ? null : new TraversalShape(elem, "eachValue", "map");
+      return elem == null ? null : new TraversalShape(elem, "eachValue", "map", true);
     }
     final var optional = elements.getTypeElement("java.util.Optional");
     if (optional != null && types.isSameType(erasure, types.erasure(optional.asType()))) {
       final var elem = concreteArg(args, 0);
-      return elem == null ? null : new TraversalShape(elem, "whenPresent", "optional");
+      return elem == null ? null : new TraversalShape(elem, "whenPresent", "optional", true);
     }
     // Differentiate List vs Set vs raw Iterable so the codegen can emit the right typed
     // Telescope.asList/asSet factory at the step (zero runtime container dispatch).
     final var list = elements.getTypeElement("java.util.List");
     if (list != null && types.isAssignable(erasure, types.erasure(list.asType()))) {
       final var elem = concreteArg(args, 0);
-      return elem == null ? null : new TraversalShape(elem, "each", "list");
+      return elem == null ? null : new TraversalShape(elem, "each", "list", true);
     }
     final var set = elements.getTypeElement("java.util.Set");
     if (set != null && types.isAssignable(erasure, types.erasure(set.asType()))) {
       final var elem = concreteArg(args, 0);
-      return elem == null ? null : new TraversalShape(elem, "each", "set");
+      return elem == null ? null : new TraversalShape(elem, "each", "set", true);
     }
     final var iterable = elements.getTypeElement("java.lang.Iterable");
     if (iterable != null && types.isAssignable(erasure, types.erasure(iterable.asType()))) {
       final var elem = concreteArg(args, 0);
-      return elem == null ? null : new TraversalShape(elem, "each", "iterable");
+      return elem == null ? null : new TraversalShape(elem, "each", "iterable", rebuildableIterable(erasure));
     }
     return null;
+  }
+
+  /**
+   * Whether a write through the polymorphic iterable step can succeed for this declared type. The
+   * traversal rebuilds its source as an {@code ArrayList} or a {@code LinkedHashSet}, so a declared
+   * type that can hold neither has no rebuild the write could store. Reads are unaffected: every
+   * {@code Iterable} enumerates.
+   */
+  private boolean rebuildableIterable(final TypeMirror erasure) {
+    final var types = processingEnv.getTypeUtils();
+    final var elements = processingEnv.getElementUtils();
+    return Stream.of("java.util.ArrayList", "java.util.LinkedHashSet")
+      .map(elements::getTypeElement)
+      .filter(Objects::nonNull)
+      .anyMatch(impl -> types.isAssignable(types.erasure(impl.asType()), erasure));
   }
 
   /**
@@ -1195,6 +1217,23 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final Set<String> navigableAnnotations,
     final String javadoc
   ) {
+    if (!shape.rebuildable()) {
+      // Reads enumerate any Iterable, so the step is useful and still emitted. Only a write has no
+      // rebuild to store, and it fails at update time with the traversal's own message.
+      processingEnv
+        .getMessager()
+        .printMessage(
+          Diagnostic.Kind.WARNING,
+          "telescope: '" +
+            componentName +
+            "' is declared " +
+            containerType +
+            ", which can hold neither an ArrayList nor a LinkedHashSet. Reading through this step" +
+            " works; updating through it throws, because the rebuild has no container to produce." +
+            " Declare the component as List<E> or Set<E> to make writes work.",
+          origin
+        );
+    }
     final var stepName = enclosingSimpleName + capitalize(componentName) + "Step";
     final var qualifiedStep = pkg.isEmpty() ? stepName : pkg + "." + stepName;
     final var rawElementType = shape.elementType();
@@ -1209,21 +1248,19 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       case "set" -> "Telescope.<R, " + elementType + ">asSet(path).each()";
       case "optional" -> "Telescope.<R, " + elementType + ">asOptional(path).present()";
       case "map" -> "Telescope.asMap(path).values()";
-      // Iterable case: declared leaf is some `? extends Iterable<E>` shape that isn't List,
-      // Set,
-      // Map, or Optional (e.g. bare `Iterable<E>` or `Collection<E>`). Pin both type arguments
-      // on `Telescope.wrap(...)` explicitly so the produced `Telescope<containerType,
-      // elementType>` matches the `path.then(...)` left side regardless of the exact declared
-      // container subtype. NOTE: `Traversals.eachIterable()` only safely rebuilds List and Set
-      // sources — other Iterable subtypes (Queue, Deque, custom iterables) trigger a runtime
-      // IllegalArgumentException at update time. The generated step still compiles; if your
-      // model uses Queue/Deque, re-declare the leaf as `List<E>` or `Set<E>` at the source so
-      // the codegen lands on the typed `list`/`set` branches above instead.
-      default -> "path.then(Telescope.<" +
-      containerType +
-      ", " +
-      elementType +
-      ">wrap(io.github.eschizoid.telescope.internal.optics.collections.Traversals.eachIterable()))";
+      // Every remaining `? extends Iterable<E>` leaf: a bare `Iterable<E>`, a
+      // `Collection<E>`, or any subtype that is not List, Set, Map or Optional. The
+      // container type is pinned alongside the element type because this branch stands
+      // for every remaining shape, so it has no single container to name.
+      //
+      // The step reaches the element traversal through a public factory. Generated code
+      // lands in the consumer's package, where a package-private member of Telescope and
+      // a qualified-exported internal package are both out of reach.
+      //
+      // `Traversals.eachIterable()` rebuilds a List or a Set source and rejects any other
+      // at update time, so a model using a Queue or a Deque should declare the leaf as
+      // `List<E>` or `Set<E>` and land on a typed branch above.
+      default -> "Telescope.<R, " + containerType + ", " + elementType + ">asIterable(path).each()";
     };
     // One Traverse per container step, mirroring a hand-written .each(), .eachValue(), or
     // .whenPresent(). The label names the runtime container family used by the hand-written hops.
