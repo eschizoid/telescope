@@ -35,7 +35,10 @@ class GeneratedCodeReachabilityTest {
   private static JavaFileObject record(final String leaf) {
     return ProcessorHarness.source(
       "demo.P",
-      "package demo; import io.github.eschizoid.telescope.annotations.Focus;\n@Focus public record P(" + leaf + ") {}"
+      "package demo; import io.github.eschizoid.telescope.annotations.Focus;\n" +
+        "@Focus public record P(" +
+        leaf +
+        ") {}"
     );
   }
 
@@ -66,7 +69,7 @@ class GeneratedCodeReachabilityTest {
       .forEach((name, src) ->
         assertFalse(
           src.contains(INTERNAL_PACKAGE),
-          () -> name + " names a package exported to :core alone, so a modular consumer cannot compile it:\n" + src
+          () -> name + " names a package exported to :core alone, so a modular consumer" + " cannot compile it:\n" + src
         )
       );
   }
@@ -85,6 +88,36 @@ class GeneratedCodeReachabilityTest {
       .stream()
       .anyMatch(d -> d.getMessage(null).contains("updating through it throws"));
     assertTrue(warned, () -> "no warning for a leaf that cannot be written: " + compilation.diagnostics());
+  }
+
+  @Test
+  @DisplayName("a generic record is rejected outright, rather than emitting a step over an erased element")
+  void genericRecordIsRejected() {
+    // A container component whose element is a type variable has nothing concrete for a step's
+    // signature to name. The processor declines the whole record rather than emitting a navigator
+    // with a hole in it, and says which component and which type made it decline.
+    final var compilation = ProcessorHarness.compileFully(
+      List.of(new FocusProcessor()),
+      List.of(),
+      ProcessorHarness.source(
+        "demo.Box",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Focus;
+        @Focus public record Box<T>(java.util.List<T> items, String label) {}
+        """
+      )
+    );
+
+    assertFalse(compilation.success(), "an erased element type cannot be navigated");
+    assertTrue(
+      compilation.hasError("generics with wildcard or self-referential bounds are not supported"),
+      () -> "the refusal should name the limitation: " + compilation.errorMessages()
+    );
+    assertTrue(
+      compilation.errorMessages().contains("items"),
+      () -> "and the component that triggered it: " + compilation.errorMessages()
+    );
   }
 
   @Test
