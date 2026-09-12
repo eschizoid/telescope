@@ -1868,7 +1868,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // target).
     if (carrierEl != null) emitBridgeProvider(source, target, bridgeName, pkg);
 
-    final var imports = new TreeSet<>(importsFor(fieldPlans, sourceFields, targetFields, renames));
+    final var imports = new TreeSet<>(importsFor(fieldPlans));
     imports.add("io.github.eschizoid.telescope.Telescope");
     imports.add("io.github.eschizoid.telescope.conversion.BridgeFn");
     writeClass(
@@ -2503,8 +2503,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * Why a container field cannot be emitted when nothing telescope can construct is of its declared
-   * type. Naming a concrete type is the only fix the author can apply, since the type itself is
-   * what rules out every candidate.
+   * type. The declared type is what rules out every candidate, so the fix is to name one telescope
+   * can build or to convert the field explicitly.
    */
   private static String unassignableContainerMessage(
     final TypeElement source,
@@ -2627,17 +2627,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * factories, which apply the load factor for the caller. A container with neither is filled from
    * its default capacity.
    *
+   * <p>Only the JDK default impls can be sized at all: a user subtype declares no sized constructor
+   * (constructors are not inherited), and one it declares itself carries whatever meaning its
+   * author gave the argument.
+   *
    * @param typeArgs the emitted type arguments, without angle brackets
-   */
-  private static String sizedAlloc(final String implFqn, final String typeArgs) {
-    return sizedAlloc(implFqn, typeArgs, simpleName(implFqn));
-  }
-
-  /**
-   * As above, naming the class as {@code rendered} at the call site: the simple name where the
-   * emitting helper's file imports it, the fully-qualified name where it does not. Only the JDK
-   * default impls can be sized — a user subtype declares no sized constructor (constructors are not
-   * inherited), and one it declares itself carries whatever meaning its author gave the argument.
+   * @param rendered how the class is named at the call site — always fully qualified, because a
+   *     container helper imports nothing
    */
   private static String sizedAlloc(final String implFqn, final String typeArgs, final String rendered) {
     return switch (implFqn) {
@@ -3166,27 +3162,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * Compute the {@code java.util.*} imports a bridge needs based on the kinds of fields in its
-   * plan. Returned set is fed into {@link AbstractTelescopeProcessor#writeClass(String, String,
-   * Set, String, Element, java.util.function.Consumer)} so the emitted file has clean imports
-   * instead of FQNs in the body.
+   * plan. Container types are not among them: a container helper renders every type fully
+   * qualified, so importing them would only reintroduce a simple-name collision. Returned set is
+   * fed into {@link AbstractTelescopeProcessor#writeClass(String, String, Set, String, Element,
+   * java.util.function.Consumer)} so the emitted file has clean imports instead of FQNs in the
+   * body.
    */
-  private Set<String> importsFor(
-    final Map<String, FieldPlan> fieldPlans,
-    final List<Field> sourceFields,
-    final List<Field> targetFields,
-    final Map<String, String> renames
-  ) {
+  private Set<String> importsFor(final Map<String, FieldPlan> fieldPlans) {
     final var imports = new TreeSet<String>();
-    for (final var entry : fieldPlans.entrySet()) {
-      final var plan = entry.getValue();
+    for (final var plan : fieldPlans.values()) {
       // Raw-container helpers render every container/element TYPE by fully-qualified name, so they
       // need no container-type imports.
       if (plan.rawContainer()) continue;
       switch (plan.kind()) {
-        // A container field needs both the declared raw of each side (the helper return / param
-        // types and the inline copy) and the concrete impl each side allocates. For the common
-        // interface-typed field this is {List, ArrayList} etc., unchanged; a concrete subtype adds
-        // its own class (LinkedList, TreeSet, …).
         // A container's raw type and its allocation class are rendered fully qualified, so they
         // need no import — and importing them would reintroduce the collision two subtypes of the
         // same simple name in different packages otherwise cause.
@@ -3281,12 +3269,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("  }");
   }
 
-  // The first of the two raw-container fields whose concrete allocation class lacks a public no-arg
-  // constructor (the generated `new <impl>()` would not compile), or null when both are
-  // allocatable.
-  // The JDK default impls (ArrayList / LinkedHashSet / LinkedHashMap) always qualify; only a user
-  // subtype
-  // can hide its no-arg ctor.
   /**
    * The first of the two container types whose chosen allocation class cannot be assigned to it, or
    * null when both fit. Picking a class and being able to name it are separate obligations from
@@ -3309,6 +3291,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return null;
   }
 
+  // The first of the two raw-container fields whose concrete allocation class lacks a public no-arg
+  // constructor (the generated `new <impl>()` would not compile), or null when both are
+  // allocatable.
+  // The JDK default impls (ArrayList / LinkedHashSet / LinkedHashMap) always qualify; only a user
+  // subtype
+  // can hide its no-arg ctor.
   private String firstNonAllocatableContainer(
     final TypeMirror srcContainer,
     final TypeMirror tgtContainer,
