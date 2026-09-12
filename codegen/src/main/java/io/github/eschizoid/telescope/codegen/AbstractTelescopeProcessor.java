@@ -1209,21 +1209,19 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       case "set" -> "Telescope.<R, " + elementType + ">asSet(path).each()";
       case "optional" -> "Telescope.<R, " + elementType + ">asOptional(path).present()";
       case "map" -> "Telescope.asMap(path).values()";
-      // Iterable case: declared leaf is some `? extends Iterable<E>` shape that isn't List,
-      // Set,
-      // Map, or Optional (e.g. bare `Iterable<E>` or `Collection<E>`). Pin both type arguments
-      // on `Telescope.wrap(...)` explicitly so the produced `Telescope<containerType,
-      // elementType>` matches the `path.then(...)` left side regardless of the exact declared
-      // container subtype. NOTE: `Traversals.eachIterable()` only safely rebuilds List and Set
-      // sources — other Iterable subtypes (Queue, Deque, custom iterables) trigger a runtime
-      // IllegalArgumentException at update time. The generated step still compiles; if your
-      // model uses Queue/Deque, re-declare the leaf as `List<E>` or `Set<E>` at the source so
-      // the codegen lands on the typed `list`/`set` branches above instead.
-      default -> "path.then(Telescope.<" +
-      containerType +
-      ", " +
-      elementType +
-      ">wrap(io.github.eschizoid.telescope.internal.optics.collections.Traversals.eachIterable()))";
+      // Every remaining `? extends Iterable<E>` leaf: a bare `Iterable<E>`, a
+      // `Collection<E>`, or any subtype that is not List, Set, Map or Optional. The
+      // container type is pinned alongside the element type because this branch stands
+      // for every remaining shape, so it has no single container to name.
+      //
+      // The step reaches the element traversal through a public factory. Generated code
+      // lands in the consumer's package, where a package-private member of Telescope and
+      // a qualified-exported internal package are both out of reach.
+      //
+      // `Traversals.eachIterable()` rebuilds a List or a Set source and rejects any other
+      // at update time, so a model using a Queue or a Deque should declare the leaf as
+      // `List<E>` or `Set<E>` and land on a typed branch above.
+      default -> "Telescope.<R, " + containerType + ", " + elementType + ">asIterable(path).each()";
     };
     // One Traverse per container step, mirroring a hand-written .each(), .eachValue(), or
     // .whenPresent(). The label names the runtime container family used by the hand-written hops.
