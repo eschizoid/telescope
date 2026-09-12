@@ -1,0 +1,24 @@
+# Codecov's defaults hold a patch to the project's own coverage with no tolerance, which reads as
+# reasonable and behaves badly on small patches. Coverage is a ratio, so a single partial branch
+# costs a twenty-line patch several points and the same branch costs a two-hundred-line patch a
+# fraction of one. The bar below is the project level, as before; what is added is room for one
+# defensive branch in a small change.
+#
+# Partial lines are the usual cause. A line whose every instruction runs but whose second branch
+# does not — a guard against an enum constant no caller can construct, an argument check that
+# nothing reaches — counts against the ratio, and writing a test to reach it would mean contorting
+# the call to prove nothing about the world.
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 5%
+
+# A pull request that only deletes code should not be read as a coverage drop.
+github_checks:
+  annotations: true
