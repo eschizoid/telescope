@@ -2604,11 +2604,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (el.getKind() == ElementKind.CLASS && !el.getModifiers().contains(Modifier.ABSTRACT)) {
       return el.getQualifiedName().toString();
     }
-    return switch (kind) {
-      case LIST -> "java.util.ArrayList";
-      case SET -> "java.util.LinkedHashSet";
-      case MAP_VALUES -> "java.util.LinkedHashMap";
-      default -> throw new IllegalStateException("not a collection/map kind: " + kind);
+    // The sorted and concurrent interfaces name a contract the plain default cannot keep, so each
+    // takes the implementation that keeps it. A rebuild into a LinkedHashMap would satisfy the
+    // field's Map-ness and silently drop its ordering.
+    final var declared = el.getQualifiedName().toString();
+    return switch (declared) {
+      case "java.util.SortedSet", "java.util.NavigableSet" -> "java.util.TreeSet";
+      case "java.util.SortedMap", "java.util.NavigableMap" -> "java.util.TreeMap";
+      case "java.util.concurrent.ConcurrentMap" -> "java.util.concurrent.ConcurrentHashMap";
+      default -> switch (kind) {
+        case LIST -> "java.util.ArrayList";
+        case SET -> "java.util.LinkedHashSet";
+        case MAP_VALUES -> "java.util.LinkedHashMap";
+        default -> throw new IllegalStateException("not a collection/map kind: " + kind);
+      };
     };
   }
 
@@ -2633,7 +2642,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    *
    * @param typeArgs the emitted type arguments, without angle brackets
    */
-  private static String sizedAlloc(final String implFqn, final String typeArgs) {
+  private static String sizedAlloc(final String implFqn, final String typeArgs, final String ordering) {
     return switch (implFqn) {
       case "java.util.HashSet", "java.util.LinkedHashSet", "java.util.HashMap", "java.util.LinkedHashMap" -> implFqn +
       ".<" +
@@ -2642,7 +2651,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       simpleName(implFqn) +
       "(src.size())";
       case "java.util.ArrayList" -> "new " + implFqn + "<" + typeArgs + ">(src.size())";
-      default -> "new " + implFqn + "<" + typeArgs + ">()";
+      default -> "new " + implFqn + "<" + typeArgs + ">(" + ordering + ")";
     };
   }
 
@@ -3241,7 +3250,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println();
     out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
     out.println("    if (src == null) return null;");
-    out.println("    final var out = " + rawAllocExpr(tgtContainer, plan.kind()) + ";");
+    out.println("    final var out = " + rawAllocExpr(tgtContainer, srcContainer, plan.kind()) + ";");
     if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
       if (identity) {
         out.println("    out.putAll(src);");
@@ -3311,17 +3320,37 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // subtype that declares an `(int)` constructor gives the argument whatever meaning it chose --
   // a page number reads exactly like a capacity from here. Filling such a subtype through addAll
   // or putAll still lets the JDK size it in one step where those methods presize.
-  private String rawAllocExpr(final TypeMirror container, final FieldPlan.Kind kind) {
+  /**
+   * The constructor argument that carries a sorted container's ordering across the rebuild, or
+   * empty when there is none that can be carried. A sorted container orders by its comparator, and
+   * a rebuild that drops one does not merely reorder: where the keys implement no natural ordering
+   * it throws on the first insert, though the source it was built from worked.
+   *
+   * <p>Only a sorted map's comparator transfers. It orders the keys, and a bridged map's keys are
+   * required to match on both sides, so the comparator fits the rebuilt map exactly. A sorted set's
+   * orders the elements, which are what the bridge converts — a comparator over the source's
+   * element type cannot order the target's, and there is nothing to translate it with.
+   */
+  private String orderingArg(final TypeMirror srcContainer, final String implFqn) {
+    final var orderedMap = switch (implFqn) {
+      case "java.util.TreeMap", "java.util.concurrent.ConcurrentSkipListMap" -> true;
+      default -> false;
+    };
+    if (!orderedMap) return "";
+    return assignableToRaw(srcContainer, "java.util.SortedMap") ? "src.comparator()" : "";
+  }
+
+  private String rawAllocExpr(final TypeMirror container, final TypeMirror srcContainer, final FieldPlan.Kind kind) {
     final var implFqn = concreteImplFqn(container, kind);
     final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
     final var generic = implEl != null && !implEl.getTypeParameters().isEmpty();
     if (!generic) return "new " + implFqn + "()";
     if (kind == FieldPlan.Kind.MAP_VALUES) {
       final var args = containerViewArgs(container, "java.util.Map");
-      return sizedAlloc(implFqn, args.get(0) + ", " + args.get(1));
+      return sizedAlloc(implFqn, args.get(0) + ", " + args.get(1), orderingArg(srcContainer, implFqn));
     }
     final var args = containerViewArgs(container, kind == FieldPlan.Kind.SET ? "java.util.Set" : "java.util.List");
-    return sizedAlloc(implFqn, args.getFirst().toString());
+    return sizedAlloc(implFqn, args.getFirst().toString(), orderingArg(srcContainer, implFqn));
   }
 
   private void emitListHelper(
@@ -3337,7 +3366,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.LIST);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement));
+    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement), orderingArg(srcContainer, implFqn));
     out.println();
     out.println(
       "  private static " +
@@ -3372,7 +3401,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.SET);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement));
+    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement), orderingArg(srcContainer, implFqn));
     out.println();
     out.println(
       "  private static " +
@@ -3410,7 +3439,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES);
-    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue);
+    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue, orderingArg(srcContainer, implFqn));
     out.println();
     out.println(
       "  private static " +
