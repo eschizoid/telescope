@@ -2607,9 +2607,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (el.getKind() == ElementKind.CLASS && !el.getModifiers().contains(Modifier.ABSTRACT)) {
       return el.getQualifiedName().toString();
     }
-    // The sorted and concurrent interfaces name a contract the plain default cannot keep, so each
-    // takes the implementation that keeps it. A rebuild into a LinkedHashMap would satisfy the
-    // field's Map-ness and silently drop its ordering.
+    // A rebuild into a LinkedHashMap satisfies a SortedMap-typed field and silently drops its
+    // ordering, which is why the family decides the impl before the kind does.
     final var declared = el.getQualifiedName().toString();
     return switch (declared) {
       case "java.util.SortedSet", "java.util.NavigableSet" -> "java.util.TreeSet";
@@ -2644,6 +2643,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * author gave the argument.
    *
    * @param typeArgs the emitted type arguments, without angle brackets
+   * @param ordering the constructor argument carrying a sorted container's ordering, empty for
+   *     every impl that has none to carry
    */
   private static String sizedAlloc(final String implFqn, final String typeArgs, final String ordering) {
     return switch (implFqn) {
@@ -3253,13 +3254,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println();
     out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
     out.println("    if (src == null) return null;");
-    final var rawGuard = orderingGuard(plan.kind(), IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName()));
-    if (!rawGuard.isEmpty()) out.println(rawGuard);
-    out.println(
-      "    final var out = " +
-        rawAllocExpr(tgtContainer, srcContainer, plan.kind(), IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) +
-        ";"
-    );
+    emitOrderingGuard(out, plan.kind(), identity);
+    out.println("    final var out = " + rawAllocExpr(tgtContainer, srcContainer, plan.kind(), identity) + ";");
     if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
       if (identity) {
         out.println("    out.putAll(src);");
@@ -3371,6 +3367,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
   }
 
+  /**
+   * Writes the guard above the line that allocates the rebuilt container, and nothing where the
+   * rebuild has none to make. Both set rebuilds emit through here, so whether a guard appears is
+   * one decision rather than one per call site.
+   */
+  private static void emitOrderingGuard(
+    final PrintWriter out,
+    final FieldPlan.Kind kind,
+    final boolean elementsPreserved
+  ) {
+    final var guard = orderingGuard(kind, elementsPreserved);
+    if (!guard.isEmpty()) out.println(guard);
+  }
+
   // Allocation expression for a raw-container output: the target's concrete class (the subtype
   // itself when instantiable, else the interface's default impl), with a diamond only when that
   // class is generic. A non-generic subtype (`class ImageUrls extends ArrayList<ImageUrl>`) takes
@@ -3468,7 +3478,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
-    out.println(orderingGuard(FieldPlan.Kind.SET, false));
+    emitOrderingGuard(out, FieldPlan.Kind.SET, false);
     out.println("    final var out = " + alloc + ";");
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
