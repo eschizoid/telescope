@@ -39,6 +39,25 @@ class SortedComparatorTest {
   }
 
   @Test
+  @DisplayName("a field declared as the SortedMap interface resolves on both paths, not just one")
+  void declaredInterfaceResolvesOnBothPaths() {
+    // The allocation tables are separate — one in the processor, one in the runtime lift — and a
+    // family added to only one of them compiles under @Bridge and throws under mapper(...), which
+    // is the swap the two paths exist to make interchangeable. A fixture declaring a concrete
+    // TreeMap cannot see that: both tables already knew it.
+    final var byKey = new TreeMap<SortKey, CmpA>(Comparator.comparing(SortKey::id));
+    byKey.put(new SortKey("a"), new CmpA("first"));
+    final var src = new IfaceSrc(byKey);
+
+    final var codegen = IfaceSrcBridge.forward(src);
+    final var runtime = Telescope.mapper(IfaceSrc.class, IfaceDst.class).forward(src);
+
+    assertEquals(codegen.byKey().getClass(), runtime.byKey().getClass());
+    assertNotNull(codegen.byKey().comparator());
+    assertNotNull(runtime.byKey().comparator());
+  }
+
+  @Test
   @DisplayName("the reflective mapper does the same, so the two paths agree on ordering")
   void runtimeAgreesWithCodegen() {
     final var src = source();

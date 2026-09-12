@@ -16,6 +16,8 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.NavigableSet;
 import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.SortedMap;
@@ -26,6 +28,7 @@ import java.util.TreeSet;
 import java.util.Vector;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -273,7 +276,8 @@ final class ContainerLifts {
     if (raw == Set.class || raw == LinkedHashSet.class) return input ->
       LinkedHashSet.newLinkedHashSet(((Collection<?>) input).size());
     if (raw == HashSet.class) return input -> HashSet.newHashSet(((Collection<?>) input).size());
-    if (raw == TreeSet.class) return input -> new TreeSet<>(setComparator(input));
+    if (raw == TreeSet.class || raw == SortedSet.class || raw == NavigableSet.class) return input ->
+      new TreeSet<>(setComparator(input));
     if (raw == ConcurrentSkipListSet.class) return input -> new ConcurrentSkipListSet<>(setComparator(input));
     if (raw == CopyOnWriteArraySet.class) return input -> {
       final int size = ((Collection<?>) input).size();
@@ -306,8 +310,10 @@ final class ContainerLifts {
     if (raw == HashMap.class) return input -> HashMap.newHashMap(((Map<?, ?>) input).size());
     if (raw == Map.class || raw == LinkedHashMap.class) return input ->
       LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size());
-    if (raw == TreeMap.class) return input -> new TreeMap<>(mapComparator(input));
-    if (raw == ConcurrentHashMap.class) return input -> new ConcurrentHashMap<>(((Map<?, ?>) input).size());
+    if (raw == TreeMap.class || raw == SortedMap.class || raw == NavigableMap.class) return input ->
+      new TreeMap<>(mapComparator(input));
+    if (raw == ConcurrentHashMap.class || raw == ConcurrentMap.class) return input ->
+      new ConcurrentHashMap<>(((Map<?, ?>) input).size());
     if (raw == ConcurrentSkipListMap.class) return input -> new ConcurrentSkipListMap<>(mapComparator(input));
     if (raw == IdentityHashMap.class) return input -> new IdentityHashMap<>(((Map<?, ?>) input).size());
     // WeakHashMap ships no newWeakHashMap factory and its int argument is table capacity,
