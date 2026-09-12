@@ -2270,8 +2270,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // primitiveWrapperIso's fwdDefault / bwdDefault.
     String fwdNullDefault,
     String bwdNullDefault,
-    // LIST/SET/MAP_VALUES only: the simple name of the concrete collection/map class to allocate
-    // for
+    // LIST/SET/MAP_VALUES only: the fully-qualified name of the concrete collection/map class to
+    // allocate for
     // the forward (target) and backward (source) outputs, used by the inline identity-element
     // copy
     // in applyForward/applyBackward. Null for non-container kinds (the element-bridging helper
@@ -2632,19 +2632,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * author gave the argument.
    *
    * @param typeArgs the emitted type arguments, without angle brackets
-   * @param rendered how the class is named at the call site — always fully qualified, because a
-   *     container helper imports nothing
    */
-  private static String sizedAlloc(final String implFqn, final String typeArgs, final String rendered) {
+  private static String sizedAlloc(final String implFqn, final String typeArgs) {
     return switch (implFqn) {
-      case "java.util.HashSet", "java.util.LinkedHashSet", "java.util.HashMap", "java.util.LinkedHashMap" -> rendered +
+      case "java.util.HashSet", "java.util.LinkedHashSet", "java.util.HashMap", "java.util.LinkedHashMap" -> implFqn +
       ".<" +
       typeArgs +
       ">new" +
       simpleName(implFqn) +
       "(src.size())";
-      case "java.util.ArrayList" -> "new " + rendered + "<" + typeArgs + ">(src.size())";
-      default -> "new " + rendered + "<" + typeArgs + ">()";
+      case "java.util.ArrayList" -> "new " + implFqn + "<" + typeArgs + ">(src.size())";
+      default -> "new " + implFqn + "<" + typeArgs + ">()";
     };
   }
 
@@ -3171,15 +3169,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private Set<String> importsFor(final Map<String, FieldPlan> fieldPlans) {
     final var imports = new TreeSet<String>();
     for (final var plan : fieldPlans.values()) {
-      // Raw-container helpers render every container/element TYPE by fully-qualified name, so they
-      // need no container-type imports.
-      if (plan.rawContainer()) continue;
       switch (plan.kind()) {
-        // A container's raw type and its allocation class are rendered fully qualified, so they
-        // need no import — and importing them would reintroduce the collision two subtypes of the
-        // same simple name in different packages otherwise cause.
-        case LIST, SET, MAP_VALUES -> {
-        }
         case OPTIONAL_TO_NULLABLE, NULLABLE_TO_OPTIONAL -> imports.add("java.util.Optional");
         default -> {
         }
@@ -3328,10 +3318,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (!generic) return "new " + implFqn + "()";
     if (kind == FieldPlan.Kind.MAP_VALUES) {
       final var args = containerViewArgs(container, "java.util.Map");
-      return sizedAlloc(implFqn, args.get(0) + ", " + args.get(1), implFqn);
+      return sizedAlloc(implFqn, args.get(0) + ", " + args.get(1));
     }
     final var args = containerViewArgs(container, kind == FieldPlan.Kind.SET ? "java.util.Set" : "java.util.List");
-    return sizedAlloc(implFqn, args.getFirst().toString(), implFqn);
+    return sizedAlloc(implFqn, args.getFirst().toString());
   }
 
   private void emitListHelper(
@@ -3347,7 +3337,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.LIST);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement), implFqn);
+    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement));
     out.println();
     out.println(
       "  private static " +
@@ -3382,7 +3372,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.SET);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement), implFqn);
+    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement));
     out.println();
     out.println(
       "  private static " +
@@ -3420,7 +3410,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
     final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES);
-    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue, implFqn);
+    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue);
     out.println();
     out.println(
       "  private static " +

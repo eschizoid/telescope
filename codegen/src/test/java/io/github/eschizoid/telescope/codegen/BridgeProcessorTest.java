@@ -321,8 +321,12 @@ class BridgeProcessorTest {
       assertTrue(orderBridge.contains("__fwd_items(__fs_items)"), orderBridge);
       assertTrue(orderBridge.contains("final java.util.List<demo.LineItemDto> __bt_items = t.items();"), orderBridge);
       assertTrue(orderBridge.contains("__bwd_items(__bt_items)"), orderBridge);
-      // A container helper renders every type fully qualified, so it imports none of them.
+      // A container helper renders every type fully qualified, so it imports none of them — not the
+      // allocation class and not the declared raw. Pinning the raw as well as the impl states the
+      // invariant directly; a colliding pair failing downstream only catches it once two of them
+      // exist in one bridge.
       assertFalse(orderBridge.contains("import java.util.ArrayList;"), orderBridge);
+      assertFalse(orderBridge.contains("import java.util.List;"), orderBridge);
       assertTrue(
         orderBridge.contains(
           "private static java.util.List<demo.LineItemDto> __fwd_items(final" + " java.util.List<demo.LineItem> src)"
