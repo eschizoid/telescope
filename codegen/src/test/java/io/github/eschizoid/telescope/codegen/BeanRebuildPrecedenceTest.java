@@ -62,17 +62,38 @@ class BeanRebuildPrecedenceTest {
     assertTrue(holder.contains("builder()"), () -> "the builder is the only usable surface here; saw " + holder);
   }
 
+  /**
+   * The body of the named method within {@code source}, so an assertion can name which emitter it
+   * is about. The holder carries two that write through setters — the per-property lens and {@code
+   * construct} — and a search of the whole file is satisfied by either, so it would hold with one
+   * of them unguarded.
+   */
+  private static String bodyOf(final String source, final String signatureFragment) {
+    final var start = source.indexOf(signatureFragment);
+    assertTrue(start >= 0, () -> "expected to find " + signatureFragment + " in:\n" + source);
+    final var end = source.indexOf("\n  }", start);
+    return source.substring(start, end < 0 ? source.length() : end);
+  }
+
   @Test
-  @DisplayName("a primitive setter behind a boxed property is guarded, not handed a null")
-  void primitiveSetterIsNullGuarded() {
-    // A Long property behind a long setter. The setter does take every non-null value, so setters
-    // are still preferred — but null unboxes and throws, and the reflective writer skips the
-    // property instead of crashing, so the emitted call has to skip it too.
+  @DisplayName("both setter emitters guard a primitive setter behind a boxed property")
+  void primitiveSetterIsNullGuardedInBothEmitters() {
+    // A Long property behind a long setter. The setter takes every non-null value, so setters are
+    // still preferred — but null unboxes and throws, and the reflective writer skips the property
+    // instead of crashing, so both emitted call sites have to skip it too.
     final var compilation = compile(bean("public", "Long", "long"));
 
     assertTrue(compilation.success(), () -> "a boxed property may be written: " + compilation.errorMessages());
     final var holder = compilation.generated().get("demo.WidgetFieldOptics");
-    assertTrue(holder.contains("!= null) c.setV("), () -> "the null must be skipped, not unboxed; saw " + holder);
+
+    final var construct = bodyOf(holder, "construct(final Function<String, Object> values)");
+    assertTrue(
+      construct.contains("!= null) c.setV("),
+      () -> "construct() unboxes a null without this; saw " + construct
+    );
+
+    final var lens = bodyOf(holder, "public static final Telescope<Widget");
+    assertTrue(lens.contains("!= null) c.setV("), () -> "the lens unboxes a null without this; saw " + lens);
   }
 
   @Test
@@ -88,6 +109,35 @@ class BeanRebuildPrecedenceTest {
     final var holder = compilation.generated().get("demo.WidgetFieldOptics");
     assertTrue(holder.contains("new Widget()"), () -> "setters are reachable here; saw " + holder);
     assertFalse(holder.contains("builder()"), () -> "so the builder should not be chosen; saw " + holder);
+  }
+
+  @Test
+  @DisplayName("a bean with only a non-public constructor and no builder is navigable now")
+  void nonPublicConstructorWithoutBuilderIsAccepted() {
+    // The scope this widens. Such a bean was refused outright before, because the only surface it
+    // offers was judged unreachable; the navigator is emitted beside it, so it never was.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.Hidden",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.BeanFocus;
+        @BeanFocus
+        public class Hidden {
+          private String v;
+          protected Hidden() {}
+          public String getV() { return v; }
+          public void setV(final String v) { this.v = v; }
+        }
+        """
+      )
+    );
+
+    assertTrue(
+      compilation.success(),
+      () -> "a package-reachable constructor is reachable: " + compilation.errorMessages()
+    );
+    assertTrue(compilation.generated().containsKey("demo.HiddenFieldOptics"), "and the holder is emitted");
   }
 
   @Test

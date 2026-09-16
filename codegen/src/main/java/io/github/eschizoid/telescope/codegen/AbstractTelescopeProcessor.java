@@ -962,7 +962,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         triggerLabel +
           ": " +
           pojo.getQualifiedName() +
-          " needs a static builder() or a public no-arg constructor with setters (field" +
+          " needs a static builder() or a no-arg constructor with setters (field" +
           " injection isn't available to generated code — use Telescope.ofBean for the" +
           " runtime path)"
       );
@@ -1183,7 +1183,17 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       out.println("    final var c = new " + pojoName + "();");
       for (var i = 0; i < props.size(); i++) {
         final var p = props.get(i);
-        out.println("    c." + setters[i] + "(" + valueExprForProp(p) + ");");
+        if (nullGuarded[i]) {
+          // valueExprForProp's own guard keys off the property's kind, which says nothing about
+          // the setter's. Where the property is a reference and the parameter is not, the value
+          // arrives as a box that may be null and unboxes on the call, so it is skipped the same
+          // way the lens skips it and the same way the reflective writer does.
+          final var local = "__s_" + p.name();
+          out.println("    final var " + local + " = " + valueExprForProp(p) + ";");
+          out.println("    if (" + local + " != null) c." + setters[i] + "(" + local + ");");
+        } else {
+          out.println("    c." + setters[i] + "(" + valueExprForProp(p) + ");");
+        }
       }
       out.println("    return c;");
     }
