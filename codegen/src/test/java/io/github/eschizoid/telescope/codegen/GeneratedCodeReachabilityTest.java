@@ -51,6 +51,8 @@ class GeneratedCodeReachabilityTest {
       "java.util.Set<String> items",
       "java.util.Map<String, String> items",
       "java.util.Optional<String> items",
+      "java.util.ArrayList<String> items",
+      "java.util.LinkedHashSet<String> items",
       "String name",
     }
   )
