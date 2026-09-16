@@ -29,6 +29,7 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
@@ -1274,11 +1275,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         error(source, "@Bridge field \"" + t + "\" appears in both transforms and drops — pick one.");
         return;
       }
-      // BridgeFn-shape transforms (no `method` qualifier): the using class's BridgeFn type
-      // arguments must fit the field pair, or the emitted __tx_ call sites reference javac
-      // errors inside a generated file the user never wrote. This catches the forward
-      // direction; a backward mismatch, a raw BridgeFn supertype (no arguments to compare)
-      // and a renamed field all still surface inside the generated file.
+      // BridgeFn-shape transforms (no `method` qualifier): what the using class's forward and
+      // backward actually accept and return must fit the field pair, or the emitted __tx_ call
+      // sites reference javac errors inside a generated file the user never wrote. Both
+      // directions are checked, and a forward-only row is exempt from the backward half because
+      // it emits no backward call.
+      //
+      // A using class implementing the raw BridgeFn still escapes, and not because its members
+      // cannot be resolved -- they can. The block short-circuits before resolution runs when there
+      // are no type arguments to read, so nothing reaches the part that would have caught it.
       //
       // Renamed fields are skipped because the target slot is looked up by the source name,
       // which a rename has moved — and the pairing is rejected a few loops down anyway.
@@ -1311,15 +1316,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // Assignability models the boxing the source read needs and the unboxing-plus-widening
           // the target write needs, so the declared field types are what to compare — boxing
           // either side first would discard the second.
-          if (
-            !types.isAssignable(sfType, erasedBound(args.get(0))) ||
-            !types.isAssignable(erasedBound(args.get(1)), tfType)
-          ) {
+          //
+          // forward reads the source field, hands it to A, and stores B into the target field.
+          // backward does the same journey in reverse and so needs the other two conversions: the
+          // target field into B, and A into the source field. A pair can satisfy one direction and
+          // not the other, and a row that only fits forward still emits a backward unless it is
+          // declared forward-only — where the mismatch then lands as a raw javac error inside the
+          // generated file rather than as a diagnostic here.
+          // Compare against the methods the emitted call sites bind to, falling back to the
+          // interface arguments only where the using type exposes no concrete override. A
+          // covariant override narrows the return type and Java binds the narrow one, so the
+          // interface arguments describe a signature the call site does not use.
+          final var fwd = resolvedFn(usingEl, "forward", sfType);
+          final var bwd = resolvedFn(usingEl, "backward", tfType);
+          final var fwdAccepts = fwd == null ? erasedBound(args.get(0)) : fwd.getParameterTypes().getFirst();
+          final var fwdGives = fwd == null ? erasedBound(args.get(1)) : fwd.getReturnType();
+          final var bwdAccepts = bwd == null ? erasedBound(args.get(1)) : bwd.getParameterTypes().getFirst();
+          final var bwdGives = bwd == null ? erasedBound(args.get(0)) : bwd.getReturnType();
+
+          final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, tfType);
+          final var backwardFits =
+            forwardOnlyTransforms.contains(t) ||
+            (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, sfType));
+          if (!forwardFits || !backwardFits) {
             error(
               source,
               "@Transform field=\"" +
                 t +
-                "\" does not fit: the field pair is " +
+                "\" does not fit " +
+                (forwardFits ? "backward" : "forward") +
+                ": the field pair is " +
                 sfType +
                 " -> " +
                 tfType +
@@ -1329,7 +1355,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 args.get(0) +
                 ", " +
                 args.get(1) +
-                ">"
+                ">" +
+                (forwardFits ? ". Add forwardOnly = true if only the forward direction is wanted." : "")
             );
             return;
           }
@@ -3070,6 +3097,55 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       work.addAll(types.directSupertypes(t));
     }
     return null;
+  }
+
+  /**
+   * The {@code forward} or {@code backward} the emitted call site will actually bind to, as a
+   * signature rather than as a name. Three things decide it, and reading the interface's type
+   * arguments gets all three wrong.
+   *
+   * <p>A member inherited from a generic base carries that base's type variables, which mean
+   * nothing on their own — {@code asMemberOf} substitutes them for what the subclass fixed them to,
+   * so a {@code backward} declared to return {@code T} reads as returning {@code Integer}.
+   *
+   * <p>Erasure applies only where the emitter writes a raw instantiation, which it does exactly
+   * when the using class is generic. Erasing unconditionally discards the parameterisation a
+   * non-generic class keeps at the call site, which lets a mismatched {@code List<String>} through
+   * to fail inside the generated file.
+   *
+   * <p>Among applicable overloads the most specific parameter wins, which is the rule javac itself
+   * applies at the call site. Ordering on the return type instead makes the answer depend on
+   * declaration order: two overloads returning the same type compare equal, so whichever is visited
+   * last is kept.
+   *
+   * @param argType what the call site will pass, so inapplicable overloads are discarded first
+   */
+  private ExecutableType resolvedFn(final TypeElement usingEl, final String name, final TypeMirror argType) {
+    final var types = processingEnv.getTypeUtils();
+    final var owner = (DeclaredType) usingEl.asType();
+    final var raw = !usingEl.getTypeParameters().isEmpty();
+    ExecutableType best = null;
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(usingEl))) {
+      if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
+      if (m.getModifiers().contains(Modifier.ABSTRACT)) continue;
+      // getAllMembers includes the type's own private members, which the generated bridge is in no
+      // position to call. Selecting one says a row fits on the strength of a method javac will not
+      // bind, and the public overload it does bind is then the one that fails.
+      if (m.getModifiers().contains(Modifier.PRIVATE)) continue;
+      final var seen = (ExecutableType) types.asMemberOf(owner, m);
+      final var param = raw ? types.erasure(seen.getParameterTypes().getFirst()) : seen.getParameterTypes().getFirst();
+      if (!types.isAssignable(argType, param)) continue;
+      if (best == null) {
+        best = seen;
+        continue;
+      }
+      final var bestParam = raw
+        ? types.erasure(best.getParameterTypes().getFirst())
+        : best.getParameterTypes().getFirst();
+      if (types.isSubtype(types.erasure(param), types.erasure(bestParam))) best = seen;
+    }
+    if (best == null) return null;
+    return raw ? (ExecutableType) types.erasure(best) : best;
   }
 
   // A type-variable argument stands for whatever the emitter's raw call site erases it to, so the
