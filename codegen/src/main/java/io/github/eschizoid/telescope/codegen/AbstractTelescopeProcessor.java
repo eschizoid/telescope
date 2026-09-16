@@ -900,7 +900,19 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED
         ? (TypeElement) ((DeclaredType) builder.getReturnType()).asElement()
         : null;
-    final var useBuilder = builderType != null && hasBuildMethod(builderType);
+    final var hasBuilder = builderType != null && hasBuildMethod(builderType);
+    // Mirror the reflective writer's precedence, which prefers setters wherever the target
+    // supports them and falls back to a builder only where it does not. The generated holder is an
+    // optimisation of the reflective path, so choosing differently here makes the same call return
+    // a different value depending on whether the holder happened to be loadable -- a builder
+    // normalises, defaults and validates on build(), and a setter writes what it was given.
+    //
+    // The reflective side settles for a partial setter surface and silently skips what it cannot
+    // write. This one requires a setter for every property before it prefers them, because a
+    // rebuild that drops a component is worse than one that goes through the builder.
+    final var settersCoverEveryProperty =
+      hasPublicNoArgConstructor(pojo) && props.stream().allMatch(p -> setterName(pojo, p.name()) != null);
+    final var useBuilder = hasBuilder && !settersCoverEveryProperty;
     if (!useBuilder && !hasPublicNoArgConstructor(pojo)) {
       error(
         pojo,
