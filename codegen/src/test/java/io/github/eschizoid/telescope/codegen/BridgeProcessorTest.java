@@ -2262,8 +2262,10 @@ class BridgeProcessorTest {
     @DisplayName("@Transform accepts a BridgeFn reached through an intermediate abstract class")
     void transformAcceptsBridgeFnThroughIntermediateSupertype() {
       // The validator walks the supertype closure rather than the direct interfaces, so an
-      // implementor several levels up still resolves its BridgeFn arguments.
-      final var compilation = compile(
+      // implementor several levels up still resolves its BridgeFn arguments. Attributed, because
+      // accepting a row only proves the validator stayed quiet -- the emitted call sites are where
+      // a wrongly accepted pair actually fails, and a processing-only compile never visits them.
+      final var compilation = compileAttributed(
         source(
           "demo.AbstractLen",
           """

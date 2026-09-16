@@ -1311,15 +1311,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // Assignability models the boxing the source read needs and the unboxing-plus-widening
           // the target write needs, so the declared field types are what to compare — boxing
           // either side first would discard the second.
-          if (
-            !types.isAssignable(sfType, erasedBound(args.get(0))) ||
-            !types.isAssignable(erasedBound(args.get(1)), tfType)
-          ) {
+          //
+          // forward reads the source field, hands it to A, and stores B into the target field.
+          // backward does the same journey in reverse and so needs the other two conversions: the
+          // target field into B, and A into the source field. A pair can satisfy one direction and
+          // not the other, and a row that only fits forward still emits a backward unless it is
+          // declared forward-only — where the mismatch then lands as a raw javac error inside the
+          // generated file rather than as a diagnostic here.
+          final var forwardFits =
+            types.isAssignable(sfType, erasedBound(args.get(0))) &&
+            types.isAssignable(erasedBound(args.get(1)), tfType);
+          final var backwardFits =
+            forwardOnlyTransforms.contains(t) ||
+            (types.isAssignable(tfType, erasedBound(args.get(1))) &&
+              types.isAssignable(erasedBound(args.get(0)), sfType));
+          if (!forwardFits || !backwardFits) {
             error(
               source,
               "@Transform field=\"" +
                 t +
-                "\" does not fit: the field pair is " +
+                "\" does not fit " +
+                (forwardFits ? "backward" : "forward") +
+                ": the field pair is " +
                 sfType +
                 " -> " +
                 tfType +
@@ -1329,7 +1342,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 args.get(0) +
                 ", " +
                 args.get(1) +
-                ">"
+                ">" +
+                (forwardFits ? ". Add forwardOnly = true if only the forward direction is wanted." : "")
             );
             return;
           }
