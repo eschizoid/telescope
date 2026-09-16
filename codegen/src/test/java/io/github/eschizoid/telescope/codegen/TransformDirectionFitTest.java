@@ -92,6 +92,42 @@ class TransformDirectionFitTest {
   }
 
   @Test
+  @DisplayName("a covariant override is accepted, because the call site binds to it and not the interface")
+  void covariantBackwardIsAccepted() {
+    // backward is declared to return Number by the interface and Integer by the class. Java binds
+    // the call to the class's method, so the emitted assignment into an Integer slot is well
+    // typed — and a check that reads the interface's arguments refuses a program that compiles.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.CovBackFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        public final class CovBackFn implements BridgeFn<Number, String> {
+          @Override public String forward(final Number n) { return String.valueOf(n); }
+          @Override public Integer backward(final String s) { return Integer.valueOf(s); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = {
+          @Transform(field = "v", using = demo.CovBackFn.class)
+        })
+        public record Src(Integer v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertTrue(compilation.success(), () -> "a covariant override round-trips: " + compilation.errorMessages());
+  }
+
+  @Test
   @DisplayName("a transform that fits neither direction still names forward, the first thing to fix")
   void forwardMismatchStillNamesForward() {
     // A pair where forward fails too. The message should lead with forward rather than report the

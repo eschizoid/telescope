@@ -1274,11 +1274,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         error(source, "@Bridge field \"" + t + "\" appears in both transforms and drops — pick one.");
         return;
       }
-      // BridgeFn-shape transforms (no `method` qualifier): the using class's BridgeFn type
-      // arguments must fit the field pair, or the emitted __tx_ call sites reference javac
-      // errors inside a generated file the user never wrote. This catches the forward
-      // direction; a backward mismatch, a raw BridgeFn supertype (no arguments to compare)
-      // and a renamed field all still surface inside the generated file.
+      // BridgeFn-shape transforms (no `method` qualifier): what the using class's forward and
+      // backward actually accept and return must fit the field pair, or the emitted __tx_ call
+      // sites reference javac errors inside a generated file the user never wrote. Both
+      // directions are checked, and a forward-only row is exempt from the backward half because
+      // it emits no backward call.
+      //
+      // A using class implementing the raw BridgeFn still escapes: there are no type arguments to
+      // fall back on, and where it also declares no concrete override there is nothing to resolve.
       //
       // Renamed fields are skipped because the target slot is looked up by the source name,
       // which a rename has moved — and the pairing is rejected a few loops down anyway.
@@ -1318,13 +1321,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // not the other, and a row that only fits forward still emits a backward unless it is
           // declared forward-only — where the mismatch then lands as a raw javac error inside the
           // generated file rather than as a diagnostic here.
-          final var forwardFits =
-            types.isAssignable(sfType, erasedBound(args.get(0))) &&
-            types.isAssignable(erasedBound(args.get(1)), tfType);
+          // Compare against the methods the emitted call sites bind to, falling back to the
+          // interface arguments only where the using type exposes no concrete override. A
+          // covariant override narrows the return type and Java binds the narrow one, so the
+          // interface arguments describe a signature the call site does not use.
+          final var fwd = resolvedFn(usingEl, "forward");
+          final var bwd = resolvedFn(usingEl, "backward");
+          final var fwdAccepts = paramOf(fwd) == null ? erasedBound(args.get(0)) : paramOf(fwd);
+          final var fwdGives = returnOf(fwd) == null ? erasedBound(args.get(1)) : returnOf(fwd);
+          final var bwdAccepts = paramOf(bwd) == null ? erasedBound(args.get(1)) : paramOf(bwd);
+          final var bwdGives = returnOf(bwd) == null ? erasedBound(args.get(0)) : returnOf(bwd);
+
+          final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, tfType);
           final var backwardFits =
             forwardOnlyTransforms.contains(t) ||
-            (types.isAssignable(tfType, erasedBound(args.get(1))) &&
-              types.isAssignable(erasedBound(args.get(0)), sfType));
+            (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, sfType));
           if (!forwardFits || !backwardFits) {
             error(
               source,
@@ -3084,6 +3095,39 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       work.addAll(types.directSupertypes(t));
     }
     return null;
+  }
+
+  /**
+   * The {@code forward} or {@code backward} the emitted call site will actually bind to: the most
+   * specific single-argument override of that name on the using type. The interface's own type
+   * arguments are not that method. A covariant override narrows the return type, and Java binds the
+   * call to the narrow one — so comparing the interface arguments refuses a pair the emitted code
+   * handles, and a bridge method restores the wide signature alongside it.
+   *
+   * <p>Specificity is decided on the erased return type, which orders an override below whatever it
+   * overrides. Returns {@code null} when no such method is visible, which leaves the caller on the
+   * interface arguments.
+   */
+  private ExecutableElement resolvedFn(final TypeElement usingEl, final String name) {
+    final var types = processingEnv.getTypeUtils();
+    ExecutableElement best = null;
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(usingEl))) {
+      if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
+      if (m.getModifiers().contains(Modifier.ABSTRACT)) continue;
+      if (best == null || types.isSubtype(types.erasure(m.getReturnType()), types.erasure(best.getReturnType()))) best =
+        m;
+    }
+    return best;
+  }
+
+  /** The single parameter's type as seen on {@code usingEl}, erased, or {@code null}. */
+  private TypeMirror paramOf(final ExecutableElement m) {
+    return m == null ? null : processingEnv.getTypeUtils().erasure(m.getParameters().getFirst().asType());
+  }
+
+  /** The return type as seen on {@code usingEl}, erased, or {@code null}. */
+  private TypeMirror returnOf(final ExecutableElement m) {
+    return m == null ? null : processingEnv.getTypeUtils().erasure(m.getReturnType());
   }
 
   // A type-variable argument stands for whatever the emitter's raw call site erases it to, so the
