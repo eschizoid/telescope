@@ -246,12 +246,16 @@ class TransformDirectionFitTest {
   }
 
   @ParameterizedTest(name = "declared {0} first")
-  @ValueSource(strings = { "CharSequence", "Integer" })
+  @ValueSource(strings = { "CharSequence", "String" })
   @DisplayName("an overload pair resolves the same way whichever order it is declared in")
   void overloadResolutionIsOrderIndependent(final String firstParam) {
-    // Two applicable-looking overloads returning the same type. Choosing by return type compares
-    // them equal, so whichever is visited last wins and the verdict flips with declaration order.
-    // Choosing by most-specific parameter -- what javac does at the call site -- does not.
+    // Two overloads that are BOTH applicable to a String argument, returning the same type. That
+    // is what makes this exercise the comparison rather than the applicability filter: a pair
+    // where only one candidate applies never reaches the comparison at all.
+    //
+    // Choosing by return type compares them equal, so whichever is visited last wins and the
+    // verdict flips with declaration order. Choosing by most-specific parameter -- what javac does
+    // at the call site -- does not.
     final var second = "CharSequence".equals(firstParam) ? "Integer" : "CharSequence";
     final var compilation = compile(
       ProcessorHarness.source(
@@ -275,7 +279,7 @@ class TransformDirectionFitTest {
         @Bridge(value = demo.Tgt.class, transforms = {
           @Transform(field = "v", using = demo.TwoFn.class, forwardOnly = true)
         })
-        public record Src(CharSequence v) {}
+        public record Src(String v) {}
         """
       ),
       ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
