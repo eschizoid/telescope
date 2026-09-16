@@ -31,9 +31,13 @@ tasks.withType<JavaCompile>().configureEach {
 val internalExportCompileFlag = "--add-exports=io.github.eschizoid.telescope.internal/io.github.eschizoid.telescope.internal=io.github.eschizoid.telescope.benchmarks"
 
 tasks.named<JavaCompile>("compileJmhJava") {
-    val jmhCompileClasspath = configurations.named("jmhCompileClasspath")
+    // A task action may only close over values the configuration cache can serialise, and a
+    // provider for a Configuration is not one. A Configuration is itself a FileCollection, which
+    // is, so the resolution stays lazy while what the action captures stays serialisable.
+    val jmhModulePath: FileCollection = configurations.getByName("jmhCompileClasspath")
+    val exportFlag = internalExportCompileFlag
     doFirst {
-        options.compilerArgs.addAll(listOf("--module-path", jmhCompileClasspath.get().asPath, internalExportCompileFlag))
+        options.compilerArgs.addAll(listOf("--module-path", jmhModulePath.asPath, exportFlag))
         classpath = files()
     }
     doLast {
