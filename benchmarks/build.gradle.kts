@@ -31,10 +31,15 @@ tasks.withType<JavaCompile>().configureEach {
 val internalExportCompileFlag = "--add-exports=io.github.eschizoid.telescope.internal/io.github.eschizoid.telescope.internal=io.github.eschizoid.telescope.benchmarks"
 
 tasks.named<JavaCompile>("compileJmhJava") {
-    val jmhCompileClasspath = configurations.named("jmhCompileClasspath")
+    // A task action may only close over values the configuration cache can serialise, and a
+    // provider for a Configuration is not one. A Configuration is itself a FileCollection, which
+    // is, so the resolution stays lazy while what the action captures stays serialisable.
+    val jmhModulePath: FileCollection = configurations.getByName("jmhCompileClasspath")
+    val exportFlag = internalExportCompileFlag
+    val emptyClasspath: FileCollection = objects.fileCollection()
     doFirst {
-        options.compilerArgs.addAll(listOf("--module-path", jmhCompileClasspath.get().asPath, internalExportCompileFlag))
-        classpath = files()
+        options.compilerArgs.addAll(listOf("--module-path", jmhModulePath.asPath, exportFlag))
+        classpath = emptyClasspath
     }
     doLast {
         destinationDirectory.file("module-info.class").get().asFile.delete()
@@ -55,4 +60,16 @@ jmh {
     (project.findProperty("jmh.timeOnIteration") as String?)?.let { timeOnIteration = it }
     (project.findProperty("jmh.warmupTime") as String?)?.let { warmup = it }
     (project.findProperty("jmh.profilers") as String?)?.let { profilers = it.split(",") }
+}
+
+// The benchmarks live in the jmh source set, which `check` does not reach: this module's own
+// compileJava and compileTestJava have no sources, so `check` completes without ever compiling a
+// benchmark. A benchmark that no longer matches the code it measures therefore ships, and is
+// discovered only when someone dispatches a run by hand -- which is how one of them spent an
+// unknown stretch throwing out of @Setup and measuring nothing at all.
+//
+// Compiling is the whole of what is wanted here. Running them on a shared runner would produce
+// numbers worth nothing, and would cost minutes per pull request.
+tasks.named("check") {
+    dependsOn("jmhClasses")
 }
