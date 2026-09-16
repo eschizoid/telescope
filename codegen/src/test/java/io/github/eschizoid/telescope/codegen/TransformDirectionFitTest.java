@@ -203,6 +203,84 @@ class TransformDirectionFitTest {
   }
 
   @Test
+  @DisplayName("a private overload is not selected, because the generated bridge cannot call it")
+  void privateOverloadIsNotSelected() {
+    // A more specific overload that happens to be private. Resolution sees it, javac binding the
+    // generated call from another class does not, so selecting it declares the row fits on the
+    // strength of a method that will never run -- and the public one that does run then fails.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.PrivFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        public final class PrivFn implements BridgeFn<Object, Object> {
+          @Override public Object forward(final Object o) { return o; }
+          private String forward(final String s) { return s; }
+          @Override public String backward(final Object o) { return String.valueOf(o); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.PrivFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertFalse(compilation.success(), "the callable overload returns Object, which does not fit");
+    assertFalse(
+      compilation.errorMessages().contains("cannot be converted to"),
+      () -> "it must be a diagnostic, not a raw error in the generated file: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a mismatch on the return side alone is caught, not only one on the parameter")
+  void returnSideMismatchIsCaught() {
+    // The sibling of the erasure case above. That one mismatches on the parameter, so a check that
+    // erased only the return would still pass it — this one can fail only if the return is
+    // compared with its type arguments intact.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.RetFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        import java.util.List;
+        public final class RetFn implements BridgeFn<String, List<Integer>> {
+          @Override public List<Integer> forward(final String s) { return List.of(); }
+          @Override public String backward(final List<Integer> in) { return ""; }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.RetFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(java.util.List<String> v) {}")
+    );
+
+    assertFalse(compilation.success(), "List<Integer> does not fit a List<String> slot");
+    assertFalse(
+      compilation.errorMessages().contains("cannot be converted to"),
+      () -> "it must be a diagnostic, not a raw error in the generated file: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
   @DisplayName("concrete methods inherited from a generic base are read as the subclass fixed them")
   void inheritedGenericMembersAreSubstituted() {
     // backward is declared to return T by the base. On its own that erases to Object and fits

@@ -1281,8 +1281,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // directions are checked, and a forward-only row is exempt from the backward half because
       // it emits no backward call.
       //
-      // A using class implementing the raw BridgeFn still escapes: there are no type arguments to
-      // fall back on, and where it also declares no concrete override there is nothing to resolve.
+      // A using class implementing the raw BridgeFn still escapes, and not because its members
+      // cannot be resolved -- they can. The block short-circuits before resolution runs when there
+      // are no type arguments to read, so nothing reaches the part that would have caught it.
       //
       // Renamed fields are skipped because the target slot is looked up by the source name,
       // which a rename has moved — and the pairing is rejected a few loops down anyway.
@@ -3127,6 +3128,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(usingEl))) {
       if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
       if (m.getModifiers().contains(Modifier.ABSTRACT)) continue;
+      // getAllMembers includes the type's own private members, which the generated bridge is in no
+      // position to call. Selecting one says a row fits on the strength of a method javac will not
+      // bind, and the public overload it does bind is then the one that fails.
+      if (m.getModifiers().contains(Modifier.PRIVATE)) continue;
       final var seen = (ExecutableType) types.asMemberOf(owner, m);
       final var param = raw ? types.erasure(seen.getParameterTypes().getFirst()) : seen.getParameterTypes().getFirst();
       if (!types.isAssignable(argType, param)) continue;
