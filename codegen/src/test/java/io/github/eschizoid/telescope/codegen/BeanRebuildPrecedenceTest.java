@@ -63,16 +63,31 @@ class BeanRebuildPrecedenceTest {
   }
 
   /**
-   * The body of the named method within {@code source}, so an assertion can name which emitter it
-   * is about. The holder carries two that write through setters — the per-property lens and {@code
-   * construct} — and a search of the whole file is satisfied by either, so it would hold with one
-   * of them unguarded.
+   * The text of one emitted member, so an assertion can name which emitter it is about. The holder
+   * carries two that write through setters — the per-property lens and {@code construct} — and a
+   * search of the whole file is satisfied by either, so it would hold with one of them unguarded.
+   *
+   * <p>The two are sliced differently because they are different shapes. A constant is emitted as a
+   * single line and ends at the newline; a method ends at its own closing brace. Slicing a constant
+   * as though it were a method runs past it into whatever follows, which puts the other emitter's
+   * text inside the slice and restores exactly the weakness this exists to remove.
    */
-  private static String bodyOf(final String source, final String signatureFragment) {
-    final var start = source.indexOf(signatureFragment);
-    assertTrue(start >= 0, () -> "expected to find " + signatureFragment + " in:\n" + source);
+  private static String constantAt(final String source, final String fragment) {
+    final var start = indexOfOrFail(source, fragment);
+    final var end = source.indexOf('\n', start);
+    return source.substring(start, end < 0 ? source.length() : end);
+  }
+
+  private static String methodAt(final String source, final String fragment) {
+    final var start = indexOfOrFail(source, fragment);
     final var end = source.indexOf("\n  }", start);
     return source.substring(start, end < 0 ? source.length() : end);
+  }
+
+  private static int indexOfOrFail(final String source, final String fragment) {
+    final var at = source.indexOf(fragment);
+    assertTrue(at >= 0, () -> "expected to find " + fragment + " in:\n" + source);
+    return at;
   }
 
   @Test
@@ -86,13 +101,13 @@ class BeanRebuildPrecedenceTest {
     assertTrue(compilation.success(), () -> "a boxed property may be written: " + compilation.errorMessages());
     final var holder = compilation.generated().get("demo.WidgetFieldOptics");
 
-    final var construct = bodyOf(holder, "construct(final Function<String, Object> values)");
+    final var construct = methodAt(holder, "construct(final Function<String, Object> values)");
     assertTrue(
       construct.contains("!= null) c.setV("),
       () -> "construct() unboxes a null without this; saw " + construct
     );
 
-    final var lens = bodyOf(holder, "public static final Telescope<Widget");
+    final var lens = constantAt(holder, "public static final Telescope<Widget");
     assertTrue(lens.contains("!= null) c.setV("), () -> "the lens unboxes a null without this; saw " + lens);
   }
 
