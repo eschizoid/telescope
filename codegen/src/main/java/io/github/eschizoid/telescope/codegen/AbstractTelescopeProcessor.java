@@ -128,6 +128,30 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   private static final Set<String> RESERVED_NAVIGATOR_METHODS = Set.of("of", "get", "explain");
 
   /**
+   * The type variables a navigator declares: {@code R} for the root it navigates from, and {@code
+   * E} and {@code B} on the effectful-update and composition forwarders. A focused type whose own
+   * simple name is one of these is shadowed by the variable at every use, and the resulting
+   * signatures are between meaningless and uncompilable — {@code Telescope<B, B>} names one type
+   * twice where two were meant.
+   *
+   * <p>Adding a variable here without adding it to this set reopens that, for a class name the
+   * author had every right to choose.
+   */
+  private static final Set<String> NAVIGATOR_TYPE_VARIABLES = Set.of("R", "E", "B");
+
+  /**
+   * How the navigator names the type it focuses. The package-relative form reads better and is what
+   * a same-package navigator normally wants, but it is shadowed when it collides with one of the
+   * navigator's own type variables. A qualified name cannot be shadowed, so the collision case
+   * takes one.
+   */
+  protected static String navigatorTypeRefOf(final TypeElement type) {
+    return NAVIGATOR_TYPE_VARIABLES.contains(type.getSimpleName().toString())
+      ? type.getQualifiedName().toString()
+      : packageRelativeTypeRefOf(type);
+  }
+
+  /**
    * Reports any property whose name would collide with a method the navigator declares for itself,
    * and answers whether emission should be abandoned for this type. Callers check before writing
    * the navigator: emitting it anyway leaves the author with a javac error inside a file they
@@ -905,7 +929,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     //   pojoName        Java type-reference inside the emitted source ("Foo" / "Outer.Inner").
     //   pathBaseName    File-level base, with the outer hierarchy flattened ("Foo" / "OuterInner").
     //   pathName        The Path class's simple name, derived from pathBaseName.
-    final var pojoName = packageRelativeTypeRefOf(pojo);
+    final var pojoName = navigatorTypeRefOf(pojo);
     final var pathBaseName = flattenedNameOf(pojo);
     final var pathName = pathBaseName + "Telescope";
     final var qualifiedPath = pkg.isEmpty() ? pathName : pkg + "." + pathName;
