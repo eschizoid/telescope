@@ -8,6 +8,8 @@ import java.util.List;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * A {@code BridgeFn<A, B>} is used in both directions unless the row says otherwise. Forward reads
@@ -125,6 +127,161 @@ class TransformDirectionFitTest {
     );
 
     assertTrue(compilation.success(), () -> "a covariant override round-trips: " + compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("a covariant forward override is accepted too, not only a covariant backward one")
+  void covariantForwardIsAccepted() {
+    // The mirror of the case above, and one the check refused before either direction was resolved
+    // from the class rather than from the interface.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.CovFwdFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        public final class CovFwdFn implements BridgeFn<String, CharSequence> {
+          @Override public String forward(final String s) { return s; }
+          @Override public String backward(final CharSequence c) { return c.toString(); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.CovFwdFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertTrue(compilation.success(), () -> "the class narrows both returns: " + compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("a non-generic transform keeps its type arguments, so a mismatched one is still caught")
+  void nonGenericTransformIsNotErased() {
+    // The emitter instantiates a using class raw only when it is generic. Erasing a non-generic
+    // one's signature throws away the parameterisation the call site keeps, which lets a pair
+    // through that then fails inside the generated file -- worse than not checking at all, since
+    // the diagnostic that would have named it is the thing being skipped.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.ListInv",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        import java.util.List;
+        public final class ListInv implements BridgeFn<List<String>, List<Integer>> {
+          @Override public List<Integer> forward(final List<String> in) { return List.of(); }
+          @Override public List<String> backward(final List<Integer> in) { return List.of(); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.ListInv.class) })
+        public record Src(java.util.List<Long> v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(java.util.List<Double> v) {}")
+    );
+
+    assertFalse(compilation.success(), "List<Long> does not fit List<String>");
+    assertFalse(
+      compilation.errorMessages().contains("cannot be converted to"),
+      () -> "it must be a diagnostic, not a raw error in the generated file: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("concrete methods inherited from a generic base are read as the subclass fixed them")
+  void inheritedGenericMembersAreSubstituted() {
+    // backward is declared to return T by the base. On its own that erases to Object and fits
+    // nothing; substituted for what the subclass fixed T to, it returns Integer and fits.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.GenBase",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        public abstract class GenBase<T> implements BridgeFn<T, String> {
+          @Override public String forward(final T t) { return String.valueOf(t); }
+          @Override public T backward(final String s) { return null; }
+        }
+        """
+      ),
+      ProcessorHarness.source("demo.GenSub", "package demo; public final class GenSub extends GenBase<Integer> {}"),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.GenSub.class) })
+        public record Src(Integer v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertTrue(compilation.success(), () -> "the subclass fixes T to Integer: " + compilation.errorMessages());
+  }
+
+  /**
+   * The interface declares {@code forward(CharSequence)}, so only that overload carries the
+   * annotation.
+   */
+  private static String forwardDecl(final String param) {
+    final var over = "CharSequence".equals(param) ? "@Override " : "";
+    return over + "public String forward(final " + param + " a) { return String.valueOf(a); }";
+  }
+
+  @ParameterizedTest(name = "declared {0} first")
+  @ValueSource(strings = { "CharSequence", "Integer" })
+  @DisplayName("an overload pair resolves the same way whichever order it is declared in")
+  void overloadResolutionIsOrderIndependent(final String firstParam) {
+    // Two applicable-looking overloads returning the same type. Choosing by return type compares
+    // them equal, so whichever is visited last wins and the verdict flips with declaration order.
+    // Choosing by most-specific parameter -- what javac does at the call site -- does not.
+    final var second = "CharSequence".equals(firstParam) ? "Integer" : "CharSequence";
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.TwoFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        public final class TwoFn implements BridgeFn<CharSequence, String> {
+          %s
+          %s
+          @Override public CharSequence backward(final String s) { return s; }
+        }
+        """.formatted(forwardDecl(firstParam), forwardDecl(second))
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = {
+          @Transform(field = "v", using = demo.TwoFn.class, forwardOnly = true)
+        })
+        public record Src(CharSequence v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertTrue(compilation.success(), () -> "order must not decide the verdict: " + compilation.errorMessages());
   }
 
   @Test

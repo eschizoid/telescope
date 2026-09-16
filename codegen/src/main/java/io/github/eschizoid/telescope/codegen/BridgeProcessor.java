@@ -29,6 +29,7 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
@@ -1325,12 +1326,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // interface arguments only where the using type exposes no concrete override. A
           // covariant override narrows the return type and Java binds the narrow one, so the
           // interface arguments describe a signature the call site does not use.
-          final var fwd = resolvedFn(usingEl, "forward");
-          final var bwd = resolvedFn(usingEl, "backward");
-          final var fwdAccepts = paramOf(fwd) == null ? erasedBound(args.get(0)) : paramOf(fwd);
-          final var fwdGives = returnOf(fwd) == null ? erasedBound(args.get(1)) : returnOf(fwd);
-          final var bwdAccepts = paramOf(bwd) == null ? erasedBound(args.get(1)) : paramOf(bwd);
-          final var bwdGives = returnOf(bwd) == null ? erasedBound(args.get(0)) : returnOf(bwd);
+          final var fwd = resolvedFn(usingEl, "forward", sfType);
+          final var bwd = resolvedFn(usingEl, "backward", tfType);
+          final var fwdAccepts = fwd == null ? erasedBound(args.get(0)) : fwd.getParameterTypes().getFirst();
+          final var fwdGives = fwd == null ? erasedBound(args.get(1)) : fwd.getReturnType();
+          final var bwdAccepts = bwd == null ? erasedBound(args.get(1)) : bwd.getParameterTypes().getFirst();
+          final var bwdGives = bwd == null ? erasedBound(args.get(0)) : bwd.getReturnType();
 
           final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, tfType);
           final var backwardFits =
@@ -3098,36 +3099,48 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The {@code forward} or {@code backward} the emitted call site will actually bind to: the most
-   * specific single-argument override of that name on the using type. The interface's own type
-   * arguments are not that method. A covariant override narrows the return type, and Java binds the
-   * call to the narrow one — so comparing the interface arguments refuses a pair the emitted code
-   * handles, and a bridge method restores the wide signature alongside it.
+   * The {@code forward} or {@code backward} the emitted call site will actually bind to, as a
+   * signature rather than as a name. Three things decide it, and reading the interface's type
+   * arguments gets all three wrong.
    *
-   * <p>Specificity is decided on the erased return type, which orders an override below whatever it
-   * overrides. Returns {@code null} when no such method is visible, which leaves the caller on the
-   * interface arguments.
+   * <p>A member inherited from a generic base carries that base's type variables, which mean
+   * nothing on their own — {@code asMemberOf} substitutes them for what the subclass fixed them to,
+   * so a {@code backward} declared to return {@code T} reads as returning {@code Integer}.
+   *
+   * <p>Erasure applies only where the emitter writes a raw instantiation, which it does exactly
+   * when the using class is generic. Erasing unconditionally discards the parameterisation a
+   * non-generic class keeps at the call site, which lets a mismatched {@code List<String>} through
+   * to fail inside the generated file.
+   *
+   * <p>Among applicable overloads the most specific parameter wins, which is the rule javac itself
+   * applies at the call site. Ordering on the return type instead makes the answer depend on
+   * declaration order: two overloads returning the same type compare equal, so whichever is visited
+   * last is kept.
+   *
+   * @param argType what the call site will pass, so inapplicable overloads are discarded first
    */
-  private ExecutableElement resolvedFn(final TypeElement usingEl, final String name) {
+  private ExecutableType resolvedFn(final TypeElement usingEl, final String name, final TypeMirror argType) {
     final var types = processingEnv.getTypeUtils();
-    ExecutableElement best = null;
+    final var owner = (DeclaredType) usingEl.asType();
+    final var raw = !usingEl.getTypeParameters().isEmpty();
+    ExecutableType best = null;
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(usingEl))) {
       if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
       if (m.getModifiers().contains(Modifier.ABSTRACT)) continue;
-      if (best == null || types.isSubtype(types.erasure(m.getReturnType()), types.erasure(best.getReturnType()))) best =
-        m;
+      final var seen = (ExecutableType) types.asMemberOf(owner, m);
+      final var param = raw ? types.erasure(seen.getParameterTypes().getFirst()) : seen.getParameterTypes().getFirst();
+      if (!types.isAssignable(argType, param)) continue;
+      if (best == null) {
+        best = seen;
+        continue;
+      }
+      final var bestParam = raw
+        ? types.erasure(best.getParameterTypes().getFirst())
+        : best.getParameterTypes().getFirst();
+      if (types.isSubtype(types.erasure(param), types.erasure(bestParam))) best = seen;
     }
-    return best;
-  }
-
-  /** The single parameter's type as seen on {@code usingEl}, erased, or {@code null}. */
-  private TypeMirror paramOf(final ExecutableElement m) {
-    return m == null ? null : processingEnv.getTypeUtils().erasure(m.getParameters().getFirst().asType());
-  }
-
-  /** The return type as seen on {@code usingEl}, erased, or {@code null}. */
-  private TypeMirror returnOf(final ExecutableElement m) {
-    return m == null ? null : processingEnv.getTypeUtils().erasure(m.getReturnType());
+    if (best == null) return null;
+    return raw ? (ExecutableType) types.erasure(best) : best;
   }
 
   // A type-variable argument stands for whatever the emitter's raw call site erases it to, so the
