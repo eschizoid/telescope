@@ -1763,7 +1763,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // A @ViaMapper bridge is user code with no guaranteed null tolerance — auto-derived
       // sub-bridges open with their own null guard, a user class may not — so the call is
       // null-gated here. Both mentions reference the hoisted local, so nothing is re-read.
-      if (plan.userSuppliedBridge()) {
+      //
+      // A primitive local is skipped: it cannot hold null, and `int == null` is not legal Java,
+      // so emitting the gate there produces a generated file that does not compile.
+      if (plan.userSuppliedBridge() && !sf.type().getKind().isPrimitive()) {
         return "(" + local + " == null ? null : " + applyForward(srcName, plan, read) + ")";
       }
       return applyForward(srcName, plan, read);
@@ -1783,8 +1786,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var local = "__bt_" + sourceName;
       backwardLocals.putIfAbsent(local, tf.type() + " " + local + " = " + readExpr(target, "t", tf) + ";");
       final var plan = fieldPlans.get(sourceName);
-      // Same user-bridge null gate as readForward, for the same reason.
-      if (plan.userSuppliedBridge()) {
+      // Same user-bridge null gate as readForward, skipped for a primitive for the same reason.
+      if (plan.userSuppliedBridge() && !tf.type().getKind().isPrimitive()) {
         return "(" + local + " == null ? null : " + applyBackward(sourceName, plan, local) + ")";
       }
       return applyBackward(sourceName, plan, local);
