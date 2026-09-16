@@ -36,9 +36,10 @@ tasks.named<JavaCompile>("compileJmhJava") {
     // is, so the resolution stays lazy while what the action captures stays serialisable.
     val jmhModulePath: FileCollection = configurations.getByName("jmhCompileClasspath")
     val exportFlag = internalExportCompileFlag
+    val emptyClasspath: FileCollection = objects.fileCollection()
     doFirst {
         options.compilerArgs.addAll(listOf("--module-path", jmhModulePath.asPath, exportFlag))
-        classpath = files()
+        classpath = emptyClasspath
     }
     doLast {
         destinationDirectory.file("module-info.class").get().asFile.delete()
