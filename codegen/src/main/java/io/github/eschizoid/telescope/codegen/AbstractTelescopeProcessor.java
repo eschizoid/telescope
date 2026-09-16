@@ -225,10 +225,11 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * emits. Returned by {@link #traversalKind}; {@code null} when the type isn't a traversable
    * container.
    *
-   * @param rebuildable whether a write through this step can succeed. The polymorphic iterable
-   *     traversal rebuilds a {@code List} or a {@code Set}, so a declared type that can hold
-   *     neither -- a {@code Deque}, a {@code Queue}, an adopter's own {@code Iterable} subtype --
-   *     reads correctly and throws on update. Always true for the four typed kinds.
+   * @param rebuildable whether a write through this step can succeed. A rebuild produces an
+   *     unmodifiable {@code List} or {@code Set}, so a declaration that fits neither -- a concrete
+   *     container class, a sub-interface of either, a {@code Deque} or {@code Queue}, an adopter's
+   *     own {@code Iterable} subtype -- reads correctly and throws on update. The four typed kinds
+   *     claim only declarations that do fit, so it is always true for them.
    */
   protected record TraversalShape(String elementType, String stepMethod, String containerKind, boolean rebuildable) {}
 
@@ -260,13 +261,21 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     }
     // Differentiate List vs Set vs raw Iterable so the codegen can emit the right typed
     // Telescope.asList/asSet factory at the step (zero runtime container dispatch).
+    // The list and set branches claim a declared type only when the rebuild they produce can be
+    // stored back. The rebuild is the interface's normalised form, so the test is whether the
+    // interface is assignable to the declared type -- true for List itself and its supertypes,
+    // false for a concrete subclass and for a sub-interface, neither of which a normalised rebuild
+    // satisfies. Those fall through to the polymorphic branch, which binds any Iterable subtype.
+    //
+    // The map branch above does not make this test, so a concrete Map subtype still emits a step
+    // that does not compile. Nothing it could fall through to exists yet.
     final var list = elements.getTypeElement("java.util.List");
-    if (list != null && types.isAssignable(erasure, types.erasure(list.asType()))) {
+    if (list != null && isKindOf(erasure, list) && storesRebuildOf(list, erasure)) {
       final var elem = concreteArg(args, 0);
       return elem == null ? null : new TraversalShape(elem, "each", "list", true);
     }
     final var set = elements.getTypeElement("java.util.Set");
-    if (set != null && types.isAssignable(erasure, types.erasure(set.asType()))) {
+    if (set != null && isKindOf(erasure, set) && storesRebuildOf(set, erasure)) {
       final var elem = concreteArg(args, 0);
       return elem == null ? null : new TraversalShape(elem, "each", "set", true);
     }
@@ -279,18 +288,39 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * Whether a write through the polymorphic iterable step can succeed for this declared type. The
-   * traversal rebuilds its source as an {@code ArrayList} or a {@code LinkedHashSet}, so a declared
-   * type that can hold neither has no rebuild the write could store. Reads are unaffected: every
-   * {@code Iterable} enumerates.
+   * Whether a write through the polymorphic iterable step can succeed for this declared type. A
+   * rebuild produces an unmodifiable wrapper over the element traversal's result, whose only {@code
+   * Iterable} supertypes are {@code List} and {@code Set} and theirs — so a declaration neither of
+   * those fits has nowhere to store what a write produces. Reads are unaffected: every {@code
+   * Iterable} enumerates.
+   *
+   * <p>The test is on the interfaces rather than on the implementations the traversal happens to
+   * allocate. Those differ: an {@code ArrayList} is assignable to {@code AbstractCollection} and a
+   * {@code List} is not, and the wrapper the write actually produces is neither.
    */
   private boolean rebuildableIterable(final TypeMirror erasure) {
-    final var types = processingEnv.getTypeUtils();
     final var elements = processingEnv.getElementUtils();
-    return Stream.of("java.util.ArrayList", "java.util.LinkedHashSet")
+    return Stream.of("java.util.List", "java.util.Set")
       .map(elements::getTypeElement)
       .filter(Objects::nonNull)
-      .anyMatch(impl -> types.isAssignable(types.erasure(impl.asType()), erasure));
+      .anyMatch(iface -> storesRebuildOf(iface, erasure));
+  }
+
+  /** Whether the declared type is one of {@code iface}'s, so that traversal is the right one. */
+  private boolean isKindOf(final TypeMirror declaredErasure, final TypeElement iface) {
+    final var types = processingEnv.getTypeUtils();
+    return types.isAssignable(declaredErasure, types.erasure(iface.asType()));
+  }
+
+  /**
+   * Whether a value rebuilt as {@code iface}'s normalised form can be stored in a field declared
+   * {@code declaredErasure}. Container rebuilds normalise to the interface rather than preserving
+   * the declared class, so this is assignability in the direction that surprises people: the
+   * question is whether the interface fits the declaration, not whether the declaration is one.
+   */
+  private boolean storesRebuildOf(final TypeElement iface, final TypeMirror declaredErasure) {
+    final var types = processingEnv.getTypeUtils();
+    return types.isAssignable(types.erasure(iface.asType()), declaredErasure);
   }
 
   /**
@@ -1218,19 +1248,21 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final String javadoc
   ) {
     if (!shape.rebuildable()) {
-      // Reads enumerate any Iterable, so the step is useful and still emitted. Only a write has no
-      // rebuild to store, and it fails at update time with the traversal's own message.
+      // Reads enumerate any Iterable, so the step is useful and still emitted. Only a write has
+      // nowhere to put its result, and it fails at update time. This is the one moment that is
+      // knowable, and saying nothing here is what turns it into a surprise at run time.
       processingEnv
         .getMessager()
         .printMessage(
           Diagnostic.Kind.WARNING,
-          "telescope: '" +
+          "telescope: reading '" +
             componentName +
-            "' is declared " +
+            "' works, but updating through it throws. A rebuild produces an unmodifiable" +
+            " List or Set, which cannot be stored in a component declared " +
             containerType +
-            ", which can hold neither an ArrayList nor a LinkedHashSet. Reading through this step" +
-            " works; updating through it throws, because the rebuild has no container to produce." +
-            " Declare the component as List<E> or Set<E> to make writes work.",
+            "; and where the value is neither a List nor a Set, the rebuild is refused" +
+            " outright instead. Declare the component as List<E> or Set<E> so the rebuild" +
+            " fits.",
           origin
         );
     }
