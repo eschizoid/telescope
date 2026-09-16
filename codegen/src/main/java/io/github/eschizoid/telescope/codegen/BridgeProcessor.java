@@ -1959,13 +1959,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("    }");
         out.println("  }");
         out.println();
-        out.println(
-          "  /** Directly-callable mapper value — one interface hop, MapStruct's {@code" + " INSTANCE.toRec(s)} cost."
-        );
-        out.println(
-          "   * Call {@code BRIDGE_FN.forward(s)} / {@code .backward(t)} in a hot loop; use" + " {@code BRIDGE} for the"
-        );
-        out.println("   * composable lattice value. */");
+        emitBridgeFnJavadoc(out);
         out.println("  public static final BridgeFn<" + sourceFq + ", " + targetFq + "> BRIDGE_FN = new Fn();");
         out.println(
           "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
@@ -2185,13 +2179,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("    }");
         out.println("  }");
         out.println();
-        out.println(
-          "  /** Directly-callable mapper value — one interface hop, MapStruct's {@code" + " INSTANCE.toRec(s)} cost."
-        );
-        out.println(
-          "   * Call {@code BRIDGE_FN.forward(s)} / {@code .backward(t)} in a hot loop; use" + " {@code BRIDGE} for the"
-        );
-        out.println("   * composable lattice value. */");
+        emitBridgeFnJavadoc(out);
         out.println("  public static final BridgeFn<" + sourceFq + ", " + targetFq + "> BRIDGE_FN = new Fn();");
         out.println(
           "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
@@ -2212,6 +2200,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var decl : locals.values()) sb.append("final ").append(decl).append(" ");
     if (body.startsWith("{")) return sb.append(body.substring(1).trim()).toString();
     return sb.append("return ").append(body).append("; }").toString();
+  }
+
+  /**
+   * The javadoc above the emitted {@code BRIDGE_FN} constant. Both the plain and the sealed bridge
+   * emit it, and it describes what the constant is rather than what it costs: which of the two
+   * shapes measures faster is tier-dependent and has not been stable across benchmark runs, so a
+   * figure quoted here would be a claim this code cannot keep true. The published comparison is the
+   * one place the numbers live.
+   */
+  private static void emitBridgeFnJavadoc(final PrintWriter out) {
+    out.println("  /** Directly-callable form of this bridge: a {@link BridgeFn} over the generated");
+    out.println("   * static methods, reached through one interface hop and without lattice composition.");
+    out.println("   * {@code BRIDGE} is the composable value for the same conversion — pick by the shape");
+    out.println("   * the call site needs. */");
   }
 
   /**
