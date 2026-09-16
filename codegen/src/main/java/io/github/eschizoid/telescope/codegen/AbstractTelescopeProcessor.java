@@ -225,10 +225,11 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * emits. Returned by {@link #traversalKind}; {@code null} when the type isn't a traversable
    * container.
    *
-   * @param rebuildable whether a write through this step can succeed. The polymorphic iterable
-   *     traversal rebuilds a {@code List} or a {@code Set}, so a declared type that can hold
-   *     neither -- a {@code Deque}, a {@code Queue}, an adopter's own {@code Iterable} subtype --
-   *     reads correctly and throws on update. Always true for the four typed kinds.
+   * @param rebuildable whether a write through this step can succeed. A rebuild produces an
+   *     unmodifiable {@code List} or {@code Set}, so a declaration that fits neither -- a concrete
+   *     container class, a sub-interface of either, a {@code Deque} or {@code Queue}, an adopter's
+   *     own {@code Iterable} subtype -- reads correctly and throws on update. The four typed kinds
+   *     claim only declarations that do fit, so it is always true for them.
    */
   protected record TraversalShape(String elementType, String stepMethod, String containerKind, boolean rebuildable) {}
 
@@ -260,10 +261,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     }
     // Differentiate List vs Set vs raw Iterable so the codegen can emit the right typed
     // Telescope.asList/asSet factory at the step (zero runtime container dispatch).
-    // A typed branch may claim a declared type only when the rebuild it produces can be stored
-    // back. The rebuild is the interface's normalised form, so the test is whether the interface
-    // is assignable to the declared type -- true for List itself and its supertypes, false for a
-    // concrete subclass, which no normalised rebuild can satisfy.
+    // The list and set branches claim a declared type only when the rebuild they produce can be
+    // stored back. The rebuild is the interface's normalised form, so the test is whether the
+    // interface is assignable to the declared type -- true for List itself and its supertypes,
+    // false for a concrete subclass and for a sub-interface, neither of which a normalised rebuild
+    // satisfies. Those fall through to the polymorphic branch, which binds any Iterable subtype.
+    //
+    // The map branch above does not make this test, so a concrete Map subtype still emits a step
+    // that does not compile. Nothing it could fall through to exists yet.
     final var list = elements.getTypeElement("java.util.List");
     if (list != null && isKindOf(erasure, list) && storesRebuildOf(list, erasure)) {
       final var elem = concreteArg(args, 0);
@@ -283,10 +288,15 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * Whether a write through the polymorphic iterable step can succeed for this declared type. The
-   * traversal rebuilds its source as an {@code ArrayList} or a {@code LinkedHashSet}, so a declared
-   * type that can hold neither has no rebuild the write could store. Reads are unaffected: every
-   * {@code Iterable} enumerates.
+   * Whether a write through the polymorphic iterable step can succeed for this declared type. A
+   * rebuild produces an unmodifiable wrapper over the element traversal's result, whose only {@code
+   * Iterable} supertypes are {@code List} and {@code Set} and theirs — so a declaration neither of
+   * those fits has nowhere to store what a write produces. Reads are unaffected: every {@code
+   * Iterable} enumerates.
+   *
+   * <p>The test is on the interfaces rather than on the implementations the traversal happens to
+   * allocate. Those differ: an {@code ArrayList} is assignable to {@code AbstractCollection} and a
+   * {@code List} is not, and the wrapper the write actually produces is neither.
    */
   private boolean rebuildableIterable(final TypeMirror erasure) {
     final var elements = processingEnv.getElementUtils();
@@ -1247,11 +1257,12 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
           Diagnostic.Kind.WARNING,
           "telescope: reading '" +
             componentName +
-            "' works, but updating through it throws. A container rebuild produces the" +
-            " interface's normalised form -- an unmodifiable List or Set -- and that cannot" +
-            " be stored in a component declared " +
+            "' works, but updating through it throws. A rebuild produces an unmodifiable" +
+            " List or Set, which cannot be stored in a component declared " +
             containerType +
-            ". Declare it as List<E> or Set<E> so the rebuild fits.",
+            "; and where the value is neither a List nor a Set, the rebuild is refused" +
+            " outright instead. Declare the component as List<E> or Set<E> so the rebuild" +
+            " fits.",
           origin
         );
     }

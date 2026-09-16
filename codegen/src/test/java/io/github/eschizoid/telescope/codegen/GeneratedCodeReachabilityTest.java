@@ -77,7 +77,15 @@ class GeneratedCodeReachabilityTest {
   }
 
   @ParameterizedTest(name = "{0}")
-  @ValueSource(strings = { "java.util.Deque<String> items", "java.util.Queue<String> items" })
+  @ValueSource(
+    strings = {
+      "java.util.Deque<String> items",
+      "java.util.Queue<String> items",
+      "java.util.ArrayList<String> items",
+      "java.util.LinkedHashSet<String> items",
+      "java.util.SortedSet<String> items",
+    }
+  )
   @DisplayName("a leaf no rebuild can produce is emitted with a warning rather than in silence")
   void unwritableIterableLeafWarns(final String leaf) {
     // The step still reads, so refusing to emit would take away a working capability. What it
