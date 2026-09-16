@@ -870,7 +870,14 @@ public final class Beans {
     // user-expected write path. A static builder() takes over when SETTERS isn't applicable
     // (immutable @Builder-only targets), and field injection backs both up for no-arg-ctor targets
     // without setters.
-    if (hasNoArgConstructor(cls) && hasAnySetter(cls)) return settersWriter(cls);
+    //
+    // "Applicable" has to mean every property, not one of them, wherever a builder is also on
+    // offer. The setter strategy skips a property it cannot write, leaving the field at its
+    // default, and a rebuild that drops a value is worse than one that goes through a builder able
+    // to carry it. Where no builder exists the skip is still the best available and stands.
+    if (
+      hasNoArgConstructor(cls) && hasAnySetter(cls) && (!hasStaticBuilder(cls) || settersCoverEveryProperty(cls))
+    ) return settersWriter(cls);
     if (hasStaticBuilder(cls)) return builderWriter(cls);
     if (hasNoArgConstructor(cls)) return fieldsWriter(cls);
     final var props = propertyNames(cls);
@@ -1073,6 +1080,27 @@ public final class Beans {
     } catch (final NoSuchMethodException e) {
       return false;
     }
+  }
+
+  /**
+   * Whether every property this class exposes has a setter to write it through. A getter-only
+   * property has none, and the setter strategy skips it — leaving the field at its JLS default,
+   * which matches what other mappers do and is the only thing available when no other surface
+   * exists. It is not the only thing available when a builder does, which is what this asks.
+   */
+  private static boolean settersCoverEveryProperty(final Class<?> cls) {
+    for (final var name : propertyNames(cls)) {
+      final var set = "set" + capitalize(name);
+      var found = false;
+      for (final var m : cls.getMethods()) {
+        if (m.getParameterCount() == 1 && !Modifier.isStatic(m.getModifiers()) && m.getName().equals(set)) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) return false;
+    }
+    return true;
   }
 
   private static boolean hasAnySetter(final Class<?> cls) {
