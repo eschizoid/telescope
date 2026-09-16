@@ -22,6 +22,7 @@ import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
@@ -164,13 +165,41 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   // members (getAllMembers), matching the runtime setters scan in
   // io.github.eschizoid.telescope.internal.Beans.
   protected String setterName(final TypeElement type, final String property) {
+    return setterParameter(type, property) == null ? null : "set" + capitalize(property);
+  }
+
+  /**
+   * The parameter type of the property's setter, or {@code null} where there is none. A setter is
+   * matched by name and arity, which is all the runtime scan can do through reflection, so the
+   * parameter may be a type the property's own value does not fit -- a {@code double} parameter
+   * behind a {@code BigDecimal} getter. Callers that emit a call to it have to look.
+   */
+  protected TypeMirror setterParameter(final TypeElement type, final String property) {
     final var setter = "set" + capitalize(property);
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(type))) {
       if (isPublicInstance(m) && m.getParameters().size() == 1 && m.getSimpleName().contentEquals(setter)) {
-        return setter;
+        return m.getParameters().getFirst().asType();
       }
     }
     return null;
+  }
+
+  /**
+   * Whether a value of the property's type can be passed to that setter. Assignment conversion plus
+   * boxing in both directions: a {@code Long} property fits a {@code long} parameter, and a {@code
+   * BigDecimal} property fits neither {@code double} nor {@code Double}.
+   */
+  protected boolean setterAcceptsProperty(final TypeElement type, final Prop prop) {
+    final var param = setterParameter(type, prop.name());
+    if (param == null) return false;
+    final var types = processingEnv.getTypeUtils();
+    if (types.isAssignable(prop.type(), param)) return true;
+    final var boxedParam = param.getKind().isPrimitive() ? types.boxedClass((PrimitiveType) param).asType() : param;
+    final var propType = prop.type();
+    final var boxedProp = propType.getKind().isPrimitive()
+      ? types.boxedClass((PrimitiveType) propType).asType()
+      : propType;
+    return types.isAssignable(boxedProp, boxedParam);
   }
 
   // A public single-argument builder method named property / setX / withX, or null.
@@ -205,6 +234,20 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   protected static boolean hasPublicNoArgConstructor(final TypeElement type) {
     for (final var ctor : ElementFilter.constructorsIn(type.getEnclosedElements())) {
       if (ctor.getModifiers().contains(Modifier.PUBLIC) && ctor.getParameters().isEmpty()) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether a no-argument constructor exists that the generated navigator can call. The navigator
+   * is emitted into the bean's own package, so protected and package-private both reach; only
+   * private does not. The reflective writer asks the same question through {@code
+   * getDeclaredConstructor}, which is why a stricter test here leaves the two paths disagreeing for
+   * the very common bean that hides its no-arg constructor behind an access modifier.
+   */
+  protected static boolean hasAccessibleNoArgConstructor(final TypeElement type) {
+    for (final var ctor : ElementFilter.constructorsIn(type.getEnclosedElements())) {
+      if (!ctor.getModifiers().contains(Modifier.PRIVATE) && ctor.getParameters().isEmpty()) return true;
     }
     return false;
   }
@@ -900,14 +943,26 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED
         ? (TypeElement) ((DeclaredType) builder.getReturnType()).asElement()
         : null;
-    final var useBuilder = builderType != null && hasBuildMethod(builderType);
-    if (!useBuilder && !hasPublicNoArgConstructor(pojo)) {
+    final var hasBuilder = builderType != null && hasBuildMethod(builderType);
+    // Mirror the reflective writer's precedence, which prefers setters wherever the target
+    // supports them and falls back to a builder only where it does not. The generated holder is an
+    // optimisation of the reflective path, so choosing differently here makes the same call return
+    // a different value depending on whether the holder happened to be loadable -- a builder
+    // normalises, defaults and validates on build(), and a setter writes what it was given.
+    //
+    // The reflective side settles for a partial setter surface and silently skips what it cannot
+    // write. This one requires a setter for every property before it prefers them, because a
+    // rebuild that drops a component is worse than one that goes through the builder.
+    final var settersCoverEveryProperty =
+      hasAccessibleNoArgConstructor(pojo) && props.stream().allMatch(p -> setterAcceptsProperty(pojo, p));
+    final var useBuilder = hasBuilder && !settersCoverEveryProperty;
+    if (!useBuilder && !hasAccessibleNoArgConstructor(pojo)) {
       error(
         pojo,
         triggerLabel +
           ": " +
           pojo.getQualifiedName() +
-          " needs a static builder() or a public no-arg constructor with setters (field" +
+          " needs a static builder() or a no-arg constructor with setters (field" +
           " injection isn't available to generated code — use Telescope.ofBean for the" +
           " runtime path)"
       );
@@ -935,6 +990,15 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       setters[i] = s;
     }
 
+    // Which emitted setter calls need a null test. A setter taking a primitive behind a property
+    // that is not one cannot be handed null -- it unboxes and throws -- so those calls are guarded.
+    // Builder methods are not: a builder takes what the property declares.
+    final var nullGuarded = new boolean[props.size()];
+    for (var i = 0; i < props.size(); i++) {
+      final var param = useBuilder ? null : setterParameter(pojo, props.get(i).name());
+      nullGuarded[i] = param != null && param.getKind().isPrimitive() && !props.get(i).type().getKind().isPrimitive();
+    }
+
     for (final var p : props) {
       final var shape = traversalKind(p.type());
       // Step's class name is built from the flattened base name (nested-safe); the step source
@@ -951,7 +1015,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       out -> {
         emitPathClassHeader(out, pathName, pojoName);
         for (var i = 0; i < props.size(); i++) {
-          emitBeanPropertyMethod(out, pojoName, props, setters, useBuilder, i, navigableAnnotations);
+          emitBeanPropertyMethod(out, pojoName, props, setters, nullGuarded, useBuilder, i, navigableAnnotations);
         }
         final var bridgeTarget = bridgeTargetFqn(pojo);
         if (bridgeTarget != null) emitBridgeHop(out, pojoName, bridgeTarget);
@@ -962,7 +1026,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // Finally, emit the sibling <X>Telescope metadata holder. If any property carries an
     // un-emittable type (wildcards, type-vars, etc.), we report a compile error and skip the
     // holder emission for that POJO only — the Path navigator above is unaffected.
-    emitBeanMetadataHolder(pojo, pojoName, pathBaseName, pkg, props, setters, useBuilder, triggerLabel);
+    emitBeanMetadataHolder(pojo, pojoName, pathBaseName, pkg, props, setters, nullGuarded, useBuilder, triggerLabel);
   }
 
   // Emits the sibling <X>Telescope holder for a bean POJO: one
@@ -977,6 +1041,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final String pkg,
     final List<Prop> props,
     final String[] setters,
+    final boolean[] nullGuarded,
     final boolean useBuilder,
     final String triggerLabel
   ) {
@@ -1025,10 +1090,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         for (final var p : props) {
           final var fieldType = shortenStdImports(boxedType(p.type()));
           final var lensArgs =
-            pojoName + "::" + p.getter() + ", " + beanRebuild(p, props, setters, useBuilder, pojoName);
+            pojoName + "::" + p.getter() + ", " + beanRebuild(p, props, setters, nullGuarded, useBuilder, pojoName);
           emitFieldConstant(out, pojoName, fieldType, p.name(), lensArgs);
         }
-        emitBeanConstruct(out, pojoName, props, setters, useBuilder);
+        emitBeanConstruct(out, pojoName, props, setters, nullGuarded, useBuilder);
         emitConstantsMap(out, props.stream().map(Prop::name).toList());
       }
     );
@@ -1101,6 +1166,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final String pojoName,
     final List<Prop> props,
     final String[] setters,
+    final boolean[] nullGuarded,
     final boolean useBuilder
   ) {
     out.println("  /** Bean rebuild short-circuit for the runtime forward branch. */");
@@ -1117,7 +1183,17 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       out.println("    final var c = new " + pojoName + "();");
       for (var i = 0; i < props.size(); i++) {
         final var p = props.get(i);
-        out.println("    c." + setters[i] + "(" + valueExprForProp(p) + ");");
+        if (nullGuarded[i]) {
+          // valueExprForProp's own guard keys off the property's kind, which says nothing about
+          // the setter's. Where the property is a reference and the parameter is not, the value
+          // arrives as a box that may be null and unboxes on the call, so it is skipped the same
+          // way the lens skips it and the same way the reflective writer does.
+          final var local = "__s_" + p.name();
+          out.println("    final var " + local + " = " + valueExprForProp(p) + ";");
+          out.println("    if (" + local + " != null) c." + setters[i] + "(" + local + ");");
+        } else {
+          out.println("    c." + setters[i] + "(" + valueExprForProp(p) + ");");
+        }
       }
       out.println("    return c;");
     }
@@ -1194,13 +1270,14 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final String pojoName,
     final List<Prop> props,
     final String[] setters,
+    final boolean[] nullGuarded,
     final boolean useBuilder,
     final int propertyIndex,
     final Set<String> navigableAnnotations
   ) {
     final var target = props.get(propertyIndex);
     final var lensArgs =
-      pojoName + "::" + target.getter() + ", " + beanRebuild(target, props, setters, useBuilder, pojoName);
+      pojoName + "::" + target.getter() + ", " + beanRebuild(target, props, setters, nullGuarded, useBuilder, pojoName);
     emitNavigatorMethod(out, pojoName, propertyIndex, target.name(), target.type(), lensArgs, navigableAnnotations);
   }
 
@@ -1417,6 +1494,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final Prop target,
     final List<Prop> all,
     final String[] setters,
+    final boolean[] nullGuarded,
     final boolean useBuilder,
     final String pojoName
   ) {
@@ -1430,8 +1508,29 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     }
     final var sb = new StringBuilder("(p, v) -> { final var c = new " + pojoName + "(); ");
     for (var i = 0; i < all.size(); i++) {
-      final var arg = all.get(i).name().equals(target.name()) ? focusedArg(target) : offPathRead(all.get(i));
-      sb.append("c.").append(setters[i]).append("(").append(arg).append("); ");
+      final var prop = all.get(i);
+      final var arg = prop.name().equals(target.name()) ? focusedArg(target) : offPathRead(prop);
+      if (nullGuarded[i]) {
+        // The setter takes a primitive and the property does not, so null cannot be passed: it
+        // unboxes and throws. The reflective writer skips the property instead, leaving the field
+        // at its JLS default, and this has to do the same or the two disagree on a null. The read
+        // is hoisted because the guard names it twice and a property must be read exactly once.
+        final var local = "__s_" + prop.name();
+        sb
+          .append("final var ")
+          .append(local)
+          .append(" = ")
+          .append(arg)
+          .append("; if (")
+          .append(local)
+          .append(" != null) c.")
+          .append(setters[i])
+          .append("(")
+          .append(local)
+          .append("); ");
+      } else {
+        sb.append("c.").append(setters[i]).append("(").append(arg).append("); ");
+      }
     }
     return sb.append("return c; }").toString();
   }

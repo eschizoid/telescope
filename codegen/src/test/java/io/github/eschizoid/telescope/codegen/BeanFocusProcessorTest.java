@@ -29,7 +29,7 @@ class BeanFocusProcessorTest {
   class HappyPath {
 
     @Test
-    @DisplayName("builder() POJO: navigator method rebuilds via builder(), swapping only the focused property")
+    @DisplayName("builder() POJO: navigator method rebuilds via builder(), swapping only the focused" + " property")
     void builderStrategy() {
       final var compilation = compile(
         source(
@@ -214,7 +214,7 @@ class BeanFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("a Map property's step exposes eachValue(); an Optional property's step exposes whenPresent()")
+    @DisplayName("a Map property's step exposes eachValue(); an Optional property's step exposes" + " whenPresent()")
     void mapAndOptionalUseDistinctStepMethods() {
       final var compilation = compile(
         source(
@@ -348,7 +348,7 @@ class BeanFocusProcessorTest {
 
       assertFalse(compilation.success(), "an all-args-only @BeanFocus class should fail");
       assertTrue(
-        compilation.hasError("needs a static builder() or a public no-arg constructor with setters"),
+        compilation.hasError("needs a static builder() or a no-arg constructor with setters"),
         () -> "expected no-strategy diagnostic; saw " + compilation.errorMessages()
       );
     }
@@ -447,7 +447,7 @@ class BeanFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("a container-shaped property surfaces as a raw Telescope<X, Container<E>> constant (not lifted)")
+    @DisplayName("a container-shaped property surfaces as a raw Telescope<X, Container<E>> constant (not" + " lifted)")
     void telescopeHolderForBeanContainerProperty() {
       final var compilation = compile(
         source(
@@ -479,7 +479,9 @@ class BeanFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("a sub-@BeanFocus property surfaces as Telescope<X, SubBean> — terminal-to-sub-bean, not composed")
+    @DisplayName(
+      "a sub-@BeanFocus property surfaces as Telescope<X, SubBean> — terminal-to-sub-bean, not" + " composed"
+    )
     void telescopeHolderForBeanSubBeanProperty() {
       final var compilation = compile(
         source(
