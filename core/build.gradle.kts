@@ -43,6 +43,25 @@ tasks.withType<Test>().configureEach {
     }
 }
 
+// Every runtime LambdaMetafactory site branches to a MethodHandle closure inside a native image,
+// and that branch is taken by no test — so the two substrates can report the same condition
+// differently and the suite stays green either way. NativeImage.IN_IMAGE reads the JDK's imagecode
+// property, so setting it runs the existing assertions on the accessor substrate an image uses.
+//
+// This proves the two substrates agree. It is not a native-image run: there is no closed world, no
+// reachability metadata and no SerializedLambda restriction here.
+val imageTest by tasks.registering(Test::class) {
+    description = "Runs the test suite on the MethodHandle accessor substrate a native image uses."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    systemProperty("org.graalvm.nativeimage.imagecode", "runtime")
+}
+
+tasks.named("check") {
+    dependsOn(imageTest)
+}
+
 tasks.jacocoTestReport {
     reports {
         csv.required.set(true)

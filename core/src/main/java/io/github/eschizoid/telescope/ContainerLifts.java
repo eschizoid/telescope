@@ -3,6 +3,9 @@ package io.github.eschizoid.telescope;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.lang.reflect.Modifier;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -35,6 +38,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Container-shape lifting for {@link DeepMap}: element-copy Isos for raw same-kind container
@@ -232,11 +236,80 @@ final class ContainerLifts {
     );
   }
 
+  /**
+   * The intermediate allocator for {@code raw}, or {@code null} when there is not one. Probing it
+   * means calling it, and the call can fail rather than answer: an abstract class with a public
+   * no-argument constructor binds a handle that raises {@code InstantiationError} on invocation.
+   * Letting that escape turns a refusal that names the type and its remedy into a linkage error
+   * thrown from the middle of planning.
+   */
+  private static Supplier<Object> probeAllocator(final Class<?> raw) {
+    final var alloc = Beans.intermediateAllocator(raw);
+    try {
+      return alloc.get() == null ? null : alloc;
+    } catch (final InstantiationError e) {
+      // Only the shape this exists for. A constructor that binds and then throws, or a class whose
+      // static initialiser throws, is a real failure of that class and belongs at plan time where
+      // the starters catch it -- swallowing it defers the same failure to every conversion, or
+      // worse converts a null slot quietly.
+      return null;
+    }
+  }
+
+  /**
+   * The last two questions an allocator asks before giving up, shared by all three families.
+   *
+   * <p>A declared type that cannot be instantiated at all — an interface, an abstract class — is
+   * asking for whatever implements its contract, so the family's default stands in. That is what
+   * the generated path does for the same declaration, and a type it allocates and this one refuses
+   * is a program that compiles under {@code @Bridge} and throws under {@code mapper(...)}.
+   *
+   * <p>A concrete one gets a public-lookup constructor handle. The tables below exist because
+   * {@code privateLookupIn} refuses {@code java.base}, which {@code publicLookup} does not need: it
+   * binds a public no-argument constructor on any exported class. Under native image such a
+   * constructor needs reachability metadata, where a hard-coded allocator needs none — so the table
+   * keeps the common shapes direct and only the tail comes through here.
+   *
+   * @return an allocator, or {@code null} when neither question has an answer
+   */
+  private static Function<Object, Object> fallbackAllocatorFor(
+    final Class<?> raw,
+    final Class<?> defaultImpl,
+    final Function<Object, Object> defaultAlloc
+  ) {
+    if (raw.isInterface() || Modifier.isAbstract(raw.getModifiers())) {
+      // Only where the default is one of them. A declared type the default does not implement
+      // cannot hold it, so allocating one moves the failure from plan time to the first conversion
+      // and turns a diagnostic naming the type into a bare cast error. The generated path refuses
+      // that pairing outright, so refusing is what keeps the two in step.
+      //
+      // The allocator handed in is the family's sized one, so a type reaching this branch is
+      // allocated exactly as a type the table names would be.
+      return raw.isAssignableFrom(defaultImpl) ? defaultAlloc : null;
+    }
+    try {
+      final var ctor = MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class));
+      return ignored -> {
+        try {
+          return ctor.invoke();
+        } catch (final Throwable t) {
+          throw new IllegalStateException("Deep map: " + raw.getName() + " refused its no-argument constructor", t);
+        }
+      };
+    } catch (final NoSuchMethodException | IllegalAccessException e) {
+      return null;
+      // A missing-registration Error under exact reachability metadata is deliberately not caught:
+      // it names the class the image was built without, which is more useful to an adopter than
+      // this method's fallthrough would be.
+    }
+  }
+
   // JDK collection classes live in java.base — `Beans.intermediateAllocator` can't bind them
   // via LambdaMetafactory's privateLookupIn (java.base doesn't grant private lookup to app code).
-  // Hard-code the common JDK Collection / Map raws so the allocator works for the standard
-  // shapes, and fall back to `intermediateAllocator` for user-defined subclasses (where LMF DOES
-  // work via the user's own package).
+  // Hard-code the common JDK Collection / Map raws so the standard shapes are allocated by a
+  // direct `new`, needing no lookup and no reachability metadata. A declared type the table does
+  // not name goes to `probeAllocator`, whose lookup does reach a user-defined subclass via the
+  // user's own package, and then to `fallbackAllocatorFor` for the tail.
   private static Function<Object, Object> listAllocatorFor(final Class<?> raw) {
     if (raw == List.class || raw == Collection.class || raw == ArrayList.class) return input ->
       new ArrayList<>(((Collection<?>) input).size());
@@ -259,11 +332,15 @@ final class ContainerLifts {
       final int size = ((Collection<?>) input).size();
       return size <= 1 ? new CopyOnWriteArrayList<>() : new ArrayList<>(size);
     };
-    final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return ignored -> alloc.get();
-    // No usable allocator for a JDK java.base class we don't recognise. Falling back to ArrayList
-    // would silently write the wrong runtime class into the target field and CCE at the setter.
-    // Throw at plan-time with a precise diagnostic instead.
+    final var alloc = probeAllocator(raw);
+    if (alloc != null) return ignored -> alloc.get();
+    final var fallback = fallbackAllocatorFor(raw, ArrayList.class, input ->
+      new ArrayList<>(((Collection<?>) input).size())
+    );
+    if (fallback != null) return fallback;
+    // Nothing can make one of these. Falling back to ArrayList would silently write the wrong
+    // runtime class into the target field and CCE at the setter, so this throws at plan time with
+    // a precise diagnostic instead.
     throw new IllegalStateException(
       "Deep map: no allocator for List subtype " +
         raw.getName() +
@@ -283,8 +360,12 @@ final class ContainerLifts {
       final int size = ((Collection<?>) input).size();
       return size <= 1 ? new CopyOnWriteArraySet<>() : new ArrayList<>(size);
     };
-    final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return ignored -> alloc.get();
+    final var alloc = probeAllocator(raw);
+    if (alloc != null) return ignored -> alloc.get();
+    final var fallback = fallbackAllocatorFor(raw, LinkedHashSet.class, input ->
+      LinkedHashSet.newLinkedHashSet(((Collection<?>) input).size())
+    );
+    if (fallback != null) return fallback;
     throw new IllegalStateException(
       "Deep map: no allocator for Set subtype " +
         raw.getName() +
@@ -325,8 +406,12 @@ final class ContainerLifts {
         "constructor (it needs the Class<K> key class). Use the codegen path or supply an " +
         "explicit `Mapping.via(...)` row that constructs the EnumMap with its key class."
     );
-    final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return ignored -> alloc.get();
+    final var alloc = probeAllocator(raw);
+    if (alloc != null) return ignored -> alloc.get();
+    final var fallback = fallbackAllocatorFor(raw, LinkedHashMap.class, input ->
+      LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size())
+    );
+    if (fallback != null) return fallback;
     throw new IllegalStateException(
       "Deep map: no allocator for Map subtype " +
         raw.getName() +
