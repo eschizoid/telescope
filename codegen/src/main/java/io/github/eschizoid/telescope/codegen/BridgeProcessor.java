@@ -1345,7 +1345,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // where the backward call would go, so how many backward overloads apply to it is not a
           // question anything asks. Refusing on it turns a build that compiles into one that does
           // not, which is the failure this check exists to prevent rather than cause.
-          final var backwardAmbiguous = bwdRes instanceof Resolution.Ambiguous && !forwardOnlyTransforms.contains(t);
+          final var forwardOnly = forwardOnlyTransforms.contains(t);
+          final var backwardAmbiguous = bwdRes instanceof Resolution.Ambiguous && !forwardOnly;
           if (fwdRes instanceof Resolution.Ambiguous || backwardAmbiguous) {
             final var forward = fwdRes instanceof Resolution.Ambiguous;
             final var amb = (Resolution.Ambiguous) (forward ? fwdRes : bwdRes);
@@ -1377,11 +1378,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // raw-implementing BridgeFn, or one leaving a direction abstract -- cannot be
           // instantiated as a transform anyway, so emission refuses them a moment later.
           final var typed = args.size() == 2;
-          if ((fwd == null || bwd == null) && !typed) continue;
+          // One skip served both directions, which is wrong for a row that emits only one of them.
+          // A forward-only row never reads the backward slots, so their being unreadable is not a
+          // reason to skip it -- and skipping took the forward check along, handing the author the
+          // javac error inside a generated file that this check exists to replace.
+          if ((fwd == null || (!forwardOnly && bwd == null)) && !typed) continue;
           final var fwdAccepts = fwd == null ? erasedBound(args.get(0)) : fwd.getParameterTypes().getFirst();
           final var fwdGives = fwd == null ? erasedBound(args.get(1)) : fwd.getReturnType();
-          final var bwdAccepts = bwd == null ? erasedBound(args.get(1)) : bwd.getParameterTypes().getFirst();
-          final var bwdGives = bwd == null ? erasedBound(args.get(0)) : bwd.getReturnType();
+          // Null only where the guard above let a row through without them, which is exactly where
+          // nothing reads them.
+          final var bwdAccepts =
+            bwd != null ? bwd.getParameterTypes().getFirst() : typed ? erasedBound(args.get(1)) : null;
+          final var bwdGives = bwd != null ? bwd.getReturnType() : typed ? erasedBound(args.get(0)) : null;
 
           // Both sides are compared against the type the field is declared with. For a bean that
           // is the getter's, and the emission may write through a setter, a builder method or a
@@ -1391,8 +1399,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // that does not compile, which is the failure this check exists to replace.
           final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, tfType);
           final var backwardFits =
-            forwardOnlyTransforms.contains(t) ||
-            (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, sfType));
+            forwardOnly || (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, sfType));
           if (!forwardFits || !backwardFits) {
             // Name the signature the call site binds to, not the interface's parameterisation.
             // Those differ whenever an overload or an override is what gets bound, and a message

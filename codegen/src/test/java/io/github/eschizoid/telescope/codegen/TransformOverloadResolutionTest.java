@@ -113,6 +113,20 @@ class TransformOverloadResolutionTest {
     }
     """;
 
+  /**
+   * Raw, so there are no type arguments to stand in for a direction the resolver cannot bind. Its
+   * forward does not fit and its backward is ambiguous — two independent problems in one class.
+   */
+  private static final String RAW_AMBIGUOUS_BACKWARD = """
+    @SuppressWarnings({ "rawtypes", "unchecked" })
+    public final class Fn implements BridgeFn {
+      public Object forward(final Integer i) { return i; }
+      public Integer backward(final Object o) { return 0; }
+      public Integer backward(final CharSequence c) { return 1; }
+      public Integer backward(final Comparable<?> c) { return 2; }
+    }
+    """;
+
   private static final String FORWARD_ONLY = ", forwardOnly = true";
 
   private static List<Case> cases() {
@@ -133,7 +147,7 @@ class TransformOverloadResolutionTest {
         "Integer",
         FORWARD_ONLY,
         false,
-        "is ambiguous"
+        "forward is ambiguous"
       ),
       new Case(
         "the same pair declared the other way round gives the same answer",
@@ -142,7 +156,7 @@ class TransformOverloadResolutionTest {
         "Integer",
         FORWARD_ONLY,
         false,
-        "is ambiguous"
+        "forward is ambiguous"
       ),
       new Case(
         "an int argument binds the widening overload, and its return is what gets checked",
@@ -181,7 +195,16 @@ class TransformOverloadResolutionTest {
         "String",
         "",
         false,
-        "is ambiguous"
+        "backward is ambiguous"
+      ),
+      new Case(
+        "an unusable backward does not take the forward check down with it",
+        RAW_AMBIGUOUS_BACKWARD,
+        "Integer",
+        "String",
+        FORWARD_ONLY,
+        false,
+        "does not fit forward"
       ),
       new Case(
         "and accepted when forwardOnly means there is no backward to be ambiguous",
