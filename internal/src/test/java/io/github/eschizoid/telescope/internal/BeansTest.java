@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.invoke.MethodHandle;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -401,6 +402,26 @@ class BeansTest {
     public String getA() {
       return a;
     }
+  }
+
+  /**
+   * A public class with a public no-argument constructor whose package its module does not export,
+   * or {@code null} when the running image has none of the candidates.
+   */
+  private static Class<?> firstPublicCtorInAnUnexportedPackage() {
+    for (final var name : List.of("sun.nio.ch.Util", "sun.net.www.MessageHeader", "sun.security.util.Length")) {
+      try {
+        final var candidate = Class.forName(name);
+        final var module = candidate.getModule();
+        if (module.isExported(candidate.getPackageName())) continue;
+        if (!Modifier.isPublic(candidate.getModifiers())) continue;
+        if (!Modifier.isPublic(candidate.getDeclaredConstructor().getModifiers())) continue;
+        return candidate;
+      } catch (final ClassNotFoundException | NoSuchMethodException ignored) {
+        // Not in this image, or not of the shape — try the next candidate.
+      }
+    }
+    return null;
   }
 
   /** Abstract and unconstructable, but its static {@code builder()} builds something concrete. */
@@ -1433,6 +1454,31 @@ class BeansTest {
         final var built = Beans.intermediateAllocator(cls).get();
         assertInstanceOf(cls, built, () -> cls.getName() + " has a public no-arg constructor");
       }
+    }
+
+    @Test
+    @DisplayName("a public constructor the public lookup cannot reach either yields no allocator")
+    void publicConstructorInAnUnexportedPackageYieldsNoAllocator() {
+      // The public-lookup arm exists for a type whose module declines privateLookupIn. Declining it
+      // is not sufficient on its own: the public lookup binds a public constructor only where the
+      // declaring package is exported, so a public class in a package its module keeps to itself
+      // satisfies neither lookup. The answer then has to be that there is no allocator, not an
+      // exception out of the asking -- the builder arm below still gets its turn.
+      //
+      // Only the platform has classes of this shape. Anything on the class path is in the unnamed
+      // module, which opens every package, so privateLookupIn succeeds and this arm is never
+      // reached. The candidates are scanned rather than fixed so that one being removed from a
+      // future release does not fail this for a reason unrelated to what it checks.
+      final var unreachable = firstPublicCtorInAnUnexportedPackage();
+      assertNotNull(
+        unreachable,
+        "no candidate had the shape this covers; add one from a non-exported package of any" + " platform module"
+      );
+
+      assertNull(
+        Beans.intermediateAllocator(unreachable).get(),
+        () -> unreachable.getName() + " is reachable through neither lookup, so there is no allocator"
+      );
     }
 
     @Test
