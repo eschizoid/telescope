@@ -845,7 +845,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("LambdaMetafactory invoker auto-unboxes a boxed Integer source value into a setX(int)" + " setter")
+    @DisplayName("the setter invoker auto-unboxes a boxed Integer source value into a setX(int) setter")
     void settersAutoUnboxesPrimitiveArg() {
       // NoArgSetters has setScore(int). The source map carries an Object value (boxed Integer);
       // the LambdaMetafactory-built BiConsumer<Object, Object> must auto-unbox to int. This pins
@@ -927,7 +927,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("builderWriter supports a void-returning setter via the BiConsumer LMF binding")
+    @DisplayName("builderWriter supports a void-returning setter via its BiConsumer binding")
     void builderSupportsVoidSetter() {
       // Classic JavaBean-style builder: setter mutates the builder in place and returns void.
       // BuilderWriter binds it as a BiConsumer<Object, Object> through LambdaMetafactory and
@@ -957,7 +957,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("repeated construct calls reuse the same writer (LMF setter invokers cached per name)")
+    @DisplayName("repeated construct calls reuse the same writer (setter invokers cached per name)")
     void builderReusesAcrossConstructs() {
       // The setter invokers map is populated lazily on first use of each name and reused on
       // subsequent calls. A second construct on the same writer must not rebuild the LMF call site.
@@ -1240,7 +1240,7 @@ class BeansTest {
   }
 
   @Nested
-  @DisplayName("capturedWriter — single-property write through cached LMF setter invoker")
+  @DisplayName("capturedWriter — single-property write through a cached setter invoker")
   class CapturedWriter {
 
     @Test
@@ -1252,7 +1252,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("primitive-typed setter unboxes a boxed source value end-to-end through the LMF invoker")
+    @DisplayName("primitive-typed setter unboxes a boxed source value end-to-end through the invoker")
     void primitiveSetterUnboxesBoxedSource() {
       // The cached invoker is built from a BiConsumer<Object, Object> SAM whose instantiated
       // method type is (Cls, Integer) -> void. LMF generates the unbox bridge to setX(int) —
@@ -1386,7 +1386,7 @@ class BeansTest {
   class IntermediateAllocator {
 
     @Test
-    @DisplayName("class with a public no-arg ctor yields a fresh instance via the LMF-bound ctor Supplier")
+    @DisplayName("class with a public no-arg ctor yields a fresh instance via the bound ctor Supplier")
     void noArgCtorYieldsFreshInstance() {
       final Supplier<Object> supplier = Beans.intermediateAllocator(NoArgFields.class);
       final var built = supplier.get();

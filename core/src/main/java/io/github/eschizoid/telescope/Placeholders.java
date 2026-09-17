@@ -181,6 +181,10 @@ final class Placeholders {
     //
     // Asked of the loader rather than the module name: a module may be named java.anything and
     // still be an adopter's own, so a name test excludes their domain types and says nothing.
+    // What the loaders own is the whole JDK API surface and not the tooling modules, which the
+    // application loader carries -- so a jdk.compiler type is allocatable here where a java.awt
+    // one is not. Reaching that needs a compiler-API component declared in a mapped record and
+    // left off-path, and it yields a fresh instance rather than a wrong one.
     final var loader = type.getClassLoader();
     if (loader == null || loader == ClassLoader.getPlatformClassLoader()) return false;
     try {
