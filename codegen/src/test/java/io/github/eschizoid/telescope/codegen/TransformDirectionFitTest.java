@@ -501,6 +501,50 @@ class TransformDirectionFitTest {
   }
 
   @Test
+  @DisplayName("the diagnostic names the signature the call site binds to, not the interface's")
+  void diagnosticNamesTheResolvedSignature() {
+    // An overload or an override means the bound signature and the interface's parameterisation
+    // are different things. A message reconstructing the latter prints types that all fit each
+    // other while the row is refused, which is true of the class and useless about the refusal --
+    // and leaves the member the author has to edit unnamed.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.OverloadedFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        public final class OverloadedFn implements BridgeFn<Object, String> {
+          @Override public String forward(final Object o) { return String.valueOf(o); }
+          public Integer forward(final String s) { return 1; }
+          @Override public Object backward(final String s) { return s; }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.OverloadedFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertFalse(compilation.success(), "the bound overload returns Integer, which the String slot refuses");
+    assertTrue(
+      compilation.hasError("forward resolves to (java.lang.String) -> java.lang.Integer"),
+      () -> "the bound signature is what the author has to change: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("implements BridgeFn<java.lang.Object, java.lang.String>"),
+      () -> "and the interface's parameterisation fits, so naming it explains nothing: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
   @DisplayName("a transform that fits neither direction still names forward, the first thing to fix")
   void forwardMismatchStillNamesForward() {
     // A pair where forward fails too. The message should lead with forward rather than report the

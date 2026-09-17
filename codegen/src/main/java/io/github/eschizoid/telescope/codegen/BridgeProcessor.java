@@ -1363,23 +1363,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             forwardOnlyTransforms.contains(t) ||
             (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, sfType));
           if (!forwardFits || !backwardFits) {
+            // Name the signature the call site binds to, not the interface's parameterisation.
+            // Those differ whenever an overload or an override is what gets bound, and a message
+            // reconstructing BridgeFn<A, B> then prints types that all fit each other while the
+            // row is refused -- true of the class and useless about the refusal. A raw class has
+            // no parameterisation to print at all.
+            final var direction = forwardFits ? "backward" : "forward";
+            final var accepts = forwardFits ? bwdAccepts : fwdAccepts;
+            final var gives = forwardFits ? bwdGives : fwdGives;
             error(
               source,
               "@Transform field=\"" +
                 t +
                 "\" does not fit " +
-                (forwardFits ? "backward" : "forward") +
-                ": the field pair is " +
-                sfType +
-                " -> " +
-                tfType +
-                " but " +
+                direction +
+                ": " +
                 transforms.get(t) +
-                " implements BridgeFn<" +
-                (typed ? args.get(0).toString() : fwdAccepts.toString()) +
-                ", " +
-                (typed ? args.get(1).toString() : fwdGives.toString()) +
-                ">" +
+                "'s " +
+                direction +
+                " resolves to (" +
+                accepts +
+                ") -> " +
+                gives +
+                ", which does not carry " +
+                (forwardFits ? tfType + " -> " + sfType : sfType + " -> " + tfType) +
                 (forwardFits ? ". Add forwardOnly = true if only the forward direction is wanted." : "")
             );
             return;
@@ -3124,9 +3131,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Whether the generated bridge could call this member. It is emitted into the source's package
-   * and is a subclass of nothing, so private is out, protected is out unless the member happens to
-   * share that package, and package-private is in only when it does.
+   * Whether the generated bridge could call this member. It subclasses nothing, so private is out,
+   * protected is out unless the member happens to share the bridge's package, and package-private
+   * is in only when it does. Which package that is depends on the pairing's form -- a carrier emits
+   * beside the carrier, everything else beside the source -- so the caller supplies it rather than
+   * this deriving it.
    */
   private boolean bindableFrom(final ExecutableElement m, final PackageElement callerPackage) {
     final var mods = m.getModifiers();
