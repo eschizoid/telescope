@@ -14,7 +14,10 @@ import java.util.function.Supplier;
  * {@link java.lang.invoke.LambdaMetafactory} path {@link Records} / {@link Beans} use on a stock
  * JVM — {@code LambdaMetafactory.metafactory(...)} synthesizes a class per accessor, which
  * native-image's closed world forbids at run time, whereas these lambda classes are compile-time.
- * The builders are chosen by {@link NativeImage#IN_IMAGE}; the JVM keeps the faster LMF path.
+ * The builders are chosen by {@link NativeImage#IN_IMAGE} wherever both paths exist, and the JVM
+ * keeps the faster LMF path there. One site uses these unconditionally on either substrate: binding
+ * a constructor through the public lookup, which {@code LambdaMetafactory} cannot do because it
+ * requires a lookup holding private access.
  *
  * <p>{@code asType} does the same receiver/return/parameter cast + primitive box/unbox the LMF
  * {@code instantiatedMethodType} bridge does, so a closure here is value-equivalent to the LMF

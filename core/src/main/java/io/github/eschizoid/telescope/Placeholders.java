@@ -171,6 +171,18 @@ final class Placeholders {
   private static boolean beanIntermediateAllocatable(final Class<?> type) {
     if (type.isPrimitive() || type.isInterface() || type.isArray()) return false;
     if (type == String.class || Number.class.isAssignableFrom(type) || type == Boolean.class) return false;
+    // A platform class is not a user-domain type whatever constructors it declares, and the line
+    // above names only three of them. The rest were excluded somewhere else entirely -- the
+    // allocator cannot bind a constructor in a module that does not open itself, which no named
+    // platform module does -- so this method read as though it filtered them while something
+    // downstream actually did. Filtering here says it once, where the sentence above claims it,
+    // and keeps a default slot answering null rather than an empty container, a fresh Object, or
+    // a Date holding the moment of conversion.
+    //
+    // Asked of the loader rather than the module name: a module may be named java.anything and
+    // still be an adopter's own, so a name test excludes their domain types and says nothing.
+    final var loader = type.getClassLoader();
+    if (loader == null || loader == ClassLoader.getPlatformClassLoader()) return false;
     try {
       final var ctor = type.getDeclaredConstructor();
       if (Modifier.isPublic(ctor.getModifiers())) return true;

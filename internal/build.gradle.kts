@@ -40,6 +40,22 @@ tasks.withType<Test>().configureEach {
     }
 }
 
+// The accessor substrate a native image uses, run over this module's own suite. It matters here
+// in particular: the allocator's public-lookup arm builds its supplier out of MethodHandle
+// closures on either substrate, so the tests covering it most directly are the ones that would
+// otherwise never run on the substrate they are about. See :core for the full reasoning.
+val imageTest by tasks.registering(Test::class) {
+    description = "Runs the test suite on the MethodHandle accessor substrate a native image uses."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    systemProperty("org.graalvm.nativeimage.imagecode", "runtime")
+}
+
+tasks.named("check") {
+    dependsOn(imageTest)
+}
+
 tasks.jacocoTestReport {
     reports {
         csv.required.set(true)

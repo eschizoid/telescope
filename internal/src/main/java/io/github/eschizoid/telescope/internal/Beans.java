@@ -173,15 +173,31 @@ public final class Beans {
   }
 
   private static Supplier<Object> computeIntermediateAllocator(final Class<?> type) {
-    // Try a public no-arg ctor first — matches DeepMap.recursiveDefault's prior strategy.
-    try {
-      final var ctor = type.getDeclaredConstructor();
-      if (Modifier.isPublic(ctor.getModifiers())) {
-        final var lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
-        return buildCtorSupplier(type, ctor, lookup);
+    // An abstract class has no instance to make, but it declares constructors like any other and
+    // they bind like any other -- so a supplier built from one raises InstantiationError the first
+    // time anything calls it, turning "can this be allocated?" from a question with the answer no
+    // into a linkage error thrown out of whoever asked.
+    //
+    // That is true of the constructor arm alone. A static builder() on an abstract class returns a
+    // builder whose build() returns something concrete, so the second arm below allocates for such
+    // a type perfectly well and this must not reach over it.
+    if (!Modifier.isAbstract(type.getModifiers())) {
+      // Try a public no-arg ctor first — matches DeepMap.recursiveDefault's prior strategy.
+      try {
+        final var ctor = type.getDeclaredConstructor();
+        if (Modifier.isPublic(ctor.getModifiers())) {
+          final var lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
+          return buildCtorSupplier(type, ctor, lookup);
+        }
+      } catch (final NoSuchMethodException ignored) {
+        // No no-arg ctor at all — try the builder pattern.
+      } catch (final IllegalAccessException e) {
+        // privateLookupIn is refused by a module that does not open itself to us, and java.base is
+        // the one every JDK container declaration runs into. Calling a public constructor does not
+        // need private access; only binding one through LambdaMetafactory does. So bind a handle.
+        final var viaPublicLookup = publicCtorSupplier(type);
+        if (viaPublicLookup != null) return viaPublicLookup;
       }
-    } catch (final NoSuchMethodException | IllegalAccessException ignored) {
-      // No public no-arg ctor — try the builder pattern.
     }
     try {
       final var builderMethod = type.getMethod("builder");
@@ -192,6 +208,32 @@ public final class Beans {
       // No static builder() — fall through to the null supplier.
     }
     return () -> null;
+  }
+
+  /**
+   * A public no-argument constructor reached through the public lookup, or {@code null} when there
+   * is not one. The handle is invoked directly rather than bridged through {@link
+   * LambdaMetafactory}, which requires a lookup holding private access the public lookup does not
+   * have.
+   *
+   * <p>What lands here is every type whose module declines {@code privateLookupIn}, which is every
+   * platform container — {@code ArrayList} and {@code LinkedHashMap} among them, named by a
+   * hard-coded allocator elsewhere and still arriving here whenever they are reached by a route
+   * that asks this method rather than that table.
+   *
+   * <p>Under a native image such a constructor needs reachability metadata, where a hard-coded
+   * allocator needs none. A missing-registration error is deliberately not caught: it names the
+   * class the image was built without, which is worth more to an adopter than this method's
+   * fallthrough.
+   */
+  private static Supplier<Object> publicCtorSupplier(final Class<?> type) {
+    try {
+      return MhAccessors.supplier(
+        MethodHandles.publicLookup().findConstructor(type, MethodType.methodType(void.class))
+      );
+    } catch (final NoSuchMethodException | IllegalAccessException e) {
+      return null;
+    }
   }
 
   @SuppressWarnings("unchecked")

@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -100,7 +103,7 @@ class MappingIntermediateAllocationTest {
     }
 
     @Test
-    @DisplayName("three-hop nested target (outer.mid.inner.value) — recursion depth is type-driven, not capped")
+    @DisplayName("three-hop nested target (outer.mid.inner.value) — recursion depth is type-driven, not" + " capped")
     void threeHopNestedTarget() {
       record Slim(String value) {}
 
@@ -232,7 +235,7 @@ class MappingIntermediateAllocationTest {
 
     @Test
     @DisplayName(
-      "builder-only bean intermediate — allocator falls back to type.builder().build() when no public no-arg ctor"
+      "builder-only bean intermediate — allocator falls back to type.builder().build() when no" + " public no-arg ctor"
     )
     void builderOnlyBeanIntermediate() {
       record Slim(String displayCity) {}
@@ -252,7 +255,7 @@ class MappingIntermediateAllocationTest {
     }
 
     @Test
-    @DisplayName("flat source routes into a freshly-allocated bean intermediate at the telescope-targeted slot")
+    @DisplayName("flat source routes into a freshly-allocated bean intermediate at the telescope-targeted" + " slot")
     void flatSourceRoutesIntoAllocatedBean() {
       record Slim(String displayCity) {}
 
@@ -270,5 +273,39 @@ class MappingIntermediateAllocationTest {
       assertEquals("Brooklyn", out.getAddress().getCity());
       assertNull(out.getAddress().getZip());
     }
+  }
+
+  /**
+   * A record whose off-path components are platform types that would each construct happily. The
+   * record shape is the one that matters: a record's default tree plans every component in turn,
+   * where a bean's fields are simply whatever its constructor left behind.
+   */
+  record PlatformRec(String city, ArrayList<String> tags, HashMap<String, String> lookup, Date when, Object blob) {}
+
+  record PlatformHolder(PlatformRec slots) {}
+
+  @Test
+  @DisplayName("off-path platform-typed components stay null, rather than being materialised as defaults")
+  void platformTypedComponentsAreNotMaterialised() {
+    // The default tree fills an intermediate so a row can write through it, and it plans every
+    // component of a record on the way. Which types it will construct is the whole question: a
+    // user type is the point, and a platform type is not. A container component filled with an
+    // empty container is merely surprising, but a Date component filled with the moment of
+    // conversion is a value nothing in the mapping asked for and no two runs agree on.
+    record Slim(String displayCity) {}
+
+    final var out = Telescope.mapper(
+      Slim.class,
+      PlatformHolder.class,
+      to(Slim::displayCity, Telescope.of(PlatformHolder.class).field(PlatformHolder::slots).field(PlatformRec::city))
+    ).forward(new Slim("Brooklyn"));
+
+    assertNotNull(out.slots(), "the intermediate itself is a user type and is still allocated");
+    assertEquals("Brooklyn", out.slots().city(), "and the row still writes through it");
+
+    assertNull(out.slots().tags(), "a container component nothing wrote to holds no value");
+    assertNull(out.slots().lookup());
+    assertNull(out.slots().when(), "and a Date component never holds the time the conversion happened");
+    assertNull(out.slots().blob());
   }
 }

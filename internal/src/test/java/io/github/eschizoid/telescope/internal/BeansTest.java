@@ -14,8 +14,11 @@ import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -398,6 +401,34 @@ class BeansTest {
     public String getA() {
       return a;
     }
+  }
+
+  /** Abstract and unconstructable, but its static {@code builder()} builds something concrete. */
+  abstract static class AbstractWithBuilder {
+
+    protected AbstractWithBuilder() {}
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Concrete extends AbstractWithBuilder {}
+
+    static final class Builder {
+
+      public AbstractWithBuilder build() {
+        return new Concrete();
+      }
+    }
+  }
+
+  /**
+   * Abstract, with a public no-argument constructor — the shape whose constructor binds fine and
+   * then raises {@code InstantiationError} on invocation.
+   */
+  abstract static class AbstractWithPublicCtor {
+
+    public AbstractWithPublicCtor() {}
   }
 
   static final class NothingBuildable {
@@ -1389,6 +1420,45 @@ class BeansTest {
       final Supplier<Object> supplier = Beans.intermediateAllocator(NothingBuildable.class);
       assertNotNull(supplier, "the allocator Supplier itself must be cached even when it returns null");
       assertNull(supplier.get(), "no-buildable class yields a null result, not a thrown exception");
+    }
+
+    @Test
+    @DisplayName("a class in a module that does not open itself still allocates through its public ctor")
+    void javaBaseClassAllocatesThroughPublicLookup() {
+      // privateLookupIn needs the target's module to open the package to us, and java.base opens
+      // nothing. Calling a public constructor never needed that access -- only binding one through
+      // LambdaMetafactory does -- so refusing here told adopters to add an --add-opens for a module
+      // they do not control, for a constructor that was callable the whole time.
+      for (final var cls : List.of(Properties.class, ArrayList.class, LinkedHashMap.class)) {
+        final var built = Beans.intermediateAllocator(cls).get();
+        assertInstanceOf(cls, built, () -> cls.getName() + " has a public no-arg constructor");
+      }
+    }
+
+    @Test
+    @DisplayName("an abstract class with a static builder() still allocates, through the builder")
+    void abstractClassWithBuilderStillAllocates() {
+      // Abstractness stops a constructor from producing an instance. It does not stop a builder:
+      // build() returns something concrete, and what it was declared to return says nothing about
+      // what it makes. A guard placed before both arms rather than inside the constructor one
+      // refuses this type -- deleting a capability, in the direction of doing less.
+      final var built = Beans.intermediateAllocator(AbstractWithBuilder.class).get();
+
+      assertNotNull(built, "the builder arm does not care that the declared type is abstract");
+      assertInstanceOf(AbstractWithBuilder.class, built);
+    }
+
+    @Test
+    @DisplayName("an abstract class answers no, rather than yielding a supplier that raises a linkage error")
+    void abstractClassAnswersNullRatherThanThrowing() {
+      // An abstract class declares a constructor like any other and binds like any other, so the
+      // supplier builds and then raises InstantiationError when something calls it. Callers use
+      // this to ask whether a type can be allocated; the answer is no, and it has to arrive as a
+      // value rather than as an error thrown out of the asking.
+      final var supplier = Beans.intermediateAllocator(AbstractWithPublicCtor.class);
+
+      assertNotNull(supplier, "the allocator Supplier itself is still cached");
+      assertNull(supplier.get(), "an abstract class cannot be instantiated, so the answer is null");
     }
   }
 
