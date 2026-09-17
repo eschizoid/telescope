@@ -308,8 +308,8 @@ final class ContainerLifts {
   // via LambdaMetafactory's privateLookupIn (java.base doesn't grant private lookup to app code).
   // Hard-code the common JDK Collection / Map raws so the standard shapes are allocated by a
   // direct `new`, needing no lookup and no reachability metadata. A declared type the table does
-  // not name goes to `probeAllocator` (LMF, which does work for a user-defined subclass via the
-  // user's own package) and then to `fallbackAllocatorFor` for the tail.
+  // not name goes to `probeAllocator`, whose lookup does reach a user-defined subclass via the
+  // user's own package, and then to `fallbackAllocatorFor` for the tail.
   private static Function<Object, Object> listAllocatorFor(final Class<?> raw) {
     if (raw == List.class || raw == Collection.class || raw == ArrayList.class) return input ->
       new ArrayList<>(((Collection<?>) input).size());

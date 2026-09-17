@@ -204,8 +204,12 @@ class MhAccessorsTest {
       throw new IllegalStateException("boom");
     }
 
-    public void checkedBoom() throws Exception {
-      throw new Exception("checked");
+    // A ReflectiveOperationException specifically, because that is the family the translation
+    // below sits inside. A plain checked Exception leaves the adjacent boundary unpinned: a
+    // translation widened from InstantiationException to its whole family would wrongly convert
+    // IllegalAccessException and NoSuchMethodException too, and nothing would notice.
+    public void checkedBoom() throws ReflectiveOperationException {
+      throw new IllegalAccessException("checked");
     }
 
     public void throwsError() {

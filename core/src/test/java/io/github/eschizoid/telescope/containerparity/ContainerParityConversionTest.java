@@ -1,8 +1,10 @@
 package io.github.eschizoid.telescope.containerparity;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.AbstractList;
@@ -147,6 +149,45 @@ class ContainerParityConversionTest {
     // of the constructor's failure -- a refusal that names the wrong cause and sends the adopter
     // to fix a table when the class is what is broken.
     assertEquals(REFUSAL, thrown.getMessage(), "the container's own refusal, not a generic one");
+  }
+
+  /**
+   * Abstract, so nothing can be allocated for it, and parameterised so element types can differ.
+   */
+  public abstract static class AbsElems<E> extends ArrayList<E> {
+
+    private static final long serialVersionUID = 1L;
+
+    public AbsElems() {}
+  }
+
+  record AbsElemsSrc(AbsElems<A> items) {}
+
+  record AbsElemsDst(AbsElems<B> items) {}
+
+  @Test
+  @DisplayName("the refusal names the type and the remedy, whichever accessor substrate is running")
+  void refusalNamesTheTypeOnEitherSubstrate() {
+    // Deciding there is no allocator means calling one and having the call fail, and the two
+    // accessor substrates report that failure differently -- a bound call site raises an Error, a
+    // constructor handle raises a checked exception. Both end as IllegalStateException here, so
+    // the type alone cannot tell a refusal that names the type from the substrate's own "dispatch
+    // failed" wrapper. The message is the only thing that separates them.
+    //
+    // This runs on both substrates: the `test` task on the one a JVM uses, `imageTest` on the one
+    // an image uses. It is the assertion that gives that second task something to catch.
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(AbsElemsSrc.class, AbsElemsDst.class)
+    );
+
+    assertTrue(
+      thrown.getMessage().contains("no allocator for"),
+      () -> "the refusal should name the type and what to do about it: " + thrown.getMessage()
+    );
+    assertFalse(
+      thrown.getMessage().contains("dispatch failed"),
+      () -> "and never the substrate's own wrapper, which names nothing useful: " + thrown.getMessage()
+    );
   }
 
   @Test
