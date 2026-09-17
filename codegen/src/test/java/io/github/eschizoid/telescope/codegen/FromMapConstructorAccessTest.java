@@ -54,6 +54,38 @@ class FromMapConstructorAccessTest {
   }
 
   @Test
+  @DisplayName("a builder-only bean binds without any reachable constructor at all")
+  void builderOnlyBeanNeedsNoConstructor() {
+    // The other half of the guard. A builder supplies its own way to make the instance, so the
+    // constructor question does not arise — and a change that demanded one regardless would refuse
+    // the immutable shape this annotation exists to serve.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.Immutable",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.FromMap;
+        @FromMap
+        public final class Immutable {
+          private final String name;
+          private Immutable(final String name) { this.name = name; }
+          public static Builder builder() { return new Builder(); }
+          public String getName() { return name; }
+          public static final class Builder {
+            private String name;
+            public Builder name(final String n) { this.name = n; return this; }
+            public Immutable build() { return new Immutable(name); }
+          }
+        }
+        """
+      )
+    );
+
+    assertTrue(compilation.success(), () -> "a builder needs no constructor: " + compilation.errorMessages());
+    assertTrue(compilation.generated().containsKey("demo.ImmutableFromMap"), "and the binder is emitted");
+  }
+
+  @Test
   @DisplayName("a private constructor is still refused, since nothing outside the class can call it")
   void privateConstructorIsRefused() {
     // The control. Without it a change that accepted every constructor would satisfy the rows
