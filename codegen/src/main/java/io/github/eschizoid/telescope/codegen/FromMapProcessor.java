@@ -136,13 +136,16 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
         ? (TypeElement) ((DeclaredType) builder.getReturnType()).asElement()
         : null;
     final var useBuilder = builderType != null && hasBuildMethod(builderType);
-    if (!useBuilder && !hasPublicNoArgConstructor(pojo)) {
+    // The binder is emitted into the bean's own package, so a protected or package-private
+    // constructor is reachable from it; only private is not. Asking for a public one refuses beans
+    // the navigator accepts and the reflective path has always accepted, for the same bean.
+    if (!useBuilder && !hasAccessibleNoArgConstructor(pojo)) {
       error(
         pojo,
         "@FromMap: " +
           pojo.getQualifiedName() +
-          " needs a static builder() or a public no-arg constructor with setters (field injection isn't " +
-          "available to generated code — use Telescope.ofBean for the runtime path)"
+          " needs a static builder() or a no-arg constructor with setters (field injection" +
+          " isn't available to generated code — use Telescope.ofBean for the runtime path)"
       );
       return;
     }
@@ -311,7 +314,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     // concrete target; require the interface so the lift is well-defined.
     if (assignableToRaw(type, "java.util.Collection") || assignableToRaw(type, "java.util.Map")) {
       return new Coercion.Unsupported(
-        fqn + " is a collection subtype — declare the field as List/Set/Map/Optional so @FromMap can build it"
+        fqn + " is a collection subtype — declare the field as List/Set/Map/Optional so @FromMap" + " can build it"
       );
     }
     // Reference types a map plausibly holds as-is — cast and trust the map.
@@ -327,8 +330,8 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     if (fqn.startsWith("java.") || fqn.startsWith("javax.")) {
       return new Coercion.Unsupported(
         fqn +
-          " can't be built from a Map value by @FromMap — use the runtime Telescope.fromMap with a " +
-          "custom extract(key, accessor, converter)"
+          " can't be built from a Map value by @FromMap — use the runtime Telescope.fromMap" +
+          " with a custom extract(key, accessor, converter)"
       );
     }
     // A user type that isn't @FromMap would arrive as a nested Map and CCE — require the
