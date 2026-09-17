@@ -366,6 +366,68 @@ class TransformDirectionFitTest {
     assertTrue(compilation.success(), () -> "order must not decide the verdict: " + compilation.errorMessages());
   }
 
+  private static JavaFileObject rawFn(final String forwardReturn) {
+    return ProcessorHarness.source(
+      "demo.RawFn",
+      """
+      package demo;
+      import io.github.eschizoid.telescope.conversion.BridgeFn;
+      @SuppressWarnings("rawtypes")
+      public final class RawFn implements BridgeFn {
+        @Override public %s forward(final Object o) { return String.valueOf(o); }
+        @Override public String backward(final Object o) { return String.valueOf(o); }
+      }
+      """.formatted(forwardReturn)
+    );
+  }
+
+  private static JavaFileObject[] rawPair(final String forwardReturn) {
+    return new JavaFileObject[] {
+      rawFn(forwardReturn),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.RawFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}"),
+    };
+  }
+
+  @Test
+  @DisplayName("a raw implementation is checked through the methods it declares, having no arguments to" + " read")
+  void rawImplementationIsStillChecked() {
+    // The one shape with no type arguments to fall back on was also the one shape not checked at
+    // all, so a mismatch reached the generated file. The class still declares the two methods the
+    // call sites bind to, and those are what the check compares.
+    final var compilation = compile(rawPair("Object"));
+
+    assertFalse(compilation.success(), "Object does not fit a String slot");
+    assertTrue(
+      compilation.hasError("does not fit forward"),
+      () -> "the diagnostic should name the direction: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("cannot be converted to"),
+      () -> "and replace the raw error, not accompany it: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a raw implementation whose methods do fit is accepted, not refused for being raw")
+  void rawImplementationThatFitsIsAccepted() {
+    // The control. Rawness is not the defect — an unchecked conversion is. A class declaring
+    // String forward(Object) genuinely produces what a String slot takes, and a check that
+    // refused every raw implementation would pass the test above while breaking this.
+    final var compilation = compile(rawPair("String"));
+
+    assertTrue(compilation.success(), () -> "its declared methods fit: " + compilation.errorMessages());
+  }
+
   @Test
   @DisplayName("a transform that fits neither direction still names forward, the first thing to fix")
   void forwardMismatchStillNamesForward() {

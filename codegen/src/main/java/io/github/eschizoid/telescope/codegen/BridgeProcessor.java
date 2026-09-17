@@ -1310,7 +1310,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           .filter(f -> f.name().equals(t))
           .findFirst()
           .orElse(null);
-        if (args.size() == 2 && tfField != null) {
+        // A class implementing the raw BridgeFn has no type arguments to read, but it still
+        // declares the two methods the call sites bind to, and those are what the check compares.
+        // Requiring arguments here meant the one shape with nothing to fall back on was also the
+        // one shape not checked at all.
+        if (tfField != null) {
           final var tfType = tfField.type();
           final var types = processingEnv.getTypeUtils();
           // Assignability models the boxing the source read needs and the unboxing-plus-widening
@@ -1329,6 +1333,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // interface arguments describe a signature the call site does not use.
           final var fwd = resolvedFn(usingEl, "forward", sfType);
           final var bwd = resolvedFn(usingEl, "backward", tfType);
+          // Nothing can be decided when neither a resolved member nor a type argument describes a
+          // direction, which is a raw implementation declaring no concrete override of it.
+          final var typed = args.size() == 2;
+          if ((fwd == null || bwd == null) && !typed) continue;
           final var fwdAccepts = fwd == null ? erasedBound(args.get(0)) : fwd.getParameterTypes().getFirst();
           final var fwdGives = fwd == null ? erasedBound(args.get(1)) : fwd.getReturnType();
           final var bwdAccepts = bwd == null ? erasedBound(args.get(1)) : bwd.getParameterTypes().getFirst();
@@ -1352,9 +1360,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 " but " +
                 transforms.get(t) +
                 " implements BridgeFn<" +
-                args.get(0) +
+                (typed ? args.get(0).toString() : fwdAccepts.toString()) +
                 ", " +
-                args.get(1) +
+                (typed ? args.get(1).toString() : fwdGives.toString()) +
                 ">" +
                 (forwardFits ? ". Add forwardOnly = true if only the forward direction is wanted." : "")
             );
