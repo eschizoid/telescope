@@ -223,13 +223,26 @@ jreleaser {
 // Checked here rather than trusted, because the pairing is easy to reintroduce: a module gains
 // `-Werror` years from now and inherits the bomb silently, and nothing about that edit looks like
 // it touched this.
+//
+// It reads what each task is configured with, so a `doFirst` that rewrites `compilerArgs` is past
+// it -- `:benchmarks` already does that to its own list.
 gradle.projectsEvaluated {
     val unguarded = allprojects.flatMap { project ->
         project.tasks.withType(JavaCompile::class.java).mapNotNull { task ->
             val args = task.options.compilerArgs
-            val lint = args.firstOrNull { it.startsWith("-Xlint:") }
-            val pairsThem = args.contains("-Werror") && lint != null && !lint.contains("-options")
-            if (pairsThem) "${project.path}:${task.name} has $lint" else null
+            // Read as keys rather than as a string. A module carrying no `-Xlint:` at all is
+            // exposed exactly as one carrying `-Xlint:all`, since the category is on either way --
+            // and that module is the likeliest next adopter of `-Werror`, precisely because its
+            // compiler arguments look like they have nothing to do with linting.
+            val keys = args.filter { it.startsWith("-Xlint:") }
+                .flatMap { it.removePrefix("-Xlint:").split(",") }
+            val silenced = keys.contains("-options") || keys.contains("none")
+            if (args.contains("-Werror") && !silenced) {
+                "${project.path}:${task.name}" + keys.joinToString(prefix = " has -Xlint:", separator = ",")
+                    .takeIf { keys.isNotEmpty() }.orEmpty()
+            } else {
+                null
+            }
         }
     }
     require(unguarded.isEmpty()) {

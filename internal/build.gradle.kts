@@ -35,7 +35,7 @@ tasks.withType<JavaCompile>().configureEach {
     // code. `options` is not one `all` switches on -- it is on by default, and naming it here is
     // the only way off -- and it is the one that matters beside `-Werror`, because it fires on the
     // release level this file picks. The lowest release level javac still supports rises every few
-    // versions and the version after that refuses it outright, so on the day the lowest reaches the
+    // versions and thereafter refuses anything below it outright, so on the day the lowest reaches the
     // level pinned above, this module stops compiling with a message about source levels and
     // nothing to fix in its source.
     //
