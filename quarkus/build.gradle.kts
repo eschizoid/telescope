@@ -43,7 +43,7 @@ java {
 tasks.withType<JavaCompile>().configureEach {
     options.release = 21
     options.encoding = "UTF-8"
-    options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-parameters"))
+    options.compilerArgs.addAll(listOf("-Xlint:all,-processing,-options", "-parameters"))
 }
 
 // Telescope-quarkus is also consumable as a JPMS module via Automatic-Module-Name for downstream

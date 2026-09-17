@@ -26,7 +26,12 @@ java {
 tasks.withType<JavaCompile>().configureEach {
     options.release = 21
     options.encoding = "UTF-8"
-    options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-Werror", "-parameters"))
+    // `-Xlint:all` minus the categories that report on how javac was invoked rather than on the code.
+    // `options` is the one that matters with `-Werror`: it fires on the release level this file picks,
+    // so it turns the day a pinned release ages into the obsolete band into a compile failure whose
+    // message is about source levels. Every category that reports on the code stays on, and `all` stays
+    // an open set deliberately -- a toolchain bump discovering a new one is the point of the flag.
+    options.compilerArgs.addAll(listOf("-Xlint:all,-processing,-options", "-Werror", "-parameters"))
 }
 
 tasks.named<JavaCompile>("compileTestJava") {

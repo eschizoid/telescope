@@ -30,7 +30,12 @@ tasks.withType<JavaCompile>().configureEach {
     // because :core (io.github.eschizoid.telescope) requires :internal, not the other way around,
     // so javac compiling :internal can't see :core on the modulepath. Runtime resolution and
     // :core's own compile catch any actual export mistakes.
-    options.compilerArgs.addAll(listOf("-Xlint:all,-processing,-module", "-Werror", "-parameters"))
+    // `-Xlint:all` minus the categories that report on how javac was invoked rather than on the code.
+    // `options` is the one that matters with `-Werror`: it fires on the release level this file picks,
+    // so it turns the day a pinned release ages into the obsolete band into a compile failure whose
+    // message is about source levels. Every category that reports on the code stays on, and `all` stays
+    // an open set deliberately -- a toolchain bump discovering a new one is the point of the flag.
+    options.compilerArgs.addAll(listOf("-Xlint:all,-processing,-module,-options", "-Werror", "-parameters"))
 }
 
 tasks.withType<Test>().configureEach {
