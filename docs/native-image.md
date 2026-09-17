@@ -102,9 +102,9 @@ reaches it, and needs no metadata at all.
 The table is not the only route, though, and two others have no table in front of them. A container component whose
 declared type carries no type arguments never yields a container view, so it is copied element-wise instead; and the
 pairing gate probes whether such a copy can be built. Both ask `Beans.intermediateAllocator`, which reaches a public
-constructor through the same public lookup whenever the declaring module declines `privateLookupIn` — which every
-named platform module does. So a `Properties`, `ArrayList` or `LinkedHashMap` reached by one of those two routes needs
-a `reflect-config` entry even though the table names it.
+constructor through the same public lookup whenever the declaring module declines `privateLookupIn` — which every named
+platform module does. So a `Properties`, `ArrayList` or `LinkedHashMap` reached by one of those two routes needs a
+`reflect-config` entry even though the table names it.
 
 The default tree does not reach them: it refuses to materialise a platform type as a default at all, so the only
 constructor it can want through the public lookup belongs to an adopter's own class in a module that declines `opens`.
