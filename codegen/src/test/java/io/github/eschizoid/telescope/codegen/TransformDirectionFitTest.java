@@ -366,6 +366,184 @@ class TransformDirectionFitTest {
     assertTrue(compilation.success(), () -> "order must not decide the verdict: " + compilation.errorMessages());
   }
 
+  private static JavaFileObject rawFn(final String forwardReturn) {
+    return ProcessorHarness.source(
+      "demo.RawFn",
+      """
+      package demo;
+      import io.github.eschizoid.telescope.conversion.BridgeFn;
+      @SuppressWarnings("rawtypes")
+      public final class RawFn implements BridgeFn {
+        @Override public %s forward(final Object o) { return String.valueOf(o); }
+        @Override public String backward(final Object o) { return String.valueOf(o); }
+      }
+      """.formatted(forwardReturn)
+    );
+  }
+
+  private static JavaFileObject[] rawPair(final String forwardReturn) {
+    return new JavaFileObject[] {
+      rawFn(forwardReturn),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.RawFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}"),
+    };
+  }
+
+  @Test
+  @DisplayName("a raw implementation is checked through the methods it declares, having no arguments to" + " read")
+  void rawImplementationIsStillChecked() {
+    // The one shape with no type arguments to fall back on was also the one shape not checked at
+    // all, so a mismatch reached the generated file. The class still declares the two methods the
+    // call sites bind to, and those are what the check compares.
+    final var compilation = compile(rawPair("Object"));
+
+    assertFalse(compilation.success(), "Object does not fit a String slot");
+    assertTrue(
+      compilation.hasError("does not fit forward"),
+      () -> "the diagnostic should name the direction: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("cannot be converted to"),
+      () -> "and replace the raw error, not accompany it: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a raw implementation whose methods do fit is accepted, not refused for being raw")
+  void rawImplementationThatFitsIsAccepted() {
+    // The control. Rawness is not the defect — an unchecked conversion is. A class declaring
+    // String forward(Object) genuinely produces what a String slot takes, and a check that
+    // refused every raw implementation would pass the test above while breaking this.
+    final var compilation = compile(rawPair("String"));
+
+    assertTrue(compilation.success(), () -> "its declared methods fit: " + compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("an overload the bridge cannot reach across packages is not selected either")
+  void unreachableAcrossPackagesIsNotSelected() {
+    // The bridge is emitted beside the source and subclasses nothing, so a package-private member
+    // of a transform in another package is as unbindable as a private one. Choosing it would
+    // refuse a pair javac resolves to the public overload, which fits.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "other.RawFn",
+        """
+        package other;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        @SuppressWarnings("rawtypes")
+        public final class RawFn implements BridgeFn {
+          @Override public String forward(final Object o) { return String.valueOf(o); }
+          Integer forward(final String s) { return 1; }
+          @Override public String backward(final Object o) { return String.valueOf(o); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = other.RawFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertTrue(compilation.success(), () -> "the reachable overload fits: " + compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("the same overload in the bridge's own package is reachable, so it is selected")
+  void reachableInTheSamePackageIsSelected() {
+    // The control for the row above. Package-private is about which package, not about the
+    // modifier alone — a check that ignored every package-private member would pass that test
+    // while missing a member javac really does bind.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.RawFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        @SuppressWarnings("rawtypes")
+        public final class RawFn implements BridgeFn {
+          @Override public String forward(final Object o) { return String.valueOf(o); }
+          Integer forward(final String s) { return 1; }
+          @Override public String backward(final Object o) { return String.valueOf(o); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.RawFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertFalse(compilation.success(), "javac binds the narrower overload here, and Integer does not fit");
+  }
+
+  @Test
+  @DisplayName("the diagnostic names the signature the call site binds to, not the interface's")
+  void diagnosticNamesTheResolvedSignature() {
+    // An overload or an override means the bound signature and the interface's parameterisation
+    // are different things. A message reconstructing the latter prints types that all fit each
+    // other while the row is refused, which is true of the class and useless about the refusal --
+    // and leaves the member the author has to edit unnamed.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.OverloadedFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        public final class OverloadedFn implements BridgeFn<Object, String> {
+          @Override public String forward(final Object o) { return String.valueOf(o); }
+          public Integer forward(final String s) { return 1; }
+          @Override public Object backward(final String s) { return s; }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.OverloadedFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertFalse(compilation.success(), "the bound overload returns Integer, which the String slot refuses");
+    assertTrue(
+      compilation.hasError("forward resolves to (java.lang.String) -> java.lang.Integer"),
+      () -> "the bound signature is what the author has to change: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("implements BridgeFn<java.lang.Object, java.lang.String>"),
+      () -> "and the interface's parameterisation fits, so naming it explains nothing: " + compilation.errorMessages()
+    );
+  }
+
   @Test
   @DisplayName("a transform that fits neither direction still names forward, the first thing to fix")
   void forwardMismatchStillNamesForward() {

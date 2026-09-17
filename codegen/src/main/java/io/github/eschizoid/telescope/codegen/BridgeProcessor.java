@@ -27,6 +27,7 @@ import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
@@ -1310,7 +1311,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           .filter(f -> f.name().equals(t))
           .findFirst()
           .orElse(null);
-        if (args.size() == 2 && tfField != null) {
+        // A class implementing the raw BridgeFn has no type arguments to read, but it still
+        // declares the two methods the call sites bind to, and those are what the check compares.
+        // Requiring arguments here meant the one shape with nothing to fall back on was also the
+        // one shape not checked at all.
+        if (tfField != null) {
           final var tfType = tfField.type();
           final var types = processingEnv.getTypeUtils();
           // Assignability models the boxing the source read needs and the unboxing-plus-widening
@@ -1327,35 +1332,61 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // interface arguments only where the using type exposes no concrete override. A
           // covariant override narrows the return type and Java binds the narrow one, so the
           // interface arguments describe a signature the call site does not use.
-          final var fwd = resolvedFn(usingEl, "forward", sfType);
-          final var bwd = resolvedFn(usingEl, "backward", tfType);
+          // A member has to be reachable from wherever the bridge lands, and a carrier-form pair
+          // lands in the carrier's package rather than the source's.
+          final var bridgePackage = processingEnv
+            .getElementUtils()
+            .getPackageOf(carrierEl != null ? carrierEl : source);
+          final var fwd = resolvedFn(usingEl, "forward", sfType, bridgePackage);
+          final var bwd = resolvedFn(usingEl, "backward", tfType, bridgePackage);
+          // Neither a resolved member nor a type argument describes this direction, so there is
+          // nothing to read: the comparisons below would index an empty argument list. Removing
+          // this guard does not widen the check, it throws IndexOutOfBoundsException out of the
+          // processor. The shapes that reach it -- an abstract class or an interface
+          // raw-implementing BridgeFn, or one leaving a direction abstract -- cannot be
+          // instantiated as a transform anyway, so emission refuses them a moment later.
+          final var typed = args.size() == 2;
+          if ((fwd == null || bwd == null) && !typed) continue;
           final var fwdAccepts = fwd == null ? erasedBound(args.get(0)) : fwd.getParameterTypes().getFirst();
           final var fwdGives = fwd == null ? erasedBound(args.get(1)) : fwd.getReturnType();
           final var bwdAccepts = bwd == null ? erasedBound(args.get(1)) : bwd.getParameterTypes().getFirst();
           final var bwdGives = bwd == null ? erasedBound(args.get(0)) : bwd.getReturnType();
 
+          // Both sides are compared against the type the field is declared with. For a bean that
+          // is the getter's, and the emission may write through a setter, a builder method or a
+          // constructor parameter, any of which can accept something the getter does not name.
+          // Modelling that needs the rebuild strategy the emitter picks, which is decided later;
+          // guessing at it from the setter alone trades this conservative refusal for an emission
+          // that does not compile, which is the failure this check exists to replace.
           final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, tfType);
           final var backwardFits =
             forwardOnlyTransforms.contains(t) ||
             (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, sfType));
           if (!forwardFits || !backwardFits) {
+            // Name the signature the call site binds to, not the interface's parameterisation.
+            // Those differ whenever an overload or an override is what gets bound, and a message
+            // reconstructing BridgeFn<A, B> then prints types that all fit each other while the
+            // row is refused -- true of the class and useless about the refusal. A raw class has
+            // no parameterisation to print at all.
+            final var direction = forwardFits ? "backward" : "forward";
+            final var accepts = forwardFits ? bwdAccepts : fwdAccepts;
+            final var gives = forwardFits ? bwdGives : fwdGives;
             error(
               source,
               "@Transform field=\"" +
                 t +
                 "\" does not fit " +
-                (forwardFits ? "backward" : "forward") +
-                ": the field pair is " +
-                sfType +
-                " -> " +
-                tfType +
-                " but " +
+                direction +
+                ": " +
                 transforms.get(t) +
-                " implements BridgeFn<" +
-                args.get(0) +
-                ", " +
-                args.get(1) +
-                ">" +
+                "'s " +
+                direction +
+                " resolves to (" +
+                accepts +
+                ") -> " +
+                gives +
+                ", which does not carry " +
+                (forwardFits ? tfType + " -> " + sfType : sfType + " -> " + tfType) +
                 (forwardFits ? ". Add forwardOnly = true if only the forward direction is wanted." : "")
             );
             return;
@@ -3100,6 +3131,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * Whether the generated bridge could call this member. It subclasses nothing, so private is out,
+   * protected is out unless the member happens to share the bridge's package, and package-private
+   * is in only when it does. Which package that is depends on the pairing's form -- a carrier emits
+   * beside the carrier, everything else beside the source -- so the caller supplies it rather than
+   * this deriving it.
+   */
+  private boolean bindableFrom(final ExecutableElement m, final PackageElement callerPackage) {
+    final var mods = m.getModifiers();
+    if (mods.contains(Modifier.PRIVATE)) return false;
+    if (mods.contains(Modifier.PUBLIC)) return true;
+    return processingEnv.getElementUtils().getPackageOf(m).equals(callerPackage);
+  }
+
+  /**
    * The {@code forward} or {@code backward} the emitted call site will actually bind to, as a
    * signature rather than as a name. Three things decide it, and reading the interface's type
    * arguments gets all three wrong.
@@ -3120,7 +3165,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    *
    * @param argType what the call site will pass, so inapplicable overloads are discarded first
    */
-  private ExecutableType resolvedFn(final TypeElement usingEl, final String name, final TypeMirror argType) {
+  private ExecutableType resolvedFn(
+    final TypeElement usingEl,
+    final String name,
+    final TypeMirror argType,
+    final PackageElement callerPackage
+  ) {
     final var types = processingEnv.getTypeUtils();
     final var owner = (DeclaredType) usingEl.asType();
     final var raw = !usingEl.getTypeParameters().isEmpty();
@@ -3128,10 +3178,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(usingEl))) {
       if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
       if (m.getModifiers().contains(Modifier.ABSTRACT)) continue;
-      // getAllMembers includes the type's own private members, which the generated bridge is in no
-      // position to call. Selecting one says a row fits on the strength of a method javac will not
-      // bind, and the public overload it does bind is then the one that fails.
-      if (m.getModifiers().contains(Modifier.PRIVATE)) continue;
+      // getAllMembers includes members the generated bridge is in no position to call. Selecting
+      // one says a row fits on the strength of a method javac will not bind, and the overload it
+      // does bind is then the one that fails.
+      if (!bindableFrom(m, callerPackage)) continue;
       final var seen = (ExecutableType) types.asMemberOf(owner, m);
       final var param = raw ? types.erasure(seen.getParameterTypes().getFirst()) : seen.getParameterTypes().getFirst();
       if (!types.isAssignable(argType, param)) continue;

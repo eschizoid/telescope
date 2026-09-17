@@ -2249,8 +2249,11 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "a raw generic BridgeFn must not compile");
       assertTrue(
-        compilation.hasError("does not fit") && compilation.hasError("BridgeFn<T, T>"),
-        () -> "expected the diagnostic to name the unresolved arguments; saw " + compilation.errorMessages()
+        compilation.hasError("does not fit") && compilation.hasError("forward resolves to (java.lang.Object)"),
+        () ->
+          "expected the diagnostic to name the signature the call site binds to, which for a" +
+          " raw instantiation is the erased one; saw " +
+          compilation.errorMessages()
       );
       assertFalse(
         compilation.hasError("cannot be converted to"),
@@ -2411,9 +2414,9 @@ class BridgeProcessorTest {
 
       assertFalse(compilation.success(), "a misfitting BridgeFn must not compile");
       assertTrue(
-        compilation.hasError("does not fit") && compilation.hasError("BridgeFn<java.lang.Integer, java.lang.Long>"),
-        () ->
-          "expected a diagnostic naming the field pair and the BridgeFn arguments; saw " + compilation.errorMessages()
+        compilation.hasError("does not fit") &&
+          compilation.hasError("forward resolves to (java.lang.Integer) -> java.lang.Long"),
+        () -> "expected a diagnostic naming the field pair and the bound signature; saw " + compilation.errorMessages()
       );
     }
 
