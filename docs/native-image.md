@@ -88,6 +88,27 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
   without an `opens` directive. A downstream consumer with JPMS-closed packages still needs
   `opens ... to io.github.eschizoid.telescope;` — a module-descriptor requirement, not a native-image one.
 
+## A container field whose class the runtime does not name
+
+The reflective deep-map allocates a rebuilt container from a table of the JDK containers it knows. A declared type
+outside that table is reached instead through a public-lookup constructor handle, and under native image that
+constructor needs a `reflect-config` entry like any other reflective target. On the JVM it needs nothing, so this is a
+difference the JVM run will not show you.
+
+This applies only to the tail. Every container the table names — `List`, `Set`, `Map`, their sorted and concurrent
+interfaces, `ArrayList`, `LinkedHashSet`, `LinkedHashMap`, `TreeMap` and the rest — is allocated by a direct `new` and
+needs no metadata at all. A field declared at one of those, which is nearly every field, is unaffected.
+
+What reaches the handle is a declared type the table does not name and whose family default cannot stand in for it: a
+concrete JDK container outside the list, or a container class of the adopter's own. Give such a class an entry for its
+no-argument constructor, the same way a DTO gets one.
+
+The failure mode if you do not is worth knowing, because it is deliberately not softened. Under exact reachability
+metadata the image raises a missing-registration error naming the class it was built without, and telescope lets that
+through rather than converting it into its own "no allocator for this type" refusal. That refusal's advice — name the
+type in the table, or supply an explicit conversion row — is wrong here: the type is fine and the program works on the
+JVM. Only the image is missing something, and only the registration error says so.
+
 ## Producing the app metadata
 
 1. **Hand-write it.** For a handful of DTO types this is the honest option: the example's

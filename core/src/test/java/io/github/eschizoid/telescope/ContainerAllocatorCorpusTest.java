@@ -141,20 +141,31 @@ class ContainerAllocatorCorpusTest {
   /**
    * Adopter-shaped containers, which is most of what a real model declares and no JDK scan finds.
    */
-  interface MyListIface<E> extends List<E> {}
+  public interface MyListIface<E> extends List<E> {}
 
-  interface MySetIface<E> extends Set<E> {}
+  public interface MySetIface<E> extends Set<E> {}
 
-  interface MyMapIface<K, V> extends Map<K, V> {}
+  public interface MyMapIface<K, V> extends Map<K, V> {}
 
-  abstract static class MyAbstractList<E> extends ArrayList<E> {
+  /**
+   * Written the way an adopter writes one: public, with a public no-argument constructor. A
+   * package-private version of either of these passes the assertions below for the wrong reason —
+   * the concrete one by being refused rather than allocated, and the abstract one by never reaching
+   * the probe that would raise a linkage error on it.
+   */
+  public abstract static class MyAbstractList<E> extends ArrayList<E> {
 
     private static final long serialVersionUID = 1L;
+
+    public MyAbstractList() {}
   }
 
-  static final class MyArrayList<E> extends ArrayList<E> {
+  /** The acceptance case: a concrete adopter subclass the reflective path should allocate. */
+  public static final class MyArrayList<E> extends ArrayList<E> {
 
     private static final long serialVersionUID = 1L;
+
+    public MyArrayList() {}
   }
 
   private static List<Class<?>> corpus() throws IOException {

@@ -38,6 +38,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Container-shape lifting for {@link DeepMap}: element-copy Isos for raw same-kind container
@@ -241,6 +242,22 @@ final class ContainerLifts {
   // shapes, and fall back to `intermediateAllocator` for user-defined subclasses (where LMF DOES
   // work via the user's own package).
   /**
+   * The intermediate allocator for {@code raw}, or {@code null} when there is not one. Probing it
+   * means calling it, and the call can fail rather than answer: an abstract class with a public
+   * no-argument constructor binds a handle that raises {@code InstantiationError} on invocation.
+   * Letting that escape turns a refusal that names the type and its remedy into a linkage error
+   * thrown from the middle of planning.
+   */
+  private static Supplier<Object> probeAllocator(final Class<?> raw) {
+    final var alloc = Beans.intermediateAllocator(raw);
+    try {
+      return alloc.get() == null ? null : alloc;
+    } catch (final RuntimeException | LinkageError e) {
+      return null;
+    }
+  }
+
+  /**
    * The last two questions an allocator asks before giving up, shared by all three families.
    *
    * <p>A declared type that cannot be instantiated at all — an interface, an abstract class — is
@@ -310,8 +327,8 @@ final class ContainerLifts {
       final int size = ((Collection<?>) input).size();
       return size <= 1 ? new CopyOnWriteArrayList<>() : new ArrayList<>(size);
     };
-    final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return ignored -> alloc.get();
+    final var alloc = probeAllocator(raw);
+    if (alloc != null) return ignored -> alloc.get();
     final var fallback = fallbackAllocatorFor(raw, ArrayList.class, input ->
       new ArrayList<>(((Collection<?>) input).size())
     );
@@ -338,8 +355,8 @@ final class ContainerLifts {
       final int size = ((Collection<?>) input).size();
       return size <= 1 ? new CopyOnWriteArraySet<>() : new ArrayList<>(size);
     };
-    final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return ignored -> alloc.get();
+    final var alloc = probeAllocator(raw);
+    if (alloc != null) return ignored -> alloc.get();
     final var fallback = fallbackAllocatorFor(raw, LinkedHashSet.class, input ->
       LinkedHashSet.newLinkedHashSet(((Collection<?>) input).size())
     );
@@ -384,8 +401,8 @@ final class ContainerLifts {
         "constructor (it needs the Class<K> key class). Use the codegen path or supply an " +
         "explicit `Mapping.via(...)` row that constructs the EnumMap with its key class."
     );
-    final var alloc = Beans.intermediateAllocator(raw);
-    if (alloc.get() != null) return ignored -> alloc.get();
+    final var alloc = probeAllocator(raw);
+    if (alloc != null) return ignored -> alloc.get();
     final var fallback = fallbackAllocatorFor(raw, LinkedHashMap.class, input ->
       LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size())
     );
