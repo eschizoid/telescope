@@ -1332,9 +1332,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // interface arguments only where the using type exposes no concrete override. A
           // covariant override narrows the return type and Java binds the narrow one, so the
           // interface arguments describe a signature the call site does not use.
-          // The bridge is emitted beside the source, so that is the package a member has to be
-          // reachable from.
-          final var bridgePackage = processingEnv.getElementUtils().getPackageOf(source);
+          // A member has to be reachable from wherever the bridge lands, and a carrier-form pair
+          // lands in the carrier's package rather than the source's.
+          final var bridgePackage = processingEnv
+            .getElementUtils()
+            .getPackageOf(carrierEl != null ? carrierEl : source);
           final var fwd = resolvedFn(usingEl, "forward", sfType, bridgePackage);
           final var bwd = resolvedFn(usingEl, "backward", tfType, bridgePackage);
           // Neither a resolved member nor a type argument describes this direction, so there is
@@ -1350,15 +1352,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var bwdAccepts = bwd == null ? erasedBound(args.get(1)) : bwd.getParameterTypes().getFirst();
           final var bwdGives = bwd == null ? erasedBound(args.get(0)) : bwd.getReturnType();
 
-          // A direction reads one slot and writes the other, and for a bean those are different
-          // members with types that need not agree. Comparing what it produces against the getter
-          // that named the field refuses a write the setter would have taken.
-          final var tgtWrite = writeTypeOf(target, t, tfType);
-          final var srcWrite = writeTypeOf(source, t, sfType);
-          final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, tgtWrite);
+          // Both sides are compared against the type the field is declared with. For a bean that
+          // is the getter's, and the emission may write through a setter, a builder method or a
+          // constructor parameter, any of which can accept something the getter does not name.
+          // Modelling that needs the rebuild strategy the emitter picks, which is decided later;
+          // guessing at it from the setter alone trades this conservative refusal for an emission
+          // that does not compile, which is the failure this check exists to replace.
+          final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, tfType);
           final var backwardFits =
             forwardOnlyTransforms.contains(t) ||
-            (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, srcWrite));
+            (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, sfType));
           if (!forwardFits || !backwardFits) {
             error(
               source,
@@ -3118,21 +3121,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       work.addAll(types.directSupertypes(t));
     }
     return null;
-  }
-
-  /**
-   * What a slot will actually accept on a write. A record component is written through the
-   * canonical constructor, so its declared type is both what it reads as and what it takes. A bean
-   * property is read through a getter and written through a setter, and those need not agree — a
-   * setter may accept wider than its getter returns, and the emitted write is the setter call.
-   *
-   * <p>Falls back to the read type where no setter is visible, which leaves the comparison exactly
-   * where it was rather than guessing.
-   */
-  private TypeMirror writeTypeOf(final TypeElement owner, final String field, final TypeMirror readType) {
-    if (owner.getKind() == ElementKind.RECORD) return readType;
-    final var param = setterParameter(owner, field);
-    return param == null ? readType : param;
   }
 
   /**
