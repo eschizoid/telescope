@@ -141,10 +141,12 @@ class ContainerParityConversionTest {
       Telescope.mapper(ThrowSrc.class, ThrowDst.class)
     );
 
-    // The class's own failure, surfacing where the plan is built. Asserting the message rather
-    // than the type is what makes this fail on a swallowed probe: a swallow leaves the plan valid
-    // and defers to a wrapper thrown per conversion, which is an IllegalStateException too.
-    assertEquals(REFUSAL, thrown.getMessage(), "the container's own refusal, not a deferred wrapper");
+    // A swallowed probe leaves the plan valid and throws nothing here, which is what assertThrows
+    // above catches. The message assertion catches a different mutation: one where the plan is
+    // still refused, but with telescope's own generic "no allocator for this type" text in place
+    // of the constructor's failure -- a refusal that names the wrong cause and sends the adopter
+    // to fix a table when the class is what is broken.
+    assertEquals(REFUSAL, thrown.getMessage(), "the container's own refusal, not a generic one");
   }
 
   @Test

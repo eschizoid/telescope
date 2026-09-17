@@ -111,6 +111,59 @@ class MhAccessorsTest {
   }
 
   /** Test fixture exposing a getter, void + fluent setters, a factory, and throwing methods. */
+  @Test
+  @DisplayName("an uninstantiable class reports as the same throwable from either substrate")
+  void abstractClassRaisesInstantiationErrorOnBothSubstrates() throws Throwable {
+    // The two substrates are interchangeable only if a condition both can report arrives as the
+    // same throwable from each. Instantiating an abstract class is such a condition, and it is the
+    // one that separates them: a bound LambdaMetafactory call site raises InstantiationError, an
+    // Error, while a constructor MethodHandle raises the checked InstantiationException.
+    //
+    // A caller that reads the throwable to tell "cannot be instantiated" from "failed while being
+    // instantiated" is then correct on whichever substrate it was written against and wrong on the
+    // other -- and the JVM runs one while an image runs the other, so the wrong one is the one no
+    // test on a developer machine ever reaches.
+    final var ctor = AbstractBox.class.getDeclaredConstructor();
+    final var handle = LOOKUP.unreflectConstructor(ctor);
+
+    assertThrows(InstantiationError.class, () -> MhAccessors.supplier(handle).get(), "the image substrate");
+    assertThrows(
+      InstantiationError.class,
+      () -> Beans.buildCtorSupplier(AbstractBox.class, ctor, LOOKUP).get(),
+      "the JVM substrate, which is the one this has to agree with"
+    );
+  }
+
+  @Test
+  @DisplayName("a constructor that throws still arrives as its own exception, not as an instantiation one")
+  void throwingConstructorPropagatesItsOwnFailure() throws Throwable {
+    // The control for the row above. Translating every constructor failure into InstantiationError
+    // would satisfy it while erasing the distinction it exists to preserve: this class can be
+    // instantiated, and the attempt failed for a reason of its own.
+    final var handle = LOOKUP.unreflectConstructor(ThrowingBox.class.getDeclaredConstructor());
+
+    final var thrown = assertThrows(IllegalStateException.class, () -> MhAccessors.supplier(handle).get());
+
+    assertEquals("box refused", thrown.getMessage(), "the constructor's own failure, unwrapped");
+  }
+
+  /**
+   * Abstract with a public no-argument constructor: binds on both substrates, instantiates on
+   * neither.
+   */
+  public abstract static class AbstractBox {
+
+    public AbstractBox() {}
+  }
+
+  /** Concrete, and its constructor throws — instantiable, but failing for its own reason. */
+  public static final class ThrowingBox {
+
+    public ThrowingBox() {
+      throw new IllegalStateException("box refused");
+    }
+  }
+
   public static final class Box {
 
     private int count;

@@ -81,10 +81,21 @@ final class MhAccessors {
 
   // Preserve the raw exception: an unchecked ClassCastException / NullPointerException from a bad
   // value or null receiver propagates unwrapped (matching the LMF path); only a checked Throwable
-  // is
-  // wrapped.
+  // is wrapped.
+  //
+  // The two substrates are meant to be interchangeable, so a condition both can report has to
+  // arrive as the same throwable from either. Instantiating an abstract class is one: a bound
+  // LambdaMetafactory call site raises InstantiationError, while a constructor MethodHandle raises
+  // the checked InstantiationException, which would otherwise fall through to the wrapper below
+  // and reach a caller that distinguishes "cannot be instantiated" from "failed while being
+  // instantiated" as neither of them.
   private static RuntimeException dispatchFailure(final Throwable t) {
     if (t instanceof Error e) throw e;
+    if (t instanceof InstantiationException) {
+      final var sameConditionAsLmf = new InstantiationError(t.getMessage());
+      sameConditionAsLmf.initCause(t);
+      throw sameConditionAsLmf;
+    }
     if (t instanceof RuntimeException re) return re;
     return new IllegalStateException("native-image MethodHandle accessor dispatch failed", t);
   }
