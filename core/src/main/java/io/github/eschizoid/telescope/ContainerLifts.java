@@ -236,11 +236,6 @@ final class ContainerLifts {
     );
   }
 
-  // JDK collection classes live in java.base — `Beans.intermediateAllocator` can't bind them
-  // via LambdaMetafactory's privateLookupIn (java.base doesn't grant private lookup to app code).
-  // Hard-code the common JDK Collection / Map raws so the allocator works for the standard
-  // shapes, and fall back to `intermediateAllocator` for user-defined subclasses (where LMF DOES
-  // work via the user's own package).
   /**
    * The intermediate allocator for {@code raw}, or {@code null} when there is not one. Probing it
    * means calling it, and the call can fail rather than answer: an abstract class with a public
@@ -252,7 +247,11 @@ final class ContainerLifts {
     final var alloc = Beans.intermediateAllocator(raw);
     try {
       return alloc.get() == null ? null : alloc;
-    } catch (final RuntimeException | LinkageError e) {
+    } catch (final InstantiationError e) {
+      // Only the shape this exists for. A constructor that binds and then throws, or a class whose
+      // static initialiser throws, is a real failure of that class and belongs at plan time where
+      // the starters catch it -- swallowing it defers the same failure to every conversion, or
+      // worse converts a null slot quietly.
       return null;
     }
   }
@@ -265,7 +264,7 @@ final class ContainerLifts {
    * the generated path does for the same declaration, and a type it allocates and this one refuses
    * is a program that compiles under {@code @Bridge} and throws under {@code mapper(...)}.
    *
-   * <p>A concrete one gets a public-lookup constructor handle. The table above exists because
+   * <p>A concrete one gets a public-lookup constructor handle. The tables below exist because
    * {@code privateLookupIn} refuses {@code java.base}, which {@code publicLookup} does not need: it
    * binds a public no-argument constructor on any exported class. Under native image such a
    * constructor needs reachability metadata, where a hard-coded allocator needs none — so the table
@@ -305,6 +304,11 @@ final class ContainerLifts {
     }
   }
 
+  // JDK collection classes live in java.base — `Beans.intermediateAllocator` can't bind them
+  // via LambdaMetafactory's privateLookupIn (java.base doesn't grant private lookup to app code).
+  // Hard-code the common JDK Collection / Map raws so the allocator works for the standard
+  // shapes, and fall back to `intermediateAllocator` for user-defined subclasses (where LMF DOES
+  // work via the user's own package).
   private static Function<Object, Object> listAllocatorFor(final Class<?> raw) {
     if (raw == List.class || raw == Collection.class || raw == ArrayList.class) return input ->
       new ArrayList<>(((Collection<?>) input).size());

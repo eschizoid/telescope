@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.containerparity;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.AbstractList;
@@ -109,6 +110,41 @@ class ContainerParityConversionTest {
       new B("x"),
       Telescope.mapper(SeqMapSrc.class, SeqMapDst.class).forward(new SeqMapSrc(oneEntry())).items().get("k")
     );
+  }
+
+  private static final String REFUSAL = "this container refuses to be built";
+
+  /** A container whose constructor binds and then throws — a real failure of the class itself. */
+  public static final class ThrowingCtor<E> extends ArrayList<E> {
+
+    private static final long serialVersionUID = 1L;
+
+    public ThrowingCtor() {
+      throw new IllegalStateException(REFUSAL);
+    }
+  }
+
+  record ThrowSrc(ThrowingCtor<A> items) {}
+
+  record ThrowDst(ThrowingCtor<B> items) {}
+
+  @Test
+  @DisplayName("a container that cannot be built fails while the mapper is built, not on every use")
+  void unbuildableContainerFailsAtPlanTime() {
+    // The probe that decides whether an allocator answers has to call it, and the call can fail
+    // for two different reasons. An abstract class binds a constructor that raises a linkage error
+    // on invocation, which means "there is no allocator here" and should fall through. A class
+    // whose constructor throws is a different thing: the allocator is real and the class is
+    // broken, and swallowing that defers the same failure to every conversion — past the point
+    // where both starters build their mappers and would have caught it.
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(ThrowSrc.class, ThrowDst.class)
+    );
+
+    // The class's own failure, surfacing where the plan is built. Asserting the message rather
+    // than the type is what makes this fail on a swallowed probe: a swallow leaves the plan valid
+    // and defers to a wrapper thrown per conversion, which is an IllegalStateException too.
+    assertEquals(REFUSAL, thrown.getMessage(), "the container's own refusal, not a deferred wrapper");
   }
 
   @Test
