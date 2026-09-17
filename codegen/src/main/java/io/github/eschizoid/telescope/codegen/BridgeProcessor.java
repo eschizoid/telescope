@@ -1337,8 +1337,35 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var bridgePackage = processingEnv
             .getElementUtils()
             .getPackageOf(carrierEl != null ? carrierEl : source);
-          final var fwd = resolvedFn(usingEl, "forward", sfType, bridgePackage);
-          final var bwd = resolvedFn(usingEl, "backward", tfType, bridgePackage);
+          final var fwdRes = resolvedFn(usingEl, "forward", sfType, bridgePackage);
+          final var bwdRes = resolvedFn(usingEl, "backward", tfType, bridgePackage);
+          // An ambiguous call is one Java refuses outright rather than resolving, so neither a
+          // bound member nor the interface's arguments describe what the emitted call site does --
+          // there is nothing to check the row against, and the row is unusable either way.
+          if (fwdRes.ambiguous() || bwdRes.ambiguous()) {
+            final var amb = fwdRes.ambiguous() ? fwdRes : bwdRes;
+            final var direction = fwdRes.ambiguous() ? "forward" : "backward";
+            error(
+              source,
+              "@Transform field=\"" +
+                t +
+                "\": " +
+                transforms.get(t) +
+                "'s " +
+                direction +
+                " is ambiguous for " +
+                (fwdRes.ambiguous() ? sfType : tfType) +
+                " between (" +
+                amb.ambiguousA() +
+                ") and (" +
+                amb.ambiguousB() +
+                "). Java refuses such a call rather than choosing, so leave one overload" +
+                " applicable."
+            );
+            continue;
+          }
+          final var fwd = fwdRes.bound();
+          final var bwd = bwdRes.bound();
           // Neither a resolved member nor a type argument describes this direction, so there is
           // nothing to read: the comparisons below would index an empty argument list. Removing
           // this guard does not widen the check, it throws IndexOutOfBoundsException out of the
@@ -3165,7 +3192,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    *
    * @param argType what the call site will pass, so inapplicable overloads are discarded first
    */
-  private ExecutableType resolvedFn(
+  private Resolution resolvedFn(
     final TypeElement usingEl,
     final String name,
     final TypeMirror argType,
@@ -3174,7 +3201,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var types = processingEnv.getTypeUtils();
     final var owner = (DeclaredType) usingEl.asType();
     final var raw = !usingEl.getTypeParameters().isEmpty();
-    ExecutableType best = null;
+    final var applicable = new ArrayList<ExecutableType>();
+    final var strict = new ArrayList<ExecutableType>();
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(usingEl))) {
       if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
       if (m.getModifiers().contains(Modifier.ABSTRACT)) continue;
@@ -3183,19 +3211,52 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // does bind is then the one that fails.
       if (!bindableFrom(m, callerPackage)) continue;
       final var seen = (ExecutableType) types.asMemberOf(owner, m);
-      final var param = raw ? types.erasure(seen.getParameterTypes().getFirst()) : seen.getParameterTypes().getFirst();
+      final var param = paramOf(seen, raw);
       if (!types.isAssignable(argType, param)) continue;
-      if (best == null) {
-        best = seen;
-        continue;
-      }
-      final var bestParam = raw
-        ? types.erasure(best.getParameterTypes().getFirst())
-        : best.getParameterTypes().getFirst();
-      if (types.isSubtype(types.erasure(param), types.erasure(bestParam))) best = seen;
+      applicable.add(seen);
+      // Java resolves a call in phases and stops at the first that yields a candidate: the first
+      // admits subtyping and primitive widening, the second adds boxing and unboxing. So an int
+      // argument binds forward(long) even though forward(Integer) is also applicable, and a check
+      // that weighs the two together picks by specificity -- a question neither answers, since a
+      // primitive and a wrapper are unrelated by subtyping.
+      if (argType.getKind().isPrimitive() == param.getKind().isPrimitive()) strict.add(seen);
     }
-    if (best == null) return null;
-    return raw ? (ExecutableType) types.erasure(best) : best;
+    final var phase = strict.isEmpty() ? applicable : strict;
+    if (phase.isEmpty()) return new Resolution(null, null, null);
+
+    // The most specific candidate is the one whose parameter every other candidate's parameter is
+    // not more specific than. Where two are mutually unrelated there is no such candidate, and
+    // javac calls the call site ambiguous rather than picking one -- so keeping the first seen
+    // makes the verdict depend on declaration order and describes a call that will not compile.
+    var best = phase.getFirst();
+    for (final var candidate : phase) {
+      if (types.isSubtype(types.erasure(paramOf(candidate, raw)), types.erasure(paramOf(best, raw)))) best = candidate;
+    }
+    final var bestParam = types.erasure(paramOf(best, raw));
+    for (final var candidate : phase) {
+      final var param = types.erasure(paramOf(candidate, raw));
+      if (!types.isSameType(param, bestParam) && !types.isSubtype(bestParam, param)) {
+        return new Resolution(null, bestParam, param);
+      }
+    }
+    return new Resolution(raw ? (ExecutableType) types.erasure(best) : best, null, null);
+  }
+
+  private TypeMirror paramOf(final ExecutableType m, final boolean raw) {
+    final var param = m.getParameterTypes().getFirst();
+    return raw ? processingEnv.getTypeUtils().erasure(param) : param;
+  }
+
+  /**
+   * What the emitted call site will bind to, or why it will not bind. {@code bound} is null in both
+   * failing cases, which differ in what the author has to do: nothing was applicable at all, so the
+   * interface's own arguments still describe the direction; or two overloads were equally
+   * applicable, which is a call javac refuses and no fallback can describe.
+   */
+  private record Resolution(ExecutableType bound, TypeMirror ambiguousA, TypeMirror ambiguousB) {
+    boolean ambiguous() {
+      return ambiguousA != null;
+    }
   }
 
   // A type-variable argument stands for whatever the emitter's raw call site erases it to, so the
