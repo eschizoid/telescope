@@ -429,6 +429,118 @@ class TransformDirectionFitTest {
   }
 
   @Test
+  @DisplayName("a setter wider than its getter is what the write has to fit, not the getter")
+  void wideSetterIsWhatTheWriteMustFit() {
+    // A bean is read through a getter and written through a setter, and those need not agree. The
+    // emitted write is the setter call, so comparing what a direction produces against the getter
+    // that named the field refuses a program the setter would have taken.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.RawFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        @SuppressWarnings("rawtypes")
+        public final class RawFn implements BridgeFn {
+          @Override public Object forward(final Object o) { return o; }
+          @Override public Object backward(final Object o) { return o; }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.SrcBean",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.RawFn.class) })
+        public class SrcBean {
+          private String v;
+          public SrcBean() {}
+          public String getV() { return v; }
+          public void setV(final Object v) { this.v = String.valueOf(v); }
+        }
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(Object v) {}")
+    );
+
+    assertTrue(compilation.success(), () -> "setV(Object) takes what backward returns: " + compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("an overload the bridge cannot reach across packages is not selected either")
+  void unreachableAcrossPackagesIsNotSelected() {
+    // The bridge is emitted beside the source and subclasses nothing, so a package-private member
+    // of a transform in another package is as unbindable as a private one. Choosing it would
+    // refuse a pair javac resolves to the public overload, which fits.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "other.RawFn",
+        """
+        package other;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        @SuppressWarnings("rawtypes")
+        public final class RawFn implements BridgeFn {
+          @Override public String forward(final Object o) { return String.valueOf(o); }
+          Integer forward(final String s) { return 1; }
+          @Override public String backward(final Object o) { return String.valueOf(o); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = other.RawFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertTrue(compilation.success(), () -> "the reachable overload fits: " + compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("the same overload in the bridge's own package is reachable, so it is selected")
+  void reachableInTheSamePackageIsSelected() {
+    // The control for the row above. Package-private is about which package, not about the
+    // modifier alone — a check that ignored every package-private member would pass that test
+    // while missing a member javac really does bind.
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.RawFn",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.conversion.BridgeFn;
+        @SuppressWarnings("rawtypes")
+        public final class RawFn implements BridgeFn {
+          @Override public String forward(final Object o) { return String.valueOf(o); }
+          Integer forward(final String s) { return 1; }
+          @Override public String backward(final Object o) { return String.valueOf(o); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = { @Transform(field = "v", using = demo.RawFn.class) })
+        public record Src(String v) {}
+        """
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(String v) {}")
+    );
+
+    assertFalse(compilation.success(), "javac binds the narrower overload here, and Integer does not fit");
+  }
+
+  @Test
   @DisplayName("a transform that fits neither direction still names forward, the first thing to fix")
   void forwardMismatchStillNamesForward() {
     // A pair where forward fails too. The message should lead with forward rather than report the

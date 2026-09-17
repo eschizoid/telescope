@@ -27,6 +27,7 @@ import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
+import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
@@ -1331,10 +1332,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // interface arguments only where the using type exposes no concrete override. A
           // covariant override narrows the return type and Java binds the narrow one, so the
           // interface arguments describe a signature the call site does not use.
-          final var fwd = resolvedFn(usingEl, "forward", sfType);
-          final var bwd = resolvedFn(usingEl, "backward", tfType);
-          // Nothing can be decided when neither a resolved member nor a type argument describes a
-          // direction, which is a raw implementation declaring no concrete override of it.
+          // The bridge is emitted beside the source, so that is the package a member has to be
+          // reachable from.
+          final var bridgePackage = processingEnv.getElementUtils().getPackageOf(source);
+          final var fwd = resolvedFn(usingEl, "forward", sfType, bridgePackage);
+          final var bwd = resolvedFn(usingEl, "backward", tfType, bridgePackage);
+          // Neither a resolved member nor a type argument describes this direction, so there is
+          // nothing to read: the comparisons below would index an empty argument list. Removing
+          // this guard does not widen the check, it throws IndexOutOfBoundsException out of the
+          // processor. The shapes that reach it -- an abstract class or an interface
+          // raw-implementing BridgeFn, or one leaving a direction abstract -- cannot be
+          // instantiated as a transform anyway, so emission refuses them a moment later.
           final var typed = args.size() == 2;
           if ((fwd == null || bwd == null) && !typed) continue;
           final var fwdAccepts = fwd == null ? erasedBound(args.get(0)) : fwd.getParameterTypes().getFirst();
@@ -1342,10 +1350,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var bwdAccepts = bwd == null ? erasedBound(args.get(1)) : bwd.getParameterTypes().getFirst();
           final var bwdGives = bwd == null ? erasedBound(args.get(0)) : bwd.getReturnType();
 
-          final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, tfType);
+          // A direction reads one slot and writes the other, and for a bean those are different
+          // members with types that need not agree. Comparing what it produces against the getter
+          // that named the field refuses a write the setter would have taken.
+          final var tgtWrite = writeTypeOf(target, t, tfType);
+          final var srcWrite = writeTypeOf(source, t, sfType);
+          final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, tgtWrite);
           final var backwardFits =
             forwardOnlyTransforms.contains(t) ||
-            (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, sfType));
+            (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, srcWrite));
           if (!forwardFits || !backwardFits) {
             error(
               source,
@@ -3108,6 +3121,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
+   * What a slot will actually accept on a write. A record component is written through the
+   * canonical constructor, so its declared type is both what it reads as and what it takes. A bean
+   * property is read through a getter and written through a setter, and those need not agree — a
+   * setter may accept wider than its getter returns, and the emitted write is the setter call.
+   *
+   * <p>Falls back to the read type where no setter is visible, which leaves the comparison exactly
+   * where it was rather than guessing.
+   */
+  private TypeMirror writeTypeOf(final TypeElement owner, final String field, final TypeMirror readType) {
+    if (owner.getKind() == ElementKind.RECORD) return readType;
+    final var param = setterParameter(owner, field);
+    return param == null ? readType : param;
+  }
+
+  /**
+   * Whether the generated bridge could call this member. It is emitted into the source's package
+   * and is a subclass of nothing, so private is out, protected is out unless the member happens to
+   * share that package, and package-private is in only when it does.
+   */
+  private boolean bindableFrom(final ExecutableElement m, final PackageElement callerPackage) {
+    final var mods = m.getModifiers();
+    if (mods.contains(Modifier.PRIVATE)) return false;
+    if (mods.contains(Modifier.PUBLIC)) return true;
+    return processingEnv.getElementUtils().getPackageOf(m).equals(callerPackage);
+  }
+
+  /**
    * The {@code forward} or {@code backward} the emitted call site will actually bind to, as a
    * signature rather than as a name. Three things decide it, and reading the interface's type
    * arguments gets all three wrong.
@@ -3128,7 +3168,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    *
    * @param argType what the call site will pass, so inapplicable overloads are discarded first
    */
-  private ExecutableType resolvedFn(final TypeElement usingEl, final String name, final TypeMirror argType) {
+  private ExecutableType resolvedFn(
+    final TypeElement usingEl,
+    final String name,
+    final TypeMirror argType,
+    final PackageElement callerPackage
+  ) {
     final var types = processingEnv.getTypeUtils();
     final var owner = (DeclaredType) usingEl.asType();
     final var raw = !usingEl.getTypeParameters().isEmpty();
@@ -3136,10 +3181,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(usingEl))) {
       if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
       if (m.getModifiers().contains(Modifier.ABSTRACT)) continue;
-      // getAllMembers includes the type's own private members, which the generated bridge is in no
-      // position to call. Selecting one says a row fits on the strength of a method javac will not
-      // bind, and the public overload it does bind is then the one that fails.
-      if (m.getModifiers().contains(Modifier.PRIVATE)) continue;
+      // getAllMembers includes members the generated bridge is in no position to call. Selecting
+      // one says a row fits on the strength of a method javac will not bind, and the overload it
+      // does bind is then the one that fails.
+      if (!bindableFrom(m, callerPackage)) continue;
       final var seen = (ExecutableType) types.asMemberOf(owner, m);
       final var param = raw ? types.erasure(seen.getParameterTypes().getFirst()) : seen.getParameterTypes().getFirst();
       if (!types.isAssignable(argType, param)) continue;
