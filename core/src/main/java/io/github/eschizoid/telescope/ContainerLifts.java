@@ -38,7 +38,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * Container-shape lifting for {@link DeepMap}: element-copy Isos for raw same-kind container
@@ -259,9 +258,19 @@ final class ContainerLifts {
    */
   private static Function<Object, Object> fallbackAllocatorFor(
     final Class<?> raw,
-    final Supplier<Object> familyDefault
+    final Class<?> defaultImpl,
+    final Function<Object, Object> defaultAlloc
   ) {
-    if (raw.isInterface() || Modifier.isAbstract(raw.getModifiers())) return ignored -> familyDefault.get();
+    if (raw.isInterface() || Modifier.isAbstract(raw.getModifiers())) {
+      // Only where the default is one of them. A declared type the default does not implement
+      // cannot hold it, so allocating one moves the failure from plan time to the first conversion
+      // and turns a diagnostic naming the type into a bare cast error. The generated path refuses
+      // that pairing outright, so refusing is what keeps the two in step.
+      //
+      // The allocator handed in is the family's sized one, so a type reaching this branch is
+      // allocated exactly as a type the table names would be.
+      return raw.isAssignableFrom(defaultImpl) ? defaultAlloc : null;
+    }
     try {
       final var ctor = MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class));
       return ignored -> {
@@ -273,6 +282,9 @@ final class ContainerLifts {
       };
     } catch (final NoSuchMethodException | IllegalAccessException e) {
       return null;
+      // A missing-registration Error under exact reachability metadata is deliberately not caught:
+      // it names the class the image was built without, which is more useful to an adopter than
+      // this method's fallthrough would be.
     }
   }
 
@@ -300,7 +312,9 @@ final class ContainerLifts {
     };
     final var alloc = Beans.intermediateAllocator(raw);
     if (alloc.get() != null) return ignored -> alloc.get();
-    final var fallback = fallbackAllocatorFor(raw, ArrayList::new);
+    final var fallback = fallbackAllocatorFor(raw, ArrayList.class, input ->
+      new ArrayList<>(((Collection<?>) input).size())
+    );
     if (fallback != null) return fallback;
     // Nothing can make one of these. Falling back to ArrayList would silently write the wrong
     // runtime class into the target field and CCE at the setter, so this throws at plan time with
@@ -326,7 +340,9 @@ final class ContainerLifts {
     };
     final var alloc = Beans.intermediateAllocator(raw);
     if (alloc.get() != null) return ignored -> alloc.get();
-    final var fallback = fallbackAllocatorFor(raw, LinkedHashSet::new);
+    final var fallback = fallbackAllocatorFor(raw, LinkedHashSet.class, input ->
+      LinkedHashSet.newLinkedHashSet(((Collection<?>) input).size())
+    );
     if (fallback != null) return fallback;
     throw new IllegalStateException(
       "Deep map: no allocator for Set subtype " +
@@ -370,7 +386,9 @@ final class ContainerLifts {
     );
     final var alloc = Beans.intermediateAllocator(raw);
     if (alloc.get() != null) return ignored -> alloc.get();
-    final var fallback = fallbackAllocatorFor(raw, LinkedHashMap::new);
+    final var fallback = fallbackAllocatorFor(raw, LinkedHashMap.class, input ->
+      LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size())
+    );
     if (fallback != null) return fallback;
     throw new IllegalStateException(
       "Deep map: no allocator for Map subtype " +

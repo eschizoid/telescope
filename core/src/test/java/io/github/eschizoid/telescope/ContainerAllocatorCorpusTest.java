@@ -15,7 +15,15 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.NavigableSet;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.BiFunction;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -99,12 +107,25 @@ class ContainerAllocatorCorpusTest {
   }
 
   /**
+   * The implementation the generated path picks for an uninstantiable declared type. Three families
+   * name a contract no hash container keeps, so each takes the implementation that keeps it; every
+   * other declaration falls to its family's plain default.
+   */
+  private static Class<?> generatedDefaultFor(final Class<?> c, final Class<?> plainDefault) {
+    if (c == SortedSet.class || c == NavigableSet.class) return TreeSet.class;
+    if (c == SortedMap.class || c == NavigableMap.class) return TreeMap.class;
+    if (c == ConcurrentMap.class) return ConcurrentHashMap.class;
+    return plainDefault;
+  }
+
+  /**
    * The generated path's rule, restated. It names the declared class when that class is one it can
    * write {@code new X<>()} for, and the family's default otherwise — so a type it cannot
    * instantiate is not one it accepts either, and asking the reflective path to handle it would be
    * demanding more than parity.
    */
-  private static boolean generatedPathAllocates(final Class<?> c, final Class<?> fallback) {
+  private static boolean generatedPathAllocates(final Class<?> c, final Class<?> plainDefault) {
+    final var fallback = generatedDefaultFor(c, plainDefault);
     // Nothing can be instantiated for an interface or an abstract class, so the family's default
     // stands in — and only where that default is actually one of them. Where it is not, the
     // generated path emits an allocation the declared field cannot hold, so it is no more able to
@@ -117,29 +138,78 @@ class ContainerAllocatorCorpusTest {
     }
   }
 
-  @Test
-  @DisplayName("every container java.base ships is allocatable by the reflective path")
-  void reflectivePathHandlesEveryJavaBaseContainer() throws IOException {
-    final var corpus = javaBaseContainers();
-    assertTrue(corpus.size() > 20, () -> "the corpus should be the JDK's own, not a handful: " + corpus.size());
+  /**
+   * Adopter-shaped containers, which is most of what a real model declares and no JDK scan finds.
+   */
+  interface MyListIface<E> extends List<E> {}
 
-    final var refused = new LinkedHashSet<String>();
-    for (final var c : corpus) {
+  interface MySetIface<E> extends Set<E> {}
+
+  interface MyMapIface<K, V> extends Map<K, V> {}
+
+  abstract static class MyAbstractList<E> extends ArrayList<E> {
+
+    private static final long serialVersionUID = 1L;
+  }
+
+  static final class MyArrayList<E> extends ArrayList<E> {
+
+    private static final long serialVersionUID = 1L;
+  }
+
+  private static List<Class<?>> corpus() throws IOException {
+    final var out = new ArrayList<Class<?>>(javaBaseContainers());
+    out.addAll(List.of(MyListIface.class, MySetIface.class, MyMapIface.class, MyAbstractList.class, MyArrayList.class));
+    return out;
+  }
+
+  @Test
+  @DisplayName("the reflective path allocates exactly what the generated path allocates, and refuses the" + " rest")
+  void bothPathsAgreeOnEveryContainer() throws IOException {
+    final var types = corpus();
+    assertTrue(types.size() > 20, () -> "the corpus should be the JDK's own plus adopter shapes: " + types.size());
+
+    final var divergent = new LinkedHashSet<String>();
+    final var badRefusals = new LinkedHashSet<String>();
+    for (final var c : types) {
       for (final var family : FAMILIES) {
         if (!family.iface().isAssignableFrom(c)) continue;
-        if (!generatedPathAllocates(c, family.fallback())) continue;
+        final var generatedAllocates = generatedPathAllocates(c, family.fallback());
+        var reflectiveAllocates = true;
         try {
           family.lift().apply(c, c);
+        } catch (final IllegalStateException e) {
+          // A refusal has to arrive here, while the plan is being built, carrying the type's name
+          // and what to do instead. Any other throwable means the plan was built and the failure
+          // moved to conversion time, where it is a bare cast error per call and the fail-fast
+          // registry the starters build at startup no longer catches it.
+          reflectiveAllocates = false;
         } catch (final Throwable t) {
-          refused.add(family.label() + " " + c.getName() + " -> " + t.getClass().getSimpleName());
+          badRefusals.add(family.label() + " " + c.getName() + " -> " + t.getClass().getName());
+          reflectiveAllocates = false;
+        }
+        // Asserted in both directions rather than filtered. Skipping the types the generated path
+        // refuses would leave the reflective path free to accept them and fail later, which is the
+        // worse divergence of the two: a refusal at plan time becomes a cast error per conversion,
+        // and the fail-fast registry the starters build at startup stops catching it.
+        if (generatedAllocates != reflectiveAllocates) {
+          divergent.add(
+            family.label() +
+              " " +
+              c.getName() +
+              " -> generated " +
+              (generatedAllocates ? "allocates" : "refuses") +
+              ", reflective " +
+              (reflectiveAllocates ? "allocates" : "refuses")
+          );
         }
       }
     }
 
+    assertTrue(divergent.isEmpty(), () -> "the two paths disagree on:\n  " + String.join("\n  ", divergent));
     assertTrue(
-      refused.isEmpty(),
-      () ->
-        "the generated path allocates these and the reflective path refuses them:\n  " + String.join("\n  ", refused)
+      badRefusals.isEmpty(),
+      () -> "these are refused, but not at plan time with a diagnostic:\n  " + String.join("\n  ", badRefusals)
     );
   }
 }
