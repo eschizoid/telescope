@@ -30,11 +30,18 @@ tasks.withType<JavaCompile>().configureEach {
     // because :core (io.github.eschizoid.telescope) requires :internal, not the other way around,
     // so javac compiling :internal can't see :core on the modulepath. Runtime resolution and
     // :core's own compile catch any actual export mistakes.
-    // `-Xlint:all` minus the categories that report on how javac was invoked rather than on the code.
-    // `options` is the one that matters with `-Werror`: it fires on the release level this file picks,
-    // so it turns the day a pinned release ages into the obsolete band into a compile failure whose
-    // message is about source levels. Every category that reports on the code stays on, and `all` stays
-    // an open set deliberately -- a toolchain bump discovering a new one is the point of the flag.
+    //
+    // `-Xlint:all` minus the categories that report on how javac was invoked rather than on the
+    // code. `options` is not one `all` switches on -- it is on by default, and naming it here is
+    // the only way off -- and it is the one that matters beside `-Werror`, because it fires on the
+    // release level this file picks. The lowest release level javac still supports rises every few
+    // versions and the version after that refuses it outright, so on the day the lowest reaches the
+    // level pinned above, this module stops compiling with a message about source levels and
+    // nothing to fix in its source.
+    //
+    // The rest of `all` stays on, and stays an open set deliberately -- a toolchain bump finding a
+    // category nobody had seen is the point of the flag. The root build checks that no module pairs
+    // `-Werror` with an unsuppressed `options`, so adding the flag elsewhere cannot inherit this.
     options.compilerArgs.addAll(listOf("-Xlint:all,-processing,-module,-options", "-Werror", "-parameters"))
 }
 
