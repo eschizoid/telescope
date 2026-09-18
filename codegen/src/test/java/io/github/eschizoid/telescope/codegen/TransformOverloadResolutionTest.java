@@ -232,29 +232,29 @@ class TransformOverloadResolutionTest {
   }
 
   private static ProcessorHarness.Compilation compile(final Case c) {
-    return ProcessorHarness.compileFully(
-      List.of(new BridgeProcessor()),
-      List.of(),
-      new JavaFileObject[] {
-        ProcessorHarness.source(
-          "demo.Fn",
-          "package demo;\nimport io.github.eschizoid.telescope.conversion.BridgeFn;\n" + c.fnBody()
-        ),
-        ProcessorHarness.source(
-          "demo.Src",
-          """
-          package demo;
-          import io.github.eschizoid.telescope.annotations.Bridge;
-          import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = {
-            @Transform(field = "v", using = demo.Fn.class%s)
-          })
-          public record Src(%s v) {}
-          """.formatted(c.extra(), c.srcField())
-        ),
-        ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(%s v) {}".formatted(c.tgtField())),
-      }
-    );
+    return ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sourcesFor(c));
+  }
+
+  private static JavaFileObject[] sourcesFor(final Case c) {
+    return new JavaFileObject[] {
+      ProcessorHarness.source(
+        "demo.Fn",
+        "package demo;\nimport io.github.eschizoid.telescope.conversion.BridgeFn;\n" + c.fnBody()
+      ),
+      ProcessorHarness.source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import io.github.eschizoid.telescope.annotations.Transform;
+        @Bridge(value = demo.Tgt.class, transforms = {
+          @Transform(field = "v", using = demo.Fn.class%s)
+        })
+        public record Src(%s v) {}
+        """.formatted(c.extra(), c.srcField())
+      ),
+      ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(%s v) {}".formatted(c.tgtField())),
+    };
   }
 
   @ParameterizedTest(name = "{0}")
@@ -291,16 +291,11 @@ class TransformOverloadResolutionTest {
     // javac would reject on its own still produces exactly the diagnostic a row asserts — and the
     // row passes while describing a shape no user could reach. One of these was an overload of the
     // raw interface's method rather than an implementation of it, and nothing here noticed.
-    final var compilation = ProcessorHarness.compileFully(
-      List.of(),
-      List.of(),
-      new JavaFileObject[] {
-        ProcessorHarness.source(
-          "demo.Fn",
-          "package demo;\nimport io.github.eschizoid.telescope.conversion.BridgeFn;\n" + c.fnBody()
-        ),
-      }
-    );
+    // All three sources, not just the transform. A processor error preempts attribution of every
+    // source in the compilation, so a malformed target or source record is masked exactly as the
+    // transform was -- the row would see the diagnostic it asserts and pass while describing a
+    // program that does not exist.
+    final var compilation = ProcessorHarness.compileFully(List.of(), List.of(), sourcesFor(c));
 
     assertTrue(compilation.success(), () -> "the fixture itself does not compile: " + compilation.errorMessages());
   }
