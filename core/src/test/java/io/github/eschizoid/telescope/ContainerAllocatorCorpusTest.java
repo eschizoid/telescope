@@ -102,6 +102,11 @@ class ContainerAllocatorCorpusTest {
           });
       }
     }
+    // Asserted where the enumeration is produced rather than where it is used. An empty one
+    // satisfies every question anybody asks of it -- "do these all agree", "does none of them
+    // have a builder" -- so a caller that forgets to check its size reports success for having
+    // looked at nothing.
+    assertTrue(out.size() > 20, () -> "the platform's own containers should number dozens: " + out.size());
     return out;
   }
 
@@ -132,10 +137,11 @@ class ContainerAllocatorCorpusTest {
    * <p>What it restates is the allocation guard, not every expression the processor can write. Some
    * routes — the element-preserving copy among them — never reach that guard, so a pair this model
    * calls settled is not necessarily one the processor agrees about. What it does say completely is
-   * that there is no builder route: the reflective path reaches a static {@code builder()} and the
-   * generated one has no equivalent, because emitting the call needs the type arguments the
-   * declaration carries and the builder's own signature supplies. {@link #KNOWN_DIVERGENCES} names
-   * what that costs.
+   * that there is no builder route <em>to a container</em>: the generated path does build POJO
+   * targets through one, and {@code WriteStrategy.BUILDER} selects it, but no route that allocates
+   * a container consults a builder — emitting that call needs the type arguments the declaration
+   * carries and the builder's own signature supplies. {@link #KNOWN_DIVERGENCES} names what that
+   * costs.
    */
   private static boolean generatedPathAllocates(final Class<?> c, final Class<?> plainDefault) {
     final var fallback = generatedDefaultFor(c, plainDefault);
@@ -151,19 +157,39 @@ class ContainerAllocatorCorpusTest {
     }
   }
 
+  /** How a pair is decided by each path, so a recorded divergence names which way it runs. */
+  private record Verdict(boolean generatedAllocates, boolean reflectiveAllocates) {
+    private String render(final String pair) {
+      return (
+        pair +
+        " -> generated " +
+        (generatedAllocates ? "allocates" : "refuses") +
+        ", reflective " +
+        (reflectiveAllocates ? "allocates" : "refuses")
+      );
+    }
+  }
+
   /**
-   * Shapes the two paths are known to disagree on, by name, so a disagreement is a recorded
-   * decision rather than a silence. A new one fails the gate; so does one of these quietly going
-   * away, which would mean the note below has outlived the reason for it.
+   * Pairs the two paths are known to decide differently, by name and by direction, so a
+   * disagreement is a recorded decision rather than a silence. A new one fails the gate; so does
+   * one of these quietly agreeing, or one whose type has left the corpus, since a note about
+   * something nobody checks is the same as a note about something untrue.
+   *
+   * <p>The direction is held as a value rather than written into the key. One of the two is the
+   * harm this file opens by naming — generated accepts, reflective refuses, so a program compiles
+   * and then throws — and the other merely refuses work that would have succeeded, so a register
+   * that could not tell them apart would let the first pass on the strength of the second. Keeping
+   * it structured means rewording the message below cannot fail the gate, which would otherwise
+   * teach the next reader to fix a red gate by pasting a string.
+   *
+   * <p>The one entry: the reflective allocator reaches a static builder and the generated one has
+   * no route to a container through one, because emitting that call needs the builder's own generic
+   * signature rather than just its name. Tracked as a capability of its own. The benign direction.
    */
-  private static final Set<String> KNOWN_DIVERGENCES = Set.of(
-    // The reflective allocator reaches a static builder, and the generated one has no route
-    // to
-    // one: emitting that call needs the builder's own generic signature rather than just its
-    // name. Tracked as a capability of its own. This is the benign direction -- work is
-    // refused
-    // rather than accepted and then failing.
-    "List " + BuildableList.class.getName() + " -> generated refuses, reflective allocates"
+  private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.of(
+    "List " + BuildableList.class.getName(),
+    new Verdict(false, true)
   );
 
   /**
@@ -273,7 +299,6 @@ class ContainerAllocatorCorpusTest {
   @DisplayName("the reflective path allocates exactly what the generated path allocates, and refuses the" + " rest")
   void bothPathsAgreeOnEveryContainer() throws IOException {
     final var types = corpus();
-    assertTrue(types.size() > 20, () -> "the corpus should be the JDK's own plus adopter shapes: " + types.size());
 
     final var divergent = new LinkedHashSet<String>();
     final var observedDivergences = new LinkedHashSet<String>();
@@ -299,21 +324,11 @@ class ContainerAllocatorCorpusTest {
         // refuses would leave the reflective path free to accept them and fail later, which is the
         // worse divergence of the two: a refusal at plan time becomes a cast error per conversion,
         // and the fail-fast registry the starters build at startup stops catching it.
-        // The direction is part of what is recorded. One of the two is the harm this file opens by
-        // naming -- generated accepts, reflective refuses, so a program compiles and then throws --
-        // and the other merely refuses work that would have succeeded. A register that could not
-        // tell them apart would let the first pass on the strength of having recorded the second.
-        final var key =
-          family.label() +
-          " " +
-          c.getName() +
-          " -> generated " +
-          (generatedAllocates ? "allocates" : "refuses") +
-          ", reflective " +
-          (reflectiveAllocates ? "allocates" : "refuses");
+        final var pair = family.label() + " " + c.getName();
+        final var verdict = new Verdict(generatedAllocates, reflectiveAllocates);
         if (generatedAllocates != reflectiveAllocates) {
-          observedDivergences.add(key);
-          if (!KNOWN_DIVERGENCES.contains(key)) divergent.add(key);
+          observedDivergences.add(pair);
+          if (!verdict.equals(KNOWN_DIVERGENCES.get(pair))) divergent.add(verdict.render(pair));
         }
       }
     }
@@ -322,7 +337,7 @@ class ContainerAllocatorCorpusTest {
     // A register entry is only worth its line while the thing it describes is still true. One that
     // has stopped diverging, and one whose type has left the corpus so nothing looks any more, are
     // the same failure: a note about something nobody is checking.
-    final var stale = new LinkedHashSet<>(KNOWN_DIVERGENCES);
+    final var stale = new LinkedHashSet<>(KNOWN_DIVERGENCES.keySet());
     stale.removeAll(observedDivergences);
     assertTrue(
       stale.isEmpty(),
