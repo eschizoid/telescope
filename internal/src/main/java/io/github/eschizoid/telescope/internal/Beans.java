@@ -912,7 +912,10 @@ public final class Beans {
     // user-expected write path. A static builder() takes over when SETTERS isn't applicable
     // (immutable @Builder-only targets), and field injection backs both up for no-arg-ctor targets
     // without setters.
-    if (hasNoArgConstructor(cls) && hasAnySetter(cls)) return settersWriter(cls);
+    if (hasNoArgConstructor(cls) && hasAnySetter(cls)) {
+      // Unless a builder carries everything they carry and more -- see builderCarriesStrictlyMore.
+      return builderCarriesStrictlyMore(cls) ? builderWriter(cls) : settersWriter(cls);
+    }
     if (hasStaticBuilder(cls)) return builderWriter(cls);
     if (hasNoArgConstructor(cls)) return fieldsWriter(cls);
     final var props = propertyNames(cls);
@@ -1109,12 +1112,112 @@ public final class Beans {
     }
   }
 
-  private static boolean hasStaticBuilder(final Class<?> cls) {
+  /**
+   * The type a usable static {@code builder()} returns, or {@code null}. Usable means it also has a
+   * {@code build()}: a class carrying an unrelated method named {@code builder} answers the name
+   * test and then fails when the writer tries to finish with it — and it fails while the path is
+   * being built, so even a read throws.
+   */
+  private static Class<?> builderTypeOf(final Class<?> cls) {
     try {
-      return Modifier.isStatic(cls.getMethod("builder").getModifiers());
+      final var factory = cls.getMethod("builder");
+      if (!Modifier.isStatic(factory.getModifiers())) return null;
+      final var builderType = factory.getReturnType();
+      final var build = builderType.getMethod("build");
+      // Existing is not enough. A static build() binds to nothing the writer can call, and one
+      // returning an unrelated type hands back an object of the wrong class without complaint --
+      // and because the writer is chosen while the path is built, the first costs even a read that
+      // was never going to write anything.
+      if (Modifier.isStatic(build.getModifiers())) return null;
+      // Unrelated, not merely different. What build() is declared to return says nothing about
+      // what it makes: a generic builder's erases to Object, and one on an abstract base names
+      // that base while returning something concrete. Demanding the bean's own type refuses both
+      // -- and this probe also decides the rung for a bean with no setters at all, so refusing
+      // there takes a builder that was working away from it.
+      final var returned = build.getReturnType();
+      if (!cls.isAssignableFrom(returned) && !returned.isAssignableFrom(cls)) return null;
+      return builderType;
     } catch (final NoSuchMethodException e) {
-      return false;
+      return null;
     }
+  }
+
+  private static boolean hasStaticBuilder(final Class<?> cls) {
+    return builderTypeOf(cls) != null;
+  }
+
+  /**
+   * Whether rebuilding through the builder carries everything the setters carry, and something they
+   * do not.
+   *
+   * <p>Both surfaces skip silently: each installs a no-op for a property it has no member for, so
+   * whichever is chosen, a property outside it is dropped from the rebuilt bean without a word.
+   * Choosing between them is therefore a question about both, and asking only whether the setters
+   * are complete answers about the surface being abandoned. A bean whose setters reach one property
+   * and whose builder reaches a different one moves the loss onto the write that was actually
+   * requested, which is worse than the loss it set out to fix.
+   *
+   * <p>So: never move unless nothing currently writable becomes unwritable, and only move when
+   * something unwritable becomes writable. A getter with no backing field is unwritable either way
+   * and leaves the decision where it was.
+   */
+  private static boolean builderCarriesStrictlyMore(final Class<?> cls) {
+    final var builderType = builderTypeOf(cls);
+    if (builderType == null) return false;
+    var gains = false;
+    for (final var property : propertyNames(cls)) {
+      final var bySetter = isSetterConstructible(cls, new String[] { property });
+      final var builderMember = builderSetterFor(builderType, property);
+      final var byBuilder = builderMember != null && builderMemberAccepts(builderMember, cls, property);
+      if (bySetter && !byBuilder) return false;
+      if (byBuilder && !bySetter) gains = true;
+    }
+    return gains;
+  }
+
+  /**
+   * Whether the builder member found for {@code property} can actually hold what it reads as.
+   *
+   * <p>Matching a member by name and arity says a call site can be written, not that the value can
+   * make the trip. A builder taking {@code String...} answers to a {@code List} property by name
+   * and arity and then rejects the list; so does an overload picked by a first match over a method
+   * order the platform does not specify. Deciding to move a bean on that answer turns writes that
+   * were landing into cast failures, which is worse than the loss the move is for.
+   *
+   * <p>Assignability answers the varargs case without naming it — the parameter is an array type,
+   * which no other declaration is assignable from — so a property that genuinely is an array still
+   * reaches a varargs member that can take it.
+   *
+   * <p>The getter's erased return type is what is asked about, being the most that can be known
+   * before a value exists.
+   */
+  private static boolean builderMemberAccepts(final Method member, final Class<?> cls, final String property) {
+    final var parameter = member.getParameterTypes()[0];
+    final var declared = getters(cls).get(property);
+    if (declared == null) return false;
+    final var propertyType = declared.getReturnType();
+    if (parameter.isPrimitive() || propertyType.isPrimitive()) return parameter.equals(propertyType);
+    return parameter.isAssignableFrom(propertyType);
+  }
+
+  /**
+   * The single-argument builder method that carries {@code name}, by the rule BuilderWriter binds.
+   */
+  private static Method builderSetterFor(final Class<?> builderType, final String name) {
+    final var set = "set" + capitalize(name);
+    final var with = "with" + capitalize(name);
+    for (final var m : builderType.getMethods()) {
+      if (m.getParameterCount() != 1) continue;
+      // Every builder inherits Object's methods, and a property named `wait` or `equals` finds one
+      // of the two that take a single argument. Binding it fails on a module that does not open
+      // java.lang, so the match has to exclude what every type has rather than what this builder
+      // declares -- which skips nothing of the builder's own, since `wait(long)` is final and an
+      // overload or an override is declared on the builder itself.
+      if (m.getDeclaringClass() == Object.class) continue;
+      final var mn = m.getName();
+      if (mn.equals(name) || mn.equals(set) || mn.equals(with)) return m;
+    }
+    return null;
   }
 
   private static boolean hasAnySetter(final Class<?> cls) {
@@ -1508,17 +1611,7 @@ public final class Beans {
      */
     @SuppressWarnings("unchecked")
     private Object buildSetterInvoker(final String name) {
-      final var set = "set" + capitalize(name);
-      final var with = "with" + capitalize(name);
-      Method setter = null;
-      for (final var m : builderType.getMethods()) {
-        if (m.getParameterCount() != 1) continue;
-        final var mn = m.getName();
-        if (mn.equals(name) || mn.equals(set) || mn.equals(with)) {
-          setter = m;
-          break;
-        }
-      }
+      final var setter = builderSetterFor(builderType, name);
       // Align with SettersWriter and the captured-writer path — when a target property has no
       // matching builder setter (getter-only on the target POJO, computed-only value, etc.),
       // silently skip rather than throw. The names array passed to
