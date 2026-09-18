@@ -1180,21 +1180,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * The value written into a slot nothing else fills, as source text.
    *
-   * <p>A bare {@code 0} is an {@code int} literal, and a method invocation permits no narrowing, so
-   * the narrower two need a cast to reach their own parameter. The wider ones widen from {@code
-   * int} on their own, and {@code char} has a literal of its own rather than a numeric one.
+   * <p>Every emission of this reaches an argument position, and a method invocation permits no
+   * narrowing — so {@code byte} and {@code short} need the cast that {@code int} and wider do not,
+   * and a table that gave them a bare {@code 0} produced a bridge that did not compile. The table
+   * that gets this right is inherited, and this asks it rather than keeping a second copy: the copy
+   * was how the two came to disagree, and asking puts this under the test that pins the original
+   * against the runtime's own defaults.
    */
   private static String defaultLiteralFor(final TypeMirror type) {
-    return switch (type.getKind()) {
-      case BOOLEAN -> "false";
-      case CHAR -> "'\\0'";
-      case BYTE -> "(byte) 0";
-      case SHORT -> "(short) 0";
-      case INT, LONG -> "0";
-      case FLOAT -> "0.0f";
-      case DOUBLE -> "0.0";
-      default -> "null";
-    };
+    return primitiveDefaultLiteral(type.getKind()).orElse("null");
   }
 
   private void generate(
