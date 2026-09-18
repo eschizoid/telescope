@@ -229,9 +229,9 @@ class TransformWriteSlotTest {
   @Test
   @DisplayName("the source's own slot decides the backward direction, as the target's does the forward")
   void theSourceSlotDecidesBackward() {
-    // Every other row here is forward-only, so `backwardFits` short-circuits and the source-side
-    // slot is never read -- reverting that half of the change leaves them all green. This row is
-    // two-way, so the backward store is the thing under test.
+    // A forward-only row short-circuits `backwardFits`, so the source-side slot is never read --
+    // and while every row was one, reverting that half of the change left them all green. This row
+    // and its control below are two-way, so the backward store is the thing under test.
     //
     // Backward hands back Object and stores it into the source. Its getter says String and its
     // setter takes Object, and the setter is what the rebuild writes.
@@ -363,6 +363,145 @@ class TransformWriteSlotTest {
     assertFalse(
       compilation.errorMessages().contains("NullPointerException"),
       () -> "and the processor answers rather than dying: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a setter no overload can take is refused by the check, not by javac")
+  void noApplicableSetterIsStillRefusedHere() {
+    // Nothing binds here at all, which is a different answer from several binding equally. With
+    // nothing applicable, naming the setter is order-independent -- whichever one is named, it
+    // does not take the value -- so the member is still what refuses, and giving that case back to
+    // the declared type gives up the refusal in the one case the slot was added for.
+    final var compilation = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      new JavaFileObject[] {
+        ProcessorHarness.source(
+          "demo.Fn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class Fn implements BridgeFn<String, Double> {
+            @Override public Double forward(final String s) { return 0.0; }
+            @Override public String backward(final Double d) { return String.valueOf(d); }
+          }
+          """
+        ),
+        ProcessorHarness.source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.Tgt.class, transforms = {
+            @Transform(field = "v", using = demo.Fn.class, forwardOnly = true)
+          })
+          public record Src(String v) {}
+          """
+        ),
+        ProcessorHarness.source(
+          "demo.Tgt",
+          """
+          package demo;
+          public class Tgt {
+            private Number v;
+            public Tgt() {}
+            public Number getV() { return v; }
+            public void setV(final Integer v) { this.v = v; }
+          }
+          """
+        ),
+      }
+    );
+
+    assertFalse(compilation.success(), "a Double reaches no setter here, so the row has to be refused");
+    assertTrue(
+      compilation.hasError("@Transform field=\"v\""),
+      () -> "and refused here, not by javac inside the generated file: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("cannot be converted to"),
+      () -> "the raw javac error is what this replaces: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a refusal names the member only when the member is what refused")
+  void theRefusalNamesTheSlotOnlyWhenTheSlotRefused() {
+    // A row can fail on the read instead -- the transform will not take what the getter gives --
+    // and there a member that accepts the value perfectly well had no part in it. Naming it then
+    // points the reader at something that is not the problem.
+    final var readRefused = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      new JavaFileObject[] {
+        ProcessorHarness.source(
+          "demo.Fn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          public final class Fn implements BridgeFn<Integer, Object> {
+            @Override public Object forward(final Integer i) { return i; }
+            @Override public Integer backward(final Object o) { return 0; }
+          }
+          """
+        ),
+        ProcessorHarness.source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.Tgt.class, transforms = {
+            @Transform(field = "v", using = demo.Fn.class, forwardOnly = true)
+          })
+          public record Src(String v) {}
+          """
+        ),
+        ProcessorHarness.source(
+          "demo.Tgt",
+          """
+          package demo;
+          public class Tgt {
+            private String v;
+            public Tgt() {}
+            public String getV() { return v; }
+            public void setV(final Object v) { this.v = String.valueOf(v); }
+          }
+          """
+        ),
+      }
+    );
+
+    assertFalse(readRefused.success(), "the transform will not take a String, so the row is refused");
+    assertFalse(
+      readRefused.errorMessages().contains("written through"),
+      () -> "the setter takes the value and had no part in this: " + readRefused.errorMessages()
+    );
+
+    // And where the store is what refused, the member is named -- otherwise the message says a
+    // transform does not carry String to String while the type that refused appears nowhere.
+    final var storeRefused = compile(
+      """
+      public class Tgt {
+        private String v;
+        private Tgt() {}
+        public String getV() { return v; }
+        public static Builder builder() { return new Builder(); }
+        public static final class Builder {
+          private final Tgt held = new Tgt();
+          public Builder v(final Integer v) { held.v = String.valueOf(v); return this; }
+          public Tgt build() { return held; }
+        }
+      }
+      """
+    );
+
+    assertFalse(storeRefused.success());
+    assertTrue(
+      storeRefused.errorMessages().contains("written through"),
+      () -> "the builder method is what refused, so it has to appear: " + storeRefused.errorMessages()
     );
   }
 

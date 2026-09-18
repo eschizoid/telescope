@@ -1402,23 +1402,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // narrower refuses one it does. So the read sides compare against what the field is
           // declared as, and the store sides against the member forward and backward will write.
           //
-          // Patch writes through the same member and is not checked here: what it stores is a
+          // Patch writes through the same member and is not checked here. What it stores is a
           // conditional between the converted value and the base's own, whose type is the join of
-          // the two rather than either. A slot that takes both still takes the join, so what this
-          // accepts patch carries -- but a slot that takes only the join is not something this
-          // asks about.
+          // the two rather than either -- and this asks only whether the slot takes the converted
+          // value. A slot narrower than the getter takes that and still refuses the join, so patch
+          // has shapes this accepts and javac does not.
           //
           // The rebuild is asked rather than modelled. Guessing from the setter alone is what makes
           // this wrong in both directions at once: a target whose rebuild goes through a builder or
           // a name-matched constructor would be judged against a setter nothing calls, and the row
           // accepted on the strength of it emits code that does not compile.
-          // A direction nothing describes has no value to ask a slot about -- neither a bound
-          // member
-          // nor the interface's own arguments say what it stores -- and the guard above lets such a
-          // row through whenever the other direction carries it. Asking anyway hands a null to the
-          // resolver, which is a crash inside the processor rather than a refusal from it.
-          final var targetSlot =
-            fwdGives == null ? null : writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage);
+          // Backward is the direction that can have nothing to say: a forward-only row whose
+          // transform binds no backward member and carries no type arguments stores a value that
+          // does not exist, and the guard above lets the row through because the direction it is
+          // about does carry. Asking a slot about that hands a null to the resolver, which is a
+          // crash inside the processor rather than a refusal from it. Forward has no such arm --
+          // past that guard it always has either a bound member or the arguments it required.
+          final var targetSlot = writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage);
           final var sourceSlot =
             bwdGives == null ? null : writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage);
           final var storesInto = targetSlot == null ? tfType : targetSlot;
@@ -1441,8 +1441,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             // appears nowhere.
             final var slot = forwardFits ? sourceSlot : targetSlot;
             final var declared = forwardFits ? sfType : tfType;
+            // Named only where the store is what refused. A row can fail on the read alone -- the
+            // transform will not take what the getter gives -- and a member that accepts the value
+            // perfectly well had no part in that, so printing it points at the wrong thing.
+            final var storeRefused = forwardFits
+              ? !types.isAssignable(bwdGives, storesBack)
+              : !types.isAssignable(fwdGives, storesInto);
             final var into =
-              slot == null || types.isSameType(slot, declared) ? "" : ", which is written through " + slot;
+              !storeRefused || slot == null || types.isSameType(slot, declared)
+                ? ""
+                : ", and the member it is written through takes " + slot;
             error(
               source,
               "@Transform field=\"" +
@@ -3246,17 +3254,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * @return what the call site binds, that no overload applies, or that two apply equally
    */
   private Resolution resolvedFn(
-    final TypeElement usingEl,
+    final TypeElement declaringType,
     final String name,
     final TypeMirror argType,
     final PackageElement callerPackage
   ) {
     final var types = processingEnv.getTypeUtils();
-    final var owner = (DeclaredType) usingEl.asType();
-    final var raw = !usingEl.getTypeParameters().isEmpty();
+    final var owner = (DeclaredType) declaringType.asType();
+    final var raw = !declaringType.getTypeParameters().isEmpty();
     final var applicable = new ArrayList<ExecutableType>();
     final var strict = new ArrayList<ExecutableType>();
-    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(usingEl))) {
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(declaringType))) {
       if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
       if (m.getModifiers().contains(Modifier.ABSTRACT)) continue;
       // getAllMembers includes members the generated bridge is in no position to call. Selecting
@@ -4097,14 +4105,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // whichever one it binds for the value being stored -- not the first of that name, which
       // makes the answer depend on declaration order while the emitted text does not.
       //
-      // Where no single overload binds, there is no slot to answer with. Falling back to the first
-      // of that name would put the order-dependence back exactly where it was removed: an ambiguous
-      // set of setters would be judged against whichever happened to be written first. Null leaves
-      // the caller on the declared type, which is order-independent, and javac still refuses the
-      // call it cannot bind.
-      case SETTERS -> resolvedFn(to, "set" + capitalize(field), stored, callerPackage) instanceof Resolution.Bound bound
-        ? bound.member().getParameterTypes().getFirst()
-        : null;
+      // The two ways this can fail are different answers. Ambiguous means several bind equally, so
+      // taking the first of that name would judge the row against whichever was written first --
+      // the order-dependence this resolver was brought in to remove. There is no slot, and the
+      // declared type stands.
+      //
+      // None means nothing binds at all, and there naming the setter is order-independent:
+      // whichever
+      // one it names, it does not take the value, so the answer is refuse either way. Handing that
+      // back to the declared type gives up the refusal in the one case the member is what refuses.
+      case SETTERS -> switch (resolvedFn(to, "set" + capitalize(field), stored, callerPackage)) {
+        case Resolution.Bound bound -> bound.member().getParameterTypes().getFirst();
+        case Resolution.Ambiguous ignored -> null;
+        case Resolution.None ignored -> setterParameter(to, field);
+      };
       case NONE -> null;
     };
   }
