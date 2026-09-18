@@ -210,3 +210,44 @@ jreleaser {
         }
     }
 }
+
+// A module that treats warnings as errors must not also lint how javac was invoked. The `options`
+// category is on by default -- `-Xlint:all` does not turn it on and dropping `all` does not turn it
+// off -- so the only way off is naming it, and `-Werror` is what turns it into a failed build.
+//
+// What it reports is the compiler invocation: a `--release` at the lowest level still supported,
+// an `--add-opens` that does nothing at compile time. The first is a dated bomb, since the lowest
+// supported level rises with each few releases and the day it reaches this build's pinned 21 every
+// `-Werror` module stops compiling with a message about source levels and nothing to fix.
+//
+// Checked here rather than trusted, because the pairing is easy to reintroduce: a module gains
+// `-Werror` years from now and inherits the bomb silently, and nothing about that edit looks like
+// it touched this.
+//
+// It reads what each task is configured with, so a `doFirst` that rewrites `compilerArgs` is past
+// it -- `:benchmarks` already does that to its own list.
+gradle.projectsEvaluated {
+    val unguarded = allprojects.flatMap { project ->
+        project.tasks.withType(JavaCompile::class.java).mapNotNull { task ->
+            val args = task.options.compilerArgs
+            // Read as keys rather than as a string. A module carrying no `-Xlint:` at all is
+            // exposed exactly as one carrying `-Xlint:all`, since the category is on either way --
+            // and that module is the likeliest next adopter of `-Werror`, precisely because its
+            // compiler arguments look like they have nothing to do with linting.
+            val keys = args.filter { it.startsWith("-Xlint:") }
+                .flatMap { it.removePrefix("-Xlint:").split(",") }
+            val silenced = keys.contains("-options") || keys.contains("none")
+            if (args.contains("-Werror") && !silenced) {
+                "${project.path}:${task.name}" + keys.joinToString(prefix = " has -Xlint:", separator = ",")
+                    .takeIf { keys.isNotEmpty() }.orEmpty()
+            } else {
+                null
+            }
+        }
+    }
+    require(unguarded.isEmpty()) {
+        "these treat warnings as errors while still linting the compiler invocation, so a future " +
+            "toolchain will fail them for a reason outside their source — add `-options` to the " +
+            "`-Xlint:` list:\n  " + unguarded.joinToString("\n  ")
+    }
+}

@@ -30,7 +30,19 @@ tasks.withType<JavaCompile>().configureEach {
     // -Werror because one of these warnings earns its keep here: a javadoc block left above the
     // wrong member after an insertion is reported as dangling, and that is the only automatic
     // signal for a comment that has drifted off the thing it documents. Advisory, it scrolls past.
-    options.compilerArgs.addAll(listOf("-Xlint:all,-processing", "-parameters", "-Werror"))
+    //
+    // `-Xlint:all` minus the categories that report on how javac was invoked rather than on the
+    // code. `options` is not one `all` switches on -- it is on by default, and naming it here is
+    // the only way off -- and it is the one that matters beside `-Werror`, because it fires on the
+    // release level this file picks. The lowest release level javac still supports rises every few
+    // versions and thereafter refuses anything below it outright, so on the day the lowest reaches the
+    // level pinned above, this module stops compiling with a message about source levels and
+    // nothing to fix in its source.
+    //
+    // The rest of `all` stays on, and stays an open set deliberately -- a toolchain bump finding a
+    // category nobody had seen is the point of the flag. The root build checks that no module pairs
+    // `-Werror` with an unsuppressed `options`, so adding the flag elsewhere cannot inherit this.
+    options.compilerArgs.addAll(listOf("-Xlint:all,-processing,-options", "-parameters", "-Werror"))
 }
 
 tasks.withType<Test>().configureEach {
