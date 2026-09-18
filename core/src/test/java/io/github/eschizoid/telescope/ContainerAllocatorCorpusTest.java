@@ -36,9 +36,14 @@ import org.junit.jupiter.api.Test;
  * under {@code @Bridge} and throws under {@code mapper(...)}.
  *
  * <p>A test that names the container types it checks can only cover the ones somebody thought of.
- * This enumerates them from {@code java.base} itself, so a type nobody remembered is still checked,
- * and restates the generated path's rule — allocate the declared class where it can be
- * instantiated, otherwise the family default — as the thing the reflective path has to agree with.
+ * This enumerates them from {@code java.base} itself and restates the generated path's rule —
+ * allocate the declared class where it can be instantiated, otherwise the family default — as the
+ * thing the reflective path has to agree with.
+ *
+ * <p>The enumeration covers what the platform declares, which is not the same as covering every
+ * shape. A container reached through a static {@code builder()} is one no {@code java.base} scan
+ * can produce, because no JDK container has one — so the adopter-shaped types below are not a
+ * convenience beside the enumeration, they are the only way those shapes are seen at all.
  *
  * <p>Restating that rule here rather than importing it is the cost of this shape: the two could
  * drift. It is two lines guarding thirty-odd types, which is a trade worth making until the rule
@@ -123,6 +128,12 @@ class ContainerAllocatorCorpusTest {
    * write {@code new X<>()} for, and the family's default otherwise — so a type it cannot
    * instantiate is not one it accepts either, and asking the reflective path to handle it would be
    * demanding more than parity.
+   *
+   * <p>{@code new X<>()} is the whole of what it can write. The reflective path has a second route,
+   * through a static {@code builder()}, and the generated one has no equivalent — emitting a
+   * builder call needs the type arguments the declaration carries and the builder's own signature
+   * supplies, which is a capability rather than an oversight. {@link #KNOWN_DIVERGENCES} names what
+   * that costs.
    */
   private static boolean generatedPathAllocates(final Class<?> c, final Class<?> plainDefault) {
     final var fallback = generatedDefaultFor(c, plainDefault);
@@ -136,6 +147,50 @@ class ContainerAllocatorCorpusTest {
     } catch (final NoSuchMethodException e) {
       return false;
     }
+  }
+
+  /**
+   * Shapes the two paths are known to disagree on, by name, so a disagreement is a recorded
+   * decision rather than a silence. A new one fails the gate; so does one of these quietly going
+   * away, which would mean the note below has outlived the reason for it.
+   */
+  private static final Set<String> KNOWN_DIVERGENCES = Set.of(
+    // The reflective allocator reaches a static builder(); the generated one writes `new
+    // X<>()` and
+    // has no builder route. Tracked as its own capability, since emitting the call needs the
+    // builder's generic signature rather than just its name.
+    "List " + BuildableList.class.getName()
+  );
+
+  /**
+   * Abstract, with no public constructor and a static {@code builder()} that makes something
+   * concrete — the shape a {@code java.base} enumeration structurally cannot produce, since no JDK
+   * container has a builder.
+   */
+  public abstract static class BuildableList<E> extends ArrayList<E> {
+
+    private static final long serialVersionUID = 1L;
+
+    protected BuildableList() {}
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    public static final class Builder {
+
+      public BuildableList<Object> build() {
+        return new BuildableListImpl<>();
+      }
+    }
+  }
+
+  /** What that builder makes. */
+  public static final class BuildableListImpl<E> extends BuildableList<E> {
+
+    private static final long serialVersionUID = 1L;
+
+    public BuildableListImpl() {}
   }
 
   /**
@@ -170,7 +225,16 @@ class ContainerAllocatorCorpusTest {
 
   private static List<Class<?>> corpus() throws IOException {
     final var out = new ArrayList<Class<?>>(javaBaseContainers());
-    out.addAll(List.of(MyListIface.class, MySetIface.class, MyMapIface.class, MyAbstractList.class, MyArrayList.class));
+    out.addAll(
+      List.of(
+        MyListIface.class,
+        MySetIface.class,
+        MyMapIface.class,
+        MyAbstractList.class,
+        MyArrayList.class,
+        BuildableList.class
+      )
+    );
     return out;
   }
 
@@ -181,6 +245,7 @@ class ContainerAllocatorCorpusTest {
     assertTrue(types.size() > 20, () -> "the corpus should be the JDK's own plus adopter shapes: " + types.size());
 
     final var divergent = new LinkedHashSet<String>();
+    final var observedDivergences = new LinkedHashSet<String>();
     final var badRefusals = new LinkedHashSet<String>();
     for (final var c : types) {
       for (final var family : FAMILIES) {
@@ -203,21 +268,32 @@ class ContainerAllocatorCorpusTest {
         // refuses would leave the reflective path free to accept them and fail later, which is the
         // worse divergence of the two: a refusal at plan time becomes a cast error per conversion,
         // and the fail-fast registry the starters build at startup stops catching it.
+        final var key = family.label() + " " + c.getName();
         if (generatedAllocates != reflectiveAllocates) {
-          divergent.add(
-            family.label() +
-              " " +
-              c.getName() +
-              " -> generated " +
-              (generatedAllocates ? "allocates" : "refuses") +
-              ", reflective " +
-              (reflectiveAllocates ? "allocates" : "refuses")
-          );
+          observedDivergences.add(key);
+          if (!KNOWN_DIVERGENCES.contains(key)) {
+            divergent.add(
+              key +
+                " -> generated " +
+                (generatedAllocates ? "allocates" : "refuses") +
+                ", reflective " +
+                (reflectiveAllocates ? "allocates" : "refuses")
+            );
+          }
         }
       }
     }
 
     assertTrue(divergent.isEmpty(), () -> "the two paths disagree on:\n  " + String.join("\n  ", divergent));
+    // A register entry is only worth its line while the thing it describes is still true. One that
+    // has stopped diverging, and one whose type has left the corpus so nothing looks any more, are
+    // the same failure: a note about something nobody is checking.
+    final var stale = new LinkedHashSet<>(KNOWN_DIVERGENCES);
+    stale.removeAll(observedDivergences);
+    assertTrue(
+      stale.isEmpty(),
+      () -> "recorded as diverging, but not observed to — resolved, or no longer in the corpus:\n  " + stale
+    );
     assertTrue(
       badRefusals.isEmpty(),
       () -> "these are refused, but not at plan time with a diagnostic:\n  " + String.join("\n  ", badRefusals)
