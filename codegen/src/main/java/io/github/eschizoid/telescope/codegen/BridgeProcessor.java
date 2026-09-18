@@ -1177,15 +1177,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return b.toString();
   }
 
+  /**
+   * The value written into a slot nothing else fills, as source text.
+   *
+   * <p>Every emission of this reaches an argument position, and a method invocation permits no
+   * narrowing — so {@code byte} and {@code short} need the cast that {@code int} and wider do not.
+   * The table that gets this right is inherited, and this asks it rather than keeping a second
+   * copy, which puts it under the test that pins the original against the runtime's own defaults.
+   */
   private static String defaultLiteralFor(final TypeMirror type) {
-    return switch (type.getKind()) {
-      case BOOLEAN -> "false";
-      case CHAR -> "'\\0'";
-      case BYTE, SHORT, INT, LONG -> "0";
-      case FLOAT -> "0.0f";
-      case DOUBLE -> "0.0";
-      default -> "null";
-    };
+    return primitiveDefaultLiteral(type.getKind()).orElse("null");
   }
 
   private void generate(
