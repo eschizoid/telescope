@@ -116,12 +116,17 @@ class TransformOverloadResolutionTest {
   /**
    * Raw, so there are no type arguments to stand in for a direction the resolver cannot bind. Its
    * forward does not fit and its backward is ambiguous — two independent problems in one class.
+   *
+   * <p>It implements the raw interface's own two methods rather than overloads of them. A class
+   * that does not is rejected by javac on its own, and a processor error stops compilation before
+   * the class body is attributed — so the row would pass on a diagnostic about the transform while
+   * the fixture was a class nobody could write.
    */
   private static final String RAW_AMBIGUOUS_BACKWARD = """
     @SuppressWarnings({ "rawtypes", "unchecked" })
     public final class Fn implements BridgeFn {
-      public Object forward(final Integer i) { return i; }
-      public Integer backward(final Object o) { return 0; }
+      public Object forward(final Object o) { return o; }
+      public Object backward(final Object o) { return 0; }
       public Integer backward(final CharSequence c) { return 1; }
       public Integer backward(final Comparable<?> c) { return 2; }
     }
@@ -276,6 +281,28 @@ class TransformOverloadResolutionTest {
       compilation.hasError(c.expected()),
       () -> "refused for the wrong reason, wanted \"" + c.expected() + "\": " + compilation.errorMessages()
     );
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("cases")
+  @DisplayName("every transform in the matrix is a class somebody could actually write")
+  void everyFixtureCompilesOnItsOwn(final Case c) {
+    // A processor error stops compilation before class bodies are attributed, so a fixture that
+    // javac would reject on its own still produces exactly the diagnostic a row asserts — and the
+    // row passes while describing a shape no user could reach. One of these was an overload of the
+    // raw interface's method rather than an implementation of it, and nothing here noticed.
+    final var compilation = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      new JavaFileObject[] {
+        ProcessorHarness.source(
+          "demo.Fn",
+          "package demo;\nimport io.github.eschizoid.telescope.conversion.BridgeFn;\n" + c.fnBody()
+        ),
+      }
+    );
+
+    assertTrue(compilation.success(), () -> "the fixture itself does not compile: " + compilation.errorMessages());
   }
 
   @ParameterizedTest(name = "{0}")
