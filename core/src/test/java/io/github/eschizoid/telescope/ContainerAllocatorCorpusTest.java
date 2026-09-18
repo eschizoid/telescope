@@ -82,7 +82,10 @@ class ContainerAllocatorCorpusTest {
     );
     final var out = new ArrayList<Class<?>>();
     for (final var root : roots) {
-      if (!Files.isDirectory(root)) continue;
+      // Every java.base has both of these, so a missing one is the enumeration being wrong rather
+      // than a platform that lacks it. Skipping it quietly is what lets a whole root disappear.
+      assertTrue(Files.isDirectory(root), () -> "the enumeration is pointed at a root that is not there: " + root);
+      final var before = out.size();
       try (Stream<Path> files = Files.list(root)) {
         files
           .map(p -> p.getFileName().toString())
@@ -101,12 +104,16 @@ class ContainerAllocatorCorpusTest {
             }
           });
       }
+      // Per root, not over the total. The two are far from equal -- one holds roughly twice the
+      // other -- so a total large enough to look healthy is reached with the smaller one missing
+      // entirely, and what goes with it is every concurrent container, which is exactly the set
+      // the special-case tables on both paths exist for.
+      assertTrue(out.size() > before, () -> "no container came from " + root);
     }
     // Asserted where the enumeration is produced rather than where it is used. An empty one
     // satisfies every question anybody asks of it -- "do these all agree", "does none of them
-    // have a builder" -- so a caller that forgets to check its size reports success for having
-    // looked at nothing.
-    assertTrue(out.size() > 20, () -> "the platform's own containers should number dozens: " + out.size());
+    // have a builder" -- so a caller that forgets to check reports success for having looked at
+    // nothing.
     return out;
   }
 
