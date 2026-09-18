@@ -25,7 +25,19 @@ import org.junit.jupiter.params.provider.ValueSource;
  */
 class PrimitiveDefaultLiteralTest {
 
-  /** The source text each primitive's default should be, which is the JLS default written out. */
+  /**
+   * The source text each primitive's default should be. Stated here rather than read from the
+   * production table, which would make every row below tautological — and safe to state, because
+   * these are the JLS defaults and Java's literal syntax rather than a decision this project makes.
+   *
+   * <p>Three different obligations sit in one map, and a red row means different things across
+   * them. Most are forced: change {@code (byte) 0} or {@code '\0'} and the emitted code stops
+   * compiling or stops meaning the same thing. {@code 0L} is not forced by narrowing — a bare
+   * {@code 0} widens — but a setter is emitted by name and javac binds the overload, so a target
+   * declaring both {@code setX(int)} and {@code setX(long)} takes the wrong one. {@code 0.0d} is
+   * neither: it is the same literal as {@code 0.0} and no program can tell them apart, so that row
+   * pins a spelling and a red one is cosmetic.
+   */
   private static final Map<String, String> EXPECTED = Map.of(
     "byte",
     "(byte) 0",
@@ -58,6 +70,11 @@ class PrimitiveDefaultLiteralTest {
     };
   }
 
+  /**
+   * A value other than the primitive's default, so the stub is visibly inert. A forward-only
+   * transform emits no backward call at all, so this is never invoked by anything generated —
+   * writing the default here would invite a reader to think otherwise.
+   */
   private static String nonZeroOf(final String primitive) {
     return switch (primitive) {
       case "boolean" -> "true";
@@ -146,8 +163,9 @@ class PrimitiveDefaultLiteralTest {
   @DisplayName("the same literal has to reach a setter parameter, which is a different emission")
   void leniencyFillsTargetOnlyFieldsThroughSetters(final String primitive) {
     // A record rebuild passes constructor arguments; a bean rebuild calls setters. Both are
-    // invocations, so both refuse a widening literal — but they are different emitted text, and
-    // only one of them was ever covered.
+    // invocations, so both refuse a narrowing literal, and they are different emitted text. The
+    // receiver and the terminator are part of the assertion because the property name alone is a
+    // suffix of others -- `unsetExtra(` and `resetExtra(` both contain it.
     final var compilation = ProcessorHarness.compileFully(
       List.of(new BridgeProcessor()),
       List.of(),
@@ -186,7 +204,7 @@ class PrimitiveDefaultLiteralTest {
     final var bridge = compilation.generated().get("demo.SrcBridge");
     assertNotNull(bridge, "no bridge was emitted");
     assertTrue(
-      bridge.contains("setExtra(" + EXPECTED.get(primitive) + ")"),
+      bridge.contains("out.setExtra(" + EXPECTED.get(primitive) + ");"),
       () -> "the setter should be handed " + EXPECTED.get(primitive)
     );
   }
