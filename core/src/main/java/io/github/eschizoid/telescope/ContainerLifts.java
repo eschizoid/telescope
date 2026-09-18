@@ -161,26 +161,62 @@ final class ContainerLifts {
               return fresh;
             }
           );
-    final boolean checkComparator = set && elementIso != Iso.<Object>identity();
+    // A comparator is a problem only for the side being built. Carrying one across a conversion
+    // would mean ordering the new element type with an ordering written for the old one, which
+    // cannot be done -- but a target that keeps no order has nothing to carry, and refusing there
+    // refuses a conversion that would have worked. So each direction asks about its own output.
+    final boolean converts = elementIso != Iso.<Object>identity();
+    final boolean buildingSortedTarget = set && converts && keepsOrder(tgtRaw);
+    final boolean buildingSortedSource = set && converts && keepsOrder(srcRaw);
+    final boolean sortedEitherWay = set && (keepsOrder(tgtRaw) || keepsOrder(srcRaw));
     final boolean finish = copyOnWrite(srcRaw) || copyOnWrite(tgtRaw);
-    if (!checkComparator && !finish) return loop;
+    if (!buildingSortedTarget && !buildingSortedSource && !sortedEitherWay && !finish) return loop;
     return Iso.of(
       src -> {
-        if (checkComparator) checkComparator(src);
-        return finishCollection(loop.to(src), tgtRaw);
+        if (buildingSortedTarget) refuseCarriedComparator(src);
+        return finishCollection(orderable(() -> loop.to(src), tgtRaw), tgtRaw);
       },
       tgt -> {
-        if (checkComparator) checkComparator(tgt);
-        return finishCollection(loop.from(tgt), srcRaw);
+        if (buildingSortedSource) refuseCarriedComparator(tgt);
+        return finishCollection(orderable(() -> loop.from(tgt), srcRaw), srcRaw);
       }
     );
   }
 
-  private static void checkComparator(final Object input) {
+  /** Whether a declared raw type keeps its elements in an order, and so needs them comparable. */
+  private static boolean keepsOrder(final Class<?> raw) {
+    return SortedSet.class.isAssignableFrom(raw);
+  }
+
+  private static void refuseCarriedComparator(final Object input) {
     if (input instanceof SortedSet<?> sorted && sorted.comparator() != null) {
       throw new IllegalStateException(
         "Deep map: a custom sorted-set comparator cannot be reused with changed " +
           "element types. Supply an explicit Mapping.via(...) row with a target comparator."
+      );
+    }
+  }
+
+  /**
+   * Builds the container, turning the cast a sorted one raises on its first insert into a refusal
+   * that says whose element type is not orderable and what to do about it.
+   *
+   * <p>The bare cast names the element class and {@code Comparable} and nothing else — not the
+   * field, not the container, not the library. It also never happens for an empty source, since
+   * nothing is inserted, so the shape reads as working until a row arrives with something in it.
+   */
+  private static Object orderable(final Supplier<Object> build, final Class<?> outRaw) {
+    if (!keepsOrder(outRaw)) return build.get();
+    try {
+      return build.get();
+    } catch (final ClassCastException e) {
+      throw new IllegalStateException(
+        "Deep map: " +
+          outRaw.getName() +
+          " keeps its elements in order, and the converted element type does not implement" +
+          " Comparable. Give the target an explicit comparator through a Mapping.via(...)" +
+          " row, or declare it as a set that keeps no order.",
+        e
       );
     }
   }
