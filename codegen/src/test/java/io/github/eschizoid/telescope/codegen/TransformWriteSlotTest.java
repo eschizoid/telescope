@@ -15,9 +15,9 @@ import org.junit.jupiter.api.Test;
  * transform against the declaration asks about a member the emission may never write through.
  *
  * <p>Which member that is depends on the rung the rebuild stops at, and the rungs disagree: the
- * same target can carry a wide setter the emission ignores because a builder outranks it. That is
- * why the answer cannot come from the setter alone, and why a previous attempt at this traded a
- * conservative refusal for an emission that did not compile.
+ * same target can carry a wide setter the emission ignores because a builder outranks it. So the
+ * answer cannot come from the setter alone — a target judged against a member nothing calls is one
+ * whose row is accepted and whose generated file then fails to compile.
  *
  * <p>These compile through the full pipeline. A wrong verdict in the accepting direction is only
  * visible once the generated file is attributed, which the processing-only harness never does.
@@ -145,8 +145,9 @@ class TransformWriteSlotTest {
   @Test
   @DisplayName("a name-matched constructor parameter wider than its getter is the slot")
   void aWiderConstructorParameterIsTheSlot() {
-    // The constructor rung, which outranks both of the others. Its parameter is what the emitted
-    // `new Tgt(...)` has to accept.
+    // The constructor rung. Its parameter is what the emitted `new Tgt(...)` has to accept. This
+    // fixture has no other rung to outrank -- no builder and no no-argument constructor -- so it
+    // says the constructor's parameter is the slot, not that the constructor wins a contest.
     assertAccepted(
       compile(
         """
@@ -189,6 +190,93 @@ class TransformWriteSlotTest {
     assertAccepted(compile(objectFirst));
   }
 
+  /**
+   * Widens on the way back: forward narrows to {@code String}, backward hands back {@code Object}.
+   */
+  private static final String WIDENING_BACKWARD_FN = """
+    package demo;
+    import io.github.eschizoid.telescope.conversion.BridgeFn;
+    public final class Fn implements BridgeFn<Object, String> {
+      @Override public String forward(final Object o) { return String.valueOf(o); }
+      @Override public Object backward(final String s) { return s; }
+    }
+    """;
+
+  private static ProcessorHarness.Compilation compileTwoWay(final String sourceBody, final String targetField) {
+    return ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      new JavaFileObject[] {
+        ProcessorHarness.source("demo.Fn", WIDENING_BACKWARD_FN),
+        ProcessorHarness.source(
+          "demo.Carrier",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(source = demo.Src.class, target = demo.Tgt.class, transforms = {
+            @Transform(field = "v", using = demo.Fn.class)
+          })
+          public final class Carrier {}
+          """
+        ),
+        ProcessorHarness.source("demo.Src", "package demo;\n" + sourceBody),
+        ProcessorHarness.source("demo.Tgt", "package demo; public record Tgt(%s v) {}".formatted(targetField)),
+      }
+    );
+  }
+
+  @Test
+  @DisplayName("the source's own slot decides the backward direction, as the target's does the forward")
+  void theSourceSlotDecidesBackward() {
+    // Every other row here is forward-only, so `backwardFits` short-circuits and the source-side
+    // slot is never read -- reverting that half of the change leaves them all green. This row is
+    // two-way, so the backward store is the thing under test.
+    //
+    // Backward hands back Object and stores it into the source. Its getter says String and its
+    // setter takes Object, and the setter is what the rebuild writes.
+    final var compilation = compileTwoWay(
+      """
+      public class Src {
+        private String v;
+        public Src() {}
+        public String getV() { return v; }
+        public void setV(final Object v) { this.v = String.valueOf(v); }
+      }
+      """,
+      "String"
+    );
+
+    assertTrue(
+      compilation.success(),
+      () -> "the emitted backward write would have taken it: " + compilation.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a source slot too narrow for what backward returns is refused, by the check")
+  void aNarrowSourceSlotIsRefused() {
+    // The control for the row above, and what stops it from being "accept every backward". This
+    // source's setter takes String and backward hands back Object, so the write cannot compile.
+    final var compilation = compileTwoWay(
+      """
+      public class Src {
+        private String v;
+        public Src() {}
+        public String getV() { return v; }
+        public void setV(final String v) { this.v = v; }
+      }
+      """,
+      "String"
+    );
+
+    assertFalse(compilation.success(), "this backward write cannot compile, so the row has to be refused");
+    assertTrue(
+      compilation.hasError("@Transform field=\"v\""),
+      () -> "and refused here, not by javac inside the generated file: " + compilation.errorMessages()
+    );
+  }
+
   @Test
   @DisplayName("a setter too narrow for the value is still refused, by the check")
   void aNarrowSetterIsStillRefused() {
@@ -206,6 +294,75 @@ class TransformWriteSlotTest {
         }
         """
       )
+    );
+  }
+
+  @Test
+  @DisplayName("a direction nothing describes is not asked which slot it writes")
+  void anUndescribedDirectionIsNotAskedForASlot() {
+    // A forward-only row whose transform raw-implements the interface, with a backward that binds
+    // no single member -- two of its overloads are unordered for the target's type -- and no type
+    // arguments to fall back on. So nothing says what backward stores. The row is allowed through
+    // because the direction it is actually about does carry, and then asking a slot about a value
+    // that does not exist hands a null to the resolver: the processor dies inside javac rather
+    // than answering.
+    final var compilation = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      new JavaFileObject[] {
+        ProcessorHarness.source(
+          "demo.Fn",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.conversion.BridgeFn;
+          @SuppressWarnings({ "rawtypes", "unchecked" })
+          public final class Fn implements BridgeFn {
+            public Object forward(final Object o) { return o; }
+            public Object backward(final Object o) { return o; }
+            public Object backward(final CharSequence c) { return c; }
+            public Object backward(final Comparable<?> c) { return c; }
+          }
+          """
+        ),
+        ProcessorHarness.source(
+          "demo.Src",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.Tgt.class, transforms = {
+            @Transform(field = "v", using = demo.Fn.class, forwardOnly = true)
+          })
+          public class Src {
+            private String v;
+            public Src() {}
+            public String getV() { return v; }
+            public void setV(final String v) { this.v = v; }
+          }
+          """
+        ),
+        ProcessorHarness.source(
+          "demo.Tgt",
+          """
+          package demo;
+          public class Tgt {
+            private String v;
+            public Tgt() {}
+            public String getV() { return v; }
+            public void setV(final Object v) { this.v = String.valueOf(v); }
+          }
+          """
+        ),
+      }
+    );
+
+    assertTrue(
+      compilation.success(),
+      () -> "the forward direction carries, so the row stands: " + compilation.errorMessages()
+    );
+    assertFalse(
+      compilation.errorMessages().contains("NullPointerException"),
+      () -> "and the processor answers rather than dying: " + compilation.errorMessages()
     );
   }
 

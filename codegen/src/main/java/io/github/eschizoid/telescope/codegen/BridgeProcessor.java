@@ -1400,14 +1400,27 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // picks, and those are different types often enough to matter -- a setter declared wider
           // than its getter takes a value the getter does not name, and a builder method declared
           // narrower refuses one it does. So the read sides compare against what the field is
-          // declared as, and the store sides against the member the emission will actually write.
+          // declared as, and the store sides against the member forward and backward will write.
+          //
+          // Patch writes through the same member and is not checked here: what it stores is a
+          // conditional between the converted value and the base's own, whose type is the join of
+          // the two rather than either. A slot that takes both still takes the join, so what this
+          // accepts patch carries -- but a slot that takes only the join is not something this
+          // asks about.
           //
           // The rebuild is asked rather than modelled. Guessing from the setter alone is what makes
           // this wrong in both directions at once: a target whose rebuild goes through a builder or
           // a name-matched constructor would be judged against a setter nothing calls, and the row
           // accepted on the strength of it emits code that does not compile.
-          final var targetSlot = writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage);
-          final var sourceSlot = writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage);
+          // A direction nothing describes has no value to ask a slot about -- neither a bound
+          // member
+          // nor the interface's own arguments say what it stores -- and the guard above lets such a
+          // row through whenever the other direction carries it. Asking anyway hands a null to the
+          // resolver, which is a crash inside the processor rather than a refusal from it.
+          final var targetSlot =
+            fwdGives == null ? null : writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage);
+          final var sourceSlot =
+            bwdGives == null ? null : writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage);
           final var storesInto = targetSlot == null ? tfType : targetSlot;
           final var storesBack = sourceSlot == null ? sfType : sourceSlot;
           final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, storesInto);
@@ -1422,6 +1435,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             final var direction = forwardFits ? "backward" : "forward";
             final var accepts = forwardFits ? bwdAccepts : fwdAccepts;
             final var gives = forwardFits ? bwdGives : fwdGives;
+            // Where a slot decided the verdict, the message has to name it. Printing only the
+            // declared types leaves a refusal that reads as a contradiction -- "does not carry
+            // String -> String" -- because the type that actually refused is the member's, and it
+            // appears nowhere.
+            final var slot = forwardFits ? sourceSlot : targetSlot;
+            final var declared = forwardFits ? sfType : tfType;
+            final var into =
+              slot == null || types.isSameType(slot, declared) ? "" : ", which is written through " + slot;
             error(
               source,
               "@Transform field=\"" +
@@ -1438,6 +1459,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 gives +
                 ", which does not carry " +
                 (forwardFits ? tfType + " -> " + sfType : sfType + " -> " + tfType) +
+                into +
                 (forwardFits ? ". Add forwardOnly = true if only the forward direction is wanted." : "")
             );
             return;
@@ -3196,9 +3218,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The {@code forward} or {@code backward} the emitted call site will actually bind to, as a
-   * signature rather than as a name. Four things decide it, and reading the interface's type
-   * arguments gets all four wrong.
+   * The member the emitted call site will actually bind to, as a signature rather than as a name.
+   * Asked of a transform's {@code forward} and {@code backward}, and of a target's setters, which
+   * are bound the same way: the emission writes a name and Java picks the overload. Four things
+   * decide it, and reading the interface's type arguments gets all four wrong.
    *
    * <p>A member inherited from a generic base carries that base's type variables, which mean
    * nothing on their own — {@code asMemberOf} substitutes them for what the subclass fixed them to,
@@ -3986,11 +4009,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return var + "." + getterName(owner, f.name(), f.type()) + "()";
   }
 
-  // Construct `to` from a name->expression reader: canonical ctor (record), or name-matched ctor /
-  // builder / no-arg+setters (POJO). Returns an expression or a `{ ... return x; }` block; null on
-  // failure (error reported on `annotationSite` so the diagnostic lands at the user's @Bridge,
-  // not at the target class, which may be third-party).
-  //
   /**
    * Which rung the rebuild of a target will use, with whatever member the choice turned on.
    *
@@ -4077,19 +4095,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case BUILDER -> builderSetterParameter(rebuild.builderType(), field);
       // The emission writes the setter's name and lets Java bind the overload, so the slot is
       // whichever one it binds for the value being stored -- not the first of that name, which
-      // makes the answer depend on declaration order while the emitted text does not. Where
-      // nothing resolves, the name-matched parameter is the same answer as before.
+      // makes the answer depend on declaration order while the emitted text does not.
+      //
+      // Where no single overload binds, there is no slot to answer with. Falling back to the first
+      // of that name would put the order-dependence back exactly where it was removed: an ambiguous
+      // set of setters would be judged against whichever happened to be written first. Null leaves
+      // the caller on the declared type, which is order-independent, and javac still refuses the
+      // call it cannot bind.
       case SETTERS -> resolvedFn(to, "set" + capitalize(field), stored, callerPackage) instanceof Resolution.Bound bound
         ? bound.member().getParameterTypes().getFirst()
-        : setterParameter(to, field);
+        : null;
       case NONE -> null;
     };
   }
 
-  // writeStrategy: AUTO (run the priority ladder), CONSTRUCTOR / BUILDER / SETTERS (force one).
-  // Records always use the canonical constructor regardless of the strategy.
   /**
    * The expression that rebuilds {@code to}, emitted from the rung {@code rebuild} chose.
+   *
+   * <p>It reads {@code writeStrategy} only to say which rung was asked for when none applied — the
+   * ladder itself, and records always taking their canonical constructor whatever the strategy, are
+   * {@link #rebuildFor}'s.
    *
    * <p>The choice is made once, by {@link #rebuildFor}, and handed here rather than made again. A
    * transform is checked against the member this will write through, so a second run of the ladder
@@ -4165,7 +4190,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return null;
       }
     }
-    return null;
+    // A switch statement over an enum is not checked for exhaustiveness, so a rung added later
+    // would fall through here and return the value meaning "already reported" -- emitting nothing
+    // and saying nothing.
+    throw new IllegalStateException("no emission for rebuild rung " + rebuild.kind());
   }
 
   /**
