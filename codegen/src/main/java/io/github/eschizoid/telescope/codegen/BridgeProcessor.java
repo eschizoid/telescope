@@ -1253,6 +1253,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var rawDefaults = cfg.defaults();
     final var viaMappers = cfg.viaMappers();
     final var writeStrategy = cfg.writeStrategy();
+    // The rung each side's rebuild will stop at, decided once and consulted by both the check
+    // below and the emission further down, so the two cannot answer differently.
+    final var targetRebuild = rebuildFor(target, targetFields, writeStrategy);
+    final var sourceRebuild = rebuildFor(source, sourceFields, writeStrategy);
     final var rawConstants = cfg.constants();
     final var computes = cfg.computes();
     // A pair is lenient if its own config says so, or if an enclosing lenient @Bridge referenced it
@@ -1392,15 +1396,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             bwd != null ? bwd.getParameterTypes().getFirst() : typed ? erasedBound(args.get(1)) : null;
           final var bwdGives = bwd != null ? bwd.getReturnType() : typed ? erasedBound(args.get(0)) : null;
 
-          // Both sides are compared against the type the field is declared with. For a bean that
-          // is the getter's, and the emission may write through a setter, a builder method or a
-          // constructor parameter, any of which can accept something the getter does not name.
-          // Modelling that needs the rebuild strategy the emitter picks, which is decided later;
-          // guessing at it from the setter alone trades this conservative refusal for an emission
-          // that does not compile, which is the failure this check exists to replace.
-          final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, tfType);
+          // A field is read through its getter and written through whichever member the rebuild
+          // picks, and those are different types often enough to matter -- a setter declared wider
+          // than its getter takes a value the getter does not name, and a builder method declared
+          // narrower refuses one it does. So the read sides compare against what the field is
+          // declared as, and the store sides against the member forward and backward will write.
+          //
+          // Patch writes through the same member and is not checked here. What it stores is a
+          // conditional between the converted value and the base's own, whose type is the join of
+          // the two rather than either -- and this asks only whether the slot takes the converted
+          // value. A slot narrower than the getter takes that and still refuses the join, so patch
+          // has shapes this accepts and javac does not.
+          //
+          // The rebuild is asked rather than modelled. Guessing from the setter alone is what makes
+          // this wrong in both directions at once: a target whose rebuild goes through a builder or
+          // a name-matched constructor would be judged against a setter nothing calls, and the row
+          // accepted on the strength of it emits code that does not compile.
+          // Backward is the direction that can have nothing to say: a forward-only row whose
+          // transform binds no backward member and carries no type arguments stores a value that
+          // does not exist, and the guard above lets the row through because the direction it is
+          // about does carry. Asking a slot about that hands a null to the resolver, which is a
+          // crash inside the processor rather than a refusal from it. Forward has no such arm --
+          // past that guard it always has either a bound member or the arguments it required.
+          final var targetSlot = writeSlotType(target, targetRebuild, t, fwdGives, bridgePackage);
+          final var sourceSlot =
+            bwdGives == null ? null : writeSlotType(source, sourceRebuild, t, bwdGives, bridgePackage);
+          final var storesInto = targetSlot == null ? tfType : targetSlot;
+          final var storesBack = sourceSlot == null ? sfType : sourceSlot;
+          final var forwardFits = types.isAssignable(sfType, fwdAccepts) && types.isAssignable(fwdGives, storesInto);
           final var backwardFits =
-            forwardOnly || (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, sfType));
+            forwardOnly || (types.isAssignable(tfType, bwdAccepts) && types.isAssignable(bwdGives, storesBack));
           if (!forwardFits || !backwardFits) {
             // Name the signature the call site binds to, not the interface's parameterisation.
             // Those differ whenever an overload or an override is what gets bound, and a message
@@ -1410,6 +1435,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             final var direction = forwardFits ? "backward" : "forward";
             final var accepts = forwardFits ? bwdAccepts : fwdAccepts;
             final var gives = forwardFits ? bwdGives : fwdGives;
+            // Where a slot decided the verdict, the message has to name it. Printing only the
+            // declared types leaves a refusal that reads as a contradiction -- "does not carry
+            // String -> String" -- because the type that actually refused is the member's, and it
+            // appears nowhere.
+            final var slot = forwardFits ? sourceSlot : targetSlot;
+            final var declared = forwardFits ? sfType : tfType;
+            // Named only where the store is what refused. A row can fail on the read alone -- the
+            // transform will not take what the getter gives -- and a member that accepts the value
+            // perfectly well had no part in that, so printing it points at the wrong thing.
+            final var storeRefused = forwardFits
+              ? !types.isAssignable(bwdGives, storesBack)
+              : !types.isAssignable(fwdGives, storesInto);
+            final var into =
+              !storeRefused || slot == null || types.isSameType(slot, declared)
+                ? ""
+                : ", and the member it is written through takes " + slot;
             error(
               source,
               "@Transform field=\"" +
@@ -1426,6 +1467,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
                 gives +
                 ", which does not carry " +
                 (forwardFits ? tfType + " -> " + sfType : sfType + " -> " + tfType) +
+                into +
                 (forwardFits ? ". Add forwardOnly = true if only the forward direction is wanted." : "")
             );
             return;
@@ -1892,9 +1934,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
     // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
     // declaration rather than at `target` (which may be a third-party POJO with no annotation).
-    final var builtForward = buildExpr(target, readForward, targetFields, writeStrategy, source);
+    final var builtForward = buildExpr(target, readForward, targetFields, writeStrategy, source, targetRebuild);
     if (builtForward == null) return;
-    final var builtBackward = buildExpr(source, readBackward, sourceFields, writeStrategy, source);
+    final var builtBackward = buildExpr(source, readBackward, sourceFields, writeStrategy, source, sourceRebuild);
     if (builtBackward == null) return;
     final var forwardBody = withPrelude(forwardLocals, builtForward);
     final var backwardBody = withPrelude(backwardLocals, builtBackward);
@@ -1936,7 +1978,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // caller never wrote.
       return "(" + pLocal + " != null ? " + partialRead + " : " + baseRead + ")";
     };
-    final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source);
+    final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source, sourceRebuild);
     if (patchInner == null) return;
     // Wrap the inner expression in a block prelude carrying the precomputed locals so the final
     // emitted body has the right shape: { final <type> __pp_X = ...; ... return <inner>; }
@@ -3184,9 +3226,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The {@code forward} or {@code backward} the emitted call site will actually bind to, as a
-   * signature rather than as a name. Four things decide it, and reading the interface's type
-   * arguments gets all four wrong.
+   * The member the emitted call site will actually bind to, as a signature rather than as a name.
+   * Asked of a transform's {@code forward} and {@code backward}, and of a target's setters, which
+   * are bound the same way: the emission writes a name and Java picks the overload. Four things
+   * decide it, and reading the interface's type arguments gets all four wrong.
    *
    * <p>A member inherited from a generic base carries that base's type variables, which mean
    * nothing on their own — {@code asMemberOf} substitutes them for what the subclass fixed them to,
@@ -3211,17 +3254,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * @return what the call site binds, that no overload applies, or that two apply equally
    */
   private Resolution resolvedFn(
-    final TypeElement usingEl,
+    final TypeElement declaringType,
     final String name,
     final TypeMirror argType,
     final PackageElement callerPackage
   ) {
     final var types = processingEnv.getTypeUtils();
-    final var owner = (DeclaredType) usingEl.asType();
-    final var raw = !usingEl.getTypeParameters().isEmpty();
+    final var owner = (DeclaredType) declaringType.asType();
+    final var raw = !declaringType.getTypeParameters().isEmpty();
     final var applicable = new ArrayList<ExecutableType>();
     final var strict = new ArrayList<ExecutableType>();
-    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(usingEl))) {
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(declaringType))) {
       if (!m.getSimpleName().contentEquals(name) || m.getParameters().size() != 1) continue;
       if (m.getModifiers().contains(Modifier.ABSTRACT)) continue;
       // getAllMembers includes members the generated bridge is in no position to call. Selecting
@@ -3974,67 +4017,153 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return var + "." + getterName(owner, f.name(), f.type()) + "()";
   }
 
-  // Construct `to` from a name->expression reader: canonical ctor (record), or name-matched ctor /
-  // builder / no-arg+setters (POJO). Returns an expression or a `{ ... return x; }` block; null on
-  // failure (error reported on `annotationSite` so the diagnostic lands at the user's @Bridge,
-  // not at the target class, which may be third-party).
-  //
-  // writeStrategy: AUTO (run the priority ladder), CONSTRUCTOR / BUILDER / SETTERS (force one).
-  // Records always use the canonical constructor regardless of the strategy.
+  /**
+   * Which rung the rebuild of a target will use, with whatever member the choice turned on.
+   *
+   * <p>The emitted rebuild and the check that a transform fits have to agree about this. A field is
+   * read through its getter and written through whichever member the rebuild picks, and those are
+   * different types often enough to matter: a setter may be declared wider than the getter, and a
+   * builder method may be declared narrower. Deciding it twice lets the check judge a row against a
+   * member the emission never writes through, which either refuses a row that would have compiled
+   * or accepts one that will not.
+   */
+  private record Rebuild(Kind kind, ExecutableElement constructor, TypeElement builderType) {
+    private enum Kind {
+      RECORD,
+      CONSTRUCTOR,
+      BUILDER,
+      SETTERS,
+      NONE,
+    }
+  }
+
+  /**
+   * Runs the same ladder the rebuild runs, and stops where it would stop. Consulted before the
+   * emission so the check can ask what the emission will do rather than model it.
+   */
+  private Rebuild rebuildFor(final TypeElement to, final List<Field> toFields, final String writeStrategy) {
+    if (to.getKind() == ElementKind.RECORD) return new Rebuild(Rebuild.Kind.RECORD, null, null);
+    final var auto = "AUTO".equals(writeStrategy);
+    if (auto || "CONSTRUCTOR".equals(writeStrategy)) {
+      for (final var ctor : ElementFilter.constructorsIn(to.getEnclosedElements())) {
+        if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != toFields.size()) continue;
+        var matched = true;
+        for (final var p : ctor.getParameters()) {
+          if (!hasField(toFields, p.getSimpleName().toString())) {
+            matched = false;
+            break;
+          }
+        }
+        if (matched) return new Rebuild(Rebuild.Kind.CONSTRUCTOR, ctor, null);
+      }
+      if (!auto) return new Rebuild(Rebuild.Kind.NONE, null, null);
+    }
+    if (auto || "BUILDER".equals(writeStrategy)) {
+      final var builder = staticBuilderMethod(to);
+      if (builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED) {
+        final var builderType = (TypeElement) ((DeclaredType) builder.getReturnType()).asElement();
+        return new Rebuild(Rebuild.Kind.BUILDER, null, builderType);
+      }
+      if (!auto) return new Rebuild(Rebuild.Kind.NONE, null, null);
+    }
+    if ((auto || "SETTERS".equals(writeStrategy)) && hasPublicNoArgConstructor(to)) {
+      return new Rebuild(Rebuild.Kind.SETTERS, null, null);
+    }
+    return new Rebuild(Rebuild.Kind.NONE, null, null);
+  }
+
+  /**
+   * The type of the member a rebuild writes {@code field} through, or {@code null} when the ladder
+   * reaches no rung or that rung has no member for it. A null answer leaves the caller with the
+   * declared type, which is what it used before there was anything better to ask.
+   */
+  private TypeMirror writeSlotType(
+    final TypeElement to,
+    final Rebuild rebuild,
+    final String field,
+    final TypeMirror stored,
+    final PackageElement callerPackage
+  ) {
+    return switch (rebuild.kind()) {
+      case RECORD -> to
+        .getRecordComponents()
+        .stream()
+        .filter(c -> c.getSimpleName().contentEquals(field))
+        .<TypeMirror>map(Element::asType)
+        .findFirst()
+        .orElse(null);
+      case CONSTRUCTOR -> rebuild
+        .constructor()
+        .getParameters()
+        .stream()
+        .filter(p -> p.getSimpleName().contentEquals(field))
+        .<TypeMirror>map(Element::asType)
+        .findFirst()
+        .orElse(null);
+      case BUILDER -> builderSetterParameter(rebuild.builderType(), field);
+      // The emission writes the setter's name and lets Java bind the overload, so the slot is
+      // whichever one it binds for the value being stored -- not the first of that name, which
+      // makes the answer depend on declaration order while the emitted text does not.
+      //
+      // The two ways this can fail are different answers. Ambiguous means several bind equally, so
+      // taking the first of that name would judge the row against whichever was written first --
+      // the order-dependence this resolver was brought in to remove. There is no slot, and the
+      // declared type stands.
+      //
+      // None means nothing binds at all, and there naming the setter is order-independent:
+      // whichever
+      // one it names, it does not take the value, so the answer is refuse either way. Handing that
+      // back to the declared type gives up the refusal in the one case the member is what refuses.
+      case SETTERS -> switch (resolvedFn(to, "set" + capitalize(field), stored, callerPackage)) {
+        case Resolution.Bound bound -> bound.member().getParameterTypes().getFirst();
+        case Resolution.Ambiguous ignored -> null;
+        case Resolution.None ignored -> setterParameter(to, field);
+      };
+      case NONE -> null;
+    };
+  }
+
+  /**
+   * The expression that rebuilds {@code to}, emitted from the rung {@code rebuild} chose.
+   *
+   * <p>It reads {@code writeStrategy} only to say which rung was asked for when none applied — the
+   * ladder itself, and records always taking their canonical constructor whatever the strategy, are
+   * {@link #rebuildFor}'s.
+   *
+   * <p>The choice is made once, by {@link #rebuildFor}, and handed here rather than made again. A
+   * transform is checked against the member this will write through, so a second run of the ladder
+   * is a second answer that can differ from the one the check was given — and the row would then be
+   * judged against a member nothing calls.
+   */
   private String buildExpr(
     final TypeElement to,
     final Function<String, String> read,
     final List<Field> toFields,
     final String writeStrategy,
-    final TypeElement annotationSite
+    final TypeElement annotationSite,
+    final Rebuild rebuild
   ) {
     final var toFq = to.getQualifiedName().toString();
-    if (to.getKind() == ElementKind.RECORD) {
-      final var args = to
-        .getRecordComponents()
-        .stream()
-        .map(c -> read.apply(c.getSimpleName().toString()))
-        .collect(Collectors.joining(", "));
-      return "new " + toFq + "(" + args + ")";
-    }
-
-    final var auto = "AUTO".equals(writeStrategy);
-
-    // POJO: a public constructor whose parameter names match the fields (order-independent).
-    if (auto || "CONSTRUCTOR".equals(writeStrategy)) {
-      for (final var ctor : ElementFilter.constructorsIn(to.getEnclosedElements())) {
-        if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != toFields.size()) continue;
-        final var args = new ArrayList<String>();
-        var matched = true;
-        for (final var p : ctor.getParameters()) {
-          final var pn = p.getSimpleName().toString();
-          if (!hasField(toFields, pn)) {
-            matched = false;
-            break;
-          }
-          args.add(read.apply(pn));
-        }
-        if (matched) return "new " + toFq + "(" + String.join(", ", args) + ")";
+    switch (rebuild.kind()) {
+      case RECORD -> {
+        final var args = to
+          .getRecordComponents()
+          .stream()
+          .map(c -> read.apply(c.getSimpleName().toString()))
+          .collect(Collectors.joining(", "));
+        return "new " + toFq + "(" + args + ")";
       }
-      if (!auto) {
-        error(
-          annotationSite,
-          "@Bridge writeStrategy = CONSTRUCTOR on " +
-            annotationSite.getQualifiedName() +
-            " (target " +
-            toFq +
-            "): no public constructor whose parameter names match the bridge fields. Switch" +
-            " to AUTO, BUILDER, or SETTERS, or add a name-matched constructor."
-        );
-        return null;
+      case CONSTRUCTOR -> {
+        final var args = rebuild
+          .constructor()
+          .getParameters()
+          .stream()
+          .map(pa -> read.apply(pa.getSimpleName().toString()))
+          .collect(Collectors.joining(", "));
+        return "new " + toFq + "(" + args + ")";
       }
-    }
-
-    // POJO: a static builder() with a method per field.
-    if (auto || "BUILDER".equals(writeStrategy)) {
-      final var builder = staticBuilderMethod(to);
-      if (builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED) {
-        final var builderType = (TypeElement) ((DeclaredType) builder.getReturnType()).asElement();
+      case BUILDER -> {
+        final var builderType = rebuild.builderType();
         final var sb = new StringBuilder(toFq + ".builder()");
         for (final var f : toFields) {
           final var method = builderSetter(builderType, f.name());
@@ -4055,23 +4184,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
         return sb.append(".build()").toString();
       }
-      if (!auto) {
-        error(
-          annotationSite,
-          "@Bridge writeStrategy = BUILDER on " +
-            annotationSite.getQualifiedName() +
-            " (target " +
-            toFq +
-            "): no static builder() method returning a builder class. Switch to AUTO," +
-            " CONSTRUCTOR, or SETTERS, or add a builder()."
-        );
-        return null;
-      }
-    }
-
-    // POJO: a no-arg constructor plus a setter per field.
-    if (auto || "SETTERS".equals(writeStrategy)) {
-      if (hasPublicNoArgConstructor(to)) {
+      case SETTERS -> {
         final var sb = new StringBuilder("{ final var out = new " + toFq + "(); ");
         for (final var f : toFields) {
           final var setter = setterName(to, f.name());
@@ -4086,29 +4199,51 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         }
         return sb.append("return out; }").toString();
       }
-      if (!auto) {
-        error(
-          annotationSite,
-          "@Bridge writeStrategy = SETTERS on " +
-            annotationSite.getQualifiedName() +
-            " (target " +
-            toFq +
-            "): no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add" +
-            " a no-arg constructor."
-        );
+      case NONE -> {
+        error(annotationSite, noStrategyMessage(annotationSite, toFq, writeStrategy));
         return null;
       }
     }
+    // A switch statement over an enum is not checked for exhaustiveness, so a rung added later
+    // would fall through here and return the value meaning "already reported" -- emitting nothing
+    // and saying nothing.
+    throw new IllegalStateException("no emission for rebuild rung " + rebuild.kind());
+  }
 
-    error(
-      annotationSite,
-      "@Bridge: " +
-        toFq +
-        " has no usable construction strategy — needs a record canonical constructor, a" +
-        " constructor whose parameter names match the fields, a static builder(), or a no-arg" +
-        " constructor with setters"
-    );
-    return null;
+  /**
+   * Why no rung applied. A forced strategy names the one that was asked for and what to switch to;
+   * AUTO ran the whole ladder, so it names what any of them would have needed.
+   */
+  private static String noStrategyMessage(
+    final TypeElement annotationSite,
+    final String toFq,
+    final String writeStrategy
+  ) {
+    return switch (writeStrategy) {
+      case "CONSTRUCTOR" -> "@Bridge writeStrategy = CONSTRUCTOR on " +
+      annotationSite.getQualifiedName() +
+      " (target " +
+      toFq +
+      "): no public constructor whose parameter names match the bridge fields. Switch to" +
+      " AUTO, BUILDER, or SETTERS, or add a name-matched constructor.";
+      case "BUILDER" -> "@Bridge writeStrategy = BUILDER on " +
+      annotationSite.getQualifiedName() +
+      " (target " +
+      toFq +
+      "): no static builder() method returning a builder class. Switch to AUTO," +
+      " CONSTRUCTOR, or SETTERS, or add a builder().";
+      case "SETTERS" -> "@Bridge writeStrategy = SETTERS on " +
+      annotationSite.getQualifiedName() +
+      " (target " +
+      toFq +
+      "): no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add" +
+      " a no-arg constructor.";
+      default -> "@Bridge: " +
+      toFq +
+      " has no usable construction strategy — needs a record canonical constructor, a" +
+      " constructor whose parameter names match the fields, a static builder(), or a" +
+      " no-arg constructor with setters";
+    };
   }
 
   // The named fields of a type: record components, or POJO getter-properties (getX/isX), in order.

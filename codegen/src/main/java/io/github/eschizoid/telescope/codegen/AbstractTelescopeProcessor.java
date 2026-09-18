@@ -228,12 +228,28 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   // A public single-argument builder method named property / setX / withX, or null.
   protected String builderSetter(final TypeElement builderType, final String property) {
+    final var member = builderSetterMember(builderType, property);
+    return member == null ? null : member.getSimpleName().toString();
+  }
+
+  /**
+   * The parameter type of the builder member that carries the property, or {@code null} where there
+   * is none. Matched by name and arity, so the parameter may be a type the property's own value
+   * does not fit — a {@code String} builder method behind an {@code Object} getter. Callers that
+   * emit a call to it have to look.
+   */
+  protected TypeMirror builderSetterParameter(final TypeElement builderType, final String property) {
+    final var member = builderSetterMember(builderType, property);
+    return member == null ? null : member.getParameters().getFirst().asType();
+  }
+
+  private ExecutableElement builderSetterMember(final TypeElement builderType, final String property) {
     final var set = "set" + capitalize(property);
     final var with = "with" + capitalize(property);
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(builderType))) {
       if (!isPublicInstance(m) || m.getParameters().size() != 1) continue;
       final var name = m.getSimpleName().toString();
-      if (name.equals(property) || name.equals(set) || name.equals(with)) return name;
+      if (name.equals(property) || name.equals(set) || name.equals(with)) return m;
     }
     return null;
   }
