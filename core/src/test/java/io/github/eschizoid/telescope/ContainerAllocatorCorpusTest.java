@@ -36,9 +36,14 @@ import org.junit.jupiter.api.Test;
  * under {@code @Bridge} and throws under {@code mapper(...)}.
  *
  * <p>A test that names the container types it checks can only cover the ones somebody thought of.
- * This enumerates them from {@code java.base} itself, so a type nobody remembered is still checked,
- * and restates the generated path's rule — allocate the declared class where it can be
- * instantiated, otherwise the family default — as the thing the reflective path has to agree with.
+ * This enumerates them from {@code java.base} itself and restates the generated path's rule —
+ * allocate the declared class where it can be instantiated, otherwise the family default — as the
+ * thing the reflective path has to agree with.
+ *
+ * <p>The enumeration covers what the platform declares, which is not the same as covering every
+ * shape. A container reached through a static {@code builder()} is one no {@code java.base} scan
+ * can produce, because no JDK container has one — so the adopter-shaped types below are not a
+ * convenience beside the enumeration, they are the only way those shapes are seen at all.
  *
  * <p>Restating that rule here rather than importing it is the cost of this shape: the two could
  * drift. It is two lines guarding thirty-odd types, which is a trade worth making until the rule
@@ -77,7 +82,10 @@ class ContainerAllocatorCorpusTest {
     );
     final var out = new ArrayList<Class<?>>();
     for (final var root : roots) {
-      if (!Files.isDirectory(root)) continue;
+      // Every java.base has both of these, so a missing one is the enumeration being wrong rather
+      // than a platform that lacks it. Skipping it quietly is what lets a whole root disappear.
+      assertTrue(Files.isDirectory(root), () -> "the enumeration is pointed at a root that is not there: " + root);
+      final var before = out.size();
       try (Stream<Path> files = Files.list(root)) {
         files
           .map(p -> p.getFileName().toString())
@@ -96,7 +104,16 @@ class ContainerAllocatorCorpusTest {
             }
           });
       }
+      // Per root, not over the total. The two are far from equal -- one holds roughly twice the
+      // other -- so a total large enough to look healthy is reached with the smaller one missing
+      // entirely, and what goes with it is every concurrent container, which is exactly the set
+      // the special-case tables on both paths exist for.
+      assertTrue(out.size() > before, () -> "no container came from " + root);
     }
+    // Asserted where the enumeration is produced rather than where it is used. An empty one
+    // satisfies every question anybody asks of it -- "do these all agree", "does none of them
+    // have a builder" -- so a caller that forgets to check reports success for having looked at
+    // nothing.
     return out;
   }
 
@@ -123,6 +140,15 @@ class ContainerAllocatorCorpusTest {
    * write {@code new X<>()} for, and the family's default otherwise — so a type it cannot
    * instantiate is not one it accepts either, and asking the reflective path to handle it would be
    * demanding more than parity.
+   *
+   * <p>What it restates is the allocation guard, not every expression the processor can write. Some
+   * routes — the element-preserving copy among them — never reach that guard, so a pair this model
+   * calls settled is not necessarily one the processor agrees about. What it does say completely is
+   * that there is no builder route <em>to a container</em>: the generated path does build POJO
+   * targets through one, and {@code WriteStrategy.BUILDER} selects it, but no route that allocates
+   * a container consults a builder — emitting that call needs the type arguments the declaration
+   * carries and the builder's own signature supplies. {@link #KNOWN_DIVERGENCES} names what that
+   * costs.
    */
   private static boolean generatedPathAllocates(final Class<?> c, final Class<?> plainDefault) {
     final var fallback = generatedDefaultFor(c, plainDefault);
@@ -136,6 +162,75 @@ class ContainerAllocatorCorpusTest {
     } catch (final NoSuchMethodException e) {
       return false;
     }
+  }
+
+  /** How a pair is decided by each path, so a recorded divergence names which way it runs. */
+  private record Verdict(boolean generatedAllocates, boolean reflectiveAllocates) {
+    private String render(final String pair) {
+      return (
+        pair +
+        " -> generated " +
+        (generatedAllocates ? "allocates" : "refuses") +
+        ", reflective " +
+        (reflectiveAllocates ? "allocates" : "refuses")
+      );
+    }
+  }
+
+  /**
+   * Pairs the two paths are known to decide differently, by name and by direction, so a
+   * disagreement is a recorded decision rather than a silence. A new one fails the gate; so does
+   * one of these quietly agreeing, or one whose type has left the corpus, since a note about
+   * something nobody checks is the same as a note about something untrue.
+   *
+   * <p>The direction is held as a value rather than written into the key. One of the two is the
+   * harm this file opens by naming — generated accepts, reflective refuses, so a program compiles
+   * and then throws — and the other merely refuses work that would have succeeded, so a register
+   * that could not tell them apart would let the first pass on the strength of the second. Keeping
+   * it structured means rewording the message below cannot fail the gate, which would otherwise
+   * teach the next reader to fix a red gate by pasting a string.
+   *
+   * <p>The one entry: the reflective allocator reaches a static builder and the generated one has
+   * no route to a container through one, because emitting that call needs the builder's own generic
+   * signature rather than just its name. Tracked as a capability of its own. The benign direction.
+   */
+  private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.of(
+    "List " + BuildableList.class.getName(),
+    new Verdict(false, true)
+  );
+
+  /**
+   * Abstract, with a static {@code builder()} that makes something concrete — the shape a {@code
+   * java.base} enumeration structurally cannot produce, since no JDK container has a builder.
+   *
+   * <p>Its constructor's access is not what makes it interesting, and nothing on either path reads
+   * it: abstractness alone settles the allocation question, and the builder is what the two then
+   * disagree about. {@code MyAbstractList} is the control, differing in exactly that one property.
+   */
+  public abstract static class BuildableList<E> extends ArrayList<E> {
+
+    private static final long serialVersionUID = 1L;
+
+    protected BuildableList() {}
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    public static final class Builder {
+
+      public BuildableList<Object> build() {
+        return new BuildableListImpl<>();
+      }
+    }
+  }
+
+  /** What that builder makes. */
+  public static final class BuildableListImpl<E> extends BuildableList<E> {
+
+    private static final long serialVersionUID = 1L;
+
+    public BuildableListImpl() {}
   }
 
   /**
@@ -170,17 +265,50 @@ class ContainerAllocatorCorpusTest {
 
   private static List<Class<?>> corpus() throws IOException {
     final var out = new ArrayList<Class<?>>(javaBaseContainers());
-    out.addAll(List.of(MyListIface.class, MySetIface.class, MyMapIface.class, MyAbstractList.class, MyArrayList.class));
+    out.addAll(
+      List.of(
+        MyListIface.class,
+        MySetIface.class,
+        MyMapIface.class,
+        MyAbstractList.class,
+        MyArrayList.class,
+        BuildableList.class
+      )
+    );
     return out;
+  }
+
+  @Test
+  @DisplayName("no platform container is reached through a builder, which is why the adopter shapes exist")
+  void noPlatformContainerHasABuilder() throws IOException {
+    // The justification for the adopter-shaped fixtures, asserted rather than described. If a JDK
+    // container ever grows a static builder(), the enumeration starts covering the shape on its own
+    // and the sentence above it stops being the reason those fixtures are there.
+    final var withBuilders = javaBaseContainers()
+      .stream()
+      .filter(c -> {
+        try {
+          return Modifier.isStatic(c.getMethod("builder").getModifiers());
+        } catch (final NoSuchMethodException e) {
+          return false;
+        }
+      })
+      .map(Class::getName)
+      .toList();
+
+    assertTrue(
+      withBuilders.isEmpty(),
+      () -> "the enumeration can reach the builder shape after all, through: " + withBuilders
+    );
   }
 
   @Test
   @DisplayName("the reflective path allocates exactly what the generated path allocates, and refuses the" + " rest")
   void bothPathsAgreeOnEveryContainer() throws IOException {
     final var types = corpus();
-    assertTrue(types.size() > 20, () -> "the corpus should be the JDK's own plus adopter shapes: " + types.size());
 
     final var divergent = new LinkedHashSet<String>();
+    final var observedDivergences = new LinkedHashSet<String>();
     final var badRefusals = new LinkedHashSet<String>();
     for (final var c : types) {
       for (final var family : FAMILIES) {
@@ -203,21 +331,25 @@ class ContainerAllocatorCorpusTest {
         // refuses would leave the reflective path free to accept them and fail later, which is the
         // worse divergence of the two: a refusal at plan time becomes a cast error per conversion,
         // and the fail-fast registry the starters build at startup stops catching it.
+        final var pair = family.label() + " " + c.getName();
+        final var verdict = new Verdict(generatedAllocates, reflectiveAllocates);
         if (generatedAllocates != reflectiveAllocates) {
-          divergent.add(
-            family.label() +
-              " " +
-              c.getName() +
-              " -> generated " +
-              (generatedAllocates ? "allocates" : "refuses") +
-              ", reflective " +
-              (reflectiveAllocates ? "allocates" : "refuses")
-          );
+          observedDivergences.add(pair);
+          if (!verdict.equals(KNOWN_DIVERGENCES.get(pair))) divergent.add(verdict.render(pair));
         }
       }
     }
 
     assertTrue(divergent.isEmpty(), () -> "the two paths disagree on:\n  " + String.join("\n  ", divergent));
+    // A register entry is only worth its line while the thing it describes is still true. One that
+    // has stopped diverging, and one whose type has left the corpus so nothing looks any more, are
+    // the same failure: a note about something nobody is checking.
+    final var stale = new LinkedHashSet<>(KNOWN_DIVERGENCES.keySet());
+    stale.removeAll(observedDivergences);
+    assertTrue(
+      stale.isEmpty(),
+      () -> "recorded as diverging, but not observed to — resolved, or no longer in the corpus:\n  " + stale
+    );
     assertTrue(
       badRefusals.isEmpty(),
       () -> "these are refused, but not at plan time with a diagnostic:\n  " + String.join("\n  ", badRefusals)
