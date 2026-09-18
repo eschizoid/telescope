@@ -3463,7 +3463,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println();
     out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
     out.println("    if (src == null) return null;");
-    emitOrderingGuard(out, plan.kind(), identity);
+    emitOrderingGuard(out, plan.kind(), identity, tgtContainer);
     out.println("    final var out = " + rawAllocExpr(tgtContainer, srcContainer, plan.kind(), identity) + ";");
     if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
       if (identity) {
@@ -3564,8 +3564,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * {@code Set} can hold a sorted one. That is what the reflective path checks, and the two are
    * meant to accept the same programs.
    */
-  private static String orderingGuard(final FieldPlan.Kind kind, final boolean elementsPreserved) {
+  private String orderingGuard(
+    final FieldPlan.Kind kind,
+    final boolean elementsPreserved,
+    final TypeMirror tgtContainer
+  ) {
     if (kind != FieldPlan.Kind.SET || elementsPreserved) return "";
+    // Only where the side being built keeps an order. A comparator cannot come across a conversion
+    // -- it orders the type being converted away from -- but a target that keeps no order has none
+    // to carry, and refusing there refuses a conversion that would have worked.
+    if (!keepsOrder(tgtContainer)) return "";
     return (
       "    if (src instanceof java.util.SortedSet<?> __sorted && __sorted.comparator() !=" +
       " null) throw new IllegalStateException(\n" +
@@ -3581,13 +3589,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * rebuild has none to make. Both set rebuilds emit through here, so whether a guard appears is
    * one decision rather than one per call site.
    */
-  private static void emitOrderingGuard(
+  private void emitOrderingGuard(
     final PrintWriter out,
     final FieldPlan.Kind kind,
-    final boolean elementsPreserved
+    final boolean elementsPreserved,
+    final TypeMirror tgtContainer
   ) {
-    final var guard = orderingGuard(kind, elementsPreserved);
+    final var guard = orderingGuard(kind, elementsPreserved, tgtContainer);
     if (!guard.isEmpty()) out.println(guard);
+  }
+
+  /**
+   * Whether a declared container type keeps its elements in an order, and so needs a comparator.
+   */
+  private boolean keepsOrder(final TypeMirror container) {
+    final var sortedSet = processingEnv.getElementUtils().getTypeElement("java.util.SortedSet");
+    if (sortedSet == null) return false;
+    final var types = processingEnv.getTypeUtils();
+    return types.isAssignable(types.erasure(container), types.erasure(sortedSet.asType()));
   }
 
   // Allocation expression for a raw-container output: the target's concrete class (the subtype
@@ -3687,7 +3706,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
-    emitOrderingGuard(out, FieldPlan.Kind.SET, false);
+    emitOrderingGuard(out, FieldPlan.Kind.SET, false, tgtContainer);
     out.println("    final var out = " + alloc + ";");
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");

@@ -161,26 +161,75 @@ final class ContainerLifts {
               return fresh;
             }
           );
-    final boolean checkComparator = set && elementIso != Iso.<Object>identity();
+    // A comparator is a problem only for the side being built. Carrying one across a conversion
+    // would mean ordering the new element type with an ordering written for the old one, which
+    // cannot be done -- but a target that keeps no order has nothing to carry, and refusing there
+    // refuses a conversion that would have worked. So each direction asks about its own output.
+    //
+    // The guard can only fire where the input it reads is itself sorted, which for one direction it
+    // need not be: building a sorted container out of an unsorted one leaves nothing to ask about,
+    // and the result takes natural ordering. That is a silent reordering, and it is what the
+    // generated path does too -- one decision on both, rather than two that differ.
+    final boolean converts = elementIso != Iso.<Object>identity();
+    final boolean buildingSortedTarget = set && converts && keepsOrder(tgtRaw);
+    final boolean buildingSortedSource = set && converts && keepsOrder(srcRaw);
+    // Either of the two above implies this, so it alone decides whether the wrapper is needed.
+    final boolean sortedEitherWay = set && (keepsOrder(tgtRaw) || keepsOrder(srcRaw));
     final boolean finish = copyOnWrite(srcRaw) || copyOnWrite(tgtRaw);
-    if (!checkComparator && !finish) return loop;
+    if (!sortedEitherWay && !finish) return loop;
     return Iso.of(
       src -> {
-        if (checkComparator) checkComparator(src);
-        return finishCollection(loop.to(src), tgtRaw);
+        if (buildingSortedTarget) refuseCarriedComparator(src);
+        return finishCollection(orderable(() -> loop.to(src), tgtRaw), tgtRaw);
       },
       tgt -> {
-        if (checkComparator) checkComparator(tgt);
-        return finishCollection(loop.from(tgt), srcRaw);
+        if (buildingSortedSource) refuseCarriedComparator(tgt);
+        return finishCollection(orderable(() -> loop.from(tgt), srcRaw), srcRaw);
       }
     );
   }
 
-  private static void checkComparator(final Object input) {
+  /**
+   * Whether a declared raw type keeps its elements in an order, and so needs them comparable.
+   *
+   * <p>Asked of the declaration rather than of the class that ends up allocated, which is the same
+   * answer only because a declaration is either instantiated as itself or stood in for by a family
+   * default assignable to it. A default that did not implement its declaration would break that,
+   * and so would this.
+   */
+  private static boolean keepsOrder(final Class<?> raw) {
+    return SortedSet.class.isAssignableFrom(raw);
+  }
+
+  private static void refuseCarriedComparator(final Object input) {
     if (input instanceof SortedSet<?> sorted && sorted.comparator() != null) {
       throw new IllegalStateException(
         "Deep map: a custom sorted-set comparator cannot be reused with changed " +
           "element types. Supply an explicit Mapping.via(...) row with a target comparator."
+      );
+    }
+  }
+
+  /**
+   * Builds the container, turning the cast a sorted one raises on its first insert into a refusal
+   * that says whose element type is not orderable and what to do about it.
+   *
+   * <p>The bare cast names the element class and {@code Comparable} and nothing else — not the
+   * field, not the container, not the library. It also never happens for an empty source, since
+   * nothing is inserted, so the shape reads as working until a row arrives with something in it.
+   */
+  private static Object orderable(final Supplier<Object> build, final Class<?> outRaw) {
+    if (!keepsOrder(outRaw)) return build.get();
+    try {
+      return build.get();
+    } catch (final ClassCastException e) {
+      throw new IllegalStateException(
+        "Deep map: " +
+          outRaw.getName() +
+          " keeps its elements in order, and the converted element type does not implement" +
+          " Comparable. Give the target an explicit comparator through a Mapping.via(...)" +
+          " row, or declare it as a set that keeps no order.",
+        e
       );
     }
   }
