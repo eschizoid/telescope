@@ -129,11 +129,13 @@ class ContainerAllocatorCorpusTest {
    * instantiate is not one it accepts either, and asking the reflective path to handle it would be
    * demanding more than parity.
    *
-   * <p>{@code new X<>()} is the whole of what it can write. The reflective path has a second route,
-   * through a static {@code builder()}, and the generated one has no equivalent — emitting a
-   * builder call needs the type arguments the declaration carries and the builder's own signature
-   * supplies, which is a capability rather than an oversight. {@link #KNOWN_DIVERGENCES} names what
-   * that costs.
+   * <p>What it restates is the allocation guard, not every expression the processor can write. Some
+   * routes — the element-preserving copy among them — never reach that guard, so a pair this model
+   * calls settled is not necessarily one the processor agrees about. What it does say completely is
+   * that there is no builder route: the reflective path reaches a static {@code builder()} and the
+   * generated one has no equivalent, because emitting the call needs the type arguments the
+   * declaration carries and the builder's own signature supplies. {@link #KNOWN_DIVERGENCES} names
+   * what that costs.
    */
   private static boolean generatedPathAllocates(final Class<?> c, final Class<?> plainDefault) {
     final var fallback = generatedDefaultFor(c, plainDefault);
@@ -155,17 +157,22 @@ class ContainerAllocatorCorpusTest {
    * away, which would mean the note below has outlived the reason for it.
    */
   private static final Set<String> KNOWN_DIVERGENCES = Set.of(
-    // The reflective allocator reaches a static builder(); the generated one writes `new
-    // X<>()` and
-    // has no builder route. Tracked as its own capability, since emitting the call needs the
-    // builder's generic signature rather than just its name.
-    "List " + BuildableList.class.getName()
+    // The reflective allocator reaches a static builder, and the generated one has no route
+    // to
+    // one: emitting that call needs the builder's own generic signature rather than just its
+    // name. Tracked as a capability of its own. This is the benign direction -- work is
+    // refused
+    // rather than accepted and then failing.
+    "List " + BuildableList.class.getName() + " -> generated refuses, reflective allocates"
   );
 
   /**
-   * Abstract, with no public constructor and a static {@code builder()} that makes something
-   * concrete — the shape a {@code java.base} enumeration structurally cannot produce, since no JDK
-   * container has a builder.
+   * Abstract, with a static {@code builder()} that makes something concrete — the shape a {@code
+   * java.base} enumeration structurally cannot produce, since no JDK container has a builder.
+   *
+   * <p>Its constructor's access is not what makes it interesting, and nothing on either path reads
+   * it: abstractness alone settles the allocation question, and the builder is what the two then
+   * disagree about. {@code MyAbstractList} is the control, differing in exactly that one property.
    */
   public abstract static class BuildableList<E> extends ArrayList<E> {
 
@@ -239,6 +246,30 @@ class ContainerAllocatorCorpusTest {
   }
 
   @Test
+  @DisplayName("no platform container is reached through a builder, which is why the adopter shapes exist")
+  void noPlatformContainerHasABuilder() throws IOException {
+    // The justification for the adopter-shaped fixtures, asserted rather than described. If a JDK
+    // container ever grows a static builder(), the enumeration starts covering the shape on its own
+    // and the sentence above it stops being the reason those fixtures are there.
+    final var withBuilders = javaBaseContainers()
+      .stream()
+      .filter(c -> {
+        try {
+          return Modifier.isStatic(c.getMethod("builder").getModifiers());
+        } catch (final NoSuchMethodException e) {
+          return false;
+        }
+      })
+      .map(Class::getName)
+      .toList();
+
+    assertTrue(
+      withBuilders.isEmpty(),
+      () -> "the enumeration can reach the builder shape after all, through: " + withBuilders
+    );
+  }
+
+  @Test
   @DisplayName("the reflective path allocates exactly what the generated path allocates, and refuses the" + " rest")
   void bothPathsAgreeOnEveryContainer() throws IOException {
     final var types = corpus();
@@ -268,18 +299,21 @@ class ContainerAllocatorCorpusTest {
         // refuses would leave the reflective path free to accept them and fail later, which is the
         // worse divergence of the two: a refusal at plan time becomes a cast error per conversion,
         // and the fail-fast registry the starters build at startup stops catching it.
-        final var key = family.label() + " " + c.getName();
+        // The direction is part of what is recorded. One of the two is the harm this file opens by
+        // naming -- generated accepts, reflective refuses, so a program compiles and then throws --
+        // and the other merely refuses work that would have succeeded. A register that could not
+        // tell them apart would let the first pass on the strength of having recorded the second.
+        final var key =
+          family.label() +
+          " " +
+          c.getName() +
+          " -> generated " +
+          (generatedAllocates ? "allocates" : "refuses") +
+          ", reflective " +
+          (reflectiveAllocates ? "allocates" : "refuses");
         if (generatedAllocates != reflectiveAllocates) {
           observedDivergences.add(key);
-          if (!KNOWN_DIVERGENCES.contains(key)) {
-            divergent.add(
-              key +
-                " -> generated " +
-                (generatedAllocates ? "allocates" : "refuses") +
-                ", reflective " +
-                (reflectiveAllocates ? "allocates" : "refuses")
-            );
-          }
+          if (!KNOWN_DIVERGENCES.contains(key)) divergent.add(key);
         }
       }
     }
