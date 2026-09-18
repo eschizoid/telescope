@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.containerparity;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -121,6 +122,11 @@ class SortedContainerConversionTest {
       Telescope.mapper(TreeSrc.class, TreeDst.class).forward(new TreeSrc(withComparator()))
     );
 
+    // On the word alone this holds whichever refusal was raised, because the other one's remedy
+    // sentence also says "comparator" -- so deleting the comparator check entirely left this green.
+    // The cause separates them: a refusal about the ordering wraps the cast that raised it, and a
+    // refusal about the comparator is reached before anything is inserted and has none.
+    assertNull(thrown.getCause(), () -> "this is the comparator refusal, not the one about ordering");
     assertTrue(
       thrown.getMessage().contains("comparator"),
       () -> "and says which of the two problems it is: " + thrown.getMessage()

@@ -165,12 +165,18 @@ final class ContainerLifts {
     // would mean ordering the new element type with an ordering written for the old one, which
     // cannot be done -- but a target that keeps no order has nothing to carry, and refusing there
     // refuses a conversion that would have worked. So each direction asks about its own output.
+    //
+    // The guard can only fire where the input it reads is itself sorted, which for one direction it
+    // need not be: building a sorted container out of an unsorted one leaves nothing to ask about,
+    // and the result takes natural ordering. That is a silent reordering, and it is what the
+    // generated path does too -- one decision on both, rather than two that differ.
     final boolean converts = elementIso != Iso.<Object>identity();
     final boolean buildingSortedTarget = set && converts && keepsOrder(tgtRaw);
     final boolean buildingSortedSource = set && converts && keepsOrder(srcRaw);
+    // Either of the two above implies this, so it alone decides whether the wrapper is needed.
     final boolean sortedEitherWay = set && (keepsOrder(tgtRaw) || keepsOrder(srcRaw));
     final boolean finish = copyOnWrite(srcRaw) || copyOnWrite(tgtRaw);
-    if (!buildingSortedTarget && !buildingSortedSource && !sortedEitherWay && !finish) return loop;
+    if (!sortedEitherWay && !finish) return loop;
     return Iso.of(
       src -> {
         if (buildingSortedTarget) refuseCarriedComparator(src);
@@ -183,7 +189,14 @@ final class ContainerLifts {
     );
   }
 
-  /** Whether a declared raw type keeps its elements in an order, and so needs them comparable. */
+  /**
+   * Whether a declared raw type keeps its elements in an order, and so needs them comparable.
+   *
+   * <p>Asked of the declaration rather than of the class that ends up allocated, which is the same
+   * answer only because a declaration is either instantiated as itself or stood in for by a family
+   * default assignable to it. A default that did not implement its declaration would break that,
+   * and so would this.
+   */
   private static boolean keepsOrder(final Class<?> raw) {
     return SortedSet.class.isAssignableFrom(raw);
   }
