@@ -238,22 +238,18 @@ final class ContainerLifts {
 
   /**
    * The intermediate allocator for {@code raw}, or {@code null} when there is not one. Probing it
-   * means calling it, and the call can fail rather than answer: an abstract class with a public
-   * no-argument constructor binds a handle that raises {@code InstantiationError} on invocation.
-   * Letting that escape turns a refusal that names the type and its remedy into a linkage error
-   * thrown from the middle of planning.
+   * means calling it, so a class whose constructor throws fails here — which is where it should
+   * fail, while the plan is being built, rather than once per conversion afterwards.
+   *
+   * <p>The call cannot fail by being impossible, only by throwing. Of the two ways the allocator
+   * builds a supplier, one binds a constructor handle and refuses an abstract type before doing so,
+   * and the other binds {@code builder()} and {@code build()}, which are ordinary methods. So no
+   * supplier it returns can raise a linkage error for having nothing to instantiate, which is what
+   * a catch here used to guard against.
    */
   private static Supplier<Object> probeAllocator(final Class<?> raw) {
     final var alloc = Beans.intermediateAllocator(raw);
-    try {
-      return alloc.get() == null ? null : alloc;
-    } catch (final InstantiationError e) {
-      // Only the shape this exists for. A constructor that binds and then throws, or a class whose
-      // static initialiser throws, is a real failure of that class and belongs at plan time where
-      // the starters catch it -- swallowing it defers the same failure to every conversion, or
-      // worse converts a null slot quietly.
-      return null;
-    }
+    return alloc.get() == null ? null : alloc;
   }
 
   /**

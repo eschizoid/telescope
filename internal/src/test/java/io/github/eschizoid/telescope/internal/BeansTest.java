@@ -12,10 +12,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.invoke.MethodHandle;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Properties;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -398,6 +402,54 @@ class BeansTest {
     public String getA() {
       return a;
     }
+  }
+
+  /**
+   * A public class with a public no-argument constructor whose package its module does not export,
+   * or {@code null} when the running image has none of the candidates.
+   */
+  private static Class<?> firstPublicCtorInAnUnexportedPackage() {
+    for (final var name : List.of("sun.nio.ch.Util", "sun.net.www.MessageHeader", "sun.security.util.Length")) {
+      try {
+        final var candidate = Class.forName(name);
+        final var module = candidate.getModule();
+        if (module.isExported(candidate.getPackageName())) continue;
+        if (!Modifier.isPublic(candidate.getModifiers())) continue;
+        if (!Modifier.isPublic(candidate.getDeclaredConstructor().getModifiers())) continue;
+        return candidate;
+      } catch (final ClassNotFoundException | NoSuchMethodException ignored) {
+        // Not in this image, or not of the shape — try the next candidate.
+      }
+    }
+    return null;
+  }
+
+  /** Abstract and unconstructable, but its static {@code builder()} builds something concrete. */
+  abstract static class AbstractWithBuilder {
+
+    protected AbstractWithBuilder() {}
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Concrete extends AbstractWithBuilder {}
+
+    static final class Builder {
+
+      public AbstractWithBuilder build() {
+        return new Concrete();
+      }
+    }
+  }
+
+  /**
+   * Abstract, with a public no-argument constructor — the shape whose constructor binds fine and
+   * then raises {@code InstantiationError} on invocation.
+   */
+  abstract static class AbstractWithPublicCtor {
+
+    public AbstractWithPublicCtor() {}
   }
 
   static final class NothingBuildable {
@@ -814,7 +866,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("LambdaMetafactory invoker auto-unboxes a boxed Integer source value into a setX(int)" + " setter")
+    @DisplayName("the setter invoker auto-unboxes a boxed Integer source value into a setX(int) setter")
     void settersAutoUnboxesPrimitiveArg() {
       // NoArgSetters has setScore(int). The source map carries an Object value (boxed Integer);
       // the LambdaMetafactory-built BiConsumer<Object, Object> must auto-unbox to int. This pins
@@ -896,7 +948,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("builderWriter supports a void-returning setter via the BiConsumer LMF binding")
+    @DisplayName("builderWriter supports a void-returning setter via its BiConsumer binding")
     void builderSupportsVoidSetter() {
       // Classic JavaBean-style builder: setter mutates the builder in place and returns void.
       // BuilderWriter binds it as a BiConsumer<Object, Object> through LambdaMetafactory and
@@ -926,7 +978,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("repeated construct calls reuse the same writer (LMF setter invokers cached per name)")
+    @DisplayName("repeated construct calls reuse the same writer (setter invokers cached per name)")
     void builderReusesAcrossConstructs() {
       // The setter invokers map is populated lazily on first use of each name and reused on
       // subsequent calls. A second construct on the same writer must not rebuild the LMF call site.
@@ -1209,7 +1261,7 @@ class BeansTest {
   }
 
   @Nested
-  @DisplayName("capturedWriter — single-property write through cached LMF setter invoker")
+  @DisplayName("capturedWriter — single-property write through a cached setter invoker")
   class CapturedWriter {
 
     @Test
@@ -1221,7 +1273,7 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("primitive-typed setter unboxes a boxed source value end-to-end through the LMF invoker")
+    @DisplayName("primitive-typed setter unboxes a boxed source value end-to-end through the invoker")
     void primitiveSetterUnboxesBoxedSource() {
       // The cached invoker is built from a BiConsumer<Object, Object> SAM whose instantiated
       // method type is (Cls, Integer) -> void. LMF generates the unbox bridge to setX(int) —
@@ -1355,7 +1407,7 @@ class BeansTest {
   class IntermediateAllocator {
 
     @Test
-    @DisplayName("class with a public no-arg ctor yields a fresh instance via the LMF-bound ctor Supplier")
+    @DisplayName("class with a public no-arg ctor yields a fresh instance via the bound ctor Supplier")
     void noArgCtorYieldsFreshInstance() {
       final Supplier<Object> supplier = Beans.intermediateAllocator(NoArgFields.class);
       final var built = supplier.get();
@@ -1389,6 +1441,70 @@ class BeansTest {
       final Supplier<Object> supplier = Beans.intermediateAllocator(NothingBuildable.class);
       assertNotNull(supplier, "the allocator Supplier itself must be cached even when it returns null");
       assertNull(supplier.get(), "no-buildable class yields a null result, not a thrown exception");
+    }
+
+    @Test
+    @DisplayName("a class in a module that does not open itself still allocates through its public ctor")
+    void javaBaseClassAllocatesThroughPublicLookup() {
+      // privateLookupIn needs the target's module to open the package to us, and java.base opens
+      // nothing. Calling a public constructor never needed that access -- only binding one through
+      // LambdaMetafactory does -- so refusing here told adopters to add an --add-opens for a module
+      // they do not control, for a constructor that was callable the whole time.
+      for (final var cls : List.of(Properties.class, ArrayList.class, LinkedHashMap.class)) {
+        final var built = Beans.intermediateAllocator(cls).get();
+        assertInstanceOf(cls, built, () -> cls.getName() + " has a public no-arg constructor");
+      }
+    }
+
+    @Test
+    @DisplayName("a public constructor the public lookup cannot reach either yields no allocator")
+    void publicConstructorInAnUnexportedPackageYieldsNoAllocator() {
+      // The public-lookup arm exists for a type whose module declines privateLookupIn. Declining it
+      // is not sufficient on its own: the public lookup binds a public constructor only where the
+      // declaring package is exported, so a public class in a package its module keeps to itself
+      // satisfies neither lookup. The answer then has to be that there is no allocator, not an
+      // exception out of the asking -- the builder arm below still gets its turn.
+      //
+      // Only the platform has classes of this shape. Anything on the class path is in the unnamed
+      // module, which opens every package, so privateLookupIn succeeds and this arm is never
+      // reached. The candidates are scanned rather than fixed so that one being removed from a
+      // future release does not fail this for a reason unrelated to what it checks.
+      final var unreachable = firstPublicCtorInAnUnexportedPackage();
+      assertNotNull(
+        unreachable,
+        "no candidate had the shape this covers; add one from a non-exported package of any" + " platform module"
+      );
+
+      assertNull(
+        Beans.intermediateAllocator(unreachable).get(),
+        () -> unreachable.getName() + " is reachable through neither lookup, so there is no allocator"
+      );
+    }
+
+    @Test
+    @DisplayName("an abstract class with a static builder() still allocates, through the builder")
+    void abstractClassWithBuilderStillAllocates() {
+      // Abstractness stops a constructor from producing an instance. It does not stop a builder:
+      // build() returns something concrete, and what it was declared to return says nothing about
+      // what it makes. A guard placed before both arms rather than inside the constructor one
+      // refuses this type -- deleting a capability, in the direction of doing less.
+      final var built = Beans.intermediateAllocator(AbstractWithBuilder.class).get();
+
+      assertNotNull(built, "the builder arm does not care that the declared type is abstract");
+      assertInstanceOf(AbstractWithBuilder.class, built);
+    }
+
+    @Test
+    @DisplayName("an abstract class answers no, rather than yielding a supplier that raises a linkage error")
+    void abstractClassAnswersNullRatherThanThrowing() {
+      // An abstract class declares a constructor like any other and binds like any other, so the
+      // supplier builds and then raises InstantiationError when something calls it. Callers use
+      // this to ask whether a type can be allocated; the answer is no, and it has to arrive as a
+      // value rather than as an error thrown out of the asking.
+      final var supplier = Beans.intermediateAllocator(AbstractWithPublicCtor.class);
+
+      assertNotNull(supplier, "the allocator Supplier itself is still cached");
+      assertNull(supplier.get(), "an abstract class cannot be instantiated, so the answer is null");
     }
   }
 

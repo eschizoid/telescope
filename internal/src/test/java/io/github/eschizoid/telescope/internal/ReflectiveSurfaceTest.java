@@ -270,7 +270,7 @@ class ReflectiveSurfaceTest {
   class PositionalReaders {
 
     @Test
-    @DisplayName("record path reads each component via the LMF-cached positional reader")
+    @DisplayName("record path reads each component via the cached positional reader")
     void recordReadersReturnComponentValues() {
       final var readers = Reflective.RECORDS.positionalReaders(SimpleUser.class, null);
       final var user = new SimpleUser("gabe", 33);

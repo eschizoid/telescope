@@ -95,9 +95,23 @@ outside that table is reached instead through a public-lookup constructor handle
 constructor needs a `reflect-config` entry like any other reflective target. On the JVM it needs nothing, so this is a
 difference the JVM run will not show you.
 
-This applies only to the tail. Every container the table names — `List`, `Set`, `Map`, their sorted and concurrent
-interfaces, `ArrayList`, `LinkedHashSet`, `LinkedHashMap`, `TreeMap` and the rest — is allocated by a direct `new` and
-needs no metadata at all. A field declared at one of those, which is nearly every field, is unaffected.
+Every container the table names — `List`, `Set`, `Map`, their sorted and concurrent interfaces, `ArrayList`,
+`LinkedHashSet`, `LinkedHashMap`, `TreeMap` and the rest — is allocated by a direct `new` when the deep-map route
+reaches it, and needs no metadata at all.
+
+The table is not the only route, though, and two others have no table in front of them. A container component whose
+declared type carries no type arguments never yields a container view, so it is copied element-wise instead; and the
+pairing gate probes whether such a copy can be built. Both ask `Beans.intermediateAllocator`, which reaches a public
+constructor through the same public lookup whenever the declaring module declines `privateLookupIn` — which every named
+platform module does. So a `Properties`, `ArrayList` or `LinkedHashMap` reached by one of those two routes needs a
+`reflect-config` entry even though the table names it.
+
+The default tree does not reach them: it refuses to materialise a platform type as a default at all, so the only
+constructor it can want through the public lookup belongs to an adopter's own class in a module that declines `opens`.
+
+The rule that covers both: if a container class is constructed by anything other than the deep-map table, register its
+no-argument constructor. Registering the handful your model actually declares costs nothing if it turns out the table
+covered them.
 
 What reaches the handle is a declared type the table does not name and whose family default cannot stand in for it: a
 concrete JDK container outside the list, or a container class of the adopter's own. Give such a class an entry for its
