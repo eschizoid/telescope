@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal.optics;
 
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
@@ -37,13 +38,73 @@ import java.util.stream.Stream;
  * Non-matching elements pass through {@code modify} unchanged.
  */
 public interface Traversal<S, A> extends Fold<S, A>, Setter<S, A> {
-  /** Narrow this traversal to focus only the {@code A}s matching {@code predicate}. */
-  default Traversal<S, A> filter(final Predicate<? super A> predicate) {
+  /** Whether successful empty effectful updates must still visit parent observers. */
+  default boolean hasObservers() {
+    return false;
+  }
+
+  /** Enumerate values for an effectful update without running read-side observers. */
+  default Stream<A> getAllForUpdate(final S source) {
+    return getAll(source);
+  }
+
+  /** Observe reads and rebuilt write values without changing the focused value. */
+  default Traversal<S, A> observe(final Consumer<? super A> observer) {
+    java.util.Objects.requireNonNull(observer, "observer");
     final var self = this;
     return new Traversal<>() {
       @Override
+      public boolean hasObservers() {
+        return true;
+      }
+
+      @Override
+      public Stream<A> getAll(final S source) {
+        return self.getAll(source).peek(observer);
+      }
+
+      @Override
+      public Stream<A> getAllForUpdate(final S source) {
+        return self.getAllForUpdate(source);
+      }
+
+      @Override
+      public boolean visitWhile(final S source, final Predicate<? super A> visitor) {
+        return self.visitWhile(source, a -> {
+          observer.accept(a);
+          return visitor.test(a);
+        });
+      }
+
+      @Override
+      public S modify(final S source, final Function<? super A, ? extends A> f) {
+        return self.modify(source, a -> {
+          final A updated = f.apply(a);
+          observer.accept(updated);
+          return updated;
+        });
+      }
+    };
+  }
+
+  /** Narrow this traversal to focus only the {@code A}s matching {@code predicate}. */
+  default Traversal<S, A> filter(final Predicate<? super A> predicate) {
+    final var self = this;
+    final boolean observed = hasObservers();
+    return new Traversal<>() {
+      @Override
+      public boolean hasObservers() {
+        return observed;
+      }
+
+      @Override
       public Stream<A> getAll(final S source) {
         return self.getAll(source).filter(predicate);
+      }
+
+      @Override
+      public Stream<A> getAllForUpdate(final S source) {
+        return self.getAllForUpdate(source).filter(predicate);
       }
 
       @Override
@@ -88,8 +149,8 @@ public interface Traversal<S, A> extends Fold<S, A>, Setter<S, A> {
     final S source,
     final Function<? super A, ? extends Kind<F, A>> fn
   ) {
-    final List<A> allAs = getAll(source).toList();
-    if (allAs.isEmpty()) return applicative.pure(source);
+    final List<A> allAs = getAllForUpdate(source).toList();
+    if (allAs.isEmpty()) return applicative.pure(hasObservers() ? modify(source, Function.identity()) : source);
 
     final Object[] slots = new Object[allAs.size()];
     Kind<F, Object[]> sequenced = applicative.pure(slots);
@@ -120,10 +181,21 @@ public interface Traversal<S, A> extends Fold<S, A>, Setter<S, A> {
   /** {@code Traversal . anything = Traversal} */
   default <B> Traversal<S, B> then(final Traversal<A, B> next) {
     final var self = this;
+    final boolean observed = hasObservers() || next.hasObservers();
     return new Traversal<>() {
+      @Override
+      public boolean hasObservers() {
+        return observed;
+      }
+
       @Override
       public Stream<B> getAll(final S source) {
         return self.getAll(source).flatMap(next::getAll);
+      }
+
+      @Override
+      public Stream<B> getAllForUpdate(final S source) {
+        return self.getAllForUpdate(source).flatMap(next::getAllForUpdate);
       }
 
       @Override

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import io.github.eschizoid.telescope.effects.Either;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -26,6 +27,30 @@ class FocusCodegenTest {
   @Nested
   @DisplayName("Generated *Path navigators")
   class Generated {
+
+    @Test
+    @DisplayName("Generated navigators forward observe at the current focus")
+    void observeForwarder() {
+      final var seen = new ArrayList<FocusPerson>();
+      final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
+      final var path = FocusPersonTelescope.of().observe(seen::add).field(FocusPerson::name);
+
+      assertEquals("alice", path.read(alice));
+      assertEquals(List.of(alice), seen);
+    }
+
+    @Test
+    void asyncObserveForwarder() {
+      final var seen = new ArrayList<FocusPerson>();
+      final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
+      final var path = FocusPersonTelescope.of()
+        .observeAsync(seen::add, Runnable::run, (value, failure) -> {
+          throw new AssertionError(failure);
+        })
+        .field(FocusPerson::name);
+      assertEquals("ALICE", path.update(alice, String::toUpperCase).name());
+      assertEquals("ALICE", seen.get(0).name());
+    }
 
     @Test
     @DisplayName("FocusPersonTelescope.of().name() reads and updates the name field")
