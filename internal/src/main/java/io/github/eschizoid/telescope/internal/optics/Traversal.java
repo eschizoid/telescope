@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal.optics;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -50,7 +51,7 @@ public interface Traversal<S, A> extends Fold<S, A>, Setter<S, A> {
 
   /** Observe reads and rebuilt write values without changing the focused value. */
   default Traversal<S, A> observe(final Consumer<? super A> observer) {
-    java.util.Objects.requireNonNull(observer, "observer");
+    Objects.requireNonNull(observer, "observer");
     final var self = this;
     return new Traversal<>() {
       @Override
@@ -60,6 +61,8 @@ public interface Traversal<S, A> extends Fold<S, A>, Setter<S, A> {
 
       @Override
       public Stream<A> getAll(final S source) {
+        // Stream.peek may be elided by terminals that do not traverse. Counting and one-focus
+        // terminals must ride visitWhile below, not a stream terminal over getAll.
         return self.getAll(source).peek(observer);
       }
 

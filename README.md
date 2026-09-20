@@ -249,34 +249,6 @@ final Telescope<Company, String> meteredEmails = Telescope.of(Company.class)
 final List<String> values = meteredEmails.toList(company);
 ```
 
-For example, publish updated user snapshots to a message queue for a downstream search index. The application's
-`queuePublisher.publish(topic, message)` method sends synchronously on the supplied executor:
-
-```java
-record UserEmailSnapshot(String name, String email) {}
-
-final Telescope<Company, String> reportedEmails = Telescope.of(Company.class)
-  .each(Company::departments)
-  .each(Department::teams)
-  .each(Team::users)
-  .observeAsync(
-    (user) -> queuePublisher.publish("user-email-snapshots", new UserEmailSnapshot(user.name(), user.email())),
-    callbackExecutor,
-    (user, error) -> log.warn("Could not publish email snapshot for {}", user.name(), error)
-  )
-  .field(User::email);
-
-final Company lowered = reportedEmails.update(company, String::toLowerCase);
-```
-
-The queue receives snapshots built from rebuilt Users with lowercase emails. The transformation does not wait for
-publishing, including when you use `updateAsync`. This publishes a snapshot for every reached User, even if their email
-did not change. Callback runtime failures and rejected submissions go to the error handler; accepted tasks cannot be
-rolled back if a later step fails. For events that must be published exactly when a database write commits, use a
-transactional outbox instead. If your publisher returns a future, handle its eventual failure inside the callback. Keep
-cheap local counters synchronous to avoid scheduling overhead. See
-[deferred observation](docs/effects.md#deferred-observation) for executor configuration and lifecycle.
-
 ### Mapping
 
 Mapping is the navigation primitive applied across two shapes. Same tree, now translated to a partner-facing

@@ -40,19 +40,6 @@ class FocusCodegenTest {
     }
 
     @Test
-    void asyncObserveForwarder() {
-      final var seen = new ArrayList<FocusPerson>();
-      final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));
-      final var path = FocusPersonTelescope.of()
-        .observeAsync(seen::add, Runnable::run, (value, failure) -> {
-          throw new AssertionError(failure);
-        })
-        .field(FocusPerson::name);
-      assertEquals("ALICE", path.update(alice, String::toUpperCase).name());
-      assertEquals("ALICE", seen.get(0).name());
-    }
-
-    @Test
     @DisplayName("FocusPersonTelescope.of().name() reads and updates the name field")
     void nameNavigation() {
       final var alice = new FocusPerson("alice", 30, new FocusAddress("nyc", "10001"));

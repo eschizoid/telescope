@@ -4,15 +4,13 @@ import io.github.eschizoid.telescope.Telescope;
 import java.util.ArrayDeque;
 import java.util.List;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import org.openjdk.jmh.annotations.*;
 
 /**
- * Submission cost uses a pre-sized queue drained outside timing; completed work includes a worker
- * barrier.
+ * Manual executor submission uses a pre-sized queue drained outside timing. The plain path is the
+ * control for traversal cost.
  */
 @State(Scope.Thread)
 @BenchmarkMode(Mode.AverageTime)
@@ -35,10 +33,7 @@ public class ObservationBenchmark {
   private Telescope<Root, Integer> plain;
   private Telescope<Root, Integer> synchronous;
   private Telescope<Root, Integer> manual;
-  private Telescope<Root, Integer> deferred;
-  private Telescope<Root, Integer> workerPath;
   private ArrayDeque<Runnable> queue;
-  private ExecutorService worker;
   private volatile long consumed;
 
   @Setup(Level.Trial)
@@ -52,13 +47,6 @@ public class ObservationBenchmark {
     final Executor executor = queue::add;
     synchronous = plain.observe(this::consume);
     manual = plain.observe(value -> executor.execute(() -> consume(value)));
-    deferred = plain.observeAsync(this::consume, executor, (value, failure) -> {
-      throw new AssertionError(failure);
-    });
-    worker = Executors.newSingleThreadExecutor();
-    workerPath = plain.observeAsync(this::consume, worker, (value, failure) -> {
-      throw new AssertionError(failure);
-    });
   }
 
   private void consume(Integer value) {
@@ -68,11 +56,6 @@ public class ObservationBenchmark {
   @TearDown(Level.Invocation)
   public void drain() {
     while (!queue.isEmpty()) queue.remove().run();
-  }
-
-  @TearDown(Level.Trial)
-  public void close() {
-    worker.close();
   }
 
   @Benchmark
@@ -91,30 +74,17 @@ public class ObservationBenchmark {
   }
 
   @Benchmark
-  public long deferredRead() {
-    return deferred.count(input);
-  }
-
-  @Benchmark
   public Root plainUpdate() {
     return plain.update(input, value -> value + 1);
   }
 
   @Benchmark
+  public Root synchronousUpdate() {
+    return synchronous.update(input, value -> value + 1);
+  }
+
+  @Benchmark
   public Root manualUpdate() {
     return manual.update(input, value -> value + 1);
-  }
-
-  @Benchmark
-  public Root deferredUpdate() {
-    return deferred.update(input, value -> value + 1);
-  }
-
-  /** Includes completion of every callback; one barrier future per batch, never per value. */
-  @Benchmark
-  public Root completedWorkerUpdate() throws Exception {
-    final var result = workerPath.update(input, value -> value + 1);
-    worker.submit(() -> {}).get();
-    return result;
   }
 }

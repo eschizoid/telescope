@@ -716,16 +716,6 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         "> observer) { return path.observe(observer); }"
     );
     out.println();
-    out.println(
-      "  public Telescope<R, " +
-        focusType +
-        "> observeAsync(final Consumer<? super " +
-        focusType +
-        "> callback, final Executor executor, final BiConsumer<? super " +
-        focusType +
-        ", ? super Throwable> onError) { return path.observeAsync(callback, executor, onError); }"
-    );
-    out.println();
     // Introspection — the generated navigator answers explain()/trace() from its composed path,
     // whose trail the .hop("...") calls recorded at each navigator method.
     out.println("  public OpticReport explain() { return path.explain(); }");
@@ -894,7 +884,6 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         out.println("import java.util.Set;");
         out.println("import java.util.concurrent.CompletableFuture;");
         out.println("import java.util.concurrent.Executor;");
-        out.println("import java.util.function.BiConsumer;");
         out.println("import java.util.function.BiFunction;");
         out.println("import java.util.function.Consumer;");
         out.println("import java.util.function.Function;");

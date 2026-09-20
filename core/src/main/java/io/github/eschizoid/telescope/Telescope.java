@@ -47,7 +47,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -1332,22 +1331,10 @@ public sealed class Telescope<
    * }</pre>
    */
   public Telescope<S, A> observe(final Consumer<? super A> observer) {
-    // The callback makes multi-edit fusion's changed evaluation order observable.
+    // No hop record on purpose: Fusion rebuilds edits from hop records, not the composed optic,
+    // so a fused pass would never call the observer. Null hops makes Fusion decline and the
+    // sequential fold run the composed optic instead.
     return new Telescope<>(optic.observe(observer), fieldOptics, chain, firstHopName, trail);
-  }
-
-  /**
-   * Submit observations to a caller-owned executor without waiting for callback completion. Reads
-   * submit current values; writes submit rebuilt values after deeper edits. Runtime callback
-   * failures and rejected submissions go to {@code onError}. The caller owns executor shutdown and
-   * callback thread safety. A direct executor may execute callbacks inline.
-   */
-  public Telescope<S, A> observeAsync(
-    final Consumer<? super A> callback,
-    final Executor executor,
-    final BiConsumer<? super A, ? super Throwable> onError
-  ) {
-    return observe(new AsyncObserver<>(callback, executor, onError));
   }
 
   /**
@@ -1713,8 +1700,8 @@ public sealed class Telescope<
    * #toList} for every focused value, or {@link #exists} / {@link #count} to test presence.
    */
   public A read(final S source) {
-    if (source == null) throw noValue();
     if (optic instanceof final Lens<S, A> lens) {
+      if (source == null) throw noValue();
       return lens.get(source);
     }
     if (optic instanceof final Affine<S, A> affine) {
@@ -1771,8 +1758,8 @@ public sealed class Telescope<
    * non-throwing sibling of {@link #read}.
    */
   public Optional<A> find(final S source) {
-    if (source == null) return Optional.empty();
     if (optic instanceof final Lens<S, A> lens) {
+      if (source == null) return Optional.empty();
       return Optional.ofNullable(lens.get(source));
     }
     if (optic instanceof final Affine<S, A> affine) {

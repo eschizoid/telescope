@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import static io.github.eschizoid.telescope.Edit.over;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -17,6 +18,19 @@ import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.Test;
 
 class TelescopeObserveTest {
+
+  @Test
+  void observedTraversalCanVisitANullRoot() {
+    final var seen = new ArrayList<String>();
+    final var observed = Telescope.of(String.class).observe(seen::add);
+
+    assertNull(observed.read(null));
+    assertEquals(Arrays.asList((String) null), seen);
+    seen.clear();
+
+    assertEquals(Optional.empty(), observed.find(null));
+    assertEquals(Arrays.asList((String) null), seen);
+  }
 
   record User(String email) {}
 
