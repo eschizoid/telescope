@@ -9,12 +9,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.effects.Either;
 import io.github.eschizoid.telescope.effects.Validated;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import org.junit.jupiter.api.Test;
 
 class TelescopeObserveTest {
@@ -95,6 +97,26 @@ class TelescopeObserveTest {
     seen.clear();
     path.updateIndexed(COMPANY, (i, email) -> i + email);
     assertEquals(List.of("user:0A@X", "user:1B@X", "team:0A@X", "department:0A@X"), seen);
+  }
+
+  @Test
+  void callerCanDeferObservationWithAnExecutor() {
+    final var tasks = new ArrayDeque<Runnable>();
+    final Executor executor = tasks::addLast;
+    final var delivered = new ArrayList<String>();
+    final var path = Telescope.of(Team.class)
+      .each(Team::users)
+      .observe(user -> executor.execute(() -> delivered.add(user.email())))
+      .field(User::email);
+    final var team = COMPANY.departments().get(0).teams().get(0);
+
+    final var lowered = path.update(team, String::toLowerCase);
+    assertEquals(List.of("a@x", "b@x"), lowered.users().stream().map(User::email).toList());
+    assertTrue(delivered.isEmpty());
+    assertEquals(2, tasks.size());
+
+    while (!tasks.isEmpty()) tasks.removeFirst().run();
+    assertEquals(List.of("a@x", "b@x"), delivered);
   }
 
   @Test
