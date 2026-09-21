@@ -48,6 +48,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -1318,6 +1319,25 @@ public sealed class Telescope<
   }
 
   /**
+   * Observe each value reached at this point in the path without changing it. Reads call the
+   * observer on the current value; writes call it on the rebuilt value after all deeper edits. The
+   * callback runs synchronously at terminal execution, never while building the path. Effectful
+   * updates observe only successful rebuilt values; {@link #trace(Object)} does not run observers.
+   *
+   * <pre>{@code
+   * Telescope.of(Company.class)
+   *     .each(Company::departments).observe(dept -> log(dept))
+   *     .each(Department::teams).observe(team -> log(team));
+   * }</pre>
+   */
+  public Telescope<S, A> observe(final Consumer<? super A> observer) {
+    // No hop record on purpose: Fusion rebuilds edits from hop records, not the composed optic,
+    // so a fused pass would never call the observer. Null hops makes Fusion decline and the
+    // sequential fold run the composed optic instead.
+    return new Telescope<>(optic.observe(observer), fieldOptics, chain, firstHopName, trail);
+  }
+
+  /**
    * Compose a post-read hook onto the path: every value flowing OUT of this telescope (via {@link
    * #read}, {@link #find}, {@link #toList}, {@link #count}, {@link #exists}, the {@link #update}
    * family's pre-hook leaf, or downstream {@link #then} composition) is passed through {@code hook}
@@ -1492,7 +1512,7 @@ public sealed class Telescope<
       // bridge). Render what the telescope actually produces — the executed focus — not the raw
       // input, which would be wrong whenever the output differs from the input; fall back to the
       // input when there is no focus.
-      final var focus = find(input);
+      final var focus = findForTrace(input);
       return new Trace(List.of(Trace.Node.leaf(renderValue(focus.isPresent() ? focus.get() : input))));
     }
     final var rowCount = trail
@@ -1511,15 +1531,23 @@ public sealed class Telescope<
     // mapping
     // rows off the navigated leaf would misread. Fall back to a safe execution-only trace of the
     // final value rather than emit a misleading per-row breakdown.
-    return new Trace(List.of(Trace.Node.leaf(renderValue(find(input).orElse(null)))));
+    return new Trace(List.of(Trace.Node.leaf(renderValue(findForTrace(input).orElse(null)))));
   }
 
   // A mapping-built Telescope (Telescope.map) carries field Rows; its trace shows the same value
   // column as Mapper.trace — run the conversion forward to get the output, then render each row's
   // source value → target value. Shares the renderer so the two surfaces can't drift.
   private Trace mappingRowsTrace(final S input) {
-    final var output = find(input).orElse(null);
+    final var output = findForTrace(input).orElse(null);
     return MappingTraces.of(input, output, trail);
+  }
+
+  private Optional<A> findForTrace(final S input) {
+    if (input == null) return Optional.empty();
+    try (final var values = optic.getAllForUpdate(input)) {
+      final var iterator = values.limit(1).iterator();
+      return iterator.hasNext() ? Optional.ofNullable(iterator.next()) : Optional.empty();
+    }
   }
 
   private static Trace.Node traceHop(

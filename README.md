@@ -212,6 +212,43 @@ emails.toList(company);   // List<String> of every email
 emails.count(company);    // how many
 ```
 
+To log or record metrics at any point in the path, attach an observer after that hop:
+
+```java
+final Telescope<Company, String> observedEmails = Telescope.of(Company.class)
+  .each(Company::departments)
+  .observe((dept) -> log.info("department: {}", dept.name()))
+  .each(Department::teams)
+  .observe((team) -> log.info("team: {}", team.name()))
+  .each(Team::users)
+  .observe((user) -> log.info("user: {}", user.email()))
+  .field(User::email);
+
+final Company result = observedEmails.update(company, String::toLowerCase);
+```
+
+`observe` runs synchronously when a terminal operation executes, once for each value reached there. Reads report the
+current values from the outside in; updates report rebuilt values from the inside out. Failed input futures,
+`Either.Left`, `Optional.empty`, and `Validated.Invalid` skip observation. A later reconstruction failure cannot undo
+observations already emitted.
+
+For example, with an injected
+[Micrometer `MeterRegistry`](https://docs.micrometer.io/micrometer/reference/concepts/counters.html), count users
+visited by a read:
+
+```java
+final var usersVisited = meterRegistry.counter("telescope.users.visited");
+
+final Telescope<Company, String> meteredEmails = Telescope.of(Company.class)
+  .each(Company::departments)
+  .each(Department::teams)
+  .each(Team::users)
+  .observe((user) -> usersVisited.increment())
+  .field(User::email);
+
+final List<String> values = meteredEmails.toList(company);
+```
+
 ### Mapping
 
 Mapping is the navigation primitive applied across two shapes. Same tree, now translated to a partner-facing
