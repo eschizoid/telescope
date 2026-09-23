@@ -1,9 +1,11 @@
 package io.github.eschizoid.telescope.containerparity;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.compute;
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
+import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,6 +16,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -68,6 +71,19 @@ class SortedContainerConversionTest {
   record CarriedComparatorSrc(SortedSet<Unordered> items) {}
 
   record CarriedComparatorDst(TreeSet<Unordered> items) {}
+
+  // Stamped by a supplier that counts, so the number of times an element is converted is readable
+  // off the result rather than inferred. Comparable, so a sorted target accepts it.
+  record Stamped(String v, int seq) implements Comparable<Stamped> {
+    @Override
+    public int compareTo(final Stamped other) {
+      return v.compareTo(other.v);
+    }
+  }
+
+  record StampedSrc(Set<Ordered> items) {}
+
+  record StampedSortedDst(SortedSet<Stamped> items) {}
 
   record OrderedSrc(Set<Ordered> items) {}
 
@@ -133,6 +149,59 @@ class SortedContainerConversionTest {
   }
 
   @Test
+  @DisplayName("a cast from an element past the first is not called an ordering problem either")
+  void aLaterElementsCastIsNotReportedAsAnOrderingProblem() {
+    // The sibling above pollutes the first element, so the refusal it proves is the one guarding
+    // the element the check looks at. This pollutes a later one, which the check never sees: the
+    // cast comes from the insert loop itself. Without this, an implementation that wrapped the
+    // whole build back up in the old blanket catch would pass the sibling and go unnoticed, since
+    // nothing would ever reach the catch.
+    final var raw = new LinkedHashSet<Object>();
+    raw.add(new Ordered("a"));
+    raw.add("not an Ordered");
+    @SuppressWarnings("unchecked")
+    final var polluted = (Set<Ordered>) (Set<?>) raw;
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(OrderedSrc.class, OrderedSortedDst.class).forward(new OrderedSrc(polluted))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("Comparable"),
+      () -> "a cast from the build should keep its own cause: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("building a sorted target converts each element exactly once")
+  void aSortedTargetConvertsEachElementOnce() {
+    // The ordering question is asked of a converted element, so where it is asked decides how many
+    // times that element is converted. Asked from outside the loop, the first element would be
+    // converted twice -- once to test and once to insert -- and a conversion that counts, stamps an
+    // id or reads a clock would give the first element a different value than it would have had.
+    // The seq values are the count: a doubled first conversion reads 2 and 3 rather than 1 and 2.
+    final var counter = new AtomicInteger();
+    final var elementMapper = Telescope.mapper(
+      Ordered.class,
+      Stamped.class,
+      to(Ordered::v, Stamped::v),
+      compute(Stamped::seq, counter::incrementAndGet)
+    );
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+    items.add(new Ordered("b"));
+
+    final var out = Telescope.mapper(
+      StampedSrc.class,
+      StampedSortedDst.class,
+      via(StampedSrc::items, StampedSortedDst::items, elementMapper)
+    ).forward(new StampedSrc(items));
+
+    assertEquals(List.of(new Stamped("a", 1), new Stamped("b", 2)), List.copyOf(out.items()));
+    assertEquals(2, counter.get(), "two elements should mean two conversions");
+  }
+
+  @Test
   @DisplayName("a sorted target built with a carried comparator does not ask its elements to be Comparable")
   void carriedComparatorRemovesTheOrderingQuestion() {
     // The element type is unchanged, so nothing is converted and the source's comparator crosses
@@ -174,12 +243,15 @@ class SortedContainerConversionTest {
     );
 
     // On the word alone this holds whichever refusal was raised, because the other one's remedy
-    // sentence also says "comparator" -- so deleting the comparator check entirely left this green.
-    // The cause separates them: a refusal about the ordering wraps the cast that raised it, and a
-    // refusal about the comparator is reached before anything is inserted and has none.
-    assertNull(thrown.getCause(), () -> "this is the comparator refusal, not the one about ordering");
+    // sentence also says "comparator" -- so deleting the comparator check entirely would leave it
+    // green. Neither refusal carries a cause any more, both being reached before anything is
+    // inserted, so what separates them is that only the one about ordering names Comparable.
+    assertFalse(
+      thrown.getMessage().contains("Comparable"),
+      () -> "this is the comparator refusal, not the one about ordering: " + thrown.getMessage()
+    );
     assertTrue(
-      thrown.getMessage().contains("comparator"),
+      thrown.getMessage().contains("cannot be reused"),
       () -> "and says which of the two problems it is: " + thrown.getMessage()
     );
   }
