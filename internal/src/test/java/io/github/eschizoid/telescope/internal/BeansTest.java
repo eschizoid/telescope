@@ -271,6 +271,54 @@ class BeansTest {
     }
   }
 
+  // An abstract base whose static builder() every subclass inherits, and whose build() is declared
+  // as the base while always making one particular subclass. Rebuilding a sibling through it is the
+  // shape no declaration can separate from the legitimate generic-builder case.
+  abstract static class Animal {
+
+    private final String name;
+
+    Animal(final String name) {
+      this.name = name;
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      private String name;
+
+      public Builder name(final String n) {
+        this.name = n;
+        return this;
+      }
+
+      public Animal build() {
+        return new Dog(name);
+      }
+    }
+  }
+
+  static final class Dog extends Animal {
+
+    Dog(final String name) {
+      super(name);
+    }
+  }
+
+  static final class Ferret extends Animal {
+
+    Ferret(final String name) {
+      super(name);
+    }
+  }
+
   static final class WithBuilderWithSetter {
 
     private final String name;
@@ -915,6 +963,33 @@ class BeansTest {
     @DisplayName("builderWriter throws if the builder type has no build() method")
     void builderRequiresBuildMethod() {
       assertThrows(IllegalStateException.class, () -> Beans.builderWriter(BuilderWithoutBuild.class));
+    }
+
+    @Test
+    @DisplayName("construct refuses a build() result that is not an instance of the bean rebuilt")
+    void builderReturningAForeignTypeIsRefused() {
+      // Ferret inherits Animal.builder(), whose build() is declared as Animal and always makes a
+      // Dog. The result is bound to Object so the caller's own checkcast stays out of the way:
+      // without the guard this returns a Dog and throws nothing at all, so an assertion that
+      // accepted any throwable would pass on the unguarded path too.
+      final var writer = Beans.builderWriter(Ferret.class);
+      final var failure = assertThrows(IllegalStateException.class, () -> {
+        final Object built = writer.construct(new String[] { "name" }, n -> "fen");
+      });
+      assertTrue(failure.getMessage().contains(Ferret.class.getName()), failure.getMessage());
+      assertTrue(failure.getMessage().contains(Dog.class.getName()), failure.getMessage());
+    }
+
+    @Test
+    @DisplayName("construct admits a build() result that is a subtype of the bean rebuilt")
+    void builderReturningASubtypeIsAdmitted() {
+      // The control for the refusal above, and the reason it tests the value rather than the
+      // declared return type: an abstract bean whose build() makes a concrete subclass is the
+      // ordinary shape, and a guard that refused it would refuse every generic builder too.
+      final var writer = Beans.builderWriter(Animal.class);
+      final var built = writer.construct(new String[] { "name" }, n -> "rex");
+      assertEquals("rex", built.getName());
+      assertInstanceOf(Dog.class, built);
     }
 
     @Test
