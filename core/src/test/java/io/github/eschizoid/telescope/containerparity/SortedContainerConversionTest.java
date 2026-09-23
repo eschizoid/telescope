@@ -2,7 +2,6 @@ package io.github.eschizoid.telescope.containerparity;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -78,9 +77,9 @@ class SortedContainerConversionTest {
   @Test
   @DisplayName("an element type that cannot be ordered is refused by name, not by a bare cast")
   void unorderableElementIsRefusedByName() {
-    // The insert raises a ClassCastException naming the element class and Comparable and nothing
-    // else — not the container, not the field, not the library. Next door to two diagnostics this
-    // codebase writes carefully for the same family of problem.
+    // Asked of the first converted element before anything is inserted, so the refusal carries no
+    // cause: there is no cast to keep, because none was allowed to happen. What it names instead is
+    // the element class, which the cast it replaces never did.
     final var thrown = assertThrows(IllegalStateException.class, () ->
       Telescope.mapper(PlainSetSrc.class, SortedSetDst.class).forward(new PlainSetSrc(onePlain()))
     );
@@ -93,10 +92,32 @@ class SortedContainerConversionTest {
       thrown.getMessage().contains("Comparable"),
       () -> "and what the element type is missing: " + thrown.getMessage()
     );
-    assertInstanceOf(
-      ClassCastException.class,
-      thrown.getCause(),
-      "with the cast it replaces kept as the cause rather than discarded"
+    assertTrue(
+      thrown.getMessage().contains(Renamed.class.getName()),
+      () -> "and which element type is missing it: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a cast raised for another reason keeps its own cause, and is not called an ordering problem")
+  void unrelatedCastIsNotReportedAsAnOrderingProblem() {
+    // Both element types here implement Comparable, so ordering is not what fails. The cast comes
+    // from the element conversion reading a component off a value that is not the type it was
+    // declared as — the same shape a bridge handing back the wrong type produces. Naming Comparable
+    // here would name a cause that is not the cause, and send the reader to add a comparator that
+    // would change nothing.
+    final var raw = new LinkedHashSet<Object>();
+    raw.add("not an Ordered");
+    @SuppressWarnings("unchecked")
+    final var polluted = (Set<Ordered>) (Set<?>) raw;
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(OrderedSrc.class, OrderedSortedDst.class).forward(new OrderedSrc(polluted))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("Comparable"),
+      () -> "a cast from elsewhere should not be dressed up as an ordering refusal: " + thrown.getMessage()
     );
   }
 

@@ -180,11 +180,13 @@ final class ContainerLifts {
     return Iso.of(
       src -> {
         if (buildingSortedTarget) refuseCarriedComparator(src);
-        return finishCollection(orderable(() -> loop.to(src), tgtRaw), tgtRaw);
+        refuseUnorderableElement(src, elementIso::to, tgtRaw);
+        return finishCollection(loop.to(src), tgtRaw);
       },
       tgt -> {
         if (buildingSortedSource) refuseCarriedComparator(tgt);
-        return finishCollection(orderable(() -> loop.from(tgt), srcRaw), srcRaw);
+        refuseUnorderableElement(tgt, elementIso::from, srcRaw);
+        return finishCollection(loop.from(tgt), srcRaw);
       }
     );
   }
@@ -211,27 +213,37 @@ final class ContainerLifts {
   }
 
   /**
-   * Builds the container, turning the cast a sorted one raises on its first insert into a refusal
-   * that says whose element type is not orderable and what to do about it.
+   * Refuses a sorted output whose converted element type cannot be ordered, asked before anything
+   * is inserted rather than caught afterwards.
    *
-   * <p>The bare cast names the element class and {@code Comparable} and nothing else — not the
-   * field, not the container, not the library. It also never happens for an empty source, since
-   * nothing is inserted, so the shape reads as working until a row arrives with something in it.
+   * <p>The converted type is not known statically here, so the question is put to the first
+   * converted element instead. That costs one element conversion on top of the build, which is why
+   * it is asked only of a sorted output and not of every lift.
+   *
+   * <p>An empty input is let through. A sorted container built from no elements inserts nothing and
+   * cannot raise, so there is no question to answer and no element to name in a refusal.
+   *
+   * <p>Only the element type is decided here. A cast raised anywhere else in the build — an element
+   * conversion, a bridge handing back the wrong type — propagates as itself, naming its own cause
+   * rather than being relabelled an ordering problem it is not.
    */
-  private static Object orderable(final Supplier<Object> build, final Class<?> outRaw) {
-    if (!keepsOrder(outRaw)) return build.get();
-    try {
-      return build.get();
-    } catch (final ClassCastException e) {
-      throw new IllegalStateException(
-        "Deep map: " +
-          outRaw.getName() +
-          " keeps its elements in order, and the converted element type does not implement" +
-          " Comparable. Give the target an explicit comparator through a Mapping.via(...)" +
-          " row, or declare it as a set that keeps no order.",
-        e
-      );
-    }
+  private static void refuseUnorderableElement(
+    final Object input,
+    final Function<Object, Object> convert,
+    final Class<?> outRaw
+  ) {
+    if (!keepsOrder(outRaw)) return;
+    if (!(input instanceof Collection<?> elements) || elements.isEmpty()) return;
+    final var first = convert.apply(elements.iterator().next());
+    if (first == null || first instanceof Comparable) return;
+    throw new IllegalStateException(
+      "Deep map: " +
+        outRaw.getName() +
+        " keeps its elements in order, and the converted element type " +
+        first.getClass().getName() +
+        " does not implement Comparable. Give the target an explicit comparator through a" +
+        " Mapping.via(...) row, or declare it as a set that keeps no order."
+    );
   }
 
   private static boolean copyOnWrite(final Class<?> raw) {
