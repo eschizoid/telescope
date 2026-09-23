@@ -180,12 +180,12 @@ final class ContainerLifts {
     return Iso.of(
       src -> {
         if (buildingSortedTarget) refuseCarriedComparator(src);
-        refuseUnorderableElement(src, elementIso::to, tgtRaw);
+        refuseUnorderableElement(src, elementIso::to, tgtAlloc, tgtRaw);
         return finishCollection(loop.to(src), tgtRaw);
       },
       tgt -> {
         if (buildingSortedSource) refuseCarriedComparator(tgt);
-        refuseUnorderableElement(tgt, elementIso::from, srcRaw);
+        refuseUnorderableElement(tgt, elementIso::from, srcAlloc, srcRaw);
         return finishCollection(loop.from(tgt), srcRaw);
       }
     );
@@ -216,24 +216,37 @@ final class ContainerLifts {
    * Refuses a sorted output whose converted element type cannot be ordered, asked before anything
    * is inserted rather than caught afterwards.
    *
+   * <p>Only a container that will order its elements naturally asks anything. One built carrying a
+   * comparator never calls {@code compareTo}, so its element type need not be {@code Comparable} —
+   * and refusing there would refuse a conversion that works.
+   *
    * <p>The converted type is not known statically here, so the question is put to the first
-   * converted element instead. That costs one element conversion on top of the build, which is why
-   * it is asked only of a sorted output and not of every lift.
+   * converted element. That converts element zero a second time, which is a repeated read and not
+   * only a repeated cost: an element whose conversion resolves a lazy association, or a {@code
+   * Mapping.via(...)} row that counts what it sees, observes element zero twice and every other
+   * element once.
    *
    * <p>An empty input is let through. A sorted container built from no elements inserts nothing and
    * cannot raise, so there is no question to answer and no element to name in a refusal.
    *
-   * <p>Only the element type is decided here. A cast raised anywhere else in the build — an element
+   * <p>Only the element type is decided here, and only from the first element. A cast raised
+   * anywhere else in the build — a later element that cannot be compared with the first, an element
    * conversion, a bridge handing back the wrong type — propagates as itself, naming its own cause
    * rather than being relabelled an ordering problem it is not.
    */
   private static void refuseUnorderableElement(
     final Object input,
     final Function<Object, Object> convert,
+    final Function<Object, Object> alloc,
     final Class<?> outRaw
   ) {
     if (!keepsOrder(outRaw)) return;
     if (!(input instanceof Collection<?> elements) || elements.isEmpty()) return;
+    // A container built with a comparator of its own never calls compareTo, so its elements need
+    // not be Comparable and there is no question to ask. Which containers carry one across is the
+    // allocator's decision, so it is asked rather than restated -- a second copy of that table
+    // here would be one more thing to drift.
+    if (alloc.apply(input) instanceof SortedSet<?> ordered && ordered.comparator() != null) return;
     final var first = convert.apply(elements.iterator().next());
     if (first == null || first instanceof Comparable) return;
     throw new IllegalStateException(

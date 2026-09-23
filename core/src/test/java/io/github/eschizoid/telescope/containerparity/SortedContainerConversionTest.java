@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.containerparity;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -57,6 +58,16 @@ class SortedContainerConversionTest {
   record TreeSrc(TreeSet<Plain> items) {}
 
   record TreeDst(TreeSet<Renamed> items) {}
+
+  // Deliberately not Comparable, and deliberately identical on both sides: when the element type
+  // does not change the conversion carries the source's comparator into the new container, and a
+  // container ordered by a comparator never asks its elements to order themselves. Every other
+  // fixture here changes the element type, so this is the only one that reaches that path.
+  record Unordered(String name) {}
+
+  record CarriedComparatorSrc(SortedSet<Unordered> items) {}
+
+  record CarriedComparatorDst(TreeSet<Unordered> items) {}
 
   record OrderedSrc(Set<Ordered> items) {}
 
@@ -119,6 +130,25 @@ class SortedContainerConversionTest {
       String.valueOf(thrown.getMessage()).contains("Comparable"),
       () -> "a cast from elsewhere should not be dressed up as an ordering refusal: " + thrown.getMessage()
     );
+  }
+
+  @Test
+  @DisplayName("a sorted target built with a carried comparator does not ask its elements to be Comparable")
+  void carriedComparatorRemovesTheOrderingQuestion() {
+    // The element type is unchanged, so nothing is converted and the source's comparator crosses
+    // into the new container. A container ordered by a comparator never calls compareTo, so an
+    // element type that implements nothing is still fine -- and a refusal here would tell the
+    // reader to supply the comparator they already supplied.
+    final var byName = new TreeSet<Unordered>(Comparator.comparing(Unordered::name));
+    byName.add(new Unordered("beth"));
+    byName.add(new Unordered("al"));
+
+    final var out = Telescope.mapper(CarriedComparatorSrc.class, CarriedComparatorDst.class).forward(
+      new CarriedComparatorSrc(byName)
+    );
+
+    assertEquals(List.of(new Unordered("al"), new Unordered("beth")), List.copyOf(out.items()));
+    assertNotNull(out.items().comparator(), "the comparator should cross with the elements");
   }
 
   @Test
