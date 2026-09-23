@@ -305,6 +305,33 @@ class BeansTest {
     }
   }
 
+  // A builder whose build() makes nothing at all. Before the guard this returned null through the
+  // caller's checkcast, which null always passes, so a mapper answered null for a non-null source
+  // with no diagnostic anywhere.
+  static final class NeverBuilt {
+
+    private String name;
+
+    public String getName() {
+      return name;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    static final class Builder {
+
+      public Builder name(final String n) {
+        return this;
+      }
+
+      public NeverBuilt build() {
+        return null;
+      }
+    }
+  }
+
   static final class Dog extends Animal {
 
     Dog(final String name) {
@@ -978,6 +1005,20 @@ class BeansTest {
       });
       assertTrue(failure.getMessage().contains(Ferret.class.getName()), failure.getMessage());
       assertTrue(failure.getMessage().contains(Dog.class.getName()), failure.getMessage());
+    }
+
+    @Test
+    @DisplayName("construct refuses a build() that makes nothing, rather than returning null")
+    void builderReturningNullIsRefused() {
+      // null passes any checkcast, so before the guard this came back as a null bean and the
+      // mapper answered null for a non-null source with nothing to read. The refusal has to name
+      // the null itself, which is the one branch of the diagnostic no other fixture reaches.
+      final var writer = Beans.builderWriter(NeverBuilt.class);
+      final var failure = assertThrows(IllegalStateException.class, () -> {
+        final Object built = writer.construct(new String[] { "name" }, n -> "gone");
+      });
+      assertTrue(failure.getMessage().contains("null"), failure.getMessage());
+      assertTrue(failure.getMessage().contains(NeverBuilt.class.getName()), failure.getMessage());
     }
 
     @Test
