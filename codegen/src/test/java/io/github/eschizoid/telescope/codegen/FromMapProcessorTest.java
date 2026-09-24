@@ -197,6 +197,12 @@ class FromMapProcessorTest {
       //
       // All three container shapes in one record, because each contributes a different helper and
       // a converter that emitted only the first would still satisfy a single-shape fixture.
+      //
+      // A second record carries the nested shapes, which is a different property: a composite
+      // coercion has to pass its children's helpers along. It holds no flat container on purpose --
+      // a list beside a map of lists contributes the list helper itself, so the propagation could
+      // stop and the binder would still compile. Here the only route to the list and set helpers is
+      // through the map's value and the optional's element.
       final var compilation = ProcessorHarness.compileFully(
         List.of(new FromMapProcessor()),
         List.of(),
@@ -211,6 +217,19 @@ class FromMapProcessorTest {
             import java.util.Set;
             @FromMap
             public record Every(List<String> names, Set<Integer> ids, Map<String, Integer> byName) {}
+            """
+          ),
+          source(
+            "demo.OnlyNested",
+            """
+            package demo;
+            import io.github.eschizoid.telescope.annotations.FromMap;
+            import java.util.List;
+            import java.util.Map;
+            import java.util.Optional;
+            import java.util.Set;
+            @FromMap
+            public record OnlyNested(Map<String, List<String>> lists, Optional<Set<String>> maybe) {}
             """
           ),
         }
