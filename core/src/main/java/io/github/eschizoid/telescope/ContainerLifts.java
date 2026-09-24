@@ -208,28 +208,24 @@ final class ContainerLifts {
   }
 
   /**
-   * Builds the converted container, refusing an element the container cannot order before that
-   * element is inserted.
+   * Builds the converted container, turning the cast a sorted one raises on an insert it cannot
+   * order into a refusal that says which element it was and what to do about it.
    *
-   * <p>Each element is converted once and the question is put to that same value, so nothing is
-   * converted twice: a conversion that counts, generates an id or reads a clock sees every element
-   * exactly as often as it would with no check at all. Asking from outside the loop would have cost
-   * the first element a second conversion, which is a repeated read rather than only a repeated
-   * cost. It is also why a sorted output that converts its elements does not take the fused
-   * MethodHandle loop — that loop leaves nowhere to stand between converting and inserting.
+   * <p>The catch is around the insert alone, which is the whole of the difference from wrapping the
+   * build. A cast from anywhere else — an element conversion, a bridge handing back the wrong type
+   * — is not an ordering problem and propagates as itself, naming its own cause. Only the insert
+   * can raise for the reason this refusal describes.
    *
-   * <p>Only a container that will order its elements naturally asks anything, and it asks only of
-   * the first element it is given. One built carrying a comparator never calls {@code compareTo},
-   * so its element type need not be {@code Comparable}, and refusing there would refuse a
-   * conversion that works.
+   * <p>Asking the insert also asks the only thing that knows. A container ordered by a comparator
+   * of its own never raises, so it is never refused; an element ordered against some other type
+   * implements {@code Comparable} and still fails; and a container of one element fails alone,
+   * since the first key is compared with itself. None of those can be read off an element ahead of
+   * time, and doing so would have cost that element a second conversion.
    *
-   * <p>An empty input has nothing to ask about and nothing to insert.
-   *
-   * <p>What is established is that the element implements {@code Comparable}, which is not that it
-   * can be compared with anything in particular. An element ordered against some other type fails
-   * on its own insert, and so does a single-element container, since the first key is compared with
-   * itself. Every such cast propagates as itself, naming its own cause rather than being relabelled
-   * an ordering problem it is not.
+   * <p>Each element is converted once and the value inserted is the value converted, so a
+   * conversion that counts, generates an id or reads a clock sees every element exactly once. That
+   * is why a sorted output whose elements change type does not take the fused MethodHandle loop —
+   * it leaves nowhere to stand between converting and inserting.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Object buildConverted(
@@ -240,29 +236,49 @@ final class ContainerLifts {
   ) {
     if (input == null) return null;
     final var fresh = (Collection) alloc.apply(input);
-    // Which containers carry a comparator across is the allocator's decision, so the container it
-    // built is asked rather than that table being restated here.
-    boolean ask = keepsOrder(outRaw) && !(fresh instanceof SortedSet<?> ordered && ordered.comparator() != null);
+    final boolean ordered = keepsOrder(outRaw);
     for (final var x : (Collection<?>) input) {
       final var converted = convert.apply(x);
-      if (ask) {
-        refuseUnorderable(converted, outRaw);
-        ask = false;
+      if (!ordered) {
+        fresh.add(converted);
+        continue;
       }
-      fresh.add(converted);
+      try {
+        fresh.add(converted);
+      } catch (final ClassCastException e) {
+        throw unorderable(converted, outRaw, e);
+      }
     }
     return fresh;
   }
 
-  private static void refuseUnorderable(final Object element, final Class<?> outRaw) {
-    if (element == null || element instanceof Comparable) return;
-    throw new IllegalStateException(
+  /**
+   * The refusal a sorted container's own insert earns, told from the element it rejected.
+   *
+   * <p>Asked of the cast rather than ahead of it, because what a sorted container needs is not that
+   * its elements implement {@code Comparable} but that they can be compared with each other. An
+   * element ordered against some other type satisfies the first and fails the second, and a single
+   * element fails it alone, since the first key is compared with itself. Only the insert knows.
+   */
+  private static IllegalStateException unorderable(
+    final Object element,
+    final Class<?> outRaw,
+    final ClassCastException cause
+  ) {
+    final var type = element == null ? "null" : element.getClass().getName();
+    final var missing =
+      element instanceof Comparable
+        ? " implements Comparable, but not against what it is being ordered with."
+        : " does not implement Comparable.";
+    return new IllegalStateException(
       "Deep map: " +
         outRaw.getName() +
         " keeps its elements in order, and the converted element type " +
-        element.getClass().getName() +
-        " does not implement Comparable. Give the target an explicit comparator through a" +
-        " Mapping.via(...) row, or declare it as a set that keeps no order."
+        type +
+        missing +
+        " Give the target an explicit comparator through a Mapping.via(...) row, or declare" +
+        " it as a set that keeps no order.",
+      cause
     );
   }
 
