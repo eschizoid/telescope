@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.BridgeProcessor;
@@ -20,7 +21,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 import java.util.function.BiFunction;
 import java.util.regex.Pattern;
@@ -128,20 +128,26 @@ public class ContainerAllocatorCorpusTest {
 
   /**
    * The generated path's rule, executed. Every declared type in a family is compiled as a
-   * {@code @Bridge} pair through the real processor and attributed by javac, so what is measured is
-   * the code the processor writes rather than a description of the guard it consults. A restatement
-   * can only find divergences it already models; the routes that never reach the allocation guard
-   * -- the element-preserving copy among them -- are exactly the ones it cannot see.
+   * {@code @Bridge} pair through the real processor and attributed by javac, so a verdict is what
+   * the processor did rather than a description of the guard it consults. A restatement can only
+   * find divergences it already models, and the routes that never reach the allocation guard are
+   * exactly the ones it cannot see.
    *
-   * <p>The source side declares the family's interface and the target side the type under test, so
-   * the two differ and an allocation is forced. Declaring the same type on both sides would let the
-   * reference through unchanged and ask nothing.
+   * <p>What it covers is one of those routes, not all of them. Both sides of a pair get the same
+   * element type, so every conversion here preserves its elements and the processor takes the copy
+   * route for all of them. That is the route the divergence this was built for lives on, and the
+   * one a restatement could not reach -- but a conversion whose element type changes allocates
+   * through different code, and nothing here looks at it. One blind spot narrowed, not removed.
    *
-   * <p>One enum serves as the element type for every family. It is the only choice that satisfies
-   * every bound in the corpus -- {@code EnumSet} and {@code EnumMap} accept nothing else, and an
-   * enum is {@code Comparable}, so the sorted containers take it too. An element type that failed a
-   * bound would be recorded as the processor refusing the container, which is a different answer to
-   * a question nobody asked.
+   * <p>The source declares the family's interface and the target the type under test, so the two
+   * differ and an allocation is forced. Declaring the same type on both sides lets the reference
+   * through unchanged and asks nothing.
+   *
+   * <p>One enum is the element type for every family. It is the only choice that satisfies every
+   * bound in the corpus -- {@code EnumSet} and {@code EnumMap} accept nothing else, and an enum is
+   * {@code Comparable}, so the sorted containers take it too. An element type that failed a bound
+   * would be recorded as the processor refusing the container, which answers a question nobody
+   * asked.
    *
    * <p>One compilation carries the whole family. Running them apart is the same answer at sixty
    * times the cost, and each type is emitted into its own package so a diagnostic names the type it
@@ -164,7 +170,7 @@ public class ContainerAllocatorCorpusTest {
             ";\nimport io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(" +
             pkg +
             ".Dst.class)\npublic record Src(" +
-            declared(family.iface(), pkg, participating.get(i).getTypeParameters().length) +
+            source(family.iface(), pkg, participating.get(i).getTypeParameters().length) +
             " items) {}\n"
         )
       );
@@ -195,16 +201,36 @@ public class ContainerAllocatorCorpusTest {
         if (byName.find()) refused.add(Integer.parseInt(byName.group(1)));
       }
     }
+    // Read off what the processor actually wrote rather than off the absence of an error attributed
+    // to this package. The two agree today, and only one of them keeps agreeing: a diagnostic with
+    // no source, a silent skip, or a round that aborts all leave a type looking accepted while
+    // nothing was emitted for it.
     final var out = new LinkedHashMap<Class<?>, Boolean>();
-    for (int i = 0; i < participating.size(); i++) out.put(participating.get(i), !refused.contains(i));
+    for (int i = 0; i < participating.size(); i++) {
+      final var emitted = compilation.generated().containsKey("corpus.t" + i + ".SrcBridge");
+      final var pair = family.label() + " " + participating.get(i).getName();
+      assertEquals(!refused.contains(i), emitted, () -> "diagnostics and emitted output disagree about " + pair);
+      out.put(participating.get(i), emitted);
+    }
     return out;
   }
 
   /**
-   * The declared type as source text. Both sides of a pair take the arity of the type under test: a
-   * raw target asked against a parameterized source is a question about element types rather than
-   * about allocation, and the processor's answer to it would be recorded as a refusal to allocate.
+   * The source side of a pair. It carries type arguments whichever arity the target has, because a
+   * raw source can be bridged to nothing: the processor refuses {@code Map} to {@code HashMap}
+   * exactly as it refuses {@code Map} to {@code Properties}, and neither refusal says anything
+   * about the target. A raw target is met with the arguments its own supertype fixes, which is
+   * {@code Object}, and that pair compiles.
    */
+  private static String source(final Class<?> iface, final String pkg, final int targetArity) {
+    final var name = iface.getCanonicalName();
+    if (targetArity != 0) return declared(iface, pkg, targetArity);
+    return Map.class.isAssignableFrom(iface)
+      ? name + "<java.lang.Object, java.lang.Object>"
+      : name + "<java.lang.Object>";
+  }
+
+  /** The declared type as source text, with as many arguments as the class itself takes. */
   private static String declared(final Class<?> c, final String pkg, final int arity) {
     final var name = c.getCanonicalName();
     return switch (arity) {
@@ -248,19 +274,11 @@ public class ContainerAllocatorCorpusTest {
     "List " + BuildableList.class.getName(),
     new Verdict(false, true),
     // Reached by the element-preserving copy, which never consults the allocation guard: the
-    // processor writes a copy-constructor call and the reflective path refuses the type
-    // outright.
-    // The harmful direction of the two -- a build that succeeds and a conversion that does
-    // not.
+    // processor writes a copy-constructor call where the reflective path refuses the type
+    // outright. The harmful direction of the two, a build that succeeds and a conversion that
+    // does not.
     "Map " + EnumMap.class.getName(),
-    new Verdict(true, false),
-    // Declared without type arguments, so the processor can derive no bridge into it and
-    // refuses
-    // the pair before allocation is reached. The reflective path asks only whether the class
-    // can be
-    // allocated and answers yes. A capability gap rather than a wrong answer.
-    "Map " + Properties.class.getName(),
-    new Verdict(false, true)
+    new Verdict(true, false)
   );
 
   /**
