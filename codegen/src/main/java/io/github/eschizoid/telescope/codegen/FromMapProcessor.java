@@ -89,6 +89,19 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
   }
 
   private void generate(final Element element) {
+    // The binder is emitted at package level and names its target by simple name, which resolves
+    // to nothing there for a nested type. Without this it emits source that cannot compile and
+    // says nothing, so what an adopter sees is javac reporting an unknown symbol inside a file
+    // they never wrote. Two nested types sharing a simple name in one package would also generate
+    // the same binder and overwrite each other. @Focus and @BeanFocus refuse the same shape.
+    if (element.getEnclosingElement().getKind() != ElementKind.PACKAGE) {
+      error(
+        element,
+        "@FromMap is only supported on top-level types (the generated binder is emitted beside " +
+          "the package and cannot name a nested type)"
+      );
+      return;
+    }
     if (element.getKind() == ElementKind.RECORD) generateForRecord((TypeElement) element);
     else if (element.getKind() == ElementKind.CLASS) generateForBean((TypeElement) element);
     else error(element, "@FromMap is only supported on records and classes");
