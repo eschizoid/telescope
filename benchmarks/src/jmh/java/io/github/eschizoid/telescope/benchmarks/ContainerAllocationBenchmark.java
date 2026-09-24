@@ -57,6 +57,13 @@ public class ContainerAllocationBenchmark {
     }
   }
 
+  // A sorted source into an unsorted target. The direction measured builds a Set, which orders
+  // nothing, so it keeps its fused loop -- the row exists because that direction used to give it up
+  // for an ordering its output does not have.
+  public record SortedToPlain(SortedSet<Ranked> values) {}
+
+  public record SortedToPlainDto(Set<RankedDto> values) {}
+
   public record Sorteds(SortedSet<Ranked> values) {}
 
   public record SortedsDto(SortedSet<RankedDto> values) {}
@@ -64,7 +71,7 @@ public class ContainerAllocationBenchmark {
   @Param({ "0", "1", "16", "256", "4096" })
   public int size;
 
-  @Param({ "LIST", "COPY_ON_WRITE", "MAP", "SET", "SORTED_SET" })
+  @Param({ "LIST", "COPY_ON_WRITE", "MAP", "SET", "SORTED_SET", "SORTED_TO_PLAIN" })
   public String kind;
 
   private Mapper<Object, Object> mapper;
@@ -98,6 +105,15 @@ public class ContainerAllocationBenchmark {
       // The one kind whose elements change type into a naturally ordered container, so each
       // converted element is tested before it is inserted and the fused loop is not taken. SET is
       // the control beside it: same conversion, same cardinality, no ordering to establish.
+      // Forward builds an unsorted Set and keeps the fused loop; backward builds the SortedSet and
+      // takes the checking loop. SORTED_SET beside it is the same conversion with both sides
+      // sorted, so the pair separates what the ordering costs from what the conversion costs.
+      case "SORTED_TO_PLAIN" -> {
+        final var ranked = new TreeSet<Ranked>();
+        for (int i = 0; i < size; i++) ranked.add(new Ranked(i));
+        mapper = (Mapper) Telescope.mapper(SortedToPlain.class, SortedToPlainDto.class);
+        source = new SortedToPlain(ranked);
+      }
       case "SORTED_SET" -> {
         final var ranked = new TreeSet<Ranked>();
         for (int i = 0; i < size; i++) ranked.add(new Ranked(i));

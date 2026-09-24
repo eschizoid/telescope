@@ -150,14 +150,19 @@ final class ContainerLifts {
     // that counts or generates would see element zero twice and every other element once. The loop
     // converts once and tests what it is about to insert, so the fusion is what gives way.
     final boolean converts = elementIso != Iso.<Object>identity();
-    final boolean checksOrdering = set && converts && (keepsOrder(srcRaw) || keepsOrder(tgtRaw));
-    final var mh = checksOrdering ? null : MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
+    // Only the side being built has an ordering to establish, so only that side gives up its fused
+    // loop. Asking the pair instead would cost the other direction its fusion to buy nothing: the
+    // forward half of a sorted-source-to-unsorted-target conversion inserts into a container that
+    // orders nothing and can raise no cast for the refusal to describe.
+    final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
+    final boolean loopForward = set && converts && keepsOrder(tgtRaw);
+    final boolean loopBackward = set && converts && keepsOrder(srcRaw);
     final Iso<Object, Object> loop =
-      mh != null
+      mh != null && !loopForward && !loopBackward
         ? mh
         : Iso.of(
-            src -> buildConverted(src, tgtAlloc, elementIso::to, tgtRaw),
-            tgt -> buildConverted(tgt, srcAlloc, elementIso::from, srcRaw)
+            src -> mh != null && !loopForward ? mh.to(src) : buildConverted(src, tgtAlloc, elementIso::to, tgtRaw),
+            tgt -> mh != null && !loopBackward ? mh.from(tgt) : buildConverted(tgt, srcAlloc, elementIso::from, srcRaw)
           );
     // A comparator is a problem only for the side being built. Carrying one across a conversion
     // would mean ordering the new element type with an ordering written for the old one, which
