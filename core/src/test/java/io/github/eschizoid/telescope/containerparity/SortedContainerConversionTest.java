@@ -66,6 +66,10 @@ class SortedContainerConversionTest {
   // does not change the conversion carries the source's comparator into the new container, and a
   // container ordered by a comparator never asks its elements to order themselves. Every other
   // fixture here changes the element type, so this is the only one that reaches that path.
+  //
+  // The declared container types have to differ for the pair below to reach a lift at all. Same
+  // element type AND same raw container is short-circuited before one is built, so squaring the
+  // two sides up would leave this reaching none of the code it is here to hold.
   record Unordered(String name) {}
 
   record CarriedComparatorSrc(SortedSet<Unordered> items) {}

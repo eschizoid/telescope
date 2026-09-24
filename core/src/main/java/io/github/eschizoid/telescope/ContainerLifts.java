@@ -223,9 +223,13 @@ final class ContainerLifts {
    * so its element type need not be {@code Comparable}, and refusing there would refuse a
    * conversion that works.
    *
-   * <p>An empty input has nothing to ask about and nothing to insert. A later element that cannot
-   * be compared with the first raises its own cast from the insert, naming its own cause rather
-   * than being relabelled an ordering problem it is not.
+   * <p>An empty input has nothing to ask about and nothing to insert.
+   *
+   * <p>What is established is that the element implements {@code Comparable}, which is not that it
+   * can be compared with anything in particular. An element ordered against some other type fails
+   * on its own insert, and so does a single-element container, since the first key is compared with
+   * itself. Every such cast propagates as itself, naming its own cause rather than being relabelled
+   * an ordering problem it is not.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Object buildConverted(
