@@ -1,11 +1,13 @@
 package io.github.eschizoid.telescope.codegen;
 
 import static io.github.eschizoid.telescope.codegen.ProcessorHarness.source;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
+import java.util.List;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -54,11 +56,12 @@ class FromMapProcessorTest {
       // Direct canonical-constructor rebuild — no reflection.
       assertTrue(generated.contains("new User("), generated);
       // String field: read the key by name.
-      assertTrue(generated.contains("map.get(\"name\")"), generated);
+      assertTrue(generated.contains("final Object __m_name = map.get(\"name\");"), generated);
+      assertEquals(1, generated.split("map\\.get\\(\"name\"\\)", -1).length - 1, generated);
     }
 
     @Test
-    @DisplayName("enum field coerces a String name via Enum.valueOf (taking an existing enum value directly)")
+    @DisplayName("enum field coerces a String name via Enum.valueOf (taking an existing enum value" + " directly)")
     void enumFieldCoercesViaValueOf() {
       final var compilation = compile(
         source(
@@ -76,7 +79,7 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.AccountFromMap");
       assertNotNull(generated, () -> "AccountFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("Role.valueOf(String.valueOf(map.get(\"role\")))"), generated);
+      assertTrue(generated.contains("Role.valueOf(String.valueOf(__m_role))"), generated);
       assertTrue(generated.contains("instanceof Role"), generated);
     }
 
@@ -112,7 +115,7 @@ class FromMapProcessorTest {
     }
 
     @Test
-    @DisplayName("nested @FromMap in another package imports that package's converter (cross-package recursion)")
+    @DisplayName("nested @FromMap in another package imports that package's converter (cross-package" + " recursion)")
     void nestedFromMapCrossPackageImportsConverter() {
       // The nested converter is referenced by simple name (AddressFromMap.fromMap(...)); when the
       // nested type lives in another package, the parent converter must import it or the generated
@@ -177,9 +180,70 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.TeamFromMap");
       assertNotNull(generated, () -> "TeamFromMap not generated; saw " + compilation.generated().keySet());
-      // Each element streamed through the element type's own generated converter.
-      assertTrue(generated.contains(".stream()"), generated);
+      // Each element run through the element type's own generated converter, by a sized loop.
+      assertTrue(generated.contains("__coerceList("), generated);
+      assertFalse(generated.contains(".stream()"), generated);
       assertTrue(generated.contains("MemberFromMap.fromMap("), generated);
+    }
+
+    @Test
+    @DisplayName("every container shape emits a binder that actually compiles, helpers included")
+    void containerBindersCompile() {
+      // The rest of this class drives the processor with -proc:only, which completes declarations
+      // and never attributes what was emitted -- so a binder calling a helper that was never
+      // written passes every assertion here and fails only in an adopter's build. That is not
+      // hypothetical: the helpers are contributed by the coercions and emitted by the converter,
+      // and wiring the first without the second produced exactly that.
+      //
+      // All three container shapes in one record, because each contributes a different helper and
+      // a converter that emitted only the first would still satisfy a single-shape fixture.
+      //
+      // A second record carries the nested shapes, which is a different property: a composite
+      // coercion has to pass its children's helpers along. It holds no flat container on purpose --
+      // a list beside a map of lists contributes the list helper itself, so the propagation could
+      // stop and the binder would still compile. Here the only route to the list and set helpers is
+      // through the map's value and the optional's element.
+      final var compilation = ProcessorHarness.compileFully(
+        List.of(new FromMapProcessor()),
+        List.of(),
+        new JavaFileObject[] {
+          source(
+            "demo.Every",
+            """
+            package demo;
+            import io.github.eschizoid.telescope.annotations.FromMap;
+            import java.util.List;
+            import java.util.Map;
+            import java.util.Set;
+            @FromMap
+            public record Every(List<String> names, Set<Integer> ids, Map<String, Integer> byName) {}
+            """
+          ),
+          source(
+            "demo.OnlyNested",
+            """
+            package demo;
+            import io.github.eschizoid.telescope.annotations.FromMap;
+            import java.util.List;
+            import java.util.Map;
+            import java.util.Optional;
+            import java.util.Set;
+            @FromMap
+            public record OnlyNested(Map<String, List<String>> lists, Optional<Set<String>> maybe) {}
+            """
+          ),
+        }
+      );
+
+      assertTrue(compilation.success(), () -> "the emitted binder does not compile: " + compilation.errorMessages());
+      final var generated = compilation.generated().get("demo.EveryFromMap");
+      assertNotNull(generated, () -> "EveryFromMap not generated; saw " + compilation.generated().keySet());
+      for (final var helper : List.of("__coerceList", "__coerceSet", "__coerceMap")) {
+        assertTrue(
+          generated.contains("private static") && generated.contains(helper + "("),
+          () -> helper + " is called but never emitted: " + generated
+        );
+      }
     }
 
     @Test
@@ -200,8 +264,9 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.LabelsFromMap");
       assertNotNull(generated, () -> "LabelsFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("instanceof Set<?>"), generated);
-      assertTrue(generated.contains("toSet()"), generated);
+      assertTrue(generated.contains("__coerceSet("), generated);
+      assertTrue(generated.contains("newLinkedHashSet(src.size())"), generated);
+      assertFalse(generated.contains(".stream()"), generated);
     }
 
     @Test

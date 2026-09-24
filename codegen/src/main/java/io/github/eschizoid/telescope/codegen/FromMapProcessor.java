@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.codegen;
 
 import java.io.PrintWriter;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
@@ -114,10 +115,13 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       .stream()
       .flatMap(c -> c.imports().stream())
       .collect(Collectors.toSet());
+    final var helpers = new LinkedHashMap<String, String>();
+    for (final var coercion : coercions) helpers.putAll(coercion.helpers());
 
-    emitConverter(record, unchecked, imports, out -> {
+    emitConverter(record, unchecked, imports, helpers, out -> {
+      for (final var component : components) hoist(out, component.getSimpleName().toString());
       final var args = IntStream.range(0, components.size())
-        .mapToObj(i -> coercions.get(i).emit("map.get(\"" + components.get(i).getSimpleName() + "\")", 0))
+        .mapToObj(i -> coercions.get(i).emit(local(components.get(i).getSimpleName().toString()), 0))
         .collect(Collectors.joining(", "));
       out.println("    return new " + name + "(" + args + ");");
     });
@@ -183,8 +187,11 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       .stream()
       .flatMap(c -> c.imports().stream())
       .collect(Collectors.toSet());
+    final var helpers = new LinkedHashMap<String, String>();
+    for (final var coercion : coercions) helpers.putAll(coercion.helpers());
 
-    emitConverter(pojo, unchecked, imports, out -> {
+    emitConverter(pojo, unchecked, imports, helpers, out -> {
+      for (final var prop : props) hoist(out, prop.name());
       if (useBuilder) {
         out.print("    return " + name + ".builder()");
         for (var i = 0; i < props.size(); i++) {
@@ -201,9 +208,28 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     });
   }
 
-  /** The coerced value expression for a property whose map key is its name. */
+  /** The coerced value expression for a property, read from the local its key was hoisted into. */
   private static String valueOf(final Coercion coercion, final String key) {
-    return coercion.emit("map.get(\"" + key + "\")", 0);
+    return coercion.emit(local(key), 0);
+  }
+
+  /**
+   * The local a map key is read into, once, before any coercion looks at it.
+   *
+   * <p>A coercion names the expression it is given as many times as its shape needs — the parse arm
+   * reaches for it three times — so passing the lookup itself would hash the key once per mention.
+   * Against a computing or concurrent map those reads can also disagree, which turns a value that
+   * changed between them into a parse failure on a map nobody mutated incorrectly.
+   *
+   * <p>The prefix is the one the bridge emitter uses for the same reason, and cannot collide: the
+   * method has only {@code map} in scope.
+   */
+  private static String local(final String key) {
+    return "__m_" + key;
+  }
+
+  private static void hoist(final PrintWriter out, final String key) {
+    out.println("    final Object " + local(key) + " = map.get(\"" + key + "\");");
   }
 
   /**
@@ -214,6 +240,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final TypeElement type,
     final boolean unchecked,
     final Set<String> coercionImports,
+    final Map<String, String> helpers,
     final Consumer<PrintWriter> body
   ) {
     final var pkg = processingEnv.getElementUtils().getPackageOf(type).getQualifiedName().toString();
@@ -236,6 +263,15 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       out.println("    if (map == null) return null;");
       body.accept(out);
       out.println("  }");
+      // Beside the binder rather than inside it: a coercion emits an expression, so a
+      // conversion
+      // that wants a loop has nowhere else to put one. Contributed by name, so two fields of
+      // the
+      // same shape ask for the same helper and get one copy.
+      for (final var helper : helpers.values()) {
+        out.println();
+        out.println(helper.indent(2).stripTrailing());
+      }
       out.println();
       // Map.class is a raw Class<Map>; create wants Class<Map<String, Object>> — same unchecked
       // bridge the runtime Telescope.fromMap makes.

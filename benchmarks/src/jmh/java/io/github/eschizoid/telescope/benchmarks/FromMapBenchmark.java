@@ -5,6 +5,7 @@ import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -92,6 +93,7 @@ public class FromMapBenchmark {
     source.put("currency", "USD");
     source.put("amountCents", 1999);
     source.put("reference", "inv-7");
+    source.put("tags", List.of("a", "b", "c", "d"));
 
     recordMapper = Telescope.fromMap(
       Payment.class,
@@ -107,6 +109,11 @@ public class FromMapBenchmark {
       extract("amountCents", PaymentBean::getAmountCents, v -> v == null ? 0 : ((Number) v).intValue()),
       extract("reference", PaymentBean::getReference, Object::toString)
     );
+  }
+
+  @Benchmark
+  public PaymentGen fromMapCodegen() {
+    return PaymentGenFromMap.fromMap(source);
   }
 
   @Benchmark
