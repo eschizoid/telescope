@@ -11,6 +11,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -46,9 +48,44 @@ final class MhContainerLoopParityTest {
 
   record SetHolder2(Set<Elem2> items) {}
 
+  // A sorted source into an unsorted target. Only the side being built has an ordering to
+  // establish, so this direction keeps its fused loop while the reverse gives one up -- which
+  // makes it the pair where the two paths must be shown to still agree.
+  record SortedSrcHolder(SortedSet<OrderedElem> items) {}
+
+  record UnsortedTgtHolder(Set<OrderedElem2> items) {}
+
+  record OrderedElem(String name) implements Comparable<OrderedElem> {
+    @Override
+    public int compareTo(final OrderedElem other) {
+      return name.compareTo(other.name);
+    }
+  }
+
+  record OrderedElem2(String name) implements Comparable<OrderedElem2> {
+    @Override
+    public int compareTo(final OrderedElem2 other) {
+      return name.compareTo(other.name);
+    }
+  }
+
   record MapHolder(Map<String, Elem> byKey) {}
 
   record MapHolder2(Map<String, Elem2> byKey) {}
+
+  @Test
+  @DisplayName("sorted source, unsorted target: the fused direction still matches the Java loop")
+  void sortedSourceUnsortedTargetLoopParity() {
+    // The forward half builds a Set, which orders nothing and can raise no cast, so it keeps the
+    // fused loop; the backward half builds the SortedSet and takes the Java loop. Both halves are
+    // compared against the Java loop here, so the one that changed path is held to the same answer.
+    final var items = new TreeSet<OrderedElem>();
+    items.add(new OrderedElem("b"));
+    items.add(new OrderedElem("a"));
+    assertLoopParity(SortedSrcHolder.class, UnsortedTgtHolder.class, new SortedSrcHolder(items));
+    assertLoopParity(SortedSrcHolder.class, UnsortedTgtHolder.class, new SortedSrcHolder(new TreeSet<>()));
+    assertLoopParity(SortedSrcHolder.class, UnsortedTgtHolder.class, new SortedSrcHolder(null));
+  }
 
   @Test
   @DisplayName("List lift: MH loop == Java loop over the same Leaf element")
