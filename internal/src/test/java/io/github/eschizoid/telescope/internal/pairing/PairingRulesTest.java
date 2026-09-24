@@ -16,7 +16,9 @@ import java.time.LocalDate;
 import java.util.AbstractCollection;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -26,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.PriorityQueue;
+import java.util.Queue;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -209,6 +212,17 @@ class PairingRulesTest {
     Map<Integer, String> mapIntegerToString;
     Map<?, String> mapWildcardToString;
     Box<String> boxOfString;
+    Collection<String> collectionOfString;
+    Collection<Integer> collectionOfInteger;
+    Deque<String> dequeOfString;
+    Queue<String> queueOfString;
+    ArrayDeque<String> arrayDequeOfString;
+  }
+
+  /** The kind the pair settles on, read off the decision both worlds consume. */
+  private ContainerView.Kind liftedKind(final Type src, final Type tgt) {
+    final var decision = rules.decidePair(src, tgt, "f");
+    return assertInstanceOf(PairDecision.LiftContainer.class, decision).src().kind();
   }
 
   private static Type typeOf(final String fieldName) {
@@ -251,7 +265,50 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("raw same-kind container subclasses decide CollectionCopy before reflectable recursion can claim them")
+    @DisplayName("a Collection-declared side takes the kind of whatever it is paired with")
+    void collectionSettlesAgainstTheOtherSide() {
+      // The shared spec is what both paths read, so the settling is asserted here rather than only
+      // through the runtime that consumes it.
+      assertEquals(
+        ContainerView.Kind.SET,
+        liftedKind(typeOf("setOfString"), typeOf("collectionOfString")),
+        "paired with a set, so a set is what gets built"
+      );
+      assertEquals(
+        ContainerView.Kind.LIST,
+        liftedKind(typeOf("listOfString"), typeOf("collectionOfInteger")),
+        "paired with a list, so a list"
+      );
+      assertEquals(
+        ContainerView.Kind.LIST,
+        liftedKind(typeOf("collectionOfString"), typeOf("collectionOfInteger")),
+        "neither side names a shape, so a list is all a Collection guarantees"
+      );
+    }
+
+    @Test
+    @DisplayName("Deque and Queue are lists, and a concrete one is viewed by the interface it is asked as")
+    void dequeAndQueueAreLists() {
+      assertEquals(ContainerView.Kind.LIST, rules.containerViewOf(typeOf("dequeOfString")).kind());
+      assertEquals(ContainerView.Kind.LIST, rules.containerViewOf(typeOf("queueOfString")).kind());
+      // A concrete deque is not one of the three general interfaces, so it is not viewed as a
+      // container at all -- which is what keeps a capacity-bounded queue refusing at plan time.
+      assertNull(rules.containerViewOf(typeOf("arrayDequeOfString")), "matched by name, not by subtype");
+    }
+
+    @Test
+    @DisplayName("a list and a set still do not pair, which Collection widening is not an exception to")
+    void listAndSetStillIncompatible() {
+      assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(typeOf("listOfString"), typeOf("setOfString"), "f")
+      );
+    }
+
+    @Test
+    @DisplayName(
+      "raw same-kind container subclasses decide CollectionCopy before reflectable recursion can" + " claim them"
+    )
     void collectionCopyPrecedesRecursion() {
       assertTrue(rules.reflectable(ImageUrls.class), "premise: the recursion branch could claim this pair");
       assertTrue(rules.reflectable(ImageUrlsDto.class), "premise: the recursion branch could claim this pair");
@@ -366,7 +423,7 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("List<X> vs Set<X> is Incompatible with the shape diagnostic — container kinds never cross-lift")
+    @DisplayName("List<X> vs Set<X> is Incompatible with the shape diagnostic — container kinds never" + " cross-lift")
     void crossKindContainersAreIncompatible() {
       final var decision = rules.decidePair(typeOf("listOfString"), typeOf("setOfString"), "tags");
       final var incompatible = assertInstanceOf(PairDecision.Incompatible.class, decision);
@@ -473,7 +530,9 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("the scalar families — CharSequence, Number, Boolean, Character, Temporal, UUID — are not reflectable")
+    @DisplayName(
+      "the scalar families — CharSequence, Number, Boolean, Character, Temporal, UUID — are not" + " reflectable"
+    )
     void scalarFamilyExclusions() {
       assertFalse(rules.reflectable(String.class));
       assertFalse(rules.reflectable(Integer.class));

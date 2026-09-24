@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.pairing.PropertySystem.WellKnown;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -76,18 +77,26 @@ public final class PairingRules<T> {
       return new PairDecision.NullableToOptional<>(srcType, tgtView.elementType());
     }
 
-    if (srcView != null && tgtView != null && srcView.kind() == tgtView.kind()) {
+    // A Collection-declared side takes the other's shape before anything else looks at the pair,
+    // so the lift and the allocator are chosen by what is actually being built. Two of them settle
+    // on a list, which is what a Collection guarantees on its own: iteration, and nothing about
+    // duplicates. List against Set stays a mismatch -- those are different shapes, not one shape
+    // named loosely.
+    final var src = settled(srcView, tgtView);
+    final var tgt = settled(tgtView, srcView);
+
+    if (src != null && tgt != null && src.kind() == tgt.kind()) {
       // Map<K, X> ↔ Map<K, Y>: keys must match exactly; lifting preserves the source keys.
-      if (srcView.kind() == ContainerView.Kind.MAP_VALUES && !props.sameType(srcView.keyType(), tgtView.keyType())) {
+      if (src.kind() == ContainerView.Kind.MAP_VALUES && !props.sameType(src.keyType(), tgt.keyType())) {
         return new PairDecision.Incompatible<>(
           PairingMessages.incompatibleMapKeys(
             componentName,
-            props.typeName(srcView.keyType()),
-            props.typeName(tgtView.keyType())
+            props.typeName(src.keyType()),
+            props.typeName(tgt.keyType())
           )
         );
       }
-      return new PairDecision.LiftContainer<>(srcView, tgtView);
+      return new PairDecision.LiftContainer<>(src, tgt);
     }
 
     return new PairDecision.Incompatible<>(
@@ -103,14 +112,56 @@ public final class PairingRules<T> {
    * or parameterized type — defeats the key-equality guarantee, so the type is not treated as a
    * liftable container).
    */
+  private static final Set<WellKnown> GENERAL = Set.of(WellKnown.DEQUE, WellKnown.QUEUE, WellKnown.COLLECTION);
+
+  private static final Map<WellKnown, String> GENERAL_NAMES = Map.of(
+    WellKnown.DEQUE,
+    "java.util.Deque",
+    WellKnown.QUEUE,
+    "java.util.Queue",
+    WellKnown.COLLECTION,
+    "java.util.Collection"
+  );
+
+  /**
+   * A view seen as the other side's kind when it has none of its own. A {@code COLLECTION} against
+   * a list or a set becomes that; against another {@code COLLECTION}, or against nothing, it
+   * becomes a list.
+   */
+  private ContainerView<T> settled(final ContainerView<T> view, final ContainerView<T> other) {
+    if (view == null || view.kind() != ContainerView.Kind.COLLECTION) return view;
+    final var against = other == null ? null : other.kind();
+    return view.as(
+      against == ContainerView.Kind.LIST || against == ContainerView.Kind.SET ? against : ContainerView.Kind.LIST
+    );
+  }
+
   public ContainerView<T> containerViewOf(final T t) {
     // Raw subclasses retain the explicit shallow-copy policy above. Parameterized subclasses
     // must be viewed through the container supertype: their own parameters can be reordered,
     // fixed, or unrelated to the element/key types.
     if (props.typeArguments(t).isEmpty()) return null;
     final var raw = props.rawType(t);
-    for (final var kind : List.of(WellKnown.OPTIONAL, WellKnown.LIST, WellKnown.SET, WellKnown.MAP)) {
+    // Order decides the answer where a type satisfies more than one: a List is asked as a List
+    // before it is asked as a Collection. The last three are what a type reaches only by being
+    // none of the others -- a Deque, a Queue, or a field declared as the general Collection -- and
+    // they are viewed as lists because that is what they keep: an order, and duplicates.
+    for (final var kind : List.of(
+      WellKnown.OPTIONAL,
+      WellKnown.LIST,
+      WellKnown.SET,
+      WellKnown.MAP,
+      WellKnown.DEQUE,
+      WellKnown.QUEUE,
+      WellKnown.COLLECTION
+    )) {
       if (!props.isSubtypeOf(raw, kind)) continue;
+      // The three general kinds are matched by name rather than by subtype. A concrete queue may
+      // be capacity-bounded -- a SynchronousQueue holds nothing at all -- and accepting one turns
+      // a refusal while the plan is built into a failure on every conversion, which is the worse
+      // of the two. A field declared as one of the interfaces asks only for something that keeps
+      // an order, and that is answerable.
+      if (GENERAL.contains(kind) && !props.typeName(raw).equals(GENERAL_NAMES.get(kind))) continue;
       final var args = props.typeArgumentsAs(t, kind);
       if (kind == WellKnown.MAP) {
         if (args.size() != 2 || !props.isClassType(args.getFirst())) return null;
@@ -120,7 +171,11 @@ public final class PairingRules<T> {
       return new ContainerView<>(
         switch (kind) {
           case OPTIONAL -> ContainerView.Kind.OPTIONAL;
-          case LIST -> ContainerView.Kind.LIST;
+          // A Deque and a Queue keep an order and admit duplicates, which is what a list is. A
+          // field declared as the general Collection has said neither, so it is settled against
+          // whatever the other side of the pair turns out to be.
+          case LIST, DEQUE, QUEUE -> ContainerView.Kind.LIST;
+          case COLLECTION -> ContainerView.Kind.COLLECTION;
           case SET -> ContainerView.Kind.SET;
           default -> throw new AssertionError(kind);
         },

@@ -983,6 +983,11 @@ public final class DeepMap {
         );
         // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
+        // Settled against the other side of the pair before the decision was built, so a view
+        // still carrying it here means the pairing stopped doing that.
+        case COLLECTION -> throw new IllegalStateException(
+          "a Collection-declared container reached the lift without taking a shape"
+        );
       };
     }
 
@@ -1129,6 +1134,11 @@ public final class DeepMap {
         );
         // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
+        // Settled against the other side of the pair before the decision was built, so a view
+        // still carrying it here means the pairing stopped doing that.
+        case COLLECTION -> throw new IllegalStateException(
+          "a Collection-declared container reached the lift without taking a shape"
+        );
       };
     }
     return elementIso;
