@@ -428,11 +428,12 @@ final class ContainerLifts {
     if (raw == LinkedList.class) return ignored -> new LinkedList<>();
     // A Deque- or Queue-typed component is viewed as a list, so an ArrayDeque is what satisfies
     // the declaration. Its int argument is an element count rather than a table capacity, so it
-    // takes the source's size directly -- unlike the hash families. A zero needs no guard either:
+    // takes the source's size directly -- unlike the hash families. Only the two interfaces arrive
+    // here: a concrete deque is not viewed as a container at all, so the lift never asks about one.
+    // A zero needs no guard either:
     // the constructor reads it as one slot, which is the empty case and not an error. That is
     // PriorityQueue's constraint, not this one, and it is handled where it applies below.
-    if (raw == Deque.class || raw == Queue.class || raw == ArrayDeque.class) return input ->
-      new ArrayDeque<>(((Collection<?>) input).size());
+    if (raw == Deque.class || raw == Queue.class) return input -> new ArrayDeque<>(((Collection<?>) input).size());
     // Vector and Stack are List subtypes and were always reachable.
     if (raw == Vector.class) return input -> new Vector<>(((Collection<?>) input).size());
     if (raw == Stack.class) return ignored -> new Stack<>();

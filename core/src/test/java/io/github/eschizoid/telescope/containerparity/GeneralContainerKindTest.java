@@ -12,6 +12,7 @@ import java.util.Collection;
 import java.util.Deque;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.SynchronousQueue;
 import org.junit.jupiter.api.DisplayName;
@@ -47,6 +48,10 @@ class GeneralContainerKindTest {
   record DequeSrc(Deque<Elem> items) {}
 
   record DequeDst(Deque<Dto> items) {}
+
+  record QueueSrc(Queue<Elem> items) {}
+
+  record QueueDst(Queue<Dto> items) {}
 
   record ListSrc(List<Elem> items) {}
 
@@ -150,6 +155,18 @@ class GeneralContainerKindTest {
 
     assertEquals(List.of(new Dto("a"), new Dto("b")), List.copyOf(out.items()));
     assertInstanceOf(ArrayDeque.class, out.items(), "an ArrayList would not satisfy the declaration");
+  }
+
+  @Test
+  @DisplayName("a Queue-declared field converts too, by the same route as a Deque")
+  void queueConverts() {
+    // Its own row rather than an assumed consequence of the deque one: the allocator names the
+    // two interfaces separately, so a change touching one and not the other would go unnoticed.
+    final Queue<Elem> items = new ArrayDeque<>(List.of(new Elem("a"), new Elem("b")));
+
+    final var out = Telescope.mapper(QueueSrc.class, QueueDst.class).forward(new QueueSrc(items));
+
+    assertEquals(List.of(new Dto("a"), new Dto("b")), List.copyOf(out.items()));
   }
 
   @Test
