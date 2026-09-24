@@ -1523,6 +1523,7 @@ public final class Beans {
    */
   static final class BuilderWriter<P> implements BeanWriter<P> {
 
+    private final Class<P> beanType;
     private final Class<?> builderType;
     private final Supplier<Object> builderSupplier;
     private final Function<Object, Object> buildFn;
@@ -1542,6 +1543,7 @@ public final class Beans {
       if (factory == null) throw new IllegalStateException(
         "writeBean(" + cls.getName() + ", BUILDER) requires a static builder() method"
       );
+      this.beanType = cls;
       this.builderType = factory.getReturnType();
       final Method buildMethod;
       try {
@@ -1586,7 +1588,22 @@ public final class Beans {
           );
         }
       }
-      return (P) buildFn.apply(builder);
+      final var built = buildFn.apply(builder);
+      // What build() makes is not decided by what it declares: a build() typed as an ancestor
+      // satisfies every sibling under that ancestor, and one erasing to Object satisfies anything
+      // at all. Both shapes are admitted deliberately, so the object itself is the only place the
+      // question can be asked. isInstance accepts a subtype, which is the legitimate case.
+      if (!beanType.isInstance(built)) throw new IllegalStateException(
+        "writeBean(" +
+          beanType.getName() +
+          ", BUILDER): builder " +
+          builderType.getName() +
+          " build() returned " +
+          (built == null ? "null" : built.getClass().getName()) +
+          ", which is not a " +
+          beanType.getName()
+      );
+      return (P) built;
     }
 
     private Object setterFor(final String name) {
