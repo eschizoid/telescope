@@ -5,6 +5,7 @@ import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -88,6 +89,20 @@ class SortedContainerConversionTest {
   record StampedSrc(Set<Ordered> items) {}
 
   record StampedSortedDst(SortedSet<Stamped> items) {}
+
+  // Ordered against a type it will never be compared with. It satisfies an instanceof Comparable
+  // test and still cannot be put in a sorted container, which is why the question belongs to the
+  // insert rather than to the element.
+  record Foreign(String v) implements Comparable<String> {
+    @Override
+    public int compareTo(final String other) {
+      return v.compareTo(other);
+    }
+  }
+
+  record ForeignSrc(Set<Ordered> items) {}
+
+  record ForeignSortedDst(SortedSet<Foreign> items) {}
 
   record OrderedSrc(Set<Ordered> items) {}
 
@@ -206,12 +221,45 @@ class SortedContainerConversionTest {
   }
 
   @Test
-  @DisplayName("a sorted target built with a carried comparator does not ask its elements to be Comparable")
-  void carriedComparatorRemovesTheOrderingQuestion() {
-    // The element type is unchanged, so nothing is converted and the source's comparator crosses
-    // into the new container. A container ordered by a comparator never calls compareTo, so an
-    // element type that implements nothing is still fine -- and a refusal here would tell the
-    // reader to supply the comparator they already supplied.
+  @DisplayName("an element ordered against another type is refused by name, not by a bare cast")
+  void foreignComparableIsRefusedByName() {
+    // One element, which is the point: a sorted container compares its first key with itself, so
+    // this fails with nothing to compare against. No check run ahead of the insert could see it --
+    // the element does implement Comparable, and what it cannot do is be compared with its own
+    // kind.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(ForeignSrc.class, ForeignSortedDst.class).forward(new ForeignSrc(items))
+    );
+
+    assertTrue(
+      thrown.getMessage().contains(Foreign.class.getName()),
+      () -> "the refusal should name the element it could not order: " + thrown.getMessage()
+    );
+    assertTrue(
+      thrown.getMessage().contains("could not be ordered there"),
+      () -> "and say what failed, rather than that Comparable is missing: " + thrown.getMessage()
+    );
+    assertTrue(
+      thrown.getMessage().contains("though its type implements Comparable"),
+      () -> "since here it is present and still not enough: " + thrown.getMessage()
+    );
+    assertInstanceOf(
+      ClassCastException.class,
+      thrown.getCause(),
+      "with the cast it replaces kept, since this one is genuinely raised by the insert"
+    );
+  }
+
+  @Test
+  @DisplayName("a carried comparator crosses with the elements, and orders them in the new container")
+  void carriedComparatorCrossesWithTheElements() {
+    // What this holds is the comparator crossing, not anything about the ordering check: the
+    // insert simply does not raise here, so no check is consulted either way. It guarded the check
+    // when one ran ahead of the insert, and it no longer does -- the assertion on the comparator
+    // is the whole of its value now.
     final var byName = new TreeSet<Unordered>(Comparator.comparing(Unordered::name));
     byName.add(new Unordered("beth"));
     byName.add(new Unordered("al"));
