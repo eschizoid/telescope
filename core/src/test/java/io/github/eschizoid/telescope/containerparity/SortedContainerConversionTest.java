@@ -111,6 +111,22 @@ class SortedContainerConversionTest {
     }
   }
 
+  // Comparable without a type argument, which says nothing about what it can be ordered against.
+  // Routed to the refusal, because the safer reading of silence is that the ordering is ours to
+  // describe -- the refusal names the element and keeps the cast, so being wrong costs a sentence.
+  @SuppressWarnings("rawtypes")
+  record RawlyComparable(String v) implements Comparable {
+    @Override
+    public int compareTo(final Object other) {
+      // Casts to the wrong thing, so it fails against its own kind as well as anything else.
+      return v.compareTo((String) other);
+    }
+  }
+
+  record RawlySrc(Set<Ordered> items) {}
+
+  record RawlySortedDst(SortedSet<RawlyComparable> items) {}
+
   record BuggySrc(Set<Ordered> items) {}
 
   record BuggySortedDst(SortedSet<BuggyCompare> items) {}
@@ -233,6 +249,24 @@ class SortedContainerConversionTest {
 
     assertEquals(List.of(new Stamped("a", 1), new Stamped("b", 2)), List.copyOf(out.items()));
     assertEquals(2, counter.get(), "two elements should mean two conversions");
+  }
+
+  @Test
+  @DisplayName("an element comparable without a type argument is described rather than left bare")
+  void rawComparableRoutesToTheRefusal() {
+    // A raw Comparable has not said what it can be ordered against, so nothing here can tell its
+    // fault from the container's. The refusal is the safer of the two readings: it names the
+    // element and carries the cast as its cause, so a wrong guess costs a sentence and not the
+    // diagnosis.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+    items.add(new Ordered("b"));
+
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(RawlySrc.class, RawlySortedDst.class).forward(new RawlySrc(items))
+    );
+
+    assertInstanceOf(ClassCastException.class, thrown.getCause(), "with the cast kept as the cause");
   }
 
   @Test
