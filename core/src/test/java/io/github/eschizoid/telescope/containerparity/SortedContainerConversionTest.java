@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -99,6 +100,74 @@ class SortedContainerConversionTest {
       return v.compareTo(other);
     }
   }
+
+  // Comparable against its own kind, so it has said it can be ordered -- and its compareTo has a
+  // bad cast inside it. The fault is the element's own, not the container's, and describing it as
+  // an ordering problem would send the reader to supply an ordering that already exists.
+  record BuggyCompare(String v) implements Comparable<BuggyCompare> {
+    @Override
+    public int compareTo(final BuggyCompare other) {
+      final Object notAnInteger = v;
+      return ((Integer) notAnInteger).compareTo(1);
+    }
+  }
+
+  // Comparable without a type argument, which says nothing about what it can be ordered against.
+  // Routed to the refusal, because the safer reading of silence is that the ordering is ours to
+  // describe -- the refusal names the element and keeps the cast, so being wrong costs a sentence.
+  @SuppressWarnings("rawtypes")
+  record RawlyComparable(String v) implements Comparable {
+    @Override
+    public int compareTo(final Object other) {
+      // Casts to the wrong thing, so it fails against its own kind as well as anything else.
+      return v.compareTo((String) other);
+    }
+  }
+
+  record RawlySrc(Set<Ordered> items) {}
+
+  record RawlySortedDst(SortedSet<RawlyComparable> items) {}
+
+  // Comparable reached through an interface rather than declared on the element itself, which is
+  // ordinary domain modelling. It has still said what it can be ordered against, so a cast from
+  // inside its compareTo is its own -- the walk has to look past the class's own interfaces to
+  // see that.
+  interface Orderable extends Comparable<Orderable> {}
+
+  record ViaInterface(String v) implements Orderable {
+    @Override
+    public int compareTo(final Orderable other) {
+      final Object notAnInteger = v;
+      return ((Integer) notAnInteger).compareTo(1);
+    }
+  }
+
+  record ViaInterfaceSrc(Set<Ordered> items) {}
+
+  record ViaInterfaceSortedDst(SortedSet<ViaInterface> items) {}
+
+  // Carries a generic interface that is not Comparable, so the walk meets a parameterized type
+  // it has to step past rather than answer from. Its own Comparable is the one that decides.
+  record AlsoSupplies(String v) implements Supplier<String>, Comparable<AlsoSupplies> {
+    @Override
+    public String get() {
+      return v;
+    }
+
+    @Override
+    public int compareTo(final AlsoSupplies other) {
+      final Object notAnInteger = v;
+      return ((Integer) notAnInteger).compareTo(1);
+    }
+  }
+
+  record SuppliesSrc(Set<Ordered> items) {}
+
+  record SuppliesSortedDst(SortedSet<AlsoSupplies> items) {}
+
+  record BuggySrc(Set<Ordered> items) {}
+
+  record BuggySortedDst(SortedSet<BuggyCompare> items) {}
 
   record ForeignSrc(Set<Ordered> items) {}
 
@@ -218,6 +287,82 @@ class SortedContainerConversionTest {
 
     assertEquals(List.of(new Stamped("a", 1), new Stamped("b", 2)), List.copyOf(out.items()));
     assertEquals(2, counter.get(), "two elements should mean two conversions");
+  }
+
+  @Test
+  @DisplayName("an element comparable without a type argument is described rather than left bare")
+  void rawComparableRoutesToTheRefusal() {
+    // A raw Comparable has not said what it can be ordered against, so nothing here can tell its
+    // fault from the container's. The refusal is the safer of the two readings: it names the
+    // element and carries the cast as its cause, so a wrong guess costs a sentence and not the
+    // diagnosis.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+    items.add(new Ordered("b"));
+
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(RawlySrc.class, RawlySortedDst.class).forward(new RawlySrc(items))
+    );
+
+    assertInstanceOf(ClassCastException.class, thrown.getCause(), "with the cast kept as the cause");
+  }
+
+  @Test
+  @DisplayName("a compareTo fault keeps its cast when Comparable arrives through an interface too")
+  void aFaultIsNotRelabelledWhenComparableComesFromAnInterface() {
+    // The same property as the row below, reached the way a domain model usually reaches it. A
+    // walk that looked only at the element's own class and its superclasses would miss this and
+    // relabel the element's own fault as an ordering one.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(ViaInterfaceSrc.class, ViaInterfaceSortedDst.class).forward(new ViaInterfaceSrc(items))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("keeps its elements in order"),
+      () -> "an interface-inherited Comparable is still the element saying it can be ordered: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a generic interface that is not Comparable is stepped past, not answered from")
+  void anUnrelatedGenericInterfaceDoesNotDecide() {
+    // The walk meets Supplier<String> before it meets Comparable<AlsoSupplies>. Answering from
+    // the first parameterized type it sees would call this element unorderable and relabel its
+    // own fault; stepping past it reaches the declaration that actually decides.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(SuppliesSrc.class, SuppliesSortedDst.class).forward(new SuppliesSrc(items))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("keeps its elements in order"),
+      () -> "its own Comparable is what decides, not the first generic interface: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a fault inside an element's own compareTo keeps its cast, and is not called an ordering" + " problem")
+  void aFaultInsideCompareToIsNotRelabelled() {
+    // The mirror of the row below. There the element is ordered against another type and cannot be
+    // ordered at all, which is ours to describe; here it is ordered against its own kind and the
+    // cast comes from its own logic, which is not. The two arrive at the same catch, so what
+    // separates them is the declared type argument rather than where the throw came from.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(BuggySrc.class, BuggySortedDst.class).forward(new BuggySrc(items))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("keeps its elements in order"),
+      () -> "the element's own fault should not be dressed as an ordering refusal: " + thrown.getMessage()
+    );
   }
 
   @Test

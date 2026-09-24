@@ -6,6 +6,8 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -256,6 +258,10 @@ final class ContainerLifts {
       try {
         fresh.add(converted);
       } catch (final ClassCastException e) {
+        // A cast from the container's own comparison is an ordering problem. A cast from inside an
+        // element's compareTo is the element's, and describing it as an ordering one would send the
+        // reader to supply an ordering for a type that already has a working one.
+        if (orderedAgainstItsOwnKind(converted)) throw e;
         throw unorderable(converted, outRaw, e);
       }
     }
@@ -297,6 +303,44 @@ final class ContainerLifts {
         " declare the target as a set that keeps no order. The cause is the cast itself.",
       cause
     );
+  }
+
+  /**
+   * Whether an element declares itself comparable with things of its own kind.
+   *
+   * <p>Asked of the declared type argument rather than of a stack trace. An element typed {@code
+   * Comparable<SomethingElse>} fails in the synthetic bridge before its own method body runs, and
+   * that is an ordering problem worth describing; one typed against its own kind has already said
+   * it can be ordered, so a cast escaping it came from its own logic and is not ours to relabel.
+   *
+   * <p>The declaration is looked for wherever it is, not only on the element's own class: a domain
+   * type reaches {@code Comparable} through an interface as often as it declares one directly, and
+   * a walk that stopped at superclasses would relabel exactly those elements' own faults.
+   *
+   * <p>Raw or absent {@code Comparable} answers false, which routes to the ordering refusal. That
+   * is the safer direction: the refusal names the element and keeps the cast as its cause, so a
+   * wrong guess here costs a sentence rather than the diagnosis. A raw one takes {@code Object} and
+   * casts it itself, so its faults are more often its own than not -- it stays with the refusal
+   * because the cause is preserved either way, not because the reading is clearly right.
+   */
+  private static boolean orderedAgainstItsOwnKind(final Object element) {
+    // Seeded with the class chain; each class's own interfaces are reached by the walk below, so
+    // adding them here as well would only be a second route to the same types. The graph is finite
+    // and acyclic, so a diamond costs a repeat visit and nothing more.
+    final var pending = new ArrayDeque<Type>();
+    for (var c = element.getClass(); c != null; c = c.getSuperclass()) pending.add(c);
+    while (!pending.isEmpty()) {
+      final var type = pending.poll();
+      // Only a parameterized Comparable answers the question. A raw one names no type argument, so
+      // it reaches the walk as an ordinary class and is followed like any other.
+      if (type instanceof ParameterizedType parameterized && parameterized.getRawType() == Comparable.class) {
+        final var against = parameterized.getActualTypeArguments()[0];
+        return against instanceof Class<?> cls && cls.isAssignableFrom(element.getClass());
+      }
+      final var raw = type instanceof ParameterizedType parameterized ? parameterized.getRawType() : type;
+      if (raw instanceof Class<?> cls) pending.addAll(List.of(cls.getGenericInterfaces()));
+    }
+    return false;
   }
 
   private static boolean copyOnWrite(final Class<?> raw) {
