@@ -1,6 +1,8 @@
 package io.github.eschizoid.telescope.codegen;
 
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -43,6 +45,18 @@ sealed interface Coercion
    */
   default Set<String> imports() {
     return Set.of();
+  }
+
+  /**
+   * Private static methods the generated converter needs beside its binder, keyed by name so two
+   * coercions asking for the same one contribute it once.
+   *
+   * <p>A coercion emits an expression, which is the whole reason this exists: a conversion that
+   * wants a loop has nowhere to put one, and the alternatives an expression does offer — a stream
+   * and a collector — cost a Spliterator and forfeit the size the source already knows.
+   */
+  default Map<String, String> helpers() {
+    return Map.of();
   }
 
   /**
@@ -300,28 +314,31 @@ sealed interface Coercion
   record Listed(RenderedType elementType, Coercion element) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      final var list = gensym("l", depth);
       final var el = gensym("el", depth);
-      return (
-        raw +
-        " instanceof List<?> " +
-        list +
-        " ? " +
-        list +
-        ".stream().map(" +
-        el +
-        " -> " +
-        element.emit(el, depth + 1) +
-        ").collect(Collectors.toList()) : List.<" +
-        elementType.source() +
-        ">of()"
-      );
+      return ("__coerceList(" + raw + ", " + el + " -> " + element.emit(el, depth + 1) + ")");
     }
 
     @Override
     public Set<String> imports() {
-      final var all = with(Set.of("java.util.List", "java.util.stream.Collectors"), element);
+      final var all = with(Set.of("java.util.ArrayList", "java.util.List", "java.util.function.Function"), element);
       all.addAll(elementType.imports());
+      return all;
+    }
+
+    @Override
+    public Map<String, String> helpers() {
+      final var all = new LinkedHashMap<>(element.helpers());
+      all.put(
+        "__coerceList",
+        """
+        private static <E> List<E> __coerceList(final Object raw, final Function<Object, E> each) {
+          if (!(raw instanceof List<?> src)) return List.of();
+          final var out = new ArrayList<E>(src.size());
+          for (final var element : src) out.add(each.apply(element));
+          return out;
+        }\
+        """
+      );
       return all;
     }
 
@@ -340,28 +357,31 @@ sealed interface Coercion
   record Setted(RenderedType elementType, Coercion element) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      final var set = gensym("s", depth);
       final var el = gensym("el", depth);
-      return (
-        raw +
-        " instanceof Set<?> " +
-        set +
-        " ? " +
-        set +
-        ".stream().map(" +
-        el +
-        " -> " +
-        element.emit(el, depth + 1) +
-        ").collect(Collectors.toSet()) : Set.<" +
-        elementType.source() +
-        ">of()"
-      );
+      return "__coerceSet(" + raw + ", " + el + " -> " + element.emit(el, depth + 1) + ")";
     }
 
     @Override
     public Set<String> imports() {
-      final var all = with(Set.of("java.util.Set", "java.util.stream.Collectors"), element);
+      final var all = with(Set.of("java.util.LinkedHashSet", "java.util.Set", "java.util.function.Function"), element);
       all.addAll(elementType.imports());
+      return all;
+    }
+
+    @Override
+    public Map<String, String> helpers() {
+      final var all = new LinkedHashMap<>(element.helpers());
+      all.put(
+        "__coerceSet",
+        """
+        private static <E> Set<E> __coerceSet(final Object raw, final Function<Object, E> each) {
+          if (!(raw instanceof Set<?> src)) return Set.of();
+          final var out = LinkedHashSet.<E>newLinkedHashSet(src.size());
+          for (final var element : src) out.add(each.apply(element));
+          return out;
+        }\
+        """
+      );
       return all;
     }
 
@@ -392,6 +412,11 @@ sealed interface Coercion
     }
 
     @Override
+    public Map<String, String> helpers() {
+      return element.helpers();
+    }
+
+    @Override
     public boolean unchecked() {
       return element.unchecked();
     }
@@ -410,45 +435,54 @@ sealed interface Coercion
   record MapValues(RenderedType keyType, RenderedType valueType, Coercion key, Coercion value) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      final var map = gensym("m", depth);
-      final var acc = gensym("acc", depth);
-      final var entry = gensym("et", depth);
-      final var mapType = "Map<" + keyType.source() + ", " + valueType.source() + ">";
-      // Explicit <Map<K,V>> witness so the 3-arg collect types even when nested inside another
-      // container (javac can't otherwise infer the accumulator's element types there).
+      final var k = gensym("k", depth);
+      final var v = gensym("v", depth);
       return (
+        "__coerceMap(" +
         raw +
-        " instanceof Map<?, ?> " +
-        map +
-        " ? " +
-        map +
-        ".entrySet().stream().<" +
-        mapType +
-        ">collect(LinkedHashMap::new, (" +
-        acc +
         ", " +
-        entry +
-        ") -> " +
-        acc +
-        ".put(" +
-        key.emit(entry + ".getKey()", depth + 1) +
+        k +
+        " -> " +
+        key.emit(k, depth + 1) +
         ", " +
-        value.emit(entry + ".getValue()", depth + 1) +
-        "), Map::putAll) : Map.<" +
-        keyType.source() +
-        ", " +
-        valueType.source() +
-        ">of()"
+        v +
+        " -> " +
+        value.emit(v, depth + 1) +
+        ")"
       );
     }
 
     @Override
     public Set<String> imports() {
-      final var all = new HashSet<>(Set.of("java.util.Map", "java.util.LinkedHashMap"));
+      final var all = new HashSet<>(Set.of("java.util.Map", "java.util.LinkedHashMap", "java.util.function.Function"));
       all.addAll(keyType.imports());
       all.addAll(valueType.imports());
       all.addAll(key.imports());
       all.addAll(value.imports());
+      return all;
+    }
+
+    @Override
+    public Map<String, String> helpers() {
+      final var all = new LinkedHashMap<>(key.helpers());
+      all.putAll(value.helpers());
+      all.put(
+        "__coerceMap",
+        """
+        private static <K, V> Map<K, V> __coerceMap(
+          final Object raw,
+          final Function<Object, K> eachKey,
+          final Function<Object, V> eachValue
+        ) {
+          if (!(raw instanceof Map<?, ?> src)) return Map.of();
+          final var out = LinkedHashMap.<K, V>newLinkedHashMap(src.size());
+          for (final var entry : src.entrySet()) {
+            out.put(eachKey.apply(entry.getKey()), eachValue.apply(entry.getValue()));
+          }
+          return out;
+        }\
+        """
+      );
       return all;
     }
 
