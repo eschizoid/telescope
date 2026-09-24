@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -256,6 +257,10 @@ final class ContainerLifts {
       try {
         fresh.add(converted);
       } catch (final ClassCastException e) {
+        // A cast from the container's own comparison is an ordering problem. A cast from inside an
+        // element's compareTo is the element's, and describing it as an ordering one would send the
+        // reader to supply an ordering for a type that already has a working one.
+        if (orderedAgainstItsOwnKind(converted)) throw e;
         throw unorderable(converted, outRaw, e);
       }
     }
@@ -297,6 +302,33 @@ final class ContainerLifts {
         " declare the target as a set that keeps no order. The cause is the cast itself.",
       cause
     );
+  }
+
+  /**
+   * Whether an element declares itself comparable with things of its own kind.
+   *
+   * <p>Asked of the declared type argument rather than of a stack trace. An element typed {@code
+   * Comparable<SomethingElse>} fails in the synthetic bridge before its own method body runs, and
+   * that is an ordering problem worth describing; one typed against its own kind has already said
+   * it can be ordered, so a cast escaping it came from its own logic and is not ours to relabel.
+   *
+   * <p>Raw or absent {@code Comparable} answers false, which routes to the ordering refusal. That
+   * is the safer direction: the refusal names the element and keeps the cast as its cause, so a
+   * wrong guess here costs a sentence rather than the diagnosis.
+   */
+  private static boolean orderedAgainstItsOwnKind(final Object element) {
+    for (var c = element.getClass(); c != null; c = c.getSuperclass()) {
+      for (final var iface : c.getGenericInterfaces()) {
+        if (
+          iface instanceof ParameterizedType parameterized &&
+          parameterized.getRawType() == Comparable.class &&
+          parameterized.getActualTypeArguments()[0] instanceof Class<?> against
+        ) {
+          return against.isAssignableFrom(element.getClass());
+        }
+      }
+    }
+    return false;
   }
 
   private static boolean copyOnWrite(final Class<?> raw) {

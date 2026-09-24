@@ -100,6 +100,21 @@ class SortedContainerConversionTest {
     }
   }
 
+  // Comparable against its own kind, so it has said it can be ordered -- and its compareTo has a
+  // bad cast inside it. The fault is the element's own, not the container's, and describing it as
+  // an ordering problem would send the reader to supply an ordering that already exists.
+  record BuggyCompare(String v) implements Comparable<BuggyCompare> {
+    @Override
+    public int compareTo(final BuggyCompare other) {
+      final Object notAnInteger = v;
+      return ((Integer) notAnInteger).compareTo(1);
+    }
+  }
+
+  record BuggySrc(Set<Ordered> items) {}
+
+  record BuggySortedDst(SortedSet<BuggyCompare> items) {}
+
   record ForeignSrc(Set<Ordered> items) {}
 
   record ForeignSortedDst(SortedSet<Foreign> items) {}
@@ -218,6 +233,26 @@ class SortedContainerConversionTest {
 
     assertEquals(List.of(new Stamped("a", 1), new Stamped("b", 2)), List.copyOf(out.items()));
     assertEquals(2, counter.get(), "two elements should mean two conversions");
+  }
+
+  @Test
+  @DisplayName("a fault inside an element's own compareTo keeps its cast, and is not called an ordering" + " problem")
+  void aFaultInsideCompareToIsNotRelabelled() {
+    // The mirror of the row below. There the element is ordered against another type and cannot be
+    // ordered at all, which is ours to describe; here it is ordered against its own kind and the
+    // cast comes from its own logic, which is not. The two arrive at the same catch, so what
+    // separates them is the declared type argument rather than where the throw came from.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(BuggySrc.class, BuggySortedDst.class).forward(new BuggySrc(items))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("keeps its elements in order"),
+      () -> "the element's own fault should not be dressed as an ordering refusal: " + thrown.getMessage()
+    );
   }
 
   @Test
