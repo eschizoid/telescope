@@ -239,7 +239,7 @@ class SortedContainerConversionTest {
       () -> "the refusal should name the element it could not order: " + thrown.getMessage()
     );
     assertTrue(
-      thrown.getMessage().contains("could not be ordered against what is already in it"),
+      thrown.getMessage().contains("could not be ordered there"),
       () -> "and say what failed, rather than that Comparable is missing: " + thrown.getMessage()
     );
     assertTrue(

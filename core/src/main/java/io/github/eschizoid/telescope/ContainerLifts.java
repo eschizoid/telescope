@@ -221,10 +221,11 @@ final class ContainerLifts {
    * for that reason: the refusal names the likeliest reading, and the cast underneath it names the
    * actual one.
    *
-   * <p>What the insert answers that nothing earlier can is whether these elements can be ordered
-   * against each other, which is not what {@code Comparable} says. An element ordered against some
-   * other type implements it and still fails, and a container of one element fails alone, since the
-   * first key is compared with itself.
+   * <p>What the insert answers that nothing earlier can is whether an element can be ordered by
+   * this container at all, which is not what {@code Comparable} says. The answer always comes from
+   * the first insert, so a refusal names one element and never a pair. An element ordered against
+   * some other type implements it and still fails, and a container of one element fails alone,
+   * since the first key is compared with itself.
    *
    * <p>Each element is converted once and the value inserted is the value converted, so a
    * conversion that counts, generates an id or reads a clock sees every element exactly once. That
@@ -285,7 +286,7 @@ final class ContainerLifts {
         outRaw.getName() +
         " keeps its elements in order, and " +
         element.getClass().getName() +
-        " could not be ordered against what is already in it" +
+        " could not be ordered there" +
         implementing +
         ". Supply an ordering these elements accept through a Mapping.via(...) row, or" +
         " declare the target as a set that keeps no order. The cause is the cast itself.",
