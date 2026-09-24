@@ -325,25 +325,20 @@ final class ContainerLifts {
    */
   private static boolean orderedAgainstItsOwnKind(final Object element) {
     // Seeded with the class chain; each class's own interfaces are reached by the walk below, so
-    // adding them here as well would only be a second route to the same types.
+    // adding them here as well would only be a second route to the same types. The graph is finite
+    // and acyclic, so a diamond costs a repeat visit and nothing more.
     final var pending = new ArrayDeque<Type>();
     for (var c = element.getClass(); c != null; c = c.getSuperclass()) pending.add(c);
-    final var seen = new HashSet<Type>();
     while (!pending.isEmpty()) {
       final var type = pending.poll();
-      if (!seen.add(type)) continue;
-      if (type instanceof ParameterizedType parameterized) {
-        if (parameterized.getRawType() == Comparable.class) {
-          final var against = parameterized.getActualTypeArguments()[0];
-          final var raw = against instanceof ParameterizedType nested ? nested.getRawType() : against;
-          return raw instanceof Class<?> cls && cls.isAssignableFrom(element.getClass());
-        }
-        if (parameterized.getRawType() instanceof Class<?> cls) {
-          pending.addAll(List.of(cls.getGenericInterfaces()));
-        }
-        continue;
+      // Only a parameterized Comparable answers the question. A raw one names no type argument, so
+      // it reaches the walk as an ordinary class and is followed like any other.
+      if (type instanceof ParameterizedType parameterized && parameterized.getRawType() == Comparable.class) {
+        final var against = parameterized.getActualTypeArguments()[0];
+        return against instanceof Class<?> cls && cls.isAssignableFrom(element.getClass());
       }
-      if (type instanceof Class<?> cls) pending.addAll(List.of(cls.getGenericInterfaces()));
+      final var raw = type instanceof ParameterizedType parameterized ? parameterized.getRawType() : type;
+      if (raw instanceof Class<?> cls) pending.addAll(List.of(cls.getGenericInterfaces()));
     }
     return false;
   }
