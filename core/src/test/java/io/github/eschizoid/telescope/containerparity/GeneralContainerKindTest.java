@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.containerparity;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -34,6 +35,10 @@ class GeneralContainerKindTest {
   record CollectionSrc(Collection<Elem> items) {}
 
   record CollectionDst(Collection<Dto> items) {}
+
+  record CollectionBoth(Collection<Elem> items) {}
+
+  record CollectionBothDto(Collection<Dto> items) {}
 
   record SetSrc(Set<Elem> items) {}
 
@@ -89,6 +94,40 @@ class GeneralContainerKindTest {
   }
 
   @Test
+  @DisplayName("two Collection sides settle on a list, so a set handed to one does not round-trip equal")
+  void collectionToCollectionSettlesOnAList() {
+    // The consequence of the rule rather than an exception to it. With neither side naming a
+    // shape there is nothing to settle against, so a list is what a Collection guarantees on its
+    // own -- and a set handed in comes back as a list, which is not equal to it. Equality on a
+    // Collection-declared field was never well defined; this says so rather than leaving an
+    // adopter to find it, since assertEquals(orig, roundTrip(orig)) is what they write first.
+    final Collection<Elem> asSet = new LinkedHashSet<>(List.of(new Elem("a"), new Elem("b")));
+
+    final var mapper = Telescope.mapper(CollectionBoth.class, CollectionBothDto.class);
+    final var back = mapper.backward(mapper.forward(new CollectionBoth(asSet))).items();
+
+    assertInstanceOf(List.class, back, "neither side named a shape, so a list is what is built");
+    assertEquals(List.copyOf(asSet), List.copyOf(back), "the elements survive, in order");
+    assertNotEquals(asSet, back, "but a set and a list are not equal, which is the part to know");
+  }
+
+  @Test
+  @DisplayName("a duplicate on the Collection side cannot reach a Set side, and is dropped")
+  void aDuplicateIsDroppedGoingBackIntoASet() {
+    // The other half of settling against the set. Forward it cannot arise, because what is built
+    // is a set; backward from a Collection somebody assembled themselves it can, and the element
+    // is collapsed rather than refused. The declaration is what decides that -- a field declared
+    // as a Set has said duplicates are not meaningful in it.
+    final Collection<Dto> withDuplicate = List.of(new Dto("a"), new Dto("a"), new Dto("b"));
+
+    final var back = Telescope.mapper(SetSrc.class, CollectionDst.class)
+      .backward(new CollectionDst(withDuplicate))
+      .items();
+
+    assertEquals(2, back.size(), "the duplicate is collapsed by the set that receives it");
+  }
+
+  @Test
   @DisplayName("a list and a set are still a mismatch, which is the rule Collection is not an exception to")
   void listAndSetStillDoNotPair() {
     // Collection widens because it names no shape. A List and a Set each name one, and they differ,
@@ -114,8 +153,10 @@ class GeneralContainerKindTest {
   }
 
   @Test
-  @DisplayName("an empty source still yields a container, since a deque rejects a zero size")
+  @DisplayName("an empty source yields an empty container rather than nothing")
   void emptySourceConverts() {
+    // Nothing about a deque rejecting a zero size: ArrayDeque reads a zero as one slot. What this
+    // holds is that an empty source still produces a container to hand back.
     final var out = Telescope.mapper(DequeSrc.class, DequeDst.class).forward(new DequeSrc(new ArrayDeque<>()));
 
     assertTrue(out.items().isEmpty());

@@ -16,6 +16,10 @@ public record ContainerView<T>(ContainerView.Kind kind, T elementType, T keyType
    * <p>{@code COLLECTION} is not a family beside the other two so much as their union: a field
    * declared that way accepts either, so it is paired against whichever the other side is and
    * carries that kind from then on. Nothing downstream sees it.
+   *
+   * <p>Two of them settle on a list, which is all a {@code Collection} promises on its own. So a
+   * set handed to such a pair comes back as a list: the elements survive and their order with them,
+   * but the two are not equal. Equality was never well defined on a field that names no shape.
    */
   public enum Kind {
     LIST,
