@@ -37,6 +37,8 @@ class GeneralContainerKindTest {
 
   record SetSrc(Set<Elem> items) {}
 
+  record SetDst(Set<Dto> items) {}
+
   record DequeSrc(Deque<Elem> items) {}
 
   record DequeDst(Deque<Dto> items) {}
@@ -58,16 +60,41 @@ class GeneralContainerKindTest {
   }
 
   @Test
-  @DisplayName("widening across kinds is still refused: a Set source does not match a Collection target")
-  void setDoesNotWidenIntoCollection() {
-    // Deliberately not delivered here. The same-kind rule is what refuses it, and relaxing that
-    // needs a decision about the other direction -- a Collection source into a Set target dedupes,
-    // which is lossy in a way the forward direction is not.
+  @DisplayName("a set widens into a Collection target, and is rebuilt as a set rather than a list")
+  void setWidensIntoCollection() {
+    // The Collection side has no shape of its own, so it takes the set's: what is built is a set,
+    // which is why the round trip below holds. Rebuilding a list here would let a duplicate into a
+    // field whose other side cannot hold one.
     final var items = new LinkedHashSet<Elem>();
     items.add(new Elem("a"));
+    items.add(new Elem("b"));
 
+    final var mapper = Telescope.mapper(SetSrc.class, CollectionDst.class);
+    final var out = mapper.forward(new SetSrc(items));
+
+    assertEquals(List.of(new Dto("a"), new Dto("b")), List.copyOf(out.items()));
+    assertInstanceOf(Set.class, out.items(), "a Collection settled against a set should be a set");
+    assertEquals(items, mapper.backward(out).items(), "and the round trip should return what it was given");
+  }
+
+  @Test
+  @DisplayName("a list widens into a Collection target, and is rebuilt as a list")
+  void listWidensIntoCollection() {
+    final var out = Telescope.mapper(ListSrc.class, CollectionDst.class).forward(
+      new ListSrc(List.of(new Elem("a"), new Elem("a")))
+    );
+
+    assertEquals(List.of(new Dto("a"), new Dto("a")), List.copyOf(out.items()));
+    assertInstanceOf(List.class, out.items(), "a Collection settled against a list keeps its duplicates");
+  }
+
+  @Test
+  @DisplayName("a list and a set are still a mismatch, which is the rule Collection is not an exception to")
+  void listAndSetStillDoNotPair() {
+    // Collection widens because it names no shape. A List and a Set each name one, and they differ,
+    // so nothing here relaxes that.
     final var thrown = assertThrows(IllegalStateException.class, () ->
-      Telescope.mapper(SetSrc.class, CollectionDst.class).forward(new SetSrc(items))
+      Telescope.mapper(ListSrc.class, SetDst.class).forward(new ListSrc(List.of(new Elem("a"))))
     );
 
     assertTrue(thrown.getMessage().contains("shapes"), thrown::getMessage);
