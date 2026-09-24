@@ -143,23 +143,21 @@ final class ContainerLifts {
   ) {
     final var srcAlloc = set ? setAllocatorFor(srcRaw) : listAllocatorFor(srcRaw);
     final var tgtAlloc = set ? setAllocatorFor(tgtRaw) : listAllocatorFor(tgtRaw);
-    final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
+    // A sorted output whose elements change type has to see each converted element before it is
+    // inserted, and the fused MethodHandle loop offers nowhere to stand between the two. Asking
+    // outside the loop instead would mean converting the first element twice, once to test it and
+    // once to insert it -- which is a repeated read, not only a repeated cost, since a conversion
+    // that counts or generates would see element zero twice and every other element once. The loop
+    // converts once and tests what it is about to insert, so the fusion is what gives way.
+    final boolean converts = elementIso != Iso.<Object>identity();
+    final boolean checksOrdering = set && converts && (keepsOrder(srcRaw) || keepsOrder(tgtRaw));
+    final var mh = checksOrdering ? null : MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
     final Iso<Object, Object> loop =
       mh != null
         ? mh
         : Iso.of(
-            src -> {
-              if (src == null) return null;
-              final var fresh = (Collection) tgtAlloc.apply(src);
-              for (final var x : (Collection<?>) src) fresh.add(elementIso.to(x));
-              return fresh;
-            },
-            tgt -> {
-              if (tgt == null) return null;
-              final var fresh = (Collection) srcAlloc.apply(tgt);
-              for (final var x : (Collection<?>) tgt) fresh.add(elementIso.from(x));
-              return fresh;
-            }
+            src -> buildConverted(src, tgtAlloc, elementIso::to, tgtRaw),
+            tgt -> buildConverted(tgt, srcAlloc, elementIso::from, srcRaw)
           );
     // A comparator is a problem only for the side being built. Carrying one across a conversion
     // would mean ordering the new element type with an ordering written for the old one, which
@@ -170,7 +168,6 @@ final class ContainerLifts {
     // need not be: building a sorted container out of an unsorted one leaves nothing to ask about,
     // and the result takes natural ordering. That is a silent reordering, and it is what the
     // generated path does too -- one decision on both, rather than two that differ.
-    final boolean converts = elementIso != Iso.<Object>identity();
     final boolean buildingSortedTarget = set && converts && keepsOrder(tgtRaw);
     final boolean buildingSortedSource = set && converts && keepsOrder(srcRaw);
     // Either of the two above implies this, so it alone decides whether the wrapper is needed.
@@ -180,11 +177,11 @@ final class ContainerLifts {
     return Iso.of(
       src -> {
         if (buildingSortedTarget) refuseCarriedComparator(src);
-        return finishCollection(orderable(() -> loop.to(src), tgtRaw), tgtRaw);
+        return finishCollection(loop.to(src), tgtRaw);
       },
       tgt -> {
         if (buildingSortedSource) refuseCarriedComparator(tgt);
-        return finishCollection(orderable(() -> loop.from(tgt), srcRaw), srcRaw);
+        return finishCollection(loop.from(tgt), srcRaw);
       }
     );
   }
@@ -211,27 +208,62 @@ final class ContainerLifts {
   }
 
   /**
-   * Builds the container, turning the cast a sorted one raises on its first insert into a refusal
-   * that says whose element type is not orderable and what to do about it.
+   * Builds the converted container, refusing an element the container cannot order before that
+   * element is inserted.
    *
-   * <p>The bare cast names the element class and {@code Comparable} and nothing else — not the
-   * field, not the container, not the library. It also never happens for an empty source, since
-   * nothing is inserted, so the shape reads as working until a row arrives with something in it.
+   * <p>Each element is converted once and the question is put to that same value, so nothing is
+   * converted twice: a conversion that counts, generates an id or reads a clock sees every element
+   * exactly as often as it would with no check at all. Asking from outside the loop would have cost
+   * the first element a second conversion, which is a repeated read rather than only a repeated
+   * cost. It is also why a sorted output that converts its elements does not take the fused
+   * MethodHandle loop — that loop leaves nowhere to stand between converting and inserting.
+   *
+   * <p>Only a container that will order its elements naturally asks anything, and it asks only of
+   * the first element it is given. One built carrying a comparator never calls {@code compareTo},
+   * so its element type need not be {@code Comparable}, and refusing there would refuse a
+   * conversion that works.
+   *
+   * <p>An empty input has nothing to ask about and nothing to insert.
+   *
+   * <p>What is established is that the element implements {@code Comparable}, which is not that it
+   * can be compared with anything in particular. An element ordered against some other type fails
+   * on its own insert, and so does a single-element container, since the first key is compared with
+   * itself. Every such cast propagates as itself, naming its own cause rather than being relabelled
+   * an ordering problem it is not.
    */
-  private static Object orderable(final Supplier<Object> build, final Class<?> outRaw) {
-    if (!keepsOrder(outRaw)) return build.get();
-    try {
-      return build.get();
-    } catch (final ClassCastException e) {
-      throw new IllegalStateException(
-        "Deep map: " +
-          outRaw.getName() +
-          " keeps its elements in order, and the converted element type does not implement" +
-          " Comparable. Give the target an explicit comparator through a Mapping.via(...)" +
-          " row, or declare it as a set that keeps no order.",
-        e
-      );
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Object buildConverted(
+    final Object input,
+    final Function<Object, Object> alloc,
+    final Function<Object, Object> convert,
+    final Class<?> outRaw
+  ) {
+    if (input == null) return null;
+    final var fresh = (Collection) alloc.apply(input);
+    // Which containers carry a comparator across is the allocator's decision, so the container it
+    // built is asked rather than that table being restated here.
+    boolean ask = keepsOrder(outRaw) && !(fresh instanceof SortedSet<?> ordered && ordered.comparator() != null);
+    for (final var x : (Collection<?>) input) {
+      final var converted = convert.apply(x);
+      if (ask) {
+        refuseUnorderable(converted, outRaw);
+        ask = false;
+      }
+      fresh.add(converted);
     }
+    return fresh;
+  }
+
+  private static void refuseUnorderable(final Object element, final Class<?> outRaw) {
+    if (element == null || element instanceof Comparable) return;
+    throw new IllegalStateException(
+      "Deep map: " +
+        outRaw.getName() +
+        " keeps its elements in order, and the converted element type " +
+        element.getClass().getName() +
+        " does not implement Comparable. Give the target an explicit comparator through a" +
+        " Mapping.via(...) row, or declare it as a set that keeps no order."
+    );
   }
 
   private static boolean copyOnWrite(final Class<?> raw) {
