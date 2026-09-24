@@ -36,18 +36,21 @@ import org.junit.jupiter.api.Test;
  * under {@code @Bridge} and throws under {@code mapper(...)}.
  *
  * <p>A test that names the container types it checks can only cover the ones somebody thought of.
- * This enumerates them from {@code java.base} itself and restates the generated path's rule —
- * allocate the declared class where it can be instantiated, otherwise the family default — as the
- * thing the reflective path has to agree with.
+ * This enumerates them from {@code java.base} itself, and asks each path what it does rather than
+ * what it is documented to do: the reflective side is driven through its own lift, and the
+ * generated side is compiled through the real processor. Neither verdict is a description that
+ * could drift from the thing it describes.
  *
  * <p>The enumeration covers what the platform declares, which is not the same as covering every
  * shape. A container reached through a static {@code builder()} is one no {@code java.base} scan
- * can produce, because no JDK container has one — so the adopter-shaped types below are not a
+ * can produce, because no JDK container has one -- so the adopter-shaped types below are not a
  * convenience beside the enumeration, they are the only way those shapes are seen at all.
  *
- * <p>Restating that rule here rather than importing it is the cost of this shape: the two could
- * drift. It is two lines guarding thirty-odd types, which is a trade worth making until the rule
- * has one home.
+ * <p>Nor is every enumerated type asked anything. Only the three container kinds the lifts convert
+ * between have a family here, so the {@code Deque} and {@code Queue} implementations are
+ * enumerated, counted, and then left alone -- neither path allocates for them, one passing the
+ * reference through and the other refusing while the plan is built, so there is nothing for an
+ * allocation gate to compare.
  */
 // Public so the adopter-shaped fixtures nested below can be named by the sources the gate compiles,
 // which live in their own package. A package-private enclosing class hides them, and the gate would
