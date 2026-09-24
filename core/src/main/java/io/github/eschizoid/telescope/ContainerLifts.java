@@ -212,15 +212,19 @@ final class ContainerLifts {
    * order into a refusal that says which element it was and what to do about it.
    *
    * <p>The catch is around the insert alone, which is the whole of the difference from wrapping the
-   * build. A cast from anywhere else — an element conversion, a bridge handing back the wrong type
-   * — is not an ordering problem and propagates as itself, naming its own cause. Only the insert
-   * can raise for the reason this refusal describes.
+   * build. A cast from an element conversion, or from a bridge handing back the wrong type, is not
+   * an ordering problem and never reaches it.
    *
-   * <p>Asking the insert also asks the only thing that knows. A container ordered by a comparator
-   * of its own never raises, so it is never refused; an element ordered against some other type
-   * implements {@code Comparable} and still fails; and a container of one element fails alone,
-   * since the first key is compared with itself. None of those can be read off an element ahead of
-   * time, and doing so would have cost that element a second conversion.
+   * <p>It does not follow that everything reaching it is one. A container ordered by a comparator
+   * of its own raises from that comparator, and a fault inside an element's own {@code compareTo}
+   * raises from there — both land here and are described as an ordering problem. The cause is kept
+   * for that reason: the refusal names the likeliest reading, and the cast underneath it names the
+   * actual one.
+   *
+   * <p>What the insert answers that nothing earlier can is whether these elements can be ordered
+   * against each other, which is not what {@code Comparable} says. An element ordered against some
+   * other type implements it and still fails, and a container of one element fails alone, since the
+   * first key is compared with itself.
    *
    * <p>Each element is converted once and the value inserted is the value converted, so a
    * conversion that counts, generates an id or reads a clock sees every element exactly once. That
@@ -256,28 +260,35 @@ final class ContainerLifts {
    * The refusal a sorted container's own insert earns, told from the element it rejected.
    *
    * <p>Asked of the cast rather than ahead of it, because what a sorted container needs is not that
-   * its elements implement {@code Comparable} but that they can be compared with each other. An
-   * element ordered against some other type satisfies the first and fails the second, and a single
-   * element fails it alone, since the first key is compared with itself. Only the insert knows.
+   * its elements implement {@code Comparable} but that they can be ordered against each other. An
+   * element ordered against some other type satisfies the first and fails the second, and a
+   * container of one element fails alone, since the first key is compared with itself.
+   *
+   * <p>The element is never null here: a sorted container raises {@code NullPointerException} for
+   * one, not a cast, so this is only ever reached with something to name.
+   *
+   * <p>Says where the ordering would come from rather than that one is missing. A target with a
+   * comparator of its own reaches this too, through that comparator failing, and telling its author
+   * to supply what they already supplied is the reading to avoid.
    */
   private static IllegalStateException unorderable(
     final Object element,
     final Class<?> outRaw,
     final ClassCastException cause
   ) {
-    final var type = element == null ? "null" : element.getClass().getName();
-    final var missing =
+    final var implementing =
       element instanceof Comparable
-        ? " implements Comparable, but not against what it is being ordered with."
-        : " does not implement Comparable.";
+        ? ", though its type implements Comparable"
+        : ", and its type does not implement Comparable";
     return new IllegalStateException(
       "Deep map: " +
         outRaw.getName() +
-        " keeps its elements in order, and the converted element type " +
-        type +
-        missing +
-        " Give the target an explicit comparator through a Mapping.via(...) row, or declare" +
-        " it as a set that keeps no order.",
+        " keeps its elements in order, and " +
+        element.getClass().getName() +
+        " could not be ordered against what is already in it" +
+        implementing +
+        ". Supply an ordering these elements accept through a Mapping.via(...) row, or" +
+        " declare the target as a set that keeps no order. The cause is the cast itself.",
       cause
     );
   }

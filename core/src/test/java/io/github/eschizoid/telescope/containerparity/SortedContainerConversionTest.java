@@ -239,8 +239,12 @@ class SortedContainerConversionTest {
       () -> "the refusal should name the element it could not order: " + thrown.getMessage()
     );
     assertTrue(
-      thrown.getMessage().contains("not against what it is being ordered with"),
-      () -> "and say that Comparable is present but useless here: " + thrown.getMessage()
+      thrown.getMessage().contains("could not be ordered against what is already in it"),
+      () -> "and say what failed, rather than that Comparable is missing: " + thrown.getMessage()
+    );
+    assertTrue(
+      thrown.getMessage().contains("though its type implements Comparable"),
+      () -> "since here it is present and still not enough: " + thrown.getMessage()
     );
     assertInstanceOf(
       ClassCastException.class,
@@ -250,12 +254,12 @@ class SortedContainerConversionTest {
   }
 
   @Test
-  @DisplayName("a sorted target built with a carried comparator does not ask its elements to be Comparable")
-  void carriedComparatorRemovesTheOrderingQuestion() {
-    // The element type is unchanged, so nothing is converted and the source's comparator crosses
-    // into the new container. A container ordered by a comparator never calls compareTo, so an
-    // element type that implements nothing is still fine -- and a refusal here would tell the
-    // reader to supply the comparator they already supplied.
+  @DisplayName("a carried comparator crosses with the elements, and orders them in the new container")
+  void carriedComparatorCrossesWithTheElements() {
+    // What this holds is the comparator crossing, not anything about the ordering check: the
+    // insert simply does not raise here, so no check is consulted either way. It guarded the check
+    // when one ran ahead of the insert, and it no longer does -- the assertion on the comparator
+    // is the whole of its value now.
     final var byName = new TreeSet<Unordered>(Comparator.comparing(Unordered::name));
     byName.add(new Unordered("beth"));
     byName.add(new Unordered("al"));
