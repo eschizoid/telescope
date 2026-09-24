@@ -7,6 +7,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -312,21 +313,37 @@ final class ContainerLifts {
    * that is an ordering problem worth describing; one typed against its own kind has already said
    * it can be ordered, so a cast escaping it came from its own logic and is not ours to relabel.
    *
+   * <p>The declaration is looked for wherever it is, not only on the element's own class: a domain
+   * type reaches {@code Comparable} through an interface as often as it declares one directly, and
+   * a walk that stopped at superclasses would relabel exactly those elements' own faults.
+   *
    * <p>Raw or absent {@code Comparable} answers false, which routes to the ordering refusal. That
    * is the safer direction: the refusal names the element and keeps the cast as its cause, so a
-   * wrong guess here costs a sentence rather than the diagnosis.
+   * wrong guess here costs a sentence rather than the diagnosis. A raw one takes {@code Object} and
+   * casts it itself, so its faults are more often its own than not -- it stays with the refusal
+   * because the cause is preserved either way, not because the reading is clearly right.
    */
   private static boolean orderedAgainstItsOwnKind(final Object element) {
-    for (var c = element.getClass(); c != null; c = c.getSuperclass()) {
-      for (final var iface : c.getGenericInterfaces()) {
-        if (
-          iface instanceof ParameterizedType parameterized &&
-          parameterized.getRawType() == Comparable.class &&
-          parameterized.getActualTypeArguments()[0] instanceof Class<?> against
-        ) {
-          return against.isAssignableFrom(element.getClass());
+    // Seeded with the class chain; each class's own interfaces are reached by the walk below, so
+    // adding them here as well would only be a second route to the same types.
+    final var pending = new ArrayDeque<Type>();
+    for (var c = element.getClass(); c != null; c = c.getSuperclass()) pending.add(c);
+    final var seen = new HashSet<Type>();
+    while (!pending.isEmpty()) {
+      final var type = pending.poll();
+      if (!seen.add(type)) continue;
+      if (type instanceof ParameterizedType parameterized) {
+        if (parameterized.getRawType() == Comparable.class) {
+          final var against = parameterized.getActualTypeArguments()[0];
+          final var raw = against instanceof ParameterizedType nested ? nested.getRawType() : against;
+          return raw instanceof Class<?> cls && cls.isAssignableFrom(element.getClass());
         }
+        if (parameterized.getRawType() instanceof Class<?> cls) {
+          pending.addAll(List.of(cls.getGenericInterfaces()));
+        }
+        continue;
       }
+      if (type instanceof Class<?> cls) pending.addAll(List.of(cls.getGenericInterfaces()));
     }
     return false;
   }

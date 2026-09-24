@@ -127,6 +127,24 @@ class SortedContainerConversionTest {
 
   record RawlySortedDst(SortedSet<RawlyComparable> items) {}
 
+  // Comparable reached through an interface rather than declared on the element itself, which is
+  // ordinary domain modelling. It has still said what it can be ordered against, so a cast from
+  // inside its compareTo is its own -- the walk has to look past the class's own interfaces to
+  // see that.
+  interface Orderable extends Comparable<Orderable> {}
+
+  record ViaInterface(String v) implements Orderable {
+    @Override
+    public int compareTo(final Orderable other) {
+      final Object notAnInteger = v;
+      return ((Integer) notAnInteger).compareTo(1);
+    }
+  }
+
+  record ViaInterfaceSrc(Set<Ordered> items) {}
+
+  record ViaInterfaceSortedDst(SortedSet<ViaInterface> items) {}
+
   record BuggySrc(Set<Ordered> items) {}
 
   record BuggySortedDst(SortedSet<BuggyCompare> items) {}
@@ -267,6 +285,25 @@ class SortedContainerConversionTest {
     );
 
     assertInstanceOf(ClassCastException.class, thrown.getCause(), "with the cast kept as the cause");
+  }
+
+  @Test
+  @DisplayName("a compareTo fault keeps its cast when Comparable arrives through an interface too")
+  void aFaultIsNotRelabelledWhenComparableComesFromAnInterface() {
+    // The same property as the row below, reached the way a domain model usually reaches it. A
+    // walk that looked only at the element's own class and its superclasses would miss this and
+    // relabel the element's own fault as an ordering one.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(ViaInterfaceSrc.class, ViaInterfaceSortedDst.class).forward(new ViaInterfaceSrc(items))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("keeps its elements in order"),
+      () -> "an interface-inherited Comparable is still the element saying it can be ordered: " + thrown.getMessage()
+    );
   }
 
   @Test
