@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -144,6 +145,25 @@ class SortedContainerConversionTest {
   record ViaInterfaceSrc(Set<Ordered> items) {}
 
   record ViaInterfaceSortedDst(SortedSet<ViaInterface> items) {}
+
+  // Carries a generic interface that is not Comparable, so the walk meets a parameterized type
+  // it has to step past rather than answer from. Its own Comparable is the one that decides.
+  record AlsoSupplies(String v) implements Supplier<String>, Comparable<AlsoSupplies> {
+    @Override
+    public String get() {
+      return v;
+    }
+
+    @Override
+    public int compareTo(final AlsoSupplies other) {
+      final Object notAnInteger = v;
+      return ((Integer) notAnInteger).compareTo(1);
+    }
+  }
+
+  record SuppliesSrc(Set<Ordered> items) {}
+
+  record SuppliesSortedDst(SortedSet<AlsoSupplies> items) {}
 
   record BuggySrc(Set<Ordered> items) {}
 
@@ -303,6 +323,25 @@ class SortedContainerConversionTest {
     assertFalse(
       String.valueOf(thrown.getMessage()).contains("keeps its elements in order"),
       () -> "an interface-inherited Comparable is still the element saying it can be ordered: " + thrown.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a generic interface that is not Comparable is stepped past, not answered from")
+  void anUnrelatedGenericInterfaceDoesNotDecide() {
+    // The walk meets Supplier<String> before it meets Comparable<AlsoSupplies>. Answering from
+    // the first parameterized type it sees would call this element unorderable and relabel its
+    // own fault; stepping past it reaches the declaration that actually decides.
+    final var items = new LinkedHashSet<Ordered>();
+    items.add(new Ordered("a"));
+
+    final var thrown = assertThrows(ClassCastException.class, () ->
+      Telescope.mapper(SuppliesSrc.class, SuppliesSortedDst.class).forward(new SuppliesSrc(items))
+    );
+
+    assertFalse(
+      String.valueOf(thrown.getMessage()).contains("keeps its elements in order"),
+      () -> "its own Comparable is what decides, not the first generic interface: " + thrown.getMessage()
     );
   }
 
