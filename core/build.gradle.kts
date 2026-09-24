@@ -102,6 +102,11 @@ dependencies {
     testRuntimeOnly(libs.slf4jSimple)
     // Run the @Focus processor over test sources so we can verify generated *Focus classes end-to-end.
     testAnnotationProcessor(project(":codegen"))
+    // The container-allocation gate drives the real BridgeProcessor rather than a restatement of
+    // what it does, which needs the in-memory compilation harness. A test-only edge: :codegen's
+    // main already depends on :core's main, and this is :core's test depending on :codegen's, so
+    // the two never meet in a cycle.
+    testImplementation(testFixtures(project(":codegen")))
 }
 
 publishing {
