@@ -187,6 +187,44 @@ class FromMapProcessorTest {
     }
 
     @Test
+    @DisplayName("a nested target is refused, rather than emitting a binder that cannot name it")
+    void nestedTargetIsRefused() {
+      // Before the refusal this emitted demo.MoneyFromMap naming Money by simple name, which
+      // resolves to nothing at package level -- so the adopter's build failed on generated source
+      // with nothing in the message naming @FromMap. Driven through the full pipeline because a
+      // processing-only run never attributes the emitted reference and would accept it either way.
+      final var compilation = ProcessorHarness.compileFully(
+        List.of(new FromMapProcessor()),
+        List.of(),
+        new JavaFileObject[] {
+          source(
+            "demo.Outer",
+            """
+            package demo;
+            import io.github.eschizoid.telescope.annotations.FromMap;
+            public final class Outer {
+              @FromMap
+              public record Money(String currency, int cents) {}
+            }
+            """
+          ),
+        }
+      );
+
+      assertFalse(
+        compilation.success(),
+        () -> "a nested target should be refused: " + compilation.generated().keySet()
+      );
+      assertTrue(
+        compilation.hasError("top-level"),
+        () ->
+          "and the refusal should say why, rather than leaving javac to report an unknown " +
+          "symbol in generated code: " +
+          compilation.errorMessages()
+      );
+    }
+
+    @Test
     @DisplayName("every container shape emits a binder that actually compiles, helpers included")
     void containerBindersCompile() {
       // The rest of this class drives the processor with -proc:only, which completes declarations
