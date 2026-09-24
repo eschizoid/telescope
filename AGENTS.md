@@ -412,8 +412,8 @@ defined, and the DSL is proven where it is exposed.
 generated `SOURCE`-kind outputs in a wrapping `CapturingFileManager`, returns a `Compilation` record with success /
 diagnostics / generated map.
 
-Tests: `FocusProcessorTest`, `BeanFocusProcessorTest`, `BridgeProcessorTest`. Each test compiles a tiny source string,
-drives one processor, asserts on the generated output's text and on diagnostic content for rejection cases.
+One test class per processor, plus one per emission shape worth pinning. Each compiles a tiny source string, drives the
+processors it needs, and asserts on the generated output's text and on diagnostic content for rejection cases.
 
 The harness has a multi-processor overload (`compile(List<Processor>, sources)`) for any future cross-processor
 integration tests where order matters.
@@ -473,6 +473,9 @@ Allocation (`-Pjmh.profilers=gc`) is deterministic and does not have this proble
 | `FieldByNameBenchmark`, `HolderDispatchBenchmark`                | the string-keyed escape hatch, and the codegen-holder probe                        |
 | `MatchDispatchBenchmark`                                         | sealed-root dispatch                                                               |
 | `ContainerLoopSpikeBenchmark`, `MethodHandleChainSpikeBenchmark` | spikes kept for the record; not gates                                              |
+| `NavigatorFluencyBenchmark`                                      | navigating a generated navigator, per call                                         |
+| `RawContainerBenchmark`                                          | the default implementation a raw-container helper allocates                        |
+| `ObservationBenchmark`                                           | `observe` on a path, against the same path unobserved                              |
 
 The table lists what exists on `main`. A benchmark added by an open PR is not here until it lands.
 
@@ -579,8 +582,11 @@ accessor-builder site in `:internal` therefore branches on `NativeImage.IN_IMAGE
 (`supplier` / `function` / `biConsumer` / `biFunction`) — **any new runtime LMF call site must do the same, or the
 native-image workflow goes red.** The JVM keeps LMF (it's faster once JIT-warmed); the branch is one folded
 `static final boolean`. Telescope's own build-time-init metadata ships as `native-image.properties` inside
-`telescope-core`; app DTO/lambda metadata is the app's own reachability config. The `:examples:graphql` `NativeVerify`
-native binary (nine capabilities) is the regression gate — on every substrate push to `main` and weekly. Full contract:
+`telescope-core`; app DTO/lambda metadata is the app's own reachability config. Two gates cover it. `:core:imageTest`
+and `:internal:imageTest` re-run each module's whole suite with the `imagecode` property set, so every existing
+assertion runs on the substrate an image uses; both are wired into `check`, which is what CI runs. The
+`:examples:graphql` `NativeVerify` native binary (nine capabilities) covers what the image itself does — closed world,
+reachability metadata, `SerializedLambda` — on every substrate push to `main` and weekly. Full contract:
 `docs/native-image.md`, decisions: ADR-0015. The one documented exception is the guarded Hibernate-proxy accessor pair
 (fails safe to `null`; JVM/codegen-only under AOT).
 
