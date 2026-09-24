@@ -76,9 +76,11 @@ final class MhContainerLoopParityTest {
   @Test
   @DisplayName("sorted source, unsorted target: the fused direction still matches the Java loop")
   void sortedSourceUnsortedTargetLoopParity() {
-    // The forward half builds a Set, which orders nothing and can raise no cast, so it keeps the
-    // fused loop; the backward half builds the SortedSet and takes the Java loop. Both halves are
-    // compared against the Java loop here, so the one that changed path is held to the same answer.
+    // The forward half builds a Set, which orders nothing, so it keeps the fused loop and is the
+    // half this holds: with the toggle clear it fuses, with the toggle set it does not, and the
+    // two answers have to match. The backward half builds the SortedSet and takes the Java loop
+    // either way, so comparing it compares the loop with itself and can fail only if the loop is
+    // non-deterministic.
     final var items = new TreeSet<OrderedElem>();
     items.add(new OrderedElem("b"));
     items.add(new OrderedElem("a"));
