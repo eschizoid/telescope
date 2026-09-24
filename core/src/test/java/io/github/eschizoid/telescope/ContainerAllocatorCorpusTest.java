@@ -2,6 +2,8 @@ package io.github.eschizoid.telescope;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.codegen.BridgeProcessor;
+import io.github.eschizoid.telescope.codegen.ProcessorHarness;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.io.IOException;
 import java.lang.reflect.Modifier;
@@ -11,21 +13,19 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.NavigableMap;
-import java.util.NavigableSet;
+import java.util.Properties;
 import java.util.Set;
-import java.util.SortedMap;
-import java.util.SortedSet;
-import java.util.TreeMap;
-import java.util.TreeSet;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.BiFunction;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
+import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -49,7 +49,10 @@ import org.junit.jupiter.api.Test;
  * drift. It is two lines guarding thirty-odd types, which is a trade worth making until the rule
  * has one home.
  */
-class ContainerAllocatorCorpusTest {
+// Public so the adopter-shaped fixtures nested below can be named by the sources the gate compiles,
+// which live in their own package. A package-private enclosing class hides them, and the gate would
+// record the processor refusing a type it was never able to see.
+public class ContainerAllocatorCorpusTest {
 
   /** A container the reflective path is expected to handle, and the lift that would handle it. */
   private record Family(
@@ -124,44 +127,91 @@ class ContainerAllocatorCorpusTest {
   }
 
   /**
-   * The implementation the generated path picks for an uninstantiable declared type. Three families
-   * name a contract no hash container keeps, so each takes the implementation that keeps it; every
-   * other declaration falls to its family's plain default.
+   * The generated path's rule, executed. Every declared type in a family is compiled as a
+   * {@code @Bridge} pair through the real processor and attributed by javac, so what is measured is
+   * the code the processor writes rather than a description of the guard it consults. A restatement
+   * can only find divergences it already models; the routes that never reach the allocation guard
+   * -- the element-preserving copy among them -- are exactly the ones it cannot see.
+   *
+   * <p>The source side declares the family's interface and the target side the type under test, so
+   * the two differ and an allocation is forced. Declaring the same type on both sides would let the
+   * reference through unchanged and ask nothing.
+   *
+   * <p>One enum serves as the element type for every family. It is the only choice that satisfies
+   * every bound in the corpus -- {@code EnumSet} and {@code EnumMap} accept nothing else, and an
+   * enum is {@code Comparable}, so the sorted containers take it too. An element type that failed a
+   * bound would be recorded as the processor refusing the container, which is a different answer to
+   * a question nobody asked.
+   *
+   * <p>One compilation carries the whole family. Running them apart is the same answer at sixty
+   * times the cost, and each type is emitted into its own package so a diagnostic names the type it
+   * belongs to.
    */
-  private static Class<?> generatedDefaultFor(final Class<?> c, final Class<?> plainDefault) {
-    if (c == SortedSet.class || c == NavigableSet.class) return TreeSet.class;
-    if (c == SortedMap.class || c == NavigableMap.class) return TreeMap.class;
-    if (c == ConcurrentMap.class) return ConcurrentHashMap.class;
-    return plainDefault;
+  private static Map<Class<?>, Boolean> generatedVerdicts(final Family family, final List<Class<?>> types) {
+    final var participating = types
+      .stream()
+      .filter(c -> family.iface().isAssignableFrom(c))
+      .toList();
+    final var sources = new ArrayList<JavaFileObject>();
+    for (int i = 0; i < participating.size(); i++) {
+      final var pkg = "corpus.t" + i;
+      sources.add(ProcessorHarness.source(pkg + ".Key", "package " + pkg + ";\npublic enum Key { A, B }\n"));
+      sources.add(
+        ProcessorHarness.source(
+          pkg + ".Src",
+          "package " +
+            pkg +
+            ";\nimport io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(" +
+            pkg +
+            ".Dst.class)\npublic record Src(" +
+            declared(family.iface(), pkg, participating.get(i).getTypeParameters().length) +
+            " items) {}\n"
+        )
+      );
+      sources.add(
+        ProcessorHarness.source(
+          pkg + ".Dst",
+          "package " +
+            pkg +
+            ";\npublic record Dst(" +
+            declared(participating.get(i), pkg, participating.get(i).getTypeParameters().length) +
+            " items) {}\n"
+        )
+      );
+    }
+    final var compilation = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      sources.toArray(JavaFileObject[]::new)
+    );
+    final var refused = new HashSet<Integer>();
+    final var belongsTo = Pattern.compile("/corpus/t(\\d+)/");
+    for (final var d : compilation.errors()) {
+      final var where = d.getSource() == null ? d.getMessage(Locale.ROOT) : d.getSource().toUri().toString();
+      final var m = belongsTo.matcher(where);
+      if (m.find()) refused.add(Integer.parseInt(m.group(1)));
+      else {
+        final var byName = Pattern.compile("corpus\\.t(\\d+)\\b").matcher(d.getMessage(Locale.ROOT));
+        if (byName.find()) refused.add(Integer.parseInt(byName.group(1)));
+      }
+    }
+    final var out = new LinkedHashMap<Class<?>, Boolean>();
+    for (int i = 0; i < participating.size(); i++) out.put(participating.get(i), !refused.contains(i));
+    return out;
   }
 
   /**
-   * The generated path's rule, restated. It names the declared class when that class is one it can
-   * write {@code new X<>()} for, and the family's default otherwise — so a type it cannot
-   * instantiate is not one it accepts either, and asking the reflective path to handle it would be
-   * demanding more than parity.
-   *
-   * <p>What it restates is the allocation guard, not every expression the processor can write. Some
-   * routes — the element-preserving copy among them — never reach that guard, so a pair this model
-   * calls settled is not necessarily one the processor agrees about. What it does say completely is
-   * that there is no builder route <em>to a container</em>: the generated path does build POJO
-   * targets through one, and {@code WriteStrategy.BUILDER} selects it, but no route that allocates
-   * a container consults a builder — emitting that call needs the type arguments the declaration
-   * carries and the builder's own signature supplies. {@link #KNOWN_DIVERGENCES} names what that
-   * costs.
+   * The declared type as source text. Both sides of a pair take the arity of the type under test: a
+   * raw target asked against a parameterized source is a question about element types rather than
+   * about allocation, and the processor's answer to it would be recorded as a refusal to allocate.
    */
-  private static boolean generatedPathAllocates(final Class<?> c, final Class<?> plainDefault) {
-    final var fallback = generatedDefaultFor(c, plainDefault);
-    // Nothing can be instantiated for an interface or an abstract class, so the family's default
-    // stands in — and only where that default is actually one of them. Where it is not, the
-    // generated path emits an allocation the declared field cannot hold, so it is no more able to
-    // handle the type than the reflective path is, and asking for parity there asks for too much.
-    if (c.isInterface() || Modifier.isAbstract(c.getModifiers())) return c.isAssignableFrom(fallback);
-    try {
-      return Modifier.isPublic(c.getConstructor().getModifiers());
-    } catch (final NoSuchMethodException e) {
-      return false;
-    }
+  private static String declared(final Class<?> c, final String pkg, final int arity) {
+    final var name = c.getCanonicalName();
+    return switch (arity) {
+      case 0 -> name;
+      case 1 -> name + "<" + pkg + ".Key>";
+      default -> name + "<" + pkg + ".Key, java.lang.String>";
+    };
   }
 
   /** How a pair is decided by each path, so a recorded divergence names which way it runs. */
@@ -196,6 +246,20 @@ class ContainerAllocatorCorpusTest {
    */
   private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.of(
     "List " + BuildableList.class.getName(),
+    new Verdict(false, true),
+    // Reached by the element-preserving copy, which never consults the allocation guard: the
+    // processor writes a copy-constructor call and the reflective path refuses the type
+    // outright.
+    // The harmful direction of the two -- a build that succeeds and a conversion that does
+    // not.
+    "Map " + EnumMap.class.getName(),
+    new Verdict(true, false),
+    // Declared without type arguments, so the processor can derive no bridge into it and
+    // refuses
+    // the pair before allocation is reached. The reflective path asks only whether the class
+    // can be
+    // allocated and answers yes. A capability gap rather than a wrong answer.
+    "Map " + Properties.class.getName(),
     new Verdict(false, true)
   );
 
@@ -307,13 +371,18 @@ class ContainerAllocatorCorpusTest {
   void bothPathsAgreeOnEveryContainer() throws IOException {
     final var types = corpus();
 
+    // One compilation per family, ahead of the loop, so the processor runs three times rather than
+    // once per pair.
+    final var generated = new LinkedHashMap<String, Map<Class<?>, Boolean>>();
+    for (final var family : FAMILIES) generated.put(family.label(), generatedVerdicts(family, types));
+
     final var divergent = new LinkedHashSet<String>();
     final var observedDivergences = new LinkedHashSet<String>();
     final var badRefusals = new LinkedHashSet<String>();
     for (final var c : types) {
       for (final var family : FAMILIES) {
         if (!family.iface().isAssignableFrom(c)) continue;
-        final var generatedAllocates = generatedPathAllocates(c, family.fallback());
+        final var generatedAllocates = generated.get(family.label()).get(c);
         var reflectiveAllocates = true;
         try {
           family.lift().apply(c, c);
