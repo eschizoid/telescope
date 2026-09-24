@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.pairing.PropertySystem.WellKnown;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -103,14 +104,43 @@ public final class PairingRules<T> {
    * or parameterized type — defeats the key-equality guarantee, so the type is not treated as a
    * liftable container).
    */
+  private static final Set<WellKnown> GENERAL = Set.of(WellKnown.DEQUE, WellKnown.QUEUE, WellKnown.COLLECTION);
+
+  private static final Map<WellKnown, String> GENERAL_NAMES = Map.of(
+    WellKnown.DEQUE,
+    "java.util.Deque",
+    WellKnown.QUEUE,
+    "java.util.Queue",
+    WellKnown.COLLECTION,
+    "java.util.Collection"
+  );
+
   public ContainerView<T> containerViewOf(final T t) {
     // Raw subclasses retain the explicit shallow-copy policy above. Parameterized subclasses
     // must be viewed through the container supertype: their own parameters can be reordered,
     // fixed, or unrelated to the element/key types.
     if (props.typeArguments(t).isEmpty()) return null;
     final var raw = props.rawType(t);
-    for (final var kind : List.of(WellKnown.OPTIONAL, WellKnown.LIST, WellKnown.SET, WellKnown.MAP)) {
+    // Order decides the answer where a type satisfies more than one: a List is asked as a List
+    // before it is asked as a Collection. The last three are what a type reaches only by being
+    // none of the others -- a Deque, a Queue, or a field declared as the general Collection -- and
+    // they are viewed as lists because that is what they keep: an order, and duplicates.
+    for (final var kind : List.of(
+      WellKnown.OPTIONAL,
+      WellKnown.LIST,
+      WellKnown.SET,
+      WellKnown.MAP,
+      WellKnown.DEQUE,
+      WellKnown.QUEUE,
+      WellKnown.COLLECTION
+    )) {
       if (!props.isSubtypeOf(raw, kind)) continue;
+      // The three general kinds are matched by name rather than by subtype. A concrete queue may
+      // be capacity-bounded -- a SynchronousQueue holds nothing at all -- and accepting one turns
+      // a refusal while the plan is built into a failure on every conversion, which is the worse
+      // of the two. A field declared as one of the interfaces asks only for something that keeps
+      // an order, and that is answerable.
+      if (GENERAL.contains(kind) && !props.typeName(raw).equals(GENERAL_NAMES.get(kind))) continue;
       final var args = props.typeArgumentsAs(t, kind);
       if (kind == WellKnown.MAP) {
         if (args.size() != 2 || !props.isClassType(args.getFirst())) return null;
@@ -120,7 +150,7 @@ public final class PairingRules<T> {
       return new ContainerView<>(
         switch (kind) {
           case OPTIONAL -> ContainerView.Kind.OPTIONAL;
-          case LIST -> ContainerView.Kind.LIST;
+          case LIST, DEQUE, QUEUE, COLLECTION -> ContainerView.Kind.LIST;
           case SET -> ContainerView.Kind.SET;
           default -> throw new AssertionError(kind);
         },

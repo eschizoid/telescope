@@ -2758,6 +2758,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case "java.util.SortedSet", "java.util.NavigableSet" -> "java.util.TreeSet";
       case "java.util.SortedMap", "java.util.NavigableMap" -> "java.util.TreeMap";
       case "java.util.concurrent.ConcurrentMap" -> "java.util.concurrent.ConcurrentHashMap";
+      // Viewed as lists, but an ArrayList satisfies neither declaration -- so the family decides
+      // here too, exactly as the sorted and concurrent ones above it do.
+      case "java.util.Deque", "java.util.Queue" -> "java.util.ArrayDeque";
       default -> switch (kind) {
         case LIST -> "java.util.ArrayList";
         case SET -> "java.util.LinkedHashSet";
