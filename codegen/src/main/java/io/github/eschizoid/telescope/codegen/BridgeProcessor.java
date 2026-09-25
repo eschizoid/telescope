@@ -2923,8 +2923,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
             return null;
           }
           final var elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(subPlan.subBridgeName());
+          // A copy constructor belongs to the class the family default names, so a side reached
+          // through its builder instead would be copy-constructed into something the field cannot
+          // hold. Asking the allocator keeps that decision in one place rather than re-deriving
+          // what makes a container need the builder.
           final var inlineCopy =
             elementIdentity &&
+            builderAllocExpr(sf.type(), subPlan.kind()) == null &&
+            builderAllocExpr(tf.type(), subPlan.kind()) == null &&
             hasCopyConstructorAccepting(tf.type(), subPlan.kind(), sf.type()) &&
             hasCopyConstructorAccepting(sf.type(), subPlan.kind(), tf.type());
           if (!inlineCopy) {
@@ -3511,7 +3517,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
     out.println("    if (src == null) return null;");
     emitOrderingGuard(out, plan.kind(), identity, tgtContainer);
-    out.println("    final var out = " + rawAllocExpr(tgtContainer, srcContainer, plan.kind(), identity) + ";");
+    out.println(rawOutDeclaration(tgtContainer, srcContainer, plan.kind(), identity));
     if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
       if (identity) {
         out.println("    out.putAll(src);");
@@ -3542,10 +3548,45 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var types = processingEnv.getTypeUtils();
     for (final var container : List.of(srcContainer, tgtContainer)) {
+      // A declared type nothing allocatable is an instance of may still be reachable through its
+      // own builder, which is the route the reflective path takes for exactly this shape. The test
+      // is the allocator's own, so a gate never refuses a container the emitter would have built.
+      if (builderAllocExpr(container, kind) != null) continue;
       final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
       if (implEl == null) continue;
       if (!types.isAssignable(types.erasure(implEl.asType()), types.erasure(container))) {
         return container.toString();
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The declared container's own qualified name when it can be reached through a static {@code
+   * builder()}, or null when it cannot.
+   *
+   * <p>The reflective path binds this pair, so what has to hold is that the builder actually
+   * produces the declared type. A {@code build()} returning something else fails its cast on the
+   * first conversion, and emitting a call to it would move that failure into generated code.
+   */
+  private String builderRouteFor(final TypeMirror container) {
+    if (container.getKind() != TypeKind.DECLARED) return null;
+    final var el = (TypeElement) ((DeclaredType) container).asElement();
+    final var factory = staticBuilderMethod(el);
+    if (factory == null || factory.getReturnType().getKind() != TypeKind.DECLARED) return null;
+    final var builderEl = (TypeElement) ((DeclaredType) factory.getReturnType()).asElement();
+    // The bridge is emitted in the source's package, which need not be the container's, so a
+    // builder type that is not public cannot be named from where the call lands. Its own build()
+    // being public is not enough: a method on an inaccessible class is inaccessible with it.
+    if (!publiclyNameable(builderEl)) return null;
+    final var types = processingEnv.getTypeUtils();
+    // All members, not the declared ones: build() may be inherited from a shared builder base, and
+    // it produces the same value wherever it is written.
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(builderEl))) {
+      if (m.getModifiers().contains(Modifier.STATIC) || !m.getModifiers().contains(Modifier.PUBLIC)) continue;
+      if (!m.getParameters().isEmpty() || !m.getSimpleName().contentEquals("build")) continue;
+      if (types.isAssignable(types.erasure(m.getReturnType()), types.erasure(container))) {
+        return el.getQualifiedName().toString();
       }
     }
     return null;
@@ -3563,6 +3604,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final FieldPlan.Kind kind
   ) {
     for (final var container : List.of(srcContainer, tgtContainer)) {
+      // A type whose builder makes it needs no constructor of its own, which is the point of
+      // hiding one.
+      if (builderAllocExpr(container, kind) != null) continue;
       final var implFqn = concreteImplFqn(container, kind);
       final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
       if (implEl != null && !hasPublicNoArgConstructor(implEl)) return implFqn;
@@ -3656,17 +3700,135 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return types.isAssignable(types.erasure(container), types.erasure(sortedSet.asType()));
   }
 
-  // Allocation expression for a raw-container output: the target's concrete class (the subtype
-  // itself when instantiable, else the interface's default impl), with a diamond only when that
-  // class is generic. A non-generic subtype (`class ImageUrls extends ArrayList<ImageUrl>`) takes
-  // no type arguments; the default impl for a generic interface field takes the field's element
-  // args.
-  //
-  // Only the JDK default impls are sized from the source. Java does not inherit constructors, so a
-  // subtype declaring nothing but its implicit no-arg one has no sized constructor to call, and a
-  // subtype that declares an `(int)` constructor gives the argument whatever meaning it chose --
-  // a page number reads exactly like a capacity from here. Filling such a subtype through addAll
-  // or putAll still lets the JDK size it in one step where those methods presize.
+  /**
+   * The allocation expression for a container reached through its own {@code builder()}, or null
+   * when there is no such route.
+   *
+   * <p>One shape covers every builder. A {@code builder()} that takes type parameters infers them
+   * from the cast's target; one that does not returns whatever it returns and the cast narrows it.
+   *
+   * <p>The cast is unchecked by construction: a builder that hands back a wider type is exactly the
+   * shape this route exists for. What keeps it honest is the probe, which admits a builder only
+   * when its {@code build()} produces the declared type.
+   */
+  private String builderAllocExpr(final TypeMirror container, final FieldPlan.Kind kind) {
+    if (!needsBuilderRoute(container, kind)) return null;
+    // A container allocated by its builder carries whatever ordering build() chose, which nothing
+    // here can pass a comparator to. A declared type promising an order would keep the promise only
+    // by luck, so the route is not offered and the pairing is refused by name instead.
+    if (promisesOrdering(container)) return null;
+    final var route = builderRouteFor(container);
+    // Through Object, because two parameterizations of one type are unrelated: a build() declared
+    // to return Buildable<Object> cannot be cast straight to Buildable<E>, and the raw type would
+    // trade the unchecked warning for a rawtypes one.
+    return route == null ? null : "(" + container + ") (Object) " + route + ".builder().build()";
+  }
+
+  /**
+   * Whether the ordinary allocation is unavailable for this container, which is the only condition
+   * under which its builder should be called.
+   *
+   * <p>A builder is a way to reach a type that cannot be constructed, not a better way to reach one
+   * that can. A concrete container with a public no-argument constructor is allocated through it
+   * and sized from the source in one step; routing such a type through its builder instead drops
+   * that sizing and adopts whatever {@code build()} chose to return, for a type whose allocation
+   * was never in question.
+   */
+  private boolean needsBuilderRoute(final TypeMirror container, final FieldPlan.Kind kind) {
+    if (container.getKind() != TypeKind.DECLARED) return false;
+    final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
+    // Every name that method yields is either the declared class itself or a java.base container,
+    // so this resolves for anything reaching here and the verdict below is what decides the route.
+    if (implEl == null) return false;
+    final var types = processingEnv.getTypeUtils();
+    if (!types.isAssignable(types.erasure(implEl.asType()), types.erasure(container))) return true;
+    return !hasPublicNoArgConstructor(implEl);
+  }
+
+  /**
+   * Whether this type can be named from any package. A nested type qualifies only when every type
+   * enclosing it does too, since naming the inner one means naming the outer ones first.
+   */
+  private static boolean publiclyNameable(final TypeElement type) {
+    for (Element el = type; el instanceof TypeElement enclosing; el = enclosing.getEnclosingElement()) {
+      if (!enclosing.getModifiers().contains(Modifier.PUBLIC)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether the declared container's type promises an iteration order, which is the contract a
+   * comparator carries and an allocation that takes no comparator cannot reproduce.
+   */
+  private boolean promisesOrdering(final TypeMirror container) {
+    final var types = processingEnv.getTypeUtils();
+    for (final var fqn : List.of("java.util.SortedSet", "java.util.SortedMap")) {
+      final var el = processingEnv.getElementUtils().getTypeElement(fqn);
+      if (el != null && types.isAssignable(types.erasure(container), types.erasure(el.asType()))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * The declaration of a helper's output container: its own builder where the ordinary allocation
+   * is unavailable, and the sized allocation otherwise. All three helpers fill their output the
+   * same way, so the route is decided here once and the declaration comes back whole — the
+   * suppression the builder cast needs can then never be attached to a different allocation than
+   * the one it was decided for.
+   */
+  private String helperOutDeclaration(
+    final TypeMirror tgtContainer,
+    final TypeMirror srcContainer,
+    final FieldPlan.Kind kind,
+    final String typeArgs
+  ) {
+    final var viaBuilder = builderAllocExpr(tgtContainer, kind);
+    if (viaBuilder != null) return outDeclaration(viaBuilder, true);
+    final var implFqn = concreteImplFqn(tgtContainer, kind);
+    return outDeclaration(sizedAlloc(implFqn, typeArgs, orderingArg(srcContainer, implFqn, false)), false);
+  }
+
+  /**
+   * The same decision for the self-contained helper, whose elements pass through rather than being
+   * converted one at a time.
+   */
+  private String rawOutDeclaration(
+    final TypeMirror container,
+    final TypeMirror srcContainer,
+    final FieldPlan.Kind kind,
+    final boolean elementsPreserved
+  ) {
+    final var viaBuilder = builderAllocExpr(container, kind);
+    return viaBuilder != null
+      ? outDeclaration(viaBuilder, true)
+      : outDeclaration(rawAllocExpr(container, srcContainer, kind, elementsPreserved), false);
+  }
+
+  /**
+   * The output container's declaration. Reaching a declared type through its builder means casting
+   * what {@code build()} hands back, which is unchecked by construction: the probe admits a builder
+   * only when its {@code build()} produces that type, and the compiler cannot see that check. The
+   * suppression rides the declaration so a consumer compiling with {@code -Werror} is not failed by
+   * code they did not write; every other route allocates its own type and needs none.
+   */
+  private String outDeclaration(final String alloc, final boolean viaBuilder) {
+    final var suppression = viaBuilder ? "@SuppressWarnings(\"unchecked\") " : "";
+    return "    " + suppression + "final var out = " + alloc + ";";
+  }
+
+  /**
+   * The allocation expression for a raw-container output: the target's concrete class (the subtype
+   * itself when instantiable, else the interface's default impl), with a diamond only when that
+   * class is generic. A non-generic subtype ({@code class ImageUrls extends ArrayList<ImageUrl>})
+   * takes no type arguments; the default impl for a generic interface field takes the field's
+   * element args.
+   *
+   * <p>Only the JDK default impls are sized from the source. Java does not inherit constructors, so
+   * a subtype declaring nothing but its implicit no-arg one has no sized constructor to call, and a
+   * subtype that declares an {@code (int)} constructor gives the argument whatever meaning it chose
+   * — a page number reads exactly like a capacity from here. Filling such a subtype through {@code
+   * addAll} or {@code putAll} still lets the JDK size it in one step where those methods presize.
+   */
   private String rawAllocExpr(
     final TypeMirror container,
     final TypeMirror srcContainer,
@@ -3701,8 +3863,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
-    final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.LIST);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement), orderingArg(srcContainer, implFqn, false));
     out.println();
     out.println(
       "  private static " +
@@ -3718,7 +3878,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
-    out.println("    final var out = " + alloc + ";");
+    out.println(helperOutDeclaration(tgtContainer, srcContainer, FieldPlan.Kind.LIST, String.valueOf(tgtElement)));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -3736,8 +3896,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
-    final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.SET);
-    final var alloc = sizedAlloc(implFqn, String.valueOf(tgtElement), orderingArg(srcContainer, implFqn, false));
     out.println();
     out.println(
       "  private static " +
@@ -3754,7 +3912,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
     out.println("    if (src == null) return null;");
     emitOrderingGuard(out, FieldPlan.Kind.SET, false, tgtContainer);
-    out.println("    final var out = " + alloc + ";");
+    out.println(helperOutDeclaration(tgtContainer, srcContainer, FieldPlan.Kind.SET, String.valueOf(tgtElement)));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -3775,8 +3933,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var tgtValue = tgtArgs.get(1);
     final var returnRaw = containerRawFqn(tgtContainer);
     final var paramRaw = containerRawFqn(srcContainer);
-    final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES);
-    final var alloc = sizedAlloc(implFqn, keyType + ", " + tgtValue, orderingArg(srcContainer, implFqn, false));
     out.println();
     out.println(
       "  private static " +
@@ -3796,7 +3952,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
-    out.println("    final var out = " + alloc + ";");
+    out.println(helperOutDeclaration(tgtContainer, srcContainer, FieldPlan.Kind.MAP_VALUES, keyType + ", " + tgtValue));
     out.println(
       "    for (final var e : src.entrySet()) out.put(e.getKey(), " + subBridge + "." + direction + "(e.getValue()));"
     );

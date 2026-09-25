@@ -269,13 +269,9 @@ public class ContainerAllocatorCorpusTest {
    * it structured means rewording the message below cannot fail the gate, which would otherwise
    * teach the next reader to fix a red gate by pasting a string.
    *
-   * <p>The one entry: the reflective allocator reaches a static builder and the generated one has
-   * no route to a container through one, because emitting that call needs the builder's own generic
-   * signature rather than just its name. Tracked as a capability of its own. The benign direction.
+   * <p>Each entry carries its own reason inline, beside the direction it records.
    */
   private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.of(
-    "List " + BuildableList.class.getName(),
-    new Verdict(false, true),
     // Reached by the element-preserving copy, which never consults the allocation guard: the
     // processor writes a copy-constructor call where the reflective path refuses the type
     // outright. The harmful direction of the two, a build that succeeds and a conversion that
@@ -319,6 +315,29 @@ public class ContainerAllocatorCorpusTest {
   }
 
   /**
+   * Concrete, and reachable only through its builder. The sibling above is abstract, so both paths
+   * decide it on abstractness before a constructor is ever looked for; here abstractness says
+   * nothing and the hidden constructor is the whole of the question.
+   */
+  public static final class SealedBuildableList<E> extends ArrayList<E> {
+
+    private static final long serialVersionUID = 1L;
+
+    private SealedBuildableList() {}
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    public static final class Builder {
+
+      public SealedBuildableList<Object> build() {
+        return new SealedBuildableList<>();
+      }
+    }
+  }
+
+  /**
    * Adopter-shaped containers, which is most of what a real model declares and no JDK scan finds.
    */
   public interface MyListIface<E> extends List<E> {}
@@ -357,7 +376,8 @@ public class ContainerAllocatorCorpusTest {
         MyMapIface.class,
         MyAbstractList.class,
         MyArrayList.class,
-        BuildableList.class
+        BuildableList.class,
+        SealedBuildableList.class
       )
     );
     return out;
