@@ -3515,7 +3515,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
     out.println("    if (src == null) return null;");
     emitOrderingGuard(out, plan.kind(), identity, tgtContainer);
-    out.println("    final var out = " + rawAllocExpr(tgtContainer, srcContainer, plan.kind(), identity) + ";");
+    out.println(
+      outDeclaration(
+        rawAllocExpr(tgtContainer, srcContainer, plan.kind(), identity),
+        builderRouteFor(tgtContainer) != null
+      )
+    );
     if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
       if (identity) {
         out.println("    out.putAll(src);");
@@ -3744,6 +3749,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return sizedAlloc(implFqn, typeArgs, orderingArg(srcContainer, implFqn, false));
   }
 
+  /**
+   * The output container's declaration. Reaching a declared type through its builder means casting
+   * what {@code build()} hands back, which is unchecked by construction: the probe admits a builder
+   * only when its {@code build()} produces that type, and the compiler cannot see that check. The
+   * suppression rides the declaration so a consumer compiling with {@code -Werror} is not failed by
+   * code they did not write; every other route allocates its own type and needs none.
+   */
+  private String outDeclaration(final String alloc, final boolean viaBuilder) {
+    final var suppression = viaBuilder ? "@SuppressWarnings(\"unchecked\") " : "";
+    return "    " + suppression + "final var out = " + alloc + ";";
+  }
+
   private String rawAllocExpr(
     final TypeMirror container,
     final TypeMirror srcContainer,
@@ -3796,7 +3813,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
-    out.println("    final var out = " + alloc + ";");
+    out.println(outDeclaration(alloc, builderRouteFor(tgtContainer) != null));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -3831,7 +3848,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
     out.println("    if (src == null) return null;");
     emitOrderingGuard(out, FieldPlan.Kind.SET, false, tgtContainer);
-    out.println("    final var out = " + alloc + ";");
+    out.println(outDeclaration(alloc, builderRouteFor(tgtContainer) != null));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -3872,7 +3889,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
-    out.println("    final var out = " + alloc + ";");
+    out.println(outDeclaration(alloc, builderRouteFor(tgtContainer) != null));
     out.println(
       "    for (final var e : src.entrySet()) out.put(e.getKey(), " + subBridge + "." + direction + "(e.getValue()));"
     );

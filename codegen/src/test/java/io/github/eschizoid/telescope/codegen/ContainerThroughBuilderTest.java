@@ -231,6 +231,37 @@ class ContainerThroughBuilderTest {
     );
   }
 
+  @ParameterizedTest(name = "{0} declares the cast unchecked")
+  @MethodSource("families")
+  @DisplayName("the builder route's cast is suppressed where it is emitted, and only there")
+  void theBuilderCastCarriesItsOwnSuppression(final Family family) {
+    // Casting what build() hands back is unchecked by construction, so a consumer compiling with
+    // -Werror would be failed by code they did not write. The control side is what keeps this from
+    // being satisfied by a suppression emitted unconditionally.
+    final var routed = compile(
+      concat(
+        elements(),
+        buildable(family),
+        pair(family.container("Built", family.srcArgs()), family.container("Built", family.tgtArgs()))
+      )
+    );
+    assertTrue(routed.success(), () -> family + " should bridge: " + routed.errorMessages());
+    assertTrue(
+      routed.generated().get("demo.BSrcBridge").contains("@SuppressWarnings(\"unchecked\") final var out ="),
+      () -> family + " should suppress the builder cast; saw " + routed.generated().get("demo.BSrcBridge")
+    );
+
+    final var plainSide = family.plainIface() + "<" + family.srcArgs() + ">";
+    final var plainTarget = family.plainIface() + "<" + family.tgtArgs() + ">";
+    final var unrouted = compile(concat(elements(), pair(plainSide, plainTarget)));
+    assertTrue(unrouted.success(), () -> family + " control should bridge: " + unrouted.errorMessages());
+    assertFalse(
+      unrouted.generated().get("demo.BSrcBridge").contains("@SuppressWarnings"),
+      () ->
+        family + " allocates its own type and needs no suppression; saw " + unrouted.generated().get("demo.BSrcBridge")
+    );
+  }
+
   @ParameterizedTest(name = "{0} whose build() is wider than the field")
   @MethodSource("families")
   @DisplayName("a builder whose build() does not produce the declared type is not a route to it")
