@@ -368,12 +368,11 @@ final ForwardMapper<Map<String, Object>, CaseListRequest> requests = Telescope.f
 final CaseListRequest request = requests.forward(payload);
 ```
 
-A target component that no row names gets a type default rather than `null`. The table is in `NullDefaults`, so a
-`String` comes back `""`, numbers come back zero, `boolean` comes back `false`, `List`, `Set`, and `Map` come back as
-empty singletons, and `Optional` comes back as `Optional.empty()`. The defaults differ from those of `mapperForward`,
-which leaves an unpaired container `null`, so do not assume the two are interchangeable. A component a row does name is
-passed to its converter as written, including when the key is missing, so a converter that cannot accept `null` needs to
-handle it.
+A component with no value gets a type default rather than `null`, whether or not a row names it. A `String` comes back
+`""`, numbers come back zero, `boolean` comes back `false`, `List`, `Set`, and `Map` come back as empty singletons, and
+`Optional` comes back as `Optional.empty()`. A converter therefore receives a value or is not called, so it never has to
+say what the absence of one means. The defaults differ from those of `mapperForward`, which leaves an unpaired container
+`null`, so do not assume the two factories are interchangeable.
 
 The backward direction is deliberately absent. A flat `String`-keyed map is a boundary format rather than a typed
 counterpart, so round-tripping to it would have to invent a key-encoding policy, and telescope does not pick one for

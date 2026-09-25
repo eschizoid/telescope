@@ -10,6 +10,7 @@ import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
 import java.lang.reflect.RecordComponent;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -106,15 +107,15 @@ final class FromMap {
       if (e != null) {
         keys[i] = e.key();
         converters[i] = (Function<Object, Object>) e.converter();
-      } else {
-        defaults[i] = NullDefaults.defaultFor(comps[i].getGenericType());
       }
+      defaults[i] = unfilledDefault(comps[i].getType(), comps[i].getGenericType());
     }
     return mapSrc -> {
       if (mapSrc == null) return null;
       final var args = new Object[n];
       for (var i = 0; i < n; i++) {
-        args[i] = keys[i] != null ? converters[i].apply(mapSrc.get(keys[i])) : defaults[i];
+        final var value = keys[i] == null ? null : mapSrc.get(keys[i]);
+        args[i] = value == null ? defaults[i] : converters[i].apply(value);
       }
       return Records.construct(target, args);
     };
@@ -147,18 +148,31 @@ final class FromMap {
         @SuppressWarnings("unchecked")
         final var conv = (Function<Object, Object>) e.converter();
         converters[i] = conv;
-      } else {
-        defaults[i] = NullDefaults.defaultFor(Beans.propertyType(target, propertyNames[i]));
       }
+      final var propertyType = Beans.propertyType(target, propertyNames[i]);
+      defaults[i] = unfilledDefault(propertyType instanceof Class<?> raw ? raw : null, propertyType);
     }
     return mapSrc -> {
       if (mapSrc == null) return null;
       final Function<String, Object> valueByName = name -> {
         final var i = indexByName.get(name);
         if (i == null) return null;
-        return keys[i] != null ? converters[i].apply(mapSrc.get(keys[i])) : defaults[i];
+        final var value = keys[i] == null ? null : mapSrc.get(keys[i]);
+        return value == null ? defaults[i] : converters[i].apply(value);
       };
       return writer.construct(propertyNames, valueByName);
     };
+  }
+
+  /**
+   * The value for a slot no row fills. The substitution table answers for the types it names and
+   * returns null for the rest, which a reference slot can hold and a primitive one cannot. A
+   * primitive therefore falls back to its own JLS default, the same value the rebuild path uses
+   * when it meets a null source for one.
+   */
+  private static Object unfilledDefault(final Class<?> raw, final Type generic) {
+    final var tabled = NullDefaults.defaultFor(generic);
+    if (tabled != null) return tabled;
+    return raw != null && raw.isPrimitive() ? Placeholders.primitiveDefault(raw) : null;
   }
 }

@@ -55,7 +55,7 @@ class TelescopeFromMapTest {
   class Forward {
 
     @Test
-    @DisplayName("record target: each extract row reads its key, applies the converter, writes the component")
+    @DisplayName("record target: each extract row reads its key, applies the converter, writes the" + " component")
     void recordRoundTrips() {
       final var mapper = Telescope.fromMap(
         CaseListRequest.class,
@@ -255,5 +255,87 @@ class TelescopeFromMapTest {
       assertEquals(new CaseListRequest("A", "1", 1), first);
       assertEquals(new CaseListRequest("B", "2", 2), second);
     }
+  }
+
+  public record HasChar(char grade, String name) {}
+
+  public static class BeanHasChar {
+
+    private char grade;
+    private String name;
+
+    public char getGrade() {
+      return grade;
+    }
+
+    public void setGrade(final char grade) {
+      this.grade = grade;
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public void setName(final String name) {
+      this.name = name;
+    }
+  }
+
+  @Test
+  @DisplayName("a char component no row fills is constructed at its JLS default rather than failing to" + " construct")
+  void charComponentTakesItsPrimitiveDefault() {
+    // The substitution table leaves Character out on purpose, so a null character source value
+    // stays null on the mapping path. A primitive component still cannot hold null, and the
+    // constructor is what would reject it, naming the record rather than the component.
+    final var record = Telescope.fromMap(HasChar.class, extract("name", HasChar::name, Object::toString));
+    assertEquals('\u0000', record.forward(Map.of("name", "Ada")).grade());
+
+    final var bean = Telescope.fromMap(BeanHasChar.class, extract("name", BeanHasChar::getName, Object::toString));
+    assertEquals('\u0000', bean.forward(Map.of("name", "Ada")).getGrade());
+  }
+
+  @Test
+  @DisplayName("a bean property a row names takes its default when the key is absent, as a record component" + " does")
+  void beanNamedPropertyWithAnAbsentKeyTakesItsDefault() {
+    // The two rebuild paths fill their slots through different machinery, so the rule holds for
+    // both only if each one is asked.
+    final var mapper = Telescope.fromMap(
+      BeanHasChar.class,
+      extract("name", BeanHasChar::getName, Object::toString),
+      extract("grade", BeanHasChar::getGrade, v -> v.toString().charAt(0))
+    );
+
+    final var filled = mapper.forward(Map.of());
+    assertEquals("", filled.getName());
+    assertEquals('\u0000', filled.getGrade());
+  }
+
+  public record Named(String bookingType, int priority) {}
+
+  @Test
+  @DisplayName("a named component whose key is absent takes its default rather than converting nothing")
+  void namedComponentWithAnAbsentKeyTakesItsDefault() {
+    // A converter says how to read a value, not what to do in place of one. Handing it null makes
+    // the common converters throw, and the generated binder for the same annotation defaults here,
+    // so converting would also make the two paths disagree about the same map.
+    final var mapper = Telescope.fromMap(
+      Named.class,
+      extract("bookingType", Named::bookingType, Object::toString),
+      extract("priority", Named::priority, v -> Integer.parseInt(v.toString()))
+    );
+
+    assertEquals(new Named("", 0), mapper.forward(Map.of()));
+    assertEquals(new Named("AIR", 3), mapper.forward(Map.of("bookingType", "AIR", "priority", "3")));
+  }
+
+  @Test
+  @DisplayName("a key present with a null value is the same as an absent one, as it is to the generated" + " binder")
+  void anExplicitNullIsTreatedAsAbsent() {
+    // The generated binder reads map.get(key) and cannot tell the two apart, so neither does this.
+    final var mapper = Telescope.fromMap(Named.class, extract("bookingType", Named::bookingType, Object::toString));
+    final var withNull = new java.util.HashMap<String, Object>();
+    withNull.put("bookingType", null);
+
+    assertEquals("", mapper.forward(withNull).bookingType());
   }
 }
