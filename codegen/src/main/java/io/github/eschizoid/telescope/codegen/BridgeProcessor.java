@@ -3580,7 +3580,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (factory == null || factory.getReturnType().getKind() != TypeKind.DECLARED) return null;
     final var builderEl = (TypeElement) ((DeclaredType) factory.getReturnType()).asElement();
     final var types = processingEnv.getTypeUtils();
-    for (final var m : ElementFilter.methodsIn(builderEl.getEnclosedElements())) {
+    // All members, not the declared ones: a builder that inherits build() from a shared base is
+    // as reachable as one that declares it, and an enclosed-only scan refuses the type for where
+    // its method is written rather than for anything about what the method produces.
+    for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(builderEl))) {
       if (m.getModifiers().contains(Modifier.STATIC) || !m.getModifiers().contains(Modifier.PUBLIC)) continue;
       if (!m.getParameters().isEmpty() || !m.getSimpleName().contentEquals("build")) continue;
       if (types.isAssignable(types.erasure(m.getReturnType()), types.erasure(container))) {

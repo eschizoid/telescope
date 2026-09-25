@@ -262,6 +262,53 @@ class ContainerThroughBuilderTest {
     );
   }
 
+  @ParameterizedTest(name = "{0} whose builder inherits build()")
+  @MethodSource("families")
+  @DisplayName("a builder that inherits build() from a base is as good a route as one that declares it")
+  void anInheritedBuildIsStillARoute(final Family family) {
+    // Where the method is written says nothing about what it produces, so a scan of declared
+    // members alone refuses a shared builder base for its authorship.
+    final var inherited = ProcessorHarness.source(
+      "demo.Inherited" + family.label(),
+      """
+      package demo;
+      public abstract class Inherited%1$s<%2$s> extends %3$s<%2$s> {
+        private static final long serialVersionUID = 1L;
+        protected Inherited%1$s() {}
+        public abstract static class BaseBuilder {
+          public Inherited%1$s<%4$s> build() { return new Inherited%1$sImpl<>(); }
+        }
+        public static final class Builder extends BaseBuilder {}
+        public static Builder builder() { return new Builder(); }
+      }
+      """.formatted(family.label(), family.typeParams(), family.rawSuper(), family.rawArgs())
+    );
+    final var impl = ProcessorHarness.source(
+      "demo.Inherited" + family.label() + "Impl",
+      """
+      package demo;
+      public final class Inherited%1$sImpl<%2$s> extends Inherited%1$s<%2$s> {
+        private static final long serialVersionUID = 1L;
+        public Inherited%1$sImpl() {}
+      }
+      """.formatted(family.label(), family.typeParams())
+    );
+    final var compilation = compile(
+      concat(
+        elements(),
+        List.of(inherited, impl),
+        pair(family.container("Inherited", family.srcArgs()), family.container("Inherited", family.tgtArgs()))
+      )
+    );
+
+    assertTrue(compilation.success(), () -> family + " should bridge: " + compilation.errorMessages());
+    final var call = "demo.Inherited" + family.label() + ".builder().build()";
+    assertTrue(
+      compilation.generated().get("demo.BSrcBridge").contains(call),
+      () -> family + " should allocate through " + call + "; saw " + compilation.generated().get("demo.BSrcBridge")
+    );
+  }
+
   @ParameterizedTest(name = "{0} whose build() is wider than the field")
   @MethodSource("families")
   @DisplayName("a builder whose build() does not produce the declared type is not a route to it")
