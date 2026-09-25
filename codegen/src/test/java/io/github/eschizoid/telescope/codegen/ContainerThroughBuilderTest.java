@@ -15,8 +15,9 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 /**
  * A container declared as a type nothing allocatable is an instance of is still reachable when it
- * owns a static {@code builder()}. The reflective path binds that pair, so refusing it here made
- * one declaration convert under {@code mapper(...)} and fail to compile under {@code @Bridge}.
+ * owns a static {@code builder()}, and the reflective path binds that pair. A declaration the two
+ * paths disagree about converts under {@code mapper(...)} and fails to compile under
+ * {@code @Bridge}.
  *
  * <p>What admits the route is the builder's own {@code build()} producing the declared type. A
  * builder that hands back something wider is the shape whose failure would land in generated code
@@ -433,7 +434,7 @@ class ContainerThroughBuilderTest {
 
   @ParameterizedTest(name = "{0} with no builder at all")
   @MethodSource("families")
-  @DisplayName("a container with no builder is refused exactly as before")
+  @DisplayName("a container with no builder has no route to it and is refused")
   void noBuilderIsStillRefused(final Family family) {
     final var plain = ProcessorHarness.source(
       "demo.Plain" + family.label(),
