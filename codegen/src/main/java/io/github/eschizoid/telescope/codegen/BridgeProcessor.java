@@ -3518,7 +3518,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println(
       outDeclaration(
         rawAllocExpr(tgtContainer, srcContainer, plan.kind(), identity),
-        builderRouteFor(tgtContainer) != null
+        builderAllocExpr(tgtContainer, plan.kind()) != null
       )
     );
     if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
@@ -3726,12 +3726,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * shape this route exists for. What keeps it honest is the probe, which admits a builder only
    * when its {@code build()} produces the declared type.
    */
-  private String builderAllocExpr(final TypeMirror container) {
+  private String builderAllocExpr(final TypeMirror container, final FieldPlan.Kind kind) {
+    if (!needsBuilderRoute(container, kind)) return null;
     final var route = builderRouteFor(container);
     // Through Object, because two parameterizations of one type are unrelated: a build() declared
     // to return Buildable<Object> cannot be cast straight to Buildable<E>, and the raw type would
     // trade the unchecked warning for a rawtypes one.
     return route == null ? null : "(" + container + ") (Object) " + route + ".builder().build()";
+  }
+
+  /**
+   * Whether the ordinary allocation is unavailable for this container, which is the only condition
+   * under which its builder should be called.
+   *
+   * <p>A builder is a way to reach a type that cannot be constructed, not a better way to reach one
+   * that can. A concrete container with a public no-argument constructor is allocated through it
+   * and sized from the source in one step; routing such a type through its builder instead drops
+   * that sizing and adopts whatever {@code build()} chose to return, for a type whose allocation
+   * was never in question.
+   */
+  private boolean needsBuilderRoute(final TypeMirror container, final FieldPlan.Kind kind) {
+    if (container.getKind() != TypeKind.DECLARED) return false;
+    final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
+    if (implEl == null) return false;
+    final var types = processingEnv.getTypeUtils();
+    if (!types.isAssignable(types.erasure(implEl.asType()), types.erasure(container))) return true;
+    return !hasPublicNoArgConstructor(implEl);
   }
 
   /**
@@ -3746,7 +3766,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final FieldPlan.Kind kind,
     final String typeArgs
   ) {
-    final var viaBuilder = builderAllocExpr(tgtContainer);
+    final var viaBuilder = builderAllocExpr(tgtContainer, kind);
     if (viaBuilder != null) return viaBuilder;
     final var implFqn = concreteImplFqn(tgtContainer, kind);
     return sizedAlloc(implFqn, typeArgs, orderingArg(srcContainer, implFqn, false));
@@ -3770,7 +3790,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final FieldPlan.Kind kind,
     final boolean elementsPreserved
   ) {
-    final var viaBuilder = builderAllocExpr(container);
+    final var viaBuilder = builderAllocExpr(container, kind);
     if (viaBuilder != null) return viaBuilder;
     final var implFqn = concreteImplFqn(container, kind);
     final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
@@ -3816,7 +3836,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
-    out.println(outDeclaration(alloc, builderRouteFor(tgtContainer) != null));
+    out.println(outDeclaration(alloc, builderAllocExpr(tgtContainer, FieldPlan.Kind.LIST) != null));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -3851,7 +3871,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
     out.println("    if (src == null) return null;");
     emitOrderingGuard(out, FieldPlan.Kind.SET, false, tgtContainer);
-    out.println(outDeclaration(alloc, builderRouteFor(tgtContainer) != null));
+    out.println(outDeclaration(alloc, builderAllocExpr(tgtContainer, FieldPlan.Kind.SET) != null));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -3892,7 +3912,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
-    out.println(outDeclaration(alloc, builderRouteFor(tgtContainer) != null));
+    out.println(outDeclaration(alloc, builderAllocExpr(tgtContainer, FieldPlan.Kind.MAP_VALUES) != null));
     out.println(
       "    for (final var e : src.entrySet()) out.put(e.getKey(), " + subBridge + "." + direction + "(e.getValue()));"
     );

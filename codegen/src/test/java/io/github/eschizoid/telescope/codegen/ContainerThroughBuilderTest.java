@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.stream.Stream;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -306,6 +307,94 @@ class ContainerThroughBuilderTest {
     assertTrue(
       compilation.generated().get("demo.BSrcBridge").contains(call),
       () -> family + " should allocate through " + call + "; saw " + compilation.generated().get("demo.BSrcBridge")
+    );
+  }
+
+  @ParameterizedTest(name = "{0} constructible AND buildable")
+  @MethodSource("families")
+  @DisplayName("a container that can be constructed is, even when it also owns a builder")
+  void theBuilderIsAFallbackAndNotAPreference(final Family family) {
+    // Owning a builder says nothing about whether the constructor works. Preferring the builder
+    // here would drop the sizing the constructor takes from the source and adopt whatever build()
+    // chose to return, for a container whose allocation was never in question.
+    final var both = ProcessorHarness.source(
+      "demo.Both" + family.label(),
+      """
+      package demo;
+      public class Both%1$s<%2$s> extends %3$s<%2$s> {
+        private static final long serialVersionUID = 1L;
+        public Both%1$s() {}
+        public Both%1$s(final int capacity) { super(capacity); }
+        public static Builder builder() { return new Builder(); }
+        public static final class Builder {
+          public Both%1$s<%4$s> build() { return new Both%1$s<>(); }
+        }
+      }
+      """.formatted(family.label(), family.typeParams(), family.rawSuper(), family.rawArgs())
+    );
+    final var compilation = compile(
+      concat(
+        elements(),
+        List.of(both),
+        pair(family.container("Both", family.srcArgs()), family.container("Both", family.tgtArgs()))
+      )
+    );
+
+    assertTrue(compilation.success(), () -> family + " should bridge: " + compilation.errorMessages());
+    final var bridge = compilation.generated().get("demo.BSrcBridge");
+    assertFalse(
+      bridge.contains("builder().build()"),
+      () -> family + " is constructible and should not be built; saw " + bridge
+    );
+    assertTrue(
+      bridge.contains("new demo.Both" + family.label() + "<"),
+      () -> family + " should be allocated through its constructor; saw " + bridge
+    );
+  }
+
+  @Test
+  @DisplayName("a sorted container reached through a builder keeps the comparator on the side that has one")
+  void aSortedContainerPairsWithItsFamilyDefault() {
+    // Only the set families carry a comparator, so this shape has no row in the table above. The
+    // two sides take different routes: the declared subtype is built, and the interface opposite it
+    // is constructed from the source's comparator, which is the ordering the pairing preserves.
+    final var sorted = ProcessorHarness.source(
+      "demo.SortB",
+      """
+      package demo;
+      public abstract class SortB<E> extends java.util.TreeSet<E> {
+        private static final long serialVersionUID = 1L;
+        protected SortB() {}
+        public static Builder builder() { return new Builder(); }
+        public static final class Builder {
+          public SortB<Object> build() { return new SortBImpl<>(); }
+        }
+      }
+      """
+    );
+    final var impl = ProcessorHarness.source(
+      "demo.SortBImpl",
+      """
+      package demo;
+      public final class SortBImpl<E> extends SortB<E> {
+        private static final long serialVersionUID = 1L;
+        public SortBImpl() {}
+      }
+      """
+    );
+    final var compilation = compile(
+      concat(List.of(sorted, impl), pair("java.util.SortedSet<String>", "demo.SortB<String>"))
+    );
+
+    assertTrue(compilation.success(), () -> "sorted should bridge: " + compilation.errorMessages());
+    final var bridge = compilation.generated().get("demo.BSrcBridge");
+    assertTrue(
+      bridge.contains("demo.SortB.builder().build()"),
+      () -> "the declared subtype should be built; saw " + bridge
+    );
+    assertTrue(
+      bridge.contains("new java.util.TreeSet<java.lang.String>(src.comparator())"),
+      () -> "the interface side should keep the source's ordering; saw " + bridge
     );
   }
 
