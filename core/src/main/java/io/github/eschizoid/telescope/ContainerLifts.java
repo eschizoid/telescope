@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Modifier;
@@ -520,7 +521,9 @@ final class ContainerLifts {
       return size <= 1 ? new CopyOnWriteArraySet<>() : new ArrayList<>(size);
     };
     final var alloc = probeAllocator(raw);
-    if (alloc != null) return ignored -> alloc.get();
+    if (alloc != null) return orderingAware(raw, SortedSet.class, ContainerLifts::setComparator, ignored ->
+      alloc.get()
+    );
     final var fallback = fallbackAllocatorFor(raw, LinkedHashSet.class, input ->
       LinkedHashSet.newLinkedHashSet(((Collection<?>) input).size())
     );
@@ -566,7 +569,9 @@ final class ContainerLifts {
         "explicit `Mapping.via(...)` row that constructs the EnumMap with its key class."
     );
     final var alloc = probeAllocator(raw);
-    if (alloc != null) return ignored -> alloc.get();
+    if (alloc != null) return orderingAware(raw, SortedMap.class, ContainerLifts::mapComparator, ignored ->
+      alloc.get()
+    );
     final var fallback = fallbackAllocatorFor(raw, LinkedHashMap.class, input ->
       LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size())
     );
@@ -592,6 +597,51 @@ final class ContainerLifts {
    */
   static int capacityFor(final int size) {
     return (int) Math.ceil(size / 0.75d);
+  }
+
+  /**
+   * Wraps an allocator so a declared subtype of a sorted container keeps the order its source
+   * carried.
+   *
+   * <p>The JDK's own sorted classes are allocated by name above, with the source's comparator
+   * handed to a constructor that takes one. A subtype answers to none of those names, and Java does
+   * not inherit constructors, so it can receive a comparator only where it declares a constructor
+   * for one. Where it declares one, that constructor is used. Where it does not, a source ordered
+   * by a comparator has nowhere to put it, and a rebuild would reorder by the elements' own {@code
+   * compareTo} while producing a container of the right type and size — so it fails instead of
+   * returning something quietly different. A source ordered naturally loses nothing and is
+   * allocated as before.
+   */
+  private static Function<Object, Object> orderingAware(
+    final Class<?> raw,
+    final Class<?> sortedIface,
+    final Function<Object, Comparator<Object>> comparatorOf,
+    final Function<Object, Object> plain
+  ) {
+    if (!sortedIface.isAssignableFrom(raw)) return plain;
+    final MethodHandle ctor;
+    try {
+      ctor = MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class, Comparator.class));
+    } catch (final NoSuchMethodException | IllegalAccessException e) {
+      return input -> {
+        if (comparatorOf.apply(input) != null) {
+          throw new IllegalStateException(
+            "Deep map: " +
+              raw.getName() +
+              " declares no constructor taking a Comparator, so the source's ordering cannot" +
+              " be carried into it. Declare one, or declare the field as the interface."
+          );
+        }
+        return plain.apply(input);
+      };
+    }
+    return input -> {
+      try {
+        return ctor.invoke(comparatorOf.apply(input));
+      } catch (final Throwable t) {
+        throw new IllegalStateException("Deep map: " + raw.getName() + " refused its Comparator constructor", t);
+      }
+    };
   }
 
   @SuppressWarnings("unchecked")

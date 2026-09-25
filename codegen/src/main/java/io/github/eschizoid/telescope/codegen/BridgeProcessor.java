@@ -3516,7 +3516,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println();
     out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
     out.println("    if (src == null) return null;");
-    emitOrderingGuard(out, plan.kind(), identity, tgtContainer);
+    emitOrderingGuard(
+      out,
+      plan.kind(),
+      identity,
+      tgtContainer,
+      srcContainer,
+      concreteImplFqn(tgtContainer, plan.kind())
+    );
     out.println(rawOutDeclaration(tgtContainer, srcContainer, plan.kind(), identity));
     if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
       if (identity) {
@@ -3626,23 +3633,58 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * element type cannot order the target's, and there is nothing to translate it with.
    */
   private String orderingArg(final TypeMirror srcContainer, final String implFqn, final boolean elementsPreserved) {
-    return switch (implFqn) {
-      // A map's comparator orders its keys, and a bridged map's keys must match on both sides, so
-      // it fits the rebuilt map whatever happens to the values.
-      case "java.util.TreeMap", "java.util.concurrent.ConcurrentSkipListMap" -> assignableToRaw(
-        srcContainer,
-        "java.util.SortedMap"
-      )
-        ? "src.comparator()"
-        : "";
-      // A set's orders its elements, so it fits only while those stay the same type. Where they do
-      // not, there is no comparator to carry and the pair is refused rather than reordered.
-      case "java.util.TreeSet", "java.util.concurrent.ConcurrentSkipListSet" -> elementsPreserved &&
-      assignableToRaw(srcContainer, "java.util.SortedSet")
-        ? "src.comparator()"
-        : "";
-      default -> "";
-    };
+    if (!carriesOrdering(srcContainer, implFqn, elementsPreserved)) return "";
+    return hasComparatorConstructor(implFqn) ? "src.comparator()" : "";
+  }
+
+  /**
+   * Whether the rebuilt container keeps an order and the source has one to give it.
+   *
+   * <p>A map's comparator orders its keys, and a bridged map's keys match on both sides, so it fits
+   * the rebuilt map whatever happens to the values. A set's orders its elements, so it fits only
+   * while those stay the same type.
+   *
+   * <p>The question is asked of the class being allocated rather than of a list of names, because a
+   * subtype of a sorted container keeps the contract its supertype declares while answering to none
+   * of those names.
+   */
+  private boolean carriesOrdering(
+    final TypeMirror srcContainer,
+    final String implFqn,
+    final boolean elementsPreserved
+  ) {
+    final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
+    if (implEl == null) return false;
+    if (assignableToRaw(implEl.asType(), "java.util.SortedMap")) {
+      return assignableToRaw(srcContainer, "java.util.SortedMap");
+    }
+    if (assignableToRaw(implEl.asType(), "java.util.SortedSet")) {
+      return elementsPreserved && assignableToRaw(srcContainer, "java.util.SortedSet");
+    }
+    return false;
+  }
+
+  /**
+   * Whether this class can be handed a comparator when it is built.
+   *
+   * <p>Java does not inherit constructors, so a subtype of a sorted container has one only where it
+   * declares one. A subtype that declares nothing but a no-argument constructor has nowhere to put
+   * the order its declared type promises to keep.
+   */
+  private boolean hasComparatorConstructor(final String implFqn) {
+    final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
+    final var comparator = processingEnv.getElementUtils().getTypeElement("java.util.Comparator");
+    if (implEl == null || comparator == null) return false;
+    final var types = processingEnv.getTypeUtils();
+    for (final var ctor : ElementFilter.constructorsIn(implEl.getEnclosedElements())) {
+      if (!ctor.getModifiers().contains(Modifier.PUBLIC)) continue;
+      final var params = ctor.getParameters();
+      if (
+        params.size() == 1 &&
+        types.isAssignable(types.erasure(comparator.asType()), types.erasure(params.getFirst().asType()))
+      ) return true;
+    }
+    return false;
   }
 
   /**
@@ -3658,8 +3700,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private String orderingGuard(
     final FieldPlan.Kind kind,
     final boolean elementsPreserved,
-    final TypeMirror tgtContainer
+    final TypeMirror tgtContainer,
+    final TypeMirror srcContainer,
+    final String implFqn
   ) {
+    // A container that keeps an order, built from one with an order to give, and no comparator on
+    // the way across. The class being built decides that, since Java does not inherit constructors
+    // and a subtype of a sorted container may declare only a no-argument one.
+    if (carriesOrdering(srcContainer, implFqn, elementsPreserved) && !hasComparatorConstructor(implFqn)) {
+      return (
+        "    if (src.comparator() != null) throw new IllegalStateException(\n" +
+        "      \"Deep map: " +
+        implFqn +
+        " declares no constructor taking a Comparator, so the source's \"\n" +
+        "        + \"ordering cannot be carried into it. Declare one, or declare the field as" +
+        " the interface.\");"
+      );
+    }
     if (kind != FieldPlan.Kind.SET || elementsPreserved) return "";
     // Only where the side being built keeps an order. A comparator cannot come across a conversion
     // -- it orders the type being converted away from -- but a target that keeps no order has none
@@ -3684,9 +3741,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final PrintWriter out,
     final FieldPlan.Kind kind,
     final boolean elementsPreserved,
-    final TypeMirror tgtContainer
+    final TypeMirror tgtContainer,
+    final TypeMirror srcContainer,
+    final String implFqn
   ) {
-    final var guard = orderingGuard(kind, elementsPreserved, tgtContainer);
+    final var guard = orderingGuard(kind, elementsPreserved, tgtContainer, srcContainer, implFqn);
     if (!guard.isEmpty()) out.println(guard);
   }
 
@@ -3911,7 +3970,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
-    emitOrderingGuard(out, FieldPlan.Kind.SET, false, tgtContainer);
+    emitOrderingGuard(
+      out,
+      FieldPlan.Kind.SET,
+      false,
+      tgtContainer,
+      srcContainer,
+      concreteImplFqn(tgtContainer, FieldPlan.Kind.SET)
+    );
     out.println(helperOutDeclaration(tgtContainer, srcContainer, FieldPlan.Kind.SET, String.valueOf(tgtElement)));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
