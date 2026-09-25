@@ -11,6 +11,7 @@ import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 /**
@@ -26,6 +27,11 @@ import org.junit.jupiter.params.provider.MethodSource;
  * <p>The two accepting cases reach the allocation by different routes. Elements that convert are
  * filled by an element-bridging helper; elements that pass through take the self-contained one, and
  * a route wired into only one of those is what makes a container compile here and throw there.
+ *
+ * <p>The three families below are the ones a container shape is detected for. A {@code Deque},
+ * {@code Queue} or bare {@code Collection} field never reaches the route at all — the shape
+ * detector does not classify it — so those are refused for want of a pairing rather than for
+ * anything about their builder.
  *
  * <p>Every case compiles through the full pipeline: what is under test is an allocation expression,
  * and {@code -proc:only} completes declarations without ever attributing a method body.
@@ -160,7 +166,7 @@ class ContainerThroughBuilderTest {
   private static void assertRefused(final Family family, final Compilation compilation) {
     assertFalse(compilation.success(), () -> family + " should be refused; it compiled");
     assertTrue(
-      compilation.errorMessages().contains("which telescope cannot construct"),
+      compilation.hasError("which telescope cannot construct"),
       () -> family + " should be refused by name; saw " + compilation.errorMessages()
     );
   }
@@ -258,7 +264,7 @@ class ContainerThroughBuilderTest {
     final var unrouted = compile(concat(elements(), pair(plainSide, plainTarget)));
     assertTrue(unrouted.success(), () -> family + " control should bridge: " + unrouted.errorMessages());
     assertFalse(
-      unrouted.generated().get("demo.BSrcBridge").contains("@SuppressWarnings"),
+      unrouted.generated().get("demo.BSrcBridge").contains("@SuppressWarnings(\"unchecked\") final var out ="),
       () ->
         family + " allocates its own type and needs no suppression; saw " + unrouted.generated().get("demo.BSrcBridge")
     );
@@ -353,12 +359,109 @@ class ContainerThroughBuilderTest {
     );
   }
 
+  /**
+   * Builder surfaces that look like a route and are not. Each names a single reason the emitted
+   * {@code builder().build()} could not be called, and the container is otherwise identical to the
+   * accepted fixtures, so what the case proves is the reason rather than the shape.
+   */
+  private static Stream<Arguments> unusableBuilders() {
+    return Stream.of(
+      Arguments.of(
+        "build() takes an argument",
+        """
+        public static Builder builder() { return new Builder(); }
+        public static final class Builder {
+          public Unusable<Object> build(final int size) { return new UnusableImpl<>(); }
+        }
+        """
+      ),
+      Arguments.of(
+        "the producer is not named build",
+        """
+        public static Builder builder() { return new Builder(); }
+        public static final class Builder {
+          public Unusable<Object> create() { return new UnusableImpl<>(); }
+        }
+        """
+      ),
+      Arguments.of(
+        "build() is not public",
+        """
+        public static Builder builder() { return new Builder(); }
+        public static final class Builder {
+          Unusable<Object> build() { return new UnusableImpl<>(); }
+        }
+        """
+      ),
+      Arguments.of(
+        "builder() is not static",
+        """
+        public Builder builder() { return new Builder(); }
+        public static final class Builder {
+          public Unusable<Object> build() { return new UnusableImpl<>(); }
+        }
+        """
+      ),
+      Arguments.of(
+        "the builder type cannot be named",
+        """
+        public static Hidden builder() { return new Hidden(); }
+        """
+      )
+    );
+  }
+
+  @ParameterizedTest(name = "refused because {0}")
+  @MethodSource("unusableBuilders")
+  @DisplayName("a builder surface that could not be called is not a route")
+  void anUncallableBuilderIsNotARoute(final String reason, final String builderSurface) {
+    final var container = ProcessorHarness.source(
+      "demo.Unusable",
+      """
+      package demo;
+      public abstract class Unusable<E> extends java.util.ArrayList<E> {
+        private static final long serialVersionUID = 1L;
+        protected Unusable() {}
+      %s}
+      """.formatted(builderSurface.indent(2))
+    );
+    // Only the last case needs it, and a type the others never mention costs them nothing.
+    final var hidden = ProcessorHarness.source(
+      "demo.Hidden",
+      """
+      package demo;
+      class Hidden {
+        public Unusable<Object> build() { return new UnusableImpl<>(); }
+      }
+      """
+    );
+    final var impl = ProcessorHarness.source(
+      "demo.UnusableImpl",
+      """
+      package demo;
+      public final class UnusableImpl<E> extends Unusable<E> {
+        private static final long serialVersionUID = 1L;
+        public UnusableImpl() {}
+      }
+      """
+    );
+    final var compilation = compile(
+      concat(elements(), List.of(container, hidden, impl), pair("demo.Unusable<demo.SA>", "demo.Unusable<demo.SB>"))
+    );
+
+    assertFalse(compilation.success(), () -> reason + ": should be refused; it compiled");
+    assertTrue(
+      compilation.hasError("which telescope cannot construct"),
+      () -> reason + ": should be refused by name; saw " + compilation.errorMessages()
+    );
+  }
+
   @Test
-  @DisplayName("a sorted container reached through a builder keeps the comparator on the side that has one")
-  void aSortedContainerPairsWithItsFamilyDefault() {
-    // Only the set families carry a comparator, so this shape has no row in the table above. The
-    // two sides take different routes: the declared subtype is built, and the interface opposite it
-    // is constructed from the source's comparator, which is the ordering the pairing preserves.
+  @DisplayName("a container whose type promises an order is not reached through a builder")
+  void anOrderedContainerIsNotBuilt() {
+    // Only the sorted families carry a comparator, so this shape has no row in the table above. A
+    // builder takes none, so a container allocated by one holds whatever order build() chose; the
+    // declared type promising an order is what makes that unusable rather than merely different.
     final var sorted = ProcessorHarness.source(
       "demo.SortB",
       """
@@ -387,15 +490,10 @@ class ContainerThroughBuilderTest {
       concat(List.of(sorted, impl), pair("java.util.SortedSet<String>", "demo.SortB<String>"))
     );
 
-    assertTrue(compilation.success(), () -> "sorted should bridge: " + compilation.errorMessages());
-    final var bridge = compilation.generated().get("demo.BSrcBridge");
+    assertFalse(compilation.success(), () -> "an ordered container should be refused; it compiled");
     assertTrue(
-      bridge.contains("demo.SortB.builder().build()"),
-      () -> "the declared subtype should be built; saw " + bridge
-    );
-    assertTrue(
-      bridge.contains("new java.util.TreeSet<java.lang.String>(src.comparator())"),
-      () -> "the interface side should keep the source's ordering; saw " + bridge
+      compilation.hasError("which telescope cannot construct"),
+      () -> "it should be refused by name; saw " + compilation.errorMessages()
     );
   }
 

@@ -3575,6 +3575,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var factory = staticBuilderMethod(el);
     if (factory == null || factory.getReturnType().getKind() != TypeKind.DECLARED) return null;
     final var builderEl = (TypeElement) ((DeclaredType) factory.getReturnType()).asElement();
+    // The bridge is emitted in the source's package, which need not be the container's, so a
+    // builder type that is not public cannot be named from where the call lands. Its own build()
+    // being public is not enough: a method on an inaccessible class is inaccessible with it.
+    if (!publiclyNameable(builderEl)) return null;
     final var types = processingEnv.getTypeUtils();
     // All members, not the declared ones: build() may be inherited from a shared builder base, and
     // it produces the same value wherever it is written.
@@ -3709,6 +3713,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private String builderAllocExpr(final TypeMirror container, final FieldPlan.Kind kind) {
     if (!needsBuilderRoute(container, kind)) return null;
+    // A container allocated by its builder carries whatever ordering build() chose, which nothing
+    // here can pass a comparator to. A declared type promising an order would keep the promise only
+    // by luck, so the route is not offered and the pairing is refused by name instead.
+    if (promisesOrdering(container)) return null;
     final var route = builderRouteFor(container);
     // Through Object, because two parameterizations of one type are unrelated: a build() declared
     // to return Buildable<Object> cannot be cast straight to Buildable<E>, and the raw type would
@@ -3729,10 +3737,36 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private boolean needsBuilderRoute(final TypeMirror container, final FieldPlan.Kind kind) {
     if (container.getKind() != TypeKind.DECLARED) return false;
     final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
+    // Every name that method yields is either the declared class itself or a java.base container,
+    // so this resolves for anything reaching here and the verdict below is what decides the route.
     if (implEl == null) return false;
     final var types = processingEnv.getTypeUtils();
     if (!types.isAssignable(types.erasure(implEl.asType()), types.erasure(container))) return true;
     return !hasPublicNoArgConstructor(implEl);
+  }
+
+  /**
+   * Whether this type can be named from any package. A nested type qualifies only when every type
+   * enclosing it does too, since naming the inner one means naming the outer ones first.
+   */
+  private static boolean publiclyNameable(final TypeElement type) {
+    for (Element el = type; el instanceof TypeElement enclosing; el = enclosing.getEnclosingElement()) {
+      if (!enclosing.getModifiers().contains(Modifier.PUBLIC)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether the declared container's type promises an iteration order, which is the contract a
+   * comparator carries and an allocation that takes no comparator cannot reproduce.
+   */
+  private boolean promisesOrdering(final TypeMirror container) {
+    final var types = processingEnv.getTypeUtils();
+    for (final var fqn : List.of("java.util.SortedSet", "java.util.SortedMap")) {
+      final var el = processingEnv.getElementUtils().getTypeElement(fqn);
+      if (el != null && types.isAssignable(types.erasure(container), types.erasure(el.asType()))) return true;
+    }
+    return false;
   }
 
   /**

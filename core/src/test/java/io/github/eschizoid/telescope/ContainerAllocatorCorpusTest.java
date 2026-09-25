@@ -269,9 +269,7 @@ public class ContainerAllocatorCorpusTest {
    * it structured means rewording the message below cannot fail the gate, which would otherwise
    * teach the next reader to fix a red gate by pasting a string.
    *
-   * <p>The one entry: the reflective allocator reaches a static builder and the generated one has
-   * no route to a container through one, because emitting that call needs the builder's own generic
-   * signature rather than just its name. Tracked as a capability of its own. The benign direction.
+   * <p>Each entry carries its own reason inline, beside the direction it records.
    */
   private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.of(
     // Reached by the element-preserving copy, which never consults the allocation guard: the
