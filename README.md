@@ -371,8 +371,9 @@ final CaseListRequest request = requests.forward(payload);
 A component with no value gets a type default rather than `null`, whether or not a row names it. A `String` comes back
 `""`, numbers come back zero, `boolean` comes back `false`, `List`, `Set`, and `Map` come back as empty singletons, and
 `Optional` comes back as `Optional.empty()`. A converter therefore receives a value or is not called, so it never has to
-say what the absence of one means. The defaults differ from those of `mapperForward`, which leaves an unpaired container
-`null`, so do not assume the two factories are interchangeable.
+say what the absence of one means. Where a key has to carry a value, write `required(...)` in place of `extract(...)`
+and the conversion fails naming both the key and the component it was to fill. The defaults differ from those of
+`mapperForward`, which leaves an unpaired container `null`, so do not assume the two factories are interchangeable.
 
 The backward direction is deliberately absent. A flat `String`-keyed map is a boundary format rather than a typed
 counterpart, so round-tripping to it would have to invent a key-encoding policy, and telescope does not pick one for

@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
 import static org.junit.jupiter.api.Assertions.*;
 
+import io.github.eschizoid.telescope.mapping.MapExtractStep;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -106,12 +107,13 @@ class TelescopeFromMapTest {
   class Lenient {
 
     @Test
-    @DisplayName("missing map key for a numeric primitive → JLS 0 (no NPE, no exception)")
-    void missingPrimitiveTakesJlsDefault() {
+    @DisplayName("missing map key for a numeric primitive → 0, without the row's converter being called")
+    void missingPrimitiveTakesItsTypeDefault() {
       // The adopter scenario: JDBC ResultSet maps where some columns are null when the schema
-      // declared NOT NULL via constraints. Without lenient-by-default, every nullable column
-      // produces an NPE at construct time. With it, the value flows through as the primitive's
-      // JLS default. Pins the contract that the factory does NOT throw on missing keys.
+      // declared NOT NULL via constraints. The component takes its type default and the row's
+      // converter is not called, so the null-tolerant branch written below is never reached and
+      // the converter could be Integer::parseInt alone. Pins that the factory does not throw on a
+      // missing key.
       final var mapper = Telescope.fromMap(
         CaseListRequest.class,
         extract("bookingType", CaseListRequest::bookingType, Object::toString),
@@ -285,13 +287,14 @@ class TelescopeFromMapTest {
   @DisplayName("a char component no row fills is constructed at its JLS default rather than failing to" + " construct")
   void charComponentTakesItsPrimitiveDefault() {
     // The substitution table leaves Character out on purpose, so a null character source value
-    // stays null on the mapping path. A primitive component still cannot hold null, and the
-    // constructor is what would reject it, naming the record rather than the component.
+    // stays null on the mapping path. A record component still cannot hold null, and the canonical
+    // constructor is what rejects it, naming the record rather than the component.
+    //
+    // Only the record path reaches that constructor. A bean is filled through setters, and the
+    // setter invoker skips a null into a primitive, so a bean's char keeps its default whatever
+    // this table returns — which is why there is no bean half to this assertion.
     final var record = Telescope.fromMap(HasChar.class, extract("name", HasChar::name, Object::toString));
     assertEquals('\u0000', record.forward(Map.of("name", "Ada")).grade());
-
-    final var bean = Telescope.fromMap(BeanHasChar.class, extract("name", BeanHasChar::getName, Object::toString));
-    assertEquals('\u0000', bean.forward(Map.of("name", "Ada")).getGrade());
   }
 
   @Test
@@ -337,5 +340,98 @@ class TelescopeFromMapTest {
     withNull.put("bookingType", null);
 
     assertEquals("", mapper.forward(withNull).bookingType());
+  }
+
+  public record Ticket(String id, String note) {}
+
+  @Test
+  @DisplayName("a required row refuses an absent key, naming both the key and the component it fills")
+  void aRequiredRowRefusesAnAbsentKey() {
+    // A default is indistinguishable from a supplied value once it is in the record, so a boundary
+    // that must have a value needs to say so where the row is written rather than in a converter.
+    final var mapper = Telescope.fromMap(
+      Ticket.class,
+      MapExtractStep.required("customer_id", Ticket::id, Object::toString),
+      extract("note", Ticket::note, Object::toString)
+    );
+
+    final var thrown = assertThrows(IllegalStateException.class, () -> mapper.forward(Map.of("note", "n")));
+
+    assertTrue(thrown.getMessage().contains("customer_id"), () -> thrown.getMessage());
+    assertTrue(thrown.getMessage().contains("id"), () -> thrown.getMessage());
+  }
+
+  @Test
+  @DisplayName("a required row converts like any other when its key carries a value")
+  void aRequiredRowConvertsWhenPresent() {
+    final var mapper = Telescope.fromMap(
+      Ticket.class,
+      MapExtractStep.required("customer_id", Ticket::id, Object::toString),
+      extract("note", Ticket::note, Object::toString)
+    );
+
+    assertEquals(new Ticket("c-1", "n"), mapper.forward(Map.of("customer_id", "c-1", "note", "n")));
+  }
+
+  @Test
+  @DisplayName("a key present holding null is as absent to a required row as it is to an extract row")
+  void aRequiredRowRefusesAnExplicitNull() {
+    // The generated binder reads map.get(key) and cannot tell the two apart, and neither does the
+    // defaulting path, so a required row that accepted one would disagree with both.
+    final var mapper = Telescope.fromMap(
+      Ticket.class,
+      MapExtractStep.required("customer_id", Ticket::id, Object::toString)
+    );
+    final var withNull = new HashMap<String, Object>();
+    withNull.put("customer_id", null);
+
+    assertThrows(IllegalStateException.class, () -> mapper.forward(withNull));
+  }
+
+  @Test
+  @DisplayName("an extract row on the same record still takes its default, so required is the opt-in")
+  void extractRemainsLenientAlongsideRequired() {
+    final var mapper = Telescope.fromMap(
+      Ticket.class,
+      MapExtractStep.required("customer_id", Ticket::id, Object::toString),
+      extract("note", Ticket::note, Object::toString)
+    );
+
+    assertEquals(new Ticket("c-1", ""), mapper.forward(Map.of("customer_id", "c-1")));
+  }
+
+  public record Concrete(java.util.ArrayList<String> tags, String name) {}
+
+  @Test
+  @DisplayName("a component declared as a concrete container is not filled with a value it cannot hold")
+  void aConcreteContainerSlotIsNotFilledWithTheSingleton() {
+    // The table answers for anything a List is assignable from, and the empty singleton it returns
+    // is not an ArrayList. Handing it over reaches the constructor, which rejects it while naming
+    // the record rather than the component.
+    final var named = Telescope.fromMap(
+      Concrete.class,
+      extract("tags", Concrete::tags, v -> new java.util.ArrayList<>(java.util.List.of(v.toString()))),
+      extract("name", Concrete::name, Object::toString)
+    );
+    assertNull(named.forward(Map.of("name", "a")).tags());
+
+    final var unnamed = Telescope.fromMap(Concrete.class, extract("name", Concrete::name, Object::toString));
+    assertNull(unnamed.forward(Map.of("name", "a")).tags());
+  }
+
+  @Test
+  @DisplayName("a required row on a bean target refuses an absent key, as it does on a record")
+  void aRequiredRowOnABeanRefusesAnAbsentKey() {
+    // Beans and records are filled through different machinery, so a rule holds for both only if
+    // each one is asked.
+    final var mapper = Telescope.fromMap(
+      BeanHasChar.class,
+      MapExtractStep.required("display_name", BeanHasChar::getName, Object::toString)
+    );
+
+    final var thrown = assertThrows(IllegalStateException.class, () -> mapper.forward(Map.of()));
+
+    assertTrue(thrown.getMessage().contains("display_name"), () -> thrown.getMessage());
+    assertTrue(thrown.getMessage().contains("name"), () -> thrown.getMessage());
   }
 }
