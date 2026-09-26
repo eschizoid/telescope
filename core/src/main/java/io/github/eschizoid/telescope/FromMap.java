@@ -9,7 +9,9 @@ import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
+import io.github.eschizoid.telescope.mapping.Require;
 import java.lang.reflect.RecordComponent;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -40,13 +42,13 @@ final class FromMap {
   static <T> ForwardMapper<Map<String, Object>, T> build(final Class<T> target, final MapExtractStep... rows) {
     Objects.requireNonNull(target, "target");
     Objects.requireNonNull(rows, "rows");
-    final var byField = new LinkedHashMap<String, Extract<?, ?>>();
+    final var byField = new LinkedHashMap<String, MapExtractStep>();
     for (final var row : rows) {
-      if (!(row instanceof Extract<?, ?> e)) throw new IllegalArgumentException(
-        "Telescope.fromMap rows must be built via MapExtractStep.extract(...)"
+      if (!(row instanceof Extract<?, ?>) && !(row instanceof Require<?, ?>)) throw new IllegalArgumentException(
+        "Telescope.fromMap rows must be built via MapExtractStep.extract(...) or" + " MapExtractStep.required(...)"
       );
-      final var fieldName = PropertyNames.property(LambdaIntrospection.methodNameOf(e.targetAccessor()));
-      if (byField.put(fieldName, e) != null) throw new IllegalArgumentException(
+      final var fieldName = PropertyNames.property(LambdaIntrospection.methodNameOf(row.targetAccessor()));
+      if (byField.put(fieldName, row) != null) throw new IllegalArgumentException(
         "Telescope.fromMap: duplicate extract row for target field '" + fieldName + "'"
       );
     }
@@ -94,27 +96,32 @@ final class FromMap {
   @SuppressWarnings("unchecked")
   private static <T> Function<Map<String, Object>, T> recordForward(
     final Class<T> target,
-    final Map<String, Extract<?, ?>> byField
+    final Map<String, MapExtractStep> byField
   ) {
     final var comps = target.getRecordComponents();
     final var n = comps.length;
     final var keys = new String[n];
     final var converters = (Function<Object, Object>[]) new Function<?, ?>[n];
     final var defaults = new Object[n];
+    final var required = new boolean[n];
+    final var names = new String[n];
     for (var i = 0; i < n; i++) {
+      names[i] = comps[i].getName();
       final var e = byField.get(comps[i].getName());
       if (e != null) {
         keys[i] = e.key();
         converters[i] = (Function<Object, Object>) e.converter();
-      } else {
-        defaults[i] = NullDefaults.defaultFor(comps[i].getGenericType());
+        required[i] = e instanceof Require<?, ?>;
       }
+      defaults[i] = unfilledDefault(comps[i].getType(), comps[i].getGenericType());
     }
     return mapSrc -> {
       if (mapSrc == null) return null;
       final var args = new Object[n];
       for (var i = 0; i < n; i++) {
-        args[i] = keys[i] != null ? converters[i].apply(mapSrc.get(keys[i])) : defaults[i];
+        final var value = keys[i] == null ? null : mapSrc.get(keys[i]);
+        if (value == null && required[i]) throw missingRequired(keys[i], names[i]);
+        args[i] = value == null ? defaults[i] : converters[i].apply(value);
       }
       return Records.construct(target, args);
     };
@@ -129,7 +136,7 @@ final class FromMap {
    */
   private static <T> Function<Map<String, Object>, T> beanForward(
     final Class<T> target,
-    final Map<String, Extract<?, ?>> byField
+    final Map<String, MapExtractStep> byField
   ) {
     final var writer = Beans.autoWriter(target);
     final var propertyNames = Beans.propertyNames(target);
@@ -138,6 +145,7 @@ final class FromMap {
     @SuppressWarnings("unchecked")
     final var converters = (Function<Object, Object>[]) new Function<?, ?>[n];
     final var defaults = new Object[n];
+    final var required = new boolean[n];
     final var indexByName = new HashMap<String, Integer>(n * 2);
     for (var i = 0; i < n; i++) {
       indexByName.put(propertyNames[i], i);
@@ -147,18 +155,51 @@ final class FromMap {
         @SuppressWarnings("unchecked")
         final var conv = (Function<Object, Object>) e.converter();
         converters[i] = conv;
-      } else {
-        defaults[i] = NullDefaults.defaultFor(Beans.propertyType(target, propertyNames[i]));
+        required[i] = e instanceof Require<?, ?>;
       }
+      final var propertyType = Beans.propertyType(target, propertyNames[i]);
+      defaults[i] = unfilledDefault(propertyType instanceof Class<?> raw ? raw : null, propertyType);
     }
     return mapSrc -> {
       if (mapSrc == null) return null;
       final Function<String, Object> valueByName = name -> {
         final var i = indexByName.get(name);
         if (i == null) return null;
-        return keys[i] != null ? converters[i].apply(mapSrc.get(keys[i])) : defaults[i];
+        final var value = keys[i] == null ? null : mapSrc.get(keys[i]);
+        if (value == null && required[i]) throw missingRequired(keys[i], propertyNames[i]);
+        return value == null ? defaults[i] : converters[i].apply(value);
       };
       return writer.construct(propertyNames, valueByName);
     };
+  }
+
+  /**
+   * The value for a slot no row fills. The substitution table answers for the types it names and
+   * returns null for the rest, which a reference slot can hold and a primitive one cannot. A
+   * primitive therefore falls back to its own JLS default, the same value the rebuild path uses
+   * when it meets a null source for one.
+   */
+  private static Object unfilledDefault(final Class<?> raw, final Type generic) {
+    final var tabled = NullDefaults.defaultFor(generic);
+    // The table answers for a family, so the value it returns for a List can be the empty singleton
+    // where the component is declared as an ArrayList, which cannot hold it. A slot with no value
+    // it can hold is better left empty than filled with one that fails on the way in.
+    if (tabled != null && (raw == null || raw.isInstance(tabled))) return tabled;
+    return raw != null && raw.isPrimitive() ? Placeholders.primitiveDefault(raw) : null;
+  }
+
+  /**
+   * The refusal a required row makes when its key carries no value. It names the key and the
+   * component, because the two need not share a name and an adopter reading the message has the map
+   * in one hand and the target in the other.
+   */
+  private static IllegalStateException missingRequired(final String key, final String component) {
+    return new IllegalStateException(
+      "Telescope.fromMap: key \"" +
+        key +
+        "\" is required for component '" +
+        component +
+        "', and the map has no value for it."
+    );
   }
 }

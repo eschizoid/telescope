@@ -16,11 +16,11 @@ import java.util.function.Function;
  * static-imported it reads as a list of correspondences alongside the {@link Mapping#to(Accessor,
  * Accessor)} rows on the typed surface.
  *
- * <p>Sealed. Today's only permit is {@link Extract}; future expansions (nested extracts,
- * conditional gates, required-key validation) extend the sealed surface — same pattern as {@link
- * MapStep}.
+ * <p>Sealed. {@link Extract} fills its component from the map where the key carries a value and
+ * from a type default where it does not; {@link Require} refuses instead. Future expansions (nested
+ * extracts, conditional gates) extend the same surface — the pattern {@link MapStep} uses.
  */
-public sealed interface MapExtractStep permits Extract {
+public sealed interface MapExtractStep permits Extract, Require {
   /** The key to look up in the source {@code Map<String, Object>}. */
   String key();
 
@@ -33,8 +33,9 @@ public sealed interface MapExtractStep permits Extract {
 
   /**
    * Converter — turns the raw {@code Object} read from the map into the target component's typed
-   * value. The factory is responsible for null-safety semantics; the converter sees whatever the
-   * map produced (including {@code null} when the key is absent or absent-mapped).
+   * value. It receives a value or is not called: a key that is absent, or present holding {@code
+   * null}, is answered by the row's own kind rather than by the converter, so a converter never has
+   * to say what the absence of a value means.
    */
   Function<Object, ?> converter();
 
@@ -106,5 +107,37 @@ public sealed interface MapExtractStep permits Extract {
       return nested.forward(nestedMap);
     };
     return extract(key, targetAccessor, converter);
+  }
+
+  /**
+   * Static factory for a {@link Require} row — one whose key has to carry a value.
+   *
+   * <p>An {@link #extract(String, Accessor, Function) extract} row fills its component from a type
+   * default when the key is absent, and a default is indistinguishable from a supplied value once
+   * it is in the target: an id arrives as {@code ""}, a count as {@code 0}, a list as empty. Where
+   * that distinction matters, this row makes the source's obligation part of the declaration, and
+   * the failure names the key and the component it was to fill.
+   *
+   * <pre>{@code
+   * ForwardMapper<Map<String, Object>, Ticket> m = Telescope.fromMap(
+   *     Ticket.class,
+   *     required("customer_id", Ticket::id,   Object::toString),
+   *     extract("note",         Ticket::note, Object::toString));
+   * }</pre>
+   *
+   * <p>A key present holding {@code null} counts as absent, because the generated binder for {@link
+   * io.github.eschizoid.telescope.annotations.FromMap} reads the key the same way and cannot tell
+   * the two apart either.
+   *
+   * @param key the map key that has to carry a value
+   * @param targetAccessor method reference naming the target field/component
+   * @param converter raw map value → typed target value, called only when a value is there
+   */
+  static <T, X> MapExtractStep required(
+    final String key,
+    final Accessor<T, X> targetAccessor,
+    final Function<Object, X> converter
+  ) {
+    return new Require<>(key, targetAccessor, converter);
   }
 }
