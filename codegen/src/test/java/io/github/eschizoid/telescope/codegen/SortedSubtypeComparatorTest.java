@@ -183,4 +183,31 @@ class SortedSubtypeComparatorTest {
       () -> "saw " + compilation.generated().get("demo.BSrcBridge")
     );
   }
+
+  @Test
+  @DisplayName("a sorted subtype declaring no type parameters is still handed the comparator")
+  void aTypeParameterlessSubtypeGetsTheComparator() {
+    // Taking no type arguments decides how the allocation is written, not whether the type keeps an
+    // order, and the two are easy to answer together by accident.
+    final var headers = ProcessorHarness.source(
+      "demo.Headers",
+      """
+      package demo;
+      public class Headers extends java.util.TreeMap<String, String> {
+        private static final long serialVersionUID = 1L;
+        public Headers() {}
+        public Headers(final java.util.Comparator<? super String> c) { super(c); }
+      }
+      """
+    );
+    final var compilation = compile(
+      concat(List.of(headers), pair("java.util.SortedMap<String, String>", "demo.Headers"))
+    );
+
+    assertTrue(compilation.success(), () -> "should bridge: " + compilation.errorMessages());
+    assertTrue(
+      compilation.generated().get("demo.BSrcBridge").contains("new demo.Headers(src.comparator())"),
+      () -> "the comparator should be carried; saw " + compilation.generated().get("demo.BSrcBridge")
+    );
+  }
 }

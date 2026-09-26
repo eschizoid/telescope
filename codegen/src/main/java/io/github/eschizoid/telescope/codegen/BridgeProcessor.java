@@ -2802,7 +2802,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       simpleName(implFqn) +
       "(src.size())";
       case "java.util.ArrayList" -> "new " + implFqn + "<" + typeArgs + ">(src.size())";
-      default -> "new " + implFqn + "<" + typeArgs + ">(" + ordering + ")";
+      default -> ordering.isEmpty()
+        ? "new " + implFqn + "<" + typeArgs + ">()"
+        : // A comparator that is null is natural ordering, which the no-argument constructor
+          // already
+          // gives. Handing the null over instead would reach a constructor free to reject it.
+          ordering +
+          " == null ? new " +
+          implFqn +
+          "<" +
+          typeArgs +
+          ">() : new " +
+          implFqn +
+          "<" +
+          typeArgs +
+          ">(" +
+          ordering +
+          ")";
     };
   }
 
@@ -3627,10 +3643,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * a rebuild that drops one does not merely reorder: where the keys implement no natural ordering
    * it throws on the first insert, though the source it was built from worked.
    *
-   * <p>Only a sorted map's comparator transfers. It orders the keys, and a bridged map's keys are
-   * required to match on both sides, so the comparator fits the rebuilt map exactly. A sorted set's
-   * orders the elements, which are what the bridge converts — a comparator over the source's
-   * element type cannot order the target's, and there is nothing to translate it with.
+   * <p>A sorted map's comparator always transfers. It orders the keys, and a bridged map's keys are
+   * required to match on both sides, so it fits the rebuilt map exactly. A sorted set's orders the
+   * elements, which are what the bridge converts, so it transfers only while those stay the same
+   * type: a comparator over the source's element type cannot order the target's.
    */
   private String orderingArg(final TypeMirror srcContainer, final String implFqn, final boolean elementsPreserved) {
     if (!carriesOrdering(srcContainer, implFqn, elementsPreserved)) return "";
@@ -3675,23 +3691,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
     final var comparator = processingEnv.getElementUtils().getTypeElement("java.util.Comparator");
     if (implEl == null || comparator == null) return false;
+    // A public constructor on a class that cannot be named is not reachable, and the reflective
+    // path binds this same constructor through a public lookup, which asks the same question.
+    if (!publiclyNameable(implEl)) return false;
     final var types = processingEnv.getTypeUtils();
     for (final var ctor : ElementFilter.constructorsIn(implEl.getEnclosedElements())) {
       if (!ctor.getModifiers().contains(Modifier.PUBLIC)) continue;
       final var params = ctor.getParameters();
+      // The parameter has to be a Comparator rather than merely able to hold one, or a constructor
+      // taking an Object would be handed a comparator it is under no obligation to use.
       if (
         params.size() == 1 &&
-        types.isAssignable(types.erasure(comparator.asType()), types.erasure(params.getFirst().asType()))
+        types.isSameType(types.erasure(params.getFirst().asType()), types.erasure(comparator.asType()))
       ) return true;
     }
     return false;
   }
 
   /**
-   * The check a set rebuild has to make before converting its elements, or empty when it has none
-   * to make. A custom comparator orders the source's element type and cannot order the target's, so
-   * reusing it is impossible and ignoring it would silently reorder. Natural ordering carries over
-   * untouched, which is why the test is on the comparator rather than on sortedness.
+   * The check a rebuild has to make before it loses an order, or empty when it has none to make.
+   * Two shapes lose one: a set whose elements change, where a comparator over the source's element
+   * type cannot order the target's; and a container whose declared type promises an order but
+   * declares no constructor able to receive one. Natural ordering carries over untouched either
+   * way, which is why the test is on the comparator rather than on sortedness.
    *
    * <p>The test is on the value rather than the declared type, because a field declared as a plain
    * {@code Set} can hold a sorted one. That is what the reflective path checks, and the two are
@@ -3713,8 +3735,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "      \"Deep map: " +
         implFqn +
         " declares no constructor taking a Comparator, so the source's \"\n" +
-        "        + \"ordering cannot be carried into it. Declare one, or declare the field as" +
-        " the interface.\");"
+        "        + \"ordering cannot be carried into it. Declare one, declare the field as the" +
+        " interface, or supply an explicit Mapping.via(...) row for it.\");"
       );
     }
     if (kind != FieldPlan.Kind.SET || elementsPreserved) return "";
@@ -3734,8 +3756,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * Writes the guard above the line that allocates the rebuilt container, and nothing where the
-   * rebuild has none to make. Both set rebuilds emit through here, so whether a guard appears is
-   * one decision rather than one per call site.
+   * rebuild has none to make. Every container rebuild emits through here, so whether a guard
+   * appears is one decision rather than one per call site.
    */
   private void emitOrderingGuard(
     final PrintWriter out,
@@ -3897,7 +3919,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var implFqn = concreteImplFqn(container, kind);
     final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
     final var generic = implEl != null && !implEl.getTypeParameters().isEmpty();
-    if (!generic) return "new " + implFqn + "()";
+    if (!generic) {
+      // A type that declares no parameters still keeps whatever order its declaration promises, so
+      // it is allocated the same way, only without the arguments it has nowhere to put.
+      final var ordering = orderingArg(srcContainer, implFqn, elementsPreserved);
+      return ordering.isEmpty()
+        ? "new " + implFqn + "()"
+        : ordering + " == null ? new " + implFqn + "() : new " + implFqn + "(" + ordering + ")";
+    }
     if (kind == FieldPlan.Kind.MAP_VALUES) {
       final var args = containerViewArgs(container, "java.util.Map");
       return sizedAlloc(
@@ -4018,6 +4047,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         "> src) {"
     );
     out.println("    if (src == null) return null;");
+    emitOrderingGuard(
+      out,
+      FieldPlan.Kind.MAP_VALUES,
+      true,
+      tgtContainer,
+      srcContainer,
+      concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES)
+    );
     out.println(helperOutDeclaration(tgtContainer, srcContainer, FieldPlan.Kind.MAP_VALUES, keyType + ", " + tgtValue));
     out.println(
       "    for (final var e : src.entrySet()) out.put(e.getKey(), " + subBridge + "." + direction + "(e.getValue()));"

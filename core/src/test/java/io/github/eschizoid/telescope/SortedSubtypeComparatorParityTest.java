@@ -78,19 +78,6 @@ class SortedSubtypeComparatorParityTest {
     return m;
   }
 
-  private static SortedSet<String> reversedSet() {
-    return new TreeSet<>(
-      new TreeSet<>(Comparator.<String>reverseOrder()) {
-        private static final long serialVersionUID = 1L;
-
-        {
-          add("a");
-          add("b");
-        }
-      }
-    );
-  }
-
   @Test
   @DisplayName("a sorted subtype declaring a Comparator constructor is rebuilt in the source's order")
   void aSubtypeThatCanTakeTheComparatorKeepsTheOrder() {

@@ -8,6 +8,8 @@ import io.github.eschizoid.telescope.Telescope;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -78,5 +80,114 @@ class SortedContainerParityTest {
       List.copyOf(Telescope.mapper(SortedParityPlainSrc.class, SortedParityPlainTgt.class).forward(src).items())
     );
     assertEquals(List.of(new SortedParityB("x")), List.copyOf(SortedParityPlainSrcBridge.BRIDGE.read(src).items()));
+  }
+
+  private static SortedMap<String, SortedParityA> mapOrderedBy(final Comparator<String> order) {
+    final var m = new TreeMap<String, SortedParityA>(order);
+    m.put("a", new SortedParityA("1"));
+    m.put("b", new SortedParityA("2"));
+    return m;
+  }
+
+  @Test
+  @DisplayName("a declared subtype that cannot receive a comparator refuses a custom one on both paths")
+  void orderedSubtypeWithoutTheConstructorRefusesOnBothPaths() {
+    // A map is the one container whose comparator outlives element conversion, because its keys
+    // match on both sides. So it is the one where dropping the comparator produces a container of
+    // the right type, the right size and a different order, which no assertion but this one sees.
+    final var src = new SortedSubtypeSrc(mapOrderedBy(Comparator.reverseOrder()));
+
+    final var reflective = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(SortedSubtypeSrc.class, SortedSubtypePlainTgt.class).forward(src)
+    );
+    final var generated = assertThrows(IllegalStateException.class, () -> SortedSubtypeSrcBridge.BRIDGE.read(src));
+
+    assertTrue(reflective.getMessage().contains("Comparator"), () -> reflective.getMessage());
+    assertTrue(generated.getMessage().contains("Comparator"), () -> generated.getMessage());
+  }
+
+  @Test
+  @DisplayName("a declared subtype that can receive a comparator keeps the source's order on both paths")
+  void orderedSubtypeWithTheConstructorKeepsTheOrderOnBothPaths() {
+    final var src = new SortedSubtypeCmpSrc(mapOrderedBy(Comparator.reverseOrder()));
+
+    final var reflective = Telescope.mapper(SortedSubtypeCmpSrc.class, SortedSubtypeCmpTgt.class).forward(src);
+    final var generated = SortedSubtypeCmpSrcBridge.BRIDGE.read(src);
+
+    assertEquals(List.of("b", "a"), List.copyOf(reflective.items().keySet()), "the reflective path keeps the order");
+    assertEquals(List.of("b", "a"), List.copyOf(generated.items().keySet()), "and so does the generated one");
+  }
+
+  @Test
+  @DisplayName("a naturally ordered source converts into either subtype on both paths")
+  void naturallyOrderedSourceConvertsOnBothPaths() {
+    // Nothing is dropped when there is no comparator to drop, so the pairing that refuses above is
+    // fine here. Taking the comparator route unconditionally would fail this row instead.
+    final var src = new SortedSubtypeSrc(mapOrderedBy(null));
+    final var cmpSrc = new SortedSubtypeCmpSrc(mapOrderedBy(null));
+
+    assertEquals(
+      List.of("a", "b"),
+      List.copyOf(Telescope.mapper(SortedSubtypeSrc.class, SortedSubtypePlainTgt.class).forward(src).items().keySet())
+    );
+    assertEquals(List.of("a", "b"), List.copyOf(SortedSubtypeSrcBridge.BRIDGE.read(src).items().keySet()));
+    assertEquals(
+      List.of("a", "b"),
+      List.copyOf(
+        Telescope.mapper(SortedSubtypeCmpSrc.class, SortedSubtypeCmpTgt.class).forward(cmpSrc).items().keySet()
+      )
+    );
+    assertEquals(List.of("a", "b"), List.copyOf(SortedSubtypeCmpSrcBridge.BRIDGE.read(cmpSrc).items().keySet()));
+  }
+
+  @Test
+  @DisplayName("a naturally ordered source does not reach a comparator constructor that would reject it")
+  void naturalOrderingSkipsTheComparatorConstructorOnBothPaths() {
+    // Writing the constructor to reject null is the ordinary way to write it. Reaching for it when
+    // there is no comparator to pass turns a conversion that worked into one that throws.
+    final var src = new SortedSubtypeStrictSrc(mapOrderedBy(null));
+
+    final var reflective = Telescope.mapper(SortedSubtypeStrictSrc.class, SortedSubtypeStrictTgt.class).forward(src);
+    final var generated = SortedSubtypeStrictSrcBridge.BRIDGE.read(src);
+
+    assertEquals(List.of("a", "b"), List.copyOf(reflective.items().keySet()), "the reflective path converts");
+    assertEquals(List.of("a", "b"), List.copyOf(generated.items().keySet()), "and so does the generated one");
+  }
+
+  @Test
+  @DisplayName("a comparator constructor on a class that cannot be named counts on neither path")
+  void anUnnameableClassIsNotAComparatorRouteOnEitherPath() {
+    // The constructor is public and the class is not, so only one of the two can be reached. The
+    // generated path emits a call by name and the reflective path binds through a public lookup,
+    // and both are stopped by the class rather than by the constructor.
+    final var src = new SortedSubtypeHiddenSrc(mapOrderedBy(Comparator.reverseOrder()));
+
+    final var reflective = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(SortedSubtypeHiddenSrc.class, SortedSubtypeHiddenTgt.class).forward(src)
+    );
+    final var generated = assertThrows(IllegalStateException.class, () ->
+      SortedSubtypeHiddenSrcBridge.BRIDGE.read(src)
+    );
+
+    assertTrue(reflective.getMessage().contains("Comparator"), () -> reflective.getMessage());
+    assertTrue(generated.getMessage().contains("Comparator"), () -> generated.getMessage());
+  }
+
+  @Test
+  @DisplayName("a constructor taking Object is not a comparator constructor on either path")
+  void anObjectConstructorIsNotAComparatorRouteOnEitherPath() {
+    // A comparator can be handed to it, and it is under no obligation to order anything by what it
+    // receives. Counting it would produce a container that took the argument and ignored it.
+    final var src = new SortedSubtypeObjArgSrc(mapOrderedBy(Comparator.reverseOrder()));
+
+    final var reflective = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(SortedSubtypeObjArgSrc.class, SortedSubtypeObjArgTgt.class).forward(src)
+    );
+    final var generated = assertThrows(IllegalStateException.class, () ->
+      SortedSubtypeObjArgSrcBridge.BRIDGE.read(src)
+    );
+
+    assertTrue(reflective.getMessage().contains("Comparator"), () -> reflective.getMessage());
+    assertTrue(generated.getMessage().contains("Comparator"), () -> generated.getMessage());
   }
 }

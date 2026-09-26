@@ -627,17 +627,25 @@ final class ContainerLifts {
         if (comparatorOf.apply(input) != null) {
           throw new IllegalStateException(
             "Deep map: " +
-              raw.getName() +
+              // The canonical name, because the generated path names the same class the same
+              // way
+              // and an adopter comparing the two messages should not have to translate.
+              (raw.getCanonicalName() == null ? raw.getName() : raw.getCanonicalName()) +
               " declares no constructor taking a Comparator, so the source's ordering cannot" +
-              " be carried into it. Declare one, or declare the field as the interface."
+              " be carried into it. Declare one, declare the field as the interface, or" +
+              " supply an explicit Mapping.via(...) row for it."
           );
         }
         return plain.apply(input);
       };
     }
     return input -> {
+      final var comparator = comparatorOf.apply(input);
+      // Natural ordering is what the no-argument constructor already produces, and a constructor
+      // taking a comparator is free to reject a null one.
+      if (comparator == null) return plain.apply(input);
       try {
-        return ctor.invoke(comparatorOf.apply(input));
+        return ctor.invoke(comparator);
       } catch (final Throwable t) {
         throw new IllegalStateException("Deep map: " + raw.getName() + " refused its Comparator constructor", t);
       }
