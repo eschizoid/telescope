@@ -23,6 +23,10 @@ class MapperBuilderTest {
 
   record AdminDto(String id, String name, String createdAt, String updatedAt, String role) {}
 
+  record RenamedSource(String displayName, String phoneNumber) {}
+
+  record RenamedTarget(String name, String phone) {}
+
   // Shared audit-column group reused across mappers
   private static final MapStep[] AUDIT_COLUMNS = {
     to(Entity::createdAt, Dto::createdAt),
@@ -272,5 +276,47 @@ class MapperBuilderTest {
       final var src = new SameShapeSrc("e1", "Alice");
       assertEquals(direct.forward(src), built.forward(src), "empty builder matches direct mapper");
     }
+  }
+
+  @Test
+  @DisplayName("from(...).to(...) adds multiple typed rename rows and preserves backward mapping")
+  void typedFromToRows() {
+    final var mapper = Telescope.mapperBuilder(RenamedSource.class, RenamedTarget.class)
+      .from(RenamedSource::displayName)
+      .to(RenamedTarget::name)
+      .from(RenamedSource::phoneNumber)
+      .to(RenamedTarget::phone)
+      .build();
+
+    final var source = new RenamedSource("Ada", "555");
+    final var target = mapper.forward(source);
+    assertEquals(new RenamedTarget("Ada", "555"), target);
+    assertEquals(source, mapper.backward(target));
+  }
+
+  @Test
+  @DisplayName("typed from(...).to(...) rejects null accessors immediately")
+  void typedFromToNullAccessor() {
+    final var builder = Telescope.mapperBuilder(RenamedSource.class, RenamedTarget.class);
+    assertThrows(NullPointerException.class, () -> builder.from(null));
+    assertThrows(NullPointerException.class, () -> builder.from(RenamedSource::displayName).to(null));
+  }
+
+  @Test
+  @DisplayName("fluent field selection exposes only the alternating next operation")
+  void typedFromToCannotRepeatEitherSide() throws NoSuchMethodException {
+    final var builder = Telescope.mapperBuilder(RenamedSource.class, RenamedTarget.class);
+    final var selection = builder.from(RenamedSource::displayName);
+
+    assertThrows(
+      NoSuchMethodException.class,
+      () -> selection.getClass().getMethod("from", Telescope.Accessor.class),
+      "from(...).from(...) is not part of the fluent surface"
+    );
+    assertThrows(
+      NoSuchMethodException.class,
+      () -> builder.getClass().getMethod("to", Telescope.Accessor.class),
+      "to(...).to(...) is not part of the fluent surface"
+    );
   }
 }
