@@ -290,4 +290,98 @@ public final class PairingRules<T> {
    * target names with no source counterpart, and source names with no consumer.
    */
   public record MatchResult(List<String> matched, List<String> unmatchedTargets, List<String> unmatchedSources) {}
+
+  /**
+   * The allocation table, keyed on the declared type's own name. A name that settles by kind rather
+   * than by itself is answered in {@link #allocationFor} instead of appearing here.
+   *
+   * <p>Exact names rather than subtype tests, because the question is what a field declared as this
+   * type is rebuilt as, and a subtype answers for itself. {@code ArrayList} and {@code ArrayDeque}
+   * take an element count; the hash families take a table capacity, which for the same number of
+   * elements is a different number; the sorted families take a comparator instead. A type whose
+   * {@code int} means something else entirely -- a hard bound on {@code LinkedBlockingQueue}, a
+   * capacity {@code PriorityQueue} refuses to see as zero -- is built with no argument at all.
+   */
+  private static final Map<String, Allocation> BY_DECLARED_NAME = Map.ofEntries(
+    Map.entry("java.util.List", new Allocation.Build("java.util.ArrayList", Allocation.Sizing.ELEMENT_COUNT)),
+    Map.entry("java.util.ArrayList", new Allocation.Build("java.util.ArrayList", Allocation.Sizing.ELEMENT_COUNT)),
+    Map.entry("java.util.LinkedList", new Allocation.Build("java.util.LinkedList", Allocation.Sizing.NONE)),
+    Map.entry("java.util.Deque", new Allocation.Build("java.util.ArrayDeque", Allocation.Sizing.ELEMENT_COUNT)),
+    Map.entry("java.util.Queue", new Allocation.Build("java.util.ArrayDeque", Allocation.Sizing.ELEMENT_COUNT)),
+    Map.entry("java.util.Vector", new Allocation.Build("java.util.Vector", Allocation.Sizing.ELEMENT_COUNT)),
+    Map.entry("java.util.Stack", new Allocation.Build("java.util.Stack", Allocation.Sizing.NONE)),
+    Map.entry("java.util.PriorityQueue", new Allocation.Build("java.util.PriorityQueue", Allocation.Sizing.NONE)),
+    Map.entry(
+      "java.util.concurrent.LinkedBlockingQueue",
+      new Allocation.Build("java.util.concurrent.LinkedBlockingQueue", Allocation.Sizing.NONE)
+    ),
+    Map.entry("java.util.Set", new Allocation.Build("java.util.LinkedHashSet", Allocation.Sizing.TABLE_CAPACITY)),
+    Map.entry(
+      "java.util.LinkedHashSet",
+      new Allocation.Build("java.util.LinkedHashSet", Allocation.Sizing.TABLE_CAPACITY)
+    ),
+    Map.entry("java.util.HashSet", new Allocation.Build("java.util.HashSet", Allocation.Sizing.TABLE_CAPACITY)),
+    Map.entry("java.util.TreeSet", new Allocation.Build("java.util.TreeSet", Allocation.Sizing.SOURCE_ORDERING)),
+    Map.entry("java.util.SortedSet", new Allocation.Build("java.util.TreeSet", Allocation.Sizing.SOURCE_ORDERING)),
+    Map.entry("java.util.NavigableSet", new Allocation.Build("java.util.TreeSet", Allocation.Sizing.SOURCE_ORDERING)),
+    Map.entry(
+      "java.util.concurrent.ConcurrentSkipListSet",
+      new Allocation.Build("java.util.concurrent.ConcurrentSkipListSet", Allocation.Sizing.SOURCE_ORDERING)
+    ),
+    Map.entry("java.util.Map", new Allocation.Build("java.util.LinkedHashMap", Allocation.Sizing.TABLE_CAPACITY)),
+    Map.entry(
+      "java.util.LinkedHashMap",
+      new Allocation.Build("java.util.LinkedHashMap", Allocation.Sizing.TABLE_CAPACITY)
+    ),
+    Map.entry("java.util.HashMap", new Allocation.Build("java.util.HashMap", Allocation.Sizing.TABLE_CAPACITY)),
+    Map.entry("java.util.TreeMap", new Allocation.Build("java.util.TreeMap", Allocation.Sizing.SOURCE_ORDERING)),
+    Map.entry("java.util.SortedMap", new Allocation.Build("java.util.TreeMap", Allocation.Sizing.SOURCE_ORDERING)),
+    Map.entry("java.util.NavigableMap", new Allocation.Build("java.util.TreeMap", Allocation.Sizing.SOURCE_ORDERING)),
+    Map.entry(
+      "java.util.concurrent.ConcurrentHashMap",
+      new Allocation.Build("java.util.concurrent.ConcurrentHashMap", Allocation.Sizing.ELEMENT_COUNT)
+    ),
+    Map.entry(
+      "java.util.concurrent.ConcurrentMap",
+      new Allocation.Build("java.util.concurrent.ConcurrentHashMap", Allocation.Sizing.ELEMENT_COUNT)
+    ),
+    Map.entry(
+      "java.util.concurrent.ConcurrentSkipListMap",
+      new Allocation.Build("java.util.concurrent.ConcurrentSkipListMap", Allocation.Sizing.SOURCE_ORDERING)
+    ),
+    Map.entry(
+      "java.util.IdentityHashMap",
+      new Allocation.Build("java.util.IdentityHashMap", Allocation.Sizing.ELEMENT_COUNT)
+    ),
+    Map.entry("java.util.WeakHashMap", new Allocation.Build("java.util.WeakHashMap", Allocation.Sizing.TABLE_CAPACITY)),
+    Map.entry(
+      "java.util.EnumMap",
+      new Allocation.Refuse(
+        "EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg" +
+          " constructor (it needs the Class<K> key class). Use an explicit" +
+          " `Mapping.via(...)` row that constructs the EnumMap with its key" +
+          " class."
+      )
+    )
+  );
+
+  /**
+   * What this declared container is rebuilt as, or null when the table does not name it and the
+   * caller's own fallbacks decide.
+   *
+   * <p>A type the table does not name is not refused here. Each side can still reach one its own
+   * way — a public constructor bound at run time, a family default written into source — and
+   * answering for those is the caller's job, not this table's.
+   */
+  public Allocation allocationFor(final T declared, final ContainerView.Kind kind) {
+    final var name = props.typeName(props.rawType(declared));
+    // A declaration that names no shape is rebuilt as whatever it was paired against. Collection is
+    // the union of the two, so the kind the pair settled on is the only thing that says which.
+    if ("java.util.Collection".equals(name)) {
+      return kind == ContainerView.Kind.SET
+        ? new Allocation.Build("java.util.LinkedHashSet", Allocation.Sizing.TABLE_CAPACITY)
+        : new Allocation.Build("java.util.ArrayList", Allocation.Sizing.ELEMENT_COUNT);
+    }
+    return BY_DECLARED_NAME.get(name);
+  }
 }

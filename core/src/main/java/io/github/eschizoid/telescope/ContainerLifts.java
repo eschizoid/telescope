@@ -3,6 +3,10 @@ package io.github.eschizoid.telescope;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.optics.Iso;
+import io.github.eschizoid.telescope.internal.pairing.Allocation;
+import io.github.eschizoid.telescope.internal.pairing.ContainerView;
+import io.github.eschizoid.telescope.internal.pairing.PairingRules;
+import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Modifier;
@@ -12,8 +16,6 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.Deque;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -22,11 +24,7 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.NavigableMap;
-import java.util.NavigableSet;
 import java.util.PriorityQueue;
-import java.util.Queue;
-import java.util.Set;
 import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.Stack;
@@ -35,7 +33,6 @@ import java.util.TreeSet;
 import java.util.Vector;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -467,26 +464,10 @@ final class ContainerLifts {
   // not name goes to `probeAllocator`, whose lookup does reach a user-defined subclass via the
   // user's own package, and then to `fallbackAllocatorFor` for the tail.
   private static Function<Object, Object> listAllocatorFor(final Class<?> raw) {
-    if (raw == List.class || raw == Collection.class || raw == ArrayList.class) return input ->
-      new ArrayList<>(((Collection<?>) input).size());
-    if (raw == LinkedList.class) return ignored -> new LinkedList<>();
-    // A Deque- or Queue-typed component is viewed as a list, so an ArrayDeque is what satisfies
-    // the declaration. Its int argument is an element count rather than a table capacity, so it
-    // takes the source's size directly -- unlike the hash families. Only the two interfaces arrive
-    // here: a concrete deque is not viewed as a container at all, so the lift never asks about one.
-    // A zero needs no guard either:
-    // the constructor reads it as one slot, which is the empty case and not an error. That is
-    // PriorityQueue's constraint, not this one, and it is handled where it applies below.
-    if (raw == Deque.class || raw == Queue.class) return input -> new ArrayDeque<>(((Collection<?>) input).size());
-    // Vector and Stack are List subtypes and were always reachable.
-    if (raw == Vector.class) return input -> new Vector<>(((Collection<?>) input).size());
-    if (raw == Stack.class) return ignored -> new Stack<>();
-    // PriorityQueue rejects a zero initial capacity outright, so a size-derived argument would
-    // throw on an empty source.
-    if (raw == PriorityQueue.class) return ignored -> new PriorityQueue<>();
-    // LinkedBlockingQueue's int argument is a hard capacity bound rather than a sizing hint, so a
-    // size-derived value would make the rebuilt queue reject every later offer.
-    if (raw == LinkedBlockingQueue.class) return ignored -> new LinkedBlockingQueue<>();
+    final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.LIST);
+    if (fromSpec != null) return fromSpec;
+    // Not in the shared table: above one element this allocates a staging list rather than its own
+    // type, which is a way of building rather than a decision about what to build.
     if (raw == CopyOnWriteArrayList.class) return input -> {
       final int size = ((Collection<?>) input).size();
       return size <= 1 ? new CopyOnWriteArrayList<>() : new ArrayList<>(size);
@@ -509,12 +490,9 @@ final class ContainerLifts {
   }
 
   private static Function<Object, Object> setAllocatorFor(final Class<?> raw) {
-    if (raw == Set.class || raw == LinkedHashSet.class) return input ->
-      LinkedHashSet.newLinkedHashSet(((Collection<?>) input).size());
-    if (raw == HashSet.class) return input -> HashSet.newHashSet(((Collection<?>) input).size());
-    if (raw == TreeSet.class || raw == SortedSet.class || raw == NavigableSet.class) return input ->
-      new TreeSet<>(setComparator(input));
-    if (raw == ConcurrentSkipListSet.class) return input -> new ConcurrentSkipListSet<>(setComparator(input));
+    final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.SET);
+    if (fromSpec != null) return fromSpec;
+    // Not in the shared table, for the same reason the list side's is not.
     if (raw == CopyOnWriteArraySet.class) return input -> {
       final int size = ((Collection<?>) input).size();
       return size <= 1 ? new CopyOnWriteArraySet<>() : new ArrayList<>(size);
@@ -547,24 +525,8 @@ final class ContainerLifts {
    * codegen path or an explicit row.
    */
   private static Function<Object, Object> mapAllocatorFor(final Class<?> raw) {
-    if (raw == HashMap.class) return input -> HashMap.newHashMap(((Map<?, ?>) input).size());
-    if (raw == Map.class || raw == LinkedHashMap.class) return input ->
-      LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size());
-    if (raw == TreeMap.class || raw == SortedMap.class || raw == NavigableMap.class) return input ->
-      new TreeMap<>(mapComparator(input));
-    if (raw == ConcurrentHashMap.class || raw == ConcurrentMap.class) return input ->
-      new ConcurrentHashMap<>(((Map<?, ?>) input).size());
-    if (raw == ConcurrentSkipListMap.class) return input -> new ConcurrentSkipListMap<>(mapComparator(input));
-    if (raw == IdentityHashMap.class) return input -> new IdentityHashMap<>(((Map<?, ?>) input).size());
-    // WeakHashMap ships no newWeakHashMap factory and its int argument is table capacity,
-    // so the element count has to be divided by the 0.75 load factor to size a table that
-    // holds them without a resize.
-    if (raw == WeakHashMap.class) return input -> new WeakHashMap<>(capacityFor(((Map<?, ?>) input).size()));
-    if (raw == EnumMap.class) throw new IllegalStateException(
-      "Deep map: EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg " +
-        "constructor (it needs the Class<K> key class). Use the codegen path or supply an " +
-        "explicit `Mapping.via(...)` row that constructs the EnumMap with its key class."
-    );
+    final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.MAP_VALUES);
+    if (fromSpec != null) return fromSpec;
     final var alloc = probeAllocator(raw);
     if (alloc != null) return ignored -> alloc.get();
     final var fallback = fallbackAllocatorFor(raw, LinkedHashMap.class, input ->
@@ -602,5 +564,59 @@ final class ContainerLifts {
   @SuppressWarnings("unchecked")
   private static Comparator<Object> setComparator(final Object input) {
     return input instanceof SortedSet<?> sorted ? (Comparator<Object>) sorted.comparator() : null;
+  }
+
+  /** The shared rules, over reflection handles. */
+  private static final PairingRules<Type> RULES = new PairingRules<>(new ReflectionProps());
+
+  /**
+   * The allocator the shared table asks for, or null where it names nothing and this file's own
+   * fallbacks decide.
+   *
+   * <p>Which class is built and what its constructor is told are decided once, in {@code
+   * internal.pairing}, so the generated bridge answers the same way. What is left here is how to
+   * make the call: {@code java.base} constructors cannot be bound through {@code
+   * LambdaMetafactory}, so each one is written out, and a hash container is sized through the
+   * factory that does the load-factor arithmetic rather than by passing the count.
+   */
+  private static Function<Object, Object> specAllocatorFor(final Class<?> raw, final ContainerView.Kind kind) {
+    // The rules speak reflective Types; a raw class handle is one.
+    final var decision = RULES.allocationFor(raw, kind);
+    if (decision == null) return null;
+    if (decision instanceof Allocation.Refuse refuse) {
+      throw new IllegalStateException("Deep map: " + refuse.reason());
+    }
+    final var build = (Allocation.Build) decision;
+    return switch (build.implName()) {
+      case "java.util.ArrayList" -> input -> new ArrayList<>(count(input));
+      case "java.util.LinkedList" -> ignored -> new LinkedList<>();
+      case "java.util.ArrayDeque" -> input -> new ArrayDeque<>(count(input));
+      case "java.util.Vector" -> input -> new Vector<>(count(input));
+      case "java.util.Stack" -> ignored -> new Stack<>();
+      case "java.util.PriorityQueue" -> ignored -> new PriorityQueue<>();
+      case "java.util.concurrent.LinkedBlockingQueue" -> ignored -> new LinkedBlockingQueue<>();
+      case "java.util.LinkedHashSet" -> input -> LinkedHashSet.newLinkedHashSet(count(input));
+      case "java.util.HashSet" -> input -> HashSet.newHashSet(count(input));
+      case "java.util.TreeSet" -> input -> new TreeSet<>(setComparator(input));
+      case "java.util.concurrent.ConcurrentSkipListSet" -> input -> new ConcurrentSkipListSet<>(setComparator(input));
+      case "java.util.LinkedHashMap" -> input -> LinkedHashMap.newLinkedHashMap(mapCount(input));
+      case "java.util.HashMap" -> input -> HashMap.newHashMap(mapCount(input));
+      case "java.util.TreeMap" -> input -> new TreeMap<>(mapComparator(input));
+      case "java.util.concurrent.ConcurrentSkipListMap" -> input -> new ConcurrentSkipListMap<>(mapComparator(input));
+      case "java.util.concurrent.ConcurrentHashMap" -> input -> new ConcurrentHashMap<>(mapCount(input));
+      case "java.util.IdentityHashMap" -> input -> new IdentityHashMap<>(mapCount(input));
+      // No newWeakHashMap factory exists, so the table arithmetic the hash factories do internally
+      // is done here instead.
+      case "java.util.WeakHashMap" -> input -> new WeakHashMap<>(capacityFor(mapCount(input)));
+      default -> null;
+    };
+  }
+
+  private static int count(final Object input) {
+    return ((Collection<?>) input).size();
+  }
+
+  private static int mapCount(final Object input) {
+    return ((Map<?, ?>) input).size();
   }
 }
