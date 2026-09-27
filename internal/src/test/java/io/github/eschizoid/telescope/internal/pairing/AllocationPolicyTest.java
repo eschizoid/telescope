@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import io.github.eschizoid.telescope.internal.pairing.Allocation.Sizing;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView.Kind;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
@@ -37,28 +36,22 @@ class AllocationPolicyTest {
 
   private static Stream<Arguments> rows() {
     return Stream.of(
-      Arguments.of(List.class, Kind.LIST, "java.util.ArrayList", Sizing.ELEMENT_COUNT),
-      Arguments.of(ArrayList.class, Kind.LIST, "java.util.ArrayList", Sizing.ELEMENT_COUNT),
+      Arguments.of(List.class, Kind.LIST, "java.util.ArrayList"),
+      Arguments.of(ArrayList.class, Kind.LIST, "java.util.ArrayList"),
       // A deque's int argument is an element count, unlike the hash families below.
-      Arguments.of(Deque.class, Kind.LIST, "java.util.ArrayDeque", Sizing.ELEMENT_COUNT),
-      Arguments.of(HashSet.class, Kind.SET, "java.util.HashSet", Sizing.TABLE_CAPACITY),
-      Arguments.of(SortedMap.class, Kind.MAP_VALUES, "java.util.TreeMap", Sizing.SOURCE_ORDERING)
+      Arguments.of(Deque.class, Kind.LIST, "java.util.ArrayDeque"),
+      Arguments.of(HashSet.class, Kind.SET, "java.util.HashSet"),
+      Arguments.of(SortedMap.class, Kind.MAP_VALUES, "java.util.TreeMap")
     );
   }
 
-  @ParameterizedTest(name = "{0} builds {2} sized by {3}")
+  @ParameterizedTest(name = "{0} builds {2}")
   @MethodSource("rows")
-  @DisplayName("a declared container names one implementation and one thing to tell its constructor")
-  void declaredTypeDecidesImplementationAndSizing(
-    final Class<?> declared,
-    final Kind kind,
-    final String impl,
-    final Sizing sizing
-  ) {
+  @DisplayName("a declared container names the one implementation it is rebuilt as")
+  void declaredTypeDecidesItsImplementation(final Class<?> declared, final Kind kind, final String impl) {
     final var build = assertInstanceOf(Allocation.Build.class, RULES.allocationFor(declared, kind));
 
     assertEquals(impl, build.implName());
-    assertEquals(sizing, build.sizing());
   }
 
   @Test
@@ -74,7 +67,7 @@ class AllocationPolicyTest {
   }
 
   @Test
-  @DisplayName("a type with no constructor to reach carries its refusal, so both renderings report it alike")
+  @DisplayName("a type with no constructor to reach carries the sentence to refuse it with")
   void enumMapCarriesItsRefusal() {
     final var refuse = assertInstanceOf(Allocation.Refuse.class, RULES.allocationFor(EnumMap.class, Kind.MAP_VALUES));
 
@@ -93,5 +86,18 @@ class AllocationPolicyTest {
   private static final class MyOwnList<E> extends ArrayList<E> {
 
     private static final long serialVersionUID = 1L;
+  }
+
+  @Test
+  @DisplayName("a name the table holds for one family is not an answer for another")
+  void aNameDoesNotAnswerForTheWrongFamily() {
+    // Before one table served all three, each family held only its own names and a foreign one was
+    // refused while the plan was built. A single table that answers regardless would hand the map
+    // family a list and let the cast fail at the first conversion instead.
+    assertNull(RULES.allocationFor(List.class, Kind.SET));
+    assertNull(RULES.allocationFor(List.class, Kind.MAP_VALUES));
+    assertNull(RULES.allocationFor(HashSet.class, Kind.LIST));
+    assertNull(RULES.allocationFor(SortedMap.class, Kind.LIST));
+    assertNull(RULES.allocationFor(Collection.class, Kind.MAP_VALUES));
   }
 }

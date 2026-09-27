@@ -1,11 +1,36 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem.WellKnown;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Deque;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.NavigableSet;
+import java.util.PriorityQueue;
+import java.util.Queue;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.Stack;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.Vector;
+import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.LinkedBlockingQueue;
 
 /**
  * The shared pairing decision rules — one implementation, two consumers. The runtime mapper
@@ -292,96 +317,125 @@ public final class PairingRules<T> {
   public record MatchResult(List<String> matched, List<String> unmatchedTargets, List<String> unmatchedSources) {}
 
   /**
-   * The allocation table, keyed on the declared type's own name. A name that settles by kind rather
-   * than by itself is answered in {@link #allocationFor} instead of appearing here.
+   * The allocation table: which class a declared container is rebuilt as, and what its constructor
+   * is told about the source.
    *
-   * <p>Exact names rather than subtype tests, because the question is what a field declared as this
-   * type is rebuilt as, and a subtype answers for itself. {@code ArrayList} and {@code ArrayDeque}
-   * take an element count; the hash families take a table capacity, which for the same number of
-   * elements is a different number; the sorted families take a comparator instead. A type whose
-   * {@code int} means something else entirely -- a hard bound on {@code LinkedBlockingQueue}, a
-   * capacity {@code PriorityQueue} refuses to see as zero -- is built with no argument at all.
+   * <p>How the chosen constructor is called is not decided here. A list's {@code int} is an element
+   * count and a hash container's is a table capacity, which for the same elements is a different
+   * number, and {@code WeakHashMap} has no factory to do that arithmetic — so the call belongs with
+   * the renderer that makes it.
+   *
+   * <p>Each entry carries the family it belongs to, because the same name must not answer for a
+   * kind it has nothing to do with. Asking the map family about a {@code List} is a question with
+   * no good answer, and one refused while a plan is built rather than answered wrongly and cast at
+   * the first conversion.
+   *
+   * <p>Names come from class literals rather than string constants, so a typo cannot make an entry
+   * dead and a rename cannot leave it behind.
    */
-  private static final Map<String, Allocation> BY_DECLARED_NAME = Map.ofEntries(
-    Map.entry("java.util.List", new Allocation.Build("java.util.ArrayList", Allocation.Sizing.ELEMENT_COUNT)),
-    Map.entry("java.util.ArrayList", new Allocation.Build("java.util.ArrayList", Allocation.Sizing.ELEMENT_COUNT)),
-    Map.entry("java.util.LinkedList", new Allocation.Build("java.util.LinkedList", Allocation.Sizing.NONE)),
-    Map.entry("java.util.Deque", new Allocation.Build("java.util.ArrayDeque", Allocation.Sizing.ELEMENT_COUNT)),
-    Map.entry("java.util.Queue", new Allocation.Build("java.util.ArrayDeque", Allocation.Sizing.ELEMENT_COUNT)),
-    Map.entry("java.util.Vector", new Allocation.Build("java.util.Vector", Allocation.Sizing.ELEMENT_COUNT)),
-    Map.entry("java.util.Stack", new Allocation.Build("java.util.Stack", Allocation.Sizing.NONE)),
-    Map.entry("java.util.PriorityQueue", new Allocation.Build("java.util.PriorityQueue", Allocation.Sizing.NONE)),
+  private static final Map<String, Entry> BY_DECLARED_NAME = Map.ofEntries(
+    list(List.class, ArrayList.class),
+    list(ArrayList.class, ArrayList.class),
+    list(LinkedList.class, LinkedList.class),
+    list(Deque.class, ArrayDeque.class),
+    list(Queue.class, ArrayDeque.class),
+    list(Vector.class, Vector.class),
+    list(Stack.class, Stack.class),
+    // PriorityQueue reads a zero capacity as an error rather than as an empty container, and
+    // LinkedBlockingQueue reads its int as a hard bound that would reject every later offer.
+    list(PriorityQueue.class, PriorityQueue.class),
+    list(LinkedBlockingQueue.class, LinkedBlockingQueue.class),
+    set(Set.class, LinkedHashSet.class),
+    set(LinkedHashSet.class, LinkedHashSet.class),
+    set(HashSet.class, HashSet.class),
+    set(TreeSet.class, TreeSet.class),
+    set(SortedSet.class, TreeSet.class),
+    set(NavigableSet.class, TreeSet.class),
+    set(ConcurrentSkipListSet.class, ConcurrentSkipListSet.class),
+    map(Map.class, LinkedHashMap.class),
+    map(LinkedHashMap.class, LinkedHashMap.class),
+    map(HashMap.class, HashMap.class),
+    map(TreeMap.class, TreeMap.class),
+    map(SortedMap.class, TreeMap.class),
+    map(NavigableMap.class, TreeMap.class),
+    map(ConcurrentHashMap.class, ConcurrentHashMap.class),
+    map(ConcurrentMap.class, ConcurrentHashMap.class),
+    map(ConcurrentSkipListMap.class, ConcurrentSkipListMap.class),
+    map(IdentityHashMap.class, IdentityHashMap.class),
+    map(WeakHashMap.class, WeakHashMap.class),
     Map.entry(
-      "java.util.concurrent.LinkedBlockingQueue",
-      new Allocation.Build("java.util.concurrent.LinkedBlockingQueue", Allocation.Sizing.NONE)
-    ),
-    Map.entry("java.util.Set", new Allocation.Build("java.util.LinkedHashSet", Allocation.Sizing.TABLE_CAPACITY)),
-    Map.entry(
-      "java.util.LinkedHashSet",
-      new Allocation.Build("java.util.LinkedHashSet", Allocation.Sizing.TABLE_CAPACITY)
-    ),
-    Map.entry("java.util.HashSet", new Allocation.Build("java.util.HashSet", Allocation.Sizing.TABLE_CAPACITY)),
-    Map.entry("java.util.TreeSet", new Allocation.Build("java.util.TreeSet", Allocation.Sizing.SOURCE_ORDERING)),
-    Map.entry("java.util.SortedSet", new Allocation.Build("java.util.TreeSet", Allocation.Sizing.SOURCE_ORDERING)),
-    Map.entry("java.util.NavigableSet", new Allocation.Build("java.util.TreeSet", Allocation.Sizing.SOURCE_ORDERING)),
-    Map.entry(
-      "java.util.concurrent.ConcurrentSkipListSet",
-      new Allocation.Build("java.util.concurrent.ConcurrentSkipListSet", Allocation.Sizing.SOURCE_ORDERING)
-    ),
-    Map.entry("java.util.Map", new Allocation.Build("java.util.LinkedHashMap", Allocation.Sizing.TABLE_CAPACITY)),
-    Map.entry(
-      "java.util.LinkedHashMap",
-      new Allocation.Build("java.util.LinkedHashMap", Allocation.Sizing.TABLE_CAPACITY)
-    ),
-    Map.entry("java.util.HashMap", new Allocation.Build("java.util.HashMap", Allocation.Sizing.TABLE_CAPACITY)),
-    Map.entry("java.util.TreeMap", new Allocation.Build("java.util.TreeMap", Allocation.Sizing.SOURCE_ORDERING)),
-    Map.entry("java.util.SortedMap", new Allocation.Build("java.util.TreeMap", Allocation.Sizing.SOURCE_ORDERING)),
-    Map.entry("java.util.NavigableMap", new Allocation.Build("java.util.TreeMap", Allocation.Sizing.SOURCE_ORDERING)),
-    Map.entry(
-      "java.util.concurrent.ConcurrentHashMap",
-      new Allocation.Build("java.util.concurrent.ConcurrentHashMap", Allocation.Sizing.ELEMENT_COUNT)
-    ),
-    Map.entry(
-      "java.util.concurrent.ConcurrentMap",
-      new Allocation.Build("java.util.concurrent.ConcurrentHashMap", Allocation.Sizing.ELEMENT_COUNT)
-    ),
-    Map.entry(
-      "java.util.concurrent.ConcurrentSkipListMap",
-      new Allocation.Build("java.util.concurrent.ConcurrentSkipListMap", Allocation.Sizing.SOURCE_ORDERING)
-    ),
-    Map.entry(
-      "java.util.IdentityHashMap",
-      new Allocation.Build("java.util.IdentityHashMap", Allocation.Sizing.ELEMENT_COUNT)
-    ),
-    Map.entry("java.util.WeakHashMap", new Allocation.Build("java.util.WeakHashMap", Allocation.Sizing.TABLE_CAPACITY)),
-    Map.entry(
-      "java.util.EnumMap",
-      new Allocation.Refuse(
-        "EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg" +
-          " constructor (it needs the Class<K> key class). Use an explicit" +
-          " `Mapping.via(...)` row that constructs the EnumMap with its key" +
-          " class."
+      EnumMap.class.getName(),
+      new Entry(
+        ContainerView.Kind.MAP_VALUES,
+        new Allocation.Refuse(
+          "EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg" +
+            " constructor (it needs the Class<K> key class). Use the codegen path" +
+            " or supply an explicit `Mapping.via(...)` row that constructs the" +
+            " EnumMap with its key class."
+        )
       )
     )
   );
 
+  /** One row: the family it answers for, and what it answers. */
+  private record Entry(ContainerView.Kind family, Allocation allocation) {}
+
+  private static Map.Entry<String, Entry> list(final Class<?> declared, final Class<?> impl) {
+    return row(ContainerView.Kind.LIST, declared, impl);
+  }
+
+  private static Map.Entry<String, Entry> set(final Class<?> declared, final Class<?> impl) {
+    return row(ContainerView.Kind.SET, declared, impl);
+  }
+
+  private static Map.Entry<String, Entry> map(final Class<?> declared, final Class<?> impl) {
+    return row(ContainerView.Kind.MAP_VALUES, declared, impl);
+  }
+
+  private static Map.Entry<String, Entry> row(
+    final ContainerView.Kind family,
+    final Class<?> declared,
+    final Class<?> impl
+  ) {
+    return Map.entry(declared.getName(), new Entry(family, new Allocation.Build(impl.getName())));
+  }
+
   /**
-   * What this declared container is rebuilt as, or null when the table does not name it and the
-   * caller's own fallbacks decide.
+   * What this declared container is rebuilt as when it is being built as {@code kind}, or null when
+   * the table has no answer and the caller's own fallbacks decide.
    *
-   * <p>A type the table does not name is not refused here. Each side can still reach one its own
-   * way — a public constructor bound at run time, a family default written into source — and
-   * answering for those is the caller's job, not this table's.
+   * <p>Null is not a refusal. A type the table does not name may still be reachable another way — a
+   * public constructor bound at run time, a family default written into source — and answering for
+   * those belongs to the side doing the building. A type the table names for a different family is
+   * also null here, so a mismatch is refused where the caller refuses rather than answered with a
+   * container of the wrong shape.
    */
   public Allocation allocationFor(final T declared, final ContainerView.Kind kind) {
     final var name = props.typeName(props.rawType(declared));
     // A declaration that names no shape is rebuilt as whatever it was paired against. Collection is
     // the union of the two, so the kind the pair settled on is the only thing that says which.
-    if ("java.util.Collection".equals(name)) {
-      return kind == ContainerView.Kind.SET
-        ? new Allocation.Build("java.util.LinkedHashSet", Allocation.Sizing.TABLE_CAPACITY)
-        : new Allocation.Build("java.util.ArrayList", Allocation.Sizing.ELEMENT_COUNT);
+    if (Collection.class.getName().equals(name)) {
+      return switch (kind) {
+        case SET -> new Allocation.Build(LinkedHashSet.class.getName());
+        case LIST, COLLECTION -> new Allocation.Build(ArrayList.class.getName());
+        default -> null;
+      };
     }
-    return BY_DECLARED_NAME.get(name);
+    final var entry = BY_DECLARED_NAME.get(name);
+    return entry == null || entry.family() != kind ? null : entry.allocation();
+  }
+
+  /**
+   * Every declared type the table answers for, with the family it answers in.
+   *
+   * <p>A side that renders these has to render all of them: an entry nothing renders is not a
+   * compile error, it is a container quietly built some other way and sized differently. Exposing
+   * the set is what lets each renderer be checked against the decision rather than against a list
+   * someone kept in step by hand.
+   */
+  public static Map<String, ContainerView.Kind> declaredTypes() {
+    final var out = new LinkedHashMap<String, ContainerView.Kind>();
+    BY_DECLARED_NAME.forEach((name, entry) -> out.put(name, entry.family()));
+    return Map.copyOf(out);
   }
 }
