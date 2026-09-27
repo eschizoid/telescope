@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.benchmarks;
 
 import io.github.eschizoid.telescope.Telescope;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -20,7 +21,12 @@ public class SpringBlueprintBenchmark {
     new SpringBlueprintSource.Address("Boston")
   );
   private final SpringBlueprintMapper mapper = new SpringBlueprintMapperImpl();
-  private final SpringBlueprintCity city = new SpringBlueprintCityImpl();
+  private final SpringBlueprintCityTransformer city = new SpringBlueprintCityTransformerImpl();
+  private final SpringBlueprintCityPrefixTransformer prefix = new SpringBlueprintCityPrefixTransformerImpl();
+  private final SpringBlueprintConfiguredMapper configuredMapper = new SpringBlueprintConfiguredMapperImpl(
+    prefix,
+    city
+  );
   private final Telescope<SpringBlueprintSource, String> manualPath = Telescope.of(SpringBlueprintSource.class)
     .field(SpringBlueprintSource::address)
     .field(SpringBlueprintSource.Address::city);
@@ -36,12 +42,24 @@ public class SpringBlueprintBenchmark {
   }
 
   @Benchmark
+  public SpringBlueprintTarget manualTransformedBridge() {
+    final var withPrefix = manualPath.update(source, value -> "PREFIX:" + value);
+    final var normalized = manualPath.update(withPrefix, value -> value.toLowerCase(Locale.ROOT));
+    return SpringBlueprintSourceBridge.forward(normalized);
+  }
+
+  @Benchmark
+  public SpringBlueprintTarget configuredSpringMapper() {
+    return configuredMapper.map(source);
+  }
+
+  @Benchmark
   public SpringBlueprintSource manualPath() {
-    return manualPath.update(source, String::toUpperCase);
+    return manualPath.update(source, value -> value.toLowerCase(Locale.ROOT));
   }
 
   @Benchmark
   public SpringBlueprintSource springTransform() {
-    return city.update(source, String::toUpperCase);
+    return city.apply(source);
   }
 }

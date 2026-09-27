@@ -6,18 +6,15 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Generates an injectable {@link TelescopePath} for a record field path. The path is assembled once
- * when the bean is created; reads and updates reuse the resulting Telescope value.
+ * Generates an injectable {@link TelescopeTransformation} from default {@code path()} and {@code
+ * transform()} methods. The path and transformation are cached once when the bean is created. Root
+ * and focus types come from {@code TelescopeTransformation<S, A>}, including inherited generic
+ * arguments. Both factories must return non-null values and must not depend on field injection. The
+ * annotated interface name must end with {@code Transformer}.
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)
 public @interface TelescopeTransform {
-  /** Root record type. */
-  Class<?> from();
-
-  /** Value type at the end of {@link #path()}. */
-  Class<?> to();
-
-  /** Dot-separated record component names, for example {@code "customer.email"}. */
-  String path();
+  /** Optional Spring bean name, usable with {@code @Qualifier}. */
+  String value() default "";
 }

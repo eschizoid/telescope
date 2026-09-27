@@ -1,9 +1,10 @@
 # telescope-spring-boot-starter
 
-## Injectable mapper and path interfaces
+## Injectable mappers and transformations
 
-Keep mapping rules on the model's existing `@Bridge`. The Spring annotations generate injectable interfaces that call
-that bridge or hold a reusable path:
+`@TelescopeMapper` exposes an existing generated `@Bridge` as a Spring bean. `@TelescopeTransform` exposes a reusable
+transformation over a typed Telescope path. A transformation declares both the default for a null focused value and the
+operation applied to a non-null value:
 
 ```java
 public record Address(String city) {}
@@ -13,60 +14,114 @@ public record UserDto(String name, Address address) {}
 @Bridge(value = UserDto.class, defaults = @Default(field = "name", value = "(unnamed)"))
 public record User(String name, Address address) {}
 
-@TelescopeMapper(from = User.class, to = UserDto.class)
-public interface UserProjection {
-  UserDto map(User user);
+@TelescopeTransform("cityNormalizer")
+public interface UserCityTransformer extends TelescopeTransformation<User, String> {
+  @Override
+  default Telescope<User, String> path() {
+    return Telescope.of(User.class).field(User::address).field(Address::city);
+  }
+
+  @Override
+  default Transformation<String> transform() {
+    return new Transformation<>("unknown", (city) -> city.toLowerCase(Locale.ROOT));
+  }
 }
 
-@TelescopeTransform(from = User.class, to = String.class, path = "address.city")
-public interface UserCity extends TelescopePath<User, String> {}
+@TelescopeTransform
+public interface UserNameTransformer extends TelescopeTransformation<User, String> {
+  @Override
+  default Telescope<User, String> path() {
+    return Telescope.of(User.class).field(User::name);
+  }
+
+  @Override
+  default Transformation<String> transform() {
+    return new Transformation<>("(unnamed)", String::strip);
+  }
+}
+
+@TelescopeMapper(transformers = { UserCityTransformer.class, UserNameTransformer.class })
+public interface UserProjection extends TelescopeProjection<User, UserDto> {}
 
 @Service
 class UserService {
 
   private final UserProjection projection;
-  private final UserCity city;
 
-  UserService(UserProjection projection, UserCity city) {
+  UserService(UserProjection projection) {
     this.projection = projection;
-    this.city = city;
   }
 
   UserDto project(User user) {
     return projection.map(user);
   }
+}
+```
 
-  User relocate(User user) {
-    return city.update(user, String::toUpperCase);
+`projection.map(user)` applies the city and name transformers in declaration order, then calls the generated bridge. A
+non-null city is lowercased; a null city becomes `"unknown"`. A null `address` has no city focus and stays null. The
+operation runs once for each non-null focus, including empty strings. A null root bypasses the transformers and maps to
+null. The source record remains unchanged. The nullable default may itself be null.
+
+`TelescopeProjection<User, UserDto>` supplies the mapper's source and target types, so this annotation does not repeat
+them. A mapper interface that declares only `map(User)` can still use
+`@TelescopeMapper(from = User.class, to = UserDto.class)`; both attributes are required in that form.
+
+To register transformers manually, leave the annotation's `transformers` list empty and extend `TelescopeProjection`:
+
+```java
+@TelescopeMapper
+interface ManualUserProjection extends TelescopeProjection<User, UserDto> {}
+
+@Configuration
+class ProjectionConfig {
+
+  @Bean
+  @Primary
+  ManualUserProjection configuredProjection(
+    @Qualifier("manualUserProjectionImpl") ManualUserProjection projection,
+    UserCityTransformer city,
+    UserNameTransformer name
+  ) {
+    projection.addTransformer(city).addTransformer(name);
+    return projection;
   }
 }
 ```
 
-`@Default` is the existing bridge rule: a null `User.name` becomes `"(unnamed)"` in the DTO. The Spring mapper
-annotation only exposes the bridge as a bean. A null input maps to null.
+The `@Bean` method registers both before the configured projection is injected by type. Registration appends to the same
+singleton mapper bean; a mapping call sees one stable snapshot in registration order. You can also append a transformer
+after those declared on `@TelescopeMapper`. Register during bean construction when the configuration must be in place
+before requests are handled.
 
-For a deeper update, declare the path once and inject it wherever it is needed:
+A path can traverse several values. `apply` transforms every focus, in traversal order:
 
 ```java
-record Workspace(Profile profile) {
-  record Profile(Contact contact) {}
+record Directory(List<User> users) {}
 
-  record Contact(String email) {}
+@TelescopeTransform
+interface NormalizeNamesTransformer extends TelescopeTransformation<Directory, String> {
+  default Telescope<Directory, String> path() {
+    return Telescope.of(Directory.class).each(Directory::users).field(User::name);
+  }
+
+  default Transformation<String> transform() {
+    return new Transformation<>("(unnamed)", (name) -> name.toLowerCase(Locale.ROOT));
+  }
 }
-
-@TelescopeTransform(from = Workspace.class, to = String.class, path = "profile.contact.email")
-interface WorkspaceEmail extends TelescopePath<Workspace, String> {}
-
-// In a service with an injected WorkspaceEmail email:
-Workspace changed = email.update(workspace, String::toLowerCase);
-
-String current = email.read(changed);
 ```
 
-Null behavior follows the underlying path: a null terminal email can be read as null and replaced with `set`. If an
-intermediate record such as `profile` or `contact` is null, `read` throws `NoSuchElementException`; `set` and `update`
-leave the source unchanged because the path has no focus. `read(null)` also throws `NoSuchElementException`. The
-`update` function must handle a null terminal value if that is possible in the model.
+An empty `users` list has no focus and remains empty. A null name in an existing user becomes `"(unnamed)"`; a null user
+has no name focus. To transform a whole collection, focus on the collection itself with a type such as
+`TelescopeTransformation<Directory, List<User>>`. An empty collection is a non-null value, so its operation runs.
+
+`TelescopeTransformation<S, A>` inherits `path()`, `read`, `find`, `toList`, `set`, and `update` from
+`TelescopePath<S, A>`. `apply(source)` uses the declared transformation. `update(source, fn)` accepts a caller supplied
+function for an ad hoc edit. You can use the complete Telescope API through `path()`.
+
+Both default factories run once when Spring constructs the bean. They must return non-null values and must not depend on
+field injection. The generated component uses Spring's default singleton scope. Keep the operation thread safe and use
+an immutable default when the bean is shared. The default is reused by reference.
 
 Add the processor alongside the starter (Gradle):
 
@@ -78,14 +133,16 @@ dependencies {
 ```
 
 For an external application, use the same released Telescope version for both artifacts. The annotation processor is a
-compile-time dependency; the starter remains the runtime dependency.
+compile-time dependency; the starter remains the runtime dependency. Put the interfaces in the application's component
+scan packages. Their generated implementation classes are Spring components. Use the annotation's optional `value` to
+name a bean and `@Qualifier` to inject it by name.
 
-Both interfaces must be in the application's component-scan packages. The mapper implementation calls the generated
-`UserBridge.forward` directly; this first version expects the source's single model-anchored `@Bridge`.
-`@TelescopeTransform` checks each record field in its dotted path at compile time and creates the `Telescope` path once
-per bean. This first path form supports record field hops; collection traversal and bean properties remain future work.
-Generated interface beans are injected by their interface type; the existing `TelescopeMapperRegistry` continues to
-index `Mapper<?, ?>` beans declared separately.
+The mapper implementation calls the model's generated `<Source>Bridge.forward` after its transformers. It expects a
+matching model-anchored `@Bridge`; bridge pairing, defaults, and conversions remain on that bridge. A null input maps to
+null. Mapper methods can be inherited from a generic interface. Transform declarations can inherit typed default
+factories through a specialized base interface. Blueprints must be top-level, non-generic, non-sealed interfaces.
+Transform interfaces must end in `Transformer`. The existing `TelescopeMapperRegistry` indexes `Mapper<?, ?>` beans
+declared separately.
 
 ---
 
@@ -107,8 +164,8 @@ they show up in the registry, which resolves them by `(sourceClass, targetClass)
   Polymorphic dispatch: generic services receive `Object` and convert via
   `registry.get(src.getClass(), Target.class).forward(src)` without enumerating type pairs.
 - **`TelescopeProperties`** — `@ConfigurationProperties("telescope")` for the `telescope.registry.fail-fast` toggle.
-- **`@TelescopeMapper` / `@TelescopeTransform`** — Spring-only interface annotations for an injectable bridge-backed
-  mapper or a cached typed path. They require `telescope-codegen` on the annotation-processor path.
+- **`@TelescopeMapper` / `@TelescopeTransform`** — Spring interface annotations for a bridge-backed mapper or a cached
+  transformation. They require `telescope-codegen` on the annotation-processor path.
 
 ## Install
 

@@ -7,14 +7,26 @@ import java.lang.annotation.Target;
 
 /**
  * Generates an injectable Spring interface implementation backed by the source model's existing
- * {@code @Bridge(to)}. Field pairing, defaults, and conversions belong to that bridge.
+ * {@code @Bridge(to)}. Declared transformer beans run in order before the bridge. An interface
+ * extending {@link TelescopeProjection} supplies the source and target types through its type
+ * arguments and can register additional transformers. Other interfaces supply {@link #from()} and
+ * {@link #to()} explicitly. Field pairing, defaults, and conversions belong to the bridge.
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)
 public @interface TelescopeMapper {
-  /** Source model type, which must have a matching {@code @Bridge}. */
-  Class<?> from();
+  /** Optional Spring bean name, usable with {@code @Qualifier}. */
+  String value() default "";
 
-  /** Destination model type. */
-  Class<?> to();
+  /** Source model type; inferred from {@link TelescopeProjection} when omitted. */
+  Class<?> from() default Void.class;
+
+  /** Destination model type; inferred from {@link TelescopeProjection} when omitted. */
+  Class<?> to() default Void.class;
+
+  /**
+   * Transformer beans injected in declaration order and applied before the bridge. Each transformer
+   * must focus on the declared source model type.
+   */
+  Class<? extends TelescopeTransformation<?, ?>>[] transformers() default {};
 }

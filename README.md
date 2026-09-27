@@ -415,6 +415,52 @@ user-facing code, because the optics live inside, behind one type.
 
 ---
 
+## Spring mapper transformers
+
+The Spring starter can normalize source values before a generated `@Bridge` maps them to a DTO. Declare transformers on
+the projection to have Spring inject and apply them in order:
+
+```java
+record CustomerDto(String email) {}
+
+@Bridge(CustomerDto.class)
+record Customer(String email) {}
+
+@TelescopeTransform
+interface CustomerEmailTransformer extends TelescopeTransformation<Customer, String> {
+  default Telescope<Customer, String> path() {
+    return Telescope.of(Customer.class).field(Customer::email);
+  }
+
+  default Transformation<String> transform() {
+    return new Transformation<>("unknown@example.com", email -> email.strip().toLowerCase(Locale.ROOT));
+  }
+}
+
+@TelescopeMapper(transformers = CustomerEmailTransformer.class)
+interface CustomerProjection extends TelescopeProjection<Customer, CustomerDto> {}
+
+@Service
+class CustomerService {
+  private final CustomerProjection projection;
+
+  CustomerService(CustomerProjection projection) {
+    this.projection = projection;
+  }
+
+  CustomerDto register(Customer customer) {
+    return projection.map(customer);
+  }
+}
+```
+
+`map` applies the transformer before the bridge. A null email gets the declared default; a non-null email is trimmed and
+lowercased. The original record is unchanged. For manual registration of multiple transformers, use
+`projection.addTransformer(first).addTransformer(second)` when configuring the bean. See the
+[Spring starter guide](spring-boot-starter/README.md) for both forms and their Spring wiring.
+
+---
+
 ## Choosing an entry point
 
 The tour used three entry points, and the table below is the whole map. Two questions decide which one you want. First,

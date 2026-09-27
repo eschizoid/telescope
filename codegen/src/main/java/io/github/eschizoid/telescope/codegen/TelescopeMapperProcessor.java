@@ -3,21 +3,29 @@ package io.github.eschizoid.telescope.codegen;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
+import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
-import javax.lang.model.type.PrimitiveType;
+import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.ElementFilter;
 
 /** Generates Spring components for bridge-backed mappers and reusable record paths. */
@@ -30,7 +38,8 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   private static final String MAPPER = "io.github.eschizoid.telescope.spring.TelescopeMapper";
   private static final String TRANSFORM = "io.github.eschizoid.telescope.spring.TelescopeTransform";
   private static final String BRIDGE = "io.github.eschizoid.telescope.annotations.Bridge";
-  private static final String PATH = "io.github.eschizoid.telescope.spring.TelescopePath";
+  private static final String PATH = "io.github.eschizoid.telescope.spring.TelescopeTransformation";
+  private static final String PROJECTION = "io.github.eschizoid.telescope.spring.TelescopeProjection";
 
   /** Public constructor for processor discovery. */
   public TelescopeMapperProcessor() {
@@ -50,25 +59,65 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     final var blueprint = interfaceType(element, "@TelescopeMapper");
     if (blueprint == null) return;
     final var config = annotation(blueprint, MAPPER);
-    final var from = declaredType(config, "from");
-    final var to = declaredType(config, "to");
-    if (from == null || to == null) {
-      error(blueprint, "@TelescopeMapper from/to must be model classes");
+    final var projection = projectionType(blueprint.asType());
+    final var explicitFrom = declaredType(config, "from");
+    final var explicitTo = declaredType(config, "to");
+    if ((explicitFrom == null) != (explicitTo == null)) {
+      error(blueprint, "@TelescopeMapper from and to must be supplied together");
       return;
     }
+    final DeclaredType from;
+    final DeclaredType to;
+    if (projection != null) {
+      if (
+        projection.getTypeArguments().size() != 2 ||
+        !(projection.getTypeArguments().get(0) instanceof DeclaredType source) ||
+        !(projection.getTypeArguments().get(1) instanceof DeclaredType target)
+      ) {
+        error(blueprint, "@TelescopeMapper requires concrete TelescopeProjection<S, T> types");
+        return;
+      }
+      if (explicitFrom != null && (!same(source, explicitFrom) || !same(target, explicitTo))) {
+        error(blueprint, "@TelescopeMapper from/to must match TelescopeProjection<S, T>");
+        return;
+      }
+      from = source;
+      to = target;
+    } else {
+      if (explicitFrom == null) {
+        error(blueprint, "@TelescopeMapper requires from/to or TelescopeProjection<S, T>");
+        return;
+      }
+      from = explicitFrom;
+      to = explicitTo;
+    }
     final var methods = abstractMethods(blueprint);
+    final var mappingMethods = methods
+      .stream()
+      .filter(m -> m.getSimpleName().contentEquals("map"))
+      .toList();
+    final var additionMethods = methods
+      .stream()
+      .filter(m -> m.getSimpleName().contentEquals("addTransformer"))
+      .toList();
     if (
-      methods.size() != 1 ||
-      methods.getFirst().getParameters().size() != 1 ||
-      !same(methods.getFirst().getParameters().getFirst().asType(), from) ||
-      !same(methods.getFirst().getReturnType(), to)
+      mappingMethods.size() != 1 ||
+      methods.size() != 1 + (projection == null ? 0 : 1) ||
+      additionMethods.size() != (projection == null ? 0 : 1) ||
+      !mappingMethods.getFirst().getTypeParameters().isEmpty() ||
+      signature(blueprint, mappingMethods.getFirst()).getParameterTypes().size() != 1 ||
+      !same(signature(blueprint, mappingMethods.getFirst()).getParameterTypes().getFirst(), from) ||
+      !same(signature(blueprint, mappingMethods.getFirst()).getReturnType(), to)
     ) {
       error(blueprint, "@TelescopeMapper requires one method accepting " + from + " and returning " + to);
       return;
     }
+    final var declaredTransformers = transformerTypes(config, blueprint, from);
+    if (declaredTransformers == null) return;
     final var source = (TypeElement) from.asElement();
-    final var bridgeClass =
-      processingEnv.getElementUtils().getPackageOf(source).getQualifiedName() + "." + source.getSimpleName() + "Bridge";
+    final var sourcePackage = processingEnv.getElementUtils().getPackageOf(source).getQualifiedName().toString();
+    final var bridgeName = source.getSimpleName() + "Bridge";
+    final var bridgeClass = sourcePackage.isEmpty() ? bridgeName : sourcePackage + "." + bridgeName;
     final var bridge = annotation(source, BRIDGE);
     final var bridgeTarget = bridge == null ? null : declaredType(bridge, "value");
     final var compiledBridge = processingEnv.getElementUtils().getTypeElement(bridgeClass);
@@ -89,87 +138,218 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       error(blueprint, "@TelescopeMapper requires a generated @Bridge for " + from + " -> " + to);
       return;
     }
-    final var method = methods.getFirst();
-    emit(blueprint, out -> {
-      out.println("  @Override public " + to + " " + method.getSimpleName() + "(final " + from + " input) {");
-      out.println("    return " + bridgeClass + ".forward(input);");
+    final var method = mappingMethods.getFirst();
+    final var model = simple(from);
+    final var focus = "TelescopeTransformation<" + model + ", ?>";
+    final var refs = new ArrayList<String>();
+    refs.add(bridgeClass);
+    if (projection != null || !declaredTransformers.isEmpty()) {
+      refs.add("io.github.eschizoid.telescope.spring.TelescopeTransformation");
+      refs.add("java.util.List");
+    }
+    if (projection != null) {
+      refs.add(PROJECTION);
+      refs.add("java.util.ArrayList");
+      refs.add("java.util.Objects");
+    }
+    final var allTypes = new ArrayList<TypeMirror>(List.of(from, to));
+    allTypes.addAll(declaredTransformers);
+    emit(blueprint, config, allTypes, refs, out -> {
+      if (projection != null) out.println("  private volatile List<" + focus + "> transformers = List.of();");
+      else if (!declaredTransformers.isEmpty()) out.println("  private final List<" + focus + "> transformers;");
+      if (!declaredTransformers.isEmpty()) {
+        out.print("  public " + blueprint.getSimpleName() + "Impl(");
+        for (var i = 0; i < declaredTransformers.size(); i++) {
+          if (i != 0) out.print(", ");
+          out.print("final " + simple(declaredTransformers.get(i)) + " transformer" + i);
+        }
+        out.println(") {");
+        out.print("    this.transformers = List.of(");
+        for (var i = 0; i < declaredTransformers.size(); i++) {
+          if (i != 0) out.print(", ");
+          out.print("transformer" + i);
+        }
+        out.println(");");
+        out.println("  }");
+      }
+      out.println("  @Override public " + simple(to) + " " + method.getSimpleName() + "(final " + model + " input) {");
+      if (projection == null && declaredTransformers.isEmpty()) {
+        out.println("    return " + bridgeName + ".forward(input);");
+      } else {
+        out.println("    if (input == null) return " + bridgeName + ".forward(null);");
+        out.println("    final List<" + focus + "> current = transformers;");
+        out.println("    if (current.isEmpty()) return " + bridgeName + ".forward(input);");
+        out.println("    " + model + " value = input;");
+        out.println("    for (final var transformer : current) value = transformer.apply(value);");
+        out.println("    return " + bridgeName + ".forward(value);");
+      }
       out.println("  }");
+      if (projection != null) {
+        out.println(
+          "  @Override public synchronized TelescopeProjection<" +
+            model +
+            ", " +
+            simple(to) +
+            "> addTransformer(final " +
+            focus +
+            " transformer) {"
+        );
+        out.println("    Objects.requireNonNull(transformer, \"transformer must not be null\");");
+        out.println("    final var next = new ArrayList<>(transformers);");
+        out.println("    next.add(transformer);");
+        out.println("    transformers = List.copyOf(next);");
+        out.println("    return this;");
+        out.println("  }");
+      }
     });
+  }
+
+  private DeclaredType projectionType(final TypeMirror type) {
+    if (!(type instanceof DeclaredType declared)) return null;
+    if (((TypeElement) declared.asElement()).getQualifiedName().contentEquals(PROJECTION)) return declared;
+    for (final var parent : processingEnv.getTypeUtils().directSupertypes(type)) {
+      final var found = projectionType(parent);
+      if (found != null) return found;
+    }
+    return null;
+  }
+
+  private List<DeclaredType> transformerTypes(
+    final AnnotationMirror config,
+    final TypeElement blueprint,
+    final TypeMirror from
+  ) {
+    final var raw = value(config, "transformers");
+    if (raw == null) return List.of();
+    if (!(raw instanceof List<?> entries)) {
+      error(blueprint, "@TelescopeMapper transformers must be class literals");
+      return null;
+    }
+    final var result = new ArrayList<DeclaredType>();
+    for (final var entry : entries) {
+      final var target = entry instanceof AnnotationValue av ? av.getValue() : null;
+      if (!(target instanceof DeclaredType declared)) {
+        error(blueprint, "@TelescopeMapper transformers must be class literals");
+        return null;
+      }
+      final var transformation = transformationType(declared);
+      if (
+        transformation == null ||
+        transformation.getTypeArguments().size() != 2 ||
+        !same(transformation.getTypeArguments().get(0), from)
+      ) {
+        error(blueprint, "@TelescopeMapper transformer " + declared + " must focus on " + from);
+        return null;
+      }
+      result.add(declared);
+    }
+    return result;
   }
 
   private void generatePath(final Element element) {
     final var blueprint = interfaceType(element, "@TelescopeTransform");
     if (blueprint == null) return;
+    if (!blueprint.getSimpleName().toString().endsWith("Transformer")) {
+      error(blueprint, "@TelescopeTransform interface name must end with Transformer");
+      return;
+    }
     final var config = annotation(blueprint, TRANSFORM);
-    if (!abstractMethods(blueprint).isEmpty()) {
+    final var declared = transformationType(blueprint.asType());
+    if (declared == null || declared.getTypeArguments().size() != 2) {
+      error(blueprint, "@TelescopeTransform must extend TelescopeTransformation<S, A> with concrete types");
+      return;
+    }
+    final var from = declared.getTypeArguments().get(0);
+    final var to = declared.getTypeArguments().get(1);
+    final var pathMethod = ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(blueprint))
+      .stream()
+      .filter(m -> m.getSimpleName().contentEquals("path") && m.getParameters().isEmpty())
+      .findFirst()
+      .orElse(null);
+    if (pathMethod == null || !pathMethod.getModifiers().contains(Modifier.DEFAULT)) {
+      error(blueprint, "@TelescopeTransform requires a default path()");
+      return;
+    }
+    final var transformMethod = ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(blueprint))
+      .stream()
+      .filter(m -> m.getSimpleName().contentEquals("transform") && m.getParameters().isEmpty())
+      .findFirst()
+      .orElse(null);
+    if (transformMethod == null || !transformMethod.getModifiers().contains(Modifier.DEFAULT)) {
+      error(blueprint, "@TelescopeTransform requires a default transform() returning Transformation<A>");
+      return;
+    }
+    final var types = processingEnv.getTypeUtils();
+    final var expectedPath = types.getDeclaredType(
+      processingEnv.getElementUtils().getTypeElement("io.github.eschizoid.telescope.Telescope"),
+      from,
+      to
+    );
+    final var expectedTransform = types.getDeclaredType(
+      processingEnv.getElementUtils().getTypeElement("io.github.eschizoid.telescope.spring.Transformation"),
+      to
+    );
+    if (
+      !same(signature(blueprint, pathMethod).getReturnType(), expectedPath) ||
+      !same(signature(blueprint, transformMethod).getReturnType(), expectedTransform)
+    ) {
       error(
         blueprint,
-        "@TelescopeTransform interface must declare no abstract methods; TelescopePath supplies the API"
+        "@TelescopeTransform requires typed Telescope<S, A> path() and Transformation<A> transform() results"
       );
       return;
     }
-    final var from = declaredType(config, "from");
-    final var to = declaredType(config, "to");
-    final var rawPath = stringValue(config, "path");
-    if (from == null || to == null || rawPath == null || rawPath.isBlank()) {
-      error(blueprint, "@TelescopeTransform requires from, to, and a nonempty path");
+    if (!abstractMethods(blueprint).isEmpty()) {
+      error(blueprint, "@TelescopeTransform requires no other abstract methods");
       return;
     }
-    final var pathInterface = processingEnv.getElementUtils().getTypeElement(PATH);
-    if (
-      pathInterface == null ||
-      blueprint.getInterfaces().size() != 1 ||
-      !(blueprint.getInterfaces().getFirst() instanceof DeclaredType declared) ||
-      !processingEnv
-        .getTypeUtils()
-        .isSameType(
-          processingEnv.getTypeUtils().erasure(declared),
-          processingEnv.getTypeUtils().erasure(pathInterface.asType())
-        ) ||
-      declared.getTypeArguments().size() != 2 ||
-      !same(declared.getTypeArguments().get(0), from) ||
-      !same(declared.getTypeArguments().get(1), to)
-    ) {
-      error(blueprint, "@TelescopeTransform must extend TelescopePath<" + from + ", " + to + ">");
-      return;
-    }
-    final var hops = new ArrayList<String>();
-    TypeMirror current = from;
-    for (final var segment : rawPath.split("\\.", -1)) {
-      if (
-        !(current instanceof DeclaredType dt) ||
-        !(dt.asElement() instanceof TypeElement record) ||
-        record.getKind() != ElementKind.RECORD
-      ) {
-        error(blueprint, "@TelescopeTransform path currently supports record fields only: " + rawPath);
-        return;
+    emit(
+      blueprint,
+      config,
+      List.of(from, to),
+      List.of(
+        "io.github.eschizoid.telescope.Telescope",
+        "io.github.eschizoid.telescope.spring.Transformation",
+        "java.util.Objects"
+      ),
+      out -> {
+        final var pathType = "Telescope<" + simple(from) + ", " + simple(to) + ">";
+        out.println("  private final " + pathType + " path =");
+        out.println(
+          "    Objects.requireNonNull(" + blueprint.getSimpleName() + ".super.path(), \"path() must not return null\");"
+        );
+        out.println("  @Override public " + pathType + " path() {");
+        out.println("    return path;");
+        out.println("  }");
+        final var transformationType = "Transformation<" + simple(to) + ">";
+        out.println("  private final " + transformationType + " transformation =");
+        out.println(
+          "    Objects.requireNonNull(" +
+            blueprint.getSimpleName() +
+            ".super.transform(), \"transform() must not return null\");"
+        );
+        out.println("  @Override public " + transformationType + " transform() {");
+        out.println("    return transformation;");
+        out.println("  }");
+        out.println("  @Override public " + simple(from) + " apply(final " + simple(from) + " input) {");
+        out.println("    return path.update(input, transformation);");
+        out.println("  }");
       }
-      final var component = record
-        .getRecordComponents()
-        .stream()
-        .filter(c -> c.getSimpleName().contentEquals(segment))
-        .findFirst()
-        .orElse(null);
-      if (component == null) {
-        error(blueprint, "@TelescopeTransform path segment '" + segment + "' is not a field of " + record);
-        return;
-      }
-      hops.add(record.getQualifiedName() + "::" + segment);
-      current = component.asType();
+    );
+  }
+
+  private DeclaredType transformationType(final TypeMirror type) {
+    if (!(type instanceof DeclaredType declared)) return null;
+    if (((TypeElement) declared.asElement()).getQualifiedName().contentEquals(PATH)) return declared;
+    for (final var parent : processingEnv.getTypeUtils().directSupertypes(type)) {
+      final var found = transformationType(parent);
+      if (found != null) return found;
     }
-    if (!sameBoxed(current, to)) {
-      error(blueprint, "@TelescopeTransform path ends at " + current + ", expected " + to);
-      return;
-    }
-    emit(blueprint, out -> {
-      out.println("  private final io.github.eschizoid.telescope.Telescope<" + from + ", " + to + "> path =");
-      out.print("    io.github.eschizoid.telescope.Telescope.of(" + from + ".class)");
-      for (final var hop : hops) out.print(".field(" + hop + ")");
-      out.println(";");
-      out.println("  @Override public io.github.eschizoid.telescope.Telescope<" + from + ", " + to + "> path() {");
-      out.println("    return path;");
-      out.println("  }");
-    });
+    return null;
+  }
+
+  private ExecutableType signature(final TypeElement owner, final ExecutableElement method) {
+    return (ExecutableType) processingEnv.getTypeUtils().asMemberOf((DeclaredType) owner.asType(), method);
   }
 
   private TypeElement interfaceType(final Element element, final String annotation) {
@@ -181,15 +361,19 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       error(element, annotation + " requires a non-generic interface");
       return null;
     }
-    if (type.getNestingKind() != javax.lang.model.element.NestingKind.TOP_LEVEL) {
+    if (type.getNestingKind() != NestingKind.TOP_LEVEL) {
       error(element, annotation + " requires a top-level interface");
+      return null;
+    }
+    if (type.getModifiers().contains(Modifier.SEALED)) {
+      error(element, annotation + " requires a non-sealed interface");
       return null;
     }
     return type;
   }
 
   private List<ExecutableElement> abstractMethods(final TypeElement type) {
-    return ElementFilter.methodsIn(type.getEnclosedElements())
+    return ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(type))
       .stream()
       .filter(m -> m.getModifiers().contains(Modifier.ABSTRACT))
       .toList();
@@ -197,13 +381,6 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
 
   private boolean same(final TypeMirror left, final TypeMirror right) {
     return processingEnv.getTypeUtils().isSameType(left, right);
-  }
-
-  private boolean sameBoxed(final TypeMirror left, final TypeMirror right) {
-    final var types = processingEnv.getTypeUtils();
-    final var a = left instanceof PrimitiveType p ? types.boxedClass(p).asType() : left;
-    final var b = right instanceof PrimitiveType p ? types.boxedClass(p).asType() : right;
-    return types.isSameType(a, b);
   }
 
   private static AnnotationMirror annotation(final Element element, final String name) {
@@ -224,21 +401,84 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     return value instanceof DeclaredType dt ? dt : null;
   }
 
-  private static String stringValue(final AnnotationMirror mirror, final String key) {
-    final var value = value(mirror, key);
-    return value instanceof String s ? s : null;
+  private static String simple(final TypeMirror type) {
+    if (type instanceof DeclaredType declared) {
+      final var name =
+        declared.getEnclosingType() instanceof DeclaredType enclosing &&
+        !declared.asElement().getModifiers().contains(Modifier.STATIC)
+          ? simple(enclosing) + "." + declared.asElement().getSimpleName()
+          : declared.asElement().getSimpleName().toString();
+      return declared.getTypeArguments().isEmpty()
+        ? name
+        : name +
+          "<" +
+          declared.getTypeArguments().stream().map(TelescopeMapperProcessor::simple).collect(Collectors.joining(", ")) +
+          ">";
+    }
+    if (type instanceof ArrayType array) return simple(array.getComponentType()) + "[]";
+    if (type instanceof WildcardType wildcard) {
+      if (wildcard.getExtendsBound() != null) return "? extends " + simple(wildcard.getExtendsBound());
+      if (wildcard.getSuperBound() != null) return "? super " + simple(wildcard.getSuperBound());
+      return "?";
+    }
+    return type.toString();
   }
 
-  private void emit(final TypeElement blueprint, final java.util.function.Consumer<PrintWriter> body) {
+  private static void collectImports(final TypeMirror type, final Set<String> imports) {
+    if (type instanceof DeclaredType declared) {
+      if (
+        declared.getEnclosingType() instanceof DeclaredType enclosing &&
+        !declared.asElement().getModifiers().contains(Modifier.STATIC)
+      ) collectImports(enclosing, imports);
+      else imports.add(((TypeElement) declared.asElement()).getQualifiedName().toString());
+      for (final var argument : declared.getTypeArguments()) collectImports(argument, imports);
+    } else if (type instanceof ArrayType array) collectImports(array.getComponentType(), imports);
+    else if (type instanceof WildcardType wildcard) {
+      if (wildcard.getExtendsBound() != null) collectImports(wildcard.getExtendsBound(), imports);
+      if (wildcard.getSuperBound() != null) collectImports(wildcard.getSuperBound(), imports);
+    }
+  }
+
+  private void emit(
+    final TypeElement blueprint,
+    final AnnotationMirror config,
+    final List<? extends TypeMirror> types,
+    final List<String> references,
+    final Consumer<PrintWriter> body
+  ) {
     final var pkg = processingEnv.getElementUtils().getPackageOf(blueprint).getQualifiedName().toString();
     final var name = blueprint.getSimpleName() + "Impl";
     final var qualified = pkg.isEmpty() ? name : pkg + "." + name;
+    final var imports = new TreeSet<String>();
+    imports.add("org.springframework.stereotype.Component");
+    imports.addAll(references);
+    for (final var type : types) collectImports(type, imports);
+    final var names = new HashSet<String>();
+    names.add(blueprint.getSimpleName().toString());
+    names.add(name);
+    for (final var imported : imports) {
+      final var simple = imported.substring(imported.lastIndexOf('.') + 1);
+      if (!names.add(simple)) {
+        error(blueprint, "Generated implementation has conflicting simple type name: " + simple);
+        return;
+      }
+    }
     try {
       final var file = processingEnv.getFiler().createSourceFile(qualified, blueprint);
       try (final var out = new PrintWriter(file.openWriter())) {
         if (!pkg.isEmpty()) out.println("package " + pkg + ";");
-        out.println("@org.springframework.stereotype.Component");
-        out.println("public final class " + name + " implements " + blueprint.getQualifiedName() + " {");
+        for (final var imported : imports) if (imported.contains(".")) out.println("import " + imported + ";");
+        final var beanName = processingEnv
+          .getElementUtils()
+          .getElementValuesWithDefaults(config)
+          .entrySet()
+          .stream()
+          .filter(entry -> entry.getKey().getSimpleName().contentEquals("value"))
+          .map(entry -> entry.getValue().toString())
+          .findFirst()
+          .orElse("\"\"");
+        out.println("@Component(" + beanName + ")");
+        out.println("public final class " + name + " implements " + blueprint.getSimpleName() + " {");
         body.accept(out);
         out.println("}");
       }
