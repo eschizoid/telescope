@@ -2,7 +2,7 @@
 
 ## Injectable mappers and transformations
 
-`@TelescopeMapper` exposes an existing generated `@Bridge` as a Spring bean. `@TelescopeTransform` exposes a reusable
+`@TelescopeMapper` exposes an existing generated `@Bridge` as a Spring bean. `@TelescopeTransformer` exposes a reusable
 transformation over a typed Telescope path. A transformation declares both the default for a null focused value and the
 operation applied to a non-null value:
 
@@ -14,7 +14,7 @@ public record UserDto(String name, Address address) {}
 @Bridge(value = UserDto.class, defaults = @Default(field = "name", value = "(unnamed)"))
 public record User(String name, Address address) {}
 
-@TelescopeTransform("cityNormalizer")
+@TelescopeTransformer("cityNormalizer")
 public interface UserCityTransformer extends TelescopeTransformation<User, String> {
   @Override
   default Telescope<User, String> path() {
@@ -27,7 +27,7 @@ public interface UserCityTransformer extends TelescopeTransformation<User, Strin
   }
 }
 
-@TelescopeTransform
+@TelescopeTransformer
 public interface UserNameTransformer extends TelescopeTransformation<User, String> {
   @Override
   default Telescope<User, String> path() {
@@ -99,7 +99,7 @@ A path can traverse several values. `apply` transforms every focus, in traversal
 ```java
 record Directory(List<User> users) {}
 
-@TelescopeTransform
+@TelescopeTransformer
 interface NormalizeNamesTransformer extends TelescopeTransformation<Directory, String> {
   default Telescope<Directory, String> path() {
     return Telescope.of(Directory.class).each(Directory::users).field(User::name);
@@ -164,7 +164,7 @@ they show up in the registry, which resolves them by `(sourceClass, targetClass)
   Polymorphic dispatch: generic services receive `Object` and convert via
   `registry.get(src.getClass(), Target.class).forward(src)` without enumerating type pairs.
 - **`TelescopeProperties`** — `@ConfigurationProperties("telescope")` for the `telescope.registry.fail-fast` toggle.
-- **`@TelescopeMapper` / `@TelescopeTransform`** — Spring interface annotations for a bridge-backed mapper or a cached
+- **`@TelescopeMapper` / `@TelescopeTransformer`** — Spring interface annotations for a bridge-backed mapper or a cached
   transformation. They require `telescope-codegen` on the annotation-processor path.
 
 ## Install

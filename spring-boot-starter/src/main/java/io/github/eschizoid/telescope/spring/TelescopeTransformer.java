@@ -14,7 +14,7 @@ import java.lang.annotation.Target;
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)
-public @interface TelescopeTransform {
+public @interface TelescopeTransformer {
   /** Optional Spring bean name, usable with {@code @Qualifier}. */
   String value() default "";
 }

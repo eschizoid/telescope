@@ -426,14 +426,14 @@ record CustomerDto(String email) {}
 @Bridge(CustomerDto.class)
 record Customer(String email) {}
 
-@TelescopeTransform
+@TelescopeTransformer
 interface CustomerEmailTransformer extends TelescopeTransformation<Customer, String> {
   default Telescope<Customer, String> path() {
     return Telescope.of(Customer.class).field(Customer::email);
   }
 
   default Transformation<String> transform() {
-    return new Transformation<>("unknown@example.com", email -> email.strip().toLowerCase(Locale.ROOT));
+    return new Transformation<>("unknown@example.com", (email) -> email.strip().toLowerCase(Locale.ROOT));
   }
 }
 
@@ -442,6 +442,7 @@ interface CustomerProjection extends TelescopeProjection<Customer, CustomerDto> 
 
 @Service
 class CustomerService {
+
   private final CustomerProjection projection;
 
   CustomerService(CustomerProjection projection) {

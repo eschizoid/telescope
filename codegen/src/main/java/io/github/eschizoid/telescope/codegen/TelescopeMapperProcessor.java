@@ -30,13 +30,15 @@ import javax.lang.model.util.ElementFilter;
 
 /** Generates Spring components for bridge-backed mappers and reusable record paths. */
 @SupportedAnnotationTypes(
-  { "io.github.eschizoid.telescope.spring.TelescopeMapper", "io.github.eschizoid.telescope.spring.TelescopeTransform" }
+  {
+    "io.github.eschizoid.telescope.spring.TelescopeMapper", "io.github.eschizoid.telescope.spring.TelescopeTransformer",
+  }
 )
 @SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
 
   private static final String MAPPER = "io.github.eschizoid.telescope.spring.TelescopeMapper";
-  private static final String TRANSFORM = "io.github.eschizoid.telescope.spring.TelescopeTransform";
+  private static final String TRANSFORM = "io.github.eschizoid.telescope.spring.TelescopeTransformer";
   private static final String BRIDGE = "io.github.eschizoid.telescope.annotations.Bridge";
   private static final String PATH = "io.github.eschizoid.telescope.spring.TelescopeTransformation";
   private static final String PROJECTION = "io.github.eschizoid.telescope.spring.TelescopeProjection";
@@ -247,16 +249,16 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   }
 
   private void generatePath(final Element element) {
-    final var blueprint = interfaceType(element, "@TelescopeTransform");
+    final var blueprint = interfaceType(element, "@TelescopeTransformer");
     if (blueprint == null) return;
     if (!blueprint.getSimpleName().toString().endsWith("Transformer")) {
-      error(blueprint, "@TelescopeTransform interface name must end with Transformer");
+      error(blueprint, "@TelescopeTransformer interface name must end with Transformer");
       return;
     }
     final var config = annotation(blueprint, TRANSFORM);
     final var declared = transformationType(blueprint.asType());
     if (declared == null || declared.getTypeArguments().size() != 2) {
-      error(blueprint, "@TelescopeTransform must extend TelescopeTransformation<S, A> with concrete types");
+      error(blueprint, "@TelescopeTransformer must extend TelescopeTransformation<S, A> with concrete types");
       return;
     }
     final var from = declared.getTypeArguments().get(0);
@@ -267,7 +269,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       .findFirst()
       .orElse(null);
     if (pathMethod == null || !pathMethod.getModifiers().contains(Modifier.DEFAULT)) {
-      error(blueprint, "@TelescopeTransform requires a default path()");
+      error(blueprint, "@TelescopeTransformer requires a default path()");
       return;
     }
     final var transformMethod = ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(blueprint))
@@ -276,7 +278,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       .findFirst()
       .orElse(null);
     if (transformMethod == null || !transformMethod.getModifiers().contains(Modifier.DEFAULT)) {
-      error(blueprint, "@TelescopeTransform requires a default transform() returning Transformation<A>");
+      error(blueprint, "@TelescopeTransformer requires a default transform() returning Transformation<A>");
       return;
     }
     final var types = processingEnv.getTypeUtils();
@@ -295,12 +297,12 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     ) {
       error(
         blueprint,
-        "@TelescopeTransform requires typed Telescope<S, A> path() and Transformation<A> transform() results"
+        "@TelescopeTransformer requires typed Telescope<S, A> path() and Transformation<A> transform() results"
       );
       return;
     }
     if (!abstractMethods(blueprint).isEmpty()) {
-      error(blueprint, "@TelescopeTransform requires no other abstract methods");
+      error(blueprint, "@TelescopeTransformer requires no other abstract methods");
       return;
     }
     emit(

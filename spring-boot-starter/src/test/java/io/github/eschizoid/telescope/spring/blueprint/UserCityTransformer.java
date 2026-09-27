@@ -1,13 +1,13 @@
 package io.github.eschizoid.telescope.spring.blueprint;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.spring.TelescopeTransform;
 import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+import io.github.eschizoid.telescope.spring.TelescopeTransformer;
 import io.github.eschizoid.telescope.spring.Transformation;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
-@TelescopeTransform("userCity")
+@TelescopeTransformer("userCity")
 public interface UserCityTransformer extends TelescopeTransformation<User, String> {
   AtomicInteger BUILDS = new AtomicInteger();
   AtomicInteger TRANSFORM_BUILDS = new AtomicInteger();

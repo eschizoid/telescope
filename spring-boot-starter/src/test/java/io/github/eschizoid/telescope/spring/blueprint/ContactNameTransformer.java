@@ -1,12 +1,12 @@
 package io.github.eschizoid.telescope.spring.blueprint;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.spring.TelescopeTransform;
 import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+import io.github.eschizoid.telescope.spring.TelescopeTransformer;
 import io.github.eschizoid.telescope.spring.Transformation;
 import java.util.Locale;
 
-@TelescopeTransform
+@TelescopeTransformer
 public interface ContactNameTransformer extends TelescopeTransformation<ContactBean, String> {
   default Telescope<ContactBean, String> path() {
     return Telescope.ofBean(ContactBean.class).field(ContactBean::getName);

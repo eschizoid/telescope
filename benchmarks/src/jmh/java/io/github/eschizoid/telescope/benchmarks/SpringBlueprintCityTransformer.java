@@ -1,12 +1,12 @@
 package io.github.eschizoid.telescope.benchmarks;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.spring.TelescopeTransform;
 import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+import io.github.eschizoid.telescope.spring.TelescopeTransformer;
 import io.github.eschizoid.telescope.spring.Transformation;
 import java.util.Locale;
 
-@TelescopeTransform
+@TelescopeTransformer
 public interface SpringBlueprintCityTransformer extends TelescopeTransformation<SpringBlueprintSource, String> {
   @Override
   default Telescope<SpringBlueprintSource, String> path() {

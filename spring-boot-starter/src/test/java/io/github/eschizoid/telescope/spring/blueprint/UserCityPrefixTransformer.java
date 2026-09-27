@@ -1,11 +1,11 @@
 package io.github.eschizoid.telescope.spring.blueprint;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.spring.TelescopeTransform;
 import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+import io.github.eschizoid.telescope.spring.TelescopeTransformer;
 import io.github.eschizoid.telescope.spring.Transformation;
 
-@TelescopeTransform
+@TelescopeTransformer
 public interface UserCityPrefixTransformer extends TelescopeTransformation<User, String> {
   @Override
   default Telescope<User, String> path() {

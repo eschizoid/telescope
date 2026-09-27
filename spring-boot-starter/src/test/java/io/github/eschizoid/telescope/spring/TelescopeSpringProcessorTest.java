@@ -21,9 +21,9 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         record Person(String name) {}
-        @TelescopeTransform
+        @TelescopeTransformer
         interface BadPathTransformer extends TelescopeTransformation<Person, String> {}
         """
       )
@@ -43,11 +43,11 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.Telescope;
         record Contact(String email) {}
         record Person(Contact contact) {}
-        @TelescopeTransform
+        @TelescopeTransformer
         interface BadNestedPathTransformer extends TelescopeTransformation<Person, String> {
           default Transformation<String> transform() { return new Transformation<>(null, value -> value); }
           default Telescope<Person, String> path() {
@@ -71,10 +71,10 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.Telescope;
         record Person(String name) {}
-        @TelescopeTransform
+        @TelescopeTransformer
         interface WrongTypePathTransformer extends TelescopeTransformation<Person, Integer> {
           default Transformation<Integer> transform() { return new Transformation<>(0, value -> value); }
           default Telescope<Person, Integer> path() {
@@ -97,10 +97,10 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.Telescope;
         record Person(String name) {}
-        @TelescopeTransform
+        @TelescopeTransformer
         interface NonRecordPathTransformer {
           default Telescope<Person, String> path() {
             return Telescope.of(Person.class).field(Person::name);
@@ -253,7 +253,7 @@ class TelescopeSpringProcessorTest {
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         record Person(List<String> names) {}
         interface NamedPath<A> extends TelescopeTransformation<Person, A> {}
         interface NamesBase extends NamedPath<List<String>> {
@@ -263,7 +263,7 @@ class TelescopeSpringProcessorTest {
           }
         }
         interface Marker {}
-        @TelescopeTransform("names")
+        @TelescopeTransformer("names")
         interface NamesTransformer extends NamesBase, Marker {}
         """
       )
@@ -283,8 +283,8 @@ class TelescopeSpringProcessorTest {
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
-        @TelescopeTransform interface RawPathTransformer extends TelescopeTransformation {
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
+        @TelescopeTransformer interface RawPathTransformer extends TelescopeTransformation {
           default Telescope path() { return null; }
         }
         """
@@ -306,9 +306,9 @@ class TelescopeSpringProcessorTest {
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         interface Extra { String other(); }
-        @TelescopeTransform interface ExtraPathTransformer extends TelescopeTransformation<String, String>, Extra {
+        @TelescopeTransformer interface ExtraPathTransformer extends TelescopeTransformation<String, String>, Extra {
           default Transformation<String> transform() { return new Transformation<>(null, value -> value); }
           default Telescope<String, String> path() { return Telescope.of(String.class); }
         }
@@ -333,8 +333,8 @@ class TelescopeSpringProcessorTest {
           "demo.InvalidTransformer",
           """
             package demo;
-            import io.github.eschizoid.telescope.spring.TelescopeTransform;
-            @TelescopeTransform
+            import io.github.eschizoid.telescope.spring.TelescopeTransformer;
+            @TelescopeTransformer
             """ +
             declaration
         )
@@ -354,9 +354,9 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.Telescope;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        @TelescopeTransform interface MissingTransformer extends TelescopeTransformation<String, String> {
+        @TelescopeTransformer interface MissingTransformer extends TelescopeTransformation<String, String> {
           default Telescope<String, String> path() { return Telescope.of(String.class); }
         }
         """
@@ -378,9 +378,9 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        @TelescopeTransform interface RawTransformer extends TelescopeTransformation<String, String> {
+        @TelescopeTransformer interface RawTransformer extends TelescopeTransformation<String, String> {
           default Telescope<String, String> path() { return Telescope.of(String.class); }
           default Transformation transform() { return new Transformation<>(null, value -> value); }
         }
@@ -404,9 +404,9 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        @TelescopeTransform interface RawPathReturnTransformer extends TelescopeTransformation<String, String> {
+        @TelescopeTransformer interface RawPathReturnTransformer extends TelescopeTransformation<String, String> {
           default Telescope path() { return Telescope.of(String.class); }
           default Transformation<String> transform() { return new Transformation<>(null, value -> value); }
         }
@@ -430,9 +430,9 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        @TelescopeTransform interface WrongTransformTypeTransformer extends TelescopeTransformation<String, String> {
+        @TelescopeTransformer interface WrongTransformTypeTransformer extends TelescopeTransformation<String, String> {
           default Telescope<String, String> path() { return Telescope.of(String.class); }
           default Transformation<Integer> transform() { return new Transformation<>(0, value -> value + 1); }
         }
@@ -453,12 +453,12 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
         interface Base<S, A> extends TelescopeTransformation<S, A> {
           default Transformation<A> transform() { return new Transformation<>(null, value -> value); }
         }
-        @TelescopeTransform interface InheritedTransformer extends Base<String, String> {
+        @TelescopeTransformer interface InheritedTransformer extends Base<String, String> {
           default Telescope<String, String> path() { return Telescope.of(String.class); }
         }
         """
@@ -478,9 +478,9 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        @TelescopeTransform("normalizer") interface NamedTransformer extends TelescopeTransformation<String, String> {
+        @TelescopeTransformer("normalizer") interface NamedTransformer extends TelescopeTransformation<String, String> {
           default Telescope<String, String> path() { return Telescope.of(String.class); }
           default Transformation<String> transform() { return new Transformation<>("", String::toLowerCase); }
         }
@@ -507,9 +507,9 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.spring.Transformation;
-        import io.github.eschizoid.telescope.spring.TelescopeTransform;
+        import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        @TelescopeTransform interface CityNormalizer extends TelescopeTransformation<String, String> {
+        @TelescopeTransformer interface CityNormalizer extends TelescopeTransformation<String, String> {
           default Telescope<String, String> path() { return Telescope.of(String.class); }
           default Transformation<String> transform() { return new Transformation<>(null, String::toLowerCase); }
         }
