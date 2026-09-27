@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 /**
- * What a declared container type is rebuilt as, and how its constructor is told the source's size.
+ * What a declared container type is rebuilt as, and which of its constructors builds it.
  *
  * <p>The implementation is named rather than handed over as a type, because the two renderers want
  * different things from it — one binds a constructor, the other writes a {@code new} expression —
@@ -35,13 +35,30 @@ public sealed interface Allocation {
      * No argument: the constructor takes none, or its {@code int} means something else entirely.
      */
     NO_ARG,
-    /** {@code new Impl(count)} — an exact element count, as a list or a deque reads it. */
+    /**
+     * {@code new Impl(count)} — the element count, unchanged. A list and a deque take it as their
+     * initial capacity; {@code IdentityHashMap} and {@code ConcurrentHashMap} size for that many
+     * entries internally, so they take the same number and the same text, and dividing it by a load
+     * factor first would over-allocate them.
+     */
     COUNT,
     /** {@code Impl.newImpl(count)} — the JDK factory that sizes a table for that many elements. */
     TABLE_FACTORY,
-    /** {@code new Impl(capacityFor(count))} — the same table sizing where no factory exists. */
+    /**
+     * {@code new Impl(capacity)} — the same table sizing where the JDK ships no factory, so the
+     * caller computes the capacity. The arithmetic is the factories' own: the smallest capacity at
+     * which that many entries fit under a 0.75 load factor, which is {@code (int) Math.ceil(count /
+     * 0.75)}.
+     */
     TABLE_ARITHMETIC,
-    /** {@code new Impl(comparator)} — a container that keeps an order rather than a size. */
+    /**
+     * {@code new Impl(comparator)} — a container that keeps an order rather than a size.
+     *
+     * <p>The comparator is the source <em>instance</em>'s, not one implied by its declared type. A
+     * field written as a plain {@code Map} can hold one ordered by a comparator, so a renderer that
+     * reads the declaration builds a naturally ordered container where the other carries the order
+     * across. The two do differ on this today, which is why the value says which.
+     */
     ORDERING,
   }
 }

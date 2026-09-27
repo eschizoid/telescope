@@ -31,6 +31,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.stream.Collectors;
 
 /**
  * The shared pairing decision rules — one implementation, two consumers. The runtime mapper
@@ -380,7 +381,7 @@ public final class PairingRules<T> {
   /** The families, computed once: the table's own iteration order is not meaningful. */
   private static final Map<String, ContainerView.Kind> DECLARED_TYPES = BY_DECLARED_NAME.entrySet()
     .stream()
-    .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> e.getValue().family()));
+    .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> e.getValue().family()));
 
   /** One row: the family it answers for, and what it answers. */
   private record Entry(ContainerView.Kind family, Allocation allocation) {}

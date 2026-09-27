@@ -5,15 +5,23 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.Allocation.Call;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView.Kind;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Deque;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Set;
 import java.util.SortedMap;
+import java.util.TreeSet;
+import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -36,21 +44,40 @@ class AllocationPolicyTest {
 
   private static Stream<Arguments> rows() {
     return Stream.of(
-      Arguments.of(List.class, Kind.LIST, "java.util.ArrayList"),
-      Arguments.of(ArrayList.class, Kind.LIST, "java.util.ArrayList"),
-      Arguments.of(Deque.class, Kind.LIST, "java.util.ArrayDeque"),
-      Arguments.of(HashSet.class, Kind.SET, "java.util.HashSet"),
-      Arguments.of(SortedMap.class, Kind.MAP_VALUES, "java.util.TreeMap")
+      Arguments.of(List.class, Kind.LIST, "java.util.ArrayList", Call.COUNT),
+      Arguments.of(ArrayList.class, Kind.LIST, "java.util.ArrayList", Call.COUNT),
+      Arguments.of(Deque.class, Kind.LIST, "java.util.ArrayDeque", Call.COUNT),
+      Arguments.of(LinkedList.class, Kind.LIST, "java.util.LinkedList", Call.NO_ARG),
+      // The hash families are the rows worth pinning: a count and a table capacity are different
+      // numbers for the same elements, and the container that results is the same class either
+      // way.
+      Arguments.of(HashSet.class, Kind.SET, "java.util.HashSet", Call.TABLE_FACTORY),
+      Arguments.of(Set.class, Kind.SET, "java.util.LinkedHashSet", Call.TABLE_FACTORY),
+      Arguments.of(HashMap.class, Kind.MAP_VALUES, "java.util.HashMap", Call.TABLE_FACTORY),
+      Arguments.of(WeakHashMap.class, Kind.MAP_VALUES, "java.util.WeakHashMap", Call.TABLE_ARITHMETIC),
+      // Sized for the count by the container itself, so the call is the same text as a list's.
+      Arguments.of(IdentityHashMap.class, Kind.MAP_VALUES, "java.util.IdentityHashMap", Call.COUNT),
+      Arguments.of(ConcurrentHashMap.class, Kind.MAP_VALUES, "java.util.concurrent.ConcurrentHashMap", Call.COUNT),
+      Arguments.of(SortedMap.class, Kind.MAP_VALUES, "java.util.TreeMap", Call.ORDERING),
+      Arguments.of(TreeSet.class, Kind.SET, "java.util.TreeSet", Call.ORDERING)
     );
   }
 
-  @ParameterizedTest(name = "{0} builds {2}")
+  @ParameterizedTest(name = "{0} builds {2} by {3}")
   @MethodSource("rows")
-  @DisplayName("a declared container names the one implementation it is rebuilt as")
-  void declaredTypeDecidesItsImplementation(final Class<?> declared, final Kind kind, final String impl) {
+  @DisplayName("a declared container names the implementation it is rebuilt as and the constructor that" + " builds it")
+  void declaredTypeDecidesImplementationAndCall(
+    final Class<?> declared,
+    final Kind kind,
+    final String impl,
+    final Call call
+  ) {
     final var build = assertInstanceOf(Allocation.Build.class, RULES.allocationFor(declared, kind));
 
     assertEquals(impl, build.implName());
+    // Asserted separately from the implementation, because moving a class to a different
+    // constructor produces the same class at a different size, which nothing downstream can see.
+    assertEquals(call, build.call());
   }
 
   @Test
@@ -70,7 +97,11 @@ class AllocationPolicyTest {
   void enumMapCarriesItsRefusal() {
     final var refuse = assertInstanceOf(Allocation.Refuse.class, RULES.allocationFor(EnumMap.class, Kind.MAP_VALUES));
 
+    // Not the whole sentence, which would teach the next reader to fix a red gate by pasting
+    // prose. What it has to convey: the escape hatch, and the path that does build one.
     assertTrue(refuse.reason().contains("Class<K>"), refuse::reason);
+    assertTrue(refuse.reason().contains("Mapping.via"), refuse::reason);
+    assertTrue(refuse.reason().contains("codegen"), refuse::reason);
   }
 
   @Test
