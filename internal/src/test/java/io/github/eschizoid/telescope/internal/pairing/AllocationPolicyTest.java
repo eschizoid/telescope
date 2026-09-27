@@ -38,7 +38,6 @@ class AllocationPolicyTest {
     return Stream.of(
       Arguments.of(List.class, Kind.LIST, "java.util.ArrayList"),
       Arguments.of(ArrayList.class, Kind.LIST, "java.util.ArrayList"),
-      // A deque's int argument is an element count, unlike the hash families below.
       Arguments.of(Deque.class, Kind.LIST, "java.util.ArrayDeque"),
       Arguments.of(HashSet.class, Kind.SET, "java.util.HashSet"),
       Arguments.of(SortedMap.class, Kind.MAP_VALUES, "java.util.TreeMap")
@@ -67,7 +66,7 @@ class AllocationPolicyTest {
   }
 
   @Test
-  @DisplayName("a type with no constructor to reach carries the sentence to refuse it with")
+  @DisplayName("a type with no constructor a rebuild can call carries the sentence to refuse it with")
   void enumMapCarriesItsRefusal() {
     final var refuse = assertInstanceOf(Allocation.Refuse.class, RULES.allocationFor(EnumMap.class, Kind.MAP_VALUES));
 
@@ -91,9 +90,9 @@ class AllocationPolicyTest {
   @Test
   @DisplayName("a name the table holds for one family is not an answer for another")
   void aNameDoesNotAnswerForTheWrongFamily() {
-    // Before one table served all three, each family held only its own names and a foreign one was
-    // refused while the plan was built. A single table that answers regardless would hand the map
-    // family a list and let the cast fail at the first conversion instead.
+    // An entry answers for one family only. A table that answered regardless would hand the map
+    // family a list, and the cast would fail at the first conversion rather than while the plan was
+    // built, where the type and the escape hatch can still be named.
     assertNull(RULES.allocationFor(List.class, Kind.SET));
     assertNull(RULES.allocationFor(List.class, Kind.MAP_VALUES));
     assertNull(RULES.allocationFor(HashSet.class, Kind.LIST));

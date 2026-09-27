@@ -334,35 +334,35 @@ public final class PairingRules<T> {
    * dead and a rename cannot leave it behind.
    */
   private static final Map<String, Entry> BY_DECLARED_NAME = Map.ofEntries(
-    list(List.class, ArrayList.class),
-    list(ArrayList.class, ArrayList.class),
-    list(LinkedList.class, LinkedList.class),
-    list(Deque.class, ArrayDeque.class),
-    list(Queue.class, ArrayDeque.class),
-    list(Vector.class, Vector.class),
-    list(Stack.class, Stack.class),
+    list(List.class, ArrayList.class, Allocation.Call.COUNT),
+    list(ArrayList.class, ArrayList.class, Allocation.Call.COUNT),
+    list(LinkedList.class, LinkedList.class, Allocation.Call.NO_ARG),
+    list(Deque.class, ArrayDeque.class, Allocation.Call.COUNT),
+    list(Queue.class, ArrayDeque.class, Allocation.Call.COUNT),
+    list(Vector.class, Vector.class, Allocation.Call.COUNT),
+    list(Stack.class, Stack.class, Allocation.Call.NO_ARG),
     // PriorityQueue reads a zero capacity as an error rather than as an empty container, and
     // LinkedBlockingQueue reads its int as a hard bound that would reject every later offer.
-    list(PriorityQueue.class, PriorityQueue.class),
-    list(LinkedBlockingQueue.class, LinkedBlockingQueue.class),
-    set(Set.class, LinkedHashSet.class),
-    set(LinkedHashSet.class, LinkedHashSet.class),
-    set(HashSet.class, HashSet.class),
-    set(TreeSet.class, TreeSet.class),
-    set(SortedSet.class, TreeSet.class),
-    set(NavigableSet.class, TreeSet.class),
-    set(ConcurrentSkipListSet.class, ConcurrentSkipListSet.class),
-    map(Map.class, LinkedHashMap.class),
-    map(LinkedHashMap.class, LinkedHashMap.class),
-    map(HashMap.class, HashMap.class),
-    map(TreeMap.class, TreeMap.class),
-    map(SortedMap.class, TreeMap.class),
-    map(NavigableMap.class, TreeMap.class),
-    map(ConcurrentHashMap.class, ConcurrentHashMap.class),
-    map(ConcurrentMap.class, ConcurrentHashMap.class),
-    map(ConcurrentSkipListMap.class, ConcurrentSkipListMap.class),
-    map(IdentityHashMap.class, IdentityHashMap.class),
-    map(WeakHashMap.class, WeakHashMap.class),
+    list(PriorityQueue.class, PriorityQueue.class, Allocation.Call.NO_ARG),
+    list(LinkedBlockingQueue.class, LinkedBlockingQueue.class, Allocation.Call.NO_ARG),
+    set(Set.class, LinkedHashSet.class, Allocation.Call.TABLE_FACTORY),
+    set(LinkedHashSet.class, LinkedHashSet.class, Allocation.Call.TABLE_FACTORY),
+    set(HashSet.class, HashSet.class, Allocation.Call.TABLE_FACTORY),
+    set(TreeSet.class, TreeSet.class, Allocation.Call.ORDERING),
+    set(SortedSet.class, TreeSet.class, Allocation.Call.ORDERING),
+    set(NavigableSet.class, TreeSet.class, Allocation.Call.ORDERING),
+    set(ConcurrentSkipListSet.class, ConcurrentSkipListSet.class, Allocation.Call.ORDERING),
+    map(Map.class, LinkedHashMap.class, Allocation.Call.TABLE_FACTORY),
+    map(LinkedHashMap.class, LinkedHashMap.class, Allocation.Call.TABLE_FACTORY),
+    map(HashMap.class, HashMap.class, Allocation.Call.TABLE_FACTORY),
+    map(TreeMap.class, TreeMap.class, Allocation.Call.ORDERING),
+    map(SortedMap.class, TreeMap.class, Allocation.Call.ORDERING),
+    map(NavigableMap.class, TreeMap.class, Allocation.Call.ORDERING),
+    map(ConcurrentHashMap.class, ConcurrentHashMap.class, Allocation.Call.COUNT),
+    map(ConcurrentMap.class, ConcurrentHashMap.class, Allocation.Call.COUNT),
+    map(ConcurrentSkipListMap.class, ConcurrentSkipListMap.class, Allocation.Call.ORDERING),
+    map(IdentityHashMap.class, IdentityHashMap.class, Allocation.Call.COUNT),
+    map(WeakHashMap.class, WeakHashMap.class, Allocation.Call.TABLE_ARITHMETIC),
     Map.entry(
       EnumMap.class.getName(),
       new Entry(
@@ -377,27 +377,33 @@ public final class PairingRules<T> {
     )
   );
 
+  /** The families, computed once: the table's own iteration order is not meaningful. */
+  private static final Map<String, ContainerView.Kind> DECLARED_TYPES = BY_DECLARED_NAME.entrySet()
+    .stream()
+    .collect(java.util.stream.Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> e.getValue().family()));
+
   /** One row: the family it answers for, and what it answers. */
   private record Entry(ContainerView.Kind family, Allocation allocation) {}
 
-  private static Map.Entry<String, Entry> list(final Class<?> declared, final Class<?> impl) {
-    return row(ContainerView.Kind.LIST, declared, impl);
+  private static Map.Entry<String, Entry> list(final Class<?> d, final Class<?> i, final Allocation.Call c) {
+    return row(ContainerView.Kind.LIST, d, i, c);
   }
 
-  private static Map.Entry<String, Entry> set(final Class<?> declared, final Class<?> impl) {
-    return row(ContainerView.Kind.SET, declared, impl);
+  private static Map.Entry<String, Entry> set(final Class<?> d, final Class<?> i, final Allocation.Call c) {
+    return row(ContainerView.Kind.SET, d, i, c);
   }
 
-  private static Map.Entry<String, Entry> map(final Class<?> declared, final Class<?> impl) {
-    return row(ContainerView.Kind.MAP_VALUES, declared, impl);
+  private static Map.Entry<String, Entry> map(final Class<?> d, final Class<?> i, final Allocation.Call c) {
+    return row(ContainerView.Kind.MAP_VALUES, d, i, c);
   }
 
   private static Map.Entry<String, Entry> row(
     final ContainerView.Kind family,
     final Class<?> declared,
-    final Class<?> impl
+    final Class<?> impl,
+    final Allocation.Call call
   ) {
-    return Map.entry(declared.getName(), new Entry(family, new Allocation.Build(impl.getName())));
+    return Map.entry(declared.getName(), new Entry(family, new Allocation.Build(impl.getName(), call)));
   }
 
   /**
@@ -416,8 +422,10 @@ public final class PairingRules<T> {
     // the union of the two, so the kind the pair settled on is the only thing that says which.
     if (Collection.class.getName().equals(name)) {
       return switch (kind) {
-        case SET -> new Allocation.Build(LinkedHashSet.class.getName());
-        case LIST, COLLECTION -> new Allocation.Build(ArrayList.class.getName());
+        case SET -> new Allocation.Build(LinkedHashSet.class.getName(), Allocation.Call.TABLE_FACTORY);
+        case LIST -> new Allocation.Build(ArrayList.class.getName(), Allocation.Call.COUNT);
+        // A COLLECTION view is settled to one of the two before anything asks for an allocation,
+        // so answering it here would be answering a question nothing puts.
         default -> null;
       };
     }
@@ -426,16 +434,17 @@ public final class PairingRules<T> {
   }
 
   /**
-   * Every declared type the table answers for, with the family it answers in.
+   * The declared types the table answers for, with the family each answers in.
    *
    * <p>A side that renders these has to render all of them: an entry nothing renders is not a
-   * compile error, it is a container quietly built some other way and sized differently. Exposing
-   * the set is what lets each renderer be checked against the decision rather than against a list
-   * someone kept in step by hand.
+   * compile error, it is a container quietly built some other way. Exposing the set is what lets a
+   * renderer be checked against the decision rather than against a list kept in step by hand.
+   *
+   * <p>{@code Collection} is deliberately absent. It has no entry, because what it is rebuilt as
+   * depends on the kind its pair settled on rather than on the declaration, so it is answered in
+   * {@link #allocationFor} instead.
    */
   public static Map<String, ContainerView.Kind> declaredTypes() {
-    final var out = new LinkedHashMap<String, ContainerView.Kind>();
-    BY_DECLARED_NAME.forEach((name, entry) -> out.put(name, entry.family()));
-    return Map.copyOf(out);
+    return DECLARED_TYPES;
   }
 }

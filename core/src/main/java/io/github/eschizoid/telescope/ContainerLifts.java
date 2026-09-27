@@ -458,7 +458,8 @@ final class ContainerLifts {
 
   // JDK collection classes live in java.base — `Beans.intermediateAllocator` can't bind them
   // via LambdaMetafactory's privateLookupIn (java.base doesn't grant private lookup to app code).
-  // Hard-code the common JDK Collection / Map raws so the standard shapes are allocated by a
+  // The shared table names the common JDK Collection / Map raws so the standard shapes are
+  // allocated by a
   // direct `new`, needing no lookup and no reachability metadata. A declared type the table does
   // not name goes to `probeAllocator`, whose lookup does reach a user-defined subclass via the
   // user's own package, and then to `fallbackAllocatorFor` for the tail.
@@ -483,8 +484,9 @@ final class ContainerLifts {
     throw new IllegalStateException(
       "Deep map: no allocator for List subtype " +
         raw.getName() +
-        ". Add it to listAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
-        "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
+        ". Add it to the shared allocation table and render it here (java.base classes can't" +
+        " bind via LambdaMetafactory's privateLookupIn) or supply an explicit" +
+        " `Mapping.via(...)` row."
     );
   }
 
@@ -505,8 +507,9 @@ final class ContainerLifts {
     throw new IllegalStateException(
       "Deep map: no allocator for Set subtype " +
         raw.getName() +
-        ". Add it to setAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
-        "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
+        ". Add it to the shared allocation table and render it here (java.base classes can't" +
+        " bind via LambdaMetafactory's privateLookupIn) or supply an explicit" +
+        " `Mapping.via(...)` row."
     );
   }
 
@@ -535,8 +538,9 @@ final class ContainerLifts {
     throw new IllegalStateException(
       "Deep map: no allocator for Map subtype " +
         raw.getName() +
-        ". Add it to mapAllocatorFor (java.base classes can't bind via LambdaMetafactory's " +
-        "privateLookupIn) or supply an explicit `Mapping.via(...)` row."
+        ". Add it to the shared allocation table and render it here (java.base classes can't" +
+        " bind via LambdaMetafactory's privateLookupIn) or supply an explicit" +
+        " `Mapping.via(...)` row."
     );
   }
 
@@ -572,50 +576,84 @@ final class ContainerLifts {
    * The allocator the shared table asks for, or null where it names nothing and this file's own
    * fallbacks decide.
    *
-   * <p>Which class is built and what its constructor is told are decided once, in {@code
-   * internal.pairing}, so the generated bridge answers the same way. What is left here is how to
-   * make the call: {@code java.base} constructors cannot be bound through {@code
-   * LambdaMetafactory}, so each one is written out, and a hash container is sized through the
-   * factory that does the load-factor arithmetic rather than by passing the count.
+   * <p>Which class is built, and which of its constructors, are decided in {@code internal.pairing}
+   * where the generated bridge can read the same answer once it is moved across. What is left here
+   * is making the call, because {@code java.base} constructors cannot be bound through {@code
+   * LambdaMetafactory} and each has to be written out.
+   *
+   * <p>The call is dispatched on before the class is, so a decision that names the wrong
+   * constructor reaches a group that does not know the class and yields nothing, rather than
+   * quietly building the right class the wrong way.
    */
   private static Function<Object, Object> specAllocatorFor(final Class<?> raw, final ContainerView.Kind kind) {
-    // The rules speak reflective Types; a raw class handle is one.
     final var decision = RULES.allocationFor(raw, kind);
     if (decision == null) return null;
     if (decision instanceof Allocation.Refuse refuse) {
       throw new IllegalStateException("Deep map: " + refuse.reason());
     }
     final var build = (Allocation.Build) decision;
-    return switch (build.implName()) {
-      case "java.util.ArrayList" -> input -> new ArrayList<>(count(input));
+    return switch (build.call()) {
+      case NO_ARG -> noArg(build.implName());
+      case COUNT -> fromCount(build.implName(), kind);
+      case TABLE_FACTORY -> fromTableFactory(build.implName(), kind);
+      case TABLE_ARITHMETIC -> fromTableArithmetic(build.implName());
+      case ORDERING -> fromOrdering(build.implName(), kind);
+    };
+  }
+
+  private static Function<Object, Object> noArg(final String implName) {
+    return switch (implName) {
       case "java.util.LinkedList" -> ignored -> new LinkedList<>();
-      case "java.util.ArrayDeque" -> input -> new ArrayDeque<>(count(input));
-      case "java.util.Vector" -> input -> new Vector<>(count(input));
       case "java.util.Stack" -> ignored -> new Stack<>();
+      // PriorityQueue reads a zero capacity as an error rather than as an empty container, and
+      // LinkedBlockingQueue reads its int as a hard bound that would reject every later offer.
       case "java.util.PriorityQueue" -> ignored -> new PriorityQueue<>();
       case "java.util.concurrent.LinkedBlockingQueue" -> ignored -> new LinkedBlockingQueue<>();
-      case "java.util.LinkedHashSet" -> input -> LinkedHashSet.newLinkedHashSet(count(input));
-      case "java.util.HashSet" -> input -> HashSet.newHashSet(count(input));
-      case "java.util.TreeSet" -> input -> new TreeSet<>(setComparator(input));
-      case "java.util.concurrent.ConcurrentSkipListSet" -> input -> new ConcurrentSkipListSet<>(setComparator(input));
-      case "java.util.LinkedHashMap" -> input -> LinkedHashMap.newLinkedHashMap(mapCount(input));
-      case "java.util.HashMap" -> input -> HashMap.newHashMap(mapCount(input));
-      case "java.util.TreeMap" -> input -> new TreeMap<>(mapComparator(input));
-      case "java.util.concurrent.ConcurrentSkipListMap" -> input -> new ConcurrentSkipListMap<>(mapComparator(input));
-      case "java.util.concurrent.ConcurrentHashMap" -> input -> new ConcurrentHashMap<>(mapCount(input));
-      case "java.util.IdentityHashMap" -> input -> new IdentityHashMap<>(mapCount(input));
-      // No newWeakHashMap factory exists, so the table arithmetic the hash factories do internally
-      // is done here instead.
-      case "java.util.WeakHashMap" -> input -> new WeakHashMap<>(capacityFor(mapCount(input)));
       default -> null;
     };
   }
 
-  private static int count(final Object input) {
-    return ((Collection<?>) input).size();
+  private static Function<Object, Object> fromCount(final String implName, final ContainerView.Kind kind) {
+    return switch (implName) {
+      case "java.util.ArrayList" -> input -> new ArrayList<>(count(input, kind));
+      case "java.util.ArrayDeque" -> input -> new ArrayDeque<>(count(input, kind));
+      case "java.util.Vector" -> input -> new Vector<>(count(input, kind));
+      case "java.util.IdentityHashMap" -> input -> new IdentityHashMap<>(count(input, kind));
+      case "java.util.concurrent.ConcurrentHashMap" -> input -> new ConcurrentHashMap<>(count(input, kind));
+      default -> null;
+    };
   }
 
-  private static int mapCount(final Object input) {
-    return ((Map<?, ?>) input).size();
+  private static Function<Object, Object> fromTableFactory(final String implName, final ContainerView.Kind kind) {
+    return switch (implName) {
+      case "java.util.LinkedHashSet" -> input -> LinkedHashSet.newLinkedHashSet(count(input, kind));
+      case "java.util.HashSet" -> input -> HashSet.newHashSet(count(input, kind));
+      case "java.util.LinkedHashMap" -> input -> LinkedHashMap.newLinkedHashMap(count(input, kind));
+      case "java.util.HashMap" -> input -> HashMap.newHashMap(count(input, kind));
+      default -> null;
+    };
+  }
+
+  private static Function<Object, Object> fromTableArithmetic(final String implName) {
+    return switch (implName) {
+      // No newWeakHashMap factory exists, so the arithmetic the hash factories do internally is
+      // done here instead.
+      case "java.util.WeakHashMap" -> input -> new WeakHashMap<>(capacityFor(((Map<?, ?>) input).size()));
+      default -> null;
+    };
+  }
+
+  private static Function<Object, Object> fromOrdering(final String implName, final ContainerView.Kind kind) {
+    return switch (implName) {
+      case "java.util.TreeSet" -> input -> new TreeSet<>(setComparator(input));
+      case "java.util.concurrent.ConcurrentSkipListSet" -> input -> new ConcurrentSkipListSet<>(setComparator(input));
+      case "java.util.TreeMap" -> input -> new TreeMap<>(mapComparator(input));
+      case "java.util.concurrent.ConcurrentSkipListMap" -> input -> new ConcurrentSkipListMap<>(mapComparator(input));
+      default -> null;
+    };
+  }
+
+  private static int count(final Object input, final ContainerView.Kind kind) {
+    return kind == ContainerView.Kind.MAP_VALUES ? ((Map<?, ?>) input).size() : ((Collection<?>) input).size();
   }
 }
