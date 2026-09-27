@@ -62,6 +62,8 @@ dependencies {
     testRuntimeOnly(libs.junitPlatformLauncher)
     testImplementation("org.springframework.boot:spring-boot-starter-test:$springBootVersion")
     testImplementation("org.assertj:assertj-core:3.27.7")
+    testImplementation(testFixtures(project(":codegen")))
+    testAnnotationProcessor(project(":codegen"))
 }
 
 publishing {

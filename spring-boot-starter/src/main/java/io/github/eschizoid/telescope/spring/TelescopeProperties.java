@@ -15,10 +15,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * }</pre>
  *
  * <p>None of these properties are required — defaults match the behaviour you'd get from importing
- * telescope directly. Setting {@code telescope.default-write-strategy} only affects mappers built
- * via the (future) declarative {@code @TelescopeMapper} shortcut; mappers built explicitly via
- * {@link io.github.eschizoid.telescope.Telescope#mapper Telescope.mapper(...)} continue to use
- * whatever {@code writeBeans(...)} / {@code writeBean(...)} rows the caller declares.
+ * telescope directly. {@code telescope.default-write-strategy} is reserved for a future bean
+ * construction shortcut. The Spring {@link TelescopeMapper} annotation delegates to an existing
+ * generated {@code @Bridge} and does not use it; mappers built explicitly via {@link
+ * io.github.eschizoid.telescope.Telescope#mapper Telescope.mapper(...)} use their own {@code
+ * writeBeans(...)} / {@code writeBean(...)} rows.
  */
 @ConfigurationProperties(prefix = "telescope")
 public class TelescopeProperties {
@@ -27,10 +28,9 @@ public class TelescopeProperties {
   public TelescopeProperties() {}
 
   /**
-   * Default {@link WriteHint.WriteStrategy} applied to mappers built through the starter's
-   * declarative shortcuts when the user doesn't pin one explicitly. {@code null} means "use {@code
-   * Beans.autoWriter}'s per-class auto-detect ladder". Common choices: {@code SETTERS} for
-   * Hibernate-friendly entity targets, {@code BUILDER} for Lombok {@code @Builder}-heavy domains.
+   * Reserved default {@link WriteHint.WriteStrategy} for a future bean construction shortcut.
+   * Currently no auto-configuration path consumes this setting, including {@link TelescopeMapper},
+   * which delegates to a generated bridge.
    */
   private WriteHint.WriteStrategy defaultWriteStrategy;
 

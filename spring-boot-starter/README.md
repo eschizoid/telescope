@@ -1,7 +1,96 @@
 # telescope-spring-boot-starter
 
-Drop-in Spring Boot 4 auto-config for [telescope](../README.md). Adds one bean to your application context — a typed
-`Mapper<A, B>` registry — and nothing else.
+## Injectable mapper and path interfaces
+
+Keep mapping rules on the model's existing `@Bridge`. The Spring annotations generate injectable interfaces that call
+that bridge or hold a reusable path:
+
+```java
+public record Address(String city) {}
+
+public record UserDto(String name, Address address) {}
+
+@Bridge(value = UserDto.class, defaults = @Default(field = "name", value = "(unnamed)"))
+public record User(String name, Address address) {}
+
+@TelescopeMapper(from = User.class, to = UserDto.class)
+public interface UserProjection {
+  UserDto map(User user);
+}
+
+@TelescopeTransform(from = User.class, to = String.class, path = "address.city")
+public interface UserCity extends TelescopePath<User, String> {}
+
+@Service
+class UserService {
+
+  private final UserProjection projection;
+  private final UserCity city;
+
+  UserService(UserProjection projection, UserCity city) {
+    this.projection = projection;
+    this.city = city;
+  }
+
+  UserDto project(User user) {
+    return projection.map(user);
+  }
+
+  User relocate(User user) {
+    return city.update(user, String::toUpperCase);
+  }
+}
+```
+
+`@Default` is the existing bridge rule: a null `User.name` becomes `"(unnamed)"` in the DTO. The Spring mapper
+annotation only exposes the bridge as a bean. A null input maps to null.
+
+For a deeper update, declare the path once and inject it wherever it is needed:
+
+```java
+record Workspace(Profile profile) {
+  record Profile(Contact contact) {}
+
+  record Contact(String email) {}
+}
+
+@TelescopeTransform(from = Workspace.class, to = String.class, path = "profile.contact.email")
+interface WorkspaceEmail extends TelescopePath<Workspace, String> {}
+
+// In a service with an injected WorkspaceEmail email:
+Workspace changed = email.update(workspace, String::toLowerCase);
+
+String current = email.read(changed);
+```
+
+Null behavior follows the underlying path: a null terminal email can be read as null and replaced with `set`. If an
+intermediate record such as `profile` or `contact` is null, `read` throws `NoSuchElementException`; `set` and `update`
+leave the source unchanged because the path has no focus. `read(null)` also throws `NoSuchElementException`. The
+`update` function must handle a null terminal value if that is possible in the model.
+
+Add the processor alongside the starter (Gradle):
+
+```kotlin
+dependencies {
+    implementation(project(":spring-boot-starter"))
+    annotationProcessor(project(":codegen"))
+}
+```
+
+For an external application, use the same released Telescope version for both artifacts. The annotation processor is a
+compile-time dependency; the starter remains the runtime dependency.
+
+Both interfaces must be in the application's component-scan packages. The mapper implementation calls the generated
+`UserBridge.forward` directly; this first version expects the source's single model-anchored `@Bridge`.
+`@TelescopeTransform` checks each record field in its dotted path at compile time and creates the `Telescope` path once
+per bean. This first path form supports record field hops; collection traversal and bean properties remain future work.
+Generated interface beans are injected by their interface type; the existing `TelescopeMapperRegistry` continues to
+index `Mapper<?, ?>` beans declared separately.
+
+---
+
+Drop-in Spring Boot 4 auto-config for [telescope](../README.md). Adds a typed `Mapper<A, B>` registry and supports
+injectable interfaces generated from `@TelescopeMapper` blueprints.
 
 ```kotlin
 dependencies {
@@ -9,8 +98,8 @@ dependencies {
 }
 ```
 
-No `@EnableTelescope` annotation. No config class to author. The starter declares `@Mapper<Order, OrderEntity>` beans in
-your `@Configuration` and they show up in the registry; the registry resolves them by `(sourceClass, targetClass)` pair.
+No `@EnableTelescope` annotation is needed. If you declare `Mapper<Order, OrderEntity>` beans in a `@Configuration`,
+they show up in the registry, which resolves them by `(sourceClass, targetClass)` pair.
 
 ## What you get
 
@@ -18,6 +107,8 @@ your `@Configuration` and they show up in the registry; the registry resolves th
   Polymorphic dispatch: generic services receive `Object` and convert via
   `registry.get(src.getClass(), Target.class).forward(src)` without enumerating type pairs.
 - **`TelescopeProperties`** — `@ConfigurationProperties("telescope")` for the `telescope.registry.fail-fast` toggle.
+- **`@TelescopeMapper` / `@TelescopeTransform`** — Spring-only interface annotations for an injectable bridge-backed
+  mapper or a cached typed path. They require `telescope-codegen` on the annotation-processor path.
 
 ## Install
 
