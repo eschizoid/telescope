@@ -25,6 +25,109 @@ import io.github.eschizoid.telescope.inject.TelescopeTransformation;
 import io.github.eschizoid.telescope.inject.Transformation;
 ```
 
+### Step by step
+
+Each step adds one annotation or override to the one before. The examples are compiled and run by
+`QuickstartExamplesTest`, so they stay in step with the code.
+
+**1. Describe the conversion with `@Bridge`, inject it with `@TelescopeMapper`.** `@Bridge` generates a reflection-free
+`CustomerBridge` at compile time. `@TelescopeMapper` turns an interface with one `map` method into a Spring bean that
+calls it:
+
+```java
+@Bridge(CustomerDto.class)
+public record Customer(String name, Contact contact) {}
+
+public record Contact(String email) {}
+
+public record CustomerDto(String name, Contact contact) {}
+
+@TelescopeMapper(from = Customer.class, to = CustomerDto.class)
+public interface CustomerMapper {
+  CustomerDto map(Customer customer);
+}
+
+@Service
+class CustomerController {
+
+  private final CustomerMapper mapper;
+
+  CustomerController(CustomerMapper mapper) {
+    this.mapper = mapper;
+  }
+
+  CustomerDto show(Customer customer) {
+    return mapper.map(customer);
+  }
+}
+```
+
+**2. Map both ways with `TelescopeProjection`.** Extending `TelescopeProjection<S, T>` gives the bean `forward` and
+`backward` without naming the types in the annotation:
+
+```java
+@TelescopeMapper
+public interface CustomerProjection extends TelescopeProjection<Customer, CustomerDto> {}
+
+CustomerDto dto = projection.map(customer);
+
+Customer back = projection.backward(dto); // equal to customer
+```
+
+A projection over a bridge refuses `patch`, because a bridge rebuilds the whole source from the partial; step 4 shows
+the form that patches.
+
+**3. Normalize before mapping with `@TelescopeTransformer`.** A transformer is a typed path plus what to do at it: a
+default for a null value and an operation for a non-null one. List it on the mapper and Spring injects it:
+
+```java
+@TelescopeTransformer
+public interface CustomerEmailTransformer extends TelescopeTransformation<Customer, String> {
+  @Override
+  default Telescope<Customer, String> path() {
+    return Telescope.of(Customer.class).field(Customer::contact).field(Contact::email);
+  }
+
+  @Override
+  default Transformation<String> transform() {
+    return new Transformation<>("unknown@example.com", (email) -> email.strip().toLowerCase(Locale.ROOT));
+  }
+}
+
+@TelescopeMapper(transformers = CustomerEmailTransformer.class)
+public interface NormalizedCustomerProjection extends TelescopeProjection<Customer, CustomerDto> {}
+```
+
+`" ADA@EXAMPLE.COM "` maps to `"ada@example.com"`, a null email to `"unknown@example.com"`, and a null `contact` stays
+null because there is no email to update. The customer passed in is never changed. The transformer is also a bean on its
+own: `email.apply(customer)` returns the normalized copy, and `email.path().read(customer)` reads the raw value.
+
+**4. Rename and stamp fields with typed rows in `translate`.** When the target's names differ, or it needs values the
+source does not carry, override `translate`. Every row names its fields with method references, so an IDE rename follows
+them and a type mismatch fails the build:
+
+```java
+public record CustomerSummary(String displayName, String source, Instant generatedAt) {}
+
+@TelescopeMapper
+public interface CustomerSummaryProjection extends TelescopeProjection<Customer, CustomerSummary> {
+  @Override
+  default void translate(MapperBuilder<Customer, CustomerSummary> mapping) {
+    mapping
+      .from(Customer::name)
+      .to(CustomerSummary::displayName)
+      .add(constant(CustomerSummary::source, "crm"), compute(CustomerSummary::generatedAt, Instant::now));
+  }
+}
+```
+
+`constant` and `compute` come from `io.github.eschizoid.telescope.mapping.Mapping`. A projection that overrides
+`translate` maps through a core `Mapper` instead of the bridge, so it also supports `patch`. `@Bridge` has string-keyed
+equivalents (`@Rename`, `@Constant`, `@Compute`). The processor rejects a `@Rename` or `@Constant` naming a field that
+does not exist, but an IDE rename does not update the string.
+
+The sections below cover each piece in more detail.
+
 `@TelescopeMapper` exposes a generated structural mapper as a Spring bean. `@TelescopeTransformer` exposes a reusable
 transformation over a typed Telescope path. A transformation declares both the default for a null focused value and the
 operation applied to a non-null value:
