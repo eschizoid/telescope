@@ -1,9 +1,9 @@
 package io.github.eschizoid.telescope.benchmarks;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.annotations.TelescopeTransformer;
 import io.github.eschizoid.telescope.inject.TelescopeTransformation;
 import io.github.eschizoid.telescope.inject.Transformation;
-import io.github.eschizoid.telescope.spring.TelescopeTransformer;
 
 @TelescopeTransformer
 public interface SpringBlueprintCityPrefixTransformer extends TelescopeTransformation<SpringBlueprintSource, String> {

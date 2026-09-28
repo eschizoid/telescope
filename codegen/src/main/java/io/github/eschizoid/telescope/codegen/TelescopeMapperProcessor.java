@@ -31,19 +31,21 @@ import javax.lang.model.util.ElementFilter;
 /** Generates Spring components for structural mappers and reusable record paths. */
 @SupportedAnnotationTypes(
   {
-    "io.github.eschizoid.telescope.spring.TelescopeMapper", "io.github.eschizoid.telescope.spring.TelescopeTransformer",
+    "io.github.eschizoid.telescope.annotations.TelescopeMapper",
+    "io.github.eschizoid.telescope.annotations.TelescopeTransformer",
   }
 )
 @SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
 
-  private static final String MAPPER = "io.github.eschizoid.telescope.spring.TelescopeMapper";
-  private static final String TRANSFORM = "io.github.eschizoid.telescope.spring.TelescopeTransformer";
+  private static final String MAPPER = "io.github.eschizoid.telescope.annotations.TelescopeMapper";
+  private static final String TRANSFORM = "io.github.eschizoid.telescope.annotations.TelescopeTransformer";
   private static final String BRIDGE = "io.github.eschizoid.telescope.annotations.Bridge";
   private static final String BRIDGES = "io.github.eschizoid.telescope.annotations.Bridges";
   private static final String PATH = "io.github.eschizoid.telescope.inject.TelescopeTransformation";
   private static final String PROJECTION = "io.github.eschizoid.telescope.inject.TelescopeProjection";
   private static final String CUSTOMIZER = "io.github.eschizoid.telescope.inject.TelescopeCustomizer";
+  private static final String SPRING_COMPONENT = "org.springframework.stereotype.Component";
 
   /** Public constructor for processor discovery. */
   public TelescopeMapperProcessor() {
@@ -60,6 +62,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   }
 
   private void generateMapper(final Element element, final RoundEnvironment round) {
+    if (!springPresent(element, "@TelescopeMapper")) return;
     final var blueprint = interfaceType(element, "@TelescopeMapper");
     if (blueprint == null) return;
     final var config = annotation(blueprint, MAPPER);
@@ -505,6 +508,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   }
 
   private void generatePath(final Element element) {
+    if (!springPresent(element, "@TelescopeTransformer")) return;
     final var blueprint = interfaceType(element, "@TelescopeTransformer");
     if (blueprint == null) return;
     final var config = annotation(blueprint, TRANSFORM);
@@ -604,6 +608,21 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
 
   private ExecutableType signature(final TypeElement owner, final ExecutableElement method) {
     return (ExecutableType) processingEnv.getTypeUtils().asMemberOf((DeclaredType) owner.asType(), method);
+  }
+
+  /**
+   * The annotations live in core, but what they generate is a Spring component. Without Spring on
+   * the classpath, say so on the user's interface rather than emit a class that cannot compile.
+   */
+  private boolean springPresent(final Element element, final String annotation) {
+    if (processingEnv.getElementUtils().getTypeElement(SPRING_COMPONENT) != null) return true;
+    error(
+      element,
+      annotation +
+        " generates a Spring component; add telescope-spring-boot-starter to the classpath of the module" +
+        " that declares this interface"
+    );
+    return false;
   }
 
   private TypeElement interfaceType(final Element element, final String annotation) {

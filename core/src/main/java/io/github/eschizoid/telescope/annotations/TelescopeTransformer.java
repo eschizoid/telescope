@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.spring;
+package io.github.eschizoid.telescope.annotations;
 
 import io.github.eschizoid.telescope.inject.TelescopeTransformation;
 import java.lang.annotation.ElementType;
@@ -12,6 +12,9 @@ import java.lang.annotation.Target;
  * and focus types come from {@code TelescopeTransformation<S, A>}, including inherited generic
  * arguments. Both factories must return non-null values and must not depend on field injection. By
  * convention the interface name ends with {@code Transformer}; the processor does not require it.
+ *
+ * <p>Like {@link TelescopeMapper}, the generated implementation is a Spring component and needs
+ * {@code telescope-spring-boot-starter} on the classpath (ADR-0016).
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)

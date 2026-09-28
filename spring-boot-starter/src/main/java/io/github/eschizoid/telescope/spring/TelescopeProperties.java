@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.spring;
 
+import io.github.eschizoid.telescope.annotations.TelescopeMapper;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

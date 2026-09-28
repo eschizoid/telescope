@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.spring;
+package io.github.eschizoid.telescope.annotations;
 
 import io.github.eschizoid.telescope.inject.TelescopeProjection;
 import io.github.eschizoid.telescope.inject.TelescopeTransformation;
@@ -13,6 +13,12 @@ import java.lang.annotation.Target;
  * extending {@link TelescopeProjection} supplies the source and target types through its type
  * arguments and can register additional transformers. Other interfaces supply {@link #from()} and
  * {@link #to()} explicitly; those plain interfaces require a generated {@code @Bridge}.
+ *
+ * <p>The implementation is a Spring component, so this annotation needs {@code
+ * telescope-spring-boot-starter} on the classpath and {@code telescope-codegen} on the annotation
+ * processor path. Without Spring the processor reports an error on the annotated interface. The
+ * annotation lives in core, next to {@link Bridge}, so another container integration can generate
+ * its own implementation from the same declaration (ADR-0016).
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)

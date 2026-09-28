@@ -1,9 +1,9 @@
 package io.github.eschizoid.telescope.spring.blueprint;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.annotations.TelescopeTransformer;
 import io.github.eschizoid.telescope.inject.TelescopeTransformation;
 import io.github.eschizoid.telescope.inject.Transformation;
-import io.github.eschizoid.telescope.spring.TelescopeTransformer;
 
 @TelescopeTransformer
 public interface CounterValueTransformer extends TelescopeTransformation<Counter, Integer> {

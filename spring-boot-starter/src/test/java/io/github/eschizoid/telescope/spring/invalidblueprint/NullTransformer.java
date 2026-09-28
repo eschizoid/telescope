@@ -1,9 +1,9 @@
 package io.github.eschizoid.telescope.spring.invalidblueprint;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.annotations.TelescopeTransformer;
 import io.github.eschizoid.telescope.inject.TelescopeTransformation;
 import io.github.eschizoid.telescope.inject.Transformation;
-import io.github.eschizoid.telescope.spring.TelescopeTransformer;
 
 @TelescopeTransformer
 public interface NullTransformer extends TelescopeTransformation<String, String> {
