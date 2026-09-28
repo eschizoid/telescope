@@ -375,6 +375,15 @@ you reach a map through does not change the record you get back. A converter is 
 so it never has to say what the absence of one means. These defaults differ from those of `mapperForward`, which leaves
 an unpaired container `null`, so do not assume the two factories are interchangeable.
 
+Where a key has to carry a value, write `required(...)` in place of `extract(...)`. A map with no value under that key,
+or `null` under it, is refused with an `IllegalArgumentException` before any converter runs, and the message names every
+missing required key beside the component it was to fill. On a `@FromMap` type, `@FromMap(required = {"id"})` makes the
+generated binder refuse the same maps with the same message. `explain()` reports each row with what an absent key does
+to it, `default when absent` or `required`.
+
+A row that names a bean property with no setter, builder method or constructor parameter behind it is refused while the
+mapper is built, because the value it reads would be dropped.
+
 A component no row names is filled only by that default, so `fromMap` refuses one whose declared type has none of its
 own: the same types the `@FromMap` processor refuses, such as an array, a concrete container like `ArrayList`, a
 `Collection` or `Iterable`, or a class the processor has not generated a binder for. The refusal comes while the mapper

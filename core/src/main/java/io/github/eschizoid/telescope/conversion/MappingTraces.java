@@ -5,6 +5,7 @@ import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.introspection.Trace;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Builds the value-column {@code trace} for a mapper: apply the mapping, then for each resolved row
@@ -54,6 +55,17 @@ public final class MappingTraces {
       render(readDotted(input, t.from())),
       t.to() + " " + render(readDotted(output, t.to()))
     );
+    if (node instanceof OpticNode.Extracted e) {
+      // A fromMap source is a map, so the value comes from the key rather than from a field read.
+      final var value = input instanceof Map<?, ?> map ? map.get(e.key()) : UNREADABLE;
+      final var right = e.field() + " " + render(readDotted(output, e.field()));
+      return new Row(
+        "•",
+        e.key(),
+        value == null ? "(absent)" : render(value),
+        value == null && e.whenAbsent() == OpticNode.WhenAbsent.DEFAULTS ? right + " (default)" : right
+      );
+    }
     if (node instanceof OpticNode.Skipped s) return new Row("•", s.field(), "", "(" + label(s.reason()) + ")");
     if (node instanceof OpticNode.UnusedSource u) return new Row("•", u.field(), "", "(unused source)");
     return new Row("•", String.valueOf(node), "", "");

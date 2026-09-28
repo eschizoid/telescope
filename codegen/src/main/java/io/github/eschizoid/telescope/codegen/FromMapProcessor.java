@@ -1,9 +1,11 @@
 package io.github.eschizoid.telescope.codegen;
 
 import java.io.PrintWriter;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -13,6 +15,7 @@ import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
+import javax.lang.model.element.AnnotationValue;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
@@ -32,6 +35,8 @@ import javax.lang.model.type.TypeMirror;
 public final class FromMapProcessor extends AbstractTelescopeProcessor {
 
   private static final String ANNOTATION = "io.github.eschizoid.telescope.annotations.FromMap";
+
+  private static final String REFUSE_MISSING = "__refuseMissing";
 
   // Reference types a raw map plausibly carries as themselves, so a direct cast is justified.
   private static final Set<String> CAST_AS_IS = Set.of(
@@ -108,7 +113,6 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
   }
 
   private void generateForRecord(final TypeElement record) {
-    final var name = record.getSimpleName().toString();
     final var components = record.getRecordComponents();
     final var coercions = components
       .stream()
@@ -123,25 +127,32 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       }
     }
     if (!coercible) return;
+    final var componentNames = components
+      .stream()
+      .map(c -> c.getSimpleName().toString())
+      .toList();
+    final var required = requiredNames(record, componentNames, "component");
+    if (required == null) return;
     final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
     final var imports = coercions
       .stream()
       .flatMap(c -> c.imports().stream())
-      .collect(Collectors.toSet());
+      .collect(Collectors.toCollection(HashSet::new));
     final var helpers = new LinkedHashMap<String, String>();
     for (final var coercion : coercions) helpers.putAll(coercion.helpers());
+    addRefusal(record, required, helpers);
 
     emitConverter(record, unchecked, imports, helpers, out -> {
       for (final var component : components) hoist(out, component.getSimpleName().toString());
+      emitRefusalCall(out, required, "component");
       final var args = IntStream.range(0, components.size())
         .mapToObj(i -> coercions.get(i).emit(local(components.get(i).getSimpleName().toString()), 0))
         .collect(Collectors.joining(", "));
-      out.println("    return new " + name + "(" + args + ");");
+      out.println("    return new " + record.getQualifiedName() + "(" + args + ");");
     });
   }
 
   private void generateForBean(final TypeElement pojo) {
-    final var name = pojo.getSimpleName().toString();
     final var props = beanProperties(pojo);
     if (props.isEmpty()) {
       error(pojo, "@FromMap: " + pojo.getQualifiedName() + " has no readable properties (getX()/isX())");
@@ -195,30 +206,132 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       }
     }
     if (!coercible) return;
+    final var required = requiredNames(pojo, props.stream().map(Prop::name).toList(), "property");
+    if (required == null) return;
     final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
     final var imports = coercions
       .stream()
       .flatMap(c -> c.imports().stream())
-      .collect(Collectors.toSet());
+      .collect(Collectors.toCollection(HashSet::new));
     final var helpers = new LinkedHashMap<String, String>();
     for (final var coercion : coercions) helpers.putAll(coercion.helpers());
+    addRefusal(pojo, required, helpers);
 
     emitConverter(pojo, unchecked, imports, helpers, out -> {
       for (final var prop : props) hoist(out, prop.name());
+      emitRefusalCall(out, required, "property");
       if (useBuilder) {
-        out.print("    return " + name + ".builder()");
+        out.print("    return " + pojo.getQualifiedName() + ".builder()");
         for (var i = 0; i < props.size(); i++) {
           out.print("." + setters[i] + "(" + valueOf(coercions.get(i), props.get(i).name()) + ")");
         }
         out.println(".build();");
       } else {
-        out.println("    final var bean = new " + name + "();");
+        out.println("    final var bean = new " + pojo.getQualifiedName() + "();");
         for (var i = 0; i < props.size(); i++) {
           out.println("    bean." + setters[i] + "(" + valueOf(coercions.get(i), props.get(i).name()) + ");");
         }
         out.println("    return bean;");
       }
     });
+  }
+
+  /**
+   * The names {@code @FromMap(required = ...)} lists on {@code type}, in declaration order of the
+   * type's own slots, or null after reporting one that is not among {@code slots}.
+   */
+  private List<String> requiredNames(final TypeElement type, final List<String> slots, final String kind) {
+    final var anno = processingEnv.getElementUtils().getTypeElement(ANNOTATION);
+    final var listed = new ArrayList<String>();
+    for (final var am : type.getAnnotationMirrors()) {
+      if (!am.getAnnotationType().asElement().equals(anno)) continue;
+      for (final var entry : am.getElementValues().entrySet()) {
+        if (!entry.getKey().getSimpleName().contentEquals("required")) continue;
+        @SuppressWarnings("unchecked")
+        final var values = (List<? extends AnnotationValue>) entry.getValue().getValue();
+        for (final var value : values) listed.add((String) value.getValue());
+      }
+    }
+    var known = true;
+    final var seen = new HashSet<String>();
+    for (final var name : listed) {
+      if (!seen.add(name)) {
+        error(type, "@FromMap: required names '" + name + "' more than once");
+        known = false;
+        continue;
+      }
+      if (slots.contains(name)) continue;
+      error(
+        type,
+        "@FromMap: required names '" +
+          name +
+          "', which is not a " +
+          kind +
+          " of " +
+          type.getSimpleName() +
+          ". Known: " +
+          slots
+      );
+      known = false;
+    }
+    if (!known) return null;
+    return slots.stream().filter(listed::contains).toList();
+  }
+
+  /**
+   * The helper the binder calls once a required key is found missing, with one entry per required
+   * slot and null where its key carried a value. It names every missing key in one refusal, worded
+   * as the runtime {@code fromMap} words it after the binder's own prefix.
+   *
+   * <p>It names the JDK types it uses by their qualified names and adds no import, because an
+   * import would shadow a type of the same simple name in the target's package, the target itself
+   * included.
+   */
+  private static void addRefusal(
+    final TypeElement type,
+    final List<String> required,
+    final Map<String, String> helpers
+  ) {
+    if (required.isEmpty()) return;
+    final var name = type.getSimpleName().toString();
+    helpers.put(
+      REFUSE_MISSING,
+      "private static void " +
+        REFUSE_MISSING +
+        "(final String... missing) {\n" +
+        "  final java.lang.StringBuilder named = new java.lang.StringBuilder();\n" +
+        "  int count = 0;\n" +
+        "  for (final String entry : missing) {\n" +
+        "    if (entry == null) continue;\n" +
+        "    if (count++ > 0) named.append(\", \");\n" +
+        "    named.append(entry);\n" +
+        "  }\n" +
+        "  throw new java.lang.IllegalArgumentException(\n" +
+        "    \"" +
+        name +
+        "FromMap.fromMap: the map carries no value for required \" + (count == 1 ? \"key \" : \"keys \") + named + \" of " +
+        name +
+        "\"\n" +
+        "  );\n" +
+        "}"
+    );
+  }
+
+  /**
+   * The refusal for a map missing a required key, made after every key is read once. The guard
+   * tests the hoisted locals, so a map that carries every required key allocates nothing for it.
+   */
+  private static void emitRefusalCall(final PrintWriter out, final List<String> required, final String kind) {
+    if (required.isEmpty()) return;
+    final var guard = required
+      .stream()
+      .map(slot -> local(slot) + " == null")
+      .collect(Collectors.joining(" || "));
+    final var args = required
+      .stream()
+      .map(slot -> local(slot) + " == null ? \"\\\"" + slot + "\\\" (" + kind + " '" + slot + "')\" : null")
+      .collect(Collectors.joining(", "));
+    out.println("    if (" + guard + ") " + REFUSE_MISSING + "(" + args + ");");
   }
 
   /** The coerced value expression for a property, read from the local its key was hoisted into. */
@@ -259,6 +372,10 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final var pkg = processingEnv.getElementUtils().getPackageOf(type).getQualifiedName().toString();
     final var name = type.getSimpleName().toString();
     final var holder = name + "FromMap";
+    // The target is named by its qualified name throughout the binder, because an import the binder
+    // needs (java.util.Map, ForwardMapper, a coercion's container) shadows a package type of the
+    // same simple name, and the target may be one.
+    final var ref = type.getQualifiedName().toString();
     final var qualified = pkg.isEmpty() ? holder : pkg + "." + holder;
 
     final Set<String> imports = new LinkedHashSet<>();
@@ -272,7 +389,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final var javadoc = "Generated by telescope-codegen for @FromMap " + name + ".";
     writeClass(qualified, holder, imports, javadoc, type, out -> {
       if (unchecked) out.println("  @SuppressWarnings(\"unchecked\")");
-      out.println("  public static " + name + " fromMap(final Map<String, Object> map) {");
+      out.println("  public static " + ref + " fromMap(final Map<String, Object> map) {");
       out.println("    if (map == null) return null;");
       body.accept(out);
       out.println("  }");
@@ -289,8 +406,8 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       // Map.class is a raw Class<Map>; create wants Class<Map<String, Object>> — same unchecked
       // bridge the runtime Telescope.fromMap makes.
       out.println("  @SuppressWarnings(\"unchecked\")");
-      out.println("  public static final ForwardMapper<Map<String, Object>, " + name + "> FROM_MAP =");
-      out.println("      ForwardMapper.create(" + holder + "::fromMap, Map.class, " + name + ".class);");
+      out.println("  public static final ForwardMapper<Map<String, Object>, " + ref + "> FROM_MAP =");
+      out.println("      ForwardMapper.create(" + holder + "::fromMap, Map.class, " + ref + ".class);");
     });
   }
 

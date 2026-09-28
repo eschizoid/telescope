@@ -13,7 +13,7 @@ package io.github.eschizoid.telescope.introspection;
  *       {@link Traverse}, {@link Filter}, {@link Narrow}, {@link Bridge}.
  *   <li>{@link Row} — a field correspondence of a conversion built by {@code map} / {@code mapper}
  *       / {@code mapperForward} / {@code fromMap}: {@link Mapped}, {@link Transformed}, {@link
- *       Skipped}, {@link UnusedSource}.
+ *       Extracted}, {@link Skipped}, {@link UnusedSource}.
  * </ul>
  *
  * <p>Every variant is a public record so a caller can assert on it directly ({@code
@@ -30,6 +30,14 @@ public sealed interface OpticNode {
      * A target field with no same-name source and no row — lenient / {@code fromMap} paths only.
      */
     MISSING_SOURCE,
+  }
+
+  /** What a {@code fromMap} row does when its key carries no value. See {@link Extracted}. */
+  enum WhenAbsent {
+    /** The field takes the default for its declared type: an {@code extract(...)} row. */
+    DEFAULTS,
+    /** The conversion is refused, naming the key: a {@code required(...)} row. */
+    REFUSES,
   }
 
   /** A navigation step of a path. */
@@ -82,6 +90,14 @@ public sealed interface OpticNode {
    * fromType} / {@code toType} are their type names.
    */
   record Transformed(String from, String to, String fromType, String toType) implements Row {}
+
+  /**
+   * A {@code fromMap} row: the value under map key {@code key} is converted into {@code field},
+   * whose declared type is {@code fieldType}. The conversion happens only where the key carries a
+   * value, and {@code whenAbsent} says what happens where it does not, which is the difference
+   * between a binder that returns a target and one that refuses the source.
+   */
+  record Extracted(String key, String field, String fieldType, WhenAbsent whenAbsent) implements Row {}
 
   /**
    * A field the mapping leaves out of a clean correspondence, with the reason. The side {@code

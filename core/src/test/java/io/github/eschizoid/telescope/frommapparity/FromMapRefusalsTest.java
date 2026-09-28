@@ -442,6 +442,9 @@ class FromMapRefusalsTest {
     final var refusal = assertThrows(IllegalArgumentException.class, () ->
       Telescope.fromMap(Scalars.class, (MapExtractStep) null)
     );
-    assertEquals("Telescope.fromMap rows must be built via MapExtractStep.extract(...)", refusal.getMessage());
+    assertEquals(
+      "Telescope.fromMap rows must be built via MapExtractStep.extract(...) or MapExtractStep.required(...)",
+      refusal.getMessage()
+    );
   }
 }

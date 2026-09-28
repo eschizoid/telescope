@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.introspection;
 
 import static java.util.stream.Collectors.joining;
 
+import io.github.eschizoid.telescope.introspection.OpticNode.Extracted;
 import io.github.eschizoid.telescope.introspection.OpticNode.Hop;
 import io.github.eschizoid.telescope.introspection.OpticNode.Mapped;
 import io.github.eschizoid.telescope.introspection.OpticNode.Skipped;
@@ -16,8 +17,8 @@ import java.util.stream.Stream;
  * The result of {@code explain()} — the ordered {@link OpticNode} trail describing what an optic
  * does, data first. The {@link #toString()} render is a <em>view</em>; the API is the structure:
  * iterate {@link #nodes()} or pull a typed slice with {@link #mapped()} / {@link
- * #transformations()} / {@link #skipped()} / {@link #unusedSources()} / {@link #hops()} and assert
- * on it.
+ * #transformations()} / {@link #extractions()} / {@link #skipped()} / {@link #unusedSources()} /
+ * {@link #hops()} and assert on it.
  *
  * <pre>{@code
  * // completeness test — a strict mapper skips nothing by construction
@@ -51,6 +52,11 @@ public record OpticReport(List<OpticNode> nodes) {
     return nodes.stream().filter(Transformed.class::isInstance).map(Transformed.class::cast).toList();
   }
 
+  /** The {@code fromMap} rows, each with what an absent key does to it, in trail order. */
+  public List<Extracted> extractions() {
+    return nodes.stream().filter(Extracted.class::isInstance).map(Extracted.class::cast).toList();
+  }
+
   /**
    * The fields left out of a clean correspondence, with their reasons, in trail order. Per {@link
    * Skipped}, the field is the dropped source field for {@code DROPPED} and the unpopulated target
@@ -76,6 +82,7 @@ public record OpticReport(List<OpticNode> nodes) {
     final var mapped = mapped();
     final var skipped = skipped();
     final var transformed = transformations();
+    final var extracted = extractions();
     final var unused = unusedSources();
     // One left-column width shared across every mapping row (not per-section), so the marker,
     // field, and the → / ( that follows all land in the same column — the whole report reads as a
@@ -85,6 +92,7 @@ public record OpticReport(List<OpticNode> nodes) {
       mapped.stream().map(Mapped::from),
       skipped.stream().map(Skipped::field),
       transformed.stream().map(t -> t.from() + "(" + t.fromType() + ")"),
+      extracted.stream().map(Extracted::key),
       unused.stream().map(UnusedSource::field)
     )
       .flatMap(Function.identity())
@@ -107,6 +115,9 @@ public record OpticReport(List<OpticNode> nodes) {
         leftWidth,
         "→ " + (t.from().equals(t.to()) ? "" : t.to() + " ") + t.toType()
       )
+    );
+    section(blocks, "Extractions", extracted, e ->
+      row("•", e.key(), leftWidth, "→ " + e.field() + " " + e.fieldType() + " (" + label(e.whenAbsent()) + ")")
     );
     section(blocks, "Unused sources", unused, u -> row("•", u.field(), leftWidth, ""));
     // Navigation hops render headingless and un-indented — a path reads as a sequence of steps.
@@ -136,6 +147,13 @@ public record OpticReport(List<OpticNode> nodes) {
     return switch (reason) {
       case DROPPED -> "ignored";
       case MISSING_SOURCE -> "missing source";
+    };
+  }
+
+  private static String label(final OpticNode.WhenAbsent whenAbsent) {
+    return switch (whenAbsent) {
+      case DEFAULTS -> "default when absent";
+      case REFUSES -> "required";
     };
   }
 

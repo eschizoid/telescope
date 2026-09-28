@@ -48,13 +48,13 @@ class FromMapProcessorTest {
       assertNotNull(generated, () -> "UserFromMap not generated; saw " + compilation.generated().keySet());
 
       assertTrue(generated.contains("public final class UserFromMap"), generated);
-      assertTrue(generated.contains("public static User fromMap(final Map<String, Object> map)"), generated);
+      assertTrue(generated.contains("public static demo.User fromMap(final Map<String, Object> map)"), generated);
       assertTrue(
-        generated.contains("public static final ForwardMapper<Map<String, Object>, User> FROM_MAP"),
+        generated.contains("public static final ForwardMapper<Map<String, Object>, demo.User> FROM_MAP"),
         generated
       );
       // Direct canonical-constructor rebuild — no reflection.
-      assertTrue(generated.contains("new User("), generated);
+      assertTrue(generated.contains("new demo.User("), generated);
       // String field: read the key by name.
       assertTrue(generated.contains("final Object __m_name = map.get(\"name\");"), generated);
       assertEquals(1, generated.split("map\\.get\\(\"name\"\\)", -1).length - 1, generated);
@@ -428,7 +428,7 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.UserBeanFromMap");
       assertNotNull(generated, () -> "UserBeanFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("new UserBean()"), generated);
+      assertTrue(generated.contains("new demo.UserBean()"), generated);
       assertTrue(generated.contains(".setName("), generated);
       assertTrue(generated.contains(".setAge("), generated);
     }

@@ -35,7 +35,7 @@ class EngineExplainTest {
   class FromMapExplain {
 
     @Test
-    @DisplayName("one Transformed row per extract, one MISSING_SOURCE skip per defaulted slot")
+    @DisplayName("one Extracted row per extract, one MISSING_SOURCE skip per defaulted slot")
     void slotDecisionsSurface() {
       final var mapper = Telescope.fromMap(
         Payment.class,
@@ -46,14 +46,11 @@ class EngineExplainTest {
       final var report = mapper.explain();
       assertFalse(report.isEmpty(), "fromMap must explain itself");
       assertEquals(
-        // Both type components hold a type name, which is how every other producer of this row
-        // writes them and where the report prints each. A value read from an untyped map is an
-        // Object.
-        List.of(new OpticNode.Transformed("payment_id", "id", "Object", "String")),
+        List.of(new OpticNode.Extracted("payment_id", "id", "String", OpticNode.WhenAbsent.DEFAULTS)),
         report
-          .transformations()
+          .extractions()
           .stream()
-          .filter(t -> t.to().equals("id"))
+          .filter(e -> e.field().equals("id"))
           .toList()
       );
       assertTrue(
