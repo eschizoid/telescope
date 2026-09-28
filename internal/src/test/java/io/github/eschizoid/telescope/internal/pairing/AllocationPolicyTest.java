@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal.pairing;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -248,22 +249,22 @@ class AllocationPolicyTest {
     // makes a new row a red test until someone says what it should decide.
     for (final var entry : PairingRules.declaredTypes().entrySet()) {
       final var declared = entry.getKey();
+      // Reported here rather than left to the differences above, so the two assertions stay
+      // independent of each other and a row with no expectation names itself instead of arriving as
+      // a null dereference.
       final var row = EXPECTED.get(declared);
+      assertNotNull(row, () -> declared + " is decided by the table and expected by nothing");
+
       // Asserted before the decision is asked for, because the question carries the family: asking
       // with the row's own answers that dimension with itself. A row in the wrong family builds an
       // allocator that throws at conversion time, which no count or contents assertion reaches.
       assertEquals(row.family(), entry.getValue(), () -> declared + " answers for a different family than expected");
 
       final var decision = RULES.allocationFor(classFor(declared), entry.getValue());
-      if (row.decision() instanceof Allocation.Refuse) {
+      if (!(row.decision() instanceof Allocation.Build expected)) {
         assertInstanceOf(Allocation.Refuse.class, decision, () -> declared + " should carry a refusal");
         continue;
       }
-      final var expected = assertInstanceOf(
-        Allocation.Build.class,
-        row.decision(),
-        () -> declared + " is decided by the table and expected by nothing"
-      );
       final var build = assertInstanceOf(Allocation.Build.class, decision, () -> declared + " should be buildable");
       assertEquals(
         expected.implName(),
