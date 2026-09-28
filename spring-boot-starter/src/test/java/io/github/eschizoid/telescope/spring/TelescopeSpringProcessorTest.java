@@ -648,6 +648,86 @@ class TelescopeSpringProcessorTest {
   }
 
   @Test
+  void mapperFindsTheBridgeOfASourceWithSeveralTargets() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("demo.TgtA", "package demo; public record TgtA(String name) {}"),
+      source("demo.TgtB", "package demo; public record TgtB(String name) {}"),
+      source(
+        "demo.Src",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(TgtA.class)
+        @Bridge(TgtB.class)
+        public record Src(String name) {}
+        """
+      ),
+      source(
+        "demo.SrcMapper",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.spring.TelescopeMapper;
+        @TelescopeMapper(from = Src.class, to = TgtB.class)
+        public interface SrcMapper { TgtB map(Src source); }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.SrcMapperImpl")).contains("SrcToTgtBBridge.forward(input)");
+  }
+
+  @Test
+  void mapperAndProjectionFindACarrierBridge() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("model.Car", "package model; public record Car(String plate) {}"),
+      source("model.CarDto", "package model; public record CarDto(String plate) {}"),
+      source(
+        "carriers.CarCarrier",
+        """
+        package carriers;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import model.Car;
+        import model.CarDto;
+        @Bridge(source = Car.class, target = CarDto.class)
+        public final class CarCarrier {}
+        """
+      ),
+      source(
+        "demo.CarMapper",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.spring.TelescopeMapper;
+        import model.Car;
+        import model.CarDto;
+        @TelescopeMapper(from = Car.class, to = CarDto.class)
+        public interface CarMapper { CarDto map(Car source); }
+        """
+      ),
+      source(
+        "demo.CarProjection",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.spring.TelescopeMapper;
+        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import model.Car;
+        import model.CarDto;
+        @TelescopeMapper
+        public interface CarProjection extends TelescopeProjection<Car, CarDto> {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.CarMapperImpl")).contains("CarCarrierBridge.forward(input)");
+    assertThat(result.generated().get("demo.CarProjectionImpl"))
+      .contains("CarCarrierBridge.forward(input)")
+      .doesNotContain("mapperBuilder");
+  }
+
+  @Test
   void projectionWithoutTranslateStillUsesTheBridge() {
     final var result = ProcessorHarness.compileFully(
       List.of(new TelescopeMapperProcessor()),

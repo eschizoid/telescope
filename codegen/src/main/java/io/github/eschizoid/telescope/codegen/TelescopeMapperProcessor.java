@@ -40,6 +40,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   private static final String MAPPER = "io.github.eschizoid.telescope.spring.TelescopeMapper";
   private static final String TRANSFORM = "io.github.eschizoid.telescope.spring.TelescopeTransformer";
   private static final String BRIDGE = "io.github.eschizoid.telescope.annotations.Bridge";
+  private static final String BRIDGES = "io.github.eschizoid.telescope.annotations.Bridges";
   private static final String PATH = "io.github.eschizoid.telescope.spring.TelescopeTransformation";
   private static final String PROJECTION = "io.github.eschizoid.telescope.spring.TelescopeProjection";
   private static final String CUSTOMIZER = "io.github.eschizoid.telescope.spring.TelescopeCustomizer";
@@ -52,13 +53,13 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment round) {
     final var mapper = processingEnv.getElementUtils().getTypeElement(MAPPER);
-    if (mapper != null) for (final var element : round.getElementsAnnotatedWith(mapper)) generateMapper(element);
+    if (mapper != null) for (final var element : round.getElementsAnnotatedWith(mapper)) generateMapper(element, round);
     final var transform = processingEnv.getElementUtils().getTypeElement(TRANSFORM);
     if (transform != null) for (final var element : round.getElementsAnnotatedWith(transform)) generatePath(element);
     return true;
   }
 
-  private void generateMapper(final Element element) {
+  private void generateMapper(final Element element, final RoundEnvironment round) {
     final var blueprint = interfaceType(element, "@TelescopeMapper");
     if (blueprint == null) return;
     final var config = annotation(blueprint, MAPPER);
@@ -117,36 +118,18 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     }
     final var declaredTransformers = transformerTypes(config, blueprint, from);
     if (declaredTransformers == null) return;
-    final var source = (TypeElement) from.asElement();
-    final var sourcePackage = processingEnv.getElementUtils().getPackageOf(source).getQualifiedName().toString();
-    final var bridgeName = source.getSimpleName() + "Bridge";
-    final var bridgeClass = sourcePackage.isEmpty() ? bridgeName : sourcePackage + "." + bridgeName;
-    final var bridge = annotation(source, BRIDGE);
-    final var bridgeTarget = bridge == null ? null : declaredType(bridge, "value");
-    final var compiledBridge = processingEnv.getElementUtils().getTypeElement(bridgeClass);
-    final var compiledForward =
-      compiledBridge != null &&
-      ElementFilter.methodsIn(compiledBridge.getEnclosedElements())
-        .stream()
-        .anyMatch(
-          m ->
-            m.getSimpleName().contentEquals("forward") &&
-            m.getModifiers().contains(Modifier.PUBLIC) &&
-            m.getModifiers().contains(Modifier.STATIC) &&
-            m.getParameters().size() == 1 &&
-            same(m.getParameters().getFirst().asType(), from) &&
-            same(m.getReturnType(), to)
-        );
-    if (projection == null && (bridgeTarget == null || !same(bridgeTarget, to)) && !compiledForward) {
+    final var bridgeClass = bridgeFor(from, to, round);
+    if (projection == null && bridgeClass == null) {
       error(blueprint, "@TelescopeMapper requires a generated @Bridge for " + from + " -> " + to);
       return;
     }
+    final var bridgeName = bridgeClass == null ? null : bridgeClass.substring(bridgeClass.lastIndexOf('.') + 1);
     final var method = mappingMethods.getFirst();
     final var model = simple(from);
     final var focus = "TelescopeTransformation<" + model + ", ?>";
     final var refs = new ArrayList<String>();
     final var customTranslate = overridesTranslate(blueprint, projection);
-    final var useBridge = !customTranslate && ((bridgeTarget != null && same(bridgeTarget, to)) || compiledForward);
+    final var useBridge = !customTranslate && bridgeClass != null;
     if (useBridge) refs.add(bridgeClass);
     else {
       refs.add("io.github.eschizoid.telescope.Telescope");
@@ -327,6 +310,85 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
         out.println("  }");
       }
     });
+  }
+
+  /**
+   * The qualified name of the generated bridge for {@code from -> to}, or null when there is none.
+   * The names follow {@code BridgeProcessor}: a carrier's bridge is {@code <Carrier>Bridge} in the
+   * carrier's package; a source declaring several targets gets {@code <Source>To<Target>Bridge}; a
+   * source declaring one gets {@code <Source>Bridge}. A bridge compiled into a dependency has no
+   * annotation left to read, so the two source-anchored names are also probed as classes.
+   */
+  private String bridgeFor(final DeclaredType from, final DeclaredType to, final RoundEnvironment round) {
+    final var elements = processingEnv.getElementUtils();
+    final var source = (TypeElement) from.asElement();
+    final var sourceBridges = bridgeAnnotations(source);
+    for (final var bridge : sourceBridges) {
+      final var target = declaredType(bridge, "value");
+      if (target != null && same(target, to)) return sourceAnchoredName(source, to, sourceBridges.size() > 1);
+    }
+    final var bridge = elements.getTypeElement(BRIDGE);
+    final var bridges = elements.getTypeElement(BRIDGES);
+    if (bridge != null && bridges != null) {
+      for (final var carrier : round.getElementsAnnotatedWithAny(bridge, bridges)) {
+        for (final var mirror : bridgeAnnotations(carrier)) {
+          final var carriedSource = declaredType(mirror, "source");
+          final var carriedTarget = declaredType(mirror, "target");
+          if (carriedSource != null && carriedTarget != null && same(carriedSource, from) && same(carriedTarget, to)) {
+            final var pkg = elements.getPackageOf(carrier).getQualifiedName().toString();
+            final var name = carrier.getSimpleName() + "Bridge";
+            return pkg.isEmpty() ? name : pkg + "." + name;
+          }
+        }
+      }
+    }
+    for (final var multiTarget : List.of(false, true)) {
+      final var name = sourceAnchoredName(source, to, multiTarget);
+      if (hasForward(elements.getTypeElement(name), from, to)) return name;
+    }
+    return null;
+  }
+
+  private String sourceAnchoredName(final TypeElement source, final DeclaredType to, final boolean multiTarget) {
+    final var pkg = processingEnv.getElementUtils().getPackageOf(source).getQualifiedName().toString();
+    final var name = multiTarget
+      ? source.getSimpleName() + "To" + to.asElement().getSimpleName() + "Bridge"
+      : source.getSimpleName() + "Bridge";
+    return pkg.isEmpty() ? name : pkg + "." + name;
+  }
+
+  /**
+   * Every {@code @Bridge} on {@code element}, whether written once or repeated under
+   * {@code @Bridges}.
+   */
+  private static List<AnnotationMirror> bridgeAnnotations(final Element element) {
+    final var result = new ArrayList<AnnotationMirror>();
+    final var single = annotation(element, BRIDGE);
+    if (single != null) result.add(single);
+    if (value(annotation(element, BRIDGES), "value") instanceof List<?> repeated) {
+      for (final var entry : repeated)
+        if (entry instanceof AnnotationValue av && av.getValue() instanceof AnnotationMirror m) {
+          result.add(m);
+        }
+    }
+    return result;
+  }
+
+  private boolean hasForward(final TypeElement bridge, final DeclaredType from, final DeclaredType to) {
+    return (
+      bridge != null &&
+      ElementFilter.methodsIn(bridge.getEnclosedElements())
+        .stream()
+        .anyMatch(
+          m ->
+            m.getSimpleName().contentEquals("forward") &&
+            m.getModifiers().contains(Modifier.PUBLIC) &&
+            m.getModifiers().contains(Modifier.STATIC) &&
+            m.getParameters().size() == 1 &&
+            same(m.getParameters().getFirst().asType(), from) &&
+            same(m.getReturnType(), to)
+        )
+    );
   }
 
   /**
