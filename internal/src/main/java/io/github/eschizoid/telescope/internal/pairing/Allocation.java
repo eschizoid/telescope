@@ -52,12 +52,17 @@ public sealed interface Allocation {
      */
     TABLE_ARITHMETIC,
     /**
-     * {@code new Impl(comparator)} — a container that keeps an order rather than a size.
+     * A container that keeps an order rather than a size, built from the order its source carries.
      *
-     * <p>The comparator is the source <em>instance</em>'s, not one implied by its declared type. A
-     * field written as a plain {@code Map} can hold one ordered by a comparator, so a renderer that
-     * reads the declaration builds a naturally ordered container where the other carries the order
-     * across. The two do differ on this today, which is why the value says which.
+     * <p>The comparator is the source <em>instance</em>'s, not one implied by its declared type: a
+     * field written as a plain {@code Map} can hold one ordered by a comparator. A renderer with no
+     * instance to read therefore emits the read rather than performing it — {@code src instanceof
+     * SortedMap<?, ?> s ? s.comparator() : null} — since the declared type need not have a {@code
+     * comparator()} to call.
+     *
+     * <p>A set's comparator orders the elements themselves, so it transfers only while those keep
+     * their type. Where a conversion changes them there is no comparator to carry, and a container
+     * built as if there were is one quietly in a different order.
      */
     ORDERING,
   }

@@ -17,6 +17,7 @@ import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeSet;
@@ -129,5 +130,80 @@ class AllocationPolicyTest {
     assertNull(RULES.allocationFor(HashSet.class, Kind.LIST));
     assertNull(RULES.allocationFor(SortedMap.class, Kind.LIST));
     assertNull(RULES.allocationFor(Collection.class, Kind.MAP_VALUES));
+  }
+
+  /**
+   * What every declared row is expected to decide, stated where the table is not.
+   *
+   * <p>A restatement of the table is normally a smell, and here it is the only shape available:
+   * deriving the expectation from the table would be circular, and the whole value of the second
+   * copy is that it lives where someone editing the first is not looking. So it restates, and it
+   * restates completely — a row with no expectation below fails, which is what stops this falling
+   * behind the way a hand-picked sample does.
+   */
+  private static final Map<String, Call> EXPECTED = Map.ofEntries(
+    Map.entry("java.util.List", Call.COUNT),
+    Map.entry("java.util.ArrayList", Call.COUNT),
+    Map.entry("java.util.LinkedList", Call.NO_ARG),
+    Map.entry("java.util.Deque", Call.COUNT),
+    Map.entry("java.util.Queue", Call.COUNT),
+    Map.entry("java.util.Vector", Call.COUNT),
+    Map.entry("java.util.Stack", Call.NO_ARG),
+    Map.entry("java.util.PriorityQueue", Call.NO_ARG),
+    Map.entry("java.util.concurrent.LinkedBlockingQueue", Call.NO_ARG),
+    Map.entry("java.util.Set", Call.TABLE_FACTORY),
+    Map.entry("java.util.LinkedHashSet", Call.TABLE_FACTORY),
+    Map.entry("java.util.HashSet", Call.TABLE_FACTORY),
+    Map.entry("java.util.TreeSet", Call.ORDERING),
+    Map.entry("java.util.SortedSet", Call.ORDERING),
+    Map.entry("java.util.NavigableSet", Call.ORDERING),
+    Map.entry("java.util.concurrent.ConcurrentSkipListSet", Call.ORDERING),
+    Map.entry("java.util.Map", Call.TABLE_FACTORY),
+    Map.entry("java.util.LinkedHashMap", Call.TABLE_FACTORY),
+    Map.entry("java.util.HashMap", Call.TABLE_FACTORY),
+    Map.entry("java.util.TreeMap", Call.ORDERING),
+    Map.entry("java.util.SortedMap", Call.ORDERING),
+    Map.entry("java.util.NavigableMap", Call.ORDERING),
+    Map.entry("java.util.concurrent.ConcurrentHashMap", Call.COUNT),
+    Map.entry("java.util.concurrent.ConcurrentMap", Call.COUNT),
+    Map.entry("java.util.concurrent.ConcurrentSkipListMap", Call.ORDERING),
+    Map.entry("java.util.IdentityHashMap", Call.COUNT),
+    Map.entry("java.util.WeakHashMap", Call.TABLE_ARITHMETIC)
+  );
+
+  /** Rows that decide a refusal rather than a build, so they have no constructor to expect. */
+  private static final Set<String> EXPECTED_REFUSALS = Set.of("java.util.EnumMap");
+
+  @Test
+  @DisplayName("every row in the table decides the constructor this file says it should")
+  void everyRowDecidesTheExpectedCall() {
+    // The unit that matters is the implementation, not the declared name: moving one to a
+    // different constructor means relabelling every row that reaches it, so a sample of rows
+    // leaves whichever implementations the sample missed unguarded. Walking the table is what
+    // makes a new row a red test until someone says what it should decide.
+    for (final var entry : PairingRules.declaredTypes().entrySet()) {
+      final var declared = entry.getKey();
+      assertTrue(
+        EXPECTED.containsKey(declared) || EXPECTED_REFUSALS.contains(declared),
+        () -> declared + " is decided by the table and expected by nothing"
+      );
+
+      final var decision = RULES.allocationFor(classFor(declared), entry.getValue());
+      if (EXPECTED_REFUSALS.contains(declared)) {
+        assertInstanceOf(Allocation.Refuse.class, decision, () -> declared + " should carry a refusal");
+        continue;
+      }
+      final var expected = EXPECTED.get(declared);
+      final var build = assertInstanceOf(Allocation.Build.class, decision, () -> declared + " should be buildable");
+      assertEquals(expected, build.call(), () -> declared + " is built by a different constructor than expected");
+    }
+  }
+
+  private static Class<?> classFor(final String name) {
+    try {
+      return Class.forName(name);
+    } catch (final ClassNotFoundException e) {
+      throw new IllegalStateException("the table names a class that is not on the classpath: " + name, e);
+    }
   }
 }
