@@ -35,9 +35,10 @@ import org.junit.jupiter.params.provider.MethodSource;
  * constructor by the runtime lift, once as the text of a {@code new} expression by the processor. A
  * decision that lives in one place cannot drift between them; these pin what it decides.
  *
- * <p>The sizing is a separate answer from the implementation because the two renderings need it
- * separately: the same "size it from the source" means an element count to a list and a table
- * capacity to a hash container, which for the same elements is a different number.
+ * <p>Which constructor is a separate answer from which class, because a renderer needs both and
+ * they move independently: the same "size it from the source" passes an element count to a list and
+ * a table capacity to a hash container, which for the same elements is a different number, and a
+ * row moved between the two produces the right class at the wrong size.
  */
 class AllocationPolicyTest {
 
@@ -133,6 +134,13 @@ class AllocationPolicyTest {
   }
 
   /**
+   * Stands for a row that refuses. The words it refuses with are pinned by {@link
+   * #enumMapCarriesItsRefusal()}, so repeating them here would give two places to edit and no
+   * second opinion.
+   */
+  private static final Allocation REFUSED = new Allocation.Refuse("");
+
+  /**
    * What every declared row is expected to decide, stated where the table is not.
    *
    * <p>A restatement of the table is normally a smell, and here it is the only shape available:
@@ -140,62 +148,86 @@ class AllocationPolicyTest {
    * copy is that it lives where someone editing the first is not looking. So it restates, and it
    * restates completely — a row with no expectation below fails, which is what stops this falling
    * behind the way a hand-picked sample does.
+   *
+   * <p>It carries the whole decision rather than the constructor alone. The class half moves on its
+   * own: a row repointed at a different implementation of the same family builds a container of the
+   * wrong type at the right size, which every count and contents assertion agrees with.
    */
-  private static final Map<String, Call> EXPECTED = Map.ofEntries(
-    Map.entry("java.util.List", Call.COUNT),
-    Map.entry("java.util.ArrayList", Call.COUNT),
-    Map.entry("java.util.LinkedList", Call.NO_ARG),
-    Map.entry("java.util.Deque", Call.COUNT),
-    Map.entry("java.util.Queue", Call.COUNT),
-    Map.entry("java.util.Vector", Call.COUNT),
-    Map.entry("java.util.Stack", Call.NO_ARG),
-    Map.entry("java.util.PriorityQueue", Call.NO_ARG),
-    Map.entry("java.util.concurrent.LinkedBlockingQueue", Call.NO_ARG),
-    Map.entry("java.util.Set", Call.TABLE_FACTORY),
-    Map.entry("java.util.LinkedHashSet", Call.TABLE_FACTORY),
-    Map.entry("java.util.HashSet", Call.TABLE_FACTORY),
-    Map.entry("java.util.TreeSet", Call.ORDERING),
-    Map.entry("java.util.SortedSet", Call.ORDERING),
-    Map.entry("java.util.NavigableSet", Call.ORDERING),
-    Map.entry("java.util.concurrent.ConcurrentSkipListSet", Call.ORDERING),
-    Map.entry("java.util.Map", Call.TABLE_FACTORY),
-    Map.entry("java.util.LinkedHashMap", Call.TABLE_FACTORY),
-    Map.entry("java.util.HashMap", Call.TABLE_FACTORY),
-    Map.entry("java.util.TreeMap", Call.ORDERING),
-    Map.entry("java.util.SortedMap", Call.ORDERING),
-    Map.entry("java.util.NavigableMap", Call.ORDERING),
-    Map.entry("java.util.concurrent.ConcurrentHashMap", Call.COUNT),
-    Map.entry("java.util.concurrent.ConcurrentMap", Call.COUNT),
-    Map.entry("java.util.concurrent.ConcurrentSkipListMap", Call.ORDERING),
-    Map.entry("java.util.IdentityHashMap", Call.COUNT),
-    Map.entry("java.util.WeakHashMap", Call.TABLE_ARITHMETIC)
+  private static final Map<String, Allocation> EXPECTED = Map.ofEntries(
+    Map.entry("java.util.List", build("java.util.ArrayList", Call.COUNT)),
+    Map.entry("java.util.ArrayList", build("java.util.ArrayList", Call.COUNT)),
+    Map.entry("java.util.LinkedList", build("java.util.LinkedList", Call.NO_ARG)),
+    Map.entry("java.util.Deque", build("java.util.ArrayDeque", Call.COUNT)),
+    Map.entry("java.util.Queue", build("java.util.ArrayDeque", Call.COUNT)),
+    Map.entry("java.util.Vector", build("java.util.Vector", Call.COUNT)),
+    Map.entry("java.util.Stack", build("java.util.Stack", Call.NO_ARG)),
+    Map.entry("java.util.PriorityQueue", build("java.util.PriorityQueue", Call.NO_ARG)),
+    Map.entry(
+      "java.util.concurrent.LinkedBlockingQueue",
+      build("java.util.concurrent.LinkedBlockingQueue", Call.NO_ARG)
+    ),
+    Map.entry("java.util.Set", build("java.util.LinkedHashSet", Call.TABLE_FACTORY)),
+    Map.entry("java.util.LinkedHashSet", build("java.util.LinkedHashSet", Call.TABLE_FACTORY)),
+    Map.entry("java.util.HashSet", build("java.util.HashSet", Call.TABLE_FACTORY)),
+    Map.entry("java.util.TreeSet", build("java.util.TreeSet", Call.ORDERING)),
+    Map.entry("java.util.SortedSet", build("java.util.TreeSet", Call.ORDERING)),
+    Map.entry("java.util.NavigableSet", build("java.util.TreeSet", Call.ORDERING)),
+    Map.entry(
+      "java.util.concurrent.ConcurrentSkipListSet",
+      build("java.util.concurrent.ConcurrentSkipListSet", Call.ORDERING)
+    ),
+    Map.entry("java.util.Map", build("java.util.LinkedHashMap", Call.TABLE_FACTORY)),
+    Map.entry("java.util.LinkedHashMap", build("java.util.LinkedHashMap", Call.TABLE_FACTORY)),
+    Map.entry("java.util.HashMap", build("java.util.HashMap", Call.TABLE_FACTORY)),
+    Map.entry("java.util.TreeMap", build("java.util.TreeMap", Call.ORDERING)),
+    Map.entry("java.util.SortedMap", build("java.util.TreeMap", Call.ORDERING)),
+    Map.entry("java.util.NavigableMap", build("java.util.TreeMap", Call.ORDERING)),
+    Map.entry("java.util.concurrent.ConcurrentHashMap", build("java.util.concurrent.ConcurrentHashMap", Call.COUNT)),
+    Map.entry("java.util.concurrent.ConcurrentMap", build("java.util.concurrent.ConcurrentHashMap", Call.COUNT)),
+    Map.entry(
+      "java.util.concurrent.ConcurrentSkipListMap",
+      build("java.util.concurrent.ConcurrentSkipListMap", Call.ORDERING)
+    ),
+    Map.entry("java.util.IdentityHashMap", build("java.util.IdentityHashMap", Call.COUNT)),
+    Map.entry("java.util.WeakHashMap", build("java.util.WeakHashMap", Call.TABLE_ARITHMETIC)),
+    Map.entry("java.util.EnumMap", REFUSED)
   );
 
-  /** Rows that decide a refusal rather than a build, so they have no constructor to expect. */
-  private static final Set<String> EXPECTED_REFUSALS = Set.of("java.util.EnumMap");
+  private static Allocation build(final String implName, final Call call) {
+    return new Allocation.Build(implName, call);
+  }
 
   @Test
-  @DisplayName("every row in the table decides the constructor this file says it should")
-  void everyRowDecidesTheExpectedCall() {
+  @DisplayName("every row in the table decides the class and the constructor this file says it should")
+  void everyRowDecidesTheExpectedAllocation() {
+    // A row and its expectation are added and removed together. Asserted as one set equality
+    // rather than per row, so a dropped row fails here instead of leaving a dead expectation
+    // nothing reads.
+    assertEquals(EXPECTED.keySet(), PairingRules.declaredTypes().keySet());
+
     // The unit that matters is the implementation, not the declared name: moving one to a
     // different constructor means relabelling every row that reaches it, so a sample of rows
     // leaves whichever implementations the sample missed unguarded. Walking the table is what
     // makes a new row a red test until someone says what it should decide.
     for (final var entry : PairingRules.declaredTypes().entrySet()) {
       final var declared = entry.getKey();
-      assertTrue(
-        EXPECTED.containsKey(declared) || EXPECTED_REFUSALS.contains(declared),
-        () -> declared + " is decided by the table and expected by nothing"
-      );
-
       final var decision = RULES.allocationFor(classFor(declared), entry.getValue());
-      if (EXPECTED_REFUSALS.contains(declared)) {
+
+      if (!(EXPECTED.get(declared) instanceof Allocation.Build expected)) {
         assertInstanceOf(Allocation.Refuse.class, decision, () -> declared + " should carry a refusal");
         continue;
       }
-      final var expected = EXPECTED.get(declared);
       final var build = assertInstanceOf(Allocation.Build.class, decision, () -> declared + " should be buildable");
-      assertEquals(expected, build.call(), () -> declared + " is built by a different constructor than expected");
+      assertEquals(
+        expected.implName(),
+        build.implName(),
+        () -> declared + " is rebuilt as a different class than expected"
+      );
+      assertEquals(
+        expected.call(),
+        build.call(),
+        () -> declared + " is built by a different constructor than expected"
+      );
     }
   }
 

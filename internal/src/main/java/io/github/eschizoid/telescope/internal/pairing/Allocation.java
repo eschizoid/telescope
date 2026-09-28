@@ -61,8 +61,10 @@ public sealed interface Allocation {
      * comparator()} to call.
      *
      * <p>A set's comparator orders the elements themselves, so it transfers only while those keep
-     * their type. Where a conversion changes them there is no comparator to carry, and a container
-     * built as if there were is one quietly in a different order.
+     * their type. Where a conversion changes them, a rebuild is refused rather than reordered, and
+     * the refusal names {@code Mapping.via(...)} with a target comparator as the way through. It is
+     * conditional on the source instance: a sorted set in natural order carries no comparator to
+     * invalidate, so it converts like any other set.
      */
     ORDERING,
   }
