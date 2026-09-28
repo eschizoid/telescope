@@ -102,25 +102,50 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
         return;
       }
     }
-    final var methods = abstractMethods(blueprint);
-    final var mappingMethods = methods
-      .stream()
-      .filter(m -> m.getSimpleName().contentEquals("map"))
-      .toList();
-    final var additionMethods = methods
-      .stream()
-      .filter(m -> m.getSimpleName().contentEquals("addTransformer"))
-      .toList();
+    // Checked in this order so each message names the part that is wrong, not the part already met.
+    final var projectionElement = processingEnv.getElementUtils().getTypeElement(PROJECTION);
+    final var mappingMethods = new ArrayList<ExecutableElement>();
+    final var extraMethods = new ArrayList<ExecutableElement>();
+    for (final var m : abstractMethods(blueprint)) {
+      if (m.getSimpleName().contentEquals("map")) mappingMethods.add(m);
+      else if (projection == null || !isProjectionMethod(m, blueprint, projectionElement)) extraMethods.add(m);
+    }
+    if (mappingMethods.isEmpty()) {
+      final var found = extraMethods
+        .stream()
+        .map(m -> m.getSimpleName().toString())
+        .collect(Collectors.joining(", "));
+      error(
+        blueprint,
+        "@TelescopeMapper requires a method named map accepting " +
+          from +
+          " and returning " +
+          to +
+          (found.isEmpty() ? "" : "; found " + found)
+      );
+      return;
+    }
+    if (!extraMethods.isEmpty()) {
+      final var extra = extraMethods.getFirst();
+      error(
+        blueprint,
+        "@TelescopeMapper cannot implement " +
+          ((TypeElement) extra.getEnclosingElement()).getQualifiedName() +
+          "." +
+          extra.getSimpleName() +
+          "(); only map may be abstract"
+      );
+      return;
+    }
+    final var mapSignature = signature(blueprint, mappingMethods.getFirst());
     if (
       mappingMethods.size() != 1 ||
-      methods.size() != 1 + (projection == null ? 0 : 3) ||
-      additionMethods.size() != (projection == null ? 0 : 1) ||
       !mappingMethods.getFirst().getTypeParameters().isEmpty() ||
-      signature(blueprint, mappingMethods.getFirst()).getParameterTypes().size() != 1 ||
-      !same(signature(blueprint, mappingMethods.getFirst()).getParameterTypes().getFirst(), from) ||
-      !same(signature(blueprint, mappingMethods.getFirst()).getReturnType(), to)
+      mapSignature.getParameterTypes().size() != 1 ||
+      !same(mapSignature.getParameterTypes().getFirst(), from) ||
+      !same(mapSignature.getReturnType(), to)
     ) {
-      error(blueprint, "@TelescopeMapper requires one method accepting " + from + " and returning " + to);
+      error(blueprint, "@TelescopeMapper requires map to accept " + from + " and return " + to);
       return;
     }
     final var declaredTransformers = transformerTypes(config, blueprint, from);
@@ -398,6 +423,18 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     );
   }
 
+  /** Whether {@code m} is one of TelescopeProjection's own methods, or an override of one. */
+  private boolean isProjectionMethod(
+    final ExecutableElement m,
+    final TypeElement blueprint,
+    final TypeElement projection
+  ) {
+    final var elements = processingEnv.getElementUtils();
+    return ElementFilter.methodsIn(projection.getEnclosedElements())
+      .stream()
+      .anyMatch(p -> p.equals(m) || elements.overrides(m, p, blueprint));
+  }
+
   /**
    * Whether the blueprint's hierarchy overrides {@code TelescopeProjection.translate}. An override
    * on any parent interface counts; a method that is merely named {@code translate} does not, and a
@@ -562,11 +599,11 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   }
 
   private TypeElement interfaceType(final Element element, final String annotation) {
-    if (
-      !(element instanceof TypeElement type) ||
-      type.getKind() != ElementKind.INTERFACE ||
-      !type.getTypeParameters().isEmpty()
-    ) {
+    if (!(element instanceof TypeElement type) || type.getKind() != ElementKind.INTERFACE) {
+      error(element, annotation + " requires an interface");
+      return null;
+    }
+    if (!type.getTypeParameters().isEmpty()) {
       error(element, annotation + " requires a non-generic interface");
       return null;
     }

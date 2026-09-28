@@ -196,7 +196,62 @@ class TelescopeSpringProcessorTest {
       )
     );
     assertThat(result.success()).isFalse();
-    assertThat(result.hasError("requires one method accepting")).isTrue();
+    assertThat(
+      result.hasError(
+        "@TelescopeMapper requires map to accept io.github.eschizoid.telescope.spring.blueprint.User and return io.github.eschizoid.telescope.spring.blueprint.UserDto"
+      )
+    )
+      .withFailMessage(result.errorMessages())
+      .isTrue();
+  }
+
+  @Test
+  void projectionMayRedeclareItsOwnMethods() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.RedeclaringProjection",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.spring.TelescopeMapper;
+        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.spring.blueprint.User;
+        import io.github.eschizoid.telescope.spring.blueprint.UserDto;
+        @TelescopeMapper
+        interface RedeclaringProjection extends TelescopeProjection<User, UserDto> {
+          @Override User backward(UserDto target);
+        }
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+  }
+
+  @Test
+  void mapperMethodWithAnotherNameIsToldToBeNamedMap() {
+    final var result = ProcessorHarness.compile(
+      new TelescopeMapperProcessor(),
+      source(
+        "demo.ToDtoMapper",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.spring.TelescopeMapper;
+        import io.github.eschizoid.telescope.spring.blueprint.User;
+        import io.github.eschizoid.telescope.spring.blueprint.UserDto;
+        @TelescopeMapper(from = User.class, to = UserDto.class)
+        interface ToDtoMapper { UserDto toDto(User input); }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(
+      result.hasError(
+        "@TelescopeMapper requires a method named map accepting io.github.eschizoid.telescope.spring.blueprint.User and returning io.github.eschizoid.telescope.spring.blueprint.UserDto; found toDto"
+      )
+    )
+      .withFailMessage(result.errorMessages())
+      .isTrue();
   }
 
   @Test
@@ -286,7 +341,9 @@ class TelescopeSpringProcessorTest {
       )
     );
     assertThat(result.success()).isFalse();
-    assertThat(result.hasError("requires one method accepting")).isTrue();
+    assertThat(result.hasError("@TelescopeMapper cannot implement demo.Extra.other(); only map may be abstract"))
+      .withFailMessage(result.errorMessages())
+      .isTrue();
     assertThat(result.generated()).doesNotContainKey("demo.ExtraMapperImpl");
   }
 
@@ -391,11 +448,15 @@ class TelescopeSpringProcessorTest {
 
   @Test
   void unsupportedBlueprintShapesHaveActionableDiagnostics() {
-    for (final var declaration : List.of(
-      "class InvalidTransformer {}",
-      "interface InvalidTransformer<T> {}",
-      "sealed interface InvalidTransformer permits Child {} non-sealed interface Child extends InvalidTransformer {}"
+    for (final var shape : List.of(
+      List.of("class InvalidTransformer {}", "@TelescopeTransformer requires an interface"),
+      List.of("interface InvalidTransformer<T> {}", "@TelescopeTransformer requires a non-generic interface"),
+      List.of(
+        "sealed interface InvalidTransformer permits Child {} non-sealed interface Child extends InvalidTransformer {}",
+        "@TelescopeTransformer requires a non-sealed interface"
+      )
     )) {
+      final var declaration = shape.get(0);
       final var result = ProcessorHarness.compileFully(
         List.of(new TelescopeMapperProcessor()),
         List.of(),
@@ -410,7 +471,8 @@ class TelescopeSpringProcessorTest {
         )
       );
       assertThat(result.success()).isFalse();
-      assertThat(result.hasError("requires a non-")).withFailMessage(result.errorMessages()).isTrue();
+      assertThat(result.errorMessages()).as(declaration).contains(shape.get(1));
+      assertThat(result.errorMessages()).as(declaration).containsOnlyOnce("@TelescopeTransformer requires");
     }
   }
 
