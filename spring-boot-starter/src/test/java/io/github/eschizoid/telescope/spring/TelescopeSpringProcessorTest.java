@@ -728,6 +728,31 @@ class TelescopeSpringProcessorTest {
   }
 
   @Test
+  void genericModelTypesAreRefusedOnTheBlueprint() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source("demo.Box", "package demo; public record Box<T>(T value, String label) {}"),
+      source("demo.BoxDto", "package demo; public record BoxDto<T>(T value, String label) {}"),
+      source(
+        "demo.BoxProjection",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.spring.TelescopeMapper;
+        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        @TelescopeMapper
+        public interface BoxProjection extends TelescopeProjection<Box<String>, BoxDto<String>> {}
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.hasError("@TelescopeMapper does not support generic model types: demo.Box<java.lang.String>"))
+      .withFailMessage(result.errorMessages())
+      .isTrue();
+    assertThat(result.generated()).doesNotContainKey("demo.BoxProjectionImpl");
+  }
+
+  @Test
   void projectionWithoutTranslateStillUsesTheBridge() {
     final var result = ProcessorHarness.compileFully(
       List.of(new TelescopeMapperProcessor()),

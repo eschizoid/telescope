@@ -95,6 +95,13 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       from = explicitFrom;
       to = explicitTo;
     }
+    // The generated class names each model in .class literals, where Java allows no type arguments.
+    for (final var model : List.of(from, to)) {
+      if (!((TypeElement) model.asElement()).getTypeParameters().isEmpty()) {
+        error(blueprint, "@TelescopeMapper does not support generic model types: " + model);
+        return;
+      }
+    }
     final var methods = abstractMethods(blueprint);
     final var mappingMethods = methods
       .stream()
