@@ -67,10 +67,38 @@ val imageTest by tasks.registering(Test::class) {
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     systemProperty("org.graalvm.nativeimage.imagecode", "runtime")
+    // Nothing this gate reads depends on which accessor substrate is in use, so running it on both
+    // costs a second filesystem walk and proves nothing.
+    filter { excludeTestsMatching("*DocCitationsResolveTest*") }
+}
+
+// The documentation is this gate's input, and a reference rots without anything under src/
+// changing, so a test task that declares only the source set is up to date on exactly the edit the
+// gate exists to catch. Its own task also keeps it out of the two runs of the whole suite.
+val docCitationsTest by tasks.registering(Test::class) {
+    description = "Checks that every path:line reference in docs/ resolves inside the file it names."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    filter { includeTestsMatching("*DocCitationsResolveTest*") }
+    // A reference rots from either end: an edit to the document, or an edit to the file it cites.
+    // Declaring the documents catches the first; the second is every tracked file's length, and
+    // four of the six references this gate was written for were broken by a rewrite of the README.
+    // Naming that as an input means naming the repository, and class-file normalisation would hide
+    // a comment added to a cited source anyway. The whole gate takes under half a second, so it
+    // runs every time rather than reasoning about which cited file happens to be an input.
+    outputs.upToDateWhen { false }
+    // And it stores nothing, since suppressing the up-to-date check means no run can ever load what
+    // a previous one wrote.
+    outputs.cacheIf { false }
+}
+
+tasks.named<Test>("test") {
+    filter { excludeTestsMatching("*DocCitationsResolveTest*") }
 }
 
 tasks.named("check") {
-    dependsOn(imageTest)
+    dependsOn(imageTest, docCitationsTest)
 }
 
 tasks.jacocoTestReport {

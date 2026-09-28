@@ -237,9 +237,10 @@ annotation attribute.
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:111-148 (4-arg to typed transform
 with Instant::toString/Instant::parse example; toOneWay forward-only);
 core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java:50-100 (per-field BridgeFn / static-method
-qualifier dispatch, DateTimeFormatter example at lines 83-94); README.md:981-991 (parity table maps to(src,tgt,fwd,bwd)
-to @Mapping qualifiedBy); core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java:2826-2845
-(number<->String transform round-trip)</sub>
+qualifier dispatch, DateTimeFormatter example at lines 83-94); README.md, "When MapStruct is the right pick" (which
+names `Mapping.via(...)` as the plain-Java stand-in for qualifier dispatch);
+core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java:2826-2845 (number<->String transform
+round-trip)</sub>
 
 ### Expressions
 
@@ -274,7 +275,7 @@ Mapping.java:276-318 (toOrElseGet closes defaultExpression, plus predicate-gated
 (afterForward(`BiFunction<A,B,B>`) source-aware hook, typed @AfterMapping analog);
 core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java:104-148 (fresh-per-call, forward-only
 semantics pinned); core/src/main/java/io/github/eschizoid/telescope/annotations/Compute.java:37-51 (codegen
-@Compute(using = Supplier.class) for @Bridge); README.md:991</sub>
+@Compute(using = Supplier.class) for @Bridge); README.md, the `constant` / `compute` example under "Mapping"</sub>
 
 ### Constants and defaults
 
@@ -315,7 +316,7 @@ backward drops to type default), core/src/test/java/io/github/eschizoid/telescop
 (null->default, pass-through, lazy supplier, empty-string/empty-collection predicates);
 core/src/main/java/io/github/eschizoid/telescope/annotations/Constant.java:41-50 and
 core/src/main/java/io/github/eschizoid/telescope/annotations/Default.java:48-61 (codegen literals, parsed at emit time
-against field type); README.md:986-990</sub>
+against field type); README.md, the `constant` / `compute` example under "Mapping"</sub>
 
 ## Collections & containers
 
@@ -460,8 +461,9 @@ lift, and forward-only (no backward through a consumed Stream).
 container kinds are exactly LIST, SET, MAP_VALUES, OPTIONAL — no STREAM);
 internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java:106-125 (containerViewOf
 recognizes only Optional/List/Set/Map — a Stream-typed component falls through to Incompatible); grep for 'Stream<'
-across core/src/main, core/src/test, and examples/ found no Stream mapping API (only an unrelated record named Stream in
-README.md:805)</sub>
+across core/src/main, core/src/test, and examples/ finds one hit, the JDK type used inside ContainerAllocatorCorpusTest,
+and no Stream mapping API. Two fixtures declare a record named Stream (TelescopeTest, and the examples'
+SealedAndFilterDemo); a user type that happens to carry the name is mapped as the record it is</sub>
 
 ## Lifecycle & customization
 
@@ -525,9 +527,9 @@ parameter threaded through nested via(...) mappers. forward(a) takes only the so
 context at build time, so per-request context (Locale, tenant) means building a mapper per context value (build cost is
 non-trivial) or closing over a ScopedValue/holder manually. No sugar exists for that.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:330 (forward(A a) — no context
-overload), :426 (backward(B b)); core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:1689-1719 (built-in
-ThreadLocal IdentityHashMap value-level cycle guard);
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `forward(final A a)` and
+`backward(final B b)` (neither takes a context argument); core/src/main/java/io/github/eschizoid/telescope/DeepMap.java,
+the `FORWARD_SEEN` / `BACKWARD_SEEN` fields (built-in ThreadLocal IdentityHashMap value-level cycle guard);
 core/src/test/java/io/github/eschizoid/telescope/CycleHandlingTest.java:31-86 (Optional/List self-reference and A-B
 mutual recursion map without StackOverflow, zero user code);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:111 (to(src, tgt, fwd, bwd) typed-transform row
@@ -856,10 +858,11 @@ PROPAGATE strategy, and under DEFAULT the coalesce wrap is skipped for target ty
 (records/beans/enums/custom). There is no per-mapper 'never call my conversion with null' switch; the recipe is toOrElse
 for the common cases or a null check inside the function.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:1573-1586 (assembleIso:
-`if (s == null) return null` on both directions — every auto record/bean pair guarded), 1306-1318 + 1360-1372
-(collection/map/list-lift isos: `if (src == null) return null`), 868-872 (telescope-to-telescope rows write
-`srcT.find(s).orElse(null)` leniently on null intermediates);
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `assembleIso` (its null guard:
+`if (s == null) return null` on both directions — every auto record/bean pair guarded),
+core/src/main/java/io/github/eschizoid/telescope/ContainerLifts.java, the three `if (src == null) return null` guards in
+the container copy and lift isos; core/src/main/java/io/github/eschizoid/telescope/TelescopeFixups.java,
+`srcT.find(s).orElse(null)` (a telescope-to-telescope row reads leniently through a null intermediate);
 internal/src/main/java/io/github/eschizoid/telescope/internal/optics/Iso.java:140-142 (coalesceForward:
 `x == null ? defaultValue : inner.to(x)` — inner fn skipped on null), 149-163 (liftList null pass-through);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:269-273 + 314-317 (toOrElse/toOrElseGet
