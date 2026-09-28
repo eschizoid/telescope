@@ -44,29 +44,15 @@ class DocCitationsResolveTest {
   private static final Pattern CITATION = Pattern.compile("([A-Za-z0-9_./-]+\\.(?:java|md|kts)):(\\d+)(?:-(\\d+))?");
 
   /**
-   * The blockquote and list markers a fence may sit behind. A fenced block inside a callout or a
-   * list item is still a fenced block, and the marker is whatever follows what encloses it.
-   */
-  private static final Pattern CONTAINERS = Pattern.compile(
-    "^(?: {0,3}(?:(?:>[ \\t]?)+|(?:[-*+]|\\d{1,9}[.)])[ \\t]+))*"
-  );
-
-  /**
-   * A fence opens on three or more backticks or tildes and closes on no fewer of the same one, at
-   * up to three spaces of indent inside whatever encloses it.
+   * A stack frame, which is the one place a {@code path:line} appears without being a reference
+   * into this repository.
    *
-   * <p>An opener and a closer are not interchangeable. An opener may carry an info string and a
-   * closer may not, so a document showing how to write a fenced block would otherwise have its
-   * inner ```` ```java ```` read as closing the outer fence. A backtick opener's info string may
-   * hold no backtick of its own, which is what keeps an inline span at the start of a line from
-   * being read as a fence.
-   *
-   * <p>Four spaces of indent is an indented code block rather than a fence, which is why the indent
-   * is bounded rather than stripped: a lone marker that deep is literal text, and the prose after
-   * it is still prose. What such a block holds is read as prose, since indentation alone does not
-   * separate one from a continued list item.
+   * <p>A frame is a transcript of something that ran, and its file and line belong to whatever was
+   * on that machine's classpath: generated sources, or the JDK. Recognising the frame is what tells
+   * those apart from a reference, rather than recognising the block a frame is usually written in.
+   * A frame says plainly which it is, and the block it sits in says nothing either way.
    */
-  private static final Pattern FENCE = Pattern.compile(" {0,3}(`{3,}|~{3,})(.*)");
+  private static final Pattern FRAME = Pattern.compile("\\bat\\s+[\\w.$]+\\([\\w$]+\\.(?:java|kt):\\d+\\)");
 
   /**
    * Every reference in one document that does not resolve, each named with the line it sits on.
@@ -77,10 +63,10 @@ class DocCitationsResolveTest {
    * open. A reference that is only a file name has nothing else to resolve by, and is ambiguous
    * rather than resolved when two files answer to it.
    *
-   * <p>A reference inside a fenced block is skipped: there it is a frame from a transcript of
-   * something that ran against generated sources or the JDK, and names no file here. An indented
-   * block is not skipped, because indentation alone does not distinguish one from a continued list
-   * item.
+   * <p>A reference inside a stack frame is skipped, a frame's file and line belonging to whatever
+   * ran rather than to anything here. Nothing else is skipped: a reference written inside a code
+   * block is one a reader would still follow, and it rots the same way, so it is checked like any
+   * other.
    */
   static List<String> unresolved(final String docPath, final String text, final Repo repo) {
     final var byName = new HashMap<String, List<String>>();
@@ -89,38 +75,25 @@ class DocCitationsResolveTest {
     }
 
     final var problems = new ArrayList<String>();
-    var openFence = "";
     var lineNumber = 0;
     // The three real terminators and nothing else: the \\R class also takes a form feed and four
-    // other separators, and the document line a reference sits on is the one fact this message
-    // has to be right about.
+    // other separators, and the document line a reference sits on is the one fact this message has
+    // to be right about.
     for (final var line : text.split("\\r\\n|\\n|\\r", -1)) {
       lineNumber++;
-      final var fence = FENCE.matcher(CONTAINERS.matcher(line).replaceFirst("").stripTrailing());
-      if (fence.matches()) {
-        final var marker = fence.group(1);
-        final var info = fence.group(2);
-        if (openFence.isEmpty()) {
-          // A backtick fence's info string holds no backtick, so a line beginning with an inline
-          // span is prose and is read as prose rather than skipped for having looked like a fence.
-          if (marker.charAt(0) != '`' || !info.contains("`")) {
-            openFence = marker;
-            continue;
-          }
-        } else {
-          final var closes =
-            info.isEmpty() && marker.charAt(0) == openFence.charAt(0) && marker.length() >= openFence.length();
-          if (closes) openFence = "";
-          continue;
-        }
-      }
-      if (!openFence.isEmpty()) continue;
+      // Where this line's frames are, so a reference inside one can be told from a reference beside
+      // one: a sentence can quote a frame and cite a file, and only the frame's own span is exempt.
+      final var frames = FRAME.matcher(line)
+        .results()
+        .map(r -> new int[] { r.start(), r.end() })
+        .toList();
 
       final var matcher = CITATION.matcher(line);
       while (matcher.find()) {
         final var cited = matcher.group(1);
         final var start = Integer.parseInt(matcher.group(2));
         final var end = matcher.group(3) == null ? start : Integer.parseInt(matcher.group(3));
+        if (frames.stream().anyMatch(f -> matcher.start() >= f[0] && matcher.end() <= f[1])) continue;
         final var where = docPath + ":" + lineNumber + " -> " + matcher.group();
 
         final List<String> candidates;
@@ -155,9 +128,6 @@ class DocCitationsResolveTest {
         }
       }
     }
-    // An unclosed fence would otherwise switch the scan off for the rest of the file, so every
-    // reference below it goes unchecked and the document reports clean.
-    if (!openFence.isEmpty()) problems.add(docPath + " leaves a " + openFence + " fence open");
     return problems;
   }
 
@@ -242,56 +212,56 @@ class DocCitationsResolveTest {
     }
 
     @Test
-    @DisplayName("a reference inside a fenced block is a transcript frame, whichever fence encloses it")
-    void fencedBlocksAreSkipped() {
-      for (final var fence : List.of("```", "```java", "~~~", "~~~~~")) {
-        final var doc = fence + "\nat Foo.bar(src/B.java:900)\n" + fence.replaceAll("[^`~]", "") + "\n";
-        assertEquals(List.of(), unresolved("d.md", doc, repo), () -> "inside " + fence);
-      }
-    }
-
-    @Test
-    @DisplayName("a shorter fence does not close a longer one")
-    void aShorterFenceDoesNotClose() {
-      final var problems = unresolved("d.md", "~~~~~\nsrc/B.java:900\n~~~\n", repo);
-      assertEquals(1, problems.size(), problems::toString);
-      assertTrue(problems.getFirst().contains("fence open"), problems::toString);
-    }
-
-    @Test
-    @DisplayName("a longer fence nested inside a shorter one does not close it")
-    void nestedFences() {
-      assertEquals(List.of(), unresolved("d.md", "`````\n```\nsrc/B.java:900\n```\n`````\n", repo));
-    }
-
-    @Test
-    @DisplayName("an unclosed fence is reported rather than silently ending the scan")
-    void unclosedFence() {
-      final var problems = unresolved("d.md", "```java\nnothing closes this\n", repo);
-      assertEquals(1, problems.size(), problems::toString);
-      assertTrue(problems.getFirst().contains("fence open"), problems::toString);
-    }
-
-    @Test
-    @DisplayName("a closing fence carries no info string, so a document showing a fence stays fenced")
-    void aClosingFenceCarriesNoInfoString() {
-      // The shape a document about fenced blocks has. Read the inner opener as a closer and the
-      // frame beneath it is scanned as prose, while the real closer opens a fence nothing shuts.
-      final var doc = "```\nprose\n```java\nsrc/B.java:900\n```\n";
+    @DisplayName("a reference inside a stack frame belongs to whatever ran, not to this repository")
+    void framesAreSkipped() {
+      // A frame names a file without a path, which is how the JVM writes one, and the name resolves
+      // here by itself — so without the exemption both of these would be reported.
+      final var doc = "It threw:\n\n```\nat Foo.bar(B.java:900)\n  at Baz.qux(B.java:901)\n```\n";
       assertEquals(List.of(), unresolved("d.md", doc, repo));
     }
 
     @Test
-    @DisplayName("an inline span at the start of a line is not a fence")
-    void inlineSpanAtLineStart() {
-      assertEquals(1, unresolved("d.md", "```src/B.java:900``` is a span\n", repo).size());
+    @DisplayName("a frame is skipped wherever it is written, fenced or not")
+    void framesAreSkippedOutsideFencesToo() {
+      // Nothing about a frame's file and line depends on the block it was pasted into, and a
+      // transcript quoted inline, in a callout, or in a list item is the same transcript.
+      for (final var line : List.of(
+        "at Foo.bar(B.java:900)",
+        "> at Foo.bar(B.java:900)",
+        "- at Foo.bar(B.java:900)",
+        "    at Foo.bar(B.java:900)"
+      )) {
+        assertEquals(List.of(), unresolved("d.md", line + "\n", repo), () -> line);
+      }
     }
 
     @Test
-    @DisplayName("a working tree with carriage returns is read the same way")
+    @DisplayName("a reference beside a frame on the same line is still checked")
+    void aReferenceBesideAFrameIsChecked() {
+      // Only the frame's own span is exempt. A sentence that quotes a frame and cites a file is two
+      // things, and the citation half is a reference a reader would follow.
+      final var problems = unresolved("d.md", "thrown at Foo.bar(B.java:900), see `src/B.java:99`\n", repo);
+      assertEquals(1, problems.size(), problems::toString);
+      assertTrue(problems.getFirst().contains("src/B.java:99"), problems::toString);
+    }
+
+    @Test
+    @DisplayName("a reference in a code block is one a reader would follow, so it is checked")
+    void codeBlocksAreChecked() {
+      // The exemption is for frames rather than for blocks. A sample that points a reader at a file
+      // is a reference like any other, whichever block it is written in, and it rots the same way.
+      final var doc = "```java\n// see src/B.java:900 for the guard\n```\n";
+      final var problems = unresolved("d.md", doc, repo);
+      assertEquals(1, problems.size(), problems::toString);
+      assertTrue(problems.getFirst().contains("points past the end"), problems::toString);
+    }
+
+    @Test
+    @DisplayName("a working tree with carriage returns reports the same line numbers")
     void carriageReturns() {
-      assertEquals(List.of(), unresolved("d.md", "```\r\nat Foo.bar(src/B.java:900)\r\n```\r\n", repo));
-      assertEquals(1, unresolved("d.md", "see `src/B.java:900`\r\n", repo).size());
+      final var problems = unresolved("d.md", "one\r\ntwo `src/B.java:900`\r\n", repo);
+      assertEquals(1, problems.size(), problems::toString);
+      assertTrue(problems.getFirst().startsWith("d.md:2 "), problems::toString);
     }
 
     @Test
@@ -310,27 +280,6 @@ class DocCitationsResolveTest {
       final var problems = unresolved("d.md", "`src/gone.java:1`", fake(Map.of("src/gone.java", 0L)));
       assertEquals(1, problems.size(), problems::toString);
       assertTrue(problems.getFirst().contains("the working tree does not have it"), problems::toString);
-    }
-
-    @Test
-    @DisplayName("a fence behind a blockquote or a list marker is still a fence")
-    void containersCarryTheirFences() {
-      // A callout wrapping a transcript is ordinary, and this repository already writes one.
-      // Reading
-      // the marker only at the start of a line reports every frame inside such a block as prose.
-      assertEquals(List.of(), unresolved("d.md", "> ```\n> at Foo.bar(src/B.java:900)\n> ```\n", repo));
-      assertEquals(List.of(), unresolved("d.md", "- ```\n  at Foo.bar(src/B.java:900)\n  ```\n", repo));
-      assertEquals(List.of(), unresolved("d.md", "1. ```\n   at Foo.bar(src/B.java:900)\n   ```\n", repo));
-    }
-
-    @Test
-    @DisplayName("four spaces of indent is an indented block, not a fence")
-    void indentedMarkersAreNotFences() {
-      // A lone marker that deep is literal text. Reading it as a fence leaves one open and swallows
-      // every reference below it, which is the opposite of what this gate is for.
-      final var problems = unresolved("d.md", "    ```\n\nsee `src/B.java:900`\n", repo);
-      assertEquals(1, problems.size(), problems::toString);
-      assertTrue(problems.getFirst().contains("points past the end"), problems::toString);
     }
 
     @Test
