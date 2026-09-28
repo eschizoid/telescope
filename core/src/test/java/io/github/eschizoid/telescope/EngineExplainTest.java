@@ -46,7 +46,10 @@ class EngineExplainTest {
       final var report = mapper.explain();
       assertFalse(report.isEmpty(), "fromMap must explain itself");
       assertEquals(
-        List.of(new OpticNode.Transformed("payment_id", "id", "map value", "converted")),
+        // Both type components hold a type name, which is how every other producer of this row
+        // writes them and where the report prints each. A value read from an untyped map is an
+        // Object.
+        List.of(new OpticNode.Transformed("payment_id", "id", "Object", "String")),
         report
           .transformations()
           .stream()

@@ -9,14 +9,18 @@ import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.function.Function;
 
 /**
@@ -40,13 +44,13 @@ final class FromMap {
   static <T> ForwardMapper<Map<String, Object>, T> build(final Class<T> target, final MapExtractStep... rows) {
     Objects.requireNonNull(target, "target");
     Objects.requireNonNull(rows, "rows");
-    final var byField = new LinkedHashMap<String, Extract<?, ?>>();
+    final var byField = new LinkedHashMap<String, MapExtractStep>();
     for (final var row : rows) {
-      if (!(row instanceof Extract<?, ?> e)) throw new IllegalArgumentException(
+      if (!(row instanceof Extract<?, ?>)) throw new IllegalArgumentException(
         "Telescope.fromMap rows must be built via MapExtractStep.extract(...)"
       );
-      final var fieldName = PropertyNames.property(LambdaIntrospection.methodNameOf(e.targetAccessor()));
-      if (byField.put(fieldName, e) != null) throw new IllegalArgumentException(
+      final var fieldName = PropertyNames.property(LambdaIntrospection.methodNameOf(row.targetAccessor()));
+      if (byField.put(fieldName, row) != null) throw new IllegalArgumentException(
         "Telescope.fromMap: duplicate extract row for target field '" + fieldName + "'"
       );
     }
@@ -55,6 +59,13 @@ final class FromMap {
     final var known = target.isRecord()
       ? Arrays.stream(target.getRecordComponents()).map(RecordComponent::getName).toList()
       : List.of(Beans.propertyNames(target));
+    final var typeByName = HashMap.<String, String>newHashMap(known.size());
+    if (target.isRecord()) {
+      for (final var comp : target.getRecordComponents())
+        typeByName.put(comp.getName(), DeepMap.simpleTypeName(comp.getGenericType()));
+    } else {
+      for (final var name : known) typeByName.put(name, DeepMap.simpleTypeName(Beans.propertyType(target, name)));
+    }
     for (final var fieldName : byField.keySet()) {
       if (!known.contains(fieldName)) throw new IllegalArgumentException(
         "Telescope.fromMap: extract row targets '" +
@@ -77,7 +88,10 @@ final class FromMap {
     for (final var comp : known) {
       final var row = byField.get(comp);
       if (row != null) {
-        trail.add(new OpticNode.Transformed(row.key(), comp, "map value", "converted"));
+        // Both of the row's type components are type names, and the report prints each where a type
+        // belongs. A value read from an untyped map is an Object, which is what the deep-mapping
+        // trail writes for an Object-typed source field through this same helper.
+        trail.add(new OpticNode.Transformed(row.key(), comp, "Object", typeByName.get(comp)));
       } else {
         trail.add(new OpticNode.Skipped(comp, OpticNode.Reason.MISSING_SOURCE));
       }
@@ -94,27 +108,29 @@ final class FromMap {
   @SuppressWarnings("unchecked")
   private static <T> Function<Map<String, Object>, T> recordForward(
     final Class<T> target,
-    final Map<String, Extract<?, ?>> byField
+    final Map<String, MapExtractStep> byField
   ) {
     final var comps = target.getRecordComponents();
     final var n = comps.length;
     final var keys = new String[n];
     final var converters = (Function<Object, Object>[]) new Function<?, ?>[n];
     final var defaults = new Object[n];
+    final var names = new String[n];
     for (var i = 0; i < n; i++) {
+      names[i] = comps[i].getName();
       final var e = byField.get(comps[i].getName());
       if (e != null) {
         keys[i] = e.key();
         converters[i] = (Function<Object, Object>) e.converter();
-      } else {
-        defaults[i] = NullDefaults.defaultFor(comps[i].getGenericType());
       }
+      defaults[i] = unfilledDefault(comps[i].getType(), comps[i].getGenericType());
     }
     return mapSrc -> {
       if (mapSrc == null) return null;
       final var args = new Object[n];
       for (var i = 0; i < n; i++) {
-        args[i] = keys[i] != null ? converters[i].apply(mapSrc.get(keys[i])) : defaults[i];
+        final var value = keys[i] == null ? null : mapSrc.get(keys[i]);
+        args[i] = value == null ? defaults[i] : converters[i].apply(value);
       }
       return Records.construct(target, args);
     };
@@ -129,7 +145,7 @@ final class FromMap {
    */
   private static <T> Function<Map<String, Object>, T> beanForward(
     final Class<T> target,
-    final Map<String, Extract<?, ?>> byField
+    final Map<String, MapExtractStep> byField
   ) {
     final var writer = Beans.autoWriter(target);
     final var propertyNames = Beans.propertyNames(target);
@@ -138,7 +154,7 @@ final class FromMap {
     @SuppressWarnings("unchecked")
     final var converters = (Function<Object, Object>[]) new Function<?, ?>[n];
     final var defaults = new Object[n];
-    final var indexByName = new HashMap<String, Integer>(n * 2);
+    final var indexByName = HashMap.<String, Integer>newHashMap(n);
     for (var i = 0; i < n; i++) {
       indexByName.put(propertyNames[i], i);
       final var e = byField.get(propertyNames[i]);
@@ -147,18 +163,52 @@ final class FromMap {
         @SuppressWarnings("unchecked")
         final var conv = (Function<Object, Object>) e.converter();
         converters[i] = conv;
-      } else {
-        defaults[i] = NullDefaults.defaultFor(Beans.propertyType(target, propertyNames[i]));
       }
+      final var propertyType = Beans.propertyType(target, propertyNames[i]);
+      defaults[i] = unfilledDefault(rawOf(propertyType), propertyType);
     }
     return mapSrc -> {
       if (mapSrc == null) return null;
       final Function<String, Object> valueByName = name -> {
         final var i = indexByName.get(name);
         if (i == null) return null;
-        return keys[i] != null ? converters[i].apply(mapSrc.get(keys[i])) : defaults[i];
+        final var value = keys[i] == null ? null : mapSrc.get(keys[i]);
+        return value == null ? defaults[i] : converters[i].apply(value);
       };
       return writer.construct(propertyNames, valueByName);
     };
+  }
+
+  /**
+   * The class behind a declared type, or null where there is none to read. A component declared
+   * with type arguments is a {@link ParameterizedType}, and reading only for a {@link Class}
+   * answers null for every one of them, which turns the fit test below into a test of nothing.
+   */
+  private static Class<?> rawOf(final Type type) {
+    if (type instanceof Class<?> raw) return raw;
+    return type instanceof ParameterizedType parameterized && parameterized.getRawType() instanceof Class<?> raw
+      ? raw
+      : null;
+  }
+
+  /**
+   * The value for a slot no row fills. The substitution table answers for the types it names and
+   * returns null for the rest, which a reference slot can hold and a primitive one cannot. A
+   * primitive therefore falls back to its own JLS default, the same value the rebuild path uses
+   * when it meets a null source for one.
+   */
+  private static Object unfilledDefault(final Class<?> raw, final Type generic) {
+    if (raw != null && raw.isPrimitive()) return Placeholders.primitiveDefault(raw);
+    final var tabled = NullDefaults.defaultFor(generic);
+    // Only the empty container and the empty Optional. The rest of that table substitutes a value
+    // for a null the mapping engine met -- "" for a String, ZERO for a BigDecimal -- which is a
+    // different question from what a key the map never carried should leave behind. Here the answer
+    // is the JLS default for the declared type, which is what the generated binder for @FromMap
+    // produces, so the two paths hand back the same record for the same map.
+    final var emptyContainer = tabled instanceof Collection<?> || tabled instanceof Map<?, ?>;
+    if (!emptyContainer && !(tabled instanceof Optional<?>)) return null;
+    // The table answers for a family, so the empty singleton it returns for a List cannot be held
+    // by a component declared as an ArrayList. A slot with no value it can hold is left empty.
+    return raw == null || raw.isInstance(tabled) ? tabled : null;
   }
 }
