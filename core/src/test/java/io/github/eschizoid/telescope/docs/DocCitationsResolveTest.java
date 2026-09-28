@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -41,8 +43,15 @@ class DocCitationsResolveTest {
 
   private static final Pattern CITATION = Pattern.compile("([A-Za-z0-9_./-]+\\.(?:java|md|kts)):(\\d+)(?:-(\\d+))?");
 
-  /** A fence opens on three or more backticks or tildes, and closes on no fewer of the same one. */
-  private static final Pattern FENCE = Pattern.compile("(`{3,}|~{3,}).*");
+  /**
+   * A fence opens on three or more backticks or tildes and closes on no fewer of the same one.
+   *
+   * <p>The two are not interchangeable. An opener may carry an info string and a closer may not, so
+   * a document showing how to write a fenced block would otherwise have its inner ```` ```java ````
+   * read as closing the outer fence. A backtick opener's info string may hold no backtick of its
+   * own, which is what keeps an inline span at the start of a line from being read as a fence.
+   */
+  private static final Pattern FENCE = Pattern.compile("(`{3,}|~{3,})(.*)");
 
   /**
    * Every reference in one document that does not resolve, each named with the line it sits on.
@@ -67,17 +76,25 @@ class DocCitationsResolveTest {
     final var problems = new ArrayList<String>();
     var openFence = "";
     var lineNumber = 0;
-    for (final var line : text.split("\n", -1)) {
+    for (final var line : text.split("\\R", -1)) {
       lineNumber++;
-      final var fence = FENCE.matcher(line.stripLeading());
+      final var fence = FENCE.matcher(line.strip());
       if (fence.matches()) {
         final var marker = fence.group(1);
+        final var info = fence.group(2);
         if (openFence.isEmpty()) {
-          openFence = marker;
+          // A backtick fence's info string holds no backtick, so a line beginning with an inline
+          // span is prose and is read as prose rather than skipped for having looked like a fence.
+          if (marker.charAt(0) != '`' || !info.contains("`")) {
+            openFence = marker;
+            continue;
+          }
+        } else {
+          final var closes =
+            info.isEmpty() && marker.charAt(0) == openFence.charAt(0) && marker.length() >= openFence.length();
+          if (closes) openFence = "";
           continue;
         }
-        if (marker.charAt(0) == openFence.charAt(0) && marker.length() >= openFence.length()) openFence = "";
-        continue;
       }
       if (!openFence.isEmpty()) continue;
 
@@ -103,8 +120,8 @@ class DocCitationsResolveTest {
           problems.add(where + " names no tracked file");
         } else if (candidates.size() > 1) {
           problems.add(where + " names " + candidates.size() + " files, so it resolves by accident");
-        } else if (start < 1) {
-          problems.add(where + " starts before the first line");
+        } else if (Math.min(start, end) < 1) {
+          problems.add(where + " names a line before the first");
         } else {
           final var lines = repo.lineCount(candidates.getFirst());
           if (Math.max(start, end) > lines) {
@@ -179,6 +196,7 @@ class DocCitationsResolveTest {
       assertEquals(1, unresolved("d.md", "`src/B.java:1-4`", repo).size());
       assertEquals(1, unresolved("d.md", "`src/B.java:9-1`", repo).size(), "a descending range still has an end");
       assertEquals(1, unresolved("d.md", "`src/B.java:0`", repo).size(), "there is no line zero");
+      assertEquals(1, unresolved("d.md", "`src/B.java:2-0`", repo).size(), "at either end of a range");
     }
 
     @Test
@@ -232,6 +250,39 @@ class DocCitationsResolveTest {
     }
 
     @Test
+    @DisplayName("a closing fence carries no info string, so a document showing a fence stays fenced")
+    void aClosingFenceCarriesNoInfoString() {
+      // The shape a document about fenced blocks has. Reading the inner opener as a closer scans
+      // the
+      // frame inside it as prose and leaves the outer closer opening a fence nothing shuts.
+      final var doc = "```\nprose\n```java\nsrc/B.java:900\n```\n";
+      assertEquals(List.of(), unresolved("d.md", doc, repo));
+    }
+
+    @Test
+    @DisplayName("an inline span at the start of a line is not a fence")
+    void inlineSpanAtLineStart() {
+      assertEquals(1, unresolved("d.md", "```src/B.java:900``` is a span\n", repo).size());
+    }
+
+    @Test
+    @DisplayName("a working tree with carriage returns is read the same way")
+    void carriageReturns() {
+      assertEquals(List.of(), unresolved("d.md", "```\r\nat Foo.bar(src/B.java:900)\r\n```\r\n", repo));
+      assertEquals(1, unresolved("d.md", "see `src/B.java:900`\r\n", repo).size());
+    }
+
+    @Test
+    @DisplayName("a cited file the working tree no longer has points past its end")
+    void aDeletedFileIsReportedRatherThanThrown() {
+      // git lists what its index holds, so a deleted file is still a path. Reporting it is the
+      // whole point; crashing on it loses every other reference in the run.
+      final var problems = unresolved("d.md", "`src/gone.java:1`", fake(Map.of("src/gone.java", 0L)));
+      assertEquals(1, problems.size(), problems::toString);
+      assertTrue(problems.getFirst().contains("points past the end"), problems::toString);
+    }
+
+    @Test
     @DisplayName("a reference in an inline code span is prose and is checked")
     void inlineSpansAreChecked() {
       assertEquals(1, unresolved("d.md", "as `src/B.java:99` shows", repo).size());
@@ -280,8 +331,11 @@ class DocCitationsResolveTest {
 
     private static List<String> tracked(final Path root) {
       try {
-        final var git = new ProcessBuilder("git", "ls-files", "-z").directory(root.toFile()).start();
-        final var out = new String(git.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        final var git = new ProcessBuilder("git", "ls-files", "-z")
+          .directory(root.toFile())
+          .redirectError(ProcessBuilder.Redirect.DISCARD)
+          .start();
+        final var out = new String(git.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         if (git.waitFor() != 0) throw new IllegalStateException("git ls-files failed in " + root);
         return List.of(out.split("\0"));
       } catch (final IOException e) {
@@ -297,12 +351,20 @@ class DocCitationsResolveTest {
       return paths;
     }
 
-    /** Counted over bytes, so a source file this JVM's charset cannot decode still has a length. */
+    /**
+     * Counted over bytes, so a source file this JVM's charset cannot decode still has a length.
+     *
+     * <p>A file git has in its index and the working tree does not answers with no lines, which
+     * makes every reference into it point past its end. Deleting a cited file is exactly the edit
+     * this gate is for, and it arrives here rather than as a missing path.
+     */
     @Override
     public long lineCount(final String path) {
       final byte[] bytes;
       try {
         bytes = Files.readAllBytes(root.resolve(path));
+      } catch (final NoSuchFileException e) {
+        return 0;
       } catch (final IOException e) {
         throw new UncheckedIOException(e);
       }
@@ -313,9 +375,12 @@ class DocCitationsResolveTest {
       return bytes.length > 0 && bytes[bytes.length - 1] != '\n' ? lines + 1 : lines;
     }
 
+    /** A tracked document the working tree no longer has holds no references to check. */
     private String read(final String path) {
       try {
         return Files.readString(root.resolve(path));
+      } catch (final NoSuchFileException e) {
+        return "";
       } catch (final IOException e) {
         throw new UncheckedIOException(e);
       }

@@ -527,9 +527,9 @@ parameter threaded through nested via(...) mappers. forward(a) takes only the so
 context at build time, so per-request context (Locale, tenant) means building a mapper per context value (build cost is
 non-trivial) or closing over a ScopedValue/holder manually. No sugar exists for that.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `forward(A a)` and
-`backward(B b)` (neither takes a context argument); core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, the
-`FORWARD_SEEN` / `BACKWARD_SEEN` fields (built-in ThreadLocal IdentityHashMap value-level cycle guard);
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `forward(final A a)` and
+`backward(final B b)` (neither takes a context argument); core/src/main/java/io/github/eschizoid/telescope/DeepMap.java,
+the `FORWARD_SEEN` / `BACKWARD_SEEN` fields (built-in ThreadLocal IdentityHashMap value-level cycle guard);
 core/src/test/java/io/github/eschizoid/telescope/CycleHandlingTest.java:31-86 (Optional/List self-reference and A-B
 mutual recursion map without StackOverflow, zero user code);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:111 (to(src, tgt, fwd, bwd) typed-transform row

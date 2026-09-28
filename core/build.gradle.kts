@@ -81,10 +81,13 @@ val docCitationsTest by tasks.registering(Test::class) {
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     filter { includeTestsMatching("*DocCitationsResolveTest*") }
-    inputs
-        .files(rootProject.layout.projectDirectory.dir("docs").asFileTree.matching { include("**/*.md") })
-        .withPropertyName("documentation")
-        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // A reference rots from either end: an edit to the document, or an edit to the file it cites.
+    // Declaring the documents catches the first; the second is every tracked file's length, and
+    // four of the six references this gate was written for were broken by a rewrite of the README.
+    // Naming that as an input means naming the repository, and class-file normalisation would hide
+    // a comment added to a cited source anyway. The whole gate takes under half a second, so it
+    // runs every time rather than reasoning about which cited file happens to be an input.
+    outputs.upToDateWhen { false }
 }
 
 tasks.named<Test>("test") {
