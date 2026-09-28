@@ -114,7 +114,7 @@ class AllocationPolicyTest {
     // row that refuses. A second one would arrive with its sentence unasserted.
     assertEquals(
       1,
-      EXPECTED.values().stream().filter(Allocation.Refuse.class::isInstance).count(),
+      EXPECTED.values().stream().map(Row::decision).filter(Allocation.Refuse.class::isInstance).count(),
       "a second refusing row needs its own words asserted"
     );
   }
@@ -166,49 +166,63 @@ class AllocationPolicyTest {
    * own: a row repointed at a different implementation of the same family builds a container of the
    * wrong type at the right size, which every count and contents assertion agrees with.
    */
-  private static final Map<String, Allocation> EXPECTED = Map.ofEntries(
-    Map.entry("java.util.List", build("java.util.ArrayList", Call.COUNT)),
-    Map.entry("java.util.ArrayList", build("java.util.ArrayList", Call.COUNT)),
-    Map.entry("java.util.LinkedList", build("java.util.LinkedList", Call.NO_ARG)),
-    Map.entry("java.util.Deque", build("java.util.ArrayDeque", Call.COUNT)),
-    Map.entry("java.util.Queue", build("java.util.ArrayDeque", Call.COUNT)),
-    Map.entry("java.util.Vector", build("java.util.Vector", Call.COUNT)),
-    Map.entry("java.util.Stack", build("java.util.Stack", Call.NO_ARG)),
-    Map.entry("java.util.PriorityQueue", build("java.util.PriorityQueue", Call.NO_ARG)),
+  private static final Map<String, Row> EXPECTED = Map.ofEntries(
+    Map.entry("java.util.List", list("java.util.ArrayList", Call.COUNT)),
+    Map.entry("java.util.ArrayList", list("java.util.ArrayList", Call.COUNT)),
+    Map.entry("java.util.LinkedList", list("java.util.LinkedList", Call.NO_ARG)),
+    Map.entry("java.util.Deque", list("java.util.ArrayDeque", Call.COUNT)),
+    Map.entry("java.util.Queue", list("java.util.ArrayDeque", Call.COUNT)),
+    Map.entry("java.util.Vector", list("java.util.Vector", Call.COUNT)),
+    Map.entry("java.util.Stack", list("java.util.Stack", Call.NO_ARG)),
+    Map.entry("java.util.PriorityQueue", list("java.util.PriorityQueue", Call.NO_ARG)),
     Map.entry(
       "java.util.concurrent.LinkedBlockingQueue",
-      build("java.util.concurrent.LinkedBlockingQueue", Call.NO_ARG)
+      list("java.util.concurrent.LinkedBlockingQueue", Call.NO_ARG)
     ),
-    Map.entry("java.util.Set", build("java.util.LinkedHashSet", Call.TABLE_FACTORY)),
-    Map.entry("java.util.LinkedHashSet", build("java.util.LinkedHashSet", Call.TABLE_FACTORY)),
-    Map.entry("java.util.HashSet", build("java.util.HashSet", Call.TABLE_FACTORY)),
-    Map.entry("java.util.TreeSet", build("java.util.TreeSet", Call.ORDERING)),
-    Map.entry("java.util.SortedSet", build("java.util.TreeSet", Call.ORDERING)),
-    Map.entry("java.util.NavigableSet", build("java.util.TreeSet", Call.ORDERING)),
+    Map.entry("java.util.Set", set("java.util.LinkedHashSet", Call.TABLE_FACTORY)),
+    Map.entry("java.util.LinkedHashSet", set("java.util.LinkedHashSet", Call.TABLE_FACTORY)),
+    Map.entry("java.util.HashSet", set("java.util.HashSet", Call.TABLE_FACTORY)),
+    Map.entry("java.util.TreeSet", set("java.util.TreeSet", Call.ORDERING)),
+    Map.entry("java.util.SortedSet", set("java.util.TreeSet", Call.ORDERING)),
+    Map.entry("java.util.NavigableSet", set("java.util.TreeSet", Call.ORDERING)),
     Map.entry(
       "java.util.concurrent.ConcurrentSkipListSet",
-      build("java.util.concurrent.ConcurrentSkipListSet", Call.ORDERING)
+      set("java.util.concurrent.ConcurrentSkipListSet", Call.ORDERING)
     ),
-    Map.entry("java.util.Map", build("java.util.LinkedHashMap", Call.TABLE_FACTORY)),
-    Map.entry("java.util.LinkedHashMap", build("java.util.LinkedHashMap", Call.TABLE_FACTORY)),
-    Map.entry("java.util.HashMap", build("java.util.HashMap", Call.TABLE_FACTORY)),
-    Map.entry("java.util.TreeMap", build("java.util.TreeMap", Call.ORDERING)),
-    Map.entry("java.util.SortedMap", build("java.util.TreeMap", Call.ORDERING)),
-    Map.entry("java.util.NavigableMap", build("java.util.TreeMap", Call.ORDERING)),
-    Map.entry("java.util.concurrent.ConcurrentHashMap", build("java.util.concurrent.ConcurrentHashMap", Call.COUNT)),
-    Map.entry("java.util.concurrent.ConcurrentMap", build("java.util.concurrent.ConcurrentHashMap", Call.COUNT)),
+    Map.entry("java.util.Map", map("java.util.LinkedHashMap", Call.TABLE_FACTORY)),
+    Map.entry("java.util.LinkedHashMap", map("java.util.LinkedHashMap", Call.TABLE_FACTORY)),
+    Map.entry("java.util.HashMap", map("java.util.HashMap", Call.TABLE_FACTORY)),
+    Map.entry("java.util.TreeMap", map("java.util.TreeMap", Call.ORDERING)),
+    Map.entry("java.util.SortedMap", map("java.util.TreeMap", Call.ORDERING)),
+    Map.entry("java.util.NavigableMap", map("java.util.TreeMap", Call.ORDERING)),
+    Map.entry("java.util.concurrent.ConcurrentHashMap", map("java.util.concurrent.ConcurrentHashMap", Call.COUNT)),
+    Map.entry("java.util.concurrent.ConcurrentMap", map("java.util.concurrent.ConcurrentHashMap", Call.COUNT)),
     Map.entry(
       "java.util.concurrent.ConcurrentSkipListMap",
-      build("java.util.concurrent.ConcurrentSkipListMap", Call.ORDERING)
+      map("java.util.concurrent.ConcurrentSkipListMap", Call.ORDERING)
     ),
-    Map.entry("java.util.IdentityHashMap", build("java.util.IdentityHashMap", Call.COUNT)),
-    Map.entry("java.util.WeakHashMap", build("java.util.WeakHashMap", Call.TABLE_ARITHMETIC)),
-    Map.entry("java.util.EnumMap", REFUSED)
+    Map.entry("java.util.IdentityHashMap", map("java.util.IdentityHashMap", Call.COUNT)),
+    Map.entry("java.util.WeakHashMap", map("java.util.WeakHashMap", Call.TABLE_ARITHMETIC)),
+    Map.entry("java.util.EnumMap", new Row(Kind.MAP_VALUES, REFUSED))
   );
 
-  private static Allocation build(final String implName, final Call call) {
-    return new Allocation.Build(implName, call);
+  private static Row list(final String implName, final Call call) {
+    return new Row(Kind.LIST, new Allocation.Build(implName, call));
   }
+
+  private static Row set(final String implName, final Call call) {
+    return new Row(Kind.SET, new Allocation.Build(implName, call));
+  }
+
+  private static Row map(final String implName, final Call call) {
+    return new Row(Kind.MAP_VALUES, new Allocation.Build(implName, call));
+  }
+
+  /**
+   * One expected row: the family it answers for, and what it answers. Stating the family is what
+   * stops the walk asking with the row's own, which makes that dimension answer itself.
+   */
+  private record Row(Kind family, Allocation decision) {}
 
   @Test
   @DisplayName("every row in the table decides the class and the constructor this file says it should")
@@ -234,15 +248,20 @@ class AllocationPolicyTest {
     // makes a new row a red test until someone says what it should decide.
     for (final var entry : PairingRules.declaredTypes().entrySet()) {
       final var declared = entry.getKey();
-      final var decision = RULES.allocationFor(classFor(declared), entry.getValue());
+      final var row = EXPECTED.get(declared);
+      // Asserted before the decision is asked for, because the question carries the family: asking
+      // with the row's own answers that dimension with itself. A row in the wrong family builds an
+      // allocator that throws at conversion time, which no count or contents assertion reaches.
+      assertEquals(row.family(), entry.getValue(), () -> declared + " answers for a different family than expected");
 
-      if (EXPECTED.get(declared) instanceof Allocation.Refuse) {
+      final var decision = RULES.allocationFor(classFor(declared), entry.getValue());
+      if (row.decision() instanceof Allocation.Refuse) {
         assertInstanceOf(Allocation.Refuse.class, decision, () -> declared + " should carry a refusal");
         continue;
       }
       final var expected = assertInstanceOf(
         Allocation.Build.class,
-        EXPECTED.get(declared),
+        row.decision(),
         () -> declared + " is decided by the table and expected by nothing"
       );
       final var build = assertInstanceOf(Allocation.Build.class, decision, () -> declared + " should be buildable");
