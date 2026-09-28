@@ -91,6 +91,9 @@ A `TelescopeProjection<S, T>` bean is the core `Mapper<S, T>` behind a Spring in
 - `map` / `forward` run the transformers, then the structural mapping.
 - `backward` and `patch` use the structural mapping directly. Transformers are one-way normalization, so they never run
   on the way back.
+- `patch` overlays the partial's non-null fields and keeps the rest of the base. A projection backed by a generated
+  `@Bridge` cannot do that, since a bridge rebuilds the whole source from the partial, so its `patch` throws
+  `UnsupportedOperationException`. Override `translate` to map through a core `Mapper`, which patches.
 - `translate(MapperBuilder<S, T>)` is the full core mapping DSL, not just renames. `from(...).to(...)` pairs two
   accessors; `add(...)` takes any `MapStep` row the core `Telescope.mapper(...)` accepts, such as `constant`, `compute`,
   `nullSourceValues`, or `writeBeans`. Every row names fields through method references, so a rename in the IDE updates

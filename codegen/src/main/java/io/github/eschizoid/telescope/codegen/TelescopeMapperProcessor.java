@@ -254,16 +254,20 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
               ".backward(input); }"
           );
           out.println(
-            "  @Override public " +
-              model +
-              " patch(final " +
-              model +
-              " source, final " +
-              simple(to) +
-              " partial) { return " +
-              bridgeName +
-              ".BRIDGE.set(source, partial); }"
+            "  @Override public " + model + " patch(final " + model + " source, final " + simple(to) + " partial) {"
           );
+          // A bridge is an Iso: writing through it rebuilds the whole source from the partial,
+          // so it
+          // cannot keep the base fields a sparse overlay promises to keep.
+          out.println(
+            "    throw new UnsupportedOperationException(\"" +
+              blueprint.getSimpleName() +
+              " maps through the generated " +
+              bridgeName +
+              ", which rebuilds the whole source from the partial and cannot keep the fields it leaves" +
+              " null. Override translate so the projection maps through a core Mapper, which patches.\");"
+          );
+          out.println("  }");
         } else {
           out.println(
             "  @Override public " +

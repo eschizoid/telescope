@@ -16,6 +16,7 @@ import io.github.eschizoid.telescope.spring.blueprint.UserCityTransformer;
 import io.github.eschizoid.telescope.spring.blueprint.UserConfiguredProjection;
 import io.github.eschizoid.telescope.spring.blueprint.UserDto;
 import io.github.eschizoid.telescope.spring.blueprint.UserProjection;
+import io.github.eschizoid.telescope.spring.blueprint.UserTranslatedProjection;
 import io.github.eschizoid.telescope.spring.blueprint.Workspace;
 import io.github.eschizoid.telescope.spring.blueprint.WorkspaceEmailTransformer;
 import io.github.eschizoid.telescope.spring.invalidblueprint.NullPathTransformerImpl;
@@ -314,6 +315,33 @@ class TelescopeBlueprintSpringTest {
   }
 
   @Test
+  void patchKeepsTheBaseFieldsThePartialLeavesNull() {
+    new ApplicationContextRunner()
+      .withUserConfiguration(ScanBlueprints.class)
+      .run(context -> {
+        final var projection = context.getBean(UserTranslatedProjection.class);
+        final var base = new User("Alice", new User.Address("Boston"));
+        assertThat(projection.patch(base, new UserDto(null, new User.Address("Paris")))).isEqualTo(
+          new User("Alice", new User.Address("Paris"))
+        );
+      });
+  }
+
+  @Test
+  void bridgeBackedPatchRefusesInsteadOfDroppingFields() {
+    new ApplicationContextRunner()
+      .withUserConfiguration(ScanBlueprints.class)
+      .run(context -> {
+        final var projection = context.getBean(UserProjection.class);
+        final var base = new User("Alice", new User.Address("Boston"));
+        assertThatThrownBy(() -> projection.patch(base, new UserDto(null, new User.Address("Paris"))))
+          .isInstanceOf(UnsupportedOperationException.class)
+          .hasMessageContaining("UserProjection")
+          .hasMessageContaining("translate");
+      });
+  }
+
+  @Test
   void projectionExposesTheCoreMapperOperations() {
     new ApplicationContextRunner()
       .withUserConfiguration(ScanBlueprints.class)
@@ -324,7 +352,6 @@ class TelescopeBlueprintSpringTest {
         assertThat(projection.backward(new UserDto("Bob", new User.Address("Paris")))).isEqualTo(
           new User("Bob", new User.Address("Paris"))
         );
-        assertThat(projection.patch(user, new UserDto("Bob", new User.Address("Boston"))).name()).isEqualTo("Bob");
 
         // Transformers apply on the way forward only.
         final var configured = context.getBean(UserConfiguredProjection.class);

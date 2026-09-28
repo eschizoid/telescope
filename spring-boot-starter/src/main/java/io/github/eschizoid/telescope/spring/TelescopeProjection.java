@@ -24,7 +24,13 @@ public interface TelescopeProjection<S, T> {
   /** Maps {@code T} back to {@code S}. Transformers do not run in this direction. */
   S backward(T target);
 
-  /** Sparse target overlay through the generated core mapper. */
+  /**
+   * Overlays the non-null fields of {@code partial} onto {@code source} and keeps every other field
+   * of {@code source}. Transformers do not run. A projection that maps through a generated
+   * {@code @Bridge} throws {@link UnsupportedOperationException}, because a bridge rebuilds the
+   * whole source from {@code partial}; override {@link #translate} to map through a core {@code
+   * Mapper}, which supports it.
+   */
   S patch(S source, T partial);
 
   /**
