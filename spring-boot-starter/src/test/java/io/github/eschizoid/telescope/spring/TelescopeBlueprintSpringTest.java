@@ -429,6 +429,18 @@ class TelescopeBlueprintSpringTest {
   }
 
   @Test
+  void mappingFromACustomizerFailsWithAnExplanation() {
+    new ApplicationContextRunner()
+      .withUserConfiguration(ScanBlueprints.class, MappingCustomizerConfig.class)
+      .run(context -> {
+        assertThat(context).hasFailed();
+        assertThat(context.getStartupFailure())
+          .hasRootCauseInstanceOf(IllegalStateException.class)
+          .hasStackTraceContaining("UserProjection cannot map while it is being constructed");
+      });
+  }
+
+  @Test
   void nullTransformerCannotBeRegistered() {
     new ApplicationContextRunner()
       .withUserConfiguration(ScanBlueprints.class, NullCustomizerConfig.class)
@@ -466,6 +478,15 @@ class TelescopeBlueprintSpringTest {
     @Order(1)
     TelescopeCustomizer<UserConfiguredProjection> first(UserCityTransformer lower) {
       return projection -> projection.addTransformer(lower);
+    }
+  }
+
+  @Configuration
+  static class MappingCustomizerConfig {
+
+    @Bean
+    TelescopeCustomizer<UserProjection> mapsTooEarly() {
+      return projection -> projection.map(new User("Alice", null));
     }
   }
 

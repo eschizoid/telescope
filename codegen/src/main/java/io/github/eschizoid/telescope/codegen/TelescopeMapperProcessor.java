@@ -247,6 +247,14 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       } else {
         out.println("    if (input == null) return null;");
         out.println("    final List<" + focus + "> current = transformers;");
+        if (projection != null) {
+          // Customizers receive the bean before its transformer list is fixed.
+          out.println(
+            "    if (current == null) throw new IllegalStateException(\"" +
+              blueprint.getSimpleName() +
+              " cannot map while it is being constructed; a TelescopeCustomizer may only register transformers\");"
+          );
+        }
         out.println(
           "    if (current.isEmpty()) return " +
             (useBridge ? bridgeName + ".forward(input)" : "mapping.forward(input)") +
