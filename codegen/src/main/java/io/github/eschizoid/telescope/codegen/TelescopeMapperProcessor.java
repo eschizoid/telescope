@@ -145,15 +145,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     final var model = simple(from);
     final var focus = "TelescopeTransformation<" + model + ", ?>";
     final var refs = new ArrayList<String>();
-    // An override anywhere in the blueprint's hierarchy counts, not only on the blueprint; just
-    // TelescopeProjection's own empty default leaves the bridge in charge.
-    final var customTranslate = ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(blueprint))
-      .stream()
-      .anyMatch(
-        m ->
-          m.getSimpleName().contentEquals("translate") &&
-          !((TypeElement) m.getEnclosingElement()).getQualifiedName().contentEquals(PROJECTION)
-      );
+    final var customTranslate = overridesTranslate(blueprint, projection);
     final var useBridge = !customTranslate && ((bridgeTarget != null && same(bridgeTarget, to)) || compiledForward);
     if (useBridge) refs.add(bridgeClass);
     else {
@@ -331,6 +323,25 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
         out.println("  }");
       }
     });
+  }
+
+  /**
+   * Whether the blueprint's hierarchy overrides {@code TelescopeProjection.translate}. An override
+   * on any parent interface counts; a method that is merely named {@code translate} does not, and a
+   * plain {@code map} interface has nothing to override.
+   */
+  private boolean overridesTranslate(final TypeElement blueprint, final DeclaredType projection) {
+    if (projection == null) return false;
+    final var elements = processingEnv.getElementUtils();
+    final var projectionType = elements.getTypeElement(PROJECTION);
+    final var base = ElementFilter.methodsIn(projectionType.getEnclosedElements())
+      .stream()
+      .filter(m -> m.getSimpleName().contentEquals("translate"))
+      .findFirst()
+      .orElseThrow();
+    return ElementFilter.methodsIn(elements.getAllMembers(blueprint))
+      .stream()
+      .anyMatch(m -> !m.getEnclosingElement().equals(projectionType) && elements.overrides(m, base, blueprint));
   }
 
   private DeclaredType projectionType(final TypeMirror type) {

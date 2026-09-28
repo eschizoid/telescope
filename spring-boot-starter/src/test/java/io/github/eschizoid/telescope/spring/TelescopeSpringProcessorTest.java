@@ -622,6 +622,32 @@ class TelescopeSpringProcessorTest {
   }
 
   @Test
+  void unrelatedTranslateMethodDoesNotReplaceTheBridge() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.UnrelatedTranslate",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.spring.TelescopeMapper;
+        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.spring.blueprint.User;
+        import io.github.eschizoid.telescope.spring.blueprint.UserDto;
+        interface HasTranslate { default String translate(final String text) { return text; } }
+        @TelescopeMapper(from = User.class, to = UserDto.class)
+        interface UnrelatedTranslateMapper extends HasTranslate { UserDto map(User source); }
+        @TelescopeMapper
+        interface UnrelatedTranslate extends TelescopeProjection<User, UserDto>, HasTranslate {}
+        """
+      )
+    );
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.UnrelatedTranslateMapperImpl")).contains("UserBridge.forward(input)");
+    assertThat(result.generated().get("demo.UnrelatedTranslateImpl")).contains("UserBridge.forward(input)");
+  }
+
+  @Test
   void projectionWithoutTranslateStillUsesTheBridge() {
     final var result = ProcessorHarness.compileFully(
       List.of(new TelescopeMapperProcessor()),
