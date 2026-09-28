@@ -32,10 +32,12 @@ class TelescopeSpringProcessorTest {
     assertThat(result.hasError("requires a default path()")).isTrue();
   }
 
+  // The next two pin the refactor safety the annotations rely on: a path is method references, so a
+  // renamed or retyped accessor fails the build in javac itself, with no processor involved.
   @Test
-  void renamedAccessorFailsAtCompileTime() {
+  void renamedAccessorFailsTheBuildWithoutTheProcessor() {
     final var result = ProcessorHarness.compileFully(
-      List.of(new TelescopeMapperProcessor()),
+      List.of(),
       List.of(),
       source(
         "demo.BadNestedPathTransformer",
@@ -58,12 +60,13 @@ class TelescopeSpringProcessorTest {
       )
     );
     assertThat(result.success()).isFalse();
+    assertThat(result.errorMessages()).contains("oldEmail");
   }
 
   @Test
-  void terminalTypeMismatchFailsAtCompileTime() {
+  void retypedAccessorFailsTheBuildWithoutTheProcessor() {
     final var result = ProcessorHarness.compileFully(
-      List.of(new TelescopeMapperProcessor()),
+      List.of(),
       List.of(),
       source(
         "demo.WrongTypePathTransformer",
@@ -85,6 +88,7 @@ class TelescopeSpringProcessorTest {
       )
     );
     assertThat(result.success()).isFalse();
+    assertThat(result.errorMessages()).contains("incompatible types");
   }
 
   @Test
@@ -155,8 +159,9 @@ class TelescopeSpringProcessorTest {
 
   @Test
   void projectionCanDeclareTypedTranslationRows() {
-    final var result = ProcessorHarness.compile(
-      new TelescopeMapperProcessor(),
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
       source(
         "demo.RenamedProjection",
         """
@@ -176,7 +181,37 @@ class TelescopeSpringProcessorTest {
         """
       )
     );
-    assertThat(result.success()).isTrue();
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.RenamedProjectionImpl")).contains(
+      "RenamedProjection.super.translate(builder);"
+    );
+  }
+
+  @Test
+  void translateRowWithMismatchedSidesFailsTheBuild() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new TelescopeMapperProcessor()),
+      List.of(),
+      source(
+        "demo.SwappedProjection",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.spring.TelescopeMapper;
+        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.conversion.MapperBuilder;
+        record Source(String displayName, int age) {}
+        record Target(String name, int years) {}
+        @TelescopeMapper
+        interface SwappedProjection extends TelescopeProjection<Source, Target> {
+          default void translate(MapperBuilder<Source, Target> mapping) {
+            mapping.from(Source::displayName).to(Target::years);
+          }
+        }
+        """
+      )
+    );
+    assertThat(result.success()).isFalse();
+    assertThat(result.errorMessages()).contains("incompatible types");
   }
 
   @Test
@@ -572,6 +607,13 @@ class TelescopeSpringProcessorTest {
       )
     );
     assertThat(result.success()).isFalse();
+    assertThat(
+      result.hasError(
+        "@TelescopeTransformer requires typed Telescope<S, A> path() and Transformation<A> transform() results"
+      )
+    )
+      .withFailMessage(result.errorMessages())
+      .isTrue();
   }
 
   @Test
