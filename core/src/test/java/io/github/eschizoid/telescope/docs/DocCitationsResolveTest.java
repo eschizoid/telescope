@@ -51,8 +51,15 @@ class DocCitationsResolveTest {
    * on that machine's classpath: generated sources, or the JDK. Recognising the frame is what tells
    * those apart from a reference, rather than recognising the block a frame is usually written in.
    * A frame says plainly which it is, and the block it sits in says nothing either way.
+   *
+   * <p>The method part spans what a real trace writes there: a module or loader prefix before the
+   * class, which is {@code java.base/} for the platform and {@code app//} for a named classpath
+   * loader as Gradle and JUnit print it, and the angle brackets of a constructor or a static
+   * initialiser. The file part spans the dots a build script's name carries. The extensions are the
+   * ones a reference can be written in, an extension this file never reads as a reference being
+   * unable to be mistaken for one.
    */
-  private static final Pattern FRAME = Pattern.compile("\\bat\\s+[\\w.$]+\\([\\w$]+\\.(?:java|kt):\\d+\\)");
+  private static final Pattern FRAME = Pattern.compile("\\bat\\s+[\\w.$/<>]+\\([\\w$.]+\\.(?:java|kt|kts):\\d+\\)");
 
   /**
    * Every reference in one document that does not resolve, each named with the line it sits on.
@@ -155,6 +162,11 @@ class DocCitationsResolveTest {
   @Nested
   class TheScan {
 
+    /**
+     * The same repository plus a root build script, so a Kotlin-DSL frame has something to resolve.
+     */
+    private final Repo scriptRepo = fake(Map.of("B.java", 3L, "build.gradle.kts", 3L));
+
     private final Repo repo = fake(
       Map.of("src/A.java", 10L, "src/deep/A.java", 10L, "src/B.java", 3L, "README.md", 5L, "docs/README.md", 5L)
     );
@@ -215,23 +227,27 @@ class DocCitationsResolveTest {
     @DisplayName("a reference inside a stack frame belongs to whatever ran, not to this repository")
     void framesAreSkipped() {
       // A frame names a file without a path, which is how the JVM writes one, and the name resolves
-      // here by itself — so without the exemption both of these would be reported.
+      // here by itself, so without the exemption both of these would be reported.
       final var doc = "It threw:\n\n```\nat Foo.bar(B.java:900)\n  at Baz.qux(B.java:901)\n```\n";
       assertEquals(List.of(), unresolved("d.md", doc, repo));
     }
 
     @Test
-    @DisplayName("a frame is skipped wherever it is written, fenced or not")
-    void framesAreSkippedOutsideFencesToo() {
-      // Nothing about a frame's file and line depends on the block it was pasted into, and a
-      // transcript quoted inline, in a callout, or in a list item is the same transcript.
-      for (final var line : List.of(
+    @DisplayName("every shape a real trace writes a frame in is a frame")
+    void frameSyntaxVariesMoreThanTheBlockAroundIt() {
+      // What this rule branches on is the frame's own syntax, so that is what varies here. A module
+      // prefix is the default format for a platform frame, a loader prefix is what Gradle and JUnit
+      // print for a classpath class, and a constructor frame appears in nearly every real trace.
+      for (final var frame : List.of(
         "at Foo.bar(B.java:900)",
-        "> at Foo.bar(B.java:900)",
-        "- at Foo.bar(B.java:900)",
-        "    at Foo.bar(B.java:900)"
+        "\tat Foo.bar(B.java:900)",
+        "at io.foo.Bar.<init>(B.java:900)",
+        "at io.foo.Bar.<clinit>(B.java:900)",
+        "at java.base/io.foo.Bar.baz(B.java:900)",
+        "at app//io.foo.Bar.baz(B.java:900)",
+        "at Build_gradle.main(build.gradle.kts:900)"
       )) {
-        assertEquals(List.of(), unresolved("d.md", line + "\n", repo), () -> line);
+        assertEquals(List.of(), unresolved("d.md", frame + "\n", scriptRepo), () -> frame);
       }
     }
 
