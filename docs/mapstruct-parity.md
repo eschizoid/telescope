@@ -461,7 +461,9 @@ lift, and forward-only (no backward through a consumed Stream).
 container kinds are exactly LIST, SET, MAP_VALUES, OPTIONAL — no STREAM);
 internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java:106-125 (containerViewOf
 recognizes only Optional/List/Set/Map — a Stream-typed component falls through to Incompatible); grep for 'Stream<'
-across core/src/main, core/src/test, and examples/ found no Stream mapping API</sub>
+across core/src/main, core/src/test, and examples/ finds one hit, the JDK type used inside ContainerAllocatorCorpusTest,
+and no Stream mapping API. Two fixtures declare a record named Stream (TelescopeTest, and the examples'
+SealedAndFilterDemo); a user type that happens to carry the name is mapped as the record it is</sub>
 
 ## Lifecycle & customization
 
@@ -525,9 +527,9 @@ parameter threaded through nested via(...) mappers. forward(a) takes only the so
 context at build time, so per-request context (Locale, tenant) means building a mapper per context value (build cost is
 non-trivial) or closing over a ScopedValue/holder manually. No sugar exists for that.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:330 (forward(A a) — no context
-overload), :426 (backward(B b)); core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, the `FORWARD_SEEN` /
-`BACKWARD_SEEN` fields (built-in ThreadLocal IdentityHashMap value-level cycle guard);
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `forward(A a)` and
+`backward(B b)` (neither takes a context argument); core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, the
+`FORWARD_SEEN` / `BACKWARD_SEEN` fields (built-in ThreadLocal IdentityHashMap value-level cycle guard);
 core/src/test/java/io/github/eschizoid/telescope/CycleHandlingTest.java:31-86 (Optional/List self-reference and A-B
 mutual recursion map without StackOverflow, zero user code);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:111 (to(src, tgt, fwd, bwd) typed-transform row
@@ -857,9 +859,10 @@ PROPAGATE strategy, and under DEFAULT the coalesce wrap is skipped for target ty
 for the common cases or a null check inside the function.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `assembleIso` (its null guard:
-`if (s == null) return null` on both directions — every auto record/bean pair guarded), 1306-1318 + 1360-1372
-(collection/map/list-lift isos: `if (src == null) return null`), 868-872 (telescope-to-telescope rows write
-`srcT.find(s).orElse(null)` leniently on null intermediates);
+`if (s == null) return null` on both directions — every auto record/bean pair guarded),
+core/src/main/java/io/github/eschizoid/telescope/ContainerLifts.java, the three `if (src == null) return null` guards in
+the container copy and lift isos; core/src/main/java/io/github/eschizoid/telescope/TelescopeFixups.java,
+`srcT.find(s).orElse(null)` (a telescope-to-telescope row reads leniently through a null intermediate);
 internal/src/main/java/io/github/eschizoid/telescope/internal/optics/Iso.java:140-142 (coalesceForward:
 `x == null ? defaultValue : inner.to(x)` — inner fn skipped on null), 149-163 (liftList null pass-through);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:269-273 + 314-317 (toOrElse/toOrElseGet

@@ -67,10 +67,32 @@ val imageTest by tasks.registering(Test::class) {
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     systemProperty("org.graalvm.nativeimage.imagecode", "runtime")
+    // Nothing this gate reads depends on which accessor substrate is in use, so running it on both
+    // costs a second filesystem walk and proves nothing.
+    filter { excludeTestsMatching("*DocCitationsResolveTest*") }
+}
+
+// The documentation is this gate's input, and a reference rots without anything under src/
+// changing, so a test task that declares only the source set is up to date on exactly the edit the
+// gate exists to catch. Its own task also keeps it out of the two runs of the whole suite.
+val docCitationsTest by tasks.registering(Test::class) {
+    description = "Checks that every path:line reference in docs/ resolves inside the file it names."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    filter { includeTestsMatching("*DocCitationsResolveTest*") }
+    inputs
+        .files(rootProject.layout.projectDirectory.dir("docs").asFileTree.matching { include("**/*.md") })
+        .withPropertyName("documentation")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+tasks.named<Test>("test") {
+    filter { excludeTestsMatching("*DocCitationsResolveTest*") }
 }
 
 tasks.named("check") {
-    dependsOn(imageTest)
+    dependsOn(imageTest, docCitationsTest)
 }
 
 tasks.jacocoTestReport {
