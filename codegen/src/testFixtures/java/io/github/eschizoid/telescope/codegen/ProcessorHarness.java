@@ -114,7 +114,8 @@ public final class ProcessorHarness {
       success,
       diagnostics.getDiagnostics(),
       capturing.generatedSources(),
-      capturing.generatedResources()
+      capturing.generatedResources(),
+      capturing.compiledClasses()
     );
   }
 
@@ -129,8 +130,29 @@ public final class ProcessorHarness {
     boolean success,
     List<Diagnostic<? extends JavaFileObject>> diagnostics,
     Map<String, String> generated,
-    Map<String, String> resources
+    Map<String, String> resources,
+    Map<String, byte[]> classes
   ) {
+    /**
+     * A loader over the classes this compilation produced, delegating everything else to the test's
+     * own loader.
+     *
+     * <p>Empty for a {@code -proc:only} compile, which attributes declarations and emits no
+     * classes. Loading what was compiled is what lets a test compare a generated path against the
+     * reflective one on the same input, rather than comparing generated text against an
+     * expectation.
+     */
+    public ClassLoader loader() {
+      return new ClassLoader(Compilation.class.getClassLoader()) {
+        @Override
+        protected Class<?> findClass(final String name) throws ClassNotFoundException {
+          final var bytes = classes.get(name);
+          if (bytes == null) throw new ClassNotFoundException(name);
+          return defineClass(name, bytes, 0, bytes.length);
+        }
+      };
+    }
+
     public List<Diagnostic<? extends JavaFileObject>> errors() {
       final var out = new ArrayList<Diagnostic<? extends JavaFileObject>>();
       for (final var d : diagnostics) {
@@ -179,6 +201,7 @@ public final class ProcessorHarness {
 
     private final Map<String, CapturedSource> captured = new LinkedHashMap<>();
     private final Map<String, CapturedResource> capturedResources = new LinkedHashMap<>();
+    private final Map<String, CapturedClass> classes = new LinkedHashMap<>();
 
     CapturingFileManager(final JavaFileManager delegate) {
       super(delegate);
@@ -199,7 +222,9 @@ public final class ProcessorHarness {
       // Full-pipeline compiles route class output here — sink it in memory so nothing lands in
       // the working tree.
       if (location == StandardLocation.CLASS_OUTPUT && kind == JavaFileObject.Kind.CLASS) {
-        return new DiscardedClass(className);
+        final var classFile = new CapturedClass(className);
+        classes.put(className, classFile);
+        return classFile;
       }
       return super.getJavaFileForOutput(location, className, kind, sibling);
     }
@@ -222,6 +247,12 @@ public final class ProcessorHarness {
     Map<String, String> generatedSources() {
       final var out = new LinkedHashMap<String, String>();
       captured.forEach((name, file) -> out.put(name, file.text()));
+      return out;
+    }
+
+    Map<String, byte[]> compiledClasses() {
+      final var out = new LinkedHashMap<String, byte[]>();
+      classes.forEach((name, file) -> out.put(name, file.bytes()));
       return out;
     }
 
@@ -256,16 +287,28 @@ public final class ProcessorHarness {
     }
   }
 
-  /** In-memory sink for class output in full-pipeline compiles — the bytes are discarded. */
-  private static final class DiscardedClass extends SimpleJavaFileObject {
+  /**
+   * In-memory sink for class output in full-pipeline compiles, keeping the bytes.
+   *
+   * <p>Nothing lands in the working tree either way. Keeping them is what lets a test run what it
+   * compiled rather than only reading the source it generated, which is the difference between
+   * checking that a processor emits something and checking what that something does.
+   */
+  private static final class CapturedClass extends SimpleJavaFileObject {
 
-    DiscardedClass(final String className) {
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+
+    CapturedClass(final String className) {
       super(URI.create("mem:///" + className.replace('.', '/') + Kind.CLASS.extension), Kind.CLASS);
     }
 
     @Override
     public OutputStream openOutputStream() {
-      return new ByteArrayOutputStream();
+      return bytes;
+    }
+
+    byte[] bytes() {
+      return bytes.toByteArray();
     }
   }
 
