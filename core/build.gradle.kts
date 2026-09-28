@@ -88,6 +88,9 @@ val docCitationsTest by tasks.registering(Test::class) {
     // a comment added to a cited source anyway. The whole gate takes under half a second, so it
     // runs every time rather than reasoning about which cited file happens to be an input.
     outputs.upToDateWhen { false }
+    // And it stores nothing, since suppressing the up-to-date check means no run can ever load what
+    // a previous one wrote.
+    outputs.cacheIf { false }
 }
 
 tasks.named<Test>("test") {
