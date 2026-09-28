@@ -323,8 +323,9 @@ When a type carries **both** `@Focus`/`@BeanFocus` **and** `@Bridge(Target.class
 | `BridgeProcessor.java`                                    | scans `@Bridge`, generates the bidirectional Iso class plus the BRIDGE static constant. Handles all type-pair combinations (record↔record, record↔POJO, POJO↔POJO).                                                                                                                                                                                          |
 | `FromMapProcessor.java`                                   | scans `@FromMap`, emits the reflection-free `Map<String, Object>` → record binder (ADR-0010). Uses the sealed `Coercion` taxonomy for per-component conversion.                                                                                                                                                                                              |
 | `MapperVerifierProcessor.java`                            | compile-time mapper pairing verification (ADR-0012) via the shared `pairing` spec. Extends plain `AbstractProcessor`, not the navigator base. Controlled by `-Atelescope.verify=error\|warn\|off`.                                                                                                                                                           |
+| `TelescopeMapperProcessor.java`                           | scans the Spring starter's `@TelescopeMapper` / `@TelescopeTransformer` interfaces and emits a `@Component` implementation for each. Matched by string FQN, so it is a no-op without the starter on the classpath. Covered by the starter's tests, which is where its JaCoCo coverage is reported.                                                           |
 | `Coercion.java`, `MirrorProps.java`                       | the per-component conversion taxonomy and the `javax.lang.model` side of the pairing `PropertySystem`.                                                                                                                                                                                                                                                       |
-| `META-INF/services/javax.annotation.processing.Processor` | SPI registration for all five processors.                                                                                                                                                                                                                                                                                                                    |
+| `META-INF/services/javax.annotation.processing.Processor` | SPI registration for all six processors.                                                                                                                                                                                                                                                                                                                     |
 
 ### Conventions for any new processor
 
@@ -389,9 +390,17 @@ Quarkus's `@All List<Mapper<?, ?>>`. Exposes the registry as `@Bean @Conditional
 `@ConditionalOnClass(Telescope.class)`. `TelescopeProperties` is `@ConfigurationProperties(prefix = "telescope")` with
 `failFast` on a nested `Registry` type, so the resolved key is the same `telescope.registry.fail-fast`.
 
-**Not here:** no `@EnableTelescope`; no build-time codegen (these starters wrap whichever `Mapper` shape the user brings
-— reflective or codegen-generated). No `@QuarkusTest`/`@SpringBootTest` integration tests — pure-Java registries covered
-by unit tests.
+**Spring only: generated beans.** `@TelescopeMapper` and `@TelescopeTransformer` are interface annotations processed by
+`TelescopeMapperProcessor` in `:codegen`, which emits a `@Component` implementation per interface. A mapper calls the
+source's generated `@Bridge` when one exists and no `translate` override replaces it, and otherwise builds a core
+`Mapper` at construction. A transformer caches its `path()` and `transform()` once. Transformers registered from
+configuration come from `TelescopeCustomizer<P>` beans keyed by the projection type, never by bean name, and the list is
+fixed once the bean is constructed. These beans are deliberately not in `TelescopeMapperRegistry`: a projection is not a
+`Mapper`. The Quarkus starter has no equivalent yet.
+
+**Not here:** no `@EnableTelescope`. The registries wrap whichever `Mapper` shape the user brings — reflective or
+codegen-generated. No `@QuarkusTest`/`@SpringBootTest` integration tests: the registries are covered by unit tests, and
+the generated Spring beans by the in-memory `ProcessorHarness` plus `ApplicationContextRunner`.
 
 ---
 
