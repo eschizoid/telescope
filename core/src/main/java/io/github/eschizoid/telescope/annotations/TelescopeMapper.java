@@ -18,7 +18,7 @@ import java.lang.annotation.Target;
  * telescope-spring-boot-starter} on the classpath and {@code telescope-codegen} on the annotation
  * processor path. Without Spring the processor reports an error on the annotated interface. The
  * annotation lives in core, next to {@link Bridge}, so another container integration can generate
- * its own implementation from the same declaration (ADR-0016).
+ * its own implementation from the same declaration.
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)

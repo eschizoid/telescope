@@ -1,6 +1,29 @@
 # telescope-spring-boot-starter
 
-## Injectable mappers and transformations
+## Quickstart: injectable mappers and transformations
+
+This starter is the Spring side of two core features. `@TelescopeMapper` and `@TelescopeTransformer` are declared in
+`telescope-core`, next to `@Bridge`, and so are the interfaces your beans implement. What this starter adds is the
+wiring: the annotation processor generates a Spring `@Component` for each annotated interface, and Spring injects it
+like any other bean. Without the starter on the classpath the processor stops with an error on your interface.
+
+The types live in core rather than here because none of them depends on Spring: only the generated class does. Their
+processor sits in `telescope-codegen` like `@Bridge`'s, so all the codegen annotations are imported from one place, and
+another container integration could generate its own beans from the same interfaces.
+
+You need the starter as a dependency and `telescope-codegen` as an annotation processor (see [Install](#install)). The
+examples below use these imports:
+
+```java
+import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.annotations.Bridge;
+import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+import io.github.eschizoid.telescope.annotations.TelescopeTransformer;
+import io.github.eschizoid.telescope.inject.TelescopeCustomizer;
+import io.github.eschizoid.telescope.inject.TelescopeProjection;
+import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+import io.github.eschizoid.telescope.inject.Transformation;
+```
 
 `@TelescopeMapper` exposes a generated structural mapper as a Spring bean. `@TelescopeTransformer` exposes a reusable
 transformation over a typed Telescope path. A transformation declares both the default for a null focused value and the

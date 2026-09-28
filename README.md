@@ -417,8 +417,9 @@ user-facing code, because the optics live inside, behind one type.
 
 ## Spring mapper transformers
 
-The Spring starter can normalize entity values before mapping them to a REST DTO. Declare transformers on the projection
-to have Spring inject and apply them in order:
+The Spring starter can normalize entity values before mapping them to a REST DTO. `@TelescopeMapper`,
+`@TelescopeTransformer` and the interfaces they annotate come from `telescope-core`; the starter generates the Spring
+components that implement them. Declare transformers on the projection to have Spring inject and apply them in order:
 
 ```java
 record CustomerRestDto(String email) {}

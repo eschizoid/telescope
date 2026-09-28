@@ -14,7 +14,7 @@ import java.lang.annotation.Target;
  * convention the interface name ends with {@code Transformer}; the processor does not require it.
  *
  * <p>Like {@link TelescopeMapper}, the generated implementation is a Spring component and needs
- * {@code telescope-spring-boot-starter} on the classpath (ADR-0016).
+ * {@code telescope-spring-boot-starter} on the classpath.
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)
