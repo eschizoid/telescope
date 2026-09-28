@@ -7,8 +7,11 @@ import java.util.function.UnaryOperator;
  * A nullable default and an operation for non-null focused values. A null input returns the default
  * directly, without invoking the operation. A null result from the operation remains null.
  *
- * <p>The default is reused by reference. Use an immutable default and a thread-safe operation when
- * sharing this transformation in a singleton bean.
+ * <p>The default is one shared instance: every call with a null focus writes that same instance
+ * into its result, so all such results share it, even on a single thread. Mutating a mutable
+ * default afterwards changes every result that received it, so use an immutable default. The
+ * operation is shared the same way, so a transformation held by a singleton bean needs a
+ * thread-safe operation.
  *
  * @param defaultValue replacement for a null focused value; may be null
  * @param operation operation applied exactly once to each non-null focused value

@@ -16,18 +16,23 @@ public interface TelescopeProjection<S, T> {
   /** Transform the source, then map it structurally to the projection target type. */
   T map(S source);
 
-  /** Forward conversion through the generated core mapper. */
+  /** Same as {@link #map}: runs the transformers, then maps {@code S} to {@code T}. */
   default T forward(final S source) {
     return map(source);
   }
 
-  /** Backward conversion through the generated core mapper. */
+  /** Maps {@code T} back to {@code S}. Transformers do not run in this direction. */
   S backward(T target);
 
   /** Sparse target overlay through the generated core mapper. */
   S patch(S source, T partial);
 
-  /** Add typed field correspondence overrides to the generated structural mapper. */
+  /**
+   * Declare the mapping rows for this projection. Overriding this method, here or on any parent
+   * interface, replaces the generated {@code @Bridge}: the projection then maps through a core
+   * {@code Mapper} built from these rows plus same-name backfill, so the bridge's defaults, renames
+   * and conversions no longer apply. Without an override, the bridge is used when one exists.
+   */
   default void translate(final MapperBuilder<S, T> mapping) {}
 
   /**

@@ -149,8 +149,9 @@ has no name focus. To transform a whole collection, focus on the collection itse
 function for an ad hoc edit. You can use the complete Telescope API through `path()`.
 
 Both default factories run once when Spring constructs the bean. They must return non-null values and must not depend on
-field injection. The generated component uses Spring's default singleton scope. Keep the operation thread safe and use
-an immutable default when the bean is shared. The default is reused by reference.
+field injection. The generated component uses Spring's default singleton scope. The default is one shared instance:
+every null focus receives that same instance, so the results share it even on a single thread. Use an immutable default,
+and keep the operation thread safe because the singleton shares it too.
 
 Add the processor alongside the starter (Gradle):
 

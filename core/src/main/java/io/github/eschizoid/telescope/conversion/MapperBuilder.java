@@ -143,6 +143,13 @@ public final class MapperBuilder<A, B> {
       this.source = Objects.requireNonNull(source, "source");
     }
 
+    /**
+     * Pair the selected source accessor with {@code target} and append the row. Both sides share
+     * the value type {@code X}, so a mismatched pair does not compile.
+     *
+     * @param target the target accessor receiving the source value
+     * @return the owning builder, for chaining further rows
+     */
     public MapperBuilder<A, B> to(final Telescope.Accessor<B, X> target) {
       return add(Mapping.to(source, Objects.requireNonNull(target, "target")));
     }
