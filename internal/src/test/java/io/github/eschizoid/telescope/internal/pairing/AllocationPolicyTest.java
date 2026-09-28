@@ -92,6 +92,12 @@ class AllocationPolicyTest {
 
     assertEquals("java.util.LinkedHashSet", asSet.implName());
     assertEquals("java.util.ArrayList", asList.implName());
+    // The walk below reaches every declared row and these two are not rows, so their constructor
+    // is asserted here or nowhere. Each family's fallback allocator happens to render what these
+    // name today, which means a relabel changes nothing observable and no behavioural test can see
+    // it.
+    assertEquals(Call.TABLE_FACTORY, asSet.call());
+    assertEquals(Call.COUNT, asList.call());
   }
 
   @Test
@@ -104,6 +110,13 @@ class AllocationPolicyTest {
     assertTrue(refuse.reason().contains("Class<K>"), refuse::reason);
     assertTrue(refuse.reason().contains("Mapping.via"), refuse::reason);
     assertTrue(refuse.reason().contains("codegen"), refuse::reason);
+    // These are the only refusal words any test reads, which is sound only while this is the only
+    // row that refuses. A second one would arrive with its sentence unasserted.
+    assertEquals(
+      1,
+      EXPECTED.values().stream().filter(Allocation.Refuse.class::isInstance).count(),
+      "a second refusing row needs its own words asserted"
+    );
   }
 
   @Test
@@ -200,10 +213,20 @@ class AllocationPolicyTest {
   @Test
   @DisplayName("every row in the table decides the class and the constructor this file says it should")
   void everyRowDecidesTheExpectedAllocation() {
-    // A row and its expectation are added and removed together. Asserted as one set equality
-    // rather than per row, so a dropped row fails here instead of leaving a dead expectation
-    // nothing reads.
-    assertEquals(EXPECTED.keySet(), PairingRules.declaredTypes().keySet());
+    // A row and its expectation are added and removed together, in both directions: a new row with
+    // nothing expected of it, and an expectation whose row is gone. Asserted as the two differences
+    // rather than as set equality, because a gate that prints both twenty-eight-name sets leaves
+    // the reader to find the one that moved.
+    final var rows = PairingRules.declaredTypes().keySet();
+    final var decidedByNothing = new TreeSet<>(EXPECTED.keySet());
+    decidedByNothing.removeAll(rows);
+    final var expectedByNothing = new TreeSet<>(rows);
+    expectedByNothing.removeAll(EXPECTED.keySet());
+    assertTrue(
+      expectedByNothing.isEmpty(),
+      () -> expectedByNothing + " is decided by the table and expected by nothing"
+    );
+    assertTrue(decidedByNothing.isEmpty(), () -> decidedByNothing + " is expected here and decided by no row");
 
     // The unit that matters is the implementation, not the declared name: moving one to a
     // different constructor means relabelling every row that reaches it, so a sample of rows
@@ -213,10 +236,15 @@ class AllocationPolicyTest {
       final var declared = entry.getKey();
       final var decision = RULES.allocationFor(classFor(declared), entry.getValue());
 
-      if (!(EXPECTED.get(declared) instanceof Allocation.Build expected)) {
+      if (EXPECTED.get(declared) instanceof Allocation.Refuse) {
         assertInstanceOf(Allocation.Refuse.class, decision, () -> declared + " should carry a refusal");
         continue;
       }
+      final var expected = assertInstanceOf(
+        Allocation.Build.class,
+        EXPECTED.get(declared),
+        () -> declared + " is decided by the table and expected by nothing"
+      );
       final var build = assertInstanceOf(Allocation.Build.class, decision, () -> declared + " should be buildable");
       assertEquals(
         expected.implName(),
