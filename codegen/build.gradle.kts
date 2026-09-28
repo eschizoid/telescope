@@ -58,8 +58,12 @@ tasks.jacocoTestReport {
     // cannot import execution data from that separate Gradle module, so counting this integration
     // processor here would report the same covered code as untested in this module. The
     // :spring-boot-starter report includes it instead.
+    // Built from the source set's classes (not classDirectories.files, which resolves eagerly and
+    // drops the task dependencies Gradle needs to validate this task).
     classDirectories.setFrom(
-        files(classDirectories.files.map { fileTree(it) { exclude("**/TelescopeMapperProcessor.class") } })
+        sourceSets.main.get().output.classesDirs.asFileTree.matching {
+            exclude("**/TelescopeMapperProcessor*.class")
+        },
     )
     reports {
         csv.required.set(true)
