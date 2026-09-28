@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.codegen;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.invoke.MethodHandles;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -134,23 +135,49 @@ public final class ProcessorHarness {
     Map<String, byte[]> classes
   ) {
     /**
-     * A loader over the classes this compilation produced, delegating everything else to the test's
-     * own loader.
+     * Define every class this compilation produced through the caller's own lookup, keyed by binary
+     * name.
+     *
+     * <p>Running what was compiled is what lets a test compare the generated path against the
+     * reflective one on the same input, rather than comparing generated text against an
+     * expectation. The lookup is a parameter rather than something this fixture builds because it
+     * decides the module, and the module decides whether the runtime path can read the class at
+     * all: {@link MethodHandles#privateLookupIn} keeps {@code MODULE} access only when the target
+     * class and the caller share a module, and {@link java.lang.invoke.LambdaMetafactory} rejects a
+     * caller without it. Every class loader owns a distinct unnamed module, so a class held by a
+     * loader of its own is unreadable to the accessor substrate however public it is. Defining
+     * through the caller's lookup puts it in the caller's module instead.
+     *
+     * <p>Two consequences for whoever writes the sources. {@link MethodHandles.Lookup#defineClass}
+     * takes only bytes naming the lookup class's own package, so the sources have to declare that
+     * package; and one loader holds every cell of a grid, so the names have to be distinct across
+     * cells.
      *
      * <p>Empty for a {@code -proc:only} compile, which attributes declarations and emits no
-     * classes. Loading what was compiled is what lets a test compare a generated path against the
-     * reflective one on the same input, rather than comparing generated text against an
-     * expectation.
+     * classes.
      */
-    public ClassLoader loader() {
-      return new ClassLoader(Compilation.class.getClassLoader()) {
-        @Override
-        protected Class<?> findClass(final String name) throws ClassNotFoundException {
-          final var bytes = classes.get(name);
-          if (bytes == null) throw new ClassNotFoundException(name);
-          return defineClass(name, bytes, 0, bytes.length);
+    public Map<String, Class<?>> define(final MethodHandles.Lookup lookup) {
+      final var defined = new LinkedHashMap<String, Class<?>>();
+      final var pending = new LinkedHashMap<>(classes);
+      // defineClass links, and linking a class that references another of the set can need that
+      // one present. Nothing here knows the dependency order, so define what can be defined and
+      // go round again while the round defined something.
+      while (!pending.isEmpty()) {
+        final var failures = new LinkedHashMap<String, Throwable>();
+        final var before = pending.size();
+        for (final var entry : List.copyOf(pending.entrySet())) {
+          try {
+            defined.put(entry.getKey(), lookup.defineClass(entry.getValue()));
+            pending.remove(entry.getKey());
+          } catch (final IllegalAccessException | LinkageError t) {
+            failures.put(entry.getKey(), t);
+          }
         }
-      };
+        if (pending.size() == before) {
+          throw new IllegalStateException("cannot define " + failures.keySet(), failures.values().iterator().next());
+        }
+      }
+      return defined;
     }
 
     public List<Diagnostic<? extends JavaFileObject>> errors() {
