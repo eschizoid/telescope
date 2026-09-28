@@ -222,10 +222,9 @@ public final class PairingRules<T> {
    * the other side of the pair by {@link #settledAgainst}.
    */
   public ContainerView<T> containerViewOf(final T t) {
-    // Raw subclasses retain the explicit shallow-copy policy above. Parameterized subclasses
-    // must be viewed through the container supertype: their own parameters can be reordered,
-    // fixed, or unrelated to the element/key types.
-    if (props.typeArguments(t).isEmpty()) return null;
+    // A subclass is viewed through the container supertype rather than through its own parameters,
+    // which can be reordered, fixed, or unrelated to the element and key types.
+    final var declaresNoArguments = props.typeArguments(t).isEmpty();
     final var raw = props.rawType(t);
     // Order decides the answer where a type satisfies more than one: a List is asked as a List
     // before it is asked as a Collection. The last three are what a type reaches only by being
@@ -248,6 +247,12 @@ public final class PairingRules<T> {
       // an order, and that is answerable.
       if (GENERAL.contains(kind) && !props.typeName(raw).equals(GENERAL_NAMES.get(kind))) continue;
       final var args = props.typeArgumentsAs(t, kind);
+      // A declaration carrying no arguments of its own is one of two unlike things, and the
+      // supertype view tells them apart. A class that declares no parameters has its element types
+      // written on that supertype, so they resolve to types; a raw use of a generic one leaves its
+      // parameters standing there unbound, and nobody has said what its elements are. Only the
+      // first is a container this can pair, and the second keeps the shallow-copy policy it had.
+      if (declaresNoArguments && !args.stream().allMatch(props::isClassType)) return null;
       if (kind == WellKnown.MAP) {
         if (args.size() != 2 || !props.isClassType(args.getFirst())) return null;
         return new ContainerView<>(ContainerView.Kind.MAP_VALUES, args.get(1), args.getFirst(), raw);
