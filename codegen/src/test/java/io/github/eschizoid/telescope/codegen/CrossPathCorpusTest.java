@@ -141,26 +141,8 @@ class CrossPathCorpusTest {
    * <p>An entry keeps a cell from failing and nothing else. A cell that starts differing without
    * one fails, and an entry whose cell has stopped differing fails too, so the register cannot
    * outlive what it describes.
-   *
-   * <p>All of these have one cause. The processor recognises a container only as a subtype of
-   * {@code List}, {@code Set} or {@code Map}, while the shared pairing spec the reflective path
-   * consults reads {@code Deque} and {@code Queue} as list-shaped and gives a {@code Collection}
-   * whichever shape the other side has. So a target declared as any of those three is refused at
-   * compile time and converted at run time — the harmful direction of the two, since a pairing that
-   * works through {@code mapper(...)} cannot be moved to the generated path.
    */
-  private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.of(
-    "collection/record",
-    new Verdict(false, true),
-    "deque/scalar",
-    new Verdict(false, true),
-    "deque/record",
-    new Verdict(false, true),
-    "queue/scalar",
-    new Verdict(false, true),
-    "queue/record",
-    new Verdict(false, true)
-  );
+  private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.of();
 
   /**
    * Cells both paths refuse, each with the reason.

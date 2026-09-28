@@ -16,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.conversion.Mapper;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -338,6 +339,40 @@ class DeepMappingTest {
     record TeamHeadEntity(String name, List<UserEntity> members) {}
 
     record TeamHeadDto(String name, List<UserDto> members) {}
+
+    record CollectionTeamEntity(Collection<UserEntity> members) {}
+
+    record CollectionTeamDto(Collection<UserDto> members) {}
+
+    @Test
+    @DisplayName("via(...) lifts the element mapper through a pair declared as the general Collection")
+    void viaLiftsThroughACollectionDeclaredPair() {
+      // A Collection-declared field names no container shape of its own, so each side is read as
+      // whatever the other side turns out to be. A lift that reads the two views without settling
+      // them finds two shapeless views, finds their kinds equal, and reaches a lift no allocator
+      // answers for.
+      final Mapper<UserEntity, UserDto> userMapper = Telescope.mapper(
+        UserEntity.class,
+        UserDto.class,
+        to(UserEntity::name, UserDto::fullName)
+      );
+      final var teamMapper = Telescope.mapper(
+        CollectionTeamEntity.class,
+        CollectionTeamDto.class,
+        via(CollectionTeamEntity::members, CollectionTeamDto::members, userMapper)
+      );
+
+      final var dto = teamMapper.forward(
+        new CollectionTeamEntity(List.of(new UserEntity("alice", "a@x", new AddressEntity("NYC", "10001"))))
+      );
+
+      assertEquals(1, dto.members().size(), "the row lifted through the Collection-declared pair");
+      assertEquals(
+        "alice",
+        dto.members().iterator().next().fullName(),
+        "and the element mapper's rename fired, which is what the row was handed for"
+      );
+    }
 
     @Test
     @DisplayName("viaList(srcAcc, tgtAcc, mapper<X, Y>) lifts the element mapper through a List-typed accessor pair")

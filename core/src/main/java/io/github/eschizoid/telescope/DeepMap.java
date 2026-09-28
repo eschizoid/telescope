@@ -1098,8 +1098,13 @@ public final class DeepMap {
     final var elementIso = Iso.of(raw::forward, raw::backward);
     final var mapperSrc = raw.sourceClass();
     final var mapperTgt = raw.targetClass();
-    final var srcShape = PAIRING.containerViewOf(srcType);
-    final var tgtShape = PAIRING.containerViewOf(tgtType);
+    final var srcView = PAIRING.containerViewOf(srcType);
+    final var tgtView = PAIRING.containerViewOf(tgtType);
+    // A Collection-declared field names no shape of its own, so each view is settled against the
+    // other before the two kinds are compared. Reading them unsettled pairs two COLLECTION views,
+    // finds the kinds equal, and reaches a lift no allocator answers for.
+    final var srcShape = PAIRING.settledAgainst(srcView, tgtView);
+    final var tgtShape = PAIRING.settledAgainst(tgtView, srcView);
     if (
       srcShape != null &&
       tgtShape != null &&
@@ -1134,8 +1139,8 @@ public final class DeepMap {
         );
         // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
-        // Settled against the other side of the pair before the decision was built, so a view
-        // still carrying it here means the pairing stopped doing that.
+        // Settled against the other side of the pair above, so a view still carrying it here means
+        // the settling stopped happening.
         case COLLECTION -> throw new IllegalStateException(
           "a Collection-declared container reached the lift without taking a shape"
         );
