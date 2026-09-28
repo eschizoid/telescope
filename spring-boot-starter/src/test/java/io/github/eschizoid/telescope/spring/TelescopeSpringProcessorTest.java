@@ -19,8 +19,8 @@ class TelescopeSpringProcessorTest {
         "demo.BadPathTransformer",
         """
         package demo;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         record Person(String name) {}
         @TelescopeTransformer
@@ -43,8 +43,8 @@ class TelescopeSpringProcessorTest {
         "demo.BadNestedPathTransformer",
         """
         package demo;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.Telescope;
         record Contact(String email) {}
@@ -72,8 +72,8 @@ class TelescopeSpringProcessorTest {
         "demo.WrongTypePathTransformer",
         """
         package demo;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.Telescope;
         record Person(String name) {}
@@ -99,8 +99,8 @@ class TelescopeSpringProcessorTest {
         "demo.NonRecordPathTransformer",
         """
         package demo;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         import io.github.eschizoid.telescope.Telescope;
         record Person(String name) {}
@@ -146,7 +146,7 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeMapper;
-        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
         record Source(String name) {}
         record Target(String name) {}
         @TelescopeMapper
@@ -167,7 +167,7 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeMapper;
-        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
         import io.github.eschizoid.telescope.conversion.MapperBuilder;
         record Source(String displayName, String phoneNumber) {}
         record Target(String name, String phone) {}
@@ -197,7 +197,7 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeMapper;
-        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
         import io.github.eschizoid.telescope.conversion.MapperBuilder;
         record Source(String displayName, int age) {}
         record Target(String name, int years) {}
@@ -250,7 +250,7 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeMapper;
-        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
         import io.github.eschizoid.telescope.spring.blueprint.User;
         import io.github.eschizoid.telescope.spring.blueprint.UserDto;
         @TelescopeMapper
@@ -413,8 +413,8 @@ class TelescopeSpringProcessorTest {
         package demo;
         import java.util.List;
         import io.github.eschizoid.telescope.Telescope;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         record Person(List<String> names) {}
         interface NamedPath<A> extends TelescopeTransformation<Person, A> {}
@@ -443,8 +443,8 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.Telescope;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         @TelescopeTransformer interface RawPathTransformer extends TelescopeTransformation {
           default Telescope path() { return null; }
@@ -466,8 +466,8 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.Telescope;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
         interface Extra { String other(); }
         @TelescopeTransformer interface ExtraPathTransformer extends TelescopeTransformation<String, String>, Extra {
@@ -522,7 +522,7 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.Telescope;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
         @TelescopeTransformer interface MissingTransformer extends TelescopeTransformation<String, String> {
           default Telescope<String, String> path() { return Telescope.of(String.class); }
         }
@@ -544,9 +544,9 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.Telescope;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
         @TelescopeTransformer interface RawTransformer extends TelescopeTransformation<String, String> {
           default Telescope<String, String> path() { return Telescope.of(String.class); }
           default Transformation transform() { return new Transformation<>(null, value -> value); }
@@ -570,9 +570,9 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.Telescope;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
         @TelescopeTransformer interface RawPathReturnTransformer extends TelescopeTransformation<String, String> {
           default Telescope path() { return Telescope.of(String.class); }
           default Transformation<String> transform() { return new Transformation<>(null, value -> value); }
@@ -596,9 +596,9 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.Telescope;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
         @TelescopeTransformer interface WrongTransformTypeTransformer extends TelescopeTransformation<String, String> {
           default Telescope<String, String> path() { return Telescope.of(String.class); }
           default Transformation<Integer> transform() { return new Transformation<>(0, value -> value + 1); }
@@ -626,9 +626,9 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.Telescope;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
         interface Base<S, A> extends TelescopeTransformation<S, A> {
           default Transformation<A> transform() { return new Transformation<>(null, value -> value); }
         }
@@ -651,9 +651,9 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.Telescope;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
         @TelescopeTransformer("normalizer") interface NamedTransformer extends TelescopeTransformation<String, String> {
           default Telescope<String, String> path() { return Telescope.of(String.class); }
           default Transformation<String> transform() { return new Transformation<>("", String::toLowerCase); }
@@ -680,9 +680,9 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.Telescope;
-        import io.github.eschizoid.telescope.spring.Transformation;
+        import io.github.eschizoid.telescope.inject.Transformation;
         import io.github.eschizoid.telescope.spring.TelescopeTransformer;
-        import io.github.eschizoid.telescope.spring.TelescopeTransformation;
+        import io.github.eschizoid.telescope.inject.TelescopeTransformation;
         record City(String name) {}
         @TelescopeTransformer interface CityNormalizer extends TelescopeTransformation<City, String> {
           default Telescope<City, String> path() { return Telescope.of(City.class).field(City::name); }
@@ -706,7 +706,7 @@ class TelescopeSpringProcessorTest {
         package demo;
         import io.github.eschizoid.telescope.conversion.MapperBuilder;
         import io.github.eschizoid.telescope.spring.TelescopeMapper;
-        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
         import io.github.eschizoid.telescope.spring.blueprint.User;
         import io.github.eschizoid.telescope.spring.blueprint.UserDto;
         interface RenamingBase extends TelescopeProjection<User, UserDto> {
@@ -735,7 +735,7 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeMapper;
-        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
         import io.github.eschizoid.telescope.spring.blueprint.User;
         import io.github.eschizoid.telescope.spring.blueprint.UserDto;
         interface HasTranslate { default String translate(final String text) { return text; } }
@@ -816,7 +816,7 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeMapper;
-        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
         import model.Car;
         import model.CarDto;
         @TelescopeMapper
@@ -843,7 +843,7 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeMapper;
-        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
         @TelescopeMapper
         public interface BoxProjection extends TelescopeProjection<Box<String>, BoxDto<String>> {}
         """
@@ -866,7 +866,7 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeMapper;
-        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
         import io.github.eschizoid.telescope.spring.blueprint.User;
         import io.github.eschizoid.telescope.spring.blueprint.UserDto;
         @TelescopeMapper
@@ -917,7 +917,7 @@ class TelescopeSpringProcessorTest {
         """
         package demo;
         import io.github.eschizoid.telescope.spring.TelescopeMapper;
-        import io.github.eschizoid.telescope.spring.TelescopeProjection;
+        import io.github.eschizoid.telescope.inject.TelescopeProjection;
         import io.github.eschizoid.telescope.spring.blueprint.Counter;
         import io.github.eschizoid.telescope.spring.blueprint.User;
         import io.github.eschizoid.telescope.spring.blueprint.UserDto;

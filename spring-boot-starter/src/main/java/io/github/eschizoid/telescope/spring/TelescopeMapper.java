@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.spring;
 
+import io.github.eschizoid.telescope.inject.TelescopeProjection;
+import io.github.eschizoid.telescope.inject.TelescopeTransformation;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;

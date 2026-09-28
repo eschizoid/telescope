@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.spring;
+package io.github.eschizoid.telescope.inject;
 
 import java.util.Objects;
 import java.util.function.UnaryOperator;

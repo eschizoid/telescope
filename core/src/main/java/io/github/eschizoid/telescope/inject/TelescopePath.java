@@ -1,4 +1,4 @@
-package io.github.eschizoid.telescope.spring;
+package io.github.eschizoid.telescope.inject;
 
 import io.github.eschizoid.telescope.Telescope;
 import java.util.List;

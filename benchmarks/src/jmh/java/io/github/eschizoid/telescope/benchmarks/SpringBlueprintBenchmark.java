@@ -1,7 +1,7 @@
 package io.github.eschizoid.telescope.benchmarks;
 
 import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.spring.TelescopeCustomizer;
+import io.github.eschizoid.telescope.inject.TelescopeCustomizer;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;

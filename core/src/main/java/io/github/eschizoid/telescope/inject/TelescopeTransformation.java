@@ -1,9 +1,9 @@
-package io.github.eschizoid.telescope.spring;
+package io.github.eschizoid.telescope.inject;
 
 import java.util.function.UnaryOperator;
 
 /**
- * A reusable transformation over a typed path. Generated Spring beans cache the path and the
+ * A reusable transformation over a typed path. Generated beans cache the path and the
  * transformation once during construction. Both default factories must be independent of field
  * injection and must return non-null values.
  *

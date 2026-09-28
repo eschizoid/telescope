@@ -3,6 +3,8 @@ package io.github.eschizoid.telescope.spring;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.eschizoid.telescope.inject.TelescopeCustomizer;
+import io.github.eschizoid.telescope.inject.TelescopePath;
 import io.github.eschizoid.telescope.spring.blueprint.ContactBean;
 import io.github.eschizoid.telescope.spring.blueprint.ContactNameTransformer;
 import io.github.eschizoid.telescope.spring.blueprint.Counter;

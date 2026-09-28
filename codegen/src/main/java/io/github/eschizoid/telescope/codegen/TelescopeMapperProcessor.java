@@ -41,9 +41,9 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
   private static final String TRANSFORM = "io.github.eschizoid.telescope.spring.TelescopeTransformer";
   private static final String BRIDGE = "io.github.eschizoid.telescope.annotations.Bridge";
   private static final String BRIDGES = "io.github.eschizoid.telescope.annotations.Bridges";
-  private static final String PATH = "io.github.eschizoid.telescope.spring.TelescopeTransformation";
-  private static final String PROJECTION = "io.github.eschizoid.telescope.spring.TelescopeProjection";
-  private static final String CUSTOMIZER = "io.github.eschizoid.telescope.spring.TelescopeCustomizer";
+  private static final String PATH = "io.github.eschizoid.telescope.inject.TelescopeTransformation";
+  private static final String PROJECTION = "io.github.eschizoid.telescope.inject.TelescopeProjection";
+  private static final String CUSTOMIZER = "io.github.eschizoid.telescope.inject.TelescopeCustomizer";
 
   /** Public constructor for processor discovery. */
   public TelescopeMapperProcessor() {
@@ -171,7 +171,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       }
     }
     if (projection != null || !declaredTransformers.isEmpty()) {
-      refs.add("io.github.eschizoid.telescope.spring.TelescopeTransformation");
+      refs.add("io.github.eschizoid.telescope.inject.TelescopeTransformation");
       refs.add("java.util.List");
     }
     if (projection != null) {
@@ -540,7 +540,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       to
     );
     final var expectedTransform = types.getDeclaredType(
-      processingEnv.getElementUtils().getTypeElement("io.github.eschizoid.telescope.spring.Transformation"),
+      processingEnv.getElementUtils().getTypeElement("io.github.eschizoid.telescope.inject.Transformation"),
       to
     );
     if (
@@ -563,7 +563,7 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       List.of(from, to),
       List.of(
         "io.github.eschizoid.telescope.Telescope",
-        "io.github.eschizoid.telescope.spring.Transformation",
+        "io.github.eschizoid.telescope.inject.Transformation",
         "java.util.Objects"
       ),
       out -> {

@@ -1,13 +1,13 @@
-package io.github.eschizoid.telescope.spring;
+package io.github.eschizoid.telescope.inject;
 
 import io.github.eschizoid.telescope.conversion.MapperBuilder;
 
 /**
- * A Spring mapper that can apply transformations before mapping. Transformers declared on {@link
- * TelescopeMapper} run first, then those registered by {@link TelescopeCustomizer} beans, in order.
- * Registration is only open while Spring constructs the bean; afterwards the transformers are
- * fixed. Transformers apply to {@link #map} and {@link #forward} only; {@link #backward} and {@link
- * #patch} use the structural mapping directly.
+ * An injectable mapper that can apply transformations before mapping. Transformers declared on
+ * {@code @TelescopeMapper} run first, then those registered by {@link TelescopeCustomizer} beans,
+ * in order. Registration is only open while the container constructs the bean; afterwards the
+ * transformers are fixed. Transformers apply to {@link #map} and {@link #forward} only; {@link
+ * #backward} and {@link #patch} use the structural mapping directly.
  *
  * @param <S> source model type
  * @param <T> target model type

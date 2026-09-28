@@ -1,7 +1,10 @@
-package io.github.eschizoid.telescope.spring;
+package io.github.eschizoid.telescope.inject;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.MapperBuilder;
@@ -35,8 +38,8 @@ class TransformationTest {
     }
     final var transformation = new DefaultTransformation();
 
-    assertThat(transformation.applyDefault(new Holder("ada"))).isEqualTo(new Holder("ADA"));
-    assertThat(transformation.applyDefault(new Holder(null))).isEqualTo(new Holder("missing"));
+    assertEquals(new Holder("ADA"), transformation.applyDefault(new Holder("ada")));
+    assertEquals(new Holder("missing"), transformation.applyDefault(new Holder(null)));
   }
 
   @Test
@@ -72,8 +75,8 @@ class TransformationTest {
       calls.incrementAndGet();
       return value.toLowerCase(Locale.ROOT);
     });
-    assertThat(rule.apply(null)).isNull();
-    assertThat(calls).hasValue(0);
+    assertNull(rule.apply(null));
+    assertEquals(0, calls.get());
   }
 
   @Test
@@ -83,8 +86,8 @@ class TransformationTest {
       calls.incrementAndGet();
       return value.toLowerCase(Locale.ROOT);
     });
-    assertThat(rule.apply(null)).isEqualTo("unknown");
-    assertThat(calls).hasValue(0);
+    assertEquals("unknown", rule.apply(null));
+    assertEquals(0, calls.get());
   }
 
   @Test
@@ -94,8 +97,8 @@ class TransformationTest {
       calls.incrementAndGet();
       return value.toLowerCase(Locale.ROOT);
     });
-    assertThat(rule.apply("BOSTON")).isEqualTo("boston");
-    assertThat(calls).hasValue(1);
+    assertEquals("boston", rule.apply("BOSTON"));
+    assertEquals(1, calls.get());
   }
 
   @Test
@@ -105,14 +108,14 @@ class TransformationTest {
       calls.incrementAndGet();
       return value + "!";
     });
-    assertThat(rule.apply("")).isEqualTo("!");
-    assertThat(calls).hasValue(1);
+    assertEquals("!", rule.apply(""));
+    assertEquals(1, calls.get());
   }
 
   @Test
   void whitespaceOnlyStringIsARealValue() {
     final var rule = new Transformation<>("fallback", (String value) -> value.strip());
-    assertThat(rule.apply("  ")).isEmpty();
+    assertTrue(rule.apply("  ").isEmpty());
   }
 
   @Test
@@ -122,21 +125,21 @@ class TransformationTest {
       calls.incrementAndGet();
       return List.copyOf(value);
     });
-    assertThat(rule.apply(List.of())).isEmpty();
-    assertThat(calls).hasValue(1);
+    assertTrue(rule.apply(List.of()).isEmpty());
+    assertEquals(1, calls.get());
   }
 
   @Test
   void operationMayReturnNull() {
     final var rule = new Transformation<>("fallback", (String value) -> null);
-    assertThat(rule.apply("anything")).isNull();
+    assertNull(rule.apply("anything"));
   }
 
   @Test
   void defaultCanBeAReferenceValue() {
     final var fallback = new ArrayList<String>();
     final var rule = new Transformation<List<String>>(fallback, List::copyOf);
-    assertThat(rule.apply(null)).isSameAs(fallback);
+    assertSame(fallback, rule.apply(null));
   }
 
   @Test
@@ -145,13 +148,12 @@ class TransformationTest {
     final var rule = new Transformation<>("fallback", (String value) -> {
       throw failure;
     });
-    assertThatThrownBy(() -> rule.apply("Boston")).isSameAs(failure);
+    assertSame(failure, assertThrows(IllegalArgumentException.class, () -> rule.apply("Boston")));
   }
 
   @Test
   void nullOperationFailsAtConstruction() {
-    assertThatThrownBy(() -> new Transformation<String>(null, null))
-      .isInstanceOf(NullPointerException.class)
-      .hasMessage("operation must not be null");
+    final var thrown = assertThrows(NullPointerException.class, () -> new Transformation<String>(null, null));
+    assertEquals("operation must not be null", thrown.getMessage());
   }
 }
