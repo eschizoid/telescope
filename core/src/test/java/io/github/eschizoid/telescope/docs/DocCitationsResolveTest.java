@@ -50,16 +50,19 @@ class DocCitationsResolveTest {
    * <p>A frame is a transcript of something that ran, and its file and line belong to whatever was
    * on that machine's classpath: generated sources, or the JDK. Recognising the frame is what tells
    * those apart from a reference, rather than recognising the block a frame is usually written in.
-   * A frame says plainly which it is, and the block it sits in says nothing either way.
    *
-   * <p>The method part spans what a real trace writes there: a module or loader prefix before the
-   * class, which is {@code java.base/} for the platform and {@code app//} for a named classpath
-   * loader as Gradle and JUnit print it, and the angle brackets of a constructor or a static
-   * initialiser. The file part spans the dots a build script's name carries. The extensions are the
-   * ones a reference can be written in, an extension this file never reads as a reference being
-   * unable to be mistaken for one.
+   * <p>Taken from the grammar {@link StackTraceElement#toString()} prints, which is closed: a class
+   * loader, then a module with an optional version, then the class, the method, the file and the
+   * line. A version carries dots, a hyphen for a qualifier and a plus for build metadata, and the
+   * method may be a constructor or a static initialiser in angle brackets. Deriving this from that
+   * grammar rather than from remembered examples is what makes it checkable, instead of a list that
+   * grows each time someone pastes a trace.
+   *
+   * <p>The extensions are the ones a reference can be written in. An extension this file never
+   * reads as a reference cannot be mistaken for one, so a Kotlin, Scala or Groovy source frame
+   * needs no alternative here.
    */
-  private static final Pattern FRAME = Pattern.compile("\\bat\\s+[\\w.$/<>]+\\([\\w$.]+\\.(?:java|kt|kts):\\d+\\)");
+  private static final Pattern FRAME = Pattern.compile("\\bat\\s+[\\w.$/<>@+-]+\\([\\w$.]+\\.(?:java|kts):\\d+\\)");
 
   /**
    * Every reference in one document that does not resolve, each named with the line it sits on.
@@ -233,11 +236,18 @@ class DocCitationsResolveTest {
     }
 
     @Test
-    @DisplayName("every shape a real trace writes a frame in is a frame")
+    @DisplayName("every shape the JDK prints a frame in is a frame")
     void frameSyntaxVariesMoreThanTheBlockAroundIt() {
-      // What this rule branches on is the frame's own syntax, so that is what varies here. A module
-      // prefix is the default format for a platform frame, a loader prefix is what Gradle and JUnit
-      // print for a classpath class, and a constructor frame appears in nearly every real trace.
+      // What this rule branches on is the frame's own syntax, so that is what varies here: the
+      // grammar StackTraceElement prints, walked through its loader, module, version and method
+      // forms. A version with a qualifier is what a snapshot build of this project emits.
+      //
+      // It holds only where the frame survives intact. This repository's formatter reflows prose at
+      // 120 columns and the sole space inside a frame is the one after "at", so a frame long enough
+      // to wrap loses that word and is read as a reference. A fenced block is the one place
+      // prettier
+      // leaves alone, which is a reason to write a transcript in one that has nothing to do with
+      // what a fence means.
       for (final var frame : List.of(
         "at Foo.bar(B.java:900)",
         "\tat Foo.bar(B.java:900)",
@@ -245,6 +255,9 @@ class DocCitationsResolveTest {
         "at io.foo.Bar.<clinit>(B.java:900)",
         "at java.base/io.foo.Bar.baz(B.java:900)",
         "at app//io.foo.Bar.baz(B.java:900)",
+        "at app/io.foo@1.8.0/io.foo.Bar.baz(B.java:900)",
+        "at app/io.foo@1.8.0-SNAPSHOT/io.foo.Bar.baz(B.java:900)",
+        "at app/io.foo@1.0+build.7/io.foo.Bar.baz(B.java:900)",
         "at Build_gradle.main(build.gradle.kts:900)"
       )) {
         assertEquals(List.of(), unresolved("d.md", frame + "\n", scriptRepo), () -> frame);
