@@ -7,7 +7,9 @@ import io.github.eschizoid.telescope.Telescope;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -55,15 +57,18 @@ class CrossPathCorpusTest {
 
   /**
    * The pairings: one per family either allocator table names, excluding those whose rebuild takes
-   * a comparator, plus {@code iterable}, which neither table names and which is here to hold that
-   * boundary. Ordering is a separate axis with its own in-flight work, and a cell that reorders
-   * would be measuring that instead of this.
+   * a comparator or a key class, plus {@code iterable}, which neither table names and which is here
+   * to hold that boundary. Ordering is a separate axis with its own in-flight work, and a cell that
+   * reorders would be measuring that instead of this.
    */
   private static final List<Family> FAMILIES = List.of(
     new Family("list/iface", "list", "java.util.List", "java.util.List", "java.util.ArrayList", true),
     new Family("list/concrete", "list", "java.util.List", "java.util.ArrayList", "java.util.ArrayList", true),
     new Family("collection", "list", "java.util.Collection", "java.util.Collection", "java.util.ArrayList", true),
-    new Family("iterable", "list", "java.lang.Iterable", "java.lang.Iterable", "java.util.ArrayList", true),
+    // Neither cell reads allocates: the scalar one is a pass-through and the converting one
+    // is a
+    // registered mutual refusal, which is the boundary this family is here to hold.
+    new Family("iterable", "list", "java.lang.Iterable", "java.lang.Iterable", "", true),
     new Family("linkedlist", "list", "java.util.List", "java.util.LinkedList", "java.util.LinkedList", true),
     new Family("deque", "list", "java.util.List", "java.util.Deque", "java.util.ArrayDeque", true),
     new Family("queue", "list", "java.util.List", "java.util.Queue", "java.util.ArrayDeque", true),
@@ -148,15 +153,28 @@ class CrossPathCorpusTest {
    * Cells both paths refuse, each with the reason.
    *
    * <p>Two paths that both refuse agree, so without a register a cell that stops converting goes
-   * quiet instead of failing. That is the grid's worst failure mode, because the two paths ask one
-   * classifier: a change there moves both together, parity holds, and nothing is measured. Naming
-   * each mutual refusal turns it into a fact the grid checks in both directions — a cell that
-   * starts refusing fails, and a cell listed here that starts converting fails too.
+   * quiet instead of failing. That is the grid's worst failure mode, because both paths ask one
+   * classifier for what counts as a container: a change there moves both together, parity holds,
+   * and nothing is measured. Naming each mutual refusal turns it into a fact the grid checks in
+   * both directions — a cell that starts refusing fails, and a cell listed here that starts
+   * converting fails too.
    */
-  private static final Map<String, String> KNOWN_REFUSALS = Map.of(
+  private static final Map<String, Refusal> KNOWN_REFUSALS = Map.of(
+    // Iterable is not a Collection subtype, so neither path's classifier gives it a shape.
     "iterable/record",
-    "Iterable is not a Collection subtype, so neither path's classifier gives it a shape"
+    new Refusal("has incompatible types", "incompatible source/target shapes")
   );
+
+  /**
+   * What each path says when it refuses a registered cell.
+   *
+   * <p>A fragment of each message rather than a note about the cause, because a note is not
+   * checked: an entry that only names a cell accepts any refusal at all, so a harness fault or an
+   * unrelated failure on both sides would satisfy it and the cell would pass having measured
+   * nothing. Naming what each path is expected to say makes the register carry the same weight as
+   * an assertion.
+   */
+  private record Refusal(String generatedSays, String reflectiveSays) {}
 
   private static final String PACKAGE = "io.github.eschizoid.telescope.codegen";
 
@@ -205,11 +223,11 @@ class CrossPathCorpusTest {
           // Resolved outside the attempt below, because a harness fault has to be an error rather
           // than an outcome: recorded as a refusal it would pair with the other path's refusal, and
           // the cell would report agreement having measured nothing.
-          final var bridge = processed.success() ? emitted(processed, plain, prefix) : null;
+          final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
           generated =
-            bridge == null
+            forward == null
               ? Outcome.refused(processed.errorMessages().strip())
-              : run(items, () -> bridge.getMethod("forward", src).invoke(null, source));
+              : run(items, () -> forward.invoke(null, source));
           reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
         } catch (final ReflectiveOperationException e) {
           throw new IllegalStateException(cell + " could not be built", e);
@@ -225,8 +243,20 @@ class CrossPathCorpusTest {
         }
         if (generated.refusal() != null) {
           refused.add(cell);
-          if (!KNOWN_REFUSALS.containsKey(cell)) {
+          final var recorded = KNOWN_REFUSALS.get(cell);
+          if (recorded == null) {
             failures.add(cell + ": both paths refused, and no reason is recorded — " + generated);
+          } else if (
+            !generated.refusal().contains(recorded.generatedSays()) ||
+            !reflective.refusal().contains(recorded.reflectiveSays())
+          ) {
+            failures.add(
+              cell +
+                ": refused for a reason the register does not name — generated " +
+                generated +
+                ", reflective " +
+                reflective
+            );
           }
           continue;
         }
@@ -361,22 +391,36 @@ class CrossPathCorpusTest {
     // has no argument to write and the processor dies inside javac with no diagnostic of its own,
     // which is worse than any refusal because the adopter sees only a stack trace.
     //
-    // Each pairing is also run, because a diagnostic-or-silence assertion passes on a bridge that
-    // compiles and converts wrongly. The map rows are what cover the two-argument allocation, where
-    // writing the key and the value the wrong way round is the mistake available.
+    // The map rows are what cover the two-argument allocation: writing the key and the value the
+    // wrong way round emits a file that does not compile, which no row without a map subtype
+    // reaches.
+    // Running each pairing covers a different mistake, one that compiles and holds the right
+    // contents
+    // in the wrong container class, which no assertion on the compile alone can see.
     final var failures = new ArrayList<String>();
     var index = 0;
     for (final var pairing : RAW_PAIRINGS) {
       final var prefix = "Rs" + index++;
       final var sources = rawSources(prefix, pairing);
+      // Only the compile is guarded, because a processor throwing is the outcome being detected
+      // here. A fault anywhere after it belongs to this test, and reporting one as though the
+      // processor had thrown is how a broken fixture reads as a product defect.
+      final ProcessorHarness.Compilation processed;
       try {
-        final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
-        // A refusal is a decision the processor made and said so. What must not happen is the
-        // processor throwing, which reaches the adopter as a compiler crash.
+        processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      } catch (final RuntimeException e) {
+        failures.add(pairing.name() + ": the processor threw " + e.getCause());
+        continue;
+      }
+      try {
+        // Every pairing in the table converts, so a refusal is a failure rather than an outcome to
+        // record. Letting a diagnosed refusal through would leave the same hole the grid's refusal
+        // register closes: the classification these pairings depend on is shared, so a change there
+        // turns them all into refusals at once, and a test that accepts a refusal goes quiet
+        // exactly
+        // when the thing it guards breaks.
         if (!processed.success()) {
-          if (!processed.hasError("@Bridge")) {
-            failures.add(pairing.name() + ": refused without a telescope diagnostic: " + processed.errorMessages());
-          }
+          failures.add(pairing.name() + ": refused, where every pairing here converts: " + processed.errorMessages());
           continue;
         }
         final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
@@ -392,8 +436,6 @@ class CrossPathCorpusTest {
         final var want =
           pairing.allocates().formatted(PACKAGE + "." + prefix) + " " + pairing.rendered().formatted(prefix, prefix);
         if (!want.equals(got)) failures.add(pairing.name() + ": produced " + got + ", expected " + want);
-      } catch (final RuntimeException e) {
-        failures.add(pairing.name() + ": the processor threw " + e.getCause());
       } catch (final ReflectiveOperationException e) {
         throw new IllegalStateException(pairing.name() + " could not be built", e);
       }
@@ -413,9 +455,10 @@ class CrossPathCorpusTest {
   private record RawPairing(String name, String kind, String src, String tgt, String allocates, String rendered) {}
 
   /**
-   * One pairing per index the allocation reads. The list arm reads a single argument, the map arm
-   * reads two, and a raw subtype on either side of the pair reaches a different emitter from a
-   * parameterized one, so the general interfaces are crossed against both sides.
+   * One pairing per arm of the allocation and per side of the pair: the single-argument arm through
+   * a list, a set and a map subtype, the two-argument arm through {@code Map} and {@code
+   * ConcurrentMap}, and each general interface as both source and target, because a raw subtype
+   * reaches a different emitter from a parameterized one.
    */
   private static final List<RawPairing> RAW_PAIRINGS = List.of(
     new RawPairing(
@@ -454,6 +497,30 @@ class CrossPathCorpusTest {
       "Collection -> names",
       "list",
       "java.util.Collection<%sLeaf>",
+      "%sNamesDto",
+      "%sNamesDto",
+      "[%sLeafDto[v=b], %sLeafDto[v=a]]"
+    ),
+    new RawPairing(
+      "Deque -> names",
+      "list",
+      "java.util.Deque<%sLeaf>",
+      "%sNamesDto",
+      "%sNamesDto",
+      "[%sLeafDto[v=b], %sLeafDto[v=a]]"
+    ),
+    new RawPairing(
+      "Queue -> names",
+      "list",
+      "java.util.Queue<%sLeaf>",
+      "%sNamesDto",
+      "%sNamesDto",
+      "[%sLeafDto[v=b], %sLeafDto[v=a]]"
+    ),
+    new RawPairing(
+      "List -> names",
+      "list",
+      "java.util.List<%sLeaf>",
       "%sNamesDto",
       "%sNamesDto",
       "[%sLeafDto[v=b], %sLeafDto[v=a]]"
@@ -534,21 +601,24 @@ class CrossPathCorpusTest {
     final var leaves = new ArrayList<>();
     for (final var value : VALUES) leaves.add(leafType.getConstructor(String.class).newInstance(value));
     final var declared = pairing.src().formatted(prefix, prefix);
-    // A raw-subtype source has to be an instance of that subtype; a general-interface source takes
-    // any container of the right kind.
-    final var type = declared.startsWith(prefix)
+    // A raw-subtype source has to be an instance of that subtype. A general-interface source takes
+    // any container the interface admits, which is not the same as any container of the kind: a
+    // Deque and a Queue are list-shaped and an ArrayList is neither of them.
+    final var raw = declared.contains("<") ? declared.substring(0, declared.indexOf('<')) : declared;
+    final Class<?> type = declared.startsWith(prefix)
       ? classes.get(PACKAGE + "." + declared)
-      : switch (pairing.kind()) {
-          case "set" -> LinkedHashSet.class;
-          case "map" -> LinkedHashMap.class;
+      : switch (raw) {
+          case "java.util.Deque", "java.util.Queue" -> ArrayDeque.class;
+          case "java.util.Set" -> LinkedHashSet.class;
+          case "java.util.Map", "java.util.concurrent.ConcurrentMap" -> LinkedHashMap.class;
           default -> ArrayList.class;
         };
     final var instance = type.getConstructor().newInstance();
     if (pairing.kind().equals("map")) {
-      final var put = java.util.Map.class.getMethod("put", Object.class, Object.class);
+      final var put = Map.class.getMethod("put", Object.class, Object.class);
       for (var i = 0; i < leaves.size(); i++) put.invoke(instance, "k" + (i + 1), leaves.get(i));
     } else {
-      final var add = java.util.Collection.class.getMethod("add", Object.class);
+      final var add = Collection.class.getMethod("add", Object.class);
       for (final var leaf : leaves) add.invoke(instance, leaf);
     }
     return instance;

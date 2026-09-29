@@ -3895,12 +3895,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * The type arguments to write into an allocation's diamond, key first where there is one.
    *
-   * <p>A container carries its arguments either on itself or on a container supertype, and only one
-   * of the two ways answers for any given type. The shared spec reads a parameterized type's view
-   * and declines a raw subtype, whose arguments live on a supertype and have to be walked for.
-   * Asking under a fixed interface name answers nothing at all for a container that is not a
-   * subtype of that interface, and a {@code Deque}, a {@code Queue} and a field declared as the
-   * general {@code Collection} are all list-shaped without being {@code List}s.
+   * <p>Each of the two ways a container carries its arguments has a blind spot the other covers.
+   * The shared spec reads a parameterized type's view and declines a raw subtype, whose arguments
+   * live on a supertype and have to be walked for. Asking under a fixed interface name answers
+   * nothing at all for a container that is not a subtype of that interface, and a {@code Deque}, a
+   * {@code Queue} and a field declared as the general {@code Collection} are all list-shaped
+   * without being {@code List}s. An ordinary container is answered by both, so the spec goes first
+   * and the walk is the tail.
    */
   private List<? extends TypeMirror> allocTypeArguments(final TypeMirror container, final FieldPlan.Kind kind) {
     final var view = rules.containerViewOf(container);
@@ -3918,11 +3919,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
     );
     // The walk answers with an empty list when the container carries no concrete view of that
-    // interface, and both callers index what comes back. Nothing reaches here with an empty answer
-    // today, because a container the walk cannot read is refused while the plan is built — but an
-    // unguarded index is what turned a reachability change into a compiler crash with no
-    // diagnostic,
-    // so the next one says which container it could not read.
+    // interface, and its caller indexes what comes back, in both arms. Nothing reaches here with an
+    // empty answer while a container the walk cannot read is refused as the plan is built, which is
+    // a property of two decisions agreeing rather than of either one alone, so the throw names the
+    // container instead of letting an index reach javac.
     if (walked.isEmpty()) {
       throw new IllegalStateException("no " + kind + " view carrying type arguments for container " + container);
     }
