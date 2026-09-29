@@ -124,9 +124,7 @@ public final class ProcessorHarness {
     return new StringSource(fqcn, code);
   }
 
-  /**
-   * Outcome of one in-memory compilation: success flag, diagnostics, and captured generated source.
-   */
+  /** Outcome of one in-memory compilation. */
   public record Compilation(
     boolean success,
     List<Diagnostic<? extends JavaFileObject>> diagnostics,

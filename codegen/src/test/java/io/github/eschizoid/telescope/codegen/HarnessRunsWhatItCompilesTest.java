@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
  * reading it.
  *
  * <p>Reading emitted text answers whether a processor wrote what was expected. Running it answers
- * whether the expectation was right, which is the only way to compare a generated path against the
+ * whether the expectation was right, which is what lets a test compare a generated path against the
  * reflective one on the same input.
  */
 class HarnessRunsWhatItCompilesTest {

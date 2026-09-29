@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
@@ -19,16 +20,18 @@ import org.junit.jupiter.api.Test;
 /**
  * One input through both paths, for every cell of a generated grid.
  *
- * <p>Every parity gate in this repository is written by hand, and a hand-written gate covers the
- * shapes whoever wrote it thought of. Four separate ones have been green while the defect they were
- * written for was live, each time because the fixture varied a dimension the rule does not branch
- * on. Generating the grid removes the author's sample from the decision.
+ * <p>A parity gate written by hand covers the shapes its author thought of, so it can stay green
+ * while the rule it guards is wrong: the fixture varies a dimension the rule does not branch on.
+ * Crossing the container families against the element shapes takes the choice of sample out of the
+ * author's hands, though the axes themselves are still written down here.
  *
- * <p>A cell agrees when both paths return the same value in the same container class, or when both
- * refuse. A cell disagrees when one path returns something the other does not, or when one refuses
- * and the other does not, and a disagreement is a defect unless {@link #KNOWN_DIVERGENCES} carries
- * it with a reason. Agreement alone is not enough: a cell also owes the rendering both paths should
- * have produced, so a pair that is wrong the same way still fails.
+ * <p>A cell agrees when both paths hold the same contents in the same container class, and for a
+ * container that promises an iteration order the same rendering too. It disagrees when one path
+ * returns something the other does not, or when one refuses and the other does not, and a
+ * disagreement is a defect unless {@link #KNOWN_DIVERGENCES} carries it. Agreement alone is not
+ * enough in either direction: a converting cell owes the rendering both paths should have produced,
+ * so a pair that is wrong the same way still fails, and a cell both paths refuse owes an entry in
+ * {@link #KNOWN_REFUSALS}, because two refusals agree while measuring nothing.
  *
  * <p>Every cell's types are declared in this test's own package with a per-cell name prefix,
  * because the classes are defined through this class's lookup: that is what puts them in a module
@@ -37,8 +40,12 @@ import org.junit.jupiter.api.Test;
 class CrossPathCorpusTest {
 
   /**
-   * One container pairing: what the source declares, what the target declares, the class both paths
-   * have to allocate for the target, and whether that class promises an iteration order.
+   * One container pairing: what the source declares, what the target declares, the class a rebuild
+   * has to produce for the target, and whether that class promises an iteration order.
+   *
+   * <p>{@code allocates} is what a rebuild produces. A pair that is the same type on both sides
+   * with an element needing no conversion rebuilds nothing at all, and {@link #passesThrough}
+   * decides which of the two a cell owes.
    *
    * <p>{@code kind} decides how the input is built and how a rebuilt container renders. {@code
    * ordered} decides how much of the rendering a cell can owe: every class here is compared across
@@ -47,8 +54,9 @@ class CrossPathCorpusTest {
   private record Family(String name, String kind, String src, String tgt, String allocates, boolean ordered) {}
 
   /**
-   * The pairings, one per family either allocator table names, excluding those whose rebuild takes
-   * a comparator. Ordering is a separate axis with its own in-flight work, and a cell that reorders
+   * The pairings: one per family either allocator table names, excluding those whose rebuild takes
+   * a comparator, plus {@code iterable}, which neither table names and which is here to hold that
+   * boundary. Ordering is a separate axis with its own in-flight work, and a cell that reorders
    * would be measuring that instead of this.
    */
   private static final List<Family> FAMILIES = List.of(
@@ -154,12 +162,28 @@ class CrossPathCorpusTest {
     new Verdict(false, true)
   );
 
+  /**
+   * Cells both paths refuse, each with the reason.
+   *
+   * <p>Two paths that both refuse agree, so without a register a cell that stops converting goes
+   * quiet instead of failing. That is the grid's worst failure mode, because the two paths ask one
+   * classifier: a change there moves both together, parity holds, and nothing is measured. Naming
+   * each mutual refusal turns it into a fact the grid checks in both directions — a cell that
+   * starts refusing fails, and a cell listed here that starts converting fails too.
+   */
+  private static final Map<String, String> KNOWN_REFUSALS = Map.of(
+    "iterable/record",
+    "Iterable is not a Collection subtype, so neither path's classifier gives it a shape"
+  );
+
   private static final String PACKAGE = "io.github.eschizoid.telescope.codegen";
 
   /**
    * The two element values every cell converts, in an order the insertion-ordered containers keep
-   * and a plain hash container does not. One element renders a list and a set alike, which hides an
-   * allocation that picked the wrong family; two of them do not.
+   * and a plain hash container does not, which is what makes a hash family's cell worth comparing
+   * by contents rather than by rendering. A wrong family is caught by the container class either
+   * way: two values do not separate a list from an insertion-ordered set, whose renderings are
+   * identical at any size.
    */
   private static final List<String> VALUES = List.of("b", "a");
 
@@ -169,6 +193,7 @@ class CrossPathCorpusTest {
     final var failures = new ArrayList<String>();
     final var checked = new LinkedHashSet<String>();
     final var diverged = new LinkedHashSet<String>();
+    final var refused = new LinkedHashSet<String>();
     var index = 0;
 
     for (final var family : FAMILIES) {
@@ -195,9 +220,14 @@ class CrossPathCorpusTest {
           final var source = src.getConstructors()[0].newInstance(items(classes, prefix, family, element));
           final var items = tgt.getMethod("items");
 
-          generated = processed.success()
-            ? run(items, () -> emitted(processed, plain).getMethod("forward", src).invoke(null, source))
-            : Outcome.refused(processed.errorMessages().strip());
+          // Resolved outside the attempt below, because a harness fault has to be an error rather
+          // than an outcome: recorded as a refusal it would pair with the other path's refusal, and
+          // the cell would report agreement having measured nothing.
+          final var bridge = processed.success() ? emitted(processed, plain, prefix) : null;
+          generated =
+            bridge == null
+              ? Outcome.refused(processed.errorMessages().strip())
+              : run(items, () -> bridge.getMethod("forward", src).invoke(null, source));
           reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
         } catch (final ReflectiveOperationException e) {
           throw new IllegalStateException(cell + " could not be built", e);
@@ -211,7 +241,17 @@ class CrossPathCorpusTest {
           }
           continue;
         }
-        if (generated.refusal() != null) continue;
+        if (generated.refusal() != null) {
+          refused.add(cell);
+          if (!KNOWN_REFUSALS.containsKey(cell)) {
+            failures.add(cell + ": both paths refused, and no reason is recorded — " + generated);
+          }
+          continue;
+        }
+        if (KNOWN_REFUSALS.containsKey(cell)) {
+          failures.add(cell + ": recorded as refused by both paths, but it converted — " + generated);
+          continue;
+        }
         owed(prefix, family, element, generated).ifPresent(owed -> failures.add(cell + ": " + owed));
       }
     }
@@ -230,16 +270,27 @@ class CrossPathCorpusTest {
       stale.isEmpty(),
       () -> "recorded as diverging, but not observed to — resolved, or no longer in the grid:\n  " + stale
     );
+    final var staleRefusals = new LinkedHashSet<>(KNOWN_REFUSALS.keySet());
+    staleRefusals.removeAll(refused);
+    assertTrue(
+      staleRefusals.isEmpty(),
+      () -> "recorded as refused, but not observed to be — no longer in the grid:\n  " + staleRefusals
+    );
   }
 
   /**
-   * Define the classes the processor's compile added over the plain one, and hand back the bridge.
+   * Define the classes the processor's compile added over the plain one, and hand back the cell's
+   * own bridge, named.
    *
    * <p>Only the added ones, because the pair itself is already defined and a name is defined once.
+   * The bridge is looked up by name rather than by suffix: a cell whose element needs converting
+   * also gets a bridge for the element pair, so two of the added names end in {@code Bridge} and
+   * whichever the compiler happened to write first would otherwise decide which one the cell runs.
    */
   private static Class<?> emitted(
     final ProcessorHarness.Compilation processed,
-    final ProcessorHarness.Compilation plain
+    final ProcessorHarness.Compilation plain,
+    final String prefix
   ) {
     final var added = new LinkedHashMap<>(processed.classes());
     plain.classes().keySet().forEach(added::remove);
@@ -250,10 +301,123 @@ class CrossPathCorpusTest {
       processed.resources(),
       added
     ).define(MethodHandles.lookup());
-    for (final var entry : defined.entrySet()) {
-      if (entry.getKey().endsWith("Bridge")) return entry.getValue();
+    final var bridge = defined.get(PACKAGE + "." + prefix + "SrcBridge");
+    if (bridge == null) throw new IllegalStateException("the processor emitted no bridge, only " + defined.keySet());
+    return bridge;
+  }
+
+  @Test
+  @DisplayName("a subtype whose own arguments are not its container view's is refused, not emitted wrong")
+  void aSubtypeViewIsRefusedRatherThanEmittedWrong() {
+    final var sources = new JavaFileObject[] {
+      source("SvLeaf", "package " + PACKAGE + ";\npublic record SvLeaf(String v) {}\n"),
+      source("SvLeafDto", "package " + PACKAGE + ";\npublic record SvLeafDto(String v) {}\n"),
+      source("SvTagged", "package " + PACKAGE + ";\npublic class SvTagged<Tag, E> extends java.util.ArrayList<E> {}\n"),
+      source(
+        "SvSrc",
+        "package " +
+          PACKAGE +
+          ";\nimport io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(SvTgt.class)\n" +
+          "public record SvSrc(SvTagged<String, SvLeaf> items) {}\n"
+      ),
+      source("SvTgt", "package " + PACKAGE + ";\npublic record SvTgt(java.util.List<SvLeafDto> items) {}\n"),
+    };
+    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+
+    // The shared spec sees a one-element list here, because it resolves the arguments of the List
+    // supertype rather than reading the two the subtype declares. A rebuild cannot write that view
+    // into the declared name, so the plan has to refuse — and the refusal owed is the pairing one
+    // that names both sides, not a type-argument count raised against code nobody wrote.
+    assertFalse(processed.success(), () -> "should refuse: " + processed.generated().keySet());
+    assertTrue(processed.hasError("has incompatible types"), processed::errorMessages);
+    assertFalse(processed.hasError("wrong number of type arguments"), processed::errorMessages);
+  }
+
+  /**
+   * Whether the pair is the same type on both sides with an element that needs no conversion, in
+   * which case neither path allocates anything and the target holds the source's own container.
+   *
+   * <p>Such a cell would otherwise assert against the class the fixture happened to build, which
+   * the families expect anyway — it would pass whatever either path did. The fixture builds a class
+   * no family names, so the pass-through is visible, and the cell pins it: if either path ever
+   * starts copying here, the cell fails and the decision surfaces rather than changing quietly.
+   */
+  private static boolean passesThrough(final Family family, final Element element) {
+    return element.name().equals("scalar") && family.src().equals(family.tgt());
+  }
+
+  private static String inputClassOf(final String kind) {
+    return switch (kind) {
+      case "list" -> InputList.class.getName();
+      case "set" -> InputSet.class.getName();
+      default -> InputMap.class.getName();
+    };
+  }
+
+  /** Container classes no family allocates, so handing one back unchanged is observable. */
+  private static final class InputList<E> extends ArrayList<E> {
+
+    private static final long serialVersionUID = 1L;
+  }
+
+  private static final class InputSet<E> extends LinkedHashSet<E> {
+
+    private static final long serialVersionUID = 1L;
+  }
+
+  private static final class InputMap<K, V> extends LinkedHashMap<K, V> {
+
+    private static final long serialVersionUID = 1L;
+  }
+
+  @Test
+  @DisplayName("a raw container subtype pairs with a general-interface side without crashing the processor")
+  void aRawSubtypePairsWithAGeneralInterfaceSide() {
+    // A raw subtype carries its element type on a supertype, so an allocation has to walk for it. A
+    // Deque, a Queue and a field declared as the general Collection are list-shaped without being
+    // Lists, so a walk that asks under the List interface finds nothing for them: the emitter then
+    // has no argument to write and the processor dies inside javac with no diagnostic of its own,
+    // which is worse than any refusal because the adopter sees only a stack trace.
+    final var general = List.of("java.util.Collection", "java.util.Deque", "java.util.Queue", "java.util.List");
+    final var failures = new ArrayList<String>();
+    for (final var raw : general) {
+      for (final var side : List.of("source", "target")) {
+        final var declaredGeneral = raw + "<RsLeafDto>";
+        final var pair = side.equals("source")
+          ? new String[] { "RsNames", declaredGeneral }
+          : new String[] { raw + "<RsLeaf>", "RsNamesDto" };
+        final var head = "package " + PACKAGE + ";\n";
+        final var sources = new JavaFileObject[] {
+          source("RsLeaf", head + "public record RsLeaf(String v) {}\n"),
+          source("RsLeafDto", head + "public record RsLeafDto(String v) {}\n"),
+          source("RsNames", head + "public class RsNames extends java.util.ArrayList<RsLeaf> {}\n"),
+          source("RsNamesDto", head + "public class RsNamesDto extends java.util.ArrayList<RsLeafDto> {}\n"),
+          source(
+            "RsSrc",
+            head +
+              "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(RsTgt.class)\n" +
+              "public record RsSrc(" +
+              pair[0] +
+              " items) {}\n"
+          ),
+          source("RsTgt", head + "public record RsTgt(" + pair[1] + " items) {}\n"),
+        };
+        try {
+          final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+          // Either outcome is a decision the processor made and said so. What must not happen is
+          // the
+          // processor throwing, which reaches the adopter as a compiler crash.
+          if (!processed.success() && !processed.hasError("@Bridge")) {
+            failures.add(
+              raw + " as " + side + ": refused without a telescope diagnostic: " + processed.errorMessages()
+            );
+          }
+        } catch (final RuntimeException e) {
+          failures.add(raw + " as " + side + ": the processor threw " + e.getCause());
+        }
+      }
     }
-    throw new IllegalStateException("the processor emitted no bridge, only " + defined.keySet());
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
   private static JavaFileObject[] sources(final String prefix, final Family family, final Element element) {
@@ -302,8 +466,9 @@ class CrossPathCorpusTest {
     final Element element,
     final Outcome outcome
   ) {
-    if (!family.allocates().equals(outcome.allocated())) {
-      return java.util.Optional.of("both paths allocated " + outcome.allocated() + ", expected " + family.allocates());
+    final var expectedClass = passesThrough(family, element) ? inputClassOf(family.kind()) : family.allocates();
+    if (!expectedClass.equals(outcome.allocated())) {
+      return java.util.Optional.of("both paths allocated " + outcome.allocated() + ", expected " + expectedClass);
     }
     final var rendered = VALUES.stream()
       .map(v -> element.rendered().formatted(prefix, v))
@@ -340,10 +505,18 @@ class CrossPathCorpusTest {
       );
     }
     return switch (family.kind()) {
-      case "list" -> new ArrayList<>(leaves);
-      case "set" -> new LinkedHashSet<>(leaves);
+      case "list" -> {
+        final var list = new InputList<Object>();
+        list.addAll(leaves);
+        yield list;
+      }
+      case "set" -> {
+        final var set = new InputSet<Object>();
+        set.addAll(leaves);
+        yield set;
+      }
       default -> {
-        final var map = new LinkedHashMap<String, Object>();
+        final var map = new InputMap<String, Object>();
         for (var i = 0; i < leaves.size(); i++) map.put("k" + (i + 1), leaves.get(i));
         yield map;
       }
