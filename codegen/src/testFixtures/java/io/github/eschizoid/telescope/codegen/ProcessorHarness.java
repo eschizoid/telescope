@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.codegen;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.invoke.MethodHandles;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -114,7 +115,8 @@ public final class ProcessorHarness {
       success,
       diagnostics.getDiagnostics(),
       capturing.generatedSources(),
-      capturing.generatedResources()
+      capturing.generatedResources(),
+      capturing.compiledClasses()
     );
   }
 
@@ -122,15 +124,60 @@ public final class ProcessorHarness {
     return new StringSource(fqcn, code);
   }
 
-  /**
-   * Outcome of one in-memory compilation: success flag, diagnostics, and captured generated source.
-   */
+  /** Outcome of one in-memory compilation. */
   public record Compilation(
     boolean success,
     List<Diagnostic<? extends JavaFileObject>> diagnostics,
     Map<String, String> generated,
-    Map<String, String> resources
+    Map<String, String> resources,
+    Map<String, byte[]> classes
   ) {
+    /**
+     * Define every class this compilation produced through the caller's own lookup, keyed by binary
+     * name.
+     *
+     * <p>Running what was compiled is what lets a test compare the generated path against the
+     * reflective one on the same input, rather than comparing generated text against an
+     * expectation. The lookup is a parameter rather than something this fixture builds because it
+     * decides the module, and the module decides whether the runtime path can read the class at
+     * all: {@link MethodHandles#privateLookupIn} keeps {@code MODULE} access only when the target
+     * class and the caller share a module, and {@link java.lang.invoke.LambdaMetafactory} rejects a
+     * caller without it. Every class loader owns a distinct unnamed module, so a class held by a
+     * loader of its own is unreadable to the accessor substrate however public it is. Defining
+     * through the caller's lookup puts it in the caller's module instead.
+     *
+     * <p>Two consequences for whoever writes the sources. {@link MethodHandles.Lookup#defineClass}
+     * takes only bytes naming the lookup class's own package, so the sources have to declare that
+     * package; and one loader holds every cell of a grid, so the names have to be distinct across
+     * cells.
+     *
+     * <p>Empty for a {@code -proc:only} compile, which attributes declarations and emits no
+     * classes.
+     */
+    public Map<String, Class<?>> define(final MethodHandles.Lookup lookup) {
+      final var defined = new LinkedHashMap<String, Class<?>>();
+      final var pending = new LinkedHashMap<>(classes);
+      // defineClass links, and linking a class that references another of the set can need that
+      // one present. Nothing here knows the dependency order, so define what can be defined and
+      // go round again while the round defined something.
+      while (!pending.isEmpty()) {
+        final var failures = new LinkedHashMap<String, Throwable>();
+        final var before = pending.size();
+        for (final var entry : List.copyOf(pending.entrySet())) {
+          try {
+            defined.put(entry.getKey(), lookup.defineClass(entry.getValue()));
+            pending.remove(entry.getKey());
+          } catch (final IllegalAccessException | LinkageError t) {
+            failures.put(entry.getKey(), t);
+          }
+        }
+        if (pending.size() == before) {
+          throw new IllegalStateException("cannot define " + failures.keySet(), failures.values().iterator().next());
+        }
+      }
+      return defined;
+    }
+
     public List<Diagnostic<? extends JavaFileObject>> errors() {
       final var out = new ArrayList<Diagnostic<? extends JavaFileObject>>();
       for (final var d : diagnostics) {
@@ -179,6 +226,7 @@ public final class ProcessorHarness {
 
     private final Map<String, CapturedSource> captured = new LinkedHashMap<>();
     private final Map<String, CapturedResource> capturedResources = new LinkedHashMap<>();
+    private final Map<String, CapturedClass> classes = new LinkedHashMap<>();
 
     CapturingFileManager(final JavaFileManager delegate) {
       super(delegate);
@@ -199,7 +247,9 @@ public final class ProcessorHarness {
       // Full-pipeline compiles route class output here — sink it in memory so nothing lands in
       // the working tree.
       if (location == StandardLocation.CLASS_OUTPUT && kind == JavaFileObject.Kind.CLASS) {
-        return new DiscardedClass(className);
+        final var classFile = new CapturedClass(className);
+        classes.put(className, classFile);
+        return classFile;
       }
       return super.getJavaFileForOutput(location, className, kind, sibling);
     }
@@ -222,6 +272,12 @@ public final class ProcessorHarness {
     Map<String, String> generatedSources() {
       final var out = new LinkedHashMap<String, String>();
       captured.forEach((name, file) -> out.put(name, file.text()));
+      return out;
+    }
+
+    Map<String, byte[]> compiledClasses() {
+      final var out = new LinkedHashMap<String, byte[]>();
+      classes.forEach((name, file) -> out.put(name, file.bytes()));
       return out;
     }
 
@@ -256,16 +312,28 @@ public final class ProcessorHarness {
     }
   }
 
-  /** In-memory sink for class output in full-pipeline compiles — the bytes are discarded. */
-  private static final class DiscardedClass extends SimpleJavaFileObject {
+  /**
+   * In-memory sink for class output in full-pipeline compiles, keeping the bytes.
+   *
+   * <p>Nothing lands in the working tree either way. Keeping them is what lets a test run what it
+   * compiled rather than only reading the source it generated, which is the difference between
+   * checking that a processor emits something and checking what that something does.
+   */
+  private static final class CapturedClass extends SimpleJavaFileObject {
 
-    DiscardedClass(final String className) {
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+
+    CapturedClass(final String className) {
       super(URI.create("mem:///" + className.replace('.', '/') + Kind.CLASS.extension), Kind.CLASS);
     }
 
     @Override
     public OutputStream openOutputStream() {
-      return new ByteArrayOutputStream();
+      return bytes;
+    }
+
+    byte[] bytes() {
+      return bytes.toByteArray();
     }
   }
 
