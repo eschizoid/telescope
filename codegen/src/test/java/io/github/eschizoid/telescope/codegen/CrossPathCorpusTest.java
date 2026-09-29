@@ -360,46 +360,198 @@ class CrossPathCorpusTest {
     // Lists, so a walk that asks under the List interface finds nothing for them: the emitter then
     // has no argument to write and the processor dies inside javac with no diagnostic of its own,
     // which is worse than any refusal because the adopter sees only a stack trace.
-    final var general = List.of("java.util.Collection", "java.util.Deque", "java.util.Queue", "java.util.List");
+    //
+    // Each pairing is also run, because a diagnostic-or-silence assertion passes on a bridge that
+    // compiles and converts wrongly. The map rows are what cover the two-argument allocation, where
+    // writing the key and the value the wrong way round is the mistake available.
     final var failures = new ArrayList<String>();
-    for (final var raw : general) {
-      for (final var side : List.of("source", "target")) {
-        final var declaredGeneral = raw + "<RsLeafDto>";
-        final var pair = side.equals("source")
-          ? new String[] { "RsNames", declaredGeneral }
-          : new String[] { raw + "<RsLeaf>", "RsNamesDto" };
-        final var head = "package " + PACKAGE + ";\n";
-        final var sources = new JavaFileObject[] {
-          source("RsLeaf", head + "public record RsLeaf(String v) {}\n"),
-          source("RsLeafDto", head + "public record RsLeafDto(String v) {}\n"),
-          source("RsNames", head + "public class RsNames extends java.util.ArrayList<RsLeaf> {}\n"),
-          source("RsNamesDto", head + "public class RsNamesDto extends java.util.ArrayList<RsLeafDto> {}\n"),
-          source(
-            "RsSrc",
-            head +
-              "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(RsTgt.class)\n" +
-              "public record RsSrc(" +
-              pair[0] +
-              " items) {}\n"
-          ),
-          source("RsTgt", head + "public record RsTgt(" + pair[1] + " items) {}\n"),
-        };
-        try {
-          final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
-          // Either outcome is a decision the processor made and said so. What must not happen is
-          // the
-          // processor throwing, which reaches the adopter as a compiler crash.
-          if (!processed.success() && !processed.hasError("@Bridge")) {
-            failures.add(
-              raw + " as " + side + ": refused without a telescope diagnostic: " + processed.errorMessages()
-            );
+    var index = 0;
+    for (final var pairing : RAW_PAIRINGS) {
+      final var prefix = "Rs" + index++;
+      final var sources = rawSources(prefix, pairing);
+      try {
+        final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+        // A refusal is a decision the processor made and said so. What must not happen is the
+        // processor throwing, which reaches the adopter as a compiler crash.
+        if (!processed.success()) {
+          if (!processed.hasError("@Bridge")) {
+            failures.add(pairing.name() + ": refused without a telescope diagnostic: " + processed.errorMessages());
           }
-        } catch (final RuntimeException e) {
-          failures.add(raw + " as " + side + ": the processor threw " + e.getCause());
+          continue;
         }
+        final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+        assertTrue(plain.success(), () -> pairing.name() + " should compile without the processor");
+        final var classes = plain.define(MethodHandles.lookup());
+        final var src = classes.get(PACKAGE + "." + prefix + "Src");
+        final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
+        final var source = src.getConstructors()[0].newInstance(rawInput(classes, prefix, pairing));
+        final var bridge = emitted(processed, plain, prefix);
+        final var produced = bridge.getMethod("forward", src).invoke(null, source);
+        final var container = tgt.getMethod("items").invoke(produced);
+        final var got = container.getClass().getName() + " " + container;
+        final var want =
+          pairing.allocates().formatted(PACKAGE + "." + prefix) + " " + pairing.rendered().formatted(prefix, prefix);
+        if (!want.equals(got)) failures.add(pairing.name() + ": produced " + got + ", expected " + want);
+      } catch (final RuntimeException e) {
+        failures.add(pairing.name() + ": the processor threw " + e.getCause());
+      } catch (final ReflectiveOperationException e) {
+        throw new IllegalStateException(pairing.name() + " could not be built", e);
       }
     }
-    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " raw pairing(s) failed:\n  " + String.join("\n  ", failures)
+    );
+  }
+
+  /**
+   * One raw-subtype pairing: the kind that decides how the input is built, the two declared field
+   * types, the class the rebuild has to produce, and how it renders.
+   *
+   * <p>{@code src} and {@code tgt} take the cell's name prefix wherever they name a generated type.
+   */
+  private record RawPairing(String name, String kind, String src, String tgt, String allocates, String rendered) {}
+
+  /**
+   * One pairing per index the allocation reads. The list arm reads a single argument, the map arm
+   * reads two, and a raw subtype on either side of the pair reaches a different emitter from a
+   * parameterized one, so the general interfaces are crossed against both sides.
+   */
+  private static final List<RawPairing> RAW_PAIRINGS = List.of(
+    new RawPairing(
+      "names -> Collection",
+      "list",
+      "%sNames",
+      "java.util.Collection<%sLeafDto>",
+      "java.util.ArrayList",
+      "[%sLeafDto[v=b], %sLeafDto[v=a]]"
+    ),
+    new RawPairing(
+      "names -> Deque",
+      "list",
+      "%sNames",
+      "java.util.Deque<%sLeafDto>",
+      "java.util.ArrayDeque",
+      "[%sLeafDto[v=b], %sLeafDto[v=a]]"
+    ),
+    new RawPairing(
+      "names -> Queue",
+      "list",
+      "%sNames",
+      "java.util.Queue<%sLeafDto>",
+      "java.util.ArrayDeque",
+      "[%sLeafDto[v=b], %sLeafDto[v=a]]"
+    ),
+    new RawPairing(
+      "names -> List",
+      "list",
+      "%sNames",
+      "java.util.List<%sLeafDto>",
+      "java.util.ArrayList",
+      "[%sLeafDto[v=b], %sLeafDto[v=a]]"
+    ),
+    new RawPairing(
+      "Collection -> names",
+      "list",
+      "java.util.Collection<%sLeaf>",
+      "%sNamesDto",
+      "%sNamesDto",
+      "[%sLeafDto[v=b], %sLeafDto[v=a]]"
+    ),
+    new RawPairing(
+      "namesSet -> Set",
+      "set",
+      "%sNamesSet",
+      "java.util.Set<%sLeafDto>",
+      "java.util.LinkedHashSet",
+      "[%sLeafDto[v=b], %sLeafDto[v=a]]"
+    ),
+    new RawPairing(
+      "namesMap -> Map",
+      "map",
+      "%sNamesMap",
+      "java.util.Map<java.lang.String, %sLeafDto>",
+      "java.util.LinkedHashMap",
+      "{k1=%sLeafDto[v=b], k2=%sLeafDto[v=a]}"
+    ),
+    new RawPairing(
+      "namesMap -> ConcurrentMap",
+      "map",
+      "%sNamesMap",
+      "java.util.concurrent.ConcurrentMap<java.lang.String, %sLeafDto>",
+      "java.util.concurrent.ConcurrentHashMap",
+      "{k1=%sLeafDto[v=b], k2=%sLeafDto[v=a]}"
+    )
+  );
+
+  private static JavaFileObject[] rawSources(final String prefix, final RawPairing pairing) {
+    final var head = "package " + PACKAGE + ";\n";
+    return new JavaFileObject[] {
+      source(prefix + "Leaf", head + "public record " + prefix + "Leaf(String v) {}\n"),
+      source(prefix + "LeafDto", head + "public record " + prefix + "LeafDto(String v) {}\n"),
+      source(
+        prefix + "Names",
+        head + "public class " + prefix + "Names extends java.util.ArrayList<" + prefix + "Leaf> {}\n"
+      ),
+      source(
+        prefix + "NamesDto",
+        head + "public class " + prefix + "NamesDto extends java.util.ArrayList<" + prefix + "LeafDto> {}\n"
+      ),
+      source(
+        prefix + "NamesSet",
+        head + "public class " + prefix + "NamesSet extends java.util.LinkedHashSet<" + prefix + "Leaf> {}\n"
+      ),
+      source(
+        prefix + "NamesMap",
+        head +
+          "public class " +
+          prefix +
+          "NamesMap extends java.util.LinkedHashMap<java.lang.String, " +
+          prefix +
+          "Leaf> {}\n"
+      ),
+      source(
+        prefix + "Src",
+        head +
+          "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(" +
+          prefix +
+          "Tgt.class)\npublic record " +
+          prefix +
+          "Src(" +
+          pairing.src().formatted(prefix, prefix) +
+          " items) {}\n"
+      ),
+      source(
+        prefix + "Tgt",
+        head + "public record " + prefix + "Tgt(" + pairing.tgt().formatted(prefix, prefix) + " items) {}\n"
+      ),
+    };
+  }
+
+  private static Object rawInput(final Map<String, Class<?>> classes, final String prefix, final RawPairing pairing)
+    throws ReflectiveOperationException {
+    final var leafType = classes.get(PACKAGE + "." + prefix + "Leaf");
+    final var leaves = new ArrayList<>();
+    for (final var value : VALUES) leaves.add(leafType.getConstructor(String.class).newInstance(value));
+    final var declared = pairing.src().formatted(prefix, prefix);
+    // A raw-subtype source has to be an instance of that subtype; a general-interface source takes
+    // any container of the right kind.
+    final var type = declared.startsWith(prefix)
+      ? classes.get(PACKAGE + "." + declared)
+      : switch (pairing.kind()) {
+          case "set" -> LinkedHashSet.class;
+          case "map" -> LinkedHashMap.class;
+          default -> ArrayList.class;
+        };
+    final var instance = type.getConstructor().newInstance();
+    if (pairing.kind().equals("map")) {
+      final var put = java.util.Map.class.getMethod("put", Object.class, Object.class);
+      for (var i = 0; i < leaves.size(); i++) put.invoke(instance, "k" + (i + 1), leaves.get(i));
+    } else {
+      final var add = java.util.Collection.class.getMethod("add", Object.class);
+      for (final var leaf : leaves) add.invoke(instance, leaf);
+    }
+    return instance;
   }
 
   private static JavaFileObject[] sources(final String prefix, final Family family, final Element element) {

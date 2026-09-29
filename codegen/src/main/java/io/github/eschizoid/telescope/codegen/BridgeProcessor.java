@@ -3909,7 +3909,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ? List.of(view.keyType(), view.elementType())
         : List.of(view.elementType());
     }
-    return containerViewArgs(
+    final var walked = containerViewArgs(
       container,
       switch (kind) {
         case MAP_VALUES -> "java.util.Map";
@@ -3917,6 +3917,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         default -> "java.util.List";
       }
     );
+    // The walk answers with an empty list when the container carries no concrete view of that
+    // interface, and both callers index what comes back. Nothing reaches here with an empty answer
+    // today, because a container the walk cannot read is refused while the plan is built — but an
+    // unguarded index is what turned a reachability change into a compiler crash with no
+    // diagnostic,
+    // so the next one says which container it could not read.
+    if (walked.isEmpty()) {
+      throw new IllegalStateException("no " + kind + " view carrying type arguments for container " + container);
+    }
+    return walked;
   }
 
   private void emitListHelper(
