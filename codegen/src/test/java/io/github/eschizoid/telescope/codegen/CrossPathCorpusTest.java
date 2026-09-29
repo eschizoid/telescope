@@ -321,28 +321,66 @@ class CrossPathCorpusTest {
   @Test
   @DisplayName("a subtype whose own arguments are not its container view's is refused, not emitted wrong")
   void aSubtypeViewIsRefusedRatherThanEmittedWrong() {
-    final var sources = new JavaFileObject[] {
-      source("SvLeaf", "package " + PACKAGE + ";\npublic record SvLeaf(String v) {}\n"),
-      source("SvLeafDto", "package " + PACKAGE + ";\npublic record SvLeafDto(String v) {}\n"),
-      source("SvTagged", "package " + PACKAGE + ";\npublic class SvTagged<Tag, E> extends java.util.ArrayList<E> {}\n"),
-      source(
-        "SvSrc",
-        "package " +
-          PACKAGE +
-          ";\nimport io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(SvTgt.class)\n" +
-          "public record SvSrc(SvTagged<String, SvLeaf> items) {}\n"
+    // Two ways a subtype's own arguments can fail to be its container view's, because the emission
+    // writes the declared ones: Tagged declares two where the view carries one, and Boxes declares
+    // one of a different type than the one the view carries. A rebuild cannot write the view into
+    // either declared name, so the plan has to refuse — and the refusal owed is the pairing one
+    // that
+    // names both sides, not a javac error raised against code nobody wrote.
+    record Shape(String name, String declaration, String field, String target) {}
+    final var shapes = List.of(
+      new Shape(
+        "arity",
+        "public class SvTagged<Tag, E> extends java.util.ArrayList<E> {}",
+        "SvTagged<String, SvLeaf>",
+        "java.util.List<SvLeafDto>"
       ),
-      source("SvTgt", "package " + PACKAGE + ";\npublic record SvTgt(java.util.List<SvLeafDto> items) {}\n"),
-    };
-    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      new Shape(
+        "element",
+        "public class SvBoxes<E> extends java.util.ArrayList<java.util.List<E>> {}",
+        "SvBoxes<SvLeaf>",
+        "java.util.List<java.util.List<SvLeafDto>>"
+      )
+    );
+    final var head = "package " + PACKAGE + ";\n";
+    var index = 0;
+    for (final var shape : shapes) {
+      final var prefix = "Sv" + index++;
+      final var sources = new JavaFileObject[] {
+        source(prefix + "Leaf", head + "public record " + prefix + "Leaf(String v) {}\n"),
+        source(prefix + "LeafDto", head + "public record " + prefix + "LeafDto(String v) {}\n"),
+        source(
+          shape.declaration().split(" ")[2].split("<")[0],
+          head + shape.declaration().replace("SvLeaf", prefix + "Leaf") + "\n"
+        ),
+        source(
+          prefix + "Src",
+          head +
+            "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(" +
+            prefix +
+            "Tgt.class)\npublic record " +
+            prefix +
+            "Src(" +
+            shape.field().replace("SvLeaf", prefix + "Leaf") +
+            " items) {}\n"
+        ),
+        source(
+          prefix + "Tgt",
+          head +
+            "public record " +
+            prefix +
+            "Tgt(" +
+            shape.target().replace("SvLeafDto", prefix + "LeafDto") +
+            " items) {}\n"
+        ),
+      };
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
 
-    // The shared spec sees a one-element list here, because it resolves the arguments of the List
-    // supertype rather than reading the two the subtype declares. A rebuild cannot write that view
-    // into the declared name, so the plan has to refuse — and the refusal owed is the pairing one
-    // that names both sides, not a type-argument count raised against code nobody wrote.
-    assertFalse(processed.success(), () -> "should refuse: " + processed.generated().keySet());
-    assertTrue(processed.hasError("has incompatible types"), processed::errorMessages);
-    assertFalse(processed.hasError("wrong number of type arguments"), processed::errorMessages);
+      assertFalse(processed.success(), () -> shape.name() + " should refuse: " + processed.generated().keySet());
+      assertTrue(processed.hasError("has incompatible types"), processed::errorMessages);
+      assertFalse(processed.hasError("wrong number of type arguments"), processed::errorMessages);
+      assertFalse(processed.hasError("cannot be converted to"), processed::errorMessages);
+    }
   }
 
   /**

@@ -3895,38 +3895,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * The type arguments to write into an allocation's diamond, key first where there is one.
    *
-   * <p>Each of the two ways a container carries its arguments has a blind spot the other covers.
-   * The shared spec reads a parameterized type's view and declines a raw subtype, whose arguments
-   * live on a supertype and have to be walked for. Asking under a fixed interface name answers
-   * nothing at all for a container that is not a subtype of that interface, and a {@code Deque}, a
-   * {@code Queue} and a field declared as the general {@code Collection} are all list-shaped
-   * without being {@code List}s. An ordinary container is answered by both, so the spec goes first
-   * and the walk is the tail.
+   * <p>The shared spec answers for every container that reaches here, so there is no second way to
+   * ask and no absent answer to handle. A container the spec declines carries no type arguments of
+   * its own, which makes the implementation to allocate the declared class itself; that class is
+   * not generic, so the caller writes no diamond and returns before this runs.
    */
   private List<? extends TypeMirror> allocTypeArguments(final TypeMirror container, final FieldPlan.Kind kind) {
     final var view = rules.containerViewOf(container);
-    if (view != null) {
-      return kind == FieldPlan.Kind.MAP_VALUES
-        ? List.of(view.keyType(), view.elementType())
-        : List.of(view.elementType());
-    }
-    final var walked = containerViewArgs(
-      container,
-      switch (kind) {
-        case MAP_VALUES -> "java.util.Map";
-        case SET -> "java.util.Set";
-        default -> "java.util.List";
-      }
-    );
-    // The walk answers with an empty list when the container carries no concrete view of that
-    // interface, and its caller indexes what comes back, in both arms. Nothing reaches here with an
-    // empty answer while a container the walk cannot read is refused as the plan is built, which is
-    // a property of two decisions agreeing rather than of either one alone, so the throw names the
-    // container instead of letting an index reach javac.
-    if (walked.isEmpty()) {
-      throw new IllegalStateException("no " + kind + " view carrying type arguments for container " + container);
-    }
-    return walked;
+    return kind == FieldPlan.Kind.MAP_VALUES
+      ? List.of(view.keyType(), view.elementType())
+      : List.of(view.elementType());
   }
 
   private void emitListHelper(
