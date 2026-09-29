@@ -82,8 +82,8 @@ public final class PairingRules<T> {
     // on a list, which is what a Collection guarantees on its own: iteration, and nothing about
     // duplicates. List against Set stays a mismatch -- those are different shapes, not one shape
     // named loosely.
-    final var src = settled(srcView, tgtView);
-    final var tgt = settled(tgtView, srcView);
+    final var src = settledAgainst(srcView, tgtView);
+    final var tgt = settledAgainst(tgtView, srcView);
 
     if (src != null && tgt != null && src.kind() == tgt.kind()) {
       // Map<K, X> ↔ Map<K, Y>: keys must match exactly; lifting preserves the source keys.
@@ -104,14 +104,6 @@ public final class PairingRules<T> {
     );
   }
 
-  /**
-   * The container view of {@code t}, or {@code null} when {@code t} is not a parameterized
-   * container the auto-lift understands. Selection rules: {@code Optional} (final, exact) →
-   * OPTIONAL; any {@code List} / {@code Set} subtype → LIST / SET; any {@code Map} subtype whose
-   * key argument is a plain class handle → MAP_VALUES (a non-class key — wildcard, type variable,
-   * or parameterized type — defeats the key-equality guarantee, so the type is not treated as a
-   * liftable container).
-   */
   private static final Set<WellKnown> GENERAL = Set.of(WellKnown.DEQUE, WellKnown.QUEUE, WellKnown.COLLECTION);
 
   private static final Map<WellKnown, String> GENERAL_NAMES = Map.of(
@@ -127,8 +119,13 @@ public final class PairingRules<T> {
    * A view seen as the other side's kind when it has none of its own. A {@code COLLECTION} against
    * a list or a set becomes that; against another {@code COLLECTION}, or against nothing, it
    * becomes a list.
+   *
+   * <p>Part of the classification rather than of one consumer's plumbing: a {@code COLLECTION} view
+   * names no shape, so anything that pairs two views owes this step before it can ask whether the
+   * two kinds are the same. Both the runtime lift and the generated one consume it, and a consumer
+   * that skips it sees a kind no lift can build.
    */
-  private ContainerView<T> settled(final ContainerView<T> view, final ContainerView<T> other) {
+  public ContainerView<T> settledAgainst(final ContainerView<T> view, final ContainerView<T> other) {
     if (view == null || view.kind() != ContainerView.Kind.COLLECTION) return view;
     final var against = other == null ? null : other.kind();
     return view.as(
@@ -136,6 +133,16 @@ public final class PairingRules<T> {
     );
   }
 
+  /**
+   * The container view of {@code t}, or {@code null} when {@code t} is not a parameterized
+   * container the auto-lift understands. Selection rules: {@code Optional} (final, exact) →
+   * OPTIONAL; any {@code List} subtype, and the {@code Deque} and {@code Queue} interfaces by name
+   * → LIST; any {@code Set} subtype → SET; any {@code Map} subtype whose key argument is a plain
+   * class handle → MAP_VALUES (a non-class key — wildcard, type variable, or parameterized type —
+   * defeats the key-equality guarantee, so the type is not treated as a liftable container); the
+   * {@code Collection} interface by name → COLLECTION, which names no shape and is settled against
+   * the other side of the pair by {@link #settledAgainst}.
+   */
   public ContainerView<T> containerViewOf(final T t) {
     // Raw subclasses retain the explicit shallow-copy policy above. Parameterized subclasses
     // must be viewed through the container supertype: their own parameters can be reordered,

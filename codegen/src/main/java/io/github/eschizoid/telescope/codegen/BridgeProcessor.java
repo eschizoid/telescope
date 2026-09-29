@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.codegen;
 
+import io.github.eschizoid.telescope.internal.pairing.ContainerView;
+import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayDeque;
@@ -16,6 +18,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
@@ -68,6 +71,15 @@ import javax.tools.StandardLocation;
 )
 @SupportedSourceVersion(SourceVersion.RELEASE_21)
 public final class BridgeProcessor extends AbstractTelescopeProcessor {
+
+  /** The shared pairing spec, over the mirror world, consulted for container classification. */
+  private PairingRules<TypeMirror> rules;
+
+  @Override
+  public synchronized void init(final ProcessingEnvironment processingEnv) {
+    super.init(processingEnv);
+    rules = new PairingRules<>(new MirrorProps(processingEnv.getTypeUtils(), processingEnv.getElementUtils()));
+  }
 
   /**
    * Public no-arg constructor required by the {@link javax.annotation.processing.Processor} SPI.
@@ -2557,28 +2569,58 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private record ContainerShape(FieldPlan.Kind kind, TypeMirror elementType, TypeMirror keyType) {}
 
-  // The container shape of a type, accepting any List/Set/Map SUBTYPE (ArrayList, TreeSet,
-  // LinkedHashMap, …) — not just the exact interface — via erasure assignability, matching the
-  // runtime ContainerShape's isAssignableFrom check. Optional is final, so it stays an exact match.
-  // The declared type's type arguments give the element (and key) types; a raw subtype with no type
-  // arguments (e.g. `class Names extends ArrayList<String>`) is not handled here (returns null),
-  // same as before.
-  private ContainerShape containerShapeOf(final TypeMirror type) {
-    if (!(type instanceof DeclaredType dt)) return null;
-    final var args = dt.getTypeArguments();
-    if (assignableToRaw(type, "java.util.Optional")) {
-      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.OPTIONAL, args.getFirst(), null) : null;
+  /**
+   * The container shape of a type, asked of the shared pairing spec so that what counts as a
+   * container is one decision rather than two. {@code null} when the spec sees no parameterized
+   * container, which includes a raw subtype: the spec excludes those deliberately and {@link
+   * #rawContainerShapeOf} answers for them. Also {@code null} when the view's arguments are not the
+   * declared type's own, which {@link #emissionCanNameArguments} decides.
+   *
+   * <p>Both sides are needed because a field declared as the general {@code Collection} has named
+   * no shape of its own, and the spec settles such a view against the other side of the pair.
+   */
+  private ContainerShape containerShapeOf(final TypeMirror type, final TypeMirror other) {
+    final var view = rules.settledAgainst(rules.containerViewOf(type), rules.containerViewOf(other));
+    if (view == null || !emissionCanNameArguments(type, view)) return null;
+    return new ContainerShape(
+      switch (view.kind()) {
+        case LIST -> FieldPlan.Kind.LIST;
+        case SET -> FieldPlan.Kind.SET;
+        case MAP_VALUES -> FieldPlan.Kind.MAP_VALUES;
+        case OPTIONAL -> FieldPlan.Kind.OPTIONAL;
+        // Settled against the other side above, so a view still carrying it here means the spec
+        // stopped doing that.
+        case COLLECTION -> throw new IllegalStateException(
+          "a Collection-declared container reached the plan without taking a shape"
+        );
+      },
+      view.elementType(),
+      view.keyType()
+    );
+  }
+
+  /**
+   * Whether a rebuild can name this container's element types by writing the declared type's own
+   * type arguments, which is what the emission does.
+   *
+   * <p>A view can see through a subtype's parameter list to the container's: {@code class
+   * Tagged<Tag, E> extends ArrayList<E>} views as a one-element list while declaring two arguments,
+   * and {@code class Boxes<E> extends ArrayList<List<E>>} views as a list of {@code List<E>} while
+   * declaring one. Writing the view's arguments into the declared name does not name the declared
+   * type — for the first no such parameterization exists at all, and for the second one exists and
+   * is a different type — so a rebuild is only possible where the two coincide. Refusing here
+   * leaves the pairing diagnostic the plan already produces, which names both sides, rather than a
+   * javac error against code nobody wrote.
+   */
+  private boolean emissionCanNameArguments(final TypeMirror type, final ContainerView<TypeMirror> view) {
+    final var declared = ((DeclaredType) type).getTypeArguments();
+    final var viewArgs =
+      view.keyType() == null ? List.of(view.elementType()) : List.of(view.keyType(), view.elementType());
+    if (declared.size() != viewArgs.size()) return false;
+    for (var i = 0; i < declared.size(); i++) {
+      if (!isSameType(declared.get(i), viewArgs.get(i))) return false;
     }
-    if (args.size() == 1 && assignableToRaw(type, "java.util.List")) {
-      return new ContainerShape(FieldPlan.Kind.LIST, args.getFirst(), null);
-    }
-    if (args.size() == 1 && assignableToRaw(type, "java.util.Set")) {
-      return new ContainerShape(FieldPlan.Kind.SET, args.getFirst(), null);
-    }
-    if (args.size() == 2 && assignableToRaw(type, "java.util.Map")) {
-      return new ContainerShape(FieldPlan.Kind.MAP_VALUES, args.get(1), args.get(0));
-    }
-    return null;
+    return true;
   }
 
   // The container shape of a RAW (non-generic) Collection/Map subtype — a field declared as `class
@@ -2873,8 +2915,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       // (2) Container shape detection — both sides container of the same kind with element types
       //     that need their own sub-bridge. List/Set/Optional/Map values, key-equal Map.
-      final var srcShape = containerShapeOf(sf.type());
-      final var tgtShape = containerShapeOf(tf.type());
+      final var srcShape = containerShapeOf(sf.type(), tf.type());
+      final var tgtShape = containerShapeOf(tf.type(), sf.type());
       if (srcShape != null && tgtShape != null && srcShape.kind() == tgtShape.kind()) {
         if (srcShape.kind() == FieldPlan.Kind.MAP_VALUES && !isSameType(srcShape.keyType(), tgtShape.keyType())) {
           error(
@@ -3839,16 +3881,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
     final var generic = implEl != null && !implEl.getTypeParameters().isEmpty();
     if (!generic) return "new " + implFqn + "()";
+    final var args = allocTypeArguments(container, kind);
     if (kind == FieldPlan.Kind.MAP_VALUES) {
-      final var args = containerViewArgs(container, "java.util.Map");
       return sizedAlloc(
         implFqn,
         args.get(0) + ", " + args.get(1),
         orderingArg(srcContainer, implFqn, elementsPreserved)
       );
     }
-    final var args = containerViewArgs(container, kind == FieldPlan.Kind.SET ? "java.util.Set" : "java.util.List");
     return sizedAlloc(implFqn, args.getFirst().toString(), orderingArg(srcContainer, implFqn, elementsPreserved));
+  }
+
+  /**
+   * The type arguments to write into an allocation's diamond, key first where there is one.
+   *
+   * <p>The shared spec answers for every container that reaches here, so there is no second way to
+   * ask and no absent answer to handle. A container the spec declines carries no type arguments of
+   * its own, which makes the implementation to allocate the declared class itself; that class is
+   * not generic, so the caller writes no diamond and returns before this runs.
+   */
+  private List<? extends TypeMirror> allocTypeArguments(final TypeMirror container, final FieldPlan.Kind kind) {
+    final var view = rules.containerViewOf(container);
+    return kind == FieldPlan.Kind.MAP_VALUES
+      ? List.of(view.keyType(), view.elementType())
+      : List.of(view.elementType());
   }
 
   private void emitListHelper(
