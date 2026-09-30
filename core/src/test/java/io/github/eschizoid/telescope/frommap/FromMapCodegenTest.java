@@ -181,4 +181,23 @@ class FromMapCodegenTest {
     assertNull(FmTeamFromMap.fromMap(null));
     assertNull(FmBeanFromMap.fromMap(null));
   }
+
+  @Test
+  @DisplayName("an Object component carries whatever the source held, of whatever type")
+  void opaqueComponentPassesTheValueThrough() {
+    // The binder reads an Object and the component is declared Object, so nothing narrows and
+    // nothing is converted. The value keeps its own class, which is the only thing a caller can
+    // rely on here.
+    final var text = FmOpaqueFromMap.fromMap(Map.of("name", "a", "payload", "plain"));
+    assertEquals("plain", text.payload());
+
+    final var number = FmOpaqueFromMap.fromMap(Map.of("name", "b", "payload", 42));
+    assertEquals(42, number.payload());
+
+    final var nested = FmOpaqueFromMap.fromMap(Map.of("name", "c", "payload", List.of(1, 2)));
+    assertEquals(List.of(1, 2), nested.payload());
+
+    final var absent = FmOpaqueFromMap.fromMap(Map.of("name", "d"));
+    assertNull(absent.payload(), "an absent key leaves a reference component null");
+  }
 }

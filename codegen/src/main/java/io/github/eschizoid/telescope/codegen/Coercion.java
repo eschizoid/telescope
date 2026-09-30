@@ -144,7 +144,10 @@ sealed interface Coercion
   record Cast(String fqn) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      return "(" + simple(fqn) + ") " + raw;
+      // A reader hands back an Object, so a cast to Object narrows nothing and javac says so. The
+      // other members of this family — String, CharSequence — are narrower than what the reader
+      // returns, and their cast is what makes the assignment compile.
+      return "java.lang.Object".equals(fqn) ? raw : "(" + simple(fqn) + ") " + raw;
     }
 
     @Override
