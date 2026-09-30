@@ -433,4 +433,41 @@ class FromMapProcessorTest {
       assertTrue(generated.contains(".setAge("), generated);
     }
   }
+
+  @Nested
+  @DisplayName("a component whose declared type is what the read already returns")
+  class OpaqueComponent {
+
+    @Test
+    @DisplayName("takes no cast, because a cast to the read's own type narrows nothing")
+    void objectComponentTakesNoCast() {
+      final var compilation = ProcessorHarness.compileFully(
+        List.of(new FromMapProcessor()),
+        List.of("-Xlint:cast"),
+        ProcessorHarness.source(
+          "demo.Opaque",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.FromMap;
+          @FromMap
+          public record Opaque(String name, Object payload) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      // The diagnostic is the assertion: javac reports a cast that narrows nothing, and every
+      // module
+      // here compiles with -Werror, so a binder that emits one does not build. A String component
+      // in
+      // the same record is the control -- its cast is narrower than the read and must survive.
+      assertFalse(
+        compilation.errorMessages().contains("redundant cast"),
+        () -> "the binder cast a value to the type it already had: " + compilation.errorMessages()
+      );
+      final var generated = compilation.generated().get("demo.OpaqueFromMap");
+      assertNotNull(generated, () -> "OpaqueFromMap not generated; saw " + compilation.generated().keySet());
+      assertTrue(generated.contains("(String) "), () -> "a String component still needs its cast: " + generated);
+    }
+  }
 }
