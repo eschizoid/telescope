@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
  *
  * <p>This checks one direction only. A family the classifier reaches and the table has no row for
  * is not seen here, because the walk starts from the table's rows and a missing row is not one of
- * them. Such a family falls through to whatever default the renderer keeps.
+ * them. Such a family falls through to the runtime's fallbacks.
  */
 class AllocationReachabilityTest {
 

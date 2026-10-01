@@ -225,7 +225,7 @@ class AllocationPolicyTest {
   void everyRowDecidesTheExpectedAllocation() {
     // A row and its expectation are added and removed together, in both directions: a new row with
     // nothing expected of it, and an expectation whose row is gone. Asserted as the two differences
-    // rather than as set equality, because a gate that prints both twenty-eight-name sets leaves
+    // rather than as set equality, because a gate that prints both full name sets leaves
     // the reader to find the one that moved.
     final var rows = PairingRules.declaredTypes().keySet();
     final var decidedByNothing = new TreeSet<>(EXPECTED.keySet());
