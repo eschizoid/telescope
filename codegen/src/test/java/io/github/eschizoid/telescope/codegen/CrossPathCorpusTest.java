@@ -526,6 +526,28 @@ class CrossPathCorpusTest {
       "add",
       "%sTgt[items=[%sLeafDto[v=x]]] in %sFTag"
     ),
+    // An upper bound the parameter's bound does not admit leaves no type to write either.
+    new SubtypeView(
+      "wildcard outside a parameter's bound",
+      "public class %sBTag<T extends Number, E> extends java.util.ArrayList<E> {}",
+      "%sBTag<? extends Comparable<Integer>, %sLeaf>",
+      "java.util.List<%sLeafDto>",
+      "add",
+      "%sTgt[items=[%sLeafDto[v=x]]] in java.util.ArrayList"
+    ),
+    // A sorted subtype reached through the raw allocation still receives the source's
+    // comparator.
+    new SubtypeView(
+      "sorted subtype with a self-referential parameter",
+      "public class %sFTree<T extends Comparable<T>, E> extends java.util.TreeSet<E> {\n" +
+        "  public %sFTree() {}\n" +
+        "  public %sFTree(final java.util.Comparator<? super E> order) { super(order); }\n" +
+        "}",
+      "java.util.SortedSet<String>",
+      "%sFTree<?, String>",
+      "addReversed",
+      "%sTgt[items=[t, s]] in %sFTree"
+    ),
     // Holds Strings whatever its argument says, so its elements and the target's cannot pair.
     new SubtypeView(
       "argument unrelated to the elements",
@@ -581,7 +603,7 @@ class CrossPathCorpusTest {
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
       final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
       final var declaredClass = classes.get(PACKAGE + "." + declared);
-      final var container = shape.put().equals("putReversed")
+      final var container = shape.put().endsWith("Reversed")
         ? declaredClass.getConstructor(Comparator.class).newInstance(Comparator.reverseOrder())
         : declaredClass.getConstructor().newInstance();
       final var leaf = classes.get(PACKAGE + "." + prefix + "Leaf").getConstructor(String.class).newInstance("x");
@@ -589,6 +611,10 @@ class CrossPathCorpusTest {
         case "put" -> Map.class.getMethod("put", Object.class, Object.class).invoke(container, "k", leaf);
         case "add" -> Collection.class.getMethod("add", Object.class).invoke(container, leaf);
         case "putString" -> Map.class.getMethod("put", Object.class, Object.class).invoke(container, "k", "s");
+        case "addReversed" -> {
+          Collection.class.getMethod("add", Object.class).invoke(container, "s");
+          Collection.class.getMethod("add", Object.class).invoke(container, "t");
+        }
         case "putReversed" -> {
           Map.class.getMethod("put", Object.class, Object.class).invoke(container, "j", leaf);
           Map.class.getMethod("put", Object.class, Object.class).invoke(container, "k", leaf);
@@ -613,7 +639,8 @@ class CrossPathCorpusTest {
         .replace(prefix + "StringMap", PACKAGE + "." + prefix + "StringMap")
         .replace(prefix + "Swapped", PACKAGE + "." + prefix + "Swapped")
         .replace(prefix + "BTag", PACKAGE + "." + prefix + "BTag")
-        .replace(prefix + "FTag", PACKAGE + "." + prefix + "FTag");
+        .replace(prefix + "FTag", PACKAGE + "." + prefix + "FTag")
+        .replace(prefix + "FTree", PACKAGE + "." + prefix + "FTree");
       final var owesRefusal = owed.startsWith("refused: ");
       for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
         final var outcome = side.getValue();

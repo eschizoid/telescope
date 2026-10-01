@@ -4050,11 +4050,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     if (implEl.getTypeParameters().isEmpty()) return (DeclaredType) implEl.asType();
     final var arguments = allocTypeArguments(tgtContainer, kind);
-    // An argument no type can be written for leaves nothing to resolve the constructor against.
-    if (
-      arguments.stream().anyMatch(Objects::isNull) || arguments.size() != implEl.getTypeParameters().size()
-    ) return null;
-    final var args = arguments.toArray(TypeMirror[]::new);
+    if (arguments.size() != implEl.getTypeParameters().size()) return null;
+    // An argument no type can be written for is resolved as the field declares it, wildcard and
+    // all: a constructor parameter that names it then orders nothing the field can supply.
+    final var declared = ((DeclaredType) tgtContainer).getTypeArguments();
+    final var args = new TypeMirror[arguments.size()];
+    for (int i = 0; i < args.length; i++) args[i] = arguments.get(i) != null ? arguments.get(i) : declared.get(i);
     return processingEnv.getTypeUtils().getDeclaredType(implEl, args);
   }
 
@@ -4230,8 +4231,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * The same for an argument of a class's own parameter, which may declare a bound. A wildcard then
    * allocates over its upper bound where that fits the parameter's bound, and over the parameter's
-   * bound otherwise. Null where no type can be written: a parameter with several bounds, or one
-   * whose bound names a type variable, as {@code T extends Comparable<T>} does.
+   * bound where it gives none. Null where no type can be written: a parameter with several bounds,
+   * one whose bound names a type variable, as {@code T extends Comparable<T>} does, or an upper
+   * bound the parameter's bound does not admit.
    */
   private TypeMirror instantiable(final TypeMirror argument, final TypeParameterElement parameter) {
     if (!(argument instanceof WildcardType wildcard)) return argument;
@@ -4243,7 +4245,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (unbounded) return instantiable(argument);
     if (bound == null || mentionsTypeVariable(bound)) return null;
     final var upper = wildcard.getExtendsBound();
-    return upper != null && processingEnv.getTypeUtils().isAssignable(upper, bound) ? upper : bound;
+    if (upper == null) return bound;
+    // An upper bound outside the parameter's leaves no type that is both within the bound and
+    // assignable to the field, so nothing can be written.
+    return processingEnv.getTypeUtils().isAssignable(upper, bound) ? upper : null;
   }
 
   private static boolean mentionsTypeVariable(final TypeMirror type) {
