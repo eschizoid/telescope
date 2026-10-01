@@ -37,7 +37,6 @@ import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
-import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.ElementFilter;
 import javax.tools.Diagnostic;
 import javax.tools.StandardLocation;
@@ -3966,27 +3965,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Whether a comparator over the container's own type can be handed to this parameter.
-   *
-   * <p>It can exactly when the parameter orders a supertype of that type, which is also exactly
-   * when the narrowing below is a legal cast. Every shape an author is likely to write is one of
-   * those: the wildcard the JDK declares, the type variable itself, and any named supertype, such
-   * as {@code Object} for a comparator meant to order anything. A parameter over an unrelated
-   * class, or over something built out of the elements, is not, and erases to the same constructor,
-   * which is why the question is asked of the declared parameter rather than of the one found by
-   * erasure.
-   *
-   * <p>A raw parameter holds any comparator, which is what the elements' own is.
+   * Whether a comparator over the container's own type can be handed to this parameter. The rule is
+   * the shared one the reflective allocator asks too.
    */
   private boolean canOrder(final TypeMirror param, final TypeMirror own) {
-    final var types = processingEnv.getTypeUtils();
-    if (!(param instanceof DeclaredType declared) || declared.getTypeArguments().isEmpty()) return true;
-    final var arg = declared.getTypeArguments().getFirst();
-    if (arg instanceof WildcardType wildcard) {
-      // Only a lower bound narrows what the parameter accepts; an upper bound or none does not.
-      return wildcard.getSuperBound() == null || types.isAssignable(own, wildcard.getSuperBound());
-    }
-    return types.isAssignable(own, arg);
+    return rules.canOrder(param, own);
   }
 
   /**

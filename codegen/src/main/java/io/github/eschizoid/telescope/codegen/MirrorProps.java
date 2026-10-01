@@ -66,6 +66,21 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public boolean isAssignable(final TypeMirror from, final TypeMirror to) {
+    return types.isAssignable(from, to);
+  }
+
+  @Override
+  public boolean isWildcard(final TypeMirror t) {
+    return t.getKind() == TypeKind.WILDCARD;
+  }
+
+  @Override
+  public TypeMirror lowerBound(final TypeMirror t) {
+    return t instanceof WildcardType wildcard ? wildcard.getSuperBound() : null;
+  }
+
+  @Override
   public boolean isClassType(final TypeMirror t) {
     // Arrays count: in the reflection world an array is a Class instance, and the container-view
     // map-key gate relies on the two worlds agreeing.

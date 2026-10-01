@@ -3,7 +3,6 @@ package io.github.eschizoid.telescope.codegen;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,17 +22,16 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * Two comparator-constructor shapes the two paths currently decide differently, pinned as they
- * stand so that bringing them into line turns these red.
+ * A sorted subtype's comparator constructor, decided the same way by both paths.
  *
- * <p>Both constructors erase to {@code (Comparator)}, and neither can order the elements the field
- * fixes. The generated path resolves the parameter against the field's type arguments, sees that,
- * and refuses a source carrying a comparator. The reflective path sees only the declared parameter:
- * a concrete class naming no type variable, or a bare type variable, both pass its check, so it
- * binds the constructor, hands the comparator over, and returns a naturally ordered container with
- * nothing to say an order was dropped.
+ * <p>Every one-argument comparator constructor erases to {@code (Comparator)}, so which one the
+ * class declares is read from its parameter, resolved against the arguments the field gave the
+ * container. A parameter over a supertype of what the field orders receives the source's
+ * comparator. One over an unrelated class, or over a type variable the field bound to something
+ * else, cannot, and a source ordered by a comparator is refused on both paths rather than rebuilt
+ * in natural order.
  */
-class SortedComparatorParameterDivergenceTest {
+class SortedComparatorParameterParityTest {
 
   private static final String PACKAGE = "io.github.eschizoid.telescope.codegen";
 
@@ -84,10 +82,22 @@ class SortedComparatorParameterDivergenceTest {
     return new Pair(src, classes.get(PACKAGE + "." + prefix + "Tgt"), bridge.getMethod("forward", src));
   }
 
+  private static final String REFUSAL = "declares no constructor taking a Comparator";
+
   private static void assertGeneratedRefuses(final Pair pair, final Object source) {
     final var thrown = assertThrows(InvocationTargetException.class, () -> pair.forward().invoke(null, source));
     final var cause = assertInstanceOf(IllegalStateException.class, thrown.getCause());
-    assertTrue(cause.getMessage().contains("declares no constructor taking a Comparator"), cause::getMessage);
+    assertTrue(cause.getMessage().contains(REFUSAL), cause::getMessage);
+  }
+
+  private static void assertReflectiveRefuses(final Pair pair, final Object source) {
+    final var thrown = assertThrows(IllegalStateException.class, () -> reflectiveItems(pair, source));
+    assertTrue(thrown.getMessage().contains(REFUSAL), thrown::getMessage);
+  }
+
+  private static Object generatedItems(final Pair pair, final Object source) throws ReflectiveOperationException {
+    final var out = pair.forward().invoke(null, source);
+    return pair.tgt().getMethod("items").invoke(out);
   }
 
   private static Object reflectiveItems(final Pair pair, final Object source) throws ReflectiveOperationException {
@@ -100,9 +110,37 @@ class SortedComparatorParameterDivergenceTest {
     return (Class<T>) type;
   }
 
+  private static Object reversedSetSource(final Pair pair) throws ReflectiveOperationException {
+    final SortedSet<String> ordered = new TreeSet<>(Comparator.<String>reverseOrder());
+    ordered.add("a");
+    ordered.add("b");
+    return pair.src().getConstructors()[0].newInstance(ordered);
+  }
+
+  private static Pair setPair(final String prefix, final String parameter) throws ReflectiveOperationException {
+    return compile(
+      prefix,
+      "public class " +
+        prefix +
+        "C<E> extends java.util.TreeSet<E> {\n" +
+        "  private static final long serialVersionUID = 1L;\n" +
+        "  public " +
+        prefix +
+        "C() {}\n" +
+        "  public " +
+        prefix +
+        "C(final " +
+        parameter +
+        " order) { super((java.util.Comparator) order); }\n" +
+        "}\n",
+      "java.util.SortedSet<java.lang.String>",
+      prefix + "C<java.lang.String>"
+    );
+  }
+
   @Test
-  @DisplayName("a set comparator constructor over an unrelated class is refused by one path and dropped by the other")
-  void anUnrelatedClassParameterDiverges() throws ReflectiveOperationException {
+  @DisplayName("a set comparator constructor over an unrelated class is refused by both paths")
+  void anUnrelatedClassParameterIsRefusedByBoth() throws ReflectiveOperationException {
     final var pair = compile(
       "Sdu",
       "public class SduC<E> extends java.util.TreeSet<E> {\n" +
@@ -113,20 +151,15 @@ class SortedComparatorParameterDivergenceTest {
       "java.util.SortedSet<java.lang.String>",
       "SduC<java.lang.String>"
     );
-    final SortedSet<String> ordered = new TreeSet<>(Comparator.<String>reverseOrder());
-    ordered.add("a");
-    ordered.add("b");
-    final var source = pair.src().getConstructors()[0].newInstance(ordered);
+    final var source = reversedSetSource(pair);
 
     assertGeneratedRefuses(pair, source);
-    final var items = (SortedSet<?>) reflectiveItems(pair, source);
-    assertEquals(List.of("a", "b"), List.copyOf(items), "the reflective path reorders the source's [b, a]");
-    assertNull(items.comparator(), "and keeps no comparator");
+    assertReflectiveRefuses(pair, source);
   }
 
   @Test
-  @DisplayName("a map comparator constructor over the value variable is refused by one path and dropped by the other")
-  void aValueVariableParameterDiverges() throws ReflectiveOperationException {
+  @DisplayName("a map comparator constructor over the value variable is refused by both paths")
+  void aValueVariableParameterIsRefusedByBoth() throws ReflectiveOperationException {
     final var pair = compile(
       "Sdv",
       "public class SdvC<K, V> extends java.util.TreeMap<K, V> {\n" +
@@ -143,8 +176,23 @@ class SortedComparatorParameterDivergenceTest {
     final var source = pair.src().getConstructors()[0].newInstance(ordered);
 
     assertGeneratedRefuses(pair, source);
-    final var items = (SortedMap<?, ?>) reflectiveItems(pair, source);
-    assertEquals(List.of("a", "b"), List.copyOf(items.keySet()), "the reflective path reorders the source's [b, a]");
-    assertNull(items.comparator(), "and keeps no comparator");
+    assertReflectiveRefuses(pair, source);
+  }
+
+  @Test
+  @DisplayName("a set comparator constructor over a supertype of the elements keeps the order on both paths")
+  void aSupertypeParameterKeepsTheOrderOnBoth() throws ReflectiveOperationException {
+    for (final var parameter : List.of(
+      "java.util.Comparator<? super E>",
+      "java.util.Comparator<E>",
+      "java.util.Comparator<java.lang.CharSequence>",
+      "java.util.Comparator<java.lang.Object>"
+    )) {
+      final var pair = setPair("Sds" + Math.abs(parameter.hashCode()), parameter);
+      final var source = reversedSetSource(pair);
+      for (final var items : List.of(generatedItems(pair, source), reflectiveItems(pair, source))) {
+        assertEquals(List.of("b", "a"), List.copyOf((SortedSet<?>) items), parameter);
+      }
+    }
   }
 }

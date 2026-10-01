@@ -84,6 +84,20 @@ public interface PropertySystem<T> {
   /** Subtype test against a well-known JDK type. Final well-knowns make this an exact match. */
   boolean isSubtypeOf(T t, WellKnown wellKnown);
 
+  /**
+   * Whether a value of type {@code from} can be assigned to a variable of type {@code to}:
+   * subtyping through the generic supertypes, with a wildcard argument of {@code to} containing
+   * whatever its bounds admit. A raw {@code from} is assignable to any parameterization of a
+   * supertype, which is the unchecked conversion javac allows.
+   */
+  boolean isAssignable(T from, T to);
+
+  /** Whether {@code t} is a wildcard type argument. */
+  boolean isWildcard(T t);
+
+  /** A wildcard's lower bound, or null when {@code t} has none or is not a wildcard. */
+  T lowerBound(T t);
+
   /** Type arguments when {@code t} is parameterized; empty list otherwise. */
   List<T> typeArguments(T t);
 

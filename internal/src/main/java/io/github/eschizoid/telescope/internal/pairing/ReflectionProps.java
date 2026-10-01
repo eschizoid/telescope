@@ -6,6 +6,7 @@ import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.time.temporal.Temporal;
 import java.util.Arrays;
 import java.util.Collection;
@@ -83,6 +84,80 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public boolean isAssignable(final Type from, final Type to) {
+    if (from.equals(to)) return true;
+    final var source = rawClass(from);
+    if (source == null) return false;
+    if (to instanceof Class<?> target) return target.isAssignableFrom(source);
+    if (!(to instanceof ParameterizedType wanted) || !(wanted.getRawType() instanceof Class<?> target)) return false;
+    if (!target.isAssignableFrom(source)) return false;
+    final var actual = argumentsAs(from instanceof TypeVariable<?> variable ? variable.getBounds()[0] : from, target);
+    // A raw source carries no arguments to check, which is the unchecked conversion.
+    if (actual.isEmpty()) return true;
+    final var expected = wanted.getActualTypeArguments();
+    for (int i = 0; i < expected.length; i++) {
+      if (!contains(expected[i], actual.get(i))) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether a type argument admits another: a wildcard admits what its bounds allow, and anything
+   * else admits only itself.
+   */
+  private boolean contains(final Type expected, final Type actual) {
+    if (!(expected instanceof WildcardType wildcard)) return expected.equals(actual);
+    final var actualUpper = actual instanceof WildcardType w ? w.getUpperBounds() : new Type[] { actual };
+    for (final var upper : wildcard.getUpperBounds()) {
+      if (Arrays.stream(actualUpper).noneMatch(bound -> isAssignable(bound, upper))) return false;
+    }
+    for (final var lower : wildcard.getLowerBounds()) {
+      final var actualLower = actual instanceof WildcardType w ? w.getLowerBounds() : new Type[] { actual };
+      if (Arrays.stream(actualLower).noneMatch(bound -> isAssignable(lower, bound))) return false;
+    }
+    return true;
+  }
+
+  /** The class a type erases to, or null for a type that names none. */
+  private static Class<?> rawClass(final Type type) {
+    return switch (type) {
+      case Class<?> cls -> cls;
+      case ParameterizedType pt when pt.getRawType() instanceof Class<?> cls -> cls;
+      case TypeVariable<?> variable -> rawClass(variable.getBounds()[0]);
+      case WildcardType wildcard -> rawClass(wildcard.getUpperBounds()[0]);
+      case GenericArrayType array -> {
+        final var component = rawClass(array.getGenericComponentType());
+        yield component == null ? null : Array.newInstance(component, 0).getClass();
+      }
+      default -> null;
+    };
+  }
+
+  @Override
+  public boolean isWildcard(final Type t) {
+    return t instanceof WildcardType;
+  }
+
+  @Override
+  public Type lowerBound(final Type t) {
+    return t instanceof WildcardType wildcard && wildcard.getLowerBounds().length > 0
+      ? wildcard.getLowerBounds()[0]
+      : null;
+  }
+
+  /**
+   * {@code type} with the type variables of {@code owner} replaced by {@code arguments}, in
+   * declaration order, so a member read off the raw class answers in terms of the arguments a field
+   * gave it.
+   */
+  public Type resolve(final Type type, final Class<?> owner, final List<Type> arguments) {
+    final var variables = owner.getTypeParameters();
+    final var bindings = new HashMap<TypeVariable<?>, Type>();
+    for (int i = 0; i < variables.length && i < arguments.size(); i++) bindings.put(variables[i], arguments.get(i));
+    return substitute(type, bindings);
+  }
+
+  @Override
   public List<Type> typeArguments(final Type t) {
     return t instanceof ParameterizedType pt ? List.of(pt.getActualTypeArguments()) : List.of();
   }
@@ -122,6 +197,16 @@ public final class ReflectionProps implements PropertySystem<Type> {
       final var component = substitute(array.getGenericComponentType(), bindings);
       return component instanceof Class<?> cls ? Array.newInstance(cls, 0).getClass() : new ResolvedArray(component);
     }
+    if (type instanceof WildcardType wildcard) {
+      return new ResolvedWildcard(
+        Arrays.stream(wildcard.getUpperBounds())
+          .map(t -> substitute(t, bindings))
+          .toList(),
+        Arrays.stream(wildcard.getLowerBounds())
+          .map(t -> substitute(t, bindings))
+          .toList()
+      );
+    }
     if (!(type instanceof ParameterizedType pt)) return type;
     final var arguments = Arrays.stream(pt.getActualTypeArguments())
       .map(t -> substitute(t, bindings))
@@ -148,6 +233,44 @@ public final class ReflectionProps implements PropertySystem<Type> {
     @Override
     public String getTypeName() {
       return component.getTypeName() + "[]";
+    }
+  }
+
+  /** Structural equality with the JDK's WildcardType implementation, whose hash it also matches. */
+  private record ResolvedWildcard(List<Type> upper, List<Type> lower) implements WildcardType {
+    @Override
+    public Type[] getUpperBounds() {
+      return upper.toArray(Type[]::new);
+    }
+
+    @Override
+    public Type[] getLowerBounds() {
+      return lower.toArray(Type[]::new);
+    }
+
+    @Override
+    public boolean equals(final Object other) {
+      return (
+        other instanceof WildcardType wildcard &&
+        Arrays.equals(getUpperBounds(), wildcard.getUpperBounds()) &&
+        Arrays.equals(getLowerBounds(), wildcard.getLowerBounds())
+      );
+    }
+
+    @Override
+    public int hashCode() {
+      return Arrays.hashCode(getLowerBounds()) ^ Arrays.hashCode(getUpperBounds());
+    }
+
+    @Override
+    public String getTypeName() {
+      if (!lower.isEmpty()) return "? super " + lower.getFirst().getTypeName();
+      return upper.isEmpty() || upper.getFirst() == Object.class ? "?" : "? extends " + upper.getFirst().getTypeName();
+    }
+
+    @Override
+    public String toString() {
+      return getTypeName();
     }
   }
 

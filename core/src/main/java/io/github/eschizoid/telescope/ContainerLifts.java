@@ -6,19 +6,16 @@ import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.Allocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
+import io.github.eschizoid.telescope.internal.pairing.PropertySystem;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.lang.reflect.TypeVariable;
-import java.lang.reflect.WildcardType;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -43,7 +40,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import java.util.stream.Stream;
 
 /**
  * Container-shape lifting for {@link DeepMap}: element-copy Isos for raw same-kind container
@@ -77,11 +73,19 @@ final class ContainerLifts {
     // Copying elements verbatim leaves an order to carry: the side being filled keeps one, and the
     // side being read has one to give. A supplier is handed no source, so the ordering rule is
     // applied here as it is wherever else a sorted container is built.
-    final var srcAlloc = orderingAware(srcCls, SortedSet.class, ContainerLifts::setComparator, ignored ->
-      srcSupplier.get()
+    final var srcAlloc = orderingAware(
+      srcCls,
+      orderingArguments(srcCls, ContainerView.Kind.SET),
+      SortedSet.class,
+      ContainerLifts::setComparator,
+      ignored -> srcSupplier.get()
     );
-    final var tgtAlloc = orderingAware(tgtCls, SortedSet.class, ContainerLifts::setComparator, ignored ->
-      tgtSupplier.get()
+    final var tgtAlloc = orderingAware(
+      tgtCls,
+      orderingArguments(tgtCls, ContainerView.Kind.SET),
+      SortedSet.class,
+      ContainerLifts::setComparator,
+      ignored -> tgtSupplier.get()
     );
     return Iso.of(
       src -> {
@@ -105,11 +109,19 @@ final class ContainerLifts {
     final var srcSupplier = Beans.intermediateAllocator(srcCls);
     final var tgtSupplier = Beans.intermediateAllocator(tgtCls);
     if (srcSupplier.get() == null || tgtSupplier.get() == null) return null;
-    final var srcAlloc = orderingAware(srcCls, SortedMap.class, ContainerLifts::mapComparator, ignored ->
-      srcSupplier.get()
+    final var srcAlloc = orderingAware(
+      srcCls,
+      orderingArguments(srcCls, ContainerView.Kind.MAP_VALUES),
+      SortedMap.class,
+      ContainerLifts::mapComparator,
+      ignored -> srcSupplier.get()
     );
-    final var tgtAlloc = orderingAware(tgtCls, SortedMap.class, ContainerLifts::mapComparator, ignored ->
-      tgtSupplier.get()
+    final var tgtAlloc = orderingAware(
+      tgtCls,
+      orderingArguments(tgtCls, ContainerView.Kind.MAP_VALUES),
+      SortedMap.class,
+      ContainerLifts::mapComparator,
+      ignored -> tgtSupplier.get()
     );
     return Iso.of(
       src -> {
@@ -136,32 +148,30 @@ final class ContainerLifts {
    * where there's no concrete class to allocate.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  static Iso<?, ?> liftListIntoTargetRaw(
-    final Iso<Object, Object> elementIso,
-    final Class<?> srcRaw,
-    final Class<?> tgtRaw
-  ) {
-    return liftCollectionIntoTargetRaw(elementIso, srcRaw, tgtRaw, false);
+  static Iso<?, ?> liftListIntoTargetRaw(final Iso<Object, Object> elementIso, final Type srcType, final Type tgtType) {
+    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, false);
   }
 
   /** Set counterpart; custom sorted comparators cannot safely consume a changed element type. */
-  static Iso<?, ?> liftSetIntoTargetRaw(
-    final Iso<Object, Object> elementIso,
-    final Class<?> srcRaw,
-    final Class<?> tgtRaw
-  ) {
-    return liftCollectionIntoTargetRaw(elementIso, srcRaw, tgtRaw, true);
+  static Iso<?, ?> liftSetIntoTargetRaw(final Iso<Object, Object> elementIso, final Type srcType, final Type tgtType) {
+    return liftCollectionIntoTargetRaw(elementIso, srcType, tgtType, true);
   }
 
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Iso<?, ?> liftCollectionIntoTargetRaw(
     final Iso<Object, Object> elementIso,
-    final Class<?> srcRaw,
-    final Class<?> tgtRaw,
+    final Type srcType,
+    final Type tgtType,
     final boolean set
   ) {
-    final var srcAlloc = set ? setAllocatorFor(srcRaw) : listAllocatorFor(srcRaw);
-    final var tgtAlloc = set ? setAllocatorFor(tgtRaw) : listAllocatorFor(tgtRaw);
+    final var srcRaw = rawClassOf(srcType);
+    final var tgtRaw = rawClassOf(tgtType);
+    final var srcAlloc = set
+      ? setAllocatorFor(srcRaw, orderingArguments(srcType, ContainerView.Kind.SET))
+      : listAllocatorFor(srcRaw);
+    final var tgtAlloc = set
+      ? setAllocatorFor(tgtRaw, orderingArguments(tgtType, ContainerView.Kind.SET))
+      : listAllocatorFor(tgtRaw);
     // A sorted output whose elements change type has to see each converted element before it is
     // inserted, and the fused MethodHandle loop offers nowhere to stand between the two. Asking
     // outside the loop instead would mean converting the first element twice, once to test it and
@@ -383,13 +393,11 @@ final class ContainerLifts {
    * #mapAllocatorFor}).
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  static Iso<?, ?> liftMapIntoTargetRaw(
-    final Iso<Object, Object> elementIso,
-    final Class<?> srcRaw,
-    final Class<?> tgtRaw
-  ) {
-    final var srcAlloc = mapAllocatorFor(srcRaw);
-    final var tgtAlloc = mapAllocatorFor(tgtRaw);
+  static Iso<?, ?> liftMapIntoTargetRaw(final Iso<Object, Object> elementIso, final Type srcType, final Type tgtType) {
+    final var srcRaw = rawClassOf(srcType);
+    final var tgtRaw = rawClassOf(tgtType);
+    final var srcAlloc = mapAllocatorFor(srcRaw, orderingArguments(srcType, ContainerView.Kind.MAP_VALUES));
+    final var tgtAlloc = mapAllocatorFor(tgtRaw, orderingArguments(tgtType, ContainerView.Kind.MAP_VALUES));
     // MethodHandle entry-loop over the value element's raw handle when it is a composed-handle
     // leaf;
     // keys pass through verbatim. Null value Iso => keep the Java loop.
@@ -509,7 +517,7 @@ final class ContainerLifts {
     );
   }
 
-  private static Function<Object, Object> setAllocatorFor(final Class<?> raw) {
+  private static Function<Object, Object> setAllocatorFor(final Class<?> raw, final List<Type> arguments) {
     final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.SET);
     if (fromSpec != null) return fromSpec;
     // Not in the shared table, for the same reason the list side's is not.
@@ -518,7 +526,7 @@ final class ContainerLifts {
       return size <= 1 ? new CopyOnWriteArraySet<>() : new ArrayList<>(size);
     };
     final var alloc = probeAllocator(raw);
-    if (alloc != null) return orderingAware(raw, SortedSet.class, ContainerLifts::setComparator, ignored ->
+    if (alloc != null) return orderingAware(raw, arguments, SortedSet.class, ContainerLifts::setComparator, ignored ->
       alloc.get()
     );
     final var fallback = fallbackAllocatorFor(raw, LinkedHashSet.class, input ->
@@ -547,11 +555,11 @@ final class ContainerLifts {
    * no-arg constructor doesn't exist (it needs the {@code Class<K>} arg); adopters must use the
    * codegen path or an explicit row.
    */
-  private static Function<Object, Object> mapAllocatorFor(final Class<?> raw) {
+  private static Function<Object, Object> mapAllocatorFor(final Class<?> raw, final List<Type> arguments) {
     final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.MAP_VALUES);
     if (fromSpec != null) return fromSpec;
     final var alloc = probeAllocator(raw);
-    if (alloc != null) return orderingAware(raw, SortedMap.class, ContainerLifts::mapComparator, ignored ->
+    if (alloc != null) return orderingAware(raw, arguments, SortedMap.class, ContainerLifts::mapComparator, ignored ->
       alloc.get()
     );
     final var fallback = fallbackAllocatorFor(raw, LinkedHashMap.class, input ->
@@ -597,6 +605,7 @@ final class ContainerLifts {
    */
   private static Function<Object, Object> orderingAware(
     final Class<?> raw,
+    final List<Type> arguments,
     final Class<?> sortedIface,
     final Function<Object, Comparator<Object>> comparatorOf,
     final Function<Object, Object> plain
@@ -604,10 +613,10 @@ final class ContainerLifts {
     if (!sortedIface.isAssignableFrom(raw)) return plain;
     final MethodHandle ctor;
     // A constructor found by erasure is not automatically one this rebuild can use: a comparator
-    // over something built out of the elements erases to the same signature and can receive nothing
-    // the source carries. Java forbids two constructors with one erasure, so there is no other
-    // overload to fall back to and the container simply cannot be told its order.
-    if (!ordersItsOwnElements(raw)) return refuseOrdering(raw, comparatorOf, plain);
+    // over anything but a supertype of what the field orders erases to the same signature and can
+    // receive nothing the source carries. Java forbids two constructors with one erasure, so there
+    // is no other overload to fall back to and the container simply cannot be told its order.
+    if (!ordersTheField(raw, arguments)) return refuseOrdering(raw, comparatorOf, plain);
     try {
       ctor = MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class, Comparator.class));
     } catch (final NoSuchMethodException | IllegalAccessException e) {
@@ -627,68 +636,42 @@ final class ContainerLifts {
   }
 
   /**
-   * Whether this container's comparator constructor orders the elements themselves.
+   * Whether this container's comparator constructor can be handed a comparator over what the field
+   * orders: a map's key type, a set's element type.
    *
-   * <p>A parameter written over the class's own type variable, or over a wildcard of one, is a
-   * comparator the elements fit. One written over a type built out of those variables is not, and
-   * erases to the same constructor, so the two are told apart by the declared parameter rather than
-   * by the one reflection binds. A raw parameter is accepted: it holds any comparator, which is
-   * what the elements' own is.
-   *
-   * <p>The one shape this cannot judge is a parameter naming a concrete unrelated class, since the
-   * element type is not knowable here through erasure. Such a constructor is bound and hands the
-   * comparator over, as it did before. A parameter naming a type that mentions none of the class's
-   * variables is therefore accepted, which covers a comparator over {@code Comparable<?>} as well
-   * as one over an unrelated class.
+   * <p>{@code arguments} are the field's container arguments, key first where there is one. The
+   * constructor's parameter is resolved against them by position, so a parameter written over the
+   * class's own type variable reads as the type the field fixed it to, and the shared rules decide
+   * from there. A class whose own parameters do not line up with the container's arguments, or a
+   * field that gives none, leaves nothing to resolve against, and the order is refused.
    */
-  private static boolean ordersItsOwnElements(final Class<?> raw) {
+  private static boolean ordersTheField(final Class<?> raw, final List<Type> arguments) {
+    if (arguments.isEmpty()) return false;
+    final var variables = raw.getTypeParameters();
+    if (variables.length != 0 && variables.length != arguments.size()) return false;
     for (final var ctor : raw.getConstructors()) {
-      final var params = ctor.getGenericParameterTypes();
-      if (params.length != 1 || !Comparator.class.equals(ctor.getParameterTypes()[0])) continue;
-      if (!(params[0] instanceof ParameterizedType parameterized)) return true;
-      final var ordered = boundOf(parameterized.getActualTypeArguments()[0]);
-      return ordered instanceof TypeVariable<?> || !namesATypeVariable(ordered);
-    }
-    return true;
-  }
-
-  /**
-   * What a type argument orders, with any wildcard replaced by the bound that constrains it.
-   *
-   * <p>A wildcard stands for whatever its bound names, so {@code ? super K} orders the same type
-   * {@code K} does. A lower bound is the one that decides what may be passed in; an upper bound or
-   * no bound at all leaves the argument unconstrained, and {@code Object} is what that orders.
-   */
-  private static Type boundOf(final Type type) {
-    if (!(type instanceof WildcardType wildcard)) return type;
-    final var lower = wildcard.getLowerBounds();
-    if (lower.length > 0) return boundOf(lower[0]);
-    final var upper = wildcard.getUpperBounds();
-    return upper.length > 0 ? boundOf(upper[0]) : Object.class;
-  }
-
-  /**
-   * Whether a type is built out of the declaring class's own variables rather than naming one.
-   *
-   * <p>A parameter over a variable orders the elements themselves, and a parameter over something
-   * assembled from those variables orders a different type that the elements cannot be passed as.
-   * The two are told apart by where the variables appear: as the argument itself in the first case,
-   * and inside it in the second. Recursion covers the nesting a type argument can have, so a
-   * comparator over the entries of a map is refused whether it is written invariantly or behind a
-   * wildcard.
-   */
-  private static boolean namesATypeVariable(final Type type) {
-    if (type instanceof TypeVariable<?>) return true;
-    if (type instanceof GenericArrayType array) return namesATypeVariable(array.getGenericComponentType());
-    if (type instanceof WildcardType wildcard) {
-      return Stream.concat(Arrays.stream(wildcard.getLowerBounds()), Arrays.stream(wildcard.getUpperBounds())).anyMatch(
-        ContainerLifts::namesATypeVariable
-      );
-    }
-    if (type instanceof ParameterizedType parameterized) {
-      return Arrays.stream(parameterized.getActualTypeArguments()).anyMatch(ContainerLifts::namesATypeVariable);
+      if (ctor.getParameterCount() != 1 || !Comparator.class.equals(ctor.getParameterTypes()[0])) continue;
+      final var param = PROPS.resolve(ctor.getGenericParameterTypes()[0], raw, arguments);
+      return RULES.canOrder(param, arguments.getFirst());
     }
     return false;
+  }
+
+  /**
+   * The arguments a container type gives {@code Map} or {@code Set}, key first where there is one,
+   * read through its supertypes so a subtype that fixes them in its declaration answers too. Empty
+   * where the type is used raw.
+   */
+  private static List<Type> orderingArguments(final Type container, final ContainerView.Kind kind) {
+    return PROPS.typeArgumentsAs(
+      container,
+      kind == ContainerView.Kind.MAP_VALUES ? PropertySystem.WellKnown.MAP : PropertySystem.WellKnown.SET
+    );
+  }
+
+  /** The class a declared container type erases to. */
+  private static Class<?> rawClassOf(final Type type) {
+    return (Class<?>) PROPS.rawType(type);
   }
 
   /**
@@ -732,8 +715,11 @@ final class ContainerLifts {
     return input instanceof SortedSet<?> sorted ? (Comparator<Object>) sorted.comparator() : null;
   }
 
+  /** The reflection handles the shared rules read through. */
+  private static final ReflectionProps PROPS = new ReflectionProps();
+
   /** The shared rules, over reflection handles. */
-  private static final PairingRules<Type> RULES = new PairingRules<>(new ReflectionProps());
+  private static final PairingRules<Type> RULES = new PairingRules<>(PROPS);
 
   /**
    * The allocator the shared table asks for, or null where it names nothing and this file's own

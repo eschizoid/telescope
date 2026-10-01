@@ -133,6 +133,21 @@ class PairingRulesTest {
     }
 
     @Override
+    public boolean isAssignable(final Type from, final Type to) {
+      return delegate.isAssignable(from, to);
+    }
+
+    @Override
+    public boolean isWildcard(final Type t) {
+      return delegate.isWildcard(t);
+    }
+
+    @Override
+    public Type lowerBound(final Type t) {
+      return delegate.lowerBound(t);
+    }
+
+    @Override
     public boolean isClassType(final Type t) {
       return delegate.isClassType(t);
     }
