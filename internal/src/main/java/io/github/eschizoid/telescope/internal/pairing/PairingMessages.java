@@ -122,6 +122,26 @@ public final class PairingMessages {
   }
 
   /** Terminal shape mismatch — no branch of the compatibility lattice applies. */
+  public static String unorderableSortedElement(
+    final String componentName,
+    final String containerType,
+    final String elementType
+  ) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' is a " +
+      containerType +
+      ", a sorted set whose element " +
+      elementType +
+      " does not implement Comparable. The source's elements are converted to it, so no" +
+      " comparator the source carries can order them either. Make " +
+      elementType +
+      " Comparable, declare the field as a set that keeps no order, or supply an explicit" +
+      " Mapping.via(...) row that builds the set with a comparator."
+    );
+  }
+
   public static String incompatibleShapes(final String componentName, final String srcType, final String tgtType) {
     return (
       "Deep map: component '" +

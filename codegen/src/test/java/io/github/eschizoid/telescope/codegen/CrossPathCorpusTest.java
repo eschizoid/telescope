@@ -233,17 +233,16 @@ class CrossPathCorpusTest {
     // Iterable is not a Collection subtype, so neither path's classifier gives it a shape.
     "iterable/record",
     new Refusal("has incompatible types", "incompatible source/target shapes"),
-    // A sorted container orders by its elements' own compareTo unless it is given a
-    // comparator, and
-    // the converted element type implements nothing.
+    // A sorted set whose elements are converted cannot carry the source's comparator, and the
+    // converted element does not implement Comparable, so both paths refuse the pairing.
     "sortedset/iface/record",
-    new Refusal("cannot be reused with changed element types", "cannot be reused with changed element types"),
+    new Refusal("does not implement Comparable", "does not implement Comparable"),
     "navigableset/record",
-    new Refusal("cannot be reused with changed element types", "cannot be reused with changed element types"),
+    new Refusal("does not implement Comparable", "does not implement Comparable"),
     "treeset/record",
-    new Refusal("cannot be reused with changed element types", "cannot be reused with changed element types"),
+    new Refusal("does not implement Comparable", "does not implement Comparable"),
     "skiplistset/record",
-    new Refusal("cannot be reused with changed element types", "cannot be reused with changed element types")
+    new Refusal("does not implement Comparable", "does not implement Comparable")
   );
 
   /**

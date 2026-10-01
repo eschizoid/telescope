@@ -228,13 +228,12 @@ class RuntimeMappingRegressionTest {
 
   @Test
   void changedSortedSetElementsRequireAnExplicitComparator() {
-    final var values = new TreeSet<Value>(Comparator.comparingInt(Value::n));
-    values.add(new Value(1));
-    final var mapper = Telescope.mapper(SortedValues.class, SortedValuesDto.class);
-    final var failure = assertThrows(IllegalStateException.class, () -> mapper.forward(new SortedValues(values)));
+    // Neither element is Comparable, so no converted set can be ordered, and the mapper is refused
+    // when it is built rather than on the first conversion.
+    final var failure = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(SortedValues.class, SortedValuesDto.class)
+    );
     assertTrue(failure.getMessage().contains("Mapping.via"));
-    final var dto = new TreeSet<ValueDto>(Comparator.comparingInt(ValueDto::n));
-    assertThrows(IllegalStateException.class, () -> mapper.backward(new SortedValuesDto(dto)));
   }
 
   @Test

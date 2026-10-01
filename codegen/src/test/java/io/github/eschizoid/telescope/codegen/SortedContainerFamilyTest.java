@@ -51,7 +51,10 @@ class SortedContainerFamilyTest {
   private static JavaFileObject[] pair(final String srcField, final String tgtField) {
     return new JavaFileObject[] {
       ProcessorHarness.source("demo.SA", "package demo; public record SA(String v) {}"),
-      ProcessorHarness.source("demo.SB", "package demo; public record SB(String v) {}"),
+      ProcessorHarness.source(
+        "demo.SB",
+        "package demo; public record SB(String v) implements Comparable<SB> { public int compareTo(SB o) { return v.compareTo(o.v()); } }"
+      ),
       ProcessorHarness.source(
         "demo.FSrc",
         """
@@ -163,7 +166,10 @@ class SortedContainerFamilyTest {
     // is the second: a raw target subtype whose elements are bridged rather than carried across.
     final var compilation = compile(
       ProcessorHarness.source("demo.SA", "package demo; public record SA(String v) {}"),
-      ProcessorHarness.source("demo.SB", "package demo; public record SB(String v) {}"),
+      ProcessorHarness.source(
+        "demo.SB",
+        "package demo; public record SB(String v) implements Comparable<SB> { public int compareTo(SB o) { return v.compareTo(o.v()); } }"
+      ),
       ProcessorHarness.source(
         "demo.NamesB",
         "package demo; import java.util.TreeSet; public class NamesB extends TreeSet<demo.SB> {}"

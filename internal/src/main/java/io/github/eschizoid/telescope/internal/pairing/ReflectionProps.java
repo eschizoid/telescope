@@ -386,6 +386,7 @@ public final class ReflectionProps implements PropertySystem<Type> {
       case UUID -> UUID.class;
       case BOOLEAN_WRAPPER -> Boolean.class;
       case CHARACTER_WRAPPER -> Character.class;
+      case COMPARABLE -> Comparable.class;
     };
   }
 }

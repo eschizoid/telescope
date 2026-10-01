@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -2924,6 +2925,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               " vs " +
               tgtShape.keyType() +
               ". Map key types must match exactly; codegen preserves source keys."
+          );
+          return null;
+        }
+        final var srcView = rules.containerViewOf(sf.type());
+        final var tgtView = rules.containerViewOf(tf.type());
+        final var settledTgt = rules.settledAgainst(tgtView, srcView);
+        if (rules.unorderableSortedTarget(rules.settledAgainst(srcView, tgtView), settledTgt, tf.type())) {
+          error(
+            source,
+            "@Bridge " +
+              source.getSimpleName() +
+              " -> " +
+              target.getSimpleName() +
+              ": " +
+              PairingMessages.unorderableSortedElement(
+                sf.name(),
+                tf.type().toString(),
+                settledTgt.elementType().toString()
+              )
           );
           return null;
         }

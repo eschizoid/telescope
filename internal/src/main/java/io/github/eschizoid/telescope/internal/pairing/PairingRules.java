@@ -120,12 +120,38 @@ public final class PairingRules<T> {
           )
         );
       }
+      if (unorderableSortedTarget(src, tgt, tgtType)) {
+        return new PairDecision.Incompatible<>(
+          PairingMessages.unorderableSortedElement(
+            componentName,
+            props.typeName(tgtType),
+            props.typeName(tgt.elementType())
+          )
+        );
+      }
       return new PairDecision.LiftContainer<>(src, tgt);
     }
 
     return new PairDecision.Incompatible<>(
       PairingMessages.incompatibleShapes(componentName, props.typeName(srcType), props.typeName(tgtType))
     );
+  }
+
+  /**
+   * Whether the target is a sorted set whose elements nothing can order. Its elements are converted
+   * from the source's, so a comparator the source carries orders the wrong type and cannot come
+   * across, and the rebuild orders by the elements' own {@code compareTo}. An element class that
+   * does not implement {@code Comparable} then fails on the first insert of every conversion. An
+   * interface element is let through, since the values a conversion produces for it may be
+   * comparable.
+   */
+  public boolean unorderableSortedTarget(final ContainerView<T> src, final ContainerView<T> tgt, final T tgtType) {
+    if (tgt.kind() != ContainerView.Kind.SET) return false;
+    if (!props.isSubtypeOf(props.rawType(tgtType), WellKnown.SORTED_SET)) return false;
+    if (props.sameType(src.elementType(), tgt.elementType())) return false;
+    final var element = props.rawType(tgt.elementType());
+    if (props.isWildcard(tgt.elementType()) || props.isInterfaceType(element)) return false;
+    return !props.isSubtypeOf(element, WellKnown.COMPARABLE);
   }
 
   private static final Set<WellKnown> GENERAL = Set.of(WellKnown.DEQUE, WellKnown.QUEUE, WellKnown.COLLECTION);

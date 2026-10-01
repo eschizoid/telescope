@@ -64,6 +64,18 @@ class SortedContainerConversionTest {
 
   record TreeDst(TreeSet<Renamed> items) {}
 
+  /**
+   * A converted element a sorted set can order, so a carried comparator is the only problem left.
+   */
+  record OrderedRenamed(String v) implements Comparable<OrderedRenamed> {
+    @Override
+    public int compareTo(final OrderedRenamed other) {
+      return v.compareTo(other.v());
+    }
+  }
+
+  record OrderedTreeDst(TreeSet<OrderedRenamed> items) {}
+
   // Deliberately not Comparable, and deliberately identical on both sides: when the element type
   // does not change the conversion carries the source's comparator into the new container, and a
   // container ordered by a comparator never asks its elements to order themselves. Every other
@@ -192,9 +204,9 @@ class SortedContainerConversionTest {
   @Test
   @DisplayName("an element type that cannot be ordered is refused by name, not by a bare cast")
   void unorderableElementIsRefusedByName() {
-    // Asked of the first converted element before anything is inserted, so the refusal carries no
-    // cause: there is no cast to keep, because none was allowed to happen. What it names instead is
-    // the element class, which the cast it replaces never did.
+    // Decided when the mapper is built, from the element class alone, so the refusal carries no
+    // cause: no cast was allowed to happen. What it names instead is the element class, which the
+    // cast it replaces never did.
     final var thrown = assertThrows(IllegalStateException.class, () ->
       Telescope.mapper(PlainSetSrc.class, SortedSetDst.class).forward(new PlainSetSrc(onePlain()))
     );
@@ -436,7 +448,7 @@ class SortedContainerConversionTest {
     // needs an ordering, the only one on offer is written for the type being converted away from,
     // and quietly falling back to natural ordering would reorder the set without saying so.
     final var thrown = assertThrows(IllegalStateException.class, () ->
-      Telescope.mapper(TreeSrc.class, TreeDst.class).forward(new TreeSrc(withComparator()))
+      Telescope.mapper(TreeSrc.class, OrderedTreeDst.class).forward(new TreeSrc(withComparator()))
     );
 
     // On the word alone this holds whichever refusal was raised, because the other one's remedy

@@ -179,6 +179,7 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
       case UUID -> "java.util.UUID";
       case BOOLEAN_WRAPPER -> "java.lang.Boolean";
       case CHARACTER_WRAPPER -> "java.lang.Character";
+      case COMPARABLE -> "java.lang.Comparable";
     };
   }
 }
