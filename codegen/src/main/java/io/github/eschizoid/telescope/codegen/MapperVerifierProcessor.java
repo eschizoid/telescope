@@ -23,7 +23,9 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Stream;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
@@ -41,6 +43,7 @@ import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
@@ -472,9 +475,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final Tree at,
       final Set<String> seen
     ) {
-      // Wildcards and type variables aren't statically comparable across the two worlds — the
-      // runtime's structural Type#equals calls identical wildcard pairs equal where isSameType is
-      // specified false. Skip rather than mis-decide: the construction backstop still applies.
+      // A type variable is bound only when the mapper is built, so nothing here can say what it
+      // pairs with. Skip rather than mis-decide: the construction backstop still applies.
       if (!staticallyComparable(srcType) || !staticallyComparable(tgtType)) return;
       final var decision = rules.decidePair(srcType, tgtType, componentName);
       if (decision instanceof PairDecision.Incompatible<TypeMirror> incompatible) {
@@ -512,9 +514,14 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       }
     }
 
-    /** True when {@code t} contains no wildcard or type variable at any depth. */
+    /** True when {@code t} contains no type variable at any depth, wildcard bounds included. */
     private boolean staticallyComparable(final TypeMirror t) {
-      if (t.getKind() == TypeKind.WILDCARD || t.getKind() == TypeKind.TYPEVAR) return false;
+      if (t.getKind() == TypeKind.TYPEVAR) return false;
+      if (t instanceof WildcardType wildcard) {
+        return Stream.of(wildcard.getExtendsBound(), wildcard.getSuperBound())
+          .filter(Objects::nonNull)
+          .allMatch(this::staticallyComparable);
+      }
       if (t instanceof ArrayType at) return staticallyComparable(at.getComponentType());
       if (t instanceof DeclaredType dt) {
         for (final var arg : dt.getTypeArguments()) {
