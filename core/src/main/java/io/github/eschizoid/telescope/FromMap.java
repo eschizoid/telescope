@@ -194,15 +194,14 @@ final class FromMap {
   }
 
   /**
-   * The class behind a declared type, or null where there is none to read. A component declared
-   * with type arguments is a {@link ParameterizedType}, and reading only for a {@link Class}
-   * answers null for every one of them, which turns the fit test below into a test of nothing.
+   * The class behind a declared type, or null for a type variable, wildcard or generic array, which
+   * have none. A component declared with type arguments is a {@link ParameterizedType}, whose raw
+   * type the reflection API always reports as a {@link Class}; reading only for a {@code Class}
+   * would answer null for every such component and leave the fit test below testing nothing.
    */
   private static Class<?> rawOf(final Type type) {
     if (type instanceof Class<?> raw) return raw;
-    return type instanceof ParameterizedType parameterized && parameterized.getRawType() instanceof Class<?> raw
-      ? raw
-      : null;
+    return type instanceof ParameterizedType parameterized ? (Class<?>) parameterized.getRawType() : null;
   }
 
   /**

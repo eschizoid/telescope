@@ -82,9 +82,8 @@ final class FromMapRefusals {
       if (c.isArray()) return unsupportedKind(type);
       return declared(c, new Type[0]);
     }
-    if (type instanceof ParameterizedType p && p.getRawType() instanceof Class<?> raw) {
-      return declared(raw, p.getActualTypeArguments());
-    }
+    // The reflection API reports the raw type of a parameterized type as a Class.
+    if (type instanceof ParameterizedType p) return declared((Class<?>) p.getRawType(), p.getActualTypeArguments());
     return unsupportedKind(type);
   }
 
