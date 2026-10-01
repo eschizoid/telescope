@@ -41,12 +41,11 @@ class AllocationRenderingCoverageTest {
     for (final var entry : PairingRules.declaredTypes().entrySet()) {
       assertRendered(render, Class.forName(entry.getKey()), entry.getValue());
     }
-    // Collection has no entry of its own, because what it is rebuilt as depends on the kind its
-    // pair
-    // settled on. The spec settles it to a list or a set and never to anything else, so it is
-    // walked
-    // under both. Left out, a rendering broken for either would fall through to the family default
-    // and build the same class, which no assertion about the result would notice.
+    // Collection has no entry of its own: what it is rebuilt as depends on the kind
+    // its pair settled on. The spec settles it to a list or a set and nothing else,
+    // so it is walked under both. Left out, a rendering broken for either would fall
+    // through to the family default and build the same class, which no assertion
+    // about the result would notice.
     for (final var kind : List.of(ContainerView.Kind.LIST, ContainerView.Kind.SET)) {
       assertRendered(render, Collection.class, kind);
     }
