@@ -966,21 +966,9 @@ public final class DeepMap {
       // see the right shape directly — no extra reach-through — and treat every non-leaf shape the
       // same (plain Java loop).
       return switch (d.src().kind()) {
-        case LIST -> ContainerLifts.liftListIntoTargetRaw(
-          eraseIso(elementIso),
-          (Class<?>) d.src().rawType(),
-          (Class<?>) d.tgt().rawType()
-        );
-        case SET -> ContainerLifts.liftSetIntoTargetRaw(
-          eraseIso(elementIso),
-          (Class<?>) d.src().rawType(),
-          (Class<?>) d.tgt().rawType()
-        );
-        case MAP_VALUES -> ContainerLifts.liftMapIntoTargetRaw(
-          eraseIso(elementIso),
-          (Class<?>) d.src().rawType(),
-          (Class<?>) d.tgt().rawType()
-        );
+        case LIST -> ContainerLifts.liftListIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
+        case SET -> ContainerLifts.liftSetIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
+        case MAP_VALUES -> ContainerLifts.liftMapIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
         // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
         // Settled against the other side of the pair before the decision was built, so a view
@@ -1122,21 +1110,9 @@ public final class DeepMap {
         );
       }
       return switch (srcShape.kind()) {
-        case LIST -> ContainerLifts.liftListIntoTargetRaw(
-          eraseIso(elementIso),
-          (Class<?>) srcShape.rawType(),
-          (Class<?>) tgtShape.rawType()
-        );
-        case SET -> ContainerLifts.liftSetIntoTargetRaw(
-          eraseIso(elementIso),
-          (Class<?>) srcShape.rawType(),
-          (Class<?>) tgtShape.rawType()
-        );
-        case MAP_VALUES -> ContainerLifts.liftMapIntoTargetRaw(
-          eraseIso(elementIso),
-          (Class<?>) srcShape.rawType(),
-          (Class<?>) tgtShape.rawType()
-        );
+        case LIST -> ContainerLifts.liftListIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
+        case SET -> ContainerLifts.liftSetIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
+        case MAP_VALUES -> ContainerLifts.liftMapIntoTargetRaw(eraseIso(elementIso), srcType, tgtType);
         // Optional is final; no subclasses, no allocator needed.
         case OPTIONAL -> Iso.liftOptional(eraseIso(elementIso));
         // Settled against the other side of the pair above, so a view still carrying it here means

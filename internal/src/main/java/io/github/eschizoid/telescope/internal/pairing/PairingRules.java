@@ -158,6 +158,29 @@ public final class PairingRules<T> {
   }
 
   /**
+   * Whether a comparator over {@code ordered} can be handed to a constructor parameter of type
+   * {@code comparatorParam}, which is resolved against the arguments the field gave its container.
+   *
+   * <p>It can exactly when the parameter orders a supertype of {@code ordered}. That covers the
+   * wildcard the JDK declares, the type variable itself, and a named supertype such as {@code
+   * Object}. A parameter over an unrelated class, or over a type variable the field bound to
+   * something else, erases to the same constructor and accepts nothing the source carries, so the
+   * question is asked of the resolved parameter rather than of the constructor reflection binds. A
+   * raw parameter holds any comparator.
+   */
+  public boolean canOrder(final T comparatorParam, final T ordered) {
+    final var arguments = props.typeArguments(comparatorParam);
+    if (arguments.isEmpty()) return true;
+    final var argument = arguments.getFirst();
+    if (props.isWildcard(argument)) {
+      // Only a lower bound narrows what the parameter accepts; an upper bound or none does not.
+      final var lower = props.lowerBound(argument);
+      return lower == null || props.isAssignable(ordered, lower);
+    }
+    return props.isAssignable(ordered, argument);
+  }
+
+  /**
    * The container view of {@code t}, or {@code null} when {@code t} is not a parameterized
    * container the auto-lift understands. Selection rules: {@code Optional} (final, exact) →
    * OPTIONAL; any {@code List} subtype, and the {@code Deque} and {@code Queue} interfaces by name

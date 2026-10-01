@@ -60,6 +60,36 @@ class SortedSubtypeComparatorParityTest {
     public PlainSet() {}
   }
 
+  /** Declares its parameters in the opposite order to TreeMap, and orders its keys. */
+  public static class SwappedByKey<V, K> extends TreeMap<K, V> {
+
+    private static final long serialVersionUID = 1L;
+
+    public SwappedByKey() {}
+
+    public SwappedByKey(final Comparator<? super K> c) {
+      super(c);
+    }
+  }
+
+  /**
+   * Declares its parameters in the opposite order to TreeMap, and takes a comparator over values.
+   */
+  public static class SwappedByValue<V, K> extends TreeMap<K, V> {
+
+    private static final long serialVersionUID = 1L;
+
+    public SwappedByValue() {}
+
+    public SwappedByValue(final Comparator<? super V> ignored) {}
+  }
+
+  public record SrcSwapped(SortedMap<String, Integer> items) {}
+
+  public record ToSwappedByKey(SwappedByKey<Integer, String> items) {}
+
+  public record ToSwappedByValue(SwappedByValue<Integer, String> items) {}
+
   public record SrcMap(SortedMap<String, String> items) {}
 
   public record ToCmpMap(CmpMap<String, String> items) {}
@@ -148,5 +178,29 @@ class SortedSubtypeComparatorParityTest {
     final var out = Telescope.mapper(SrcSet.class, ToPlainSet.class).forward(new SrcSet(src));
 
     assertEquals(List.of("a", "b"), List.copyOf(out.items()));
+  }
+
+  private static SortedMap<String, Integer> reversedIntMap() {
+    final var m = new TreeMap<String, Integer>(Comparator.<String>reverseOrder());
+    m.put("a", 1);
+    m.put("b", 2);
+    return m;
+  }
+
+  @Test
+  @DisplayName("a subtype declaring its parameters out of TreeMap's order keeps a key comparator")
+  void swappedParametersKeepAKeyComparator() {
+    final var out = Telescope.mapper(SrcSwapped.class, ToSwappedByKey.class).forward(new SrcSwapped(reversedIntMap()));
+    assertEquals(List.of("b", "a"), List.copyOf(out.items().keySet()));
+  }
+
+  @Test
+  @DisplayName("a subtype declaring its parameters out of TreeMap's order refuses a value comparator")
+  void swappedParametersRefuseAValueComparator() {
+    final var mapper = Telescope.mapper(SrcSwapped.class, ToSwappedByValue.class);
+    final var thrown = assertThrows(IllegalStateException.class, () ->
+      mapper.forward(new SrcSwapped(reversedIntMap()))
+    );
+    assertTrue(thrown.getMessage().contains("declares no constructor taking a Comparator"), thrown::getMessage);
   }
 }
