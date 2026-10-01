@@ -81,8 +81,8 @@ public sealed interface MapExtractStep permits Extract {
    * <p>The {@code Object → Map<String, Object>} cast the nested map requires lives here, once,
    * instead of at every call site — and is guarded: a key present but holding a non-{@code Map}
    * value raises an {@link IllegalArgumentException} naming the key rather than leaking a bare
-   * {@code ClassCastException}. An absent key is answered before this converter, by the row's own
-   * kind, so the component takes the type default rather than passing a null through here.
+   * {@code ClassCastException}. An absent key never reaches this converter, so the component takes
+   * its type default.
    *
    * @param key the map key the row pulls its nested map from
    * @param targetAccessor method reference naming the target field/component
@@ -94,9 +94,8 @@ public sealed interface MapExtractStep permits Extract {
     final ForwardMapper<Map<String, Object>, X> nested
   ) {
     final Function<Object, X> converter = v -> {
-      // Absence is decided by the row's kind before a converter is consulted, so this answers
-      // only
-      // for a value that is present. It stays for a caller holding the converter directly.
+      // The mapper answers an absent value before it consults a converter, so this branch is
+      // reached only by a caller that holds the converter and applies it directly.
       if (v == null) return null;
       // The cast is the caller's now-internal one: guard it so a key that holds the wrong shape
       // names itself, instead of leaking a bare `class String cannot be cast to class Map`.

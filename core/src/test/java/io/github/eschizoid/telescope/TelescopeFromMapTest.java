@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -57,7 +58,7 @@ class TelescopeFromMapTest {
   class Forward {
 
     @Test
-    @DisplayName("record target: each extract row reads its key, applies the converter, writes the" + " component")
+    @DisplayName("record target: each extract row reads its key, applies the converter, writes the component")
     void recordRoundTrips() {
       final var mapper = Telescope.fromMap(
         CaseListRequest.class,
@@ -112,14 +113,16 @@ class TelescopeFromMapTest {
     void missingPrimitiveTakesItsTypeDefault() {
       // The adopter scenario: JDBC ResultSet maps where some columns are null when the schema
       // declared NOT NULL via constraints. The component takes its type default and the row's
-      // converter is not called, so the null-tolerant branch written below is never reached and
-      // the converter could be Integer::parseInt alone. Pins that the factory does not throw on a
-      // missing key.
+      // converter is not called, so a converter with no null branch of its own is enough.
+      final var calls = new AtomicInteger();
       final var mapper = Telescope.fromMap(
         CaseListRequest.class,
         extract("bookingType", CaseListRequest::bookingType, Object::toString),
         extract("caseId", CaseListRequest::caseId, Object::toString),
-        extract("priority", CaseListRequest::priority, v -> v == null ? 0 : Integer.parseInt(v.toString()))
+        extract("priority", CaseListRequest::priority, v -> {
+          calls.incrementAndGet();
+          return Integer.parseInt(v.toString());
+        })
       );
 
       final var sourceMissingPriority = Map.<String, Object>of("bookingType", "X", "caseId", "y");
@@ -127,10 +130,11 @@ class TelescopeFromMapTest {
       final var result = mapper.forward(sourceMissingPriority);
 
       assertEquals(new CaseListRequest("X", "y", 0), result);
+      assertEquals(0, calls.get(), "the converter is not called for a key the map does not carry");
     }
 
     @Test
-    @DisplayName("target component with NO extract row → NullDefaults value (empty String, 0 int, etc.)")
+    @DisplayName("target component with no extract row → its JLS default (null for a reference, 0 for an int)")
     void unspecifiedComponentTakesJlsDefault() {
       // Adopters often care about a subset of the target's components and would otherwise declare
       // a no-op row for each of the rest. What such a component gets is the JLS default for its
@@ -344,13 +348,13 @@ class TelescopeFromMapTest {
     assertNull(mapper.forward(withNull).bookingType());
   }
 
-  public record Ticket(String id, String note) {}
-
   public record Concrete(ArrayList<String> tags, String name) {}
 
   @Test
-  @DisplayName("a component declared as a concrete container is not filled with a value it cannot hold")
-  void aConcreteContainerSlotIsNotFilledWithTheSingleton() {
+  @DisplayName(
+    "a concrete container a row names is left null for an absent key rather than given a List it cannot hold"
+  )
+  void aNamedConcreteContainerIsLeftNullForAnAbsentKey() {
     // The table answers for anything a List is assignable from, and the empty singleton it returns
     // is not an ArrayList. Handing it over reaches the constructor, which rejects it while naming
     // the record rather than the component.
@@ -360,8 +364,38 @@ class TelescopeFromMapTest {
       extract("name", Concrete::name, Object::toString)
     );
     assertNull(named.forward(Map.of("name", "a")).tags());
+    assertEquals(List.of("x"), named.forward(Map.of("name", "a", "tags", "x")).tags());
+  }
 
-    final var unnamed = Telescope.fromMap(Concrete.class, extract("name", Concrete::name, Object::toString));
-    assertNull(unnamed.forward(Map.of("name", "a")).tags());
+  @Test
+  @DisplayName("a concrete container no row names is refused while the mapper is built, naming the component")
+  void anUnnamedConcreteContainerIsRefused() {
+    final var refusal = assertThrows(IllegalArgumentException.class, () ->
+      Telescope.fromMap(Concrete.class, extract("name", Concrete::name, Object::toString))
+    );
+    assertTrue(refusal.getMessage().contains("component 'tags' of Concrete"), refusal::getMessage);
+    assertTrue(refusal.getMessage().contains("declare it as List/Set/Map/Optional"), refusal::getMessage);
+  }
+
+  public record Plain(String city) {}
+
+  public record Holder(String name, Plain plain, String[] codes) {}
+
+  @Test
+  @DisplayName("a type the generated binder refuses is accepted when a row names it, since the row converts it")
+  void aRefusedTypeIsAcceptedWhenARowNamesIt() {
+    final var mapper = Telescope.fromMap(
+      Holder.class,
+      extract("name", Holder::name, Object::toString),
+      extract("plain", Holder::plain, v -> new Plain(v.toString())),
+      extract("codes", Holder::codes, v -> v.toString().split(","))
+    );
+
+    final var filled = mapper.forward(Map.of("name", "a", "plain", "Austin", "codes", "x,y"));
+    assertEquals(new Plain("Austin"), filled.plain());
+    assertArrayEquals(new String[] { "x", "y" }, filled.codes());
+    final var empty = mapper.forward(Map.of());
+    assertNull(empty.plain(), "an absent key leaves a reference at null");
+    assertNull(empty.codes());
   }
 }

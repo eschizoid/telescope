@@ -33,17 +33,17 @@ class FromMapBeanSlotsTest {
   }
 
   @Test
-  @DisplayName("a slot declared as a concrete container is left empty rather than given one it cannot hold")
+  @DisplayName("a slot declared as a concrete container is left null rather than given a List it cannot hold")
   void aConcreteContainerSlotIsNotHandedTheInterfaceSingleton() {
     // The substitution table answers for a family, so what it returns for a List is an immutable
-    // singleton an ArrayList-declared slot cannot hold. Reading the declared type as a Class is
-    // what
-    // tells the two apart, and a generic declaration is not one.
+    // singleton an ArrayList-declared slot cannot hold. Telling the two apart needs the class
+    // behind the declared type, and a bean declares this property as a parameterized type rather
+    // than a class.
     final var bean = Telescope.fromMap(
       ConcreteContainerBean.class,
       extract("tags", ConcreteContainerBean::getTags, v -> v)
     ).forward(Map.<String, Object>of());
 
-    assertNull(bean.getTags(), "a slot with no value it can hold is left empty");
+    assertNull(bean.getTags(), "a slot with no value it can hold is left null");
   }
 }

@@ -30,11 +30,11 @@ import java.util.function.Function;
  *
  * <p>Rows are matched to target components / properties once at build time, into positional arrays.
  * On the record path the per-call forward is fully positional: a source {@code Map.get} plus
- * converter per extracted slot, a type default per unmatched slot (the NullDefaults table: "" for
- * String, empty containers — not bare null), and one cached canonical-constructor invocation — no
- * name lookup survives. On the bean path the writer's {@code construct} contract stays name-driven,
- * so one {@code name→index} lookup per property remains (down from the two the old engine paid —
- * the row map and the defaults map).
+ * converter per extracted slot, the type default where a slot has no value (the JLS default for its
+ * declared type, or an empty {@code List}/{@code Set}/{@code Map}/{@code Optional}), and one cached
+ * canonical-constructor invocation — no name lookup survives. On the bean path the writer's {@code
+ * construct} contract stays name-driven, so one {@code name→index} lookup per property remains
+ * (down from the two the old engine paid — the row map and the defaults map).
  */
 final class FromMap {
 
@@ -59,12 +59,11 @@ final class FromMap {
     final var known = target.isRecord()
       ? Arrays.stream(target.getRecordComponents()).map(RecordComponent::getName).toList()
       : List.of(Beans.propertyNames(target));
-    final var typeByName = HashMap.<String, String>newHashMap(known.size());
+    final var typeByName = LinkedHashMap.<String, Type>newLinkedHashMap(known.size());
     if (target.isRecord()) {
-      for (final var comp : target.getRecordComponents())
-        typeByName.put(comp.getName(), DeepMap.simpleTypeName(comp.getGenericType()));
+      for (final var comp : target.getRecordComponents()) typeByName.put(comp.getName(), comp.getGenericType());
     } else {
-      for (final var name : known) typeByName.put(name, DeepMap.simpleTypeName(Beans.propertyType(target, name)));
+      for (final var name : known) typeByName.put(name, Beans.propertyType(target, name));
     }
     for (final var fieldName : byField.keySet()) {
       if (!known.contains(fieldName)) throw new IllegalArgumentException(
@@ -75,6 +74,23 @@ final class FromMap {
           ". Known fields: " +
           known +
           "."
+      );
+    }
+    // A component no row names is filled only by its type, so a type with no value of its own is
+    // refused here, where the generated binder refuses it too, rather than left null.
+    for (final var entry : typeByName.entrySet()) {
+      if (byField.containsKey(entry.getKey())) continue;
+      final var reason = FromMapRefusals.reasonFor(entry.getValue());
+      if (reason.isPresent()) throw new IllegalArgumentException(
+        "Telescope.fromMap: " +
+          (target.isRecord() ? "component '" : "property '") +
+          entry.getKey() +
+          "' of " +
+          target.getSimpleName() +
+          " is declared " +
+          DeepMap.simpleTypeName(entry.getValue()) +
+          " and no row names it: " +
+          reason.get()
       );
     }
     final Function<Map<String, Object>, T> forward = target.isRecord()
@@ -91,7 +107,7 @@ final class FromMap {
         // Both of the row's type components are type names, and the report prints each where a type
         // belongs. A value read from an untyped map is an Object, which is what the deep-mapping
         // trail writes for an Object-typed source field through this same helper.
-        trail.add(new OpticNode.Transformed(row.key(), comp, "Object", typeByName.get(comp)));
+        trail.add(new OpticNode.Transformed(row.key(), comp, "Object", DeepMap.simpleTypeName(typeByName.get(comp))));
       } else {
         trail.add(new OpticNode.Skipped(comp, OpticNode.Reason.MISSING_SOURCE));
       }
@@ -115,9 +131,7 @@ final class FromMap {
     final var keys = new String[n];
     final var converters = (Function<Object, Object>[]) new Function<?, ?>[n];
     final var defaults = new Object[n];
-    final var names = new String[n];
     for (var i = 0; i < n; i++) {
-      names[i] = comps[i].getName();
       final var e = byField.get(comps[i].getName());
       if (e != null) {
         keys[i] = e.key();
@@ -192,23 +206,27 @@ final class FromMap {
   }
 
   /**
-   * The value for a slot no row fills. The substitution table answers for the types it names and
-   * returns null for the rest, which a reference slot can hold and a primitive one cannot. A
-   * primitive therefore falls back to its own JLS default, the same value the rebuild path uses
-   * when it meets a null source for one.
+   * The value for a slot the map leaves without one: the JLS default for its declared type, except
+   * that {@code List}, {@code Set}, {@code Map} and {@code Optional} come back empty. That is what
+   * the binder generated for {@code @FromMap} produces, so the two paths hand back the same record
+   * for the same map.
+   *
+   * <p>Only the empty containers and the empty {@code Optional} are taken from the substitution
+   * table. The rest of it stands in for a null the mapping engine met, {@code ""} for a {@code
+   * String} and {@code ZERO} for a {@code BigDecimal}, which is a different question from what a
+   * missing value leaves behind. The table returns null for a primitive, which a primitive slot
+   * cannot hold, so a primitive takes its own default from the helper the rebuild path uses.
+   *
+   * <p>The table answers for a container family, and its empty singleton does not fit every member
+   * of one: a component declared {@code ArrayList} cannot hold it. Such a component reaches here
+   * only when a row names it, since one no row names is refused while the mapper is built, and it
+   * is left {@code null}.
    */
   private static Object unfilledDefault(final Class<?> raw, final Type generic) {
     if (raw != null && raw.isPrimitive()) return Placeholders.primitiveDefault(raw);
     final var tabled = NullDefaults.defaultFor(generic);
-    // Only the empty container and the empty Optional. The rest of that table substitutes a value
-    // for a null the mapping engine met -- "" for a String, ZERO for a BigDecimal -- which is a
-    // different question from what a key the map never carried should leave behind. Here the answer
-    // is the JLS default for the declared type, which is what the generated binder for @FromMap
-    // produces, so the two paths hand back the same record for the same map.
     final var emptyContainer = tabled instanceof Collection<?> || tabled instanceof Map<?, ?>;
     if (!emptyContainer && !(tabled instanceof Optional<?>)) return null;
-    // The table answers for a family, so the empty singleton it returns for a List cannot be held
-    // by a component declared as an ArrayList. A slot with no value it can hold is left empty.
     return raw == null || raw.isInstance(tabled) ? tabled : null;
   }
 }

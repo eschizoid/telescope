@@ -858,12 +858,18 @@ public sealed class Telescope<
    *     extract("priority",    CaseListRequest::getPriority,    v -> Integer.parseInt(v.toString())));
    * }</pre>
    *
-   * <p><b>A component with no value takes the JLS default for its declared type.</b> A reference is
-   * {@code null}, a primitive is zero or {@code false}, and {@code List}/{@code Set}/{@code
-   * Map}/{@link java.util.Optional} come back empty, which is what an empty one of those is. The
-   * binder generated for {@link io.github.eschizoid.telescope.annotations.FromMap} produces the
-   * same values for the same record, so which path an adopter reaches a map through does not change
-   * the record they get back.
+   * <p><b>A component with no value takes a default for its declared type.</b> A reference is
+   * {@code null}, a primitive is zero or {@code false}, and a component declared exactly {@code
+   * List}, {@code Set}, {@code Map} or {@link java.util.Optional} comes back empty. The binder
+   * generated for {@link io.github.eschizoid.telescope.annotations.FromMap} produces the same
+   * values for the same record, so which path an adopter reaches a map through does not change the
+   * record they get back.
+   *
+   * <p>A component no row names is filled by that default alone, so one whose declared type the
+   * generated binder refuses is refused here too, with an {@link IllegalArgumentException} naming
+   * the component, its type and the fix: an array, a type variable, a container other than those
+   * four, a JDK type with no String form the binder rebuilds, or a class with no generated binder.
+   * A row that names such a component converts it, and an absent key leaves it {@code null}.
    *
    * <p>That is not the table behind {@code NullHint.NullStrategy#DEFAULT}, which substitutes {@code
    * ""} for a {@code String} and {@code ZERO} for the two big numeric types. Standing in for a

@@ -99,14 +99,14 @@ public class FromMapBenchmark {
       Payment.class,
       extract("id", Payment::id, Object::toString),
       extract("currency", Payment::currency, Object::toString),
-      extract("amountCents", Payment::amountCents, v -> v == null ? 0 : ((Number) v).intValue()),
+      extract("amountCents", Payment::amountCents, v -> ((Number) v).intValue()),
       extract("reference", Payment::reference, Object::toString)
     );
     beanMapper = Telescope.fromMap(
       PaymentBean.class,
       extract("id", PaymentBean::getId, Object::toString),
       extract("currency", PaymentBean::getCurrency, Object::toString),
-      extract("amountCents", PaymentBean::getAmountCents, v -> v == null ? 0 : ((Number) v).intValue()),
+      extract("amountCents", PaymentBean::getAmountCents, v -> ((Number) v).intValue()),
       extract("reference", PaymentBean::getReference, Object::toString)
     );
   }

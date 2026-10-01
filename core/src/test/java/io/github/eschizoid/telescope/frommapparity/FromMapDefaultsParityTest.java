@@ -31,7 +31,7 @@ class FromMapDefaultsParityTest {
   void aPartialMapAgreesOnBothPaths() {
     // The two address their source differently: the generated binder reads every component by its
     // own name, while the runtime reads the keys its rows name. Giving the runtime those two rows
-    // is what makes the comparison about the eleven components neither of them was given.
+    // is what makes the comparison about the components neither of them was given.
     final var source = Map.<String, Object>of("text", "a", "count", 3);
 
     final var runtime = Telescope.fromMap(

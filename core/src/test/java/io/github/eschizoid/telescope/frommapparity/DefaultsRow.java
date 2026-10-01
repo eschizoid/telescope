@@ -29,10 +29,9 @@ public record DefaultsRow(
   Map<String, String> meta,
   Optional<String> maybe,
   // An Optional of a container is the shape where the two answers can differ without either
-  // looking
-  // wrong: an empty Optional and an Optional holding an empty container are both plausible
-  // readings
-  // of a key that carries nothing, and only one of them can be right on both paths.
+  // looking wrong: an empty Optional and an Optional holding an empty container are both
+  // plausible readings of a key that carries nothing, and only one of them can be right on both
+  // paths.
   Optional<List<String>> maybeItems,
   Optional<Set<String>> maybeTags,
   Optional<Map<String, String>> maybeMeta,

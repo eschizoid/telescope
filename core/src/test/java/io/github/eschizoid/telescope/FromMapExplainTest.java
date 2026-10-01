@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -25,17 +26,14 @@ class FromMapExplainTest {
       extract("c", Row::count, v -> Integer.parseInt(v.toString()))
     ).explain();
 
-    final var byTarget = report
-      .transformations()
-      .stream()
-      .collect(java.util.stream.Collectors.toMap(t -> t.to(), t -> t.toType()));
+    final var byTarget = report.transformations().stream().collect(Collectors.toMap(t -> t.to(), t -> t.toType()));
 
     assertEquals(Map.of("name", "String", "count", "int"), byTarget);
     // The source side is a type slot too, and the report prints it inside the parentheses where a
     // type belongs. An untyped map hands over an Object.
     assertEquals(
       Map.of("name", "Object", "count", "Object"),
-      report.transformations().stream().collect(java.util.stream.Collectors.toMap(t -> t.to(), t -> t.fromType()))
+      report.transformations().stream().collect(Collectors.toMap(t -> t.to(), t -> t.fromType()))
     );
   }
 

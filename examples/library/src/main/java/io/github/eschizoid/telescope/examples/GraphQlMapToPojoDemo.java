@@ -14,9 +14,9 @@ import java.util.Map;
  * convertValue}, which works but is reflection-heavy and a chore to register for GraalVM native
  * image. {@code fromMap} builds a reusable converter from typed accessor rows: each row names a map
  * key, a target field via a method reference (compile-checked, not a string on the target side),
- * and a per-key converter that coerces the raw value. An absent key passes {@code null} to its
- * converter (which can null-default an optional field); a target component with no row at all takes
- * the field's JLS default.
+ * and a per-key converter that coerces the raw value. A converter is called only for a key that
+ * carries a value; an absent key, like a component with no row at all, leaves the field at its JLS
+ * default.
  *
  * <p>This is the <em>runtime</em> tier: {@code fromMap} binds the accessors through {@code
  * LambdaMetafactory}, so it is well clear of naive reflection but still resolves at runtime. The
@@ -55,7 +55,7 @@ final class GraphQlMapToPojoDemo {
       User.class,
       extract("name", User::name, Object::toString),
       extract("email", User::email, Object::toString),
-      extract("age", User::age, v -> v == null ? 0 : Integer.parseInt(v.toString())), // optional Int → int
+      extract("age", User::age, v -> Integer.parseInt(v.toString())), // optional Int → int
       extract("role", User::role, v -> Role.valueOf(v.toString())), // GraphQL enum name → enum
       extract("address", User::address, v -> addressMapper.forward(asMap(v))) // nested input object
     );
@@ -72,8 +72,8 @@ final class GraphQlMapToPojoDemo {
     System.out.println("[fromMap] full input        : " + user);
     require(user.equals(new User("Alice", "alice@example.com", 30, Role.ADMIN, new Address("New York", "10001"))));
 
-    // Optional GraphQL input field: 'age' is absent here, so its row's converter receives null and
-    // coerces it to 0 — no throw. (Components with no extract row at all take the JLS default too.)
+    // Optional GraphQL input field: 'age' is absent here, so its row's converter is not called and
+    // the int component takes its JLS default of 0, as a component with no row at all would.
     final var partial = new LinkedHashMap<String, Object>();
     partial.put("name", "Bob");
     partial.put("email", "bob@example.com");
