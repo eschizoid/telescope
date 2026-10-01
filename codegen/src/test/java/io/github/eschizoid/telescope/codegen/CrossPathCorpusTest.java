@@ -508,6 +508,24 @@ class CrossPathCorpusTest {
       "putReversed",
       "%sTgt[items={k=%sLeafDto[v=x], j=%sLeafDto[v=x]}] in %sSwapped"
     ),
+    // A wildcard for a bounded parameter allocates over the bound.
+    new SubtypeView(
+      "wildcard for a bounded parameter",
+      "public class %sBTag<T extends Number, E> extends java.util.ArrayList<E> {}",
+      "%sBTag<?, %sLeaf>",
+      "%sBTag<? super Integer, %sLeafDto>",
+      "add",
+      "%sTgt[items=[%sLeafDto[v=x]]] in %sBTag"
+    ),
+    // A self-referential bound has no type that can be written for a wildcard.
+    new SubtypeView(
+      "wildcard for a self-referential parameter",
+      "public class %sFTag<T extends Comparable<T>, E> extends java.util.ArrayList<E> {}",
+      "%sFTag<?, %sLeaf>",
+      "%sFTag<?, %sLeafDto>",
+      "add",
+      "%sTgt[items=[%sLeafDto[v=x]]] in %sFTag"
+    ),
     // Holds Strings whatever its argument says, so its elements and the target's cannot pair.
     new SubtypeView(
       "argument unrelated to the elements",
@@ -593,7 +611,9 @@ class CrossPathCorpusTest {
         .replace(prefix + "Tagged", PACKAGE + "." + prefix + "Tagged")
         .replace(prefix + "Reordered", PACKAGE + "." + prefix + "Reordered")
         .replace(prefix + "StringMap", PACKAGE + "." + prefix + "StringMap")
-        .replace(prefix + "Swapped", PACKAGE + "." + prefix + "Swapped");
+        .replace(prefix + "Swapped", PACKAGE + "." + prefix + "Swapped")
+        .replace(prefix + "BTag", PACKAGE + "." + prefix + "BTag")
+        .replace(prefix + "FTag", PACKAGE + "." + prefix + "FTag");
       final var owesRefusal = owed.startsWith("refused: ");
       for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
         final var outcome = side.getValue();

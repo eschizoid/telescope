@@ -31,6 +31,7 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
@@ -4048,8 +4049,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeElement implEl
   ) {
     if (implEl.getTypeParameters().isEmpty()) return (DeclaredType) implEl.asType();
-    final var args = allocTypeArguments(tgtContainer, kind).toArray(TypeMirror[]::new);
-    if (args.length != implEl.getTypeParameters().size()) return null;
+    final var arguments = allocTypeArguments(tgtContainer, kind);
+    // An argument no type can be written for leaves nothing to resolve the constructor against.
+    if (
+      arguments.stream().anyMatch(Objects::isNull) || arguments.size() != implEl.getTypeParameters().size()
+    ) return null;
+    final var args = arguments.toArray(TypeMirror[]::new);
     return processingEnv.getTypeUtils().getDeclaredType(implEl, args);
   }
 
@@ -4092,10 +4097,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var viaBuilder = builderAllocExpr(tgtContainer, kind);
     if (viaBuilder != null) return outDeclaration(viaBuilder, true);
     final var implFqn = concreteImplFqn(tgtContainer, kind);
-    final var typeArgs = allocTypeArguments(tgtContainer, kind)
-      .stream()
-      .map(String::valueOf)
-      .collect(Collectors.joining(", "));
+    final var arguments = allocTypeArguments(tgtContainer, kind);
+    if (arguments.stream().anyMatch(Objects::isNull)) {
+      return rawTypedOutDeclaration(tgtContainer, implFqn, orderingArg(kind, tgtContainer, implFqn, elementsPreserved));
+    }
+    final var typeArgs = arguments.stream().map(String::valueOf).collect(Collectors.joining(", "));
     return outDeclaration(
       sizedAlloc(implFqn, typeArgs, orderingArg(kind, tgtContainer, implFqn, elementsPreserved)),
       false
@@ -4112,9 +4118,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final boolean elementsPreserved
   ) {
     final var viaBuilder = builderAllocExpr(container, kind);
-    return viaBuilder != null
-      ? outDeclaration(viaBuilder, true)
-      : outDeclaration(rawAllocExpr(container, kind, elementsPreserved), false);
+    if (viaBuilder != null) return outDeclaration(viaBuilder, true);
+    final var implFqn = concreteImplFqn(container, kind);
+    if (
+      container instanceof DeclaredType declared &&
+      !declared.getTypeArguments().isEmpty() &&
+      allocTypeArguments(container, kind).stream().anyMatch(Objects::isNull)
+    ) {
+      return rawTypedOutDeclaration(container, implFqn, orderingArg(kind, container, implFqn, elementsPreserved));
+    }
+    return outDeclaration(rawAllocExpr(container, kind, elementsPreserved), false);
+  }
+
+  /**
+   * The declaration for an output whose type arguments cannot be written after {@code new}: a
+   * wildcard standing for a type parameter whose bound names a type variable, as {@code T extends
+   * Comparable<T>} does, or that has several bounds. The class is allocated raw into a local
+   * declared as the field's own type, which every element the helper adds already fits, and the
+   * unchecked conversion that takes is suppressed on that one declaration.
+   */
+  private static String rawTypedOutDeclaration(final TypeMirror declared, final String implFqn, final String ordering) {
+    final var alloc = ordering.isEmpty()
+      ? "new " + implFqn + "()"
+      : ordering + " == null ? new " + implFqn + "() : new " + implFqn + "(" + ordering + ")";
+    return "    @SuppressWarnings({\"unchecked\", \"rawtypes\"}) final " + declared + " out = " + alloc + ";";
   }
 
   /**
@@ -4175,7 +4202,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       container instanceof DeclaredType declared &&
       ((TypeElement) declared.asElement()).getQualifiedName().contentEquals(concreteImplFqn(container, kind))
     ) {
-      return declared.getTypeArguments().stream().map(this::instantiable).toList();
+      final var arguments = declared.getTypeArguments();
+      final var parameters = ((TypeElement) declared.asElement()).getTypeParameters();
+      final var instantiated = new ArrayList<TypeMirror>();
+      for (int i = 0; i < arguments.size(); i++) instantiated.add(instantiable(arguments.get(i), parameters.get(i)));
+      return instantiated;
     }
     final var view = rules.containerViewOf(container);
     return kind == FieldPlan.Kind.MAP_VALUES
@@ -4194,6 +4225,39 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (!(argument instanceof WildcardType wildcard)) return argument;
     final var upper = wildcard.getExtendsBound();
     return upper != null ? upper : processingEnv.getElementUtils().getTypeElement("java.lang.Object").asType();
+  }
+
+  /**
+   * The same for an argument of a class's own parameter, which may declare a bound. A wildcard then
+   * allocates over its upper bound where that fits the parameter's bound, and over the parameter's
+   * bound otherwise. Null where no type can be written: a parameter with several bounds, or one
+   * whose bound names a type variable, as {@code T extends Comparable<T>} does.
+   */
+  private TypeMirror instantiable(final TypeMirror argument, final TypeParameterElement parameter) {
+    if (!(argument instanceof WildcardType wildcard)) return argument;
+    final var bounds = parameter.getBounds();
+    final var bound = bounds.size() == 1 ? bounds.getFirst() : null;
+    final var unbounded =
+      bound instanceof DeclaredType declared &&
+      ((TypeElement) declared.asElement()).getQualifiedName().contentEquals("java.lang.Object");
+    if (unbounded) return instantiable(argument);
+    if (bound == null || mentionsTypeVariable(bound)) return null;
+    final var upper = wildcard.getExtendsBound();
+    return upper != null && processingEnv.getTypeUtils().isAssignable(upper, bound) ? upper : bound;
+  }
+
+  private static boolean mentionsTypeVariable(final TypeMirror type) {
+    if (type.getKind() == TypeKind.TYPEVAR) return true;
+    if (type instanceof WildcardType wildcard) {
+      return (
+        (wildcard.getExtendsBound() != null && mentionsTypeVariable(wildcard.getExtendsBound())) ||
+        (wildcard.getSuperBound() != null && mentionsTypeVariable(wildcard.getSuperBound()))
+      );
+    }
+    return (
+      type instanceof DeclaredType declared &&
+      declared.getTypeArguments().stream().anyMatch(BridgeProcessor::mentionsTypeVariable)
+    );
   }
 
   /**
