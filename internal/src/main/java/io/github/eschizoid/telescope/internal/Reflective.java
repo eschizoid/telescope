@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * The uniform reflective dispatch that {@code DeepMap} drives — abstracts over "this side is a
@@ -16,10 +17,10 @@ import java.util.function.Function;
  * at any depth: the source side of a given pair uses one {@code Reflective}, the target side
  * another, chosen independently from the pair's classes.
  *
- * <p>The record's fields are the five per-side function references; the forwarding instance methods
- * ({@link #names(Class)}, {@link #genericType(Class, String)}, {@link #read(Object, String)},
- * {@link #construct(Class, Function)}, {@link #normalize(String)}) preserve the prior
- * interface-method calling convention so call sites don't have to spell {@code .read().apply(...)}.
+ * <p>The record's fields are the per-side behaviours, and each has a forwarding method ({@link
+ * #names(Class)}, {@link #genericType(Class, String)}, {@link #read(Object, String)}, {@link
+ * #construct(Class, Function)}, {@link #normalize(String)}, {@link #foldsSetters(Class)}) so a call
+ * site reads {@code refl.read(value, name)} rather than {@code refl.read().apply(value, name)}.
  *
  * <p>Two singletons:
  *
@@ -42,14 +43,16 @@ public record Reflective(
   BiFunction<Class<?>, String, Type> genericType,
   BiFunction<Object, String, Object> read,
   BiFunction<Class<?>, Function<String, Object>, Object> construct,
-  Function<String, String> normalize
+  Function<String, String> normalize,
+  Predicate<Class<?>> writesThroughSetters
 ) {
   public static final Reflective RECORDS = new Reflective(
     Records::componentNames,
     Records::componentType,
     Records::read,
     Reflective::constructRecord,
-    name -> name
+    name -> name,
+    cls -> true
   );
 
   public static final Reflective BEANS = new Reflective(
@@ -57,7 +60,8 @@ public record Reflective(
     Beans::propertyType,
     Beans::readProperty,
     Reflective::constructBean,
-    Beans::propertyOf
+    Beans::propertyOf,
+    cls -> true
   );
 
   /**
@@ -72,13 +76,12 @@ public record Reflective(
    * Bean reflective that consults {@code hints} before falling back to {@code defaultWriterFactory}
    * (when non-null) and ultimately to {@link Beans#autoWriter}. Used by {@code DeepMap} when the
    * user supplies {@code writeBean(targetClass, strategy)} rows and/or a single {@code
-   * writeBeans(strategy)} default — the per-class hint map is keyed on target class and provides a
-   * pre-instantiated {@link Beans.BeanWriter}; the default factory is consulted on every
-   * not-explicitly-hinted call, so a default-strategy incompatible with a particular target only
-   * throws when that target is actually constructed. Per-class LMF reuse happens one layer down in
-   * {@link Beans#autoWriter} (and the underlying {@code SETTER_INVOKERS} / {@code GETTER_INVOKERS}
-   * caches) — this layer is intentionally stateless so a factory swap is observable on the next
-   * call.
+   * writeBeans(strategy)} default. The per-class hint map is keyed on target class and holds a
+   * pre-instantiated {@link Beans.BeanWriter}. The default factory is consulted for every class no
+   * hint names: once when the mapper is planned, to decide whether a composed setter fold may build
+   * the class, and again on construction, which is where a default strategy that cannot apply to a
+   * target throws. Per-class LMF reuse happens one layer down in {@link Beans#autoWriter} and its
+   * invoker caches, so this layer holds no state of its own.
    */
   public static Reflective beansWithHints(
     final Map<Class<?>, Beans.BeanWriter<?>> hints,
@@ -89,7 +92,8 @@ public record Reflective(
       BEANS.genericType,
       BEANS.read,
       (cls, valueByName) -> constructBeanWithHints(hints, defaultWriterFactory, cls, valueByName),
-      BEANS.normalize
+      BEANS.normalize,
+      cls -> hintedSetters(hints, defaultWriterFactory, cls)
     );
   }
 
@@ -101,6 +105,15 @@ public record Reflective(
   /** Generic type of the named component / property (for container shape detection). */
   public Type genericType(final Class<?> cls, final String name) {
     return genericType.apply(cls, name);
+  }
+
+  /**
+   * Whether this side writes {@code cls} through its setters, which is the only bean write a
+   * composed setter fold can stand in for. An explicit hint or a default strategy that names
+   * another writer is honoured by declining the fold, so the hinted writer builds the value.
+   */
+  public boolean foldsSetters(final Class<?> cls) {
+    return writesThroughSetters.test(cls);
   }
 
   /** Read a value by name. */
@@ -340,6 +353,27 @@ public record Reflective(
   private static Object constructBean(final Class<?> cls, final Function<String, Object> valueByName) {
     final var writer = Beans.autoWriter((Class) cls);
     return writer.construct(Beans.propertyNames(cls), valueByName);
+  }
+
+  /**
+   * Whether the writer the hints pick for {@code cls} is the setter writer. A default strategy
+   * whose writer cannot be built for {@code cls} answers no, so the construction that follows
+   * raises that failure itself rather than the fold building the value some other way.
+   */
+  private static boolean hintedSetters(
+    final Map<Class<?>, Beans.BeanWriter<?>> hints,
+    final Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactory,
+    final Class<?> cls
+  ) {
+    if (cls.isRecord()) return true;
+    final var hinted = hints.get(cls);
+    if (hinted != null) return hinted instanceof Beans.SettersWriter<?>;
+    if (defaultWriterFactory == null) return true;
+    try {
+      return defaultWriterFactory.apply(cls) instanceof Beans.SettersWriter<?>;
+    } catch (final RuntimeException e) {
+      return false;
+    }
   }
 
   @SuppressWarnings({ "rawtypes", "unchecked" })
