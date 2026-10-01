@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.codegen;
 
-import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -32,6 +31,7 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.TypeParameterElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
@@ -2574,15 +2574,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * The container shape of a type, asked of the shared pairing spec so that what counts as a
    * container is one decision rather than two. {@code null} when the spec sees no parameterized
    * container, which includes a raw subtype: the spec excludes those deliberately and {@link
-   * #rawContainerShapeOf} answers for them. Also {@code null} when the view's arguments are not the
-   * declared type's own, which {@link #emissionCanNameArguments} decides.
+   * #rawContainerShapeOf} answers for them.
    *
    * <p>Both sides are needed because a field declared as the general {@code Collection} has named
    * no shape of its own, and the spec settles such a view against the other side of the pair.
    */
   private ContainerShape containerShapeOf(final TypeMirror type, final TypeMirror other) {
     final var view = rules.settledAgainst(rules.containerViewOf(type), rules.containerViewOf(other));
-    if (view == null || !emissionCanNameArguments(type, view)) return null;
+    if (view == null) return null;
     return new ContainerShape(
       switch (view.kind()) {
         case LIST -> FieldPlan.Kind.LIST;
@@ -2598,30 +2597,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       view.elementType(),
       view.keyType()
     );
-  }
-
-  /**
-   * Whether a rebuild can name this container's element types by writing the declared type's own
-   * type arguments, which is what the emission does.
-   *
-   * <p>A view can see through a subtype's parameter list to the container's: {@code class
-   * Tagged<Tag, E> extends ArrayList<E>} views as a one-element list while declaring two arguments,
-   * and {@code class Boxes<E> extends ArrayList<List<E>>} views as a list of {@code List<E>} while
-   * declaring one. Writing the view's arguments into the declared name does not name the declared
-   * type — for the first no such parameterization exists at all, and for the second one exists and
-   * is a different type — so a rebuild is only possible where the two coincide. Refusing here
-   * leaves the pairing diagnostic the plan already produces, which names both sides, rather than a
-   * javac error against code nobody wrote.
-   */
-  private boolean emissionCanNameArguments(final TypeMirror type, final ContainerView<TypeMirror> view) {
-    final var declared = ((DeclaredType) type).getTypeArguments();
-    final var viewArgs =
-      view.keyType() == null ? List.of(view.elementType()) : List.of(view.keyType(), view.elementType());
-    if (declared.size() != viewArgs.size()) return false;
-    for (var i = 0; i < declared.size(); i++) {
-      if (!isSameType(declared.get(i), viewArgs.get(i))) return false;
-    }
-    return true;
   }
 
   // The container shape of a RAW (non-generic) Collection/Map subtype — a field declared as `class
@@ -4061,22 +4036,27 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The implementation parameterised by the arguments the field gave its container, which is what a
-   * member has to be resolved against. Null when the implementation takes a different number of
-   * parameters than the view supplies, since pairing them off by position would then substitute the
-   * wrong ones.
+   * The implementation parameterised by the arguments the field gave it, which is what a member has
+   * to be resolved against. They are the arguments the allocation writes: the declared type's own
+   * when it is the class allocated, so a subtype declaring its parameters in another order than
+   * {@code Map} resolves correctly, and the container's otherwise. Null when the implementation
+   * takes a different number of parameters than those, since pairing them off by position would
+   * then substitute the wrong ones.
    */
   private DeclaredType implWithFieldArgs(
     final FieldPlan.Kind kind,
     final TypeMirror tgtContainer,
     final TypeElement implEl
   ) {
-    final var types = processingEnv.getTypeUtils();
     if (implEl.getTypeParameters().isEmpty()) return (DeclaredType) implEl.asType();
-    final var iface = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.Map" : "java.util.Set";
-    final var args = containerViewArgs(tgtContainer, iface).stream().map(this::instantiable).toArray(TypeMirror[]::new);
-    if (args.length != implEl.getTypeParameters().size()) return null;
-    return types.getDeclaredType(implEl, args);
+    final var arguments = allocTypeArguments(tgtContainer, kind);
+    if (arguments.size() != implEl.getTypeParameters().size()) return null;
+    // An argument no type can be written for is resolved as the field declares it, wildcard and
+    // all: a constructor parameter that names it then orders nothing the field can supply.
+    final var declared = ((DeclaredType) tgtContainer).getTypeArguments();
+    final var args = new TypeMirror[arguments.size()];
+    for (int i = 0; i < args.length; i++) args[i] = arguments.get(i) != null ? arguments.get(i) : declared.get(i);
+    return processingEnv.getTypeUtils().getDeclaredType(implEl, args);
   }
 
   /**
@@ -4113,12 +4093,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private String helperOutDeclaration(
     final TypeMirror tgtContainer,
     final FieldPlan.Kind kind,
-    final boolean elementsPreserved,
-    final String typeArgs
+    final boolean elementsPreserved
   ) {
     final var viaBuilder = builderAllocExpr(tgtContainer, kind);
     if (viaBuilder != null) return outDeclaration(viaBuilder, true);
     final var implFqn = concreteImplFqn(tgtContainer, kind);
+    final var arguments = allocTypeArguments(tgtContainer, kind);
+    if (arguments.stream().anyMatch(Objects::isNull)) {
+      return rawTypedOutDeclaration(tgtContainer, implFqn, orderingArg(kind, tgtContainer, implFqn, elementsPreserved));
+    }
+    final var typeArgs = arguments.stream().map(String::valueOf).collect(Collectors.joining(", "));
     return outDeclaration(
       sizedAlloc(implFqn, typeArgs, orderingArg(kind, tgtContainer, implFqn, elementsPreserved)),
       false
@@ -4135,9 +4119,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final boolean elementsPreserved
   ) {
     final var viaBuilder = builderAllocExpr(container, kind);
-    return viaBuilder != null
-      ? outDeclaration(viaBuilder, true)
-      : outDeclaration(rawAllocExpr(container, kind, elementsPreserved), false);
+    if (viaBuilder != null) return outDeclaration(viaBuilder, true);
+    final var implFqn = concreteImplFqn(container, kind);
+    if (
+      container instanceof DeclaredType declared &&
+      !declared.getTypeArguments().isEmpty() &&
+      allocTypeArguments(container, kind).stream().anyMatch(Objects::isNull)
+    ) {
+      return rawTypedOutDeclaration(container, implFqn, orderingArg(kind, container, implFqn, elementsPreserved));
+    }
+    return outDeclaration(rawAllocExpr(container, kind, elementsPreserved), false);
+  }
+
+  /**
+   * The declaration for an output whose type arguments cannot be written after {@code new}: a
+   * wildcard standing for a type parameter whose bound names a type variable, as {@code T extends
+   * Comparable<T>} does, or that has several bounds. The class is allocated raw into a local
+   * declared as the field's own type, which every element the helper adds already fits, and the
+   * unchecked conversion that takes is suppressed on that one declaration.
+   */
+  private static String rawTypedOutDeclaration(final TypeMirror declared, final String implFqn, final String ordering) {
+    final var alloc = ordering.isEmpty()
+      ? "new " + implFqn + "()"
+      : ordering + " == null ? new " + implFqn + "() : new " + implFqn + "(" + ordering + ")";
+    return "    @SuppressWarnings({\"unchecked\", \"rawtypes\"}) final " + declared + " out = " + alloc + ";";
   }
 
   /**
@@ -4177,26 +4182,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ? "new " + implFqn + "()"
         : ordering + " == null ? new " + implFqn + "() : new " + implFqn + "(" + ordering + ")";
     }
-    final var args = allocTypeArguments(container, kind);
-    if (kind == FieldPlan.Kind.MAP_VALUES) {
-      return sizedAlloc(
-        implFqn,
-        args.get(0) + ", " + args.get(1),
-        orderingArg(kind, container, implFqn, elementsPreserved)
-      );
-    }
-    return sizedAlloc(implFqn, args.getFirst().toString(), orderingArg(kind, container, implFqn, elementsPreserved));
+    final var args = allocTypeArguments(container, kind)
+      .stream()
+      .map(String::valueOf)
+      .collect(Collectors.joining(", "));
+    return sizedAlloc(implFqn, args, orderingArg(kind, container, implFqn, elementsPreserved));
   }
 
   /**
-   * The type arguments to write into an allocation's diamond, key first where there is one.
+   * The type arguments to write into an allocation, key first where there is one.
    *
-   * <p>The shared spec answers for every container that reaches here, so there is no second way to
-   * ask and no absent answer to handle. A container the spec declines carries no type arguments of
-   * its own, which makes the implementation to allocate the declared class itself; that class is
-   * not generic, so the caller writes no diamond and returns before this runs.
+   * <p>They are the arguments of the class being allocated. Where that class is the declared type
+   * itself, they are the declared type's own, which for a subtype need not be its container view's:
+   * {@code class Tagged<Tag, E> extends ArrayList<E>} takes two. Where it is a default
+   * implementation standing in for an interface, they come from the container view, which the
+   * shared spec answers for every container that reaches here.
    */
   private List<TypeMirror> allocTypeArguments(final TypeMirror container, final FieldPlan.Kind kind) {
+    if (
+      container instanceof DeclaredType declared &&
+      ((TypeElement) declared.asElement()).getQualifiedName().contentEquals(concreteImplFqn(container, kind))
+    ) {
+      final var arguments = declared.getTypeArguments();
+      final var parameters = ((TypeElement) declared.asElement()).getTypeParameters();
+      final var instantiated = new ArrayList<TypeMirror>();
+      for (int i = 0; i < arguments.size(); i++) instantiated.add(instantiable(arguments.get(i), parameters.get(i)));
+      return instantiated;
+    }
     final var view = rules.containerViewOf(container);
     return kind == FieldPlan.Kind.MAP_VALUES
       ? List.of(instantiable(view.keyType()), instantiable(view.elementType()))
@@ -4216,6 +4228,70 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return upper != null ? upper : processingEnv.getElementUtils().getTypeElement("java.lang.Object").asType();
   }
 
+  /**
+   * The same for an argument of a class's own parameter, which may declare a bound. A wildcard then
+   * allocates over its upper bound where that fits the parameter's bound, and over the parameter's
+   * bound where it gives none. Null where no type can be written: a parameter with several bounds,
+   * one whose bound names a type variable, as {@code T extends Comparable<T>} does, or an upper
+   * bound the parameter's bound does not admit.
+   */
+  private TypeMirror instantiable(final TypeMirror argument, final TypeParameterElement parameter) {
+    if (!(argument instanceof WildcardType wildcard)) return argument;
+    final var bounds = parameter.getBounds();
+    final var bound = bounds.size() == 1 ? bounds.getFirst() : null;
+    final var unbounded =
+      bound instanceof DeclaredType declared &&
+      ((TypeElement) declared.asElement()).getQualifiedName().contentEquals("java.lang.Object");
+    if (unbounded) return instantiable(argument);
+    if (bound == null || mentionsTypeVariable(bound)) return null;
+    final var upper = wildcard.getExtendsBound();
+    if (upper == null) return bound;
+    // An upper bound outside the parameter's leaves no type that is both within the bound and
+    // assignable to the field, so nothing can be written.
+    return processingEnv.getTypeUtils().isAssignable(upper, bound) ? upper : null;
+  }
+
+  private static boolean mentionsTypeVariable(final TypeMirror type) {
+    if (type.getKind() == TypeKind.TYPEVAR) return true;
+    if (type instanceof WildcardType wildcard) {
+      return (
+        (wildcard.getExtendsBound() != null && mentionsTypeVariable(wildcard.getExtendsBound())) ||
+        (wildcard.getSuperBound() != null && mentionsTypeVariable(wildcard.getSuperBound()))
+      );
+    }
+    return (
+      type instanceof DeclaredType declared &&
+      declared.getTypeArguments().stream().anyMatch(BridgeProcessor::mentionsTypeVariable)
+    );
+  }
+
+  /**
+   * A container helper's signature, taking and returning each side's container exactly as it was
+   * declared.
+   *
+   * <p>The declared type and the container it is viewed as are two different things for a subtype:
+   * {@code class Tagged<Tag, E> extends ArrayList<E>} is declared with two arguments and holds
+   * elements of its second. Each element is converted through the view, which is where its type is
+   * found, and the signature names the declared type, which is the type the field has.
+   */
+  private static String helperSignature(final String name, final TypeMirror src, final TypeMirror tgt) {
+    return "  private static " + declaredContainer(tgt) + " " + name + "(final " + declaredContainer(src) + " src) {";
+  }
+
+  /** A container type as declared: its raw name and its own type arguments. */
+  private static String declaredContainer(final TypeMirror container) {
+    final var arguments = ownArguments(container);
+    return containerRawFqn(container) + (arguments.isEmpty() ? "" : "<" + arguments + ">");
+  }
+
+  /** A container's own type arguments as written, comma-separated, or empty for a raw type. */
+  private static String ownArguments(final TypeMirror container) {
+    return ((DeclaredType) container).getTypeArguments()
+      .stream()
+      .map(String::valueOf)
+      .collect(Collectors.joining(", "));
+  }
+
   private void emitListHelper(
     final PrintWriter out,
     final String name,
@@ -4224,26 +4300,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String subBridge,
     final String direction
   ) {
-    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().getFirst();
-    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
-    final var returnRaw = containerRawFqn(tgtContainer);
-    final var paramRaw = containerRawFqn(srcContainer);
     out.println();
-    out.println(
-      "  private static " +
-        returnRaw +
-        "<" +
-        tgtElement +
-        "> " +
-        name +
-        "(final " +
-        paramRaw +
-        "<" +
-        srcElement +
-        "> src) {"
-    );
+    out.println(helperSignature(name, srcContainer, tgtContainer));
     out.println("    if (src == null) return null;");
-    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false, String.valueOf(tgtElement)));
+    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -4257,24 +4317,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String subBridge,
     final String direction
   ) {
-    final var srcElement = ((DeclaredType) srcContainer).getTypeArguments().getFirst();
-    final var tgtElement = ((DeclaredType) tgtContainer).getTypeArguments().getFirst();
-    final var returnRaw = containerRawFqn(tgtContainer);
-    final var paramRaw = containerRawFqn(srcContainer);
     out.println();
-    out.println(
-      "  private static " +
-        returnRaw +
-        "<" +
-        tgtElement +
-        "> " +
-        name +
-        "(final " +
-        paramRaw +
-        "<" +
-        srcElement +
-        "> src) {"
-    );
+    out.println(helperSignature(name, srcContainer, tgtContainer));
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
       out,
@@ -4283,7 +4327,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       tgtContainer,
       concreteImplFqn(tgtContainer, FieldPlan.Kind.SET)
     );
-    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false, String.valueOf(tgtElement)));
+    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -4297,31 +4341,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String subBridge,
     final String direction
   ) {
-    final var srcArgs = ((DeclaredType) srcContainer).getTypeArguments();
-    final var tgtArgs = ((DeclaredType) tgtContainer).getTypeArguments();
-    final var keyType = srcArgs.get(0);
-    final var srcValue = srcArgs.get(1);
-    final var tgtValue = tgtArgs.get(1);
-    final var returnRaw = containerRawFqn(tgtContainer);
-    final var paramRaw = containerRawFqn(srcContainer);
     out.println();
-    out.println(
-      "  private static " +
-        returnRaw +
-        "<" +
-        keyType +
-        ", " +
-        tgtValue +
-        "> " +
-        name +
-        "(final " +
-        paramRaw +
-        "<" +
-        keyType +
-        ", " +
-        srcValue +
-        "> src) {"
-    );
+    out.println(helperSignature(name, srcContainer, tgtContainer));
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
       out,
@@ -4330,7 +4351,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       tgtContainer,
       concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES)
     );
-    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true, keyType + ", " + tgtValue));
+    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true));
     out.println(
       "    for (final var e : src.entrySet()) out.put(e.getKey(), " + subBridge + "." + direction + "(e.getValue()));"
     );
