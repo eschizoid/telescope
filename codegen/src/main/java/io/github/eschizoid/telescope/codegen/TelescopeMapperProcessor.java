@@ -158,15 +158,18 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       error(blueprint, "@TelescopeMapper requires a generated @Bridge for " + from + " -> " + to);
       return;
     }
-    final var bridgeName = bridgeClass == null ? null : bridgeClass.substring(bridgeClass.lastIndexOf('.') + 1);
+    // Referenced by its qualified name rather than imported. A bridge for a source carrying a
+    // Lombok
+    // annotation is emitted in the last processing round, and a class created then can be named in
+    // full but cannot be imported.
+    final var bridgeName = bridgeClass;
     final var method = mappingMethods.getFirst();
     final var model = simple(from);
     final var focus = "TelescopeTransformation<" + model + ", ?>";
     final var refs = new ArrayList<String>();
     final var customTranslate = overridesTranslate(blueprint, projection);
     final var useBridge = !customTranslate && bridgeClass != null;
-    if (useBridge) refs.add(bridgeClass);
-    else {
+    if (!useBridge) {
       refs.add("io.github.eschizoid.telescope.Telescope");
       if (projection != null) {
         refs.add("io.github.eschizoid.telescope.conversion.Mapper");
