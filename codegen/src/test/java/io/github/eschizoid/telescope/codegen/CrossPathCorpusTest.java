@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope.codegen;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
@@ -400,41 +399,88 @@ class CrossPathCorpusTest {
     return bridge;
   }
 
+  /**
+   * A container subtype whose own type arguments differ from the container it is viewed as: the
+   * declaration, the field type that names it, the target field, how its input is filled, and what
+   * both paths owe — the rendering and the class of the rebuilt container, or a refusal.
+   *
+   * <p>{@code %s} is the cell's prefix everywhere it appears.
+   */
+  private record SubtypeView(
+    String name,
+    String declaration,
+    String srcField,
+    String tgtField,
+    String put,
+    String owed
+  ) {}
+
+  private static final List<SubtypeView> SUBTYPE_VIEWS = List.of(
+    // Declares two arguments and holds elements of the second.
+    new SubtypeView(
+      "extra parameter to an interface",
+      "public class %sTagged<Tag, E> extends java.util.ArrayList<E> {}",
+      "%sTagged<String, %sLeaf>",
+      "java.util.List<%sLeafDto>",
+      "add",
+      "%sTgt[items=[%sLeafDto[v=x]]] in java.util.ArrayList"
+    ),
+    new SubtypeView(
+      "extra parameter on both sides",
+      "public class %sTagged<Tag, E> extends java.util.ArrayList<E> {}",
+      "%sTagged<String, %sLeaf>",
+      "%sTagged<String, %sLeafDto>",
+      "add",
+      "%sTgt[items=[%sLeafDto[v=x]]] in %sTagged"
+    ),
+    // Declares its key and value in the opposite order to Map.
+    new SubtypeView(
+      "reordered map parameters",
+      "public class %sReordered<V, K> extends java.util.HashMap<K, V> {}",
+      "%sReordered<%sLeaf, String>",
+      "%sReordered<%sLeafDto, String>",
+      "put",
+      "%sTgt[items={k=%sLeafDto[v=x]}] in %sReordered"
+    ),
+    // Fixes the key and declares one argument where Map has two.
+    new SubtypeView(
+      "fixed map key",
+      "public class %sStringMap<V> extends java.util.HashMap<String, V> {}",
+      "%sStringMap<%sLeaf>",
+      "java.util.Map<String, %sLeafDto>",
+      "put",
+      "%sTgt[items={k=%sLeafDto[v=x]}] in java.util.LinkedHashMap"
+    ),
+    // Holds Strings whatever its argument says, so its elements and the target's cannot pair.
+    new SubtypeView(
+      "argument unrelated to the elements",
+      "public class %sWrap<E> extends java.util.ArrayList<String> {}",
+      "%sWrap<%sLeaf>",
+      "java.util.List<%sLeafDto>",
+      "addString",
+      "refused"
+    )
+  );
+
   @Test
-  @DisplayName("a subtype whose own arguments are not its container view's is refused, not emitted wrong")
-  void aSubtypeViewIsRefusedRatherThanEmittedWrong() {
-    // Two ways a subtype's own arguments can fail to be its container view's, because the emission
-    // writes the declared ones: Tagged declares two where the view carries one, and Boxes declares
-    // one of a different type than the one the view carries. A rebuild cannot write the view into
-    // either declared name, so the plan has to refuse — and the refusal owed is the pairing one
+  @DisplayName("a subtype whose own arguments differ from its container view converts the same way on both paths")
+  void aSubtypeViewConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    // The view is where an element's type is found, and the declared type is what the generated
+    // source has to write: a field of a subtype is a value of that subtype, not of the container it
+    // is viewed as. Taking either for the other is what refused these shapes, or emitted a type
     // that
-    // names both sides, not a javac error raised against code nobody wrote.
-    record Shape(String name, String declaration, String field, String target) {}
-    final var shapes = List.of(
-      new Shape(
-        "arity",
-        "public class SvTagged<Tag, E> extends java.util.ArrayList<E> {}",
-        "SvTagged<String, SvLeaf>",
-        "java.util.List<SvLeafDto>"
-      ),
-      new Shape(
-        "element",
-        "public class SvBoxes<E> extends java.util.ArrayList<java.util.List<E>> {}",
-        "SvBoxes<SvLeaf>",
-        "java.util.List<java.util.List<SvLeafDto>>"
-      )
-    );
-    final var head = "package " + PACKAGE + ";\n";
+    // does not exist for them.
+    final var failures = new ArrayList<String>();
     var index = 0;
-    for (final var shape : shapes) {
+    for (final var shape : SUBTYPE_VIEWS) {
       final var prefix = "Sv" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var declaration = shape.declaration().replace("%s", prefix);
+      final var declared = declaration.split(" ")[2].split("<")[0];
       final var sources = new JavaFileObject[] {
         source(prefix + "Leaf", head + "public record " + prefix + "Leaf(String v) {}\n"),
         source(prefix + "LeafDto", head + "public record " + prefix + "LeafDto(String v) {}\n"),
-        source(
-          shape.declaration().split(" ")[2].split("<")[0],
-          head + shape.declaration().replace("SvLeaf", prefix + "Leaf") + "\n"
-        ),
+        source(declared, head + declaration + "\n"),
         source(
           prefix + "Src",
           head +
@@ -443,26 +489,57 @@ class CrossPathCorpusTest {
             "Tgt.class)\npublic record " +
             prefix +
             "Src(" +
-            shape.field().replace("SvLeaf", prefix + "Leaf") +
+            shape.srcField().replace("%s", prefix) +
             " items) {}\n"
         ),
         source(
           prefix + "Tgt",
-          head +
-            "public record " +
-            prefix +
-            "Tgt(" +
-            shape.target().replace("SvLeafDto", prefix + "LeafDto") +
-            " items) {}\n"
+          head + "public record " + prefix + "Tgt(" + shape.tgtField().replace("%s", prefix) + " items) {}\n"
         ),
       };
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(
+        plain.success(),
+        () -> shape.name() + " should compile without the processor: " + plain.errorMessages()
+      );
       final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
 
-      assertFalse(processed.success(), () -> shape.name() + " should refuse: " + processed.generated().keySet());
-      assertTrue(processed.hasError("has incompatible types"), processed::errorMessages);
-      assertFalse(processed.hasError("wrong number of type arguments"), processed::errorMessages);
-      assertFalse(processed.hasError("cannot be converted to"), processed::errorMessages);
+      final var classes = plain.define(MethodHandles.lookup());
+      final var src = classes.get(PACKAGE + "." + prefix + "Src");
+      final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
+      final var container = classes.get(PACKAGE + "." + declared).getConstructor().newInstance();
+      final var leaf = classes.get(PACKAGE + "." + prefix + "Leaf").getConstructor(String.class).newInstance("x");
+      switch (shape.put()) {
+        case "put" -> Map.class.getMethod("put", Object.class, Object.class).invoke(container, "k", leaf);
+        case "add" -> Collection.class.getMethod("add", Object.class).invoke(container, leaf);
+        default -> Collection.class.getMethod("add", Object.class).invoke(container, "s");
+      }
+      final var source = src.getConstructors()[0].newInstance(container);
+      final var items = tgt.getMethod("items");
+
+      final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
+      final var generated =
+        forward == null
+          ? Outcome.refused(processed.errorMessages().strip())
+          : run(items, () -> forward.invoke(null, source));
+      final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+
+      final var owed = shape
+        .owed()
+        .replace("%s", prefix)
+        .replace(prefix + "Tagged", PACKAGE + "." + prefix + "Tagged")
+        .replace(prefix + "Reordered", PACKAGE + "." + prefix + "Reordered");
+      for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+        final var got = side.getValue().refusal() != null ? "refused" : side.getValue().toString();
+        if (!owed.equals(got)) failures.add(
+          shape.name() + ": " + side.getKey() + " gave " + side.getValue() + ", owed " + owed
+        );
+      }
     }
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " subtype view(s) failed:\n  " + String.join("\n  ", failures)
+    );
   }
 
   /**
