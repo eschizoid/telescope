@@ -120,7 +120,11 @@ public final class PairingRules<T> {
           )
         );
       }
-      if (unorderableSortedTarget(src, tgt, tgtType)) {
+      if (
+        tgt.kind() == ContainerView.Kind.SET &&
+        !(decidePair(src.elementType(), tgt.elementType(), componentName) instanceof PairDecision.Incompatible) &&
+        unorderableSortedTarget(src.elementType(), tgt.elementType(), tgtType)
+      ) {
         return new PairDecision.Incompatible<>(
           PairingMessages.unorderableSortedElement(
             componentName,
@@ -138,19 +142,20 @@ public final class PairingRules<T> {
   }
 
   /**
-   * Whether the target is a sorted set whose elements nothing can order. Its elements are converted
-   * from the source's, so a comparator the source carries orders the wrong type and cannot come
-   * across, and the rebuild orders by the elements' own {@code compareTo}. An element class that
-   * does not implement {@code Comparable} then fails on the first insert of every conversion. An
-   * interface element is let through, since the values a conversion produces for it may be
-   * comparable.
+   * Whether a sorted set target's elements, converted from the source's, are of a class nothing can
+   * order. A comparator the source carries orders the type being converted away from and cannot
+   * come across, so the rebuild orders by the element's own {@code compareTo}, and an element class
+   * that does not implement {@code Comparable} fails on the first insert of every conversion. An
+   * interface or wildcard element is let through, since the values a conversion produces for it may
+   * be comparable. Asked only once the element pair is known to convert, so a pairing refused for
+   * another reason keeps that reason.
    */
-  public boolean unorderableSortedTarget(final ContainerView<T> src, final ContainerView<T> tgt, final T tgtType) {
-    if (tgt.kind() != ContainerView.Kind.SET) return false;
+  public boolean unorderableSortedTarget(final T srcElement, final T tgtElement, final T tgtType) {
     if (!props.isSubtypeOf(props.rawType(tgtType), WellKnown.SORTED_SET)) return false;
-    if (props.sameType(src.elementType(), tgt.elementType())) return false;
-    final var element = props.rawType(tgt.elementType());
-    if (props.isWildcard(tgt.elementType()) || props.isInterfaceType(element)) return false;
+    if (props.sameType(srcElement, tgtElement)) return false;
+    if (props.isWildcard(tgtElement)) return false;
+    final var element = props.rawType(tgtElement);
+    if (props.isInterfaceType(element)) return false;
     return !props.isSubtypeOf(element, WellKnown.COMPARABLE);
   }
 

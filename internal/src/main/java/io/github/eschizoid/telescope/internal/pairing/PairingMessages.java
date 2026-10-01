@@ -121,7 +121,7 @@ public final class PairingMessages {
     );
   }
 
-  /** Terminal shape mismatch — no branch of the compatibility lattice applies. */
+  /** A sorted set target whose converted element class does not implement {@code Comparable}. */
   public static String unorderableSortedElement(
     final String componentName,
     final String containerType,
@@ -142,6 +142,7 @@ public final class PairingMessages {
     );
   }
 
+  /** Terminal shape mismatch — no branch of the compatibility lattice applies. */
   public static String incompatibleShapes(final String componentName, final String srcType, final String tgtType) {
     return (
       "Deep map: component '" +

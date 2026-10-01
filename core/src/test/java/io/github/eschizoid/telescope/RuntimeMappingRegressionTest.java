@@ -236,6 +236,28 @@ class RuntimeMappingRegressionTest {
     assertTrue(failure.getMessage().contains("Mapping.via"));
   }
 
+  record OrderedValueDto(int n) implements Comparable<OrderedValueDto> {
+    @Override
+    public int compareTo(final OrderedValueDto other) {
+      return Integer.compare(n, other.n());
+    }
+  }
+
+  record OrderedValuesDto(TreeSet<OrderedValueDto> values) {}
+
+  @Test
+  void changedSortedSetElementsRefuseACarriedComparatorBothWays() {
+    final var values = new TreeSet<Value>(Comparator.comparingInt(Value::n));
+    values.add(new Value(1));
+    final var mapper = Telescope.mapper(SortedValues.class, OrderedValuesDto.class);
+    final var forward = assertThrows(IllegalStateException.class, () -> mapper.forward(new SortedValues(values)));
+    assertTrue(forward.getMessage().contains("cannot be reused with changed element types"), forward::getMessage);
+    final var dto = new TreeSet<OrderedValueDto>(Comparator.comparingInt(OrderedValueDto::n).reversed());
+    dto.add(new OrderedValueDto(1));
+    final var backward = assertThrows(IllegalStateException.class, () -> mapper.backward(new OrderedValuesDto(dto)));
+    assertTrue(backward.getMessage().contains("cannot be reused with changed element types"), backward::getMessage);
+  }
+
   @Test
   void inheritedNestedListArgumentsAreSubstituted() {
     final var values = new NestedList<Value>();

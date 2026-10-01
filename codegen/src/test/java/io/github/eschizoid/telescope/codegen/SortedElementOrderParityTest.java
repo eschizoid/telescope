@@ -35,6 +35,10 @@ class SortedElementOrderParityTest {
   ) {
     return new JavaFileObject[] {
       ProcessorHarness.source(
+        PACKAGE + "." + prefix + "DtoSet",
+        HEAD + "public class " + prefix + "DtoSet extends java.util.TreeSet<" + prefix + "LeafDto> {}\n"
+      ),
+      ProcessorHarness.source(
         PACKAGE + "." + prefix + "Leaf",
         HEAD +
           "public record " +
@@ -115,9 +119,16 @@ class SortedElementOrderParityTest {
       generated = String.valueOf(bridge.getMethod("forward", src).invoke(null, source));
     }
 
+    // Building the mapper and converting are separate steps, so a refusal on the first conversion
+    // cannot pass for one when the mapper is built.
     String reflective;
     try {
-      reflective = String.valueOf(Telescope.mapper(cast(src), cast(tgt)).forward(source));
+      final var mapper = Telescope.mapper(cast(src), cast(tgt));
+      try {
+        reflective = String.valueOf(mapper.forward(source));
+      } catch (final IllegalStateException e) {
+        reflective = "built, then refused on conversion: " + e.getMessage();
+      }
     } catch (final IllegalStateException | IllegalArgumentException e) {
       reflective = e.getMessage().contains(REFUSAL) ? "refused" : e.getMessage();
     }
@@ -155,5 +166,16 @@ class SortedElementOrderParityTest {
       List.of(expected, expected),
       outcomes(prefix, "java.util.SortedSet<%sLeaf>", "java.util.SortedSet<%sLeafDto>", true)
     );
+  }
+
+  @Test
+  @DisplayName("a sorted subtype that fixes an unorderable element is refused by @Bridge by name")
+  void aRawSortedSubtypeIsRefusedByName() throws ReflectiveOperationException {
+    // The runtime refuses these pairings too, as shapes it cannot pair, so only the generated
+    // path's reason is pinned here: it must name the element, not compile and throw a bare cast.
+    var index = 0;
+    for (final var srcField : List.of("java.util.Set<%sLeaf>", "java.util.SortedSet<%sLeaf>")) {
+      assertEquals("refused", outcomes("Ser" + index++, srcField, "%sDtoSet", false).getFirst(), srcField);
+    }
   }
 }

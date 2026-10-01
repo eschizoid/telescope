@@ -459,6 +459,30 @@ class MapperVerifierProcessorTest {
   }
 
   @Test
+  @DisplayName("a sorted set of a converted element that is not Comparable is reported at compile time")
+  void unorderableSortedElementReported() {
+    final var compilation = verify(
+      """
+      package demo;
+      import io.github.eschizoid.telescope.Telescope;
+      import io.github.eschizoid.telescope.conversion.Mapper;
+      import java.util.SortedSet;
+      record Leaf(String v) implements Comparable<Leaf> { public int compareTo(Leaf o) { return v.compareTo(o.v()); } }
+      record LeafDto(String v) {}
+      record Src(SortedSet<Leaf> xs) {}
+      record Tgt(SortedSet<LeafDto> xs) {}
+      class Holder {
+        static final Mapper<Src, Tgt> M = Telescope.mapper(Src.class, Tgt.class);
+      }
+      """
+    );
+    assertFalse(compilation.success(), "the verifier should report the pair");
+    assertTrue(compilation.errorMessages().contains("does not implement Comparable"), () ->
+      compilation.errorMessages()
+    );
+  }
+
+  @Test
   @DisplayName("wildcards with different bounds are reported at compile time, as the runtime refuses them")
   void wildcardBoundsMismatchReported() {
     final var compilation = verify(
