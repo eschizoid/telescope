@@ -42,14 +42,15 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
- * Container-shape lifting for {@link DeepMap}: element-copy Isos for raw same-kind container
- * subtype pairs, element-wise {@code List} / {@code Set} / {@code Map}-values lifts that allocate
- * the target's concrete raw class, and the allocator renderings backing them. JDK collection
- * classes live in {@code java.base} — {@link Beans#intermediateAllocator} can't bind them via
- * LambdaMetafactory's {@code privateLookupIn} — so the common JDK raws are rendered by name, with
- * {@code intermediateAllocator} as the fallback for user-defined subclasses (where LMF DOES work
- * via the user's own package). Each lift consults {@link MhIso} first so a composed-handle leaf
- * element iterates via a dedicated MethodHandle loop rather than a megamorphic Java-loop lambda.
+ * Container-shape lifting for {@link DeepMap}: element-copy Isos for same-kind container pairs
+ * written without type arguments whose elements need no conversion, element-wise {@code List} /
+ * {@code Set} / {@code Map}-values lifts that allocate the target's concrete raw class, and the
+ * allocator renderings backing them. JDK collection classes live in {@code java.base} — {@link
+ * Beans#intermediateAllocator} can't bind them via LambdaMetafactory's {@code privateLookupIn} — so
+ * the common JDK raws are rendered by name, with {@code intermediateAllocator} as the fallback for
+ * user-defined subclasses (where LMF DOES work via the user's own package). Each lift consults
+ * {@link MhIso} first so a composed-handle leaf element iterates via a dedicated MethodHandle loop
+ * rather than a megamorphic Java-loop lambda.
  */
 final class ContainerLifts {
 

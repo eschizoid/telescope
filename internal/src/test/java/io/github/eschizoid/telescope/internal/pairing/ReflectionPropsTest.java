@@ -50,6 +50,28 @@ class ReflectionPropsTest {
     assertEquals(expected.hashCode(), actual.hashCode());
   }
 
+  @SuppressWarnings("unused")
+  static final class VariableHolder<E> {
+
+    List<List<?>> nestedWildcard;
+    List<? super E> boundedByVariable;
+    List<E>[] arrayOfVariable;
+  }
+
+  @Test
+  @DisplayName("a type variable is found at any depth, in a bound or a component, and nowhere else")
+  void findsATypeVariableAnywhereInAType() throws NoSuchFieldException {
+    final var props = new ReflectionProps();
+    assertFalse(props.mentionsTypeVariable(String.class));
+    assertFalse(props.mentionsTypeVariable(VariableHolder.class.getDeclaredField("nestedWildcard").getGenericType()));
+    assertTrue(props.mentionsTypeVariable(VariableHolder.class.getTypeParameters()[0]));
+    assertTrue(props.mentionsTypeVariable(VariableHolder.class.getDeclaredField("boundedByVariable").getGenericType()));
+    assertTrue(props.mentionsTypeVariable(VariableHolder.class.getDeclaredField("arrayOfVariable").getGenericType()));
+    // A generic class used raw resolves its container supertype's argument to its own parameter.
+    assertTrue(props.mentionsTypeVariable(props.typeArgumentsAs(ArrayList.class, WellKnown.LIST).getFirst()));
+    assertFalse(props.mentionsTypeVariable(props.typeArgumentsAs(Urls.class, WellKnown.LIST).getFirst()));
+  }
+
   public static class Urls extends ArrayList<String> {
 
     @Serial

@@ -4,10 +4,12 @@ import io.github.eschizoid.telescope.internal.pairing.PropertySystem;
 import java.util.List;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.TypeVariable;
 import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
@@ -124,6 +126,24 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
     if (target == null) return false;
     if (t.getKind().isPrimitive()) return false;
     return types.isAssignable(types.erasure(t), types.erasure(target.asType()));
+  }
+
+  @Override
+  public boolean mentionsTypeVariable(final TypeMirror t) {
+    return typeVariableIn(t);
+  }
+
+  /** {@link PropertySystem#mentionsTypeVariable}, for callers that hold no adapter. */
+  static boolean typeVariableIn(final TypeMirror t) {
+    if (t == null) return false;
+    if (t instanceof TypeVariable) return true;
+    if (t instanceof ArrayType array) return typeVariableIn(array.getComponentType());
+    if (t instanceof WildcardType wildcard) {
+      return typeVariableIn(wildcard.getExtendsBound()) || typeVariableIn(wildcard.getSuperBound());
+    }
+    if (!(t instanceof DeclaredType declared)) return false;
+    if (typeVariableIn(declared.getEnclosingType())) return true;
+    return declared.getTypeArguments().stream().anyMatch(MirrorProps::typeVariableIn);
   }
 
   @Override

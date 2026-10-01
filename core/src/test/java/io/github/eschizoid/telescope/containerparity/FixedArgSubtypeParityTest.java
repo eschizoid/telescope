@@ -9,13 +9,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * A container subtype that fixes its own type arguments is a concrete container, and both paths
- * have to read it as one.
+ * A container subtype that declares no type parameters of its own is a concrete container, and both
+ * paths have to read it as one.
  *
- * <p>Such a type declares no parameters of its own, so a rule that asks a declaration for its type
- * arguments finds none and cannot tell it apart from a raw use of a generic type. The two are not
- * alike: a raw use has element types nobody wrote down, and this one has them written on its
- * supertype. Reading them the same way refuses a program the generated path converts.
+ * <p>Such a type is written without type arguments, and so is a generic class used raw, so a rule
+ * that asks a declaration for its own arguments finds none in either case and cannot tell them
+ * apart. The two are not alike: the first fixes its element types on its supertype, and the second
+ * leaves them unbound. Reading the first like the second refuses a program the generated path
+ * converts.
  */
 class FixedArgSubtypeParityTest {
 
@@ -39,25 +40,29 @@ class FixedArgSubtypeParityTest {
     assertEquals("1", reflective.items().get("a").v(), "and converts the element");
   }
 
-  /** Raw on both sides: the element type is unsaid, so there is nothing to convert element-wise. */
+  /** A generic class used raw, whose elements nobody has named. */
   @SuppressWarnings("rawtypes")
   public record RawSrc(RawArgList items) {}
 
-  @SuppressWarnings("rawtypes")
-  public record RawTgt(RawArgList items) {}
+  /**
+   * A class that fixes its elements, so the pair is two different types written without arguments.
+   */
+  public record FixedTgt(FixedArgNames items) {}
 
   @Test
-  @DisplayName("a raw use of a generic subtype keeps the policy it had, rather than being paired")
+  @DisplayName("a generic class used raw is copied into a fixed subtype without an element conversion")
   @SuppressWarnings({ "rawtypes", "unchecked" })
   void aRawUseIsNotReadAsAConcreteContainer() {
-    // The discrimination the fix turns on. A raw declaration resolves through its supertype to its
-    // own unbound parameter, not to a type, so nobody has said what its elements are and reading it
-    // as a container would invent an element conversion. The raw shape is the point here, so the
-    // warnings it raises are the fixture rather than a defect.
+    // One side names no element type, so there is no element pair to convert between, and the
+    // pairing copies the elements as they are into the target's own class. Reading the raw side's
+    // unbound parameter as an element type would instead make the pair look like two containers of
+    // different elements, which it refuses. The raw shape is the subject here, so the warnings it
+    // raises are the fixture rather than a defect.
     final RawArgList items = new RawArgList();
     items.add("kept");
-    final var out = Telescope.mapper(RawSrc.class, RawTgt.class).forward(new RawSrc(items));
+    final var out = Telescope.mapper(RawSrc.class, FixedTgt.class).forward(new RawSrc(items));
 
+    assertEquals(FixedArgNames.class, out.items().getClass(), "the target's own class is allocated");
     assertEquals(List.of("kept"), List.copyOf(out.items()), "the value carries across unconverted");
   }
 }

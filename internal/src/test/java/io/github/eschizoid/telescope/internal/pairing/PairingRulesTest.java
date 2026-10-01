@@ -65,7 +65,10 @@ class PairingRulesTest {
     }
   }
 
-  /** Raw container subclass — the shape the subtype-copy branch exists to intercept. */
+  /**
+   * A container subclass declaring no type parameters of its own — the shape the subtype-copy
+   * branch exists to intercept.
+   */
   public static class ImageUrls extends ArrayList<String> {
 
     @Serial
@@ -92,6 +95,45 @@ class PairingRulesTest {
 
   /** Package-private implicit constructor — provably not allocable by the copy branch. */
   static class NoPublicCtorUrls extends ArrayList<String> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  /** Two non-generic lists of different element types, whose elements a copy would not convert. */
+  public static class PointList extends ArrayList<Point> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  public static class PointDtoList extends ArrayList<PointDto> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  /** The same for maps, whose keys agree and whose values do not. */
+  public static class PointMap extends HashMap<String, Point> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  public static class PointDtoMap extends HashMap<String, PointDto> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  /** Non-generic subtypes whose fixed arguments are themselves parameterized. */
+  public static class Groups extends ArrayList<List<String>> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  public static class WildMap extends LinkedHashMap<String, List<?>> {
 
     @Serial
     private static final long serialVersionUID = 1L;
@@ -193,6 +235,11 @@ class PairingRulesTest {
     }
 
     @Override
+    public boolean mentionsTypeVariable(final Type t) {
+      return delegate.mentionsTypeVariable(t);
+    }
+
+    @Override
     public List<Type> typeArgumentsAs(final Type t, final WellKnown supertype) {
       return delegate.typeArgumentsAs(t, supertype);
     }
@@ -218,6 +265,7 @@ class PairingRulesTest {
   static final class TypeHolder {
 
     List<String> listOfString;
+    List<?> listOfWildcard;
     List<Integer> listOfInteger;
     Set<String> setOfString;
     Optional<String> optionalOfString;
@@ -322,7 +370,8 @@ class PairingRulesTest {
 
     @Test
     @DisplayName(
-      "raw same-kind container subclasses decide CollectionCopy before reflectable recursion can" + " claim them"
+      "non-generic same-kind container subclasses over one element type decide CollectionCopy before" +
+        " reflectable recursion can claim them"
     )
     void collectionCopyPrecedesRecursion() {
       assertTrue(rules.reflectable(ImageUrls.class), "premise: the recursion branch could claim this pair");
@@ -331,11 +380,50 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("raw same-kind Map subclasses decide MapCopy before reflectable recursion can claim them")
+    @DisplayName(
+      "non-generic same-kind Map subclasses over one key and value type decide MapCopy before reflectable" +
+        " recursion can claim them"
+    )
     void mapCopyPrecedesRecursion() {
       assertTrue(rules.reflectable(Attrs.class), "premise: the recursion branch could claim this pair");
       assertTrue(rules.reflectable(AttrsDto.class), "premise: the recursion branch could claim this pair");
       assertInstanceOf(PairDecision.MapCopy.class, rules.decidePair(Attrs.class, AttrsDto.class, "f"));
+    }
+
+    @Test
+    @DisplayName("non-generic subclasses fixing different element types lift, converting each element")
+    void differentFixedElementsLift() {
+      assertTrue(rules.sameKindCollection(PointList.class, PointDtoList.class), "premise: same-kind pair");
+      final var list = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(PointList.class, PointDtoList.class, "f")
+      );
+      assertEquals(Point.class, list.src().elementType());
+      assertEquals(PointDto.class, list.tgt().elementType());
+      final var map = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(PointMap.class, PointDtoMap.class, "f")
+      );
+      assertEquals(PointDto.class, map.tgt().elementType());
+    }
+
+    @Test
+    @DisplayName("a generic container used raw names no element type, so it still copies")
+    void rawUseStillCopies() {
+      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ArrayList.class, LinkedList.class, "f"));
+      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ArrayList.class, PointDtoList.class, "f"));
+      assertInstanceOf(PairDecision.MapCopy.class, rules.decidePair(HashMap.class, PointDtoMap.class, "f"));
+    }
+
+    @Test
+    @DisplayName("a non-generic subclass pairs with a parameterized container through its supertype's arguments")
+    void nonGenericSubclassLiftsAgainstAnInterface() {
+      final var decision = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(ImageUrls.class, typeOf("listOfString"), "f")
+      );
+      assertEquals(String.class, decision.src().elementType());
+      assertEquals(ImageUrls.class, decision.src().rawType());
     }
 
     @Test
@@ -511,10 +599,33 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("scalars and raw (non-parameterized) containers present no container view")
+    @DisplayName("scalars and generic containers used raw present no container view")
     void nonParameterizedTypesHaveNoView() {
       assertNull(rules.containerViewOf(String.class));
       assertNull(rules.containerViewOf(ArrayList.class));
+      assertNull(rules.containerViewOf(HashMap.class));
+    }
+
+    @Test
+    @DisplayName("a class declaring no type parameters is viewed through the supertype that fixes them")
+    void nonGenericSubclassIsViewedThroughItsSupertype() {
+      final var list = rules.containerViewOf(ImageUrls.class);
+      assertEquals(ContainerView.Kind.LIST, list.kind());
+      assertEquals(String.class, list.elementType());
+      assertEquals(ImageUrls.class, list.rawType());
+      final var map = rules.containerViewOf(PointMap.class);
+      assertEquals(ContainerView.Kind.MAP_VALUES, map.kind());
+      assertEquals(String.class, map.keyType());
+      assertEquals(Point.class, map.elementType());
+    }
+
+    @Test
+    @DisplayName("a fixed argument that is itself parameterized still gives a view")
+    void parameterizedFixedArgumentGivesAView() {
+      assertEquals(typeOf("listOfString"), rules.containerViewOf(Groups.class).elementType());
+      final var wild = rules.containerViewOf(WildMap.class);
+      assertEquals(ContainerView.Kind.MAP_VALUES, wild.kind());
+      assertEquals(typeOf("listOfWildcard"), wild.elementType());
     }
 
     @Test

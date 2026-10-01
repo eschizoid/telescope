@@ -2575,9 +2575,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * The container shape of a type, asked of the shared pairing spec so that what counts as a
-   * container is one decision rather than two. {@code null} when the spec sees no parameterized
-   * container, which includes a raw subtype: the spec excludes those deliberately and {@link
-   * #rawContainerShapeOf} answers for them.
+   * container is one decision rather than two. That includes a class declaring no type parameters
+   * of its own, which the spec views through the supertype that fixes them. {@code null} when the
+   * spec gives no view, as for a generic class used raw, and {@link #rawContainerShapeOf} is then
+   * asked.
    *
    * <p>Both sides are needed because a field declared as the general {@code Collection} has named
    * no shape of its own, and the spec settles such a view against the other side of the pair.
@@ -2602,12 +2603,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
   }
 
-  // The container shape of a RAW (non-generic) Collection/Map subtype — a field declared as `class
-  // ImageUrls extends ArrayList<ImageUrl>` whose own type-argument list is empty, so the element
-  // type lives in the supertype. Returns null for a generic container (handled by
-  // containerShapeOf),
-  // a raw use of a generic type with no concrete supertype element, or a non-container. Optional is
-  // final and cannot be subtyped, so it has no raw form.
+  // The container shape of a Collection/Map type written without type arguments, read off its
+  // supertype the way `class ImageUrls extends ArrayList<ImageUrl>` fixes its element there. Asked
+  // only where the shared spec gives no view, so what it answers for is a non-generic subtype the
+  // spec refused for a reason this does not check, such as a map key that is not a plain class.
+  // Returns null for a parameterized type, a generic class used raw, whose supertype names no
+  // element, and a non-container. Optional is final and cannot be subtyped, so it has no such form.
   private ContainerShape rawContainerShapeOf(final TypeMirror type) {
     if (!(type instanceof DeclaredType dt) || !dt.getTypeArguments().isEmpty()) return null;
     if (assignableToRaw(type, "java.util.List")) {
@@ -2837,37 +2838,37 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * (constructors are not inherited), and one it declares itself carries whatever meaning its
    * author gave the argument.
    *
-   * @param typeArgs the emitted type arguments, without angle brackets
+   * @param typeArgs the emitted type-argument clause, angle brackets included, or empty for a class
+   *     that declares no type parameters; see {@link #typeArgumentClause}
    * @param ordering the constructor argument carrying a sorted container's ordering, empty for
    *     every impl that has none to carry
    */
   private static String sizedAlloc(final String implFqn, final String typeArgs, final String ordering) {
     return switch (implFqn) {
       case "java.util.HashSet", "java.util.LinkedHashSet", "java.util.HashMap", "java.util.LinkedHashMap" -> implFqn +
-      ".<" +
+      "." +
       typeArgs +
-      ">new" +
+      "new" +
       simpleName(implFqn) +
       "(src.size())";
-      case "java.util.ArrayList" -> "new " + implFqn + "<" + typeArgs + ">(src.size())";
+      case "java.util.ArrayList" -> "new " + implFqn + typeArgs + "(src.size())";
+      // A comparator that is null is natural ordering, which the no-argument constructor already
+      // gives. Handing the null over instead would reach a constructor free to reject it.
       default -> ordering.isEmpty()
-        ? "new " + implFqn + "<" + typeArgs + ">()"
-        : // A comparator that is null is natural ordering, which the no-argument constructor
-          // already
-          // gives. Handing the null over instead would reach a constructor free to reject it.
-          ordering +
-          " == null ? new " +
-          implFqn +
-          "<" +
-          typeArgs +
-          ">() : new " +
-          implFqn +
-          "<" +
-          typeArgs +
-          ">(" +
-          ordering +
-          ")";
+        ? "new " + implFqn + typeArgs + "()"
+        : ordering + " == null ? new " + implFqn + typeArgs + "() : new " + implFqn + typeArgs + "(" + ordering + ")";
     };
+  }
+
+  /**
+   * What follows the class name when {@code implFqn} is allocated: {@code typeArgs} in angle
+   * brackets, which is the diamond when it is empty, or nothing at all for a class that declares no
+   * type parameters. javac rejects a diamond and an argument list alike on a non-generic class, and
+   * a container subtype that fixes its supertype's arguments is one.
+   */
+  private String typeArgumentClause(final String implFqn, final String typeArgs) {
+    final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
+    return implEl != null && implEl.getTypeParameters().isEmpty() ? "" : "<" + typeArgs + ">";
   }
 
   /**
@@ -3027,13 +3028,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         plans.put(sf.name(), withImpls);
         continue;
       }
-      // (2-raw) Raw Collection/Map subtype container — at least one side is a non-generic subtype
-      //     (`class ImageUrls extends ArrayList<ImageUrl>`), possibly paired with a generic
-      //     container on the other. The element lives in the supertype; the subtype is allocated
-      // via
-      //     its no-arg ctor + element loop. Falls back to the generic shape when a side is already
-      // a
-      //     parameterized container (the mixed `List<X>` ↔ `Wrap` case).
+      // (2-raw) A non-generic Collection/Map subtype the shared spec gives no view, on at least one
+      //     side, possibly paired with a parameterized container on the other. The element lives
+      //     in the supertype; the subtype is allocated via its no-arg ctor + element loop. A side
+      //     the spec did view keeps that shape.
       final var srcRaw = srcShape != null ? srcShape : rawContainerShapeOf(sf.type());
       final var tgtRaw = tgtShape != null ? tgtShape : rawContainerShapeOf(tf.type());
       if (srcRaw != null && tgtRaw != null && srcRaw.kind() == tgtRaw.kind()) {
@@ -3404,6 +3402,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return Objects.requireNonNull(impl, "container impl not attached for field '" + fieldName + "'");
   }
 
+  /** The class name an inline copy allocates, with the diamond only where the class is generic. */
+  private String withDiamond(final String implFqn) {
+    return implFqn + typeArgumentClause(implFqn, "");
+  }
+
   // The BridgeFn<A, B> instantiation in `usingType`'s supertype closure, or null when the class
   // does not implement BridgeFn at all. The erasure comparison finds the interface regardless of
   // how many levels up the hierarchy it sits.
@@ -3563,8 +3566,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ? "(" +
           readExpr +
           " == null ? null : new " +
-          requireImpl(plan.fwdContainerImpl(), fieldName) +
-          "<>(" +
+          withDiamond(requireImpl(plan.fwdContainerImpl(), fieldName)) +
+          "(" +
           readExpr +
           "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
@@ -3572,8 +3575,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ? "(" +
           readExpr +
           " == null ? null : new " +
-          requireImpl(plan.fwdContainerImpl(), fieldName) +
-          "<>(" +
+          withDiamond(requireImpl(plan.fwdContainerImpl(), fieldName)) +
+          "(" +
           readExpr +
           "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
@@ -3582,8 +3585,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ? "(" +
           readExpr +
           " == null ? null : new " +
-          requireImpl(plan.fwdContainerImpl(), fieldName) +
-          "<>(" +
+          withDiamond(requireImpl(plan.fwdContainerImpl(), fieldName)) +
+          "(" +
           readExpr +
           "))"
         : "__fwd_" + fieldName + "(" + readExpr + ")";
@@ -3618,8 +3621,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ? "(" +
           readExpr +
           " == null ? null : new " +
-          requireImpl(plan.bwdContainerImpl(), fieldName) +
-          "<>(" +
+          withDiamond(requireImpl(plan.bwdContainerImpl(), fieldName)) +
+          "(" +
           readExpr +
           "))"
         : "__bwd_" + fieldName + "(" + readExpr + ")";
@@ -4273,7 +4276,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (arguments.stream().anyMatch(Objects::isNull)) {
       return rawTypedOutDeclaration(tgtContainer, implFqn, orderingArg(kind, tgtContainer, implFqn, elementsPreserved));
     }
-    final var typeArgs = arguments.stream().map(String::valueOf).collect(Collectors.joining(", "));
+    final var typeArgs = typeArgumentClause(
+      implFqn,
+      arguments.stream().map(String::valueOf).collect(Collectors.joining(", "))
+    );
     return outDeclaration(
       sizedAlloc(implFqn, typeArgs, orderingArg(kind, tgtContainer, implFqn, elementsPreserved)),
       false
@@ -4357,7 +4363,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       .stream()
       .map(String::valueOf)
       .collect(Collectors.joining(", "));
-    return sizedAlloc(implFqn, args, orderingArg(kind, container, implFqn, elementsPreserved));
+    return sizedAlloc(implFqn, "<" + args + ">", orderingArg(kind, container, implFqn, elementsPreserved));
   }
 
   /**
@@ -4414,26 +4420,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       bound instanceof DeclaredType declared &&
       ((TypeElement) declared.asElement()).getQualifiedName().contentEquals("java.lang.Object");
     if (unbounded) return instantiable(argument);
-    if (bound == null || mentionsTypeVariable(bound)) return null;
+    if (bound == null || MirrorProps.typeVariableIn(bound)) return null;
     final var upper = wildcard.getExtendsBound();
     if (upper == null) return bound;
     // An upper bound outside the parameter's leaves no type that is both within the bound and
     // assignable to the field, so nothing can be written.
     return processingEnv.getTypeUtils().isAssignable(upper, bound) ? upper : null;
-  }
-
-  private static boolean mentionsTypeVariable(final TypeMirror type) {
-    if (type.getKind() == TypeKind.TYPEVAR) return true;
-    if (type instanceof WildcardType wildcard) {
-      return (
-        (wildcard.getExtendsBound() != null && mentionsTypeVariable(wildcard.getExtendsBound())) ||
-        (wildcard.getSuperBound() != null && mentionsTypeVariable(wildcard.getSuperBound()))
-      );
-    }
-    return (
-      type instanceof DeclaredType declared &&
-      declared.getTypeArguments().stream().anyMatch(BridgeProcessor::mentionsTypeVariable)
-    );
   }
 
   /**

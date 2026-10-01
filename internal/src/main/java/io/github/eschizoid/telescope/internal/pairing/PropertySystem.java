@@ -101,6 +101,14 @@ public interface PropertySystem<T> {
   /** A wildcard's lower bound, or null when {@code t} has none or is not a wildcard. */
   T lowerBound(T t);
 
+  /**
+   * Whether {@code t} is a type variable or has one anywhere inside it: among its type arguments,
+   * at any depth, in a wildcard's bounds, or as an array's component. {@code List<List<?>>} answers
+   * false and {@code List<E>} answers true, so a false answer means every part of the type names a
+   * type rather than a parameter waiting to be bound.
+   */
+  boolean mentionsTypeVariable(T t);
+
   /** Type arguments when {@code t} is parameterized; empty list otherwise. */
   List<T> typeArguments(T t);
 
