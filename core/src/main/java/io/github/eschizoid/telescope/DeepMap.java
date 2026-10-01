@@ -1203,7 +1203,8 @@ public final class DeepMap {
     // constructor falls to the array leaf below. This is a build-time shape decision (see
     // MhIso.supports), not a runtime fallback, and it stays lattice-routed — the composed handles
     // are the leaf Iso's transforms.
-    if (MhIso.supports(source, target)) {
+    // A write hint naming another writer than the setters is honoured by declining the fold.
+    if (MhIso.supports(source, target) && srcRefl.foldsSetters(source) && tgtRefl.foldsSetters(target)) {
       return MhIso.pair(
         source,
         target,
