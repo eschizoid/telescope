@@ -14,8 +14,10 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.regex.Pattern;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -931,6 +933,409 @@ class CrossPathCorpusTest {
     } else {
       final var add = Collection.class.getMethod("add", Object.class);
       for (final var leaf : leaves) add.invoke(instance, leaf);
+    }
+    return instance;
+  }
+
+  /**
+   * One pairing with a class that declares no type parameters of its own on at least one side: the
+   * two declared field types, what each input element is built as, and what both paths owe.
+   *
+   * <p>{@code %1$s} is the cell's prefix and {@code %2$s} the same prefix qualified by the package,
+   * for the class a rebuilt container is reported as. {@code input} is {@code str} for the element
+   * values as strings, {@code leaf} for each as a record, {@code leafList} and {@code leafOpt} for
+   * each record inside a list or an optional, and {@code strList} for each string inside a list.
+   */
+  private record FixedPairing(String name, String src, String tgt, String input, String owed) {}
+
+  /**
+   * The classes a fixed pairing may name, by simple name without the prefix. A cell declares only
+   * those its two fields mention.
+   */
+  private static final Map<String, String> FIXED_DECLARATIONS = Map.ofEntries(
+    Map.entry("StrList", "extends java.util.ArrayList<String>"),
+    Map.entry("StrList2", "extends java.util.ArrayList<String>"),
+    Map.entry("LeafList", "extends java.util.ArrayList<%1$sLeaf>"),
+    Map.entry("LeafDtoList", "extends java.util.ArrayList<%1$sLeafDto>"),
+    Map.entry("Tagged", "<T, E> extends java.util.ArrayList<E>"),
+    Map.entry("StrSet", "extends java.util.LinkedHashSet<String>"),
+    Map.entry("StrSet2", "extends java.util.LinkedHashSet<String>"),
+    Map.entry("LeafSet", "extends java.util.LinkedHashSet<%1$sLeaf>"),
+    Map.entry("LeafDtoSet", "extends java.util.LinkedHashSet<%1$sLeafDto>"),
+    Map.entry("GSet", "<T, E> extends java.util.LinkedHashSet<E>"),
+    Map.entry("StrMap", "extends java.util.LinkedHashMap<String, String>"),
+    Map.entry("StrMap2", "extends java.util.LinkedHashMap<String, String>"),
+    Map.entry("LeafMap", "extends java.util.LinkedHashMap<String, %1$sLeaf>"),
+    Map.entry("LeafDtoMap", "extends java.util.LinkedHashMap<String, %1$sLeafDto>"),
+    Map.entry("GMap", "<T, V> extends java.util.LinkedHashMap<String, V>"),
+    Map.entry("StrTree", "extends java.util.TreeSet<String>"),
+    Map.entry("StrTree2", "extends java.util.TreeSet<String>"),
+    Map.entry("LeafTree", "extends java.util.TreeSet<%1$sLeaf>"),
+    Map.entry("LeafDtoTree", "extends java.util.TreeSet<%1$sLeafDto>"),
+    Map.entry("LeafTreeMap", "extends java.util.TreeMap<String, %1$sLeaf>"),
+    Map.entry("LeafDtoTreeMap", "extends java.util.TreeMap<String, %1$sLeafDto>"),
+    Map.entry("Groups", "extends java.util.ArrayList<java.util.List<%1$sLeaf>>"),
+    Map.entry("MapOfLists", "extends java.util.LinkedHashMap<String, java.util.List<%1$sLeaf>>"),
+    Map.entry("OptList", "extends java.util.ArrayList<java.util.Optional<%1$sLeaf>>"),
+    Map.entry("WildMap", "extends java.util.LinkedHashMap<String, java.util.List<?>>")
+  );
+
+  private static final String DTOS = "[%1$sLeafDto[v=b], %1$sLeafDto[v=a]]";
+  private static final String DTO_MAP = "{k1=%1$sLeafDto[v=b], k2=%1$sLeafDto[v=a]}";
+  private static final String SORTED_DTOS = "[%1$sLeafDto[v=a], %1$sLeafDto[v=b]]";
+
+  /**
+   * A class declaring no type parameters against an interface, a JDK class, a generic subtype and
+   * another such class, for a list, a set, a map and the sorted families, with scalar and record
+   * elements, and with fixed arguments that are themselves parameterized.
+   */
+  private static final List<FixedPairing> FIXED_PAIRINGS = List.of(
+    new FixedPairing(
+      "StrList -> List",
+      "%1$sStrList",
+      "java.util.List<String>",
+      "str",
+      "[b, a] in java.util.ArrayList"
+    ),
+    new FixedPairing("List -> StrList", "java.util.List<String>", "%1$sStrList", "str", "[b, a] in %2$sStrList"),
+    new FixedPairing(
+      "LeafList -> List",
+      "%1$sLeafList",
+      "java.util.List<%1$sLeafDto>",
+      "leaf",
+      DTOS + " in java.util.ArrayList"
+    ),
+    new FixedPairing(
+      "List -> LeafDtoList",
+      "java.util.List<%1$sLeaf>",
+      "%1$sLeafDtoList",
+      "leaf",
+      DTOS + " in %2$sLeafDtoList"
+    ),
+    new FixedPairing(
+      "StrList -> ArrayList",
+      "%1$sStrList",
+      "java.util.ArrayList<String>",
+      "str",
+      "[b, a] in java.util.ArrayList"
+    ),
+    new FixedPairing(
+      "LeafList -> LinkedList",
+      "%1$sLeafList",
+      "java.util.LinkedList<%1$sLeafDto>",
+      "leaf",
+      DTOS + " in java.util.LinkedList"
+    ),
+    new FixedPairing("StrList -> Tagged", "%1$sStrList", "%1$sTagged<Long, String>", "str", "[b, a] in %2$sTagged"),
+    new FixedPairing("Tagged -> StrList", "%1$sTagged<String, String>", "%1$sStrList", "str", "[b, a] in %2$sStrList"),
+    new FixedPairing(
+      "LeafList -> Tagged",
+      "%1$sLeafList",
+      "%1$sTagged<Long, %1$sLeafDto>",
+      "leaf",
+      DTOS + " in %2$sTagged"
+    ),
+    new FixedPairing(
+      "Tagged -> LeafDtoList",
+      "%1$sTagged<String, %1$sLeaf>",
+      "%1$sLeafDtoList",
+      "leaf",
+      DTOS + " in %2$sLeafDtoList"
+    ),
+    new FixedPairing("StrList -> StrList2", "%1$sStrList", "%1$sStrList2", "str", "[b, a] in %2$sStrList2"),
+    new FixedPairing(
+      "LeafList -> LeafDtoList",
+      "%1$sLeafList",
+      "%1$sLeafDtoList",
+      "leaf",
+      DTOS + " in %2$sLeafDtoList"
+    ),
+    new FixedPairing(
+      "StrSet -> Set",
+      "%1$sStrSet",
+      "java.util.Set<String>",
+      "str",
+      "[b, a] in java.util.LinkedHashSet"
+    ),
+    new FixedPairing(
+      "Set -> LeafDtoSet",
+      "java.util.Set<%1$sLeaf>",
+      "%1$sLeafDtoSet",
+      "leaf",
+      DTOS + " in %2$sLeafDtoSet"
+    ),
+    new FixedPairing(
+      "LeafSet -> Set",
+      "%1$sLeafSet",
+      "java.util.Set<%1$sLeafDto>",
+      "leaf",
+      DTOS + " in java.util.LinkedHashSet"
+    ),
+    new FixedPairing(
+      "LeafSet -> LinkedHashSet",
+      "%1$sLeafSet",
+      "java.util.LinkedHashSet<%1$sLeafDto>",
+      "leaf",
+      DTOS + " in java.util.LinkedHashSet"
+    ),
+    new FixedPairing("LeafSet -> GSet", "%1$sLeafSet", "%1$sGSet<Long, %1$sLeafDto>", "leaf", DTOS + " in %2$sGSet"),
+    new FixedPairing(
+      "GSet -> LeafDtoSet",
+      "%1$sGSet<String, %1$sLeaf>",
+      "%1$sLeafDtoSet",
+      "leaf",
+      DTOS + " in %2$sLeafDtoSet"
+    ),
+    new FixedPairing("StrSet -> StrSet2", "%1$sStrSet", "%1$sStrSet2", "str", "[b, a] in %2$sStrSet2"),
+    new FixedPairing("LeafSet -> LeafDtoSet", "%1$sLeafSet", "%1$sLeafDtoSet", "leaf", DTOS + " in %2$sLeafDtoSet"),
+    new FixedPairing(
+      "StrMap -> Map",
+      "%1$sStrMap",
+      "java.util.Map<String, String>",
+      "str",
+      "{k1=b, k2=a} in java.util.LinkedHashMap"
+    ),
+    new FixedPairing(
+      "Map -> LeafDtoMap",
+      "java.util.Map<String, %1$sLeaf>",
+      "%1$sLeafDtoMap",
+      "leaf",
+      DTO_MAP + " in %2$sLeafDtoMap"
+    ),
+    new FixedPairing(
+      "LeafMap -> Map",
+      "%1$sLeafMap",
+      "java.util.Map<String, %1$sLeafDto>",
+      "leaf",
+      DTO_MAP + " in java.util.LinkedHashMap"
+    ),
+    new FixedPairing(
+      "LeafMap -> LinkedHashMap",
+      "%1$sLeafMap",
+      "java.util.LinkedHashMap<String, %1$sLeafDto>",
+      "leaf",
+      DTO_MAP + " in java.util.LinkedHashMap"
+    ),
+    new FixedPairing("LeafMap -> GMap", "%1$sLeafMap", "%1$sGMap<Long, %1$sLeafDto>", "leaf", DTO_MAP + " in %2$sGMap"),
+    new FixedPairing(
+      "GMap -> LeafDtoMap",
+      "%1$sGMap<Long, %1$sLeaf>",
+      "%1$sLeafDtoMap",
+      "leaf",
+      DTO_MAP + " in %2$sLeafDtoMap"
+    ),
+    new FixedPairing("StrMap -> StrMap2", "%1$sStrMap", "%1$sStrMap2", "str", "{k1=b, k2=a} in %2$sStrMap2"),
+    new FixedPairing("LeafMap -> LeafDtoMap", "%1$sLeafMap", "%1$sLeafDtoMap", "leaf", DTO_MAP + " in %2$sLeafDtoMap"),
+    new FixedPairing(
+      "StrTree -> SortedSet",
+      "%1$sStrTree",
+      "java.util.SortedSet<String>",
+      "str",
+      "[a, b] in java.util.TreeSet"
+    ),
+    new FixedPairing(
+      "SortedSet -> StrTree",
+      "java.util.SortedSet<String>",
+      "%1$sStrTree",
+      "str",
+      "[a, b] in %2$sStrTree"
+    ),
+    new FixedPairing("StrTree -> StrTree2", "%1$sStrTree", "%1$sStrTree2", "str", "[a, b] in %2$sStrTree2"),
+    new FixedPairing(
+      "LeafTree -> SortedSet",
+      "%1$sLeafTree",
+      "java.util.SortedSet<%1$sLeafDto>",
+      "leaf",
+      SORTED_DTOS + " in java.util.TreeSet"
+    ),
+    new FixedPairing(
+      "LeafTree -> LeafDtoTree",
+      "%1$sLeafTree",
+      "%1$sLeafDtoTree",
+      "leaf",
+      SORTED_DTOS + " in %2$sLeafDtoTree"
+    ),
+    new FixedPairing(
+      "LeafTreeMap -> SortedMap",
+      "%1$sLeafTreeMap",
+      "java.util.SortedMap<String, %1$sLeafDto>",
+      "leaf",
+      DTO_MAP + " in java.util.TreeMap"
+    ),
+    new FixedPairing(
+      "SortedMap -> LeafDtoTreeMap",
+      "java.util.SortedMap<String, %1$sLeaf>",
+      "%1$sLeafDtoTreeMap",
+      "leaf",
+      DTO_MAP + " in %2$sLeafDtoTreeMap"
+    ),
+    new FixedPairing(
+      "LeafTreeMap -> LeafDtoTreeMap",
+      "%1$sLeafTreeMap",
+      "%1$sLeafDtoTreeMap",
+      "leaf",
+      DTO_MAP + " in %2$sLeafDtoTreeMap"
+    ),
+    new FixedPairing(
+      "Groups -> List of lists",
+      "%1$sGroups",
+      "java.util.List<java.util.List<%1$sLeafDto>>",
+      "leafList",
+      "[[%1$sLeafDto[v=b]], [%1$sLeafDto[v=a]]] in java.util.ArrayList"
+    ),
+    new FixedPairing(
+      "MapOfLists -> Map of lists",
+      "%1$sMapOfLists",
+      "java.util.Map<String, java.util.List<%1$sLeafDto>>",
+      "leafList",
+      "{k1=[%1$sLeafDto[v=b]], k2=[%1$sLeafDto[v=a]]} in java.util.LinkedHashMap"
+    ),
+    // The optionals hold the same element on both sides, so this row asks only whether the
+    // element type is found. Converting a record inside an optional that is itself a
+    // container's element is a separate question, which the two paths answer differently.
+    new FixedPairing(
+      "OptList -> List of optionals",
+      "%1$sOptList",
+      "java.util.List<java.util.Optional<%1$sLeaf>>",
+      "leafOpt",
+      "[Optional[%1$sLeaf[v=b]], Optional[%1$sLeaf[v=a]]] in java.util.ArrayList"
+    ),
+    new FixedPairing(
+      "WildMap -> Map of wildcard lists",
+      "%1$sWildMap",
+      "java.util.Map<String, java.util.List<?>>",
+      "strList",
+      "{k1=[b], k2=[a]} in java.util.LinkedHashMap"
+    )
+  );
+
+  @Test
+  @DisplayName("a class declaring no type parameters converts the same way on both paths, whatever it is paired with")
+  void aFixedArgumentSubtypeConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    // Such a class is written without type arguments and keeps its element types on a supertype,
+    // so each path has to find them there. Pairing it against every other way of declaring the
+    // same container, and against another of its own kind with different elements, is what shows
+    // whether the elements are found and converted rather than carried across as they are.
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var pairing : FIXED_PAIRINGS) {
+      final var prefix = "Fx" + index++;
+      final var qualified = PACKAGE + "." + prefix;
+      final var srcField = pairing.src().formatted(prefix);
+      final var tgtField = pairing.tgt().formatted(prefix);
+      final var sources = fixedSources(prefix, srcField, tgtField);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(
+        plain.success(),
+        () -> pairing.name() + " should compile without the processor: " + plain.errorMessages()
+      );
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+
+      final var classes = plain.define(MethodHandles.lookup());
+      final var src = classes.get(qualified + "Src");
+      final var tgt = classes.get(qualified + "Tgt");
+      final var source = src.getConstructors()[0].newInstance(fixedInput(classes, prefix, srcField, pairing.input()));
+      final var items = tgt.getMethod("items");
+
+      final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
+      final var generated =
+        forward == null
+          ? Outcome.refused(processed.errorMessages().strip())
+          : run(items, () -> forward.invoke(null, source));
+      final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+
+      final var owed =
+        prefix + "Tgt[items=" + pairing.owed().formatted(prefix, qualified).replaceFirst(" in ", "] in ");
+      for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+        if (!owed.equals(side.getValue().toString())) {
+          failures.add(pairing.name() + ": " + side.getKey() + " gave " + side.getValue() + ", owed " + owed);
+        }
+      }
+    }
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " fixed pairing(s) failed:\n  " + String.join("\n  ", failures)
+    );
+  }
+
+  private static JavaFileObject[] fixedSources(final String prefix, final String srcField, final String tgtField) {
+    final var head = "package " + PACKAGE + ";\n";
+    final var files = new ArrayList<JavaFileObject>();
+    for (final var leaf : List.of("Leaf", "LeafDto")) {
+      final var name = prefix + leaf;
+      files.add(
+        source(
+          name,
+          head +
+            "public record " +
+            name +
+            "(String v) implements Comparable<" +
+            name +
+            "> {\n  public int compareTo(final " +
+            name +
+            " o) { return v.compareTo(o.v); }\n}\n"
+        )
+      );
+    }
+    for (final var declaration : FIXED_DECLARATIONS.entrySet()) {
+      final var name = prefix + declaration.getKey();
+      final var mentioned = Pattern.compile("\\b" + name + "\\b");
+      if (!mentioned.matcher(srcField).find() && !mentioned.matcher(tgtField).find()) continue;
+      files.add(source(name, head + "public class " + name + " " + declaration.getValue().formatted(prefix) + " {}\n"));
+    }
+    files.add(
+      source(
+        prefix + "Src",
+        head +
+          "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(" +
+          prefix +
+          "Tgt.class)\npublic record " +
+          prefix +
+          "Src(" +
+          srcField +
+          " items) {}\n"
+      )
+    );
+    files.add(source(prefix + "Tgt", head + "public record " + prefix + "Tgt(" + tgtField + " items) {}\n"));
+    return files.toArray(JavaFileObject[]::new);
+  }
+
+  /**
+   * The source container for a fixed pairing: the declared class itself where the cell declares it,
+   * and otherwise the JDK class a field of that interface would hold, filled with {@link #VALUES}.
+   */
+  private static Object fixedInput(
+    final Map<String, Class<?>> classes,
+    final String prefix,
+    final String declared,
+    final String input
+  ) throws ReflectiveOperationException {
+    final var raw = declared.contains("<") ? declared.substring(0, declared.indexOf('<')) : declared;
+    final Class<?> type = raw.startsWith(prefix)
+      ? classes.get(PACKAGE + "." + raw)
+      : switch (raw) {
+          case "java.util.Set" -> LinkedHashSet.class;
+          case "java.util.SortedSet" -> TreeSet.class;
+          case "java.util.Map" -> LinkedHashMap.class;
+          case "java.util.SortedMap" -> TreeMap.class;
+          default -> ArrayList.class;
+        };
+    final var instance = type.getConstructor().newInstance();
+    final var leaf = classes.get(PACKAGE + "." + prefix + "Leaf").getConstructor(String.class);
+    var key = 0;
+    for (final var value : VALUES) {
+      final Object element = switch (input) {
+        case "leaf" -> leaf.newInstance(value);
+        case "leafList" -> List.of(leaf.newInstance(value));
+        case "leafOpt" -> Optional.of(leaf.newInstance(value));
+        case "strList" -> List.of(value);
+        default -> value;
+      };
+      if (instance instanceof Map<?, ?>) {
+        Map.class.getMethod("put", Object.class, Object.class).invoke(instance, "k" + ++key, element);
+      } else {
+        Collection.class.getMethod("add", Object.class).invoke(instance, element);
+      }
     }
     return instance;
   }

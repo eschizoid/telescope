@@ -181,6 +181,22 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public boolean mentionsTypeVariable(final Type t) {
+    if (t instanceof TypeVariable<?>) return true;
+    if (t instanceof GenericArrayType array) return mentionsTypeVariable(array.getGenericComponentType());
+    if (t instanceof WildcardType wildcard) {
+      return anyMentionsTypeVariable(wildcard.getUpperBounds()) || anyMentionsTypeVariable(wildcard.getLowerBounds());
+    }
+    if (!(t instanceof ParameterizedType pt)) return false;
+    if (pt.getOwnerType() != null && mentionsTypeVariable(pt.getOwnerType())) return true;
+    return anyMentionsTypeVariable(pt.getActualTypeArguments());
+  }
+
+  private boolean anyMentionsTypeVariable(final Type[] types) {
+    return Arrays.stream(types).anyMatch(this::mentionsTypeVariable);
+  }
+
+  @Override
   public List<Type> typeArguments(final Type t) {
     return t instanceof ParameterizedType pt ? List.of(pt.getActualTypeArguments()) : List.of();
   }

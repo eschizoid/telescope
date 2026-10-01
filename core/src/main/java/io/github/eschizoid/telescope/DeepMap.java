@@ -879,10 +879,12 @@ public final class DeepMap {
       return primitiveWrapperIso((Class<?>) srcType, (Class<?>) tgtType);
     }
 
-    // (a.2) Same-kind Collection / Map subtype pair (raw container subclasses like `class
-    //       ImageUrls extends ArrayList<ImageUrl>` on both sides) — copy elements via the target's
-    //       no-arg constructor + `addAll` / `putAll`. The kind-discriminator and allocability
-    //       gates live on the shared spec; the decision only fires when the copy is buildable.
+    // (a.2) Same-kind Collection / Map pair written without type arguments on both sides, whose
+    //       elements need no conversion: two classes declaring no type parameters that fix the
+    //       same element types (`class ImageUrls extends ArrayList<ImageUrl>`), or a generic class
+    //       used raw on either side — copy elements via the target's no-arg constructor + `addAll`
+    //       / `putAll`. The element-type, kind-discriminator and allocability gates live on the
+    //       shared spec; the decision only fires when the copy is buildable.
     if (decision instanceof PairDecision.CollectionCopy) {
       return ContainerLifts.collectionCopyIso((Class<?>) srcType, (Class<?>) tgtType);
     }

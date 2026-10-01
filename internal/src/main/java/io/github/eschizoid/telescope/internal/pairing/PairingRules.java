@@ -43,9 +43,11 @@ import java.util.stream.Collectors;
  * <p>Decision order in {@link #decidePair} is load-bearing — it IS the runtime lattice: identity →
  * primitive/wrapper → same-kind subtype copy → reflectable recursion → cross-{@code Optional}
  * bridge → same-kind container lift → incompatible. Subtype copy must precede reflectable
- * recursion: a raw container subclass ({@code class ImageUrls extends ArrayList<ImageUrl>}) counts
- * as reflectable, and bean-decomposing it would fail at the JDK boundary (private lookup into
- * {@code java.base} is rejected) — the copy branch intercepts those pairs first.
+ * recursion: a container subclass that declares no type parameters of its own ({@code class
+ * ImageUrls extends ArrayList<ImageUrl>}) counts as reflectable, and bean-decomposing it would fail
+ * at the JDK boundary (private lookup into {@code java.base} is rejected) — the copy branch
+ * intercepts those pairs first, and a pair of them whose element types differ skips recursion for
+ * the container lift.
  *
  * @param <T> the world's type handle
  */
@@ -66,27 +68,33 @@ public final class PairingRules<T> {
       // (a.1) Primitive ↔ wrapper over the same scalar — null-safe box/unbox.
       if (primitiveWrapperPair(srcType, tgtType)) return new PairDecision.PrimitiveWrapper<>();
 
-      // (a.2) Same-kind Collection / Map subtype pair (raw container subclasses on both sides) —
-      // element copy, gated on kind-discriminator agreement AND allocability so a provably
-      // infeasible copy falls through to the remaining branches exactly like the runtime. UNKNOWN
-      // allocability (the compile-time world can't probe allocators) resolves in the ACCEPTING
-      // direction here: CollectionCopy/MapCopy are terminal accepts, so optimism can only defer an
-      // error to the construction backstop, never invent one.
-      if (
-        sameKindCollection(srcType, tgtType) &&
-        props.copyAllocability(srcType, tgtType) != PropertySystem.Allocability.NOT_ALLOCABLE
-      ) {
-        return new PairDecision.CollectionCopy<>();
-      }
-      if (
-        sameKindMap(srcType, tgtType) &&
-        props.copyAllocability(srcType, tgtType) != PropertySystem.Allocability.NOT_ALLOCABLE
-      ) {
-        return new PairDecision.MapCopy<>();
-      }
+      // (a.2) Same-kind Collection / Map pair written without type arguments on both sides:
+      // element copy, which converts nothing. It is right only where there is nothing to convert.
+      // The two sides fix the same element types, and the same key type for a map, or at least one
+      // side is a generic class used raw and so names no element type at all. Two classes that
+      // declare no type parameters of their own and fix different element types, such as `Leaves
+      // extends ArrayList<Leaf>` against `LeafDtos extends ArrayList<LeafDto>`, skip both this and
+      // (b) for the container lift in (c), which converts each element.
+      //
+      // The copy is gated on kind-discriminator agreement AND allocability so a provably infeasible
+      // copy falls through to the remaining branches exactly like the runtime. UNKNOWN allocability
+      // (the compile-time world can't probe allocators) resolves in the ACCEPTING direction here:
+      // CollectionCopy/MapCopy are terminal accepts, so optimism can only defer an error to the
+      // construction backstop, never invent one.
+      final var collection = sameKindCollection(srcType, tgtType);
+      final var map = sameKindMap(srcType, tgtType);
+      final var lift =
+        (collection && elementTypesDiffer(srcType, tgtType, WellKnown.COLLECTION)) ||
+        (map && elementTypesDiffer(srcType, tgtType, WellKnown.MAP));
+      if (!lift) {
+        final var allocable =
+          (collection || map) && props.copyAllocability(srcType, tgtType) != PropertySystem.Allocability.NOT_ALLOCABLE;
+        if (collection && allocable) return new PairDecision.CollectionCopy<>();
+        if (map && allocable) return new PairDecision.MapCopy<>();
 
-      // (b) Both reflectable (record or bean) → recurse into the nested pair.
-      if (reflectable(srcType) && reflectable(tgtType)) return new PairDecision.RecursePair<>();
+        // (b) Both reflectable (record or bean) → recurse into the nested pair.
+        if (reflectable(srcType) && reflectable(tgtType)) return new PairDecision.RecursePair<>();
+      }
     }
 
     // (c) Container views. Cross-Optional bridge first, then same-kind lift.
@@ -212,20 +220,21 @@ public final class PairingRules<T> {
   }
 
   /**
-   * The container view of {@code t}, or {@code null} when {@code t} is not a parameterized
-   * container the auto-lift understands. Selection rules: {@code Optional} (final, exact) →
-   * OPTIONAL; any {@code List} subtype, and the {@code Deque} and {@code Queue} interfaces by name
-   * → LIST; any {@code Set} subtype → SET; any {@code Map} subtype whose key argument is a plain
-   * class handle → MAP_VALUES (a non-class key — wildcard, type variable, or parameterized type —
-   * defeats the key-equality guarantee, so the type is not treated as a liftable container); the
-   * {@code Collection} interface by name → COLLECTION, which names no shape and is settled against
-   * the other side of the pair by {@link #settledAgainst}.
+   * The container view of {@code t}, or {@code null} when {@code t} is not a container the
+   * auto-lift understands with element types it can name. A class that declares no type parameters
+   * of its own is viewed through the supertype that fixes them; a generic class used raw has none
+   * to name and presents no view. Selection rules: {@code Optional} (final, exact) → OPTIONAL; any
+   * {@code List} subtype, and the {@code Deque} and {@code Queue} interfaces by name → LIST; any
+   * {@code Set} subtype → SET; any {@code Map} subtype whose key argument is a plain class handle →
+   * MAP_VALUES (a non-class key — wildcard, type variable, or parameterized type — defeats the
+   * key-equality guarantee, so the type is not treated as a liftable container); the {@code
+   * Collection} interface by name → COLLECTION, which names no shape and is settled against the
+   * other side of the pair by {@link #settledAgainst}.
    */
   public ContainerView<T> containerViewOf(final T t) {
-    // Raw subclasses retain the explicit shallow-copy policy above. Parameterized subclasses
-    // must be viewed through the container supertype: their own parameters can be reordered,
-    // fixed, or unrelated to the element/key types.
-    if (props.typeArguments(t).isEmpty()) return null;
+    // A container subtype is viewed through its container supertype rather than through its own
+    // parameters, which can be reordered, fixed, or unrelated to the element and key types.
+    final var declaresNoArguments = props.typeArguments(t).isEmpty();
     final var raw = props.rawType(t);
     // Order decides the answer where a type satisfies more than one: a List is asked as a List
     // before it is asked as a Collection. The last three are what a type reaches only by being
@@ -248,6 +257,13 @@ public final class PairingRules<T> {
       // an order, and that is answerable.
       if (GENERAL.contains(kind) && !props.typeName(raw).equals(GENERAL_NAMES.get(kind))) continue;
       final var args = props.typeArgumentsAs(t, kind);
+      // A type written with no arguments of its own is one of two unlike things, and the supertype
+      // view tells them apart. A class that declares no type parameters fixes its element types on
+      // its supertype, so they resolve there to types, which may themselves be parameterized, as
+      // List<Leaf> and List<?> are. A generic class used raw leaves its parameters unbound, so what
+      // resolves is a type variable, or nothing: nobody has said what its elements are, and it
+      // presents no view.
+      if (declaresNoArguments && args.stream().anyMatch(props::mentionsTypeVariable)) return null;
       if (kind == WellKnown.MAP) {
         if (args.size() != 2 || !props.isClassType(args.getFirst())) return null;
         return new ContainerView<>(ContainerView.Kind.MAP_VALUES, args.get(1), args.getFirst(), raw);
@@ -329,6 +345,29 @@ public final class PairingRules<T> {
   public boolean sameKindMap(final T a, final T b) {
     if (!props.isSubtypeOf(a, WellKnown.MAP) || !props.isSubtypeOf(b, WellKnown.MAP)) return false;
     return props.isSubtypeOf(a, WellKnown.SORTED_MAP) == props.isSubtypeOf(b, WellKnown.SORTED_MAP);
+  }
+
+  /**
+   * Whether two containers of one kind both name their arguments as that kind, element and key
+   * alike, and name different ones, so that carrying an element across unchanged would put a value
+   * of one type in a container of another. A side whose arguments do not resolve to types, which is
+   * what a generic class used raw presents, names nothing to differ from, and answers false.
+   */
+  private boolean elementTypesDiffer(final T a, final T b, final WellKnown kind) {
+    final var aArgs = props.typeArgumentsAs(a, kind);
+    final var bArgs = props.typeArgumentsAs(b, kind);
+    if (!namesTypes(aArgs) || !namesTypes(bArgs) || aArgs.size() != bArgs.size()) return false;
+    for (int i = 0; i < aArgs.size(); i++) {
+      if (!props.sameType(aArgs.get(i), bArgs.get(i))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether resolved arguments name types: there is at least one, and none holds a type variable.
+   */
+  private boolean namesTypes(final List<T> arguments) {
+    return !arguments.isEmpty() && arguments.stream().noneMatch(props::mentionsTypeVariable);
   }
 
   /**
