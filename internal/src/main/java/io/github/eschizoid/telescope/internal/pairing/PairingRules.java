@@ -1,11 +1,35 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem.WellKnown;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Deque;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.NavigableSet;
+import java.util.Queue;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.Stack;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.Vector;
+import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.stream.Collectors;
 
 /**
  * The shared pairing decision rules — one implementation, two consumers. The runtime mapper
@@ -290,4 +314,132 @@ public final class PairingRules<T> {
    * target names with no source counterpart, and source names with no consumer.
    */
   public record MatchResult(List<String> matched, List<String> unmatchedTargets, List<String> unmatchedSources) {}
+
+  /**
+   * The allocation table: which class a declared container is rebuilt as, and what its constructor
+   * is told about the source.
+   *
+   * <p>How the chosen constructor is called is not decided here. A list's {@code int} is an element
+   * count and a hash container's is a table capacity, which for the same elements is a different
+   * number, and {@code WeakHashMap} has no factory to do that arithmetic — so the call belongs with
+   * the renderer that makes it.
+   *
+   * <p>Each entry carries the family it belongs to, because the same name must not answer for a
+   * kind it has nothing to do with. Asking the map family about a {@code List} is a question with
+   * no good answer, and one refused while a plan is built rather than answered wrongly and cast at
+   * the first conversion.
+   *
+   * <p>Names come from class literals rather than string constants, so a typo cannot make an entry
+   * dead and a rename cannot leave it behind.
+   */
+  private static final Map<String, Entry> BY_DECLARED_NAME = Map.ofEntries(
+    list(List.class, ArrayList.class, Allocation.Call.COUNT),
+    list(ArrayList.class, ArrayList.class, Allocation.Call.COUNT),
+    list(LinkedList.class, LinkedList.class, Allocation.Call.NO_ARG),
+    list(Deque.class, ArrayDeque.class, Allocation.Call.COUNT),
+    list(Queue.class, ArrayDeque.class, Allocation.Call.COUNT),
+    list(Vector.class, Vector.class, Allocation.Call.COUNT),
+    list(Stack.class, Stack.class, Allocation.Call.NO_ARG),
+    set(Set.class, LinkedHashSet.class, Allocation.Call.TABLE_FACTORY),
+    set(LinkedHashSet.class, LinkedHashSet.class, Allocation.Call.TABLE_FACTORY),
+    set(HashSet.class, HashSet.class, Allocation.Call.TABLE_FACTORY),
+    set(TreeSet.class, TreeSet.class, Allocation.Call.ORDERING),
+    set(SortedSet.class, TreeSet.class, Allocation.Call.ORDERING),
+    set(NavigableSet.class, TreeSet.class, Allocation.Call.ORDERING),
+    set(ConcurrentSkipListSet.class, ConcurrentSkipListSet.class, Allocation.Call.ORDERING),
+    map(Map.class, LinkedHashMap.class, Allocation.Call.TABLE_FACTORY),
+    map(LinkedHashMap.class, LinkedHashMap.class, Allocation.Call.TABLE_FACTORY),
+    map(HashMap.class, HashMap.class, Allocation.Call.TABLE_FACTORY),
+    map(TreeMap.class, TreeMap.class, Allocation.Call.ORDERING),
+    map(SortedMap.class, TreeMap.class, Allocation.Call.ORDERING),
+    map(NavigableMap.class, TreeMap.class, Allocation.Call.ORDERING),
+    map(ConcurrentHashMap.class, ConcurrentHashMap.class, Allocation.Call.COUNT),
+    map(ConcurrentMap.class, ConcurrentHashMap.class, Allocation.Call.COUNT),
+    map(ConcurrentSkipListMap.class, ConcurrentSkipListMap.class, Allocation.Call.ORDERING),
+    map(IdentityHashMap.class, IdentityHashMap.class, Allocation.Call.COUNT),
+    map(WeakHashMap.class, WeakHashMap.class, Allocation.Call.TABLE_ARITHMETIC),
+    Map.entry(
+      EnumMap.class.getName(),
+      new Entry(
+        ContainerView.Kind.MAP_VALUES,
+        new Allocation.Refuse(
+          "EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg" +
+            " constructor (it needs the Class<K> key class). Use the codegen path" +
+            " or supply an explicit `Mapping.via(...)` row that constructs the" +
+            " EnumMap with its key class."
+        )
+      )
+    )
+  );
+
+  /** The families, computed once: the table's own iteration order is not meaningful. */
+  private static final Map<String, ContainerView.Kind> DECLARED_TYPES = BY_DECLARED_NAME.entrySet()
+    .stream()
+    .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, e -> e.getValue().family()));
+
+  /** One row: the family it answers for, and what it answers. */
+  private record Entry(ContainerView.Kind family, Allocation allocation) {}
+
+  private static Map.Entry<String, Entry> list(final Class<?> d, final Class<?> i, final Allocation.Call c) {
+    return row(ContainerView.Kind.LIST, d, i, c);
+  }
+
+  private static Map.Entry<String, Entry> set(final Class<?> d, final Class<?> i, final Allocation.Call c) {
+    return row(ContainerView.Kind.SET, d, i, c);
+  }
+
+  private static Map.Entry<String, Entry> map(final Class<?> d, final Class<?> i, final Allocation.Call c) {
+    return row(ContainerView.Kind.MAP_VALUES, d, i, c);
+  }
+
+  private static Map.Entry<String, Entry> row(
+    final ContainerView.Kind family,
+    final Class<?> declared,
+    final Class<?> impl,
+    final Allocation.Call call
+  ) {
+    return Map.entry(declared.getName(), new Entry(family, new Allocation.Build(impl.getName(), call)));
+  }
+
+  /**
+   * What this declared container is rebuilt as when it is being built as {@code kind}, or null when
+   * the table has no answer and the caller's own fallbacks decide.
+   *
+   * <p>Null is not a refusal. A type the table does not name may still be reachable another way — a
+   * public constructor bound at run time, a family default written into source — and answering for
+   * those belongs to the side doing the building. A type the table names for a different family is
+   * also null here, so a mismatch is refused where the caller refuses rather than answered with a
+   * container of the wrong shape.
+   */
+  public Allocation allocationFor(final T declared, final ContainerView.Kind kind) {
+    final var name = props.typeName(props.rawType(declared));
+    // A declaration that names no shape is rebuilt as whatever it was paired against. Collection is
+    // the union of the two, so the kind the pair settled on is the only thing that says which.
+    if (Collection.class.getName().equals(name)) {
+      return switch (kind) {
+        case SET -> new Allocation.Build(LinkedHashSet.class.getName(), Allocation.Call.TABLE_FACTORY);
+        case LIST -> new Allocation.Build(ArrayList.class.getName(), Allocation.Call.COUNT);
+        // A COLLECTION view is settled to one of the two before anything asks for an allocation,
+        // so answering it here would be answering a question nothing puts.
+        default -> null;
+      };
+    }
+    final var entry = BY_DECLARED_NAME.get(name);
+    return entry == null || entry.family() != kind ? null : entry.allocation();
+  }
+
+  /**
+   * The declared types the table answers for, with the family each answers in.
+   *
+   * <p>A side that renders these has to render all of them: an entry nothing renders is not a
+   * compile error, it is a container quietly built some other way. Exposing the set is what lets a
+   * renderer be checked against the decision rather than against a list kept in step by hand.
+   *
+   * <p>{@code Collection} is deliberately absent. It has no entry, because what it is rebuilt as
+   * depends on the kind its pair settled on rather than on the declaration, so it is answered in
+   * {@link #allocationFor} instead.
+   */
+  public static Map<String, ContainerView.Kind> declaredTypes() {
+    return DECLARED_TYPES;
+  }
 }
