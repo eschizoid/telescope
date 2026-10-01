@@ -10,10 +10,12 @@ import java.lang.reflect.Method;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
@@ -50,59 +52,98 @@ class CrossPathCorpusTest {
    * decides which of the two a cell owes.
    *
    * <p>{@code kind} decides how the input is built and how a rebuilt container renders. {@code
-   * ordered} decides how much of the rendering a cell can owe: every class here is compared across
-   * the two paths exactly, and only one that keeps insertion order is also held to a literal.
+   * order} decides how much of the rendering a cell can owe: a class that promises no order is
+   * compared by contents, and every other class is compared across the two paths exactly and held
+   * to a literal.
    */
-  private record Family(String name, String kind, String src, String tgt, String allocates, boolean ordered) {}
+  private record Family(String name, String kind, String src, String tgt, String allocates, Order order) {}
+
+  /**
+   * How much of a rebuilt container's rendering the cell owes. A sorted family's input is ordered
+   * by a comparator, so its literal is the order that comparator gives, and a rebuild that drops
+   * the comparator renders in natural order instead.
+   */
+  private enum Order {
+    NONE,
+    INSERTION,
+    SORTED,
+  }
 
   /**
    * The pairings: one per family either allocator table names, excluding those whose rebuild takes
-   * a comparator or a key class, plus {@code iterable}, which neither table names and which is here
-   * to hold that boundary. Ordering is a separate axis with its own in-flight work, and a cell that
-   * reorders would be measuring that instead of this.
+   * a key class, plus {@code iterable}, which neither table names and which is here to hold that
+   * boundary.
    */
   private static final List<Family> FAMILIES = List.of(
-    new Family("list/iface", "list", "java.util.List", "java.util.List", "java.util.ArrayList", true),
-    new Family("list/concrete", "list", "java.util.List", "java.util.ArrayList", "java.util.ArrayList", true),
-    new Family("collection", "list", "java.util.Collection", "java.util.Collection", "java.util.ArrayList", true),
+    new Family("list/iface", "list", "java.util.List", "java.util.List", "java.util.ArrayList", Order.INSERTION),
+    new Family(
+      "list/concrete",
+      "list",
+      "java.util.List",
+      "java.util.ArrayList",
+      "java.util.ArrayList",
+      Order.INSERTION
+    ),
+    new Family(
+      "collection",
+      "list",
+      "java.util.Collection",
+      "java.util.Collection",
+      "java.util.ArrayList",
+      Order.INSERTION
+    ),
     // Neither cell reads allocates: the scalar one is a pass-through and the converting one
     // is a
     // registered mutual refusal, which is the boundary this family is here to hold.
-    new Family("iterable", "list", "java.lang.Iterable", "java.lang.Iterable", "", true),
-    new Family("linkedlist", "list", "java.util.List", "java.util.LinkedList", "java.util.LinkedList", true),
-    new Family("deque", "list", "java.util.List", "java.util.Deque", "java.util.ArrayDeque", true),
-    new Family("queue", "list", "java.util.List", "java.util.Queue", "java.util.ArrayDeque", true),
-    new Family("vector", "list", "java.util.List", "java.util.Vector", "java.util.Vector", true),
-    new Family("stack", "list", "java.util.List", "java.util.Stack", "java.util.Stack", true),
+    new Family("iterable", "list", "java.lang.Iterable", "java.lang.Iterable", "", Order.INSERTION),
+    new Family("linkedlist", "list", "java.util.List", "java.util.LinkedList", "java.util.LinkedList", Order.INSERTION),
+    new Family("deque", "list", "java.util.List", "java.util.Deque", "java.util.ArrayDeque", Order.INSERTION),
+    new Family("queue", "list", "java.util.List", "java.util.Queue", "java.util.ArrayDeque", Order.INSERTION),
+    new Family("vector", "list", "java.util.List", "java.util.Vector", "java.util.Vector", Order.INSERTION),
+    new Family("stack", "list", "java.util.List", "java.util.Stack", "java.util.Stack", Order.INSERTION),
     new Family(
       "cowlist",
       "list",
       "java.util.List",
       "java.util.concurrent.CopyOnWriteArrayList",
       "java.util.concurrent.CopyOnWriteArrayList",
-      true
+      Order.INSERTION
     ),
-    new Family("set/iface", "set", "java.util.Set", "java.util.Set", "java.util.LinkedHashSet", true),
-    new Family("set/concrete", "set", "java.util.Set", "java.util.LinkedHashSet", "java.util.LinkedHashSet", true),
-    new Family("hashset", "set", "java.util.Set", "java.util.HashSet", "java.util.HashSet", false),
+    new Family("set/iface", "set", "java.util.Set", "java.util.Set", "java.util.LinkedHashSet", Order.INSERTION),
+    new Family(
+      "set/concrete",
+      "set",
+      "java.util.Set",
+      "java.util.LinkedHashSet",
+      "java.util.LinkedHashSet",
+      Order.INSERTION
+    ),
+    new Family("hashset", "set", "java.util.Set", "java.util.HashSet", "java.util.HashSet", Order.NONE),
     new Family(
       "cowset",
       "set",
       "java.util.Set",
       "java.util.concurrent.CopyOnWriteArraySet",
       "java.util.concurrent.CopyOnWriteArraySet",
-      true
+      Order.INSERTION
     ),
-    new Family("map/iface", "map", "java.util.Map", "java.util.Map", "java.util.LinkedHashMap", true),
-    new Family("map/concrete", "map", "java.util.Map", "java.util.LinkedHashMap", "java.util.LinkedHashMap", true),
-    new Family("hashmap", "map", "java.util.Map", "java.util.HashMap", "java.util.HashMap", false),
+    new Family("map/iface", "map", "java.util.Map", "java.util.Map", "java.util.LinkedHashMap", Order.INSERTION),
+    new Family(
+      "map/concrete",
+      "map",
+      "java.util.Map",
+      "java.util.LinkedHashMap",
+      "java.util.LinkedHashMap",
+      Order.INSERTION
+    ),
+    new Family("hashmap", "map", "java.util.Map", "java.util.HashMap", "java.util.HashMap", Order.NONE),
     new Family(
       "concurrentmap",
       "map",
       "java.util.Map",
       "java.util.concurrent.ConcurrentMap",
       "java.util.concurrent.ConcurrentHashMap",
-      false
+      Order.NONE
     ),
     new Family(
       "concurrenthashmap",
@@ -110,7 +151,7 @@ class CrossPathCorpusTest {
       "java.util.Map",
       "java.util.concurrent.ConcurrentHashMap",
       "java.util.concurrent.ConcurrentHashMap",
-      false
+      Order.NONE
     ),
     new Family(
       "identityhashmap",
@@ -118,9 +159,31 @@ class CrossPathCorpusTest {
       "java.util.Map",
       "java.util.IdentityHashMap",
       "java.util.IdentityHashMap",
-      false
+      Order.NONE
     ),
-    new Family("weakhashmap", "map", "java.util.Map", "java.util.WeakHashMap", "java.util.WeakHashMap", false)
+    new Family("weakhashmap", "map", "java.util.Map", "java.util.WeakHashMap", "java.util.WeakHashMap", Order.NONE),
+    new Family("sortedset/iface", "set", "java.util.Set", "java.util.SortedSet", "java.util.TreeSet", Order.SORTED),
+    new Family("navigableset", "set", "java.util.Set", "java.util.NavigableSet", "java.util.TreeSet", Order.SORTED),
+    new Family("treeset", "set", "java.util.Set", "java.util.TreeSet", "java.util.TreeSet", Order.SORTED),
+    new Family(
+      "skiplistset",
+      "set",
+      "java.util.Set",
+      "java.util.concurrent.ConcurrentSkipListSet",
+      "java.util.concurrent.ConcurrentSkipListSet",
+      Order.SORTED
+    ),
+    new Family("sortedmap/iface", "map", "java.util.Map", "java.util.SortedMap", "java.util.TreeMap", Order.SORTED),
+    new Family("navigablemap", "map", "java.util.Map", "java.util.NavigableMap", "java.util.TreeMap", Order.SORTED),
+    new Family("treemap", "map", "java.util.Map", "java.util.TreeMap", "java.util.TreeMap", Order.SORTED),
+    new Family(
+      "skiplistmap",
+      "map",
+      "java.util.Map",
+      "java.util.concurrent.ConcurrentSkipListMap",
+      "java.util.concurrent.ConcurrentSkipListMap",
+      Order.SORTED
+    )
   );
 
   /**
@@ -162,7 +225,18 @@ class CrossPathCorpusTest {
   private static final Map<String, Refusal> KNOWN_REFUSALS = Map.of(
     // Iterable is not a Collection subtype, so neither path's classifier gives it a shape.
     "iterable/record",
-    new Refusal("has incompatible types", "incompatible source/target shapes")
+    new Refusal("has incompatible types", "incompatible source/target shapes"),
+    // A sorted container orders by its elements' own compareTo unless it is given a
+    // comparator, and
+    // the converted element type implements nothing.
+    "sortedset/iface/record",
+    new Refusal("cannot be reused with changed element types", "cannot be reused with changed element types"),
+    "navigableset/record",
+    new Refusal("cannot be reused with changed element types", "cannot be reused with changed element types"),
+    "treeset/record",
+    new Refusal("cannot be reused with changed element types", "cannot be reused with changed element types"),
+    "skiplistset/record",
+    new Refusal("cannot be reused with changed element types", "cannot be reused with changed element types")
   );
 
   /**
@@ -233,7 +307,7 @@ class CrossPathCorpusTest {
           throw new IllegalStateException(cell + " could not be built", e);
         }
 
-        if (!generated.agreesWith(reflective, family.ordered())) {
+        if (!generated.agreesWith(reflective, family.order())) {
           diverged.add(cell);
           final var verdict = new Verdict(generated.refusal() == null, reflective.refusal() == null);
           if (!verdict.equals(KNOWN_DIVERGENCES.get(cell))) {
@@ -722,10 +796,17 @@ class CrossPathCorpusTest {
     if (!expectedElements.equals(outcome.elements())) {
       return java.util.Optional.of("both paths held " + outcome.elements() + ", expected " + expectedElements);
     }
-    if (!family.ordered()) return java.util.Optional.empty();
+    if (family.order() == Order.NONE) return java.util.Optional.empty();
+    // A sorted family's input is ordered by a reversing comparator, so the rendering it owes is the
+    // one that comparator produces; a rebuild that dropped it would render in natural order.
+    final var sorted = family.order() == Order.SORTED;
+    final var laid =
+      sorted && !family.kind().equals("map") ? rendered.stream().sorted(Comparator.reverseOrder()).toList() : rendered;
     final var body = family.kind().equals("map")
-      ? "{k1=" + rendered.get(0) + ", k2=" + rendered.get(1) + "}"
-      : "[" + rendered.get(0) + ", " + rendered.get(1) + "]";
+      ? (sorted
+          ? "{k2=" + laid.get(1) + ", k1=" + laid.get(0) + "}"
+          : "{k1=" + laid.get(0) + ", k2=" + laid.get(1) + "}")
+      : "[" + laid.get(0) + ", " + laid.get(1) + "]";
     final var expected = prefix + "Tgt[items=" + body + "]";
     return expected.equals(outcome.value())
       ? java.util.Optional.empty()
@@ -753,17 +834,27 @@ class CrossPathCorpusTest {
         yield list;
       }
       case "set" -> {
-        final var set = new InputSet<Object>();
+        // A sorted family's input carries a comparator, which is the only thing a rebuild of one
+        // can lose while producing a container of the right class holding the right elements.
+        final Collection<Object> set =
+          family.order() == Order.SORTED ? new TreeSet<>(REVERSED) : new InputSet<Object>();
         set.addAll(leaves);
         yield set;
       }
       default -> {
-        final var map = new InputMap<String, Object>();
+        final Map<String, Object> map =
+          family.order() == Order.SORTED ? new TreeMap<>(REVERSED) : new InputMap<String, Object>();
         for (var i = 0; i < leaves.size(); i++) map.put("k" + (i + 1), leaves.get(i));
         yield map;
       }
     };
   }
+
+  /**
+   * The order a sorted family's input is built in, so that a rebuild which drops the comparator
+   * renders differently from one that carries it.
+   */
+  private static final Comparator<Object> REVERSED = Comparator.comparing(String::valueOf).reversed();
 
   /**
    * What one path produced, or the refusal it made instead.
@@ -817,10 +908,10 @@ class CrossPathCorpusTest {
      * fail on a difference neither path owes the caller, and pass or fail per run. The contents and
      * the class are compared for every family either way.
      */
-    boolean agreesWith(final Outcome other, final boolean ordered) {
+    boolean agreesWith(final Outcome other, final Order order) {
       if (refusal != null || other.refusal != null) return refusal != null && other.refusal != null;
       if (!allocated.equals(other.allocated)) return false;
-      return ordered ? value.equals(other.value) : elements.equals(other.elements);
+      return order == Order.NONE ? elements.equals(other.elements) : value.equals(other.value);
     }
 
     @Override

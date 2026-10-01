@@ -7,13 +7,18 @@ import io.github.eschizoid.telescope.internal.pairing.Allocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
+import java.lang.reflect.WildcardType;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -38,6 +43,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 /**
  * Container-shape lifting for {@link DeepMap}: element-copy Isos for raw same-kind container
@@ -65,19 +71,28 @@ final class ContainerLifts {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> collectionCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
-    final var srcAlloc = Beans.intermediateAllocator(srcCls);
-    final var tgtAlloc = Beans.intermediateAllocator(tgtCls);
-    if (srcAlloc.get() == null || tgtAlloc.get() == null) return null;
+    final var srcSupplier = Beans.intermediateAllocator(srcCls);
+    final var tgtSupplier = Beans.intermediateAllocator(tgtCls);
+    if (srcSupplier.get() == null || tgtSupplier.get() == null) return null;
+    // Copying elements verbatim leaves an order to carry: the side being filled keeps one, and the
+    // side being read has one to give. A supplier is handed no source, so the ordering rule is
+    // applied here as it is wherever else a sorted container is built.
+    final var srcAlloc = orderingAware(srcCls, SortedSet.class, ContainerLifts::setComparator, ignored ->
+      srcSupplier.get()
+    );
+    final var tgtAlloc = orderingAware(tgtCls, SortedSet.class, ContainerLifts::setComparator, ignored ->
+      tgtSupplier.get()
+    );
     return Iso.of(
       src -> {
         if (src == null) return null;
-        final var fresh = (Collection) tgtAlloc.get();
+        final var fresh = (Collection) tgtAlloc.apply(src);
         fresh.addAll((Collection<?>) src);
         return fresh;
       },
       tgt -> {
         if (tgt == null) return null;
-        final var fresh = (Collection) srcAlloc.get();
+        final var fresh = (Collection) srcAlloc.apply(tgt);
         fresh.addAll((Collection<?>) tgt);
         return fresh;
       }
@@ -87,19 +102,25 @@ final class ContainerLifts {
   /** Map ↔ Map element-copy Iso. Mirror of {@link #collectionCopyIso} via {@code putAll}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> mapCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
-    final var srcAlloc = Beans.intermediateAllocator(srcCls);
-    final var tgtAlloc = Beans.intermediateAllocator(tgtCls);
-    if (srcAlloc.get() == null || tgtAlloc.get() == null) return null;
+    final var srcSupplier = Beans.intermediateAllocator(srcCls);
+    final var tgtSupplier = Beans.intermediateAllocator(tgtCls);
+    if (srcSupplier.get() == null || tgtSupplier.get() == null) return null;
+    final var srcAlloc = orderingAware(srcCls, SortedMap.class, ContainerLifts::mapComparator, ignored ->
+      srcSupplier.get()
+    );
+    final var tgtAlloc = orderingAware(tgtCls, SortedMap.class, ContainerLifts::mapComparator, ignored ->
+      tgtSupplier.get()
+    );
     return Iso.of(
       src -> {
         if (src == null) return null;
-        final var fresh = (Map) tgtAlloc.get();
+        final var fresh = (Map) tgtAlloc.apply(src);
         fresh.putAll((Map<?, ?>) src);
         return fresh;
       },
       tgt -> {
         if (tgt == null) return null;
-        final var fresh = (Map) srcAlloc.get();
+        final var fresh = (Map) srcAlloc.apply(tgt);
         fresh.putAll((Map<?, ?>) tgt);
         return fresh;
       }
@@ -497,7 +518,9 @@ final class ContainerLifts {
       return size <= 1 ? new CopyOnWriteArraySet<>() : new ArrayList<>(size);
     };
     final var alloc = probeAllocator(raw);
-    if (alloc != null) return ignored -> alloc.get();
+    if (alloc != null) return orderingAware(raw, SortedSet.class, ContainerLifts::setComparator, ignored ->
+      alloc.get()
+    );
     final var fallback = fallbackAllocatorFor(raw, LinkedHashSet.class, input ->
       LinkedHashSet.newLinkedHashSet(((Collection<?>) input).size())
     );
@@ -528,7 +551,9 @@ final class ContainerLifts {
     final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.MAP_VALUES);
     if (fromSpec != null) return fromSpec;
     final var alloc = probeAllocator(raw);
-    if (alloc != null) return ignored -> alloc.get();
+    if (alloc != null) return orderingAware(raw, SortedMap.class, ContainerLifts::mapComparator, ignored ->
+      alloc.get()
+    );
     final var fallback = fallbackAllocatorFor(raw, LinkedHashMap.class, input ->
       LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size())
     );
@@ -555,6 +580,146 @@ final class ContainerLifts {
    */
   static int capacityFor(final int size) {
     return (int) Math.ceil(size / 0.75d);
+  }
+
+  /**
+   * Wraps an allocator so a declared subtype of a sorted container keeps the order its source
+   * carried.
+   *
+   * <p>The JDK's own sorted classes are allocated by name above, with the source's comparator
+   * handed to a constructor that takes one. A subtype answers to none of those names, and Java does
+   * not inherit constructors, so it can receive a comparator only where it declares a constructor
+   * for one. Where it declares one, that constructor is used. Where it does not, a source ordered
+   * by a comparator has nowhere to put it, and a rebuild would reorder by the elements' own {@code
+   * compareTo} while producing a container of the right type and size — so it fails instead of
+   * returning something quietly different. A source ordered naturally loses nothing and is
+   * allocated as before.
+   */
+  private static Function<Object, Object> orderingAware(
+    final Class<?> raw,
+    final Class<?> sortedIface,
+    final Function<Object, Comparator<Object>> comparatorOf,
+    final Function<Object, Object> plain
+  ) {
+    if (!sortedIface.isAssignableFrom(raw)) return plain;
+    final MethodHandle ctor;
+    // A constructor found by erasure is not automatically one this rebuild can use: a comparator
+    // over something built out of the elements erases to the same signature and can receive nothing
+    // the source carries. Java forbids two constructors with one erasure, so there is no other
+    // overload to fall back to and the container simply cannot be told its order.
+    if (!ordersItsOwnElements(raw)) return refuseOrdering(raw, comparatorOf, plain);
+    try {
+      ctor = MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class, Comparator.class));
+    } catch (final NoSuchMethodException | IllegalAccessException e) {
+      return refuseOrdering(raw, comparatorOf, plain);
+    }
+    return input -> {
+      final var comparator = comparatorOf.apply(input);
+      // Natural ordering is what the no-argument constructor already produces, and a constructor
+      // taking a comparator is free to reject a null one.
+      if (comparator == null) return plain.apply(input);
+      try {
+        return ctor.invoke(comparator);
+      } catch (final Throwable t) {
+        throw new IllegalStateException("Deep map: " + canonical(raw) + " refused its Comparator constructor", t);
+      }
+    };
+  }
+
+  /**
+   * Whether this container's comparator constructor orders the elements themselves.
+   *
+   * <p>A parameter written over the class's own type variable, or over a wildcard of one, is a
+   * comparator the elements fit. One written over a type built out of those variables is not, and
+   * erases to the same constructor, so the two are told apart by the declared parameter rather than
+   * by the one reflection binds. A raw parameter is accepted: it holds any comparator, which is
+   * what the elements' own is.
+   *
+   * <p>The one shape this cannot judge is a parameter naming a concrete unrelated class, since the
+   * element type is not knowable here through erasure. Such a constructor is bound and hands the
+   * comparator over, as it did before. A parameter naming a type that mentions none of the class's
+   * variables is therefore accepted, which covers a comparator over {@code Comparable<?>} as well
+   * as one over an unrelated class.
+   */
+  private static boolean ordersItsOwnElements(final Class<?> raw) {
+    for (final var ctor : raw.getConstructors()) {
+      final var params = ctor.getGenericParameterTypes();
+      if (params.length != 1 || !Comparator.class.equals(ctor.getParameterTypes()[0])) continue;
+      if (!(params[0] instanceof ParameterizedType parameterized)) return true;
+      final var ordered = boundOf(parameterized.getActualTypeArguments()[0]);
+      return ordered instanceof TypeVariable<?> || !namesATypeVariable(ordered);
+    }
+    return true;
+  }
+
+  /**
+   * What a type argument orders, with any wildcard replaced by the bound that constrains it.
+   *
+   * <p>A wildcard stands for whatever its bound names, so {@code ? super K} orders the same type
+   * {@code K} does. A lower bound is the one that decides what may be passed in; an upper bound or
+   * no bound at all leaves the argument unconstrained, and {@code Object} is what that orders.
+   */
+  private static Type boundOf(final Type type) {
+    if (!(type instanceof WildcardType wildcard)) return type;
+    final var lower = wildcard.getLowerBounds();
+    if (lower.length > 0) return boundOf(lower[0]);
+    final var upper = wildcard.getUpperBounds();
+    return upper.length > 0 ? boundOf(upper[0]) : Object.class;
+  }
+
+  /**
+   * Whether a type is built out of the declaring class's own variables rather than naming one.
+   *
+   * <p>A parameter over a variable orders the elements themselves, and a parameter over something
+   * assembled from those variables orders a different type that the elements cannot be passed as.
+   * The two are told apart by where the variables appear: as the argument itself in the first case,
+   * and inside it in the second. Recursion covers the nesting a type argument can have, so a
+   * comparator over the entries of a map is refused whether it is written invariantly or behind a
+   * wildcard.
+   */
+  private static boolean namesATypeVariable(final Type type) {
+    if (type instanceof TypeVariable<?>) return true;
+    if (type instanceof GenericArrayType array) return namesATypeVariable(array.getGenericComponentType());
+    if (type instanceof WildcardType wildcard) {
+      return Stream.concat(Arrays.stream(wildcard.getLowerBounds()), Arrays.stream(wildcard.getUpperBounds())).anyMatch(
+        ContainerLifts::namesATypeVariable
+      );
+    }
+    if (type instanceof ParameterizedType parameterized) {
+      return Arrays.stream(parameterized.getActualTypeArguments()).anyMatch(ContainerLifts::namesATypeVariable);
+    }
+    return false;
+  }
+
+  /**
+   * The name a nested class carries in source, which is the spelling the generated path reports.
+   */
+  private static String canonical(final Class<?> raw) {
+    return raw.getCanonicalName() == null ? raw.getName() : raw.getCanonicalName();
+  }
+
+  /**
+   * Refuses a source that carries an ordering this container cannot be told, and converts one that
+   * carries none. Both refusals reach here so the two read identically whether the constructor is
+   * missing or unusable, which is the same sentence the generated path emits.
+   */
+  private static Function<Object, Object> refuseOrdering(
+    final Class<?> raw,
+    final Function<Object, Comparator<Object>> comparatorOf,
+    final Function<Object, Object> plain
+  ) {
+    return input -> {
+      if (comparatorOf.apply(input) != null) {
+        throw new IllegalStateException(
+          "Deep map: " +
+            canonical(raw) +
+            " declares no constructor taking a Comparator, so the source's ordering cannot" +
+            " be carried into it. Declare one, declare the field as the interface, or" +
+            " supply an explicit Mapping.via(...) row for it."
+        );
+      }
+      return plain.apply(input);
+    };
   }
 
   @SuppressWarnings("unchecked")

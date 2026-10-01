@@ -895,10 +895,10 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "identity element, concrete Set subtype: Set<String> ↔ TreeSet<String> emits an inline copy" +
-        " into each side's concrete class"
+      "identity element, Set<String> ↔ TreeSet<String> copies through a helper that reads the" +
+        " source's comparator from the value"
     )
-    void identityElementConcreteSetEmitsInlineConcreteCopy() {
+    void identityElementSortedSetCopiesThroughHelper() {
       final var compilation = compile(
         source(
           "demo.ISOrder",
@@ -923,16 +923,20 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.ISOrderBridge");
       assertNotNull(bridge);
-      assertTrue(bridge.contains("new java.util.TreeSet<>("), bridge);
+      // A source declared as a plain Set can hold a sorted one, and new TreeSet<>(src) would bind
+      // the Collection overload and order naturally.
+      assertTrue(bridge.contains("src instanceof java.util.SortedSet<java.lang.String> __ordered"), bridge);
+      assertTrue(bridge.contains("new java.util.TreeSet<java.lang.String>(__cmp)"), bridge);
+      // The backward output keeps no order, so it stays an inline copy.
       assertTrue(bridge.contains("new java.util.LinkedHashSet<>("), bridge);
     }
 
     @Test
     @DisplayName(
-      "identity value, concrete Map subtype: Map<String, String> ↔ TreeMap<String, String> emits" +
-        " an inline copy into each side's concrete class"
+      "identity value, Map<String, String> ↔ TreeMap<String, String> copies through a helper that" +
+        " reads the source's comparator from the value"
     )
-    void identityValueConcreteMapEmitsInlineConcreteCopy() {
+    void identityValueSortedMapCopiesThroughHelper() {
       final var compilation = compile(
         source(
           "demo.IMOrder",
@@ -957,10 +961,47 @@ class BridgeProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.IMOrderBridge");
       assertNotNull(bridge);
-      // Forward into the target TreeMap; backward into the Map interface's insertion-ordered
-      // default.
-      assertTrue(bridge.contains("new java.util.TreeMap<>("), bridge);
+      // Forward into the target TreeMap with the value's comparator; backward, which keeps no
+      // order, an inline copy into the Map interface's insertion-ordered default.
+      assertTrue(bridge.contains("src instanceof java.util.SortedMap<java.lang.String, ?> __ordered"), bridge);
+      assertTrue(bridge.contains("new java.util.TreeMap<java.lang.String, java.lang.String>(__cmp)"), bridge);
       assertTrue(bridge.contains("new java.util.LinkedHashMap<>("), bridge);
+    }
+
+    @Test
+    @DisplayName(
+      "identity value, SortedMap<E, V> ↔ EnumMap<E, V> copies only the sorted direction through the" +
+        " helper, so the EnumMap side keeps the copy constructor it needs"
+    )
+    void sortedToEnumMapCopiesOnlyTheSortedDirectionThroughTheHelper() {
+      final var compilation = compileAttributed(
+        source("demo.EmDay", "package demo;\npublic enum EmDay { MON, TUE }\n"),
+        source(
+          "demo.EmOrder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.SortedMap;
+          @Bridge(demo.EmOrderDto.class)
+          public record EmOrder(SortedMap<EmDay, String> byDay) {}
+          """
+        ),
+        source(
+          "demo.EmOrderDto",
+          """
+          package demo;
+          import java.util.EnumMap;
+          public record EmOrderDto(EnumMap<EmDay, String> byDay) {}
+          """
+        )
+      );
+
+      // EnumMap has no no-argument constructor, so a helper allocating one fails in the generated
+      // file. Only the full pipeline attributes that file.
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.EmOrderBridge");
+      assertTrue(bridge.contains("new java.util.EnumMap<>("), bridge);
+      assertTrue(bridge.contains("new java.util.TreeMap<demo.EmDay, java.lang.String>(__cmp)"), bridge);
     }
 
     @Test

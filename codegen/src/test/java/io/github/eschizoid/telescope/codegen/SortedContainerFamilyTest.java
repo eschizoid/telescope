@@ -1,6 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
@@ -89,11 +89,11 @@ class SortedContainerFamilyTest {
   }
 
   @Test
-  @DisplayName("a plain map into a sorted target allocates natural ordering, having none to carry")
-  void unsortedSourceCarriesNoOrdering() {
-    // The ordering argument is read off the source, so a source that is not sorted has none to
-    // give. Emitting the read anyway would name a method a plain Map does not declare, which is
-    // why this asserts on the compile as well as on the text.
+  @DisplayName("a plain map into a sorted target reads the order off the value, not the declaration")
+  void anUnsortedDeclarationStillReadsTheValuesOrdering() {
+    // A plain Map declares no comparator() to call, and the value it holds may still be ordered by
+    // one. Deciding from the declaration refuses a program the other path converts, so the read is
+    // a pattern test the declared type cannot fail to compile against.
     final var compilation = compile(
       pair("java.util.Map<String, demo.SA> items", "java.util.SortedMap<String, demo.SB> items")
     );
@@ -101,10 +101,41 @@ class SortedContainerFamilyTest {
     assertTrue(compilation.success(), () -> "a plain map is a valid sorted-map source: " + compilation.errorMessages());
     final var bridge = compilation.generated().get("demo.FSrcBridge");
     assertTrue(bridge != null && bridge.contains("java.util.TreeMap"), () -> "sorted target allocates a TreeMap");
-    assertFalse(
-      bridge.contains("src.comparator()"),
-      () -> "there is no comparator on the source to read; saw " + bridge
+    assertTrue(
+      bridge.contains("src instanceof java.util.SortedMap<java.lang.String, ?> __ordered"),
+      () -> "the ordering is read off the value; saw " + bridge
     );
+    assertTrue(bridge.contains("(__cmp)"), () -> "and handed to the constructor; saw " + bridge);
+  }
+
+  @Test
+  @DisplayName("the source's comparator is read once per direction, not once per use")
+  void theComparatorIsReadOncePerDirection() {
+    // comparator() is not always a field read: a lazily initialised sorted collection resolves on
+    // the call, and an overriding subtype can answer differently twice. The null test and the
+    // constructor argument have to be one read, which is what the local is for.
+    final var compilation = compile(
+      pair("java.util.SortedMap<String, demo.SA> items", "java.util.SortedMap<String, demo.SB> items")
+    );
+
+    assertTrue(compilation.success(), () -> "should bridge: " + compilation.errorMessages());
+    final var bridge = compilation.generated().get("demo.FSrcBridge");
+    // Counted inside each direction rather than over the file: two reads in one helper and none in
+    // the other totals the same, and is the regression this is here to catch.
+    for (final var helper : List.of("__fwd_items", "__bwd_items")) {
+      final var body = helperBody(bridge, helper);
+      assertEquals(1, body.split("comparator\\(\\)", -1).length - 1, () -> "one read in " + helper + "; saw " + body);
+    }
+  }
+
+  /** The text of one generated helper, from its signature to the closing brace of its body. */
+  private static String helperBody(final String bridge, final String name) {
+    // Anchored on the declaration, whose parameter is always final, so a call to the same helper
+    // elsewhere in the file cannot be mistaken for its body.
+    final var start = bridge.indexOf(" " + name + "(final ");
+    assertTrue(start >= 0, () -> name + " should be emitted; saw " + bridge);
+    final var end = bridge.indexOf("\n  }", start);
+    return bridge.substring(start, end < 0 ? bridge.length() : end);
   }
 
   @Test
@@ -184,7 +215,7 @@ class SortedContainerFamilyTest {
     assertTrue(compilation.success(), () -> "identity elements are bridgeable: " + compilation.errorMessages());
     final var bridge = compilation.generated().get("demo.RSrcBridge");
     assertTrue(
-      bridge != null && bridge.contains("src.comparator()"),
+      bridge != null && bridge.contains("(__cmp)"),
       () -> "the ordering must be carried where the JDK constructor cannot; saw " + bridge
     );
   }
