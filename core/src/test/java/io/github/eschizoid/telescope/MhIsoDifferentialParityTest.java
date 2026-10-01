@@ -696,6 +696,7 @@ final class MhIsoDifferentialParityTest {
     fuzzConstantComputeGated();
     fuzzViaNestedMapper();
     fuzzNullEdges();
+    fuzzConstructorAndBuilderBeans();
 
     // Anchor a handful of absolute-correctness checks under the MH leaf so a "both leaves wrong
     // the same way" scenario can't pass as parity. These pin the ACTUAL converted values.
@@ -714,6 +715,64 @@ final class MhIsoDifferentialParityTest {
     // Guardrail: the harness actually exercised a substantial corpus.
     assertTrue(comparisons > 90, "expected >90 comparisons, ran " + comparisons);
     System.out.println("[MhIso parity] CLEAN — " + comparisons + " comparisons byte-identical");
+  }
+
+  // ---- beans built through a constructor or a builder, whose writers normalise what they take
+  // ----
+  private void fuzzConstructorAndBuilderBeans() {
+    final var samples = List.of(
+      new MhComposedBuildParityTest.Src(1, 2, "  padded  ", 3L),
+      new MhComposedBuildParityTest.Src(0, null, null, 0L)
+    );
+    for (final var sample : samples) {
+      diff(
+        "Src→CtorBean",
+        MhComposedBuildParityTest.Src.class,
+        MhComposedBuildParityTest.CtorBean.class,
+        () -> Telescope.mapper(MhComposedBuildParityTest.Src.class, MhComposedBuildParityTest.CtorBean.class),
+        sample
+      );
+      diff(
+        "Src→BuiltBean",
+        MhComposedBuildParityTest.Src.class,
+        MhComposedBuildParityTest.BuiltBean.class,
+        () -> Telescope.mapper(MhComposedBuildParityTest.Src.class, MhComposedBuildParityTest.BuiltBean.class),
+        sample
+      );
+      diff(
+        "OuterRec→OuterBuilt",
+        MhComposedBuildParityTest.OuterRec.class,
+        MhComposedBuildParityTest.OuterBuilt.class,
+        () -> Telescope.mapper(MhComposedBuildParityTest.OuterRec.class, MhComposedBuildParityTest.OuterBuilt.class),
+        new MhComposedBuildParityTest.OuterRec(" t ", sample)
+      );
+    }
+    // A builder with no member for a computed property, from a source whose getter for it throws:
+    // neither leaf reads the slot, so neither throws.
+    final var throwing = new MhComposedBuildParityTest.ThrowingSrc();
+    throwing.setI(3);
+    throwing.setStr("ab");
+    diffForward(
+      "ThrowingSrc→ComputedBuilt",
+      src ->
+        Telescope.mapperForward(
+          MhComposedBuildParityTest.ThrowingSrc.class,
+          MhComposedBuildParityTest.ComputedBuilt.class
+        ).forward(src),
+      throwing
+    );
+    // The comparisons above mean something only when the composed side is a composed build.
+    System.clearProperty(MhIso.DISABLE_PROPERTY);
+    // The read-only source is built by no writer, so a composed leaf from it means the target's
+    // build composed.
+    for (final var built : List.<Class<?>>of(
+      MhComposedBuildParityTest.CtorBean.class,
+      MhComposedBuildParityTest.BuiltBean.class
+    )) {
+      if (!MhIso.isComposedLeaf(DeepMap.resolve(MhComposedBuildParityTest.ReadOnlySrc.class, built, new MapStep[0]))) {
+        divergences.add(built.getSimpleName() + " was not built by a composed leaf");
+      }
+    }
   }
 
   // ---- absolute-value anchors (MH leaf), so "both leaves wrong identically" can't pass ----

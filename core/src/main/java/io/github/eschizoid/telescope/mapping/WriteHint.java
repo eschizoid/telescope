@@ -7,10 +7,15 @@ import io.github.eschizoid.telescope.Telescope;
  * Tells the deep-mapping engine which {@code Beans.BeanWriter} strategy to use when constructing an
  * instance of {@code B}, overriding the auto-detected strategy from {@code Beans.autoWriter}.
  *
+ * <p>With no hint, a bean is built through the first of these it offers: a static {@code
+ * builder()}, then a public all-args constructor whose parameter names match the properties
+ * (compiled with {@code -parameters}), then a no-arg constructor with setters. The generated
+ * {@code @Bridge}, {@code @BeanFocus} and {@code @FromMap} code takes the same order.
+ *
  * <p>Closes the gap on immutable all-args-only POJOs (no builder, no no-arg constructor) by letting
  * the user pin {@link WriteStrategy#CONSTRUCTOR}. Also useful when several strategies apply and the
- * user wants to force a specific one (e.g., {@link WriteStrategy#SETTERS} over a class that also
- * has a builder).
+ * user wants a different one than that order picks (e.g., {@link WriteStrategy#SETTERS} over a
+ * class that also has a builder).
  *
  * <pre>{@code
  * import static io.github.eschizoid.telescope.mapping.Mapping.to;

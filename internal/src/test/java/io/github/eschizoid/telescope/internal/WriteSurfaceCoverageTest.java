@@ -102,11 +102,12 @@ class WriteSurfaceCoverageTest {
     }
 
     @Test
-    @DisplayName("setters covering the bean are still used when a builder also covers it")
-    void settersWinWhenBothCover() {
-      // Nothing is gained by moving, so nothing moves. This row is a control rather than a guard:
-      // both surfaces reproduce the same bean, so it holds whichever is chosen, and what actually
-      // pins the preference is the autoWriter row in BeansTest.
+    @DisplayName("a builder covering the bean is used when setters also cover it")
+    void builderWinsWhenBothCover() {
+      // The builder comes first in the auto order, and it loses nothing the setters carry. This row
+      // is a control rather than a guard: both surfaces reproduce the same bean, so it holds
+      // whichever is chosen, and what actually pins the preference is the autoWriter rows in
+      // BeansTest.
       final var out = writeName(AllSettersAndBuilder.class, AllSettersAndBuilder.of("alice", "AB"));
 
       assertEquals("bob", out.getName());
@@ -408,8 +409,9 @@ class WriteSurfaceCoverageTest {
    * A static {@code builder()} returning something with no {@code build()}, and <em>no
    * setters</em>.
    *
-   * <p>The absence matters. With a setter it takes the setters branch whatever the builder probe
-   * decides, never reaches that probe, and pins nothing about it.
+   * <p>The absence matters. With no other surface the bean is refused as one only its private
+   * fields could write, and that particular refusal is what says the probe turned this builder
+   * down.
    */
   public static class UnrelatedBuilder {
 

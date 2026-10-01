@@ -715,7 +715,7 @@ Installation snippets, annotation-processor ordering with Lombok, and JPMS setup
 ## Constraints
 
 - **Records and JavaBeans-style POJOs.** Records rebuild through the canonical constructor, and POJOs rebuild through an
-  auto-detected write strategy, tried as builder, then setters, then fields, then constructor, and overridable per class
+  auto-detected write strategy, tried as builder, then all-args constructor, then setters, and overridable per class
   with `WriteHint.writeBean(...)`.
 - **Method references, not lambdas.** `.field(User::name)` works, and `.field(u -> u.name())` is rejected when the path
   is built, with an error saying so. Field names are recovered from the reference, and a lambda has none.

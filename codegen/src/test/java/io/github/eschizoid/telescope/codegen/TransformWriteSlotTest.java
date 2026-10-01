@@ -35,6 +35,10 @@ class TransformWriteSlotTest {
     """;
 
   private static ProcessorHarness.Compilation compile(final String targetBody) {
+    return compile(targetBody, "AUTO");
+  }
+
+  private static ProcessorHarness.Compilation compile(final String targetBody, final String writeStrategy) {
     return ProcessorHarness.compileFully(
       List.of(new BridgeProcessor()),
       List.of(),
@@ -46,11 +50,12 @@ class TransformWriteSlotTest {
           package demo;
           import io.github.eschizoid.telescope.annotations.Bridge;
           import io.github.eschizoid.telescope.annotations.Transform;
-          @Bridge(value = demo.Tgt.class, transforms = {
+          import io.github.eschizoid.telescope.annotations.WriteStrategy;
+          @Bridge(value = demo.Tgt.class, writeStrategy = WriteStrategy.%s, transforms = {
             @Transform(field = "v", using = demo.Fn.class, forwardOnly = true)
           })
           public record Src(String v) {}
-          """
+          """.formatted(writeStrategy)
         ),
         ProcessorHarness.source("demo.Tgt", "package demo;\n" + targetBody),
       }
@@ -481,7 +486,9 @@ class TransformWriteSlotTest {
     );
 
     // And where the store is what refused, the member is named -- otherwise the message says a
-    // transform does not carry String to String while the type that refused appears nowhere.
+    // transform does not carry String to String while the type that refused appears nowhere. The
+    // builder is forced: its member cannot take the property's own type, so the auto order passes
+    // it over.
     final var storeRefused = compile(
       """
       public class Tgt {
@@ -495,7 +502,8 @@ class TransformWriteSlotTest {
           public Tgt build() { return held; }
         }
       }
-      """
+      """,
+      "BUILDER"
     );
 
     assertFalse(storeRefused.success());

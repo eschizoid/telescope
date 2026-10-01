@@ -171,27 +171,27 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
 
 ### `:internal` — substrate (`io.github.eschizoid.telescope.internal`)
 
-| File / package                                       | Role                                                                                                                                                                                                                          |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Records.java`                                       | record reflection: cached LMF component readers, canonical-ctor `MethodHandle` rebuild                                                                                                                                        |
-| `Beans.java`                                         | bean reflection: getter / setter / builder discovery, the `BeanWriter` rebuild strategies (`SettersWriter` / `BuilderWriter` / ctor); none writes a private field                                                             |
-| `Reflective.java`                                    | the uniform record-vs-bean dispatch `DeepMap` drives — one facade, per-side `of(Class)` resolution                                                                                                                            |
-| `MhIso.java`                                         | `MethodHandle`-combinator assembly of the structural-conversion `Iso` leaf (the runtime-perf hot path: fused reads + rebuild in one composed handle)                                                                          |
-| `MhAccessors.java`                                   | native-image accessor closures — one `supplier`/`function`/`biConsumer`/`biFunction` per SAM shape over an `asType`-adapted handle (ADR-0015)                                                                                 |
-| `NativeImage.java`                                   | the one-time `IN_IMAGE` flag (JDK `imagecode` property) that gates LMF-vs-`MhAccessors` accessor construction                                                                                                                 |
-| `LambdaIntrospection.java`                           | `SerializedLambda` decode — impl-method name + declaring class from a method reference; the single decode point                                                                                                               |
-| `MetadataHolderProbe.java`, `BridgeHolderProbe.java` | ADR-0006 runtime probes for the codegen-emitted `<X>FieldOptics` / `<Source>Bridge` siblings — constant on hit, LMF on miss                                                                                                   |
-| `NullDefaults.java`                                  | per-leaf-type default-value table backing `NullHint.NullStrategy#DEFAULT`                                                                                                                                                     |
-| `pairing/`                                           | the shared pairing spec (ADR-0012): `PairingRules` + `PropertySystem` — one decision implementation consumed by both the runtime mapper and the compile-time verifier, with `PairingMessages` as the single diagnostic source |
-| `optics/Iso.java`                                    | reversible `A ↔ B` (+ static `lift*` container helpers)                                                                                                                                                                       |
-| `optics/Lens.java`                                   | exactly-one focus, reversible writes                                                                                                                                                                                          |
-| `optics/Prism.java`                                  | at-most-one focus + reconstruct, sealed-type cases                                                                                                                                                                            |
-| `optics/Affine.java`                                 | at-most-one read+write (Lens + Prism intersection)                                                                                                                                                                            |
-| `optics/Traversal.java`                              | many-focus with `modifyF` for effectful traversal                                                                                                                                                                             |
-| `optics/Getter.java`, `Setter.java`, `Fold.java`     | read-only / write-only / fold-only weakenings                                                                                                                                                                                 |
-| `optics/Focus.java`                                  | static factories that build the optic instances                                                                                                                                                                               |
-| `optics/collections/Traversals.java`                 | runtime dispatch for List / Set / Iterable / Map values / Optional                                                                                                                                                            |
-| `optics/Kind.java`, `Applicative.java`               | HKT-emulation for effectful update (see next section)                                                                                                                                                                         |
+| File / package                                       | Role                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Records.java`                                       | record reflection: cached LMF component readers, canonical-ctor `MethodHandle` rebuild                                                                                                                                                                                                                                                      |
+| `Beans.java`                                         | bean reflection: getter / setter / builder discovery, the `BeanWriter` rebuild strategies (`SettersWriter` / `BuilderWriter` / ctor); none writes a private field                                                                                                                                                                           |
+| `Reflective.java`                                    | the uniform record-vs-bean dispatch `DeepMap` drives — one facade, per-side `of(Class)` resolution                                                                                                                                                                                                                                          |
+| `MhIso.java`                                         | `MethodHandle`-combinator assembly of the structural-conversion `Iso` leaf (the runtime-perf hot path: fused reads + rebuild in one composed handle)                                                                                                                                                                                        |
+| `MhAccessors.java`                                   | native-image accessor closures — one `supplier`/`function`/`biConsumer`/`biFunction` per SAM shape over an `asType`-adapted handle (ADR-0015)                                                                                                                                                                                               |
+| `NativeImage.java`                                   | the one-time `IN_IMAGE` flag (JDK `imagecode` property) that gates LMF-vs-`MhAccessors` accessor construction                                                                                                                                                                                                                               |
+| `LambdaIntrospection.java`                           | `SerializedLambda` decode — impl-method name + declaring class from a method reference; the single decode point                                                                                                                                                                                                                             |
+| `MetadataHolderProbe.java`, `BridgeHolderProbe.java` | ADR-0006 runtime probes for the codegen-emitted `<X>FieldOptics` / `<Source>Bridge` siblings — constant on hit, LMF on miss                                                                                                                                                                                                                 |
+| `NullDefaults.java`                                  | per-leaf-type default-value table backing `NullHint.NullStrategy#DEFAULT`                                                                                                                                                                                                                                                                   |
+| `pairing/`                                           | the shared pairing spec (ADR-0012): `PairingRules` + `PropertySystem` — one decision implementation consumed by both the runtime mapper and the compile-time verifier, with `PairingMessages` as the single diagnostic source; `BeanWriteStrategy` holds the order an unhinted bean write tries, for the runtime writer and every processor |
+| `optics/Iso.java`                                    | reversible `A ↔ B` (+ static `lift*` container helpers)                                                                                                                                                                                                                                                                                     |
+| `optics/Lens.java`                                   | exactly-one focus, reversible writes                                                                                                                                                                                                                                                                                                        |
+| `optics/Prism.java`                                  | at-most-one focus + reconstruct, sealed-type cases                                                                                                                                                                                                                                                                                          |
+| `optics/Affine.java`                                 | at-most-one read+write (Lens + Prism intersection)                                                                                                                                                                                                                                                                                          |
+| `optics/Traversal.java`                              | many-focus with `modifyF` for effectful traversal                                                                                                                                                                                                                                                                                           |
+| `optics/Getter.java`, `Setter.java`, `Fold.java`     | read-only / write-only / fold-only weakenings                                                                                                                                                                                                                                                                                               |
+| `optics/Focus.java`                                  | static factories that build the optic instances                                                                                                                                                                                                                                                                                             |
+| `optics/collections/Traversals.java`                 | runtime dispatch for List / Set / Iterable / Map values / Optional                                                                                                                                                                                                                                                                          |
+| `optics/Kind.java`, `Applicative.java`               | HKT-emulation for effectful update (see next section)                                                                                                                                                                                                                                                                                       |
 
 Each optic except `Setter` and `Fold` exposes `.then(Other)` for composition — composition lives on the read+write
 optics, and `Getter` is the one weakening that still composes, read-side only. Composition picks the most-specific
@@ -320,7 +320,7 @@ When a type carries **both** `@Focus`/`@BeanFocus` **and** `@Bridge(Target.class
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `AbstractTelescopeProcessor.java`                         | **public abstract** base. Holds the shared emit pipeline (`emitBeanNavigator`), the `javax.lang.model` probes (setter/builder discovery, traversal-shape detection, navigable-type lookup), and the forwarder block. Subclassed by `FocusProcessor`, `BeanFocusProcessor`, `BridgeProcessor`, `FromMapProcessor`, and out of tree by `LombokFocusProcessor`. |
 | `FocusProcessor.java`                                     | scans `@Focus`, emits the record version of the Telescope navigator (canonical-ctor rebuild).                                                                                                                                                                                                                                                                |
-| `BeanFocusProcessor.java`                                 | scans `@BeanFocus`, delegates to `emitBeanNavigator` (builder-or-setters rebuild).                                                                                                                                                                                                                                                                           |
+| `BeanFocusProcessor.java`                                 | scans `@BeanFocus`, delegates to `emitBeanNavigator` (builder, all-args constructor or setters rebuild, in the shared `BeanWriteStrategy.AUTO_ORDER`).                                                                                                                                                                                                       |
 | `BridgeProcessor.java`                                    | scans `@Bridge`, generates the bidirectional Iso class plus the BRIDGE static constant. Handles all type-pair combinations (record↔record, record↔POJO, POJO↔POJO).                                                                                                                                                                                          |
 | `FromMapProcessor.java`                                   | scans `@FromMap`, emits the reflection-free `Map<String, Object>` → record binder (ADR-0010). Uses the sealed `Coercion` taxonomy for per-component conversion.                                                                                                                                                                                              |
 | `MapperVerifierProcessor.java`                            | compile-time mapper pairing verification (ADR-0012) via the shared `pairing` spec. Extends plain `AbstractProcessor`, not the navigator base. Controlled by `-Atelescope.verify=error\|warn\|off`.                                                                                                                                                           |
@@ -355,10 +355,13 @@ same-module main code. `LombokFocusProcessor` retries every round and emits as s
 (`emitBeanNavigatorIfReady`), using `processingOver()` only to turn a target that never became readable into a
 diagnostic rather than silence — nothing is emitted there. Deferring emission itself to that round is what breaks **for
 this processor**: a navigator emitted only then does not exist yet when same-module main code is resolved, which
-`examples/library`'s `LombokDemo` holds in place by importing the generated navigators directly. `BridgeProcessor` and
-`FromMapProcessor` defer only the targets carrying a Lombok trigger, to `processingOver()`. **Any future processor
-reading synthesised members of Lombok-annotated types must do one or the other; reading them in round one gets an
-un-patched view.**
+`examples/library`'s `LombokDemo` holds in place by importing the generated navigators directly. `BridgeProcessor`,
+`FromMapProcessor` and `BeanFocusProcessor` defer only the targets carrying a Lombok trigger, to `processingOver()`. For
+`BeanFocusProcessor` the readable-properties check `LombokFocusProcessor` retries on is not enough: hand-written getters
+read complete in round one while the builder or constructor Lombok adds, which decides the rebuild strategy, is still
+missing. A `@BeanFocus` navigator on a Lombok-annotated class is therefore emitted in the final round and cannot be
+named from same-module main code. **Any future processor reading synthesised members of Lombok-annotated types must do
+one or the other; reading them in round one gets an un-patched view.**
 
 The in-memory `ProcessorHarness` (`:codegen` testFixtures) can't reproduce this — Lombok's javac hooks don't install in
 the in-process `JavaCompiler.CompilationTask` flow. Lombok integration tests must use Gradle's standard
@@ -551,9 +554,12 @@ field name. The error message tells you. For dynamic field names there's `fieldB
 
 ### Records and beans, separate entry points
 
-Records use canonical-ctor rebuild via `Records.java`. Beans use builder-or-no-arg-ctor-with-setters via `Beans.java`.
-The runtime entry points are `Telescope.of(...)` and `Telescope.ofBean(...)` respectively. `BeanFocusProcessor` and
-`LombokFocusProcessor` both generate the bean-style rebuild; `FocusProcessor` generates the record-style.
+Records use canonical-ctor rebuild via `Records.java`. Beans use the first of a static `builder()`, a name-matched
+all-args constructor, or a no-arg constructor with setters via `Beans.java`. The order is `BeanWriteStrategy.AUTO_ORDER`
+in the shared pairing spec, and every processor that rebuilds a bean with no hint takes the same order, so a bean
+offering several ways to be built is built the same way on both paths. The runtime entry points are `Telescope.of(...)`
+and `Telescope.ofBean(...)` respectively. `BeanFocusProcessor` and `LombokFocusProcessor` both generate the bean-style
+rebuild; `FocusProcessor` generates the record-style.
 
 ### Reflection for discovery, generated dispatch for the hot path
 
@@ -578,9 +584,9 @@ See `docs/adr/0004-runtime-and-codegen-strategy-separate.md`.
 
 A processor must not read them in round one, before Lombok's lazy AST patches have fired. `LombokFocusProcessor` retries
 every round and emits as soon as the bean surface reads complete, because output emitted only in the final round is
-unresolvable from same-module main code; `BridgeProcessor` and `FromMapProcessor` defer only their Lombok-triggered
-targets to `processingOver()`. Detailed in the `:lombok` section above; applies to any future processor that reads
-synthesised members.
+unresolvable from same-module main code; `BridgeProcessor`, `FromMapProcessor` and `BeanFocusProcessor` defer only their
+Lombok-triggered targets to `processingOver()`. Detailed in the `:lombok` section above; applies to any future processor
+that reads synthesised members.
 
 ### Bridge constants emit in the source's package
 
@@ -673,7 +679,7 @@ Each of these is a property of the platform or of this codebase that reads the o
 - **Lombok-touching processors must not read synthesised members in round one** — the patches may not have fired, so the
   lookup returns an un-patched view. Retry every round and emit once the surface reads complete
   (`LombokFocusProcessor`), or defer the Lombok-triggered targets to `processingOver()` (`BridgeProcessor`,
-  `FromMapProcessor`).
+  `FromMapProcessor`, `BeanFocusProcessor`).
 - **Every runtime `LambdaMetafactory` site needs the `NativeImage.IN_IMAGE` branch** to its `MhAccessors` equivalent, or
   the native-image workflow goes red.
 - **Spotless for Java runs google-java-format first and prettier last.** Running only one of them leaves violations the

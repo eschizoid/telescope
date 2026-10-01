@@ -33,13 +33,14 @@ import java.util.function.Function;
  *
  * <p>Holders also expose a {@code public static <X> construct(Function<String, Object> values)}
  * method that mirrors the {@code <X>Path<R>}'s write strategy (canonical constructor for records;
- * builder chain or no-arg ctor + setters for beans). Probing binds the static method via {@link
- * LambdaMetafactory} into a cached {@code Function<Function<String, Object>, Object>} on {@link
- * HolderRef}. {@link io.github.eschizoid.telescope.internal.Reflective#structuralIso
- * Reflective.structuralIso}'s forward branch routes through it when present, skipping the
- * reflective {@link io.github.eschizoid.telescope.internal.Records#construct Records.construct} /
- * {@link io.github.eschizoid.telescope.internal.Beans.BeanWriter Beans.BeanWriter} path. A holder
- * that lacks the required {@code construct} method (out-of-date codegen on the classpath) trips a
+ * builder chain, constructor call or no-arg ctor + setters for beans). Probing binds the static
+ * method via {@link LambdaMetafactory} into a cached {@code Function<Function<String, Object>,
+ * Object>} on {@link HolderRef}. {@link
+ * io.github.eschizoid.telescope.internal.Reflective#structuralIso Reflective.structuralIso}'s
+ * forward branch routes through it when present, skipping the reflective {@link
+ * io.github.eschizoid.telescope.internal.Records#construct Records.construct} / {@link
+ * io.github.eschizoid.telescope.internal.Beans.BeanWriter Beans.BeanWriter} path. A holder that
+ * lacks the required {@code construct} method (out-of-date codegen on the classpath) trips a
  * precise {@link IllegalStateException} at probe time rather than silently falling back.
  */
 public final class MetadataHolderProbe {

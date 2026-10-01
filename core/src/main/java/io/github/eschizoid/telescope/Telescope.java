@@ -509,10 +509,11 @@ public sealed class Telescope<
    * Start a <em>native POJO</em> telescope. Unlike {@link #of(Class)} (records only), the resulting
    * telescope navigates JavaBeans-style POJOs directly: {@code .field(Pojo::getX)} reads via the
    * getter, and {@code set}/{@code update} rebuild the POJO immutably with that one property
-   * changed — using a write strategy auto-detected per type (no-arg constructor with setters &rarr;
-   * static {@code builder()} &rarr; name-matched all-args constructor). A POJO whose only write
-   * path is its private fields reads and navigates normally and is refused on the first write. Deep
-   * paths and {@code .each(...)} compose like records, rebuilding the POJO at each level.
+   * changed — using a write strategy auto-detected per type (static {@code builder()} &rarr;
+   * name-matched all-args constructor &rarr; no-arg constructor with setters). A POJO whose only
+   * write path is its private fields reads and navigates normally and is refused on the first
+   * write. Deep paths and {@code .each(...)} compose like records, rebuilding the POJO at each
+   * level.
    *
    * <pre>{@code
    * Telescope.ofBean(LegacyUser.class)

@@ -133,11 +133,11 @@ class LombokFocusProcessorHarnessTest {
     }
 
     @Test
-    @DisplayName("@Value with no setters and no builder() is rejected with the no-write-strategy diagnostic")
-    void bareValueIsRejectedAtEmit() {
-      // A Lombok bean with all-final fields and no static builder() has no write strategy the
-      // emitter can drive — the processor must reject with a diagnostic that names the offending
-      // class, not silently produce a half-built navigator.
+    @DisplayName("@Value with no setters and no builder() is rebuilt through its all-args constructor")
+    void bareValueIsRebuiltThroughItsConstructor() {
+      // All-final fields and no static builder(): the all-args constructor names every property,
+      // which is the second strategy in the auto order and the one the runtime writer takes for the
+      // same class.
       final var compilation = compile(
         new LombokFocusProcessor(),
         source(
@@ -155,10 +155,39 @@ class LombokFocusProcessorHarnessTest {
         )
       );
 
-      assertFalse(compilation.success(), "bare @Value must fail compilation with a rejection diagnostic");
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var holder = compilation.generated().get("demo.BareValueFieldOptics");
+      assertNotNull(holder, () -> "expected a holder; saw " + compilation.generated().keySet());
+      assertTrue(holder.contains("return new BareValue((String)"), () -> "expected a constructor call; got: " + holder);
+    }
+
+    @Test
+    @DisplayName("@Value with no write strategy at all is rejected with the no-write-strategy diagnostic")
+    void bareValueWithNoStrategyIsRejectedAtEmit() {
+      // The constructor's parameter is not named after the property, so it says nothing about which
+      // property it takes. With no builder and no setters either, the processor must reject with a
+      // diagnostic that names the offending class, not silently produce a half-built navigator.
+      final var compilation = compile(
+        new LombokFocusProcessor(),
+        source(
+          "demo.BareValue",
+          """
+          package demo;
+          import lombok.Value;
+          @Value
+          public class BareValue {
+            String id;
+            public BareValue(String other) { this.id = other; }
+            public String getId() { return id; }
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "this @Value must fail compilation with a rejection diagnostic");
       assertNull(
         compilation.generated().get("demo.BareValueTelescope"),
-        () -> "bare @Value must NOT yield a navigator; saw " + compilation.generated().keySet()
+        () -> "this @Value must NOT yield a navigator; saw " + compilation.generated().keySet()
       );
       assertTrue(
         compilation.hasError("demo.BareValue"),

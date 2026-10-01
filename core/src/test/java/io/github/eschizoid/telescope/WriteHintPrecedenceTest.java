@@ -57,30 +57,30 @@ class WriteHintPrecedenceTest {
   }
 
   @Test
-  @DisplayName("with no hint, a bean with setters is written through its setters")
-  void noHintWritesThroughSetters() {
-    assertEquals("a", Telescope.mapper(Source.class, Target.class).forward(new Source("a")).getName());
+  @DisplayName("with no hint, a bean with setters and a builder is built through its builder")
+  void noHintBuildsThroughTheBuilder() {
+    assertEquals("a [built]", Telescope.mapper(Source.class, Target.class).forward(new Source("a")).getName());
   }
 
   @Test
-  @DisplayName("a per-class BUILDER hint builds a bean that also has setters through its builder")
-  void perClassBuilderHintWins() {
-    final var mapper = Telescope.mapper(Source.class, Target.class, writeBean(Target.class, BUILDER));
-    assertEquals("a [built]", mapper.forward(new Source("a")).getName());
-  }
-
-  @Test
-  @DisplayName("a default BUILDER strategy builds a bean that also has setters through its builder")
-  void defaultBuilderStrategyWins() {
-    final var mapper = Telescope.mapper(Source.class, Target.class, writeBeans(BUILDER));
-    assertEquals("a [built]", mapper.forward(new Source("a")).getName());
-  }
-
-  @Test
-  @DisplayName("a SETTERS hint keeps the setter write")
-  void settersHintKeepsSetters() {
+  @DisplayName("a per-class SETTERS hint writes a bean that also has a builder through its setters")
+  void perClassSettersHintWins() {
     final var mapper = Telescope.mapper(Source.class, Target.class, writeBean(Target.class, SETTERS));
     assertEquals("a", mapper.forward(new Source("a")).getName());
+  }
+
+  @Test
+  @DisplayName("a default SETTERS strategy writes a bean that also has a builder through its setters")
+  void defaultSettersStrategyWins() {
+    final var mapper = Telescope.mapper(Source.class, Target.class, writeBeans(SETTERS));
+    assertEquals("a", mapper.forward(new Source("a")).getName());
+  }
+
+  @Test
+  @DisplayName("a BUILDER hint keeps the builder write")
+  void builderHintKeepsTheBuilder() {
+    final var mapper = Telescope.mapper(Source.class, Target.class, writeBean(Target.class, BUILDER));
+    assertEquals("a [built]", mapper.forward(new Source("a")).getName());
   }
 
   public record Holder(Target one, List<Target> many) {}
@@ -110,20 +110,20 @@ class WriteHintPrecedenceTest {
   @Test
   @DisplayName("a hint on the source class decides how the backward direction builds it")
   void hintOnTheSourceSideDecidesBackward() {
-    final var mapper = Telescope.mapper(Target.class, Source.class, writeBean(Target.class, BUILDER));
+    final var mapper = Telescope.mapper(Target.class, Source.class, writeBean(Target.class, SETTERS));
     final var target = new Target();
     target.setName("a");
-    assertEquals("a [built]", mapper.backward(new Source("a")).getName());
+    assertEquals("a", mapper.backward(new Source("a")).getName());
     assertEquals("a", mapper.forward(target).name());
   }
 
   @Test
-  @DisplayName("a hinted bean nested in a record, and in a list, is built through its builder")
+  @DisplayName("a hinted bean nested in a record, and in a list, is written through its setters")
   void nestedAndListedHintedBeansUseTheHint() {
-    final var mapper = Telescope.mapper(SourceHolder.class, Holder.class, writeBean(Target.class, BUILDER));
+    final var mapper = Telescope.mapper(SourceHolder.class, Holder.class, writeBean(Target.class, SETTERS));
     final var out = mapper.forward(new SourceHolder(new Source("a"), List.of(new Source("b"))));
-    assertEquals("a [built]", out.one().getName());
-    assertEquals("b [built]", out.many().getFirst().getName());
+    assertEquals("a", out.one().getName());
+    assertEquals("b", out.many().getFirst().getName());
   }
 
   @Test

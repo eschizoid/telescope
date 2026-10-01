@@ -328,8 +328,39 @@ class BeanFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("no builder and no no-arg constructor is an error")
+    @DisplayName("no builder, no name-matched constructor and no no-arg constructor is an error")
     void noStrategyIsRejected() {
+      // The constructor's parameter is not named after the property, so nothing says which
+      // property it takes, and the runtime writer refuses the same class.
+      final var compilation = compile(
+        source(
+          "demo.Immutable",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Immutable {
+            private final String a;
+            public Immutable(String other) { this.a = other; }
+            public String getA() { return a; }
+          }
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "a class with no usable strategy should fail");
+      assertTrue(
+        compilation.hasError(
+          "needs a static builder(), a public constructor whose parameters are named after its properties," +
+            " or a no-arg constructor with setters"
+        ),
+        () -> "expected no-strategy diagnostic; saw " + compilation.errorMessages()
+      );
+    }
+
+    @Test
+    @DisplayName("an all-args-only class whose constructor names its properties is rebuilt through it")
+    void nameMatchedConstructorIsAccepted() {
       final var compilation = compile(
         source(
           "demo.Immutable",
@@ -346,10 +377,10 @@ class BeanFocusProcessorTest {
         )
       );
 
-      assertFalse(compilation.success(), "an all-args-only @BeanFocus class should fail");
+      assertTrue(compilation.success(), compilation::errorMessages);
       assertTrue(
-        compilation.hasError("needs a static builder() or a no-arg constructor with setters"),
-        () -> "expected no-strategy diagnostic; saw " + compilation.errorMessages()
+        compilation.generated().get("demo.ImmutableFieldOptics").contains("return new Immutable((String)"),
+        () -> "construct() should call the constructor; saw " + compilation.generated().get("demo.ImmutableFieldOptics")
       );
     }
   }
