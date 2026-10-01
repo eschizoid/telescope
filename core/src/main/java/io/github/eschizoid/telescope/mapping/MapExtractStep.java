@@ -16,9 +16,9 @@ import java.util.function.Function;
  * static-imported it reads as a list of correspondences alongside the {@link Mapping#to(Accessor,
  * Accessor)} rows on the typed surface.
  *
- * <p>Sealed. Today's only permit is {@link Extract}; future expansions (nested extracts,
- * conditional gates, required-key validation) extend the sealed surface — same pattern as {@link
- * MapStep}.
+ * <p>Sealed. {@link Extract} fills its component from the map where the key carries a value and
+ * from a type default where it does not. Future expansions (nested extracts, conditional gates)
+ * extend the same surface — the pattern {@link MapStep} uses.
  */
 public sealed interface MapExtractStep permits Extract {
   /** The key to look up in the source {@code Map<String, Object>}. */
@@ -33,8 +33,9 @@ public sealed interface MapExtractStep permits Extract {
 
   /**
    * Converter — turns the raw {@code Object} read from the map into the target component's typed
-   * value. The factory is responsible for null-safety semantics; the converter sees whatever the
-   * map produced (including {@code null} when the key is absent or absent-mapped).
+   * value. It receives a value or is not called: a key that is absent, or present holding {@code
+   * null}, is answered before any converter is consulted, so a converter never has to say what the
+   * absence of a value means.
    */
   Function<Object, ?> converter();
 
@@ -78,10 +79,10 @@ public sealed interface MapExtractStep permits Extract {
    * }</pre>
    *
    * <p>The {@code Object → Map<String, Object>} cast the nested map requires lives here, once,
-   * instead of at every call site — and is guarded: an absent key (a {@code null} raw value) yields
-   * a {@code null} component ({@code ForwardMapper#forward} is null-in/null-out), while a key
-   * present but holding a non-{@code Map} value raises an {@link IllegalArgumentException} naming
-   * the key rather than leaking a bare {@code ClassCastException}.
+   * instead of at every call site — and is guarded: a key present but holding a non-{@code Map}
+   * value raises an {@link IllegalArgumentException} naming the key rather than leaking a bare
+   * {@code ClassCastException}. An absent key never reaches this converter, so the component takes
+   * its type default.
    *
    * @param key the map key the row pulls its nested map from
    * @param targetAccessor method reference naming the target field/component
@@ -93,6 +94,8 @@ public sealed interface MapExtractStep permits Extract {
     final ForwardMapper<Map<String, Object>, X> nested
   ) {
     final Function<Object, X> converter = v -> {
+      // The mapper answers an absent value before it consults a converter, so this branch is
+      // reached only by a caller that holds the converter and applies it directly.
       if (v == null) return null;
       // The cast is the caller's now-internal one: guard it so a key that holds the wrong shape
       // names itself, instead of leaking a bare `class String cannot be cast to class Map`.

@@ -5,9 +5,10 @@ import java.util.function.Function;
 
 /**
  * Permit of {@link MapExtractStep} — one {@code Telescope.fromMap(...)} row. Users construct via
- * {@link MapExtractStep#extract(String, Accessor, Function)}; this record is the package-private
- * carrier. The record-generated accessors return {@code Accessor<T, X>} / {@code Function<Object,
- * X>}, which are covariant with the {@link MapExtractStep} supertype's wildcarded returns.
+ * {@link MapExtractStep#extract(String, Accessor, Function)} rather than naming this type, which a
+ * sealed permit has to be public to be. The record-generated accessors return {@code Accessor<T,
+ * X>} / {@code Function<Object, X>}, which are covariant with the {@link MapExtractStep}
+ * supertype's wildcarded returns.
  */
 public record Extract<T, X>(
   String key,

@@ -400,13 +400,19 @@ sealed interface Coercion
   }
 
   /**
-   * {@code Optional<E>} target: wrap the (null-coalescing) element coercion in {@code
-   * Optional.ofNullable}.
+   * {@code Optional<E>} target: an absent value is an empty {@code Optional}, and a present one is
+   * wrapped after the element coercion has run.
+   *
+   * <p>The absence is tested here rather than left to {@code ofNullable}, because an element
+   * coercion answers for its own type before this sees the result: a container answers with an
+   * empty container for a null, so the wrap would receive something non-null and report a key that
+   * carried nothing as a key that carried an empty list. An empty {@code Optional} is what the
+   * runtime mapper leaves for the same source, and it is the reading the source supports.
    */
   record OptionalOf(Coercion element) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      return "Optional.ofNullable(" + element.emit(raw, depth) + ")";
+      return raw + " == null ? Optional.empty() : Optional.ofNullable(" + element.emit(raw, depth) + ")";
     }
 
     @Override

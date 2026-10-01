@@ -34,7 +34,7 @@ public final class RuntimeFromMapServer {
       User.class,
       extract("name", User::name, Object::toString),
       extract("email", User::email, Object::toString),
-      extract("age", User::age, v -> v == null ? 0 : Integer.parseInt(v.toString())),
+      extract("age", User::age, v -> Integer.parseInt(v.toString())),
       extract("role", User::role, v -> v instanceof Role r ? r : Role.valueOf(v.toString())),
       extract("address", User::address, v -> addressMapper.forward(GraphQlServer.asMap(v)))
     );

@@ -403,7 +403,10 @@ public final class DeepMap {
     return new OpticNode.Transformed(sourceField, targetField, simpleTypeName(srcType), simpleTypeName(tgtType));
   }
 
-  private static String simpleTypeName(final Type t) {
+  /**
+   * The name a report gives a type. Shared with the fromMap trail so the two cannot drift apart.
+   */
+  static String simpleTypeName(final Type t) {
     return t instanceof Class<?> c ? c.getSimpleName() : t.getTypeName();
   }
 
