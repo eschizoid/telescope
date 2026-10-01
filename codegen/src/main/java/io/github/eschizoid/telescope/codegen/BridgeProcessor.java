@@ -4193,11 +4193,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * its own, which makes the implementation to allocate the declared class itself; that class is
    * not generic, so the caller writes no diamond and returns before this runs.
    */
-  private List<? extends TypeMirror> allocTypeArguments(final TypeMirror container, final FieldPlan.Kind kind) {
+  private List<TypeMirror> allocTypeArguments(final TypeMirror container, final FieldPlan.Kind kind) {
     final var view = rules.containerViewOf(container);
     return kind == FieldPlan.Kind.MAP_VALUES
-      ? List.of(view.keyType(), view.elementType())
-      : List.of(view.elementType());
+      ? List.of(instantiable(view.keyType()), instantiable(view.elementType()))
+      : List.of(instantiable(view.elementType()));
+  }
+
+  /**
+   * A type argument that can be written after {@code new}, which a wildcard cannot. A wildcard is
+   * replaced by its upper bound, or {@code Object} where it has none: a container of that type
+   * accepts every element the wildcard admits, which is what filling it from the source needs, and
+   * it is assignable to the wildcard-typed field it is returned as. A lower bound gives no element
+   * type the source's elements are known to be, so it allocates over {@code Object} too.
+   */
+  private TypeMirror instantiable(final TypeMirror argument) {
+    if (!(argument instanceof WildcardType wildcard)) return argument;
+    final var upper = wildcard.getExtendsBound();
+    return upper != null ? upper : processingEnv.getElementUtils().getTypeElement("java.lang.Object").asType();
   }
 
   private void emitListHelper(
@@ -4485,7 +4498,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * Whether two TypeMirrors refer to the same type by erasure (handles generics + raw equality).
    */
   private boolean isSameType(final TypeMirror a, final TypeMirror b) {
-    return processingEnv.getTypeUtils().isSameType(a, b);
+    return MirrorProps.sameType(processingEnv.getTypeUtils(), a, b);
   }
 
   // True when one of {a, b} is a primitive and the other is exactly its boxed wrapper (boolean ↔

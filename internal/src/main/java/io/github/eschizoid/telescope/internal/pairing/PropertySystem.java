@@ -48,7 +48,15 @@ public interface PropertySystem<T> {
     UNKNOWN,
   }
 
-  /** Structural type equality — {@code Type#equals} / {@code Types#isSameType} semantics. */
+  /**
+   * Structural type equality.
+   *
+   * <p>Two wildcards are the same type when they have the same upper and lower bounds, with an
+   * unwritten upper bound read as {@code Object}, so {@code ?} and {@code ? extends Object} are the
+   * same. That is what {@code WildcardType#equals} answers in the reflection world. {@code
+   * Types#isSameType} answers false for any wildcard, itself included, so an adapter over it has to
+   * compare wildcards itself.
+   */
   boolean sameType(T a, T b);
 
   /**
