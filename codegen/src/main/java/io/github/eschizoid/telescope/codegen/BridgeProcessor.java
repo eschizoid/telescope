@@ -4035,22 +4035,22 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The implementation parameterised by the arguments the field gave its container, which is what a
-   * member has to be resolved against. Null when the implementation takes a different number of
-   * parameters than the view supplies, since pairing them off by position would then substitute the
-   * wrong ones.
+   * The implementation parameterised by the arguments the field gave it, which is what a member has
+   * to be resolved against. They are the arguments the allocation writes: the declared type's own
+   * when it is the class allocated, so a subtype declaring its parameters in another order than
+   * {@code Map} resolves correctly, and the container's otherwise. Null when the implementation
+   * takes a different number of parameters than those, since pairing them off by position would
+   * then substitute the wrong ones.
    */
   private DeclaredType implWithFieldArgs(
     final FieldPlan.Kind kind,
     final TypeMirror tgtContainer,
     final TypeElement implEl
   ) {
-    final var types = processingEnv.getTypeUtils();
     if (implEl.getTypeParameters().isEmpty()) return (DeclaredType) implEl.asType();
-    final var iface = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.Map" : "java.util.Set";
-    final var args = containerViewArgs(tgtContainer, iface).stream().map(this::instantiable).toArray(TypeMirror[]::new);
+    final var args = allocTypeArguments(tgtContainer, kind).toArray(TypeMirror[]::new);
     if (args.length != implEl.getTypeParameters().size()) return null;
-    return types.getDeclaredType(implEl, args);
+    return processingEnv.getTypeUtils().getDeclaredType(implEl, args);
   }
 
   /**
