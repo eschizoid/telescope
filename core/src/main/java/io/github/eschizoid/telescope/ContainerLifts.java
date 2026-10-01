@@ -24,7 +24,6 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.Stack;
@@ -37,7 +36,6 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -605,10 +603,6 @@ final class ContainerLifts {
     return switch (implName) {
       case "java.util.LinkedList" -> ignored -> new LinkedList<>();
       case "java.util.Stack" -> ignored -> new Stack<>();
-      // PriorityQueue reads a zero capacity as an error rather than as an empty container, and
-      // LinkedBlockingQueue reads its int as a hard bound that would reject every later offer.
-      case "java.util.PriorityQueue" -> ignored -> new PriorityQueue<>();
-      case "java.util.concurrent.LinkedBlockingQueue" -> ignored -> new LinkedBlockingQueue<>();
       default -> null;
     };
   }

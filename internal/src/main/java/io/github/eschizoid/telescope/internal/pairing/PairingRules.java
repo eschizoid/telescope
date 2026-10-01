@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.NavigableSet;
-import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.Set;
 import java.util.SortedMap;
@@ -30,7 +29,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ConcurrentSkipListSet;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.stream.Collectors;
 
 /**
@@ -342,10 +340,6 @@ public final class PairingRules<T> {
     list(Queue.class, ArrayDeque.class, Allocation.Call.COUNT),
     list(Vector.class, Vector.class, Allocation.Call.COUNT),
     list(Stack.class, Stack.class, Allocation.Call.NO_ARG),
-    // PriorityQueue reads a zero capacity as an error rather than as an empty container, and
-    // LinkedBlockingQueue reads its int as a hard bound that would reject every later offer.
-    list(PriorityQueue.class, PriorityQueue.class, Allocation.Call.NO_ARG),
-    list(LinkedBlockingQueue.class, LinkedBlockingQueue.class, Allocation.Call.NO_ARG),
     set(Set.class, LinkedHashSet.class, Allocation.Call.TABLE_FACTORY),
     set(LinkedHashSet.class, LinkedHashSet.class, Allocation.Call.TABLE_FACTORY),
     set(HashSet.class, HashSet.class, Allocation.Call.TABLE_FACTORY),

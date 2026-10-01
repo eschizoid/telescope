@@ -175,11 +175,6 @@ class AllocationPolicyTest {
     Map.entry("java.util.Queue", list("java.util.ArrayDeque", Call.COUNT)),
     Map.entry("java.util.Vector", list("java.util.Vector", Call.COUNT)),
     Map.entry("java.util.Stack", list("java.util.Stack", Call.NO_ARG)),
-    Map.entry("java.util.PriorityQueue", list("java.util.PriorityQueue", Call.NO_ARG)),
-    Map.entry(
-      "java.util.concurrent.LinkedBlockingQueue",
-      list("java.util.concurrent.LinkedBlockingQueue", Call.NO_ARG)
-    ),
     Map.entry("java.util.Set", set("java.util.LinkedHashSet", Call.TABLE_FACTORY)),
     Map.entry("java.util.LinkedHashSet", set("java.util.LinkedHashSet", Call.TABLE_FACTORY)),
     Map.entry("java.util.HashSet", set("java.util.HashSet", Call.TABLE_FACTORY)),

@@ -9,6 +9,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.reflect.Method;
 import java.lang.reflect.Type;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -37,27 +38,38 @@ class AllocationRenderingCoverageTest {
     );
     render.setAccessible(true);
 
-    final var source = Map.of("kind", "value");
-    final var listSource = List.of("a", "b");
-
     for (final var entry : PairingRules.declaredTypes().entrySet()) {
-      final var declared = Class.forName(entry.getKey());
-      final var kind = entry.getValue();
-      final var decision = RULES.allocationFor(declared, kind);
-
-      if (decision instanceof Allocation.Refuse) continue;
-      final var build = (Allocation.Build) decision;
-
-      @SuppressWarnings("unchecked")
-      final var rendered = (Function<Object, Object>) render.invoke(null, declared, kind);
-      assertNotNull(rendered, () -> entry.getKey() + " is decided but nothing renders it");
-
-      final var made = rendered.apply(kind == ContainerView.Kind.MAP_VALUES ? source : listSource);
-      assertEquals(
-        build.implName(),
-        made.getClass().getName(),
-        () -> entry.getKey() + " is decided as " + build.implName() + " and rendered as something else"
-      );
+      assertRendered(render, Class.forName(entry.getKey()), entry.getValue());
     }
+    // Collection has no entry of its own, because what it is rebuilt as depends on the kind its
+    // pair
+    // settled on. The spec settles it to a list or a set and never to anything else, so it is
+    // walked
+    // under both. Left out, a rendering broken for either would fall through to the family default
+    // and build the same class, which no assertion about the result would notice.
+    for (final var kind : List.of(ContainerView.Kind.LIST, ContainerView.Kind.SET)) {
+      assertRendered(render, Collection.class, kind);
+    }
+  }
+
+  private static void assertRendered(final Method render, final Class<?> declared, final ContainerView.Kind kind)
+    throws ReflectiveOperationException {
+    final var decision = RULES.allocationFor(declared, kind);
+    if (decision instanceof Allocation.Refuse) return;
+    final var build = (Allocation.Build) decision;
+    final var label = declared.getName() + " as " + kind;
+
+    @SuppressWarnings("unchecked")
+    final var rendered = (Function<Object, Object>) render.invoke(null, declared, kind);
+    assertNotNull(rendered, () -> label + " is decided but nothing renders it");
+
+    final var made = rendered.apply(
+      kind == ContainerView.Kind.MAP_VALUES ? Map.of("kind", "value") : List.of("a", "b")
+    );
+    assertEquals(
+      build.implName(),
+      made.getClass().getName(),
+      () -> label + " is decided as " + build.implName() + " and rendered as something else"
+    );
   }
 }
