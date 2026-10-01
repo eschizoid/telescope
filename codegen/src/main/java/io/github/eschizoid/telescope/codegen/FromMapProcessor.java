@@ -38,6 +38,10 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
 
   private static final String REFUSE_MISSING = "__refuseMissing";
 
+  private static final String MAP_TYPE = "java.util.Map<java.lang.String, java.lang.Object>";
+
+  private static final String FORWARD_MAPPER = "io.github.eschizoid.telescope.conversion.ForwardMapper";
+
   // Reference types a raw map plausibly carries as themselves, so a direct cast is justified.
   private static final Set<String> CAST_AS_IS = Set.of(
     "java.lang.String",
@@ -134,15 +138,11 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final var required = requiredNames(record, componentNames, "component");
     if (required == null) return;
     final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
-    final var imports = coercions
-      .stream()
-      .flatMap(c -> c.imports().stream())
-      .collect(Collectors.toCollection(HashSet::new));
     final var helpers = new LinkedHashMap<String, String>();
     for (final var coercion : coercions) helpers.putAll(coercion.helpers());
     addRefusal(record, required, helpers);
 
-    emitConverter(record, unchecked, imports, helpers, out -> {
+    emitConverter(record, unchecked, helpers, out -> {
       for (final var component : components) hoist(out, component.getSimpleName().toString());
       emitRefusalCall(out, required, "component");
       final var args = IntStream.range(0, components.size())
@@ -209,15 +209,11 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final var required = requiredNames(pojo, props.stream().map(Prop::name).toList(), "property");
     if (required == null) return;
     final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
-    final var imports = coercions
-      .stream()
-      .flatMap(c -> c.imports().stream())
-      .collect(Collectors.toCollection(HashSet::new));
     final var helpers = new LinkedHashMap<String, String>();
     for (final var coercion : coercions) helpers.putAll(coercion.helpers());
     addRefusal(pojo, required, helpers);
 
-    emitConverter(pojo, unchecked, imports, helpers, out -> {
+    emitConverter(pojo, unchecked, helpers, out -> {
       for (final var prop : props) hoist(out, prop.name());
       emitRefusalCall(out, required, "property");
       if (useBuilder) {
@@ -298,10 +294,10 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       REFUSE_MISSING,
       "private static void " +
         REFUSE_MISSING +
-        "(final String... missing) {\n" +
+        "(final java.lang.String... missing) {\n" +
         "  final java.lang.StringBuilder named = new java.lang.StringBuilder();\n" +
         "  int count = 0;\n" +
-        "  for (final String entry : missing) {\n" +
+        "  for (final java.lang.String entry : missing) {\n" +
         "    if (entry == null) continue;\n" +
         "    if (count++ > 0) named.append(\", \");\n" +
         "    named.append(entry);\n" +
@@ -355,7 +351,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
   }
 
   private static void hoist(final PrintWriter out, final String key) {
-    out.println("    final Object " + local(key) + " = map.get(\"" + key + "\");");
+    out.println("    final java.lang.Object " + local(key) + " = map.get(\"" + key + "\");");
   }
 
   /**
@@ -365,31 +361,23 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
   private void emitConverter(
     final TypeElement type,
     final boolean unchecked,
-    final Set<String> coercionImports,
     final Map<String, String> helpers,
     final Consumer<PrintWriter> body
   ) {
     final var pkg = processingEnv.getElementUtils().getPackageOf(type).getQualifiedName().toString();
     final var name = type.getSimpleName().toString();
     final var holder = name + "FromMap";
-    // The target is named by its qualified name throughout the binder, because an import the binder
-    // needs (java.util.Map, ForwardMapper, a coercion's container) shadows a package type of the
-    // same simple name, and the target may be one.
+    // The binder lives in the target's package and imports nothing, so every type it names is
+    // written by its qualified name, java.lang included: there a simple name means whatever the
+    // package declares, and an import would shadow a package type of the same name or collide with
+    // a component type's own. The target is one of the names it writes.
     final var ref = type.getQualifiedName().toString();
     final var qualified = pkg.isEmpty() ? holder : pkg + "." + holder;
 
-    final Set<String> imports = new LinkedHashSet<>();
-    imports.add("java.util.Map");
-    imports.add("io.github.eschizoid.telescope.conversion.ForwardMapper");
-    imports.addAll(coercionImports);
-    // The converter lives in the target's own package — no self-import needed for sibling
-    // converters.
-    imports.removeIf(fqn -> fqn.equals(pkg + "." + Coercion.simple(fqn)));
-
     final var javadoc = "Generated by telescope-codegen for @FromMap " + name + ".";
-    writeClass(qualified, holder, imports, javadoc, type, out -> {
-      if (unchecked) out.println("  @SuppressWarnings(\"unchecked\")");
-      out.println("  public static " + ref + " fromMap(final Map<String, Object> map) {");
+    writeClass(qualified, holder, Set.of(), javadoc, type, out -> {
+      if (unchecked) out.println("  @java.lang.SuppressWarnings(\"unchecked\")");
+      out.println("  public static " + ref + " fromMap(final " + MAP_TYPE + " map) {");
       out.println("    if (map == null) return null;");
       body.accept(out);
       out.println("  }");
@@ -405,21 +393,23 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       out.println();
       // Map.class is a raw Class<Map>; create wants Class<Map<String, Object>> — same unchecked
       // bridge the runtime Telescope.fromMap makes.
-      out.println("  @SuppressWarnings(\"unchecked\")");
-      out.println("  public static final ForwardMapper<Map<String, Object>, " + ref + "> FROM_MAP =");
-      out.println("      ForwardMapper.create(" + holder + "::fromMap, Map.class, " + ref + ".class);");
+      out.println("  @java.lang.SuppressWarnings(\"unchecked\")");
+      out.println("  public static final " + FORWARD_MAPPER + "<" + MAP_TYPE + ", " + ref + "> FROM_MAP =");
+      out.println(
+        "      " + FORWARD_MAPPER + ".create(" + holder + "::fromMap, java.util.Map.class, " + ref + ".class);"
+      );
     });
   }
 
   /** Map a target field type to the expression strategy that coerces a raw map value into it. */
   private Coercion resolveCoercion(final TypeMirror type) {
     return switch (type.getKind()) {
-      case INT -> new Coercion.Parse("intValue", "Integer.parseInt", "0");
-      case LONG -> new Coercion.Parse("longValue", "Long.parseLong", "0L");
-      case DOUBLE -> new Coercion.Parse("doubleValue", "Double.parseDouble", "0.0d");
-      case FLOAT -> new Coercion.Parse("floatValue", "Float.parseFloat", "0.0f");
-      case SHORT -> new Coercion.Parse("shortValue", "Short.parseShort", "(short) 0");
-      case BYTE -> new Coercion.Parse("byteValue", "Byte.parseByte", "(byte) 0");
+      case INT -> new Coercion.Parse("intValue", "java.lang.Integer.parseInt", "0");
+      case LONG -> new Coercion.Parse("longValue", "java.lang.Long.parseLong", "0L");
+      case DOUBLE -> new Coercion.Parse("doubleValue", "java.lang.Double.parseDouble", "0.0d");
+      case FLOAT -> new Coercion.Parse("floatValue", "java.lang.Float.parseFloat", "0.0f");
+      case SHORT -> new Coercion.Parse("shortValue", "java.lang.Short.parseShort", "(short) 0");
+      case BYTE -> new Coercion.Parse("byteValue", "java.lang.Byte.parseByte", "(byte) 0");
       case BOOLEAN -> new Coercion.BoolParse("false");
       case CHAR -> new Coercion.CharParse("'\\0'");
       case DECLARED -> declaredCoercion((DeclaredType) type);
@@ -434,12 +424,12 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
    */
   private Coercion boxedWrapperCoercion(final String fqn) {
     return switch (fqn) {
-      case "java.lang.Integer" -> new Coercion.Parse("intValue", "Integer.parseInt", "null");
-      case "java.lang.Long" -> new Coercion.Parse("longValue", "Long.parseLong", "null");
-      case "java.lang.Double" -> new Coercion.Parse("doubleValue", "Double.parseDouble", "null");
-      case "java.lang.Float" -> new Coercion.Parse("floatValue", "Float.parseFloat", "null");
-      case "java.lang.Short" -> new Coercion.Parse("shortValue", "Short.parseShort", "null");
-      case "java.lang.Byte" -> new Coercion.Parse("byteValue", "Byte.parseByte", "null");
+      case "java.lang.Integer" -> new Coercion.Parse("intValue", "java.lang.Integer.parseInt", "null");
+      case "java.lang.Long" -> new Coercion.Parse("longValue", "java.lang.Long.parseLong", "null");
+      case "java.lang.Double" -> new Coercion.Parse("doubleValue", "java.lang.Double.parseDouble", "null");
+      case "java.lang.Float" -> new Coercion.Parse("floatValue", "java.lang.Float.parseFloat", "null");
+      case "java.lang.Short" -> new Coercion.Parse("shortValue", "java.lang.Short.parseShort", "null");
+      case "java.lang.Byte" -> new Coercion.Parse("byteValue", "java.lang.Byte.parseByte", "null");
       case "java.lang.Boolean" -> new Coercion.BoolParse("null");
       case "java.lang.Character" -> new Coercion.CharParse("null");
       default -> null;
@@ -458,22 +448,17 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     if (hasAnnotation(element, ANNOTATION)) return new Coercion.Nested(boxedType(type) + "FromMap");
     final var listElement = singleArgOf(type, "java.util.List");
     if (listElement != null) {
-      return new Coercion.Listed(renderType(listElement), resolveCoercion(listElement));
+      return new Coercion.Listed(resolveCoercion(listElement));
     }
     final var setElement = singleArgOf(type, "java.util.Set");
     if (setElement != null) {
-      return new Coercion.Setted(renderType(setElement), resolveCoercion(setElement));
+      return new Coercion.Setted(resolveCoercion(setElement));
     }
     final var optElement = singleArgOf(type, "java.util.Optional");
     if (optElement != null) return new Coercion.OptionalOf(resolveCoercion(optElement));
     if (isErasure(type, "java.util.Map") && type.getTypeArguments().size() == 2) {
       final var args = type.getTypeArguments();
-      return new Coercion.MapValues(
-        renderType(args.get(0)),
-        renderType(args.get(1)),
-        resolveCoercion(args.get(0)),
-        resolveCoercion(args.get(1))
-      );
+      return new Coercion.MapValues(resolveCoercion(args.get(0)), resolveCoercion(args.get(1)));
     }
     final var fqn = boxedType(type);
     // A collection/map SUBTYPE (ArrayList, TreeSet, HashMap, …) — codegen can't allocate the
@@ -512,30 +497,6 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final var types = processingEnv.getTypeUtils();
     final var raw = processingEnv.getElementUtils().getTypeElement(rawFqn);
     return raw != null && types.isAssignable(types.erasure(type), types.erasure(raw.asType()));
-  }
-
-  /**
-   * Render a type as a simple-name source string ({@code Map<String, List<Address>>}), collecting
-   * the FQNs to import. Used for the explicit type witnesses on the generated container collectors.
-   */
-  private Coercion.RenderedType renderType(final TypeMirror type) {
-    if (type.getKind() != TypeKind.DECLARED) return new Coercion.RenderedType(
-      Coercion.simple(boxedType(type)),
-      Set.of()
-    );
-    final var declared = (DeclaredType) type;
-    final var raw = ((TypeElement) declared.asElement()).getQualifiedName().toString();
-    final var imports = new HashSet<>(Coercion.importing(raw));
-    final var args = declared.getTypeArguments();
-    if (args.isEmpty()) return new Coercion.RenderedType(Coercion.simple(raw), imports);
-    final var rendered = new StringBuilder();
-    for (final var arg : args) {
-      final var part = renderType(arg);
-      if (!rendered.isEmpty()) rendered.append(", ");
-      rendered.append(part.source());
-      imports.addAll(part.imports());
-    }
-    return new Coercion.RenderedType(Coercion.simple(raw) + "<" + rendered + ">", imports);
   }
 
   /**

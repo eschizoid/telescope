@@ -1,19 +1,20 @@
 package io.github.eschizoid.telescope.codegen;
 
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * A per-field coercion from a raw {@code Map} value expression to the target field's type, emitted
  * as a Java expression. The processor resolves each field's declared type to one of these, then
  * asks it to {@link #emit(String, int)} the conversion around the raw {@code map.get("key")}
- * expression and to {@link #imports()} the types it references — so the generated converter uses
- * imports and simple names, not inline fully-qualified names. Sealed so each strategy is a
- * distinct, independently testable shape; container strategies compose recursively over their
- * element coercion.
+ * expression. Sealed so each strategy is a distinct, independently testable shape; container
+ * strategies compose recursively over their element coercion.
+ *
+ * <p>Every type an emitted expression names is written by its qualified name, {@code java.lang}
+ * included. The binder lives in its target's package, where a simple name means whatever that
+ * package declares: a type there named {@code String} shadows {@code java.lang.String}, and an
+ * import would shadow a type there of the same name or collide with another import.
  *
  * <p>{@code depth} disambiguates generated local/pattern variable names so nested containers (e.g.
  * {@code List<List<X>>}) don't shadow each other's lambda parameters.
@@ -38,14 +39,6 @@ sealed interface Coercion
    * type.
    */
   String emit(String raw, int depth);
-
-  /**
-   * Fully-qualified names this coercion references, to be imported by the generated converter
-   * (simple names emitted).
-   */
-  default Set<String> imports() {
-    return Set.of();
-  }
 
   /**
    * Private static methods the generated converter needs beside its binder, keyed by name so two
@@ -91,25 +84,6 @@ sealed interface Coercion
     return "__" + tag + depth;
   }
 
-  /** Import set for a type — empty for {@code java.lang} (auto-imported), else the single FQN. */
-  static Set<String> importing(final String fqn) {
-    return fqn.startsWith("java.lang.") ? Set.of() : Set.of(fqn);
-  }
-
-  /** Union of a fixed import set with a child coercion's imports. */
-  static Set<String> with(final Set<String> own, final Coercion child) {
-    final var all = new HashSet<>(own);
-    all.addAll(child.imports());
-    return all;
-  }
-
-  /**
-   * A type rendered to its simple-name source form ({@code Map<String, Address>}) together with the
-   * FQNs that form needs imported. Kept as one value so the rendered string and its imports can't
-   * drift apart — the container coercions thread it straight through to their type witnesses.
-   */
-  record RenderedType(String source, Set<String> imports) {}
-
   /**
    * How a JDK value type is rebuilt from its {@code String} form: a named static factory ({@code
    * Instant.parse}, {@code UUID.fromString}, …) or the {@code String} constructor ({@code new
@@ -147,12 +121,7 @@ sealed interface Coercion
       // A reader hands back an Object, so a cast to Object narrows nothing and javac says so. The
       // other members of this family — String, CharSequence — are narrower than what the reader
       // returns, and their cast is what makes the assignment compile.
-      return "java.lang.Object".equals(fqn) ? raw : "(" + simple(fqn) + ") " + raw;
-    }
-
-    @Override
-    public Set<String> imports() {
-      return importing(fqn);
+      return "java.lang.Object".equals(fqn) ? raw : "(" + fqn + ") " + raw;
     }
   }
 
@@ -167,7 +136,7 @@ sealed interface Coercion
       final var v = gensym("n", depth);
       return (
         raw +
-        " instanceof Number " +
+        " instanceof java.lang.Number " +
         v +
         " ? " +
         v +
@@ -179,7 +148,7 @@ sealed interface Coercion
         defaultLiteral +
         " : " +
         parseMethod +
-        "(String.valueOf(" +
+        "(java.lang.String.valueOf(" +
         raw +
         "))"
       );
@@ -197,7 +166,7 @@ sealed interface Coercion
       final var v = gensym("b", depth);
       return (
         raw +
-        " instanceof Boolean " +
+        " instanceof java.lang.Boolean " +
         v +
         " ? " +
         v +
@@ -205,7 +174,7 @@ sealed interface Coercion
         raw +
         " == null ? " +
         defaultLiteral +
-        " : Boolean.parseBoolean(String.valueOf(" +
+        " : java.lang.Boolean.parseBoolean(java.lang.String.valueOf(" +
         raw +
         "))"
       );
@@ -222,17 +191,17 @@ sealed interface Coercion
       final var v = gensym("c", depth);
       return (
         raw +
-        " instanceof Character " +
+        " instanceof java.lang.Character " +
         v +
         " ? " +
         v +
         " : " +
         raw +
-        " == null || String.valueOf(" +
+        " == null || java.lang.String.valueOf(" +
         raw +
         ").isEmpty() ? " +
         defaultLiteral +
-        " : String.valueOf(" +
+        " : java.lang.String.valueOf(" +
         raw +
         ").charAt(0)"
       );
@@ -246,7 +215,7 @@ sealed interface Coercion
   record EnumOf(String fqn) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      final var type = simple(fqn);
+      final var type = fqn;
       final var v = gensym("e", depth);
       return (
         raw +
@@ -260,15 +229,10 @@ sealed interface Coercion
         raw +
         " == null ? null : " +
         type +
-        ".valueOf(String.valueOf(" +
+        ".valueOf(java.lang.String.valueOf(" +
         raw +
         "))"
       );
-    }
-
-    @Override
-    public Set<String> imports() {
-      return importing(fqn);
     }
   }
 
@@ -280,15 +244,10 @@ sealed interface Coercion
   record StringFactory(String fqn, Factory factory) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      final var type = simple(fqn);
-      final var build = factory.build(type, "String.valueOf(" + raw + ")");
+      final var type = fqn;
+      final var build = factory.build(type, "java.lang.String.valueOf(" + raw + ")");
       final var v = gensym("sf", depth);
       return raw + " instanceof " + type + " " + v + " ? " + v + " : " + raw + " == null ? null : " + build;
-    }
-
-    @Override
-    public Set<String> imports() {
-      return importing(fqn);
     }
   }
 
@@ -299,12 +258,14 @@ sealed interface Coercion
   record Nested(String converterFqn) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      return raw + " == null ? null : " + simple(converterFqn) + ".fromMap((Map<String, Object>) " + raw + ")";
-    }
-
-    @Override
-    public Set<String> imports() {
-      return importing(converterFqn);
+      return (
+        raw +
+        " == null ? null : " +
+        converterFqn +
+        ".fromMap((java.util.Map<java.lang.String, java.lang.Object>) " +
+        raw +
+        ")"
+      );
     }
 
     @Override
@@ -314,18 +275,11 @@ sealed interface Coercion
   }
 
   /** {@code List<E>} target: stream each element through the element coercion into a fresh list. */
-  record Listed(RenderedType elementType, Coercion element) implements Coercion {
+  record Listed(Coercion element) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
       final var el = gensym("el", depth);
       return ("__coerceList(" + raw + ", " + el + " -> " + element.emit(el, depth + 1) + ")");
-    }
-
-    @Override
-    public Set<String> imports() {
-      final var all = with(Set.of("java.util.ArrayList", "java.util.List", "java.util.function.Function"), element);
-      all.addAll(elementType.imports());
-      return all;
     }
 
     @Override
@@ -334,9 +288,12 @@ sealed interface Coercion
       all.put(
         "__coerceList",
         """
-        private static <E> List<E> __coerceList(final Object raw, final Function<Object, E> each) {
-          if (!(raw instanceof List<?> src)) return List.of();
-          final var out = new ArrayList<E>(src.size());
+        private static <E> java.util.List<E> __coerceList(
+          final java.lang.Object raw,
+          final java.util.function.Function<java.lang.Object, E> each
+        ) {
+          if (!(raw instanceof java.util.List<?> src)) return java.util.List.of();
+          final var out = new java.util.ArrayList<E>(src.size());
           for (final var element : src) out.add(each.apply(element));
           return out;
         }\
@@ -357,18 +314,11 @@ sealed interface Coercion
   }
 
   /** {@code Set<E>} target: stream each element through the element coercion into a fresh set. */
-  record Setted(RenderedType elementType, Coercion element) implements Coercion {
+  record Setted(Coercion element) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
       final var el = gensym("el", depth);
       return "__coerceSet(" + raw + ", " + el + " -> " + element.emit(el, depth + 1) + ")";
-    }
-
-    @Override
-    public Set<String> imports() {
-      final var all = with(Set.of("java.util.LinkedHashSet", "java.util.Set", "java.util.function.Function"), element);
-      all.addAll(elementType.imports());
-      return all;
     }
 
     @Override
@@ -377,9 +327,12 @@ sealed interface Coercion
       all.put(
         "__coerceSet",
         """
-        private static <E> Set<E> __coerceSet(final Object raw, final Function<Object, E> each) {
-          if (!(raw instanceof Set<?> src)) return Set.of();
-          final var out = LinkedHashSet.<E>newLinkedHashSet(src.size());
+        private static <E> java.util.Set<E> __coerceSet(
+          final java.lang.Object raw,
+          final java.util.function.Function<java.lang.Object, E> each
+        ) {
+          if (!(raw instanceof java.util.Set<?> src)) return java.util.Set.of();
+          final var out = java.util.LinkedHashSet.<E>newLinkedHashSet(src.size());
           for (final var element : src) out.add(each.apply(element));
           return out;
         }\
@@ -412,12 +365,9 @@ sealed interface Coercion
   record OptionalOf(Coercion element) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
-      return raw + " == null ? Optional.empty() : Optional.ofNullable(" + element.emit(raw, depth) + ")";
-    }
-
-    @Override
-    public Set<String> imports() {
-      return with(Set.of("java.util.Optional"), element);
+      return (
+        raw + " == null ? java.util.Optional.empty() : java.util.Optional.ofNullable(" + element.emit(raw, depth) + ")"
+      );
     }
 
     @Override
@@ -441,7 +391,7 @@ sealed interface Coercion
    * put-accumulating collect (not {@code Collectors.toMap}) so a {@code null} value doesn't throw —
    * matching the lenient spirit of {@code fromMap}.
    */
-  record MapValues(RenderedType keyType, RenderedType valueType, Coercion key, Coercion value) implements Coercion {
+  record MapValues(Coercion key, Coercion value) implements Coercion {
     @Override
     public String emit(final String raw, final int depth) {
       final var k = gensym("k", depth);
@@ -462,29 +412,19 @@ sealed interface Coercion
     }
 
     @Override
-    public Set<String> imports() {
-      final var all = new HashSet<>(Set.of("java.util.Map", "java.util.LinkedHashMap", "java.util.function.Function"));
-      all.addAll(keyType.imports());
-      all.addAll(valueType.imports());
-      all.addAll(key.imports());
-      all.addAll(value.imports());
-      return all;
-    }
-
-    @Override
     public Map<String, String> helpers() {
       final var all = new LinkedHashMap<>(key.helpers());
       all.putAll(value.helpers());
       all.put(
         "__coerceMap",
         """
-        private static <K, V> Map<K, V> __coerceMap(
-          final Object raw,
-          final Function<Object, K> eachKey,
-          final Function<Object, V> eachValue
+        private static <K, V> java.util.Map<K, V> __coerceMap(
+          final java.lang.Object raw,
+          final java.util.function.Function<java.lang.Object, K> eachKey,
+          final java.util.function.Function<java.lang.Object, V> eachValue
         ) {
-          if (!(raw instanceof Map<?, ?> src)) return Map.of();
-          final var out = LinkedHashMap.<K, V>newLinkedHashMap(src.size());
+          if (!(raw instanceof java.util.Map<?, ?> src)) return java.util.Map.of();
+          final var out = java.util.LinkedHashMap.<K, V>newLinkedHashMap(src.size());
           for (final var entry : src.entrySet()) {
             out.put(eachKey.apply(entry.getKey()), eachValue.apply(entry.getValue()));
           }
