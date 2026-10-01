@@ -1008,6 +1008,48 @@ class TelescopeSpringProcessorTest {
     );
 
     assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
-    assertThat(result.generated().get("demo.EntityMapperImpl")).contains("return demo.EntityBridge.forward(input);");
+    // In the mapper's own package the bridge needs neither an import nor a qualifier.
+    assertThat(result.generated().get("demo.EntityMapperImpl"))
+      .contains("return EntityBridge.forward(input);")
+      .doesNotContain("import demo.EntityBridge;");
+  }
+
+  // From another package the bridge cannot be named by its simple name, and a last-round bridge
+  // cannot be imported either, so the qualified name is the one form that compiles. This pins why
+  // the qualifier is kept outside the mapper's own package.
+  @Test
+  void mapperInAnotherPackageNamesALastRoundBridgeInFull() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("lombok.Data", "package lombok; public @interface Data {}"),
+      source(
+        "domain.Entity",
+        """
+        package domain;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @lombok.Data
+        @Bridge(EntityDto.class)
+        public record Entity(String name) {}
+        """
+      ),
+      source("domain.EntityDto", "package domain; public record EntityDto(String name) {}"),
+      source(
+        "mapping.EntityMapper",
+        """
+        package mapping;
+        import domain.Entity;
+        import domain.EntityDto;
+        import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+        @TelescopeMapper(from = Entity.class, to = EntityDto.class)
+        public interface EntityMapper { EntityDto map(Entity source); }
+        """
+      )
+    );
+
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("mapping.EntityMapperImpl"))
+      .contains("return domain.EntityBridge.forward(input);")
+      .doesNotContain("import domain.EntityBridge;");
   }
 }

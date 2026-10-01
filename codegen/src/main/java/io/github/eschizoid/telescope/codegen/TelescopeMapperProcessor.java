@@ -158,11 +158,16 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
       error(blueprint, "@TelescopeMapper requires a generated @Bridge for " + from + " -> " + to);
       return;
     }
-    // Referenced by its qualified name rather than imported. A bridge for a source carrying a
-    // Lombok
-    // annotation is emitted in the last processing round, and a class created then can be named in
-    // full but cannot be imported.
-    final var bridgeName = bridgeClass;
+    // The bridge is never imported. A bridge for a Lombok-annotated source is created in the last
+    // processing round, and a class created then can be named but not imported. In the mapper's own
+    // package its simple name resolves with no import at all, as the navigators already rely on.
+    // Anywhere else it is named in full.
+    final var bridgeName =
+      bridgeClass == null
+        ? null
+        : packageOf(bridgeClass).equals(packageOf(blueprint))
+          ? bridgeClass.substring(bridgeClass.lastIndexOf('.') + 1)
+          : bridgeClass;
     final var method = mappingMethods.getFirst();
     final var model = simple(from);
     final var focus = "TelescopeTransformation<" + model + ", ?>";
@@ -761,5 +766,15 @@ public final class TelescopeMapperProcessor extends AbstractTelescopeProcessor {
     } catch (final IOException e) {
       error(blueprint, "Failed to write " + qualified + ": " + e.getMessage());
     }
+  }
+
+  /** The package a qualified name sits in, or the empty string for the default package. */
+  private static String packageOf(final String qualifiedName) {
+    final var dot = qualifiedName.lastIndexOf('.');
+    return dot < 0 ? "" : qualifiedName.substring(0, dot);
+  }
+
+  private String packageOf(final Element element) {
+    return processingEnv.getElementUtils().getPackageOf(element).getQualifiedName().toString();
   }
 }
