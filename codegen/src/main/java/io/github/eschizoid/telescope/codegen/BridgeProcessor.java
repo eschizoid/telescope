@@ -37,6 +37,7 @@ import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.ElementFilter;
 import javax.tools.Diagnostic;
 import javax.tools.StandardLocation;

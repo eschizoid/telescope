@@ -85,11 +85,12 @@ public interface PropertySystem<T> {
   boolean isSubtypeOf(T t, WellKnown wellKnown);
 
   /**
-   * Whether a value of type {@code from} can be assigned to a variable of type {@code to}, as
-   * javac's {@code Types#isAssignable} answers: subtyping through the generic supertypes, with a
-   * wildcard argument of {@code to} containing whatever its bounds admit; a type variable through
-   * any of its bounds; arrays by their components; boxing and unboxing. A generic class used raw is
-   * assignable to any parameterization of a supertype, which is the unchecked conversion.
+   * Whether a value of type {@code from} can be assigned to a variable of type {@code to}:
+   * subtyping through the generic supertypes, with a wildcard argument of {@code to} containing
+   * whatever its bounds admit; a type variable through any of its bounds; arrays by their
+   * components; boxing and unboxing. A generic class used raw is assignable to any parameterization
+   * of a supertype, which is the unchecked conversion. Widening between primitive types is not
+   * covered, so an adapter may answer either way for it.
    */
   boolean isAssignable(T from, T to);
 
