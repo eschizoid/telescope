@@ -26,10 +26,10 @@ import java.util.function.Function;
  * <ul>
  *   <li>{@link #RECORDS} — backed by {@link Records}. Canonical-constructor rebuild, identity name
  *       normalization (record components are already named the user-visible way).
- *   <li>{@link #BEANS} — backed by {@link Beans}. Auto-detected write strategy ({@code builder()} →
- *       no-arg ctor + setters → no-arg ctor + reflective field injection), {@code getX/isX}
- *       stripped to a property name. Immutable all-args-only POJOs (no setters, no builder, no
- *       no-arg ctor) are not supported by the auto path — use a record, or add a no-arg ctor.
+ *   <li>{@link #BEANS} — backed by {@link Beans}. Auto-detected write strategy (no-arg ctor +
+ *       setters → {@code builder()} → name-matched all-args ctor), {@code getX/isX} stripped to a
+ *       property name. A POJO none of those strategies can write — including one whose only write
+ *       path is its private fields — is refused by the auto path.
  * </ul>
  *
  * <p>The lattice-first principle holds: {@code DeepMap} composes {@link

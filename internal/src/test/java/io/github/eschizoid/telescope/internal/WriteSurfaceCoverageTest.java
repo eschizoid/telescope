@@ -3,6 +3,8 @@ package io.github.eschizoid.telescope.internal;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
@@ -27,6 +29,17 @@ class WriteSurfaceCoverageTest {
 
   private static <P> P writeName(final Class<P> cls, final P seed) {
     return Beans.lens(cls, "name", Beans.autoWriter(cls)).set(seed, "bob");
+  }
+
+  /**
+   * The bean offers no builder, no setter and no matching constructor, so the write is refused as
+   * one only private fields could carry — a candidate builder that was accepted would fail
+   * differently, or not at all.
+   */
+  private static <P> void assertNoWriteSurface(final Class<P> cls, final P seed) {
+    final var ex = assertThrows(IllegalStateException.class, () -> writeName(cls, seed));
+    assertTrue(ex.getMessage().contains(cls.getName()), ex.getMessage());
+    assertTrue(ex.getMessage().contains("does not write private fields"), ex.getMessage());
   }
 
   @Nested
@@ -104,11 +117,10 @@ class WriteSurfaceCoverageTest {
     @DisplayName("a method named builder that builds nothing is not a builder")
     void anUnrelatedBuilderMethodIsNotASurface() {
       // A method's name is not a contract. Nothing can finish with what this one returns, so it is
-      // not a surface — and because the surface is chosen while the path is constructed, treating
-      // it as one costs a read that was never going to write anything.
-      final var out = assertDoesNotThrow(() -> writeName(UnrelatedBuilder.class, UnrelatedBuilder.of("alice")));
-
-      assertEquals("bob", out.getName());
+      // not a surface. With no setters either, the bean has no write surface at all, so the path
+      // is refused where it is constructed — with the refusal for a bean only its private fields
+      // could write, not a failure from binding a builder that is not one.
+      assertNoWriteSurface(UnrelatedBuilder.class, UnrelatedBuilder.of("alice"));
     }
 
     @Test
@@ -116,10 +128,8 @@ class WriteSurfaceCoverageTest {
     void aStaticBuildIsNotASurface() {
       // Existing and being callable are different requirements. A static build() belongs to the
       // class rather than to the builder that was made, so nothing can invoke it on that builder —
-      // and the failure lands where the path is constructed, not where a value is written.
-      final var out = assertDoesNotThrow(() -> writeName(StaticBuild.class, StaticBuild.of("alice")));
-
-      assertEquals("bob", out.getName());
+      // and the refusal lands where the path is constructed, not where a value is written.
+      assertNoWriteSurface(StaticBuild.class, StaticBuild.of("alice"));
     }
 
     @Test
@@ -140,9 +150,7 @@ class WriteSurfaceCoverageTest {
     void aBuildReturningSomethingUnrelatedIsNotASurface() {
       // The other side of that, and what stops the row above from being "accept any build()". This
       // one hands back an object of a class the field cannot hold, and does it without complaint.
-      final var out = assertDoesNotThrow(() -> writeName(UnrelatedBuild.class, UnrelatedBuild.of("alice")));
-
-      assertEquals("bob", out.getName());
+      assertNoWriteSurface(UnrelatedBuild.class, UnrelatedBuild.of("alice"));
     }
 
     @Test

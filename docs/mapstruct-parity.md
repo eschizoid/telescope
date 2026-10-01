@@ -408,8 +408,8 @@ TARGET_IMMUTABLE; @MappingTarget updates an existing target's collections
 // (ArrayList/LinkedList/Vector/CopyOnWriteArrayList/TreeSet/ConcurrentHashMap/... + user subclasses)
 final Mapper<Order, OrderEntity> mapper = Telescope.mapper(
     Order.class, OrderEntity.class,
-    writeBeans(SETTERS),                          // pin bean write strategy tree-wide
-    writeBean(CashRegisterEntity.class, FIELDS)); // per-class override
+    writeBeans(SETTERS),                           // pin bean write strategy tree-wide
+    writeBean(CashRegisterEntity.class, BUILDER)); // per-class override
 
 // @MappingTarget analog — mutate an existing managed entity in place:
 final OrderEntity managed = repository.findById(id).orElseThrow();
@@ -433,8 +433,8 @@ identity, repeatable); core/src/main/java/io/github/eschizoid/telescope/DeepMap.
 (liftListIntoTargetRaw + listAllocatorFor: result runtime class matches declared target raw class, unknown java.base
 subtypes throw at plan time), 1463-1508 (set/map allocators);
 core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java:45-98 (writeBean/writeBeans with
-BUILDER/SETTERS/FIELDS/CONSTRUCTOR — no ADDER); grep for 'adder' across core/ and codegen/ returned only WriteStrategy
-ladder docs (no adder support anywhere)</sub>
+BUILDER/SETTERS/CONSTRUCTOR — no ADDER); grep for 'adder' across core/ and codegen/ returned only WriteStrategy ladder
+docs (no adder support anywhere)</sub>
 
 ### Stream support
 
@@ -647,7 +647,7 @@ args, EntityManager lookup, DI-provided instance) which the generated mapper the
 ```java
 // 1. Pin HOW the engine constructs a target class (strategy, not arbitrary code):
 Telescope.mapper(OrderRecord.class, OrderPojo.class,
-    writeBean(OrderPojo.class, WriteStrategy.CONSTRUCTOR),  // or BUILDER / SETTERS / FIELDS
+    writeBean(OrderPojo.class, WriteStrategy.CONSTRUCTOR),  // or BUILDER / SETTERS
     to(OrderRecord::sku, OrderPojo::getSku));
 // 2. Fabricate/load the instance yourself, then let the mapper populate it in place:
 mapper.into(entityManager.find(OrderEntity.class, dto.id()), dto);
@@ -657,7 +657,7 @@ Telescope.from(OrderDto.class).to(OrderEntity.class)
 ```
 
 No hook to inject an arbitrary user function as the instantiator inside the deep-mapping engine — writeBean() selects
-among four reflection strategies (BUILDER/SETTERS/FIELDS/CONSTRUCTOR), it cannot call your code. The two @ObjectFactory
+among three reflection strategies (BUILDER/SETTERS/CONSTRUCTOR), it cannot call your code. The two @ObjectFactory
 motivations are each covered by a different idiom: 'construct differently' → writeBean strategy hint; 'populate an
 instance I obtained elsewhere (JPA/DI)' → mapper.into(existing, source). A truly custom factory (e.g. constructor
 needing values not on the source) forces you out to from/to/using where you hand-write the entire forward function,
@@ -696,15 +696,15 @@ is NOT detected and there is no @Builder(builderMethod=...) equivalent or Builde
 per-mapper toggle to prefer builder over setters other than the writeBean hint. Builder setter matching (exact / setX /
 withX) covers Lombok, Immutables-fluent, and JavaBean-style builders.
 
-<sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java:742-768 (autoWriter probe order:
-setters → static builder() at :767 → fields → all-args ctor), :720-726 (builderWriter factory), :1229-1232 + 1259-1329
-(BuilderWriter: requires static method named exactly 'builder()' returning a type with 'build()' at :1272-1289; setter
-matching by exact name / setX / withX; LMF-de-reflected dispatch);
-core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java:50,59 (BUILDER strategy, 'requires a static
-builder() method'); lombok/src/test/java/io/github/eschizoid/telescope/codegen/lombok/fixtures/BuilderUser.java:10-12
-(@Builder fixture) and LombokFocusProcessorTest.java:53-68 (@Builder and @Value+@Builder navigators verified
-end-to-end); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:576-712 (writeBean
-BUILDER/FIELDS/CONSTRUCTOR hint tests)</sub>
+<sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java — `computeAutoWriter`
+(autoWriter probe order: setters → static builder() → all-args ctor), the `builderWriter` factory, and `BuilderWriter`
+(requires a static method named exactly 'builder()' returning a type with 'build()'; setter matching by exact name /
+setX / withX; LMF-de-reflected dispatch); core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java — the
+`WriteStrategy` javadoc (BUILDER strategy, 'requires a static builder() method');
+lombok/src/test/java/io/github/eschizoid/telescope/codegen/lombok/fixtures/BuilderUser.java (@Builder fixture) and
+LombokFocusProcessorTest.java (@Builder and @Value+@Builder navigators verified end-to-end);
+core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java — the `WriteHints` nested class (writeBean
+BUILDER/SETTERS/CONSTRUCTOR hint tests)</sub>
 
 ### Records and constructor mapping
 

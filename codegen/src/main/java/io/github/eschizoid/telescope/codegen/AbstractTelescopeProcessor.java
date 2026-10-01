@@ -1011,9 +1011,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         triggerLabel +
           ": " +
           pojo.getQualifiedName() +
-          " needs a static builder() or a no-arg constructor with setters (field" +
-          " injection isn't available to generated code — use Telescope.ofBean for the" +
-          " runtime path)"
+          " needs a static builder() or a no-arg constructor with setters (Telescope.ofBean" +
+          " also accepts a single public all-args constructor compiled with -parameters)"
       );
       return;
     }

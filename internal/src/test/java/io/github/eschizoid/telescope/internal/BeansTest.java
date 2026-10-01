@@ -434,31 +434,41 @@ class BeansTest {
     }
   }
 
-  // Multi-primitive FIELDS fixture pinning the cached-setter unbox path: each declared field is
-  // written through the MethodHandle setter built once at construction time.
-  static final class PrimitiveFields {
+  // No-arg ctor plus an all-args ctor whose parameter names (`n`, `s`) match no getter.
+  static final class NoArgPlusMismatchedCtor {
 
-    private int i;
-    private long l;
-    private double d;
-    private boolean b;
+    private String name;
+    private int score;
 
-    public PrimitiveFields() {}
+    public NoArgPlusMismatchedCtor() {}
 
-    public int getI() {
-      return i;
+    public NoArgPlusMismatchedCtor(final String n, final int s) {
+      this.name = n;
+      this.score = s;
     }
 
-    public long getL() {
-      return l;
+    public String getName() {
+      return name;
     }
 
-    public double getD() {
-      return d;
+    public int getScore() {
+      return score;
+    }
+  }
+
+  // Its one setter is package-private, which neither path calls.
+  static final class PackagePrivateSetter {
+
+    private String name;
+
+    public PackagePrivateSetter() {}
+
+    public String getName() {
+      return name;
     }
 
-    public boolean isB() {
-      return b;
+    void setName(final String name) {
+      this.name = name;
     }
   }
 
@@ -838,57 +848,6 @@ class BeansTest {
     }
   }
 
-  // ----- FieldsWriter -----
-
-  @Nested
-  @DisplayName("FieldsWriter — no-arg ctor + reflective field injection")
-  class Fields {
-
-    @Test
-    @DisplayName("round-trip via fieldsWriter populates declared fields by name")
-    void fieldsRoundTrip() {
-      final var writer = Beans.fieldsWriter(NoArgFields.class);
-      final var values = Map.<String, Object>of("name", "alice", "score", 9);
-      final var pojo = writer.construct(new String[] { "name", "score" }, values::get);
-      assertEquals("alice", pojo.getName());
-      assertEquals(9, pojo.getScore());
-    }
-
-    @Test
-    @DisplayName("fieldsWriter throws when no no-arg constructor exists")
-    void fieldsRequiresNoArgCtor() {
-      assertThrows(IllegalStateException.class, () -> Beans.fieldsWriter(ImmutableCtor.class));
-    }
-
-    @Test
-    @DisplayName("construct silently skips a name without a matching declared field (no-op)")
-    void fieldsMissingFieldIsSilentlySkipped() {
-      // Mirrors SettersWriter and BuilderWriter — the FIELDS strategy must not throw on a
-      // name without a matching field, otherwise three writer strategies on the same engine
-      // would carry three different contracts. The named slot stays at the JLS default; the
-      // value flowing through valueByName is dropped.
-      final var writer = Beans.fieldsWriter(NoArgFields.class);
-      final var pojo = writer.construct(new String[] { "ghost", "name" }, n -> n.equals("name") ? "alice" : "x");
-      assertNotNull(pojo);
-      assertEquals("alice", pojo.name);
-    }
-
-    @Test
-    @DisplayName("primitive-typed fields auto-unbox through the cached MethodHandle setter")
-    void fieldsAutoUnboxesPrimitives() {
-      final var writer = Beans.fieldsWriter(PrimitiveFields.class);
-      // Boxed wrappers arrive via valueByName; the cached setter MH unboxes them per the same
-      // implicit conversions a direct Field.set call would apply (the setter handle was bound
-      // with field-typed signature at cache-warm time).
-      final var values = Map.<String, Object>of("i", 7, "l", 42L, "d", 3.14, "b", Boolean.TRUE);
-      final var pojo = writer.construct(new String[] { "i", "l", "d", "b" }, values::get);
-      assertEquals(7, pojo.getI());
-      assertEquals(42L, pojo.getL());
-      assertEquals(3.14, pojo.getD());
-      assertTrue(pojo.isB());
-    }
-  }
-
   // ----- SettersWriter -----
 
   @Nested
@@ -1083,9 +1042,8 @@ class BeansTest {
     void builderConstructPropagatesDispatchFailures() {
       // A String value flows into a setter expecting an int — the LMF auto-unbox bridge throws
       // ClassCastException at setter-dispatch time. Dispatch-time exceptions propagate raw,
-      // matching the FIELDS / SETTERS / CONSTRUCTOR strategies and the pre-LMF BuilderWriter
-      // (which only wrapped `ReflectiveOperationException`, a class that doesn't exist on the
-      // LMF hot path). Class-context information lives in the bind-time failure messages, not
+      // matching the SETTERS / CONSTRUCTOR strategies; no `ReflectiveOperationException` arises on
+      // the LMF hot path. Class-context information lives in the bind-time failure messages, not
       // the dispatch path.
       final var writer = Beans.builderWriter(WithBuilder.class);
       assertThrows(ClassCastException.class, () ->
@@ -1194,11 +1152,37 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("autoWriter falls back to FieldsWriter when no-arg ctor but no setters")
-    void autoPicksFields() {
-      final var writer = Beans.autoWriter(NoArgFields.class);
-      final var pojo = writer.construct(new String[] { "name" }, n -> "f");
-      assertEquals("f", pojo.getName());
+    @DisplayName("autoWriter refuses a class writable only through its private fields, naming the class and the fix")
+    void autoRefusesPrivateFieldsOnly() {
+      // NoArgFields has a no-arg constructor and getters, but no setter, no static builder() and no
+      // all-args constructor: its private fields are its only write path.
+      final var ex = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(NoArgFields.class));
+      final var message = ex.getMessage();
+      assertTrue(message.contains(NoArgFields.class.getName()), message);
+      assertTrue(message.contains("does not write private fields"), message);
+      assertTrue(message.contains("Add public setters, an all-args constructor"), message);
+      assertTrue(message.contains("static builder()"), message);
+      assertTrue(message.contains("explicit Mapping row"), message);
+    }
+
+    @Test
+    @DisplayName("autoWriter gives constructor advice when a no-arg class also declares an unmatched all-args ctor")
+    void autoGivesConstructorAdviceWhenAConstructorExists() {
+      // NoArgPlusMismatchedCtor has an all-args constructor whose parameter names do not line up
+      // with its getters. It has a constructor write path, so the advice is about that
+      // constructor (-parameters, the CONSTRUCTOR hint), not to add one it already has.
+      final var ex = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(NoArgPlusMismatchedCtor.class));
+      final var message = ex.getMessage();
+      assertTrue(message.contains("No name-based write strategy"), message);
+      assertTrue(message.contains("-parameters"), message);
+      assertFalse(message.contains("does not write private fields"), message);
+    }
+
+    @Test
+    @DisplayName("autoWriter refuses a class whose only setters are package-private, as having no public setters")
+    void autoRefusesPackagePrivateSettersOnly() {
+      final var ex = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(PackagePrivateSetter.class));
+      assertTrue(ex.getMessage().contains("no public setters"), ex.getMessage());
     }
 
     @Test
@@ -1235,15 +1219,14 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("autoWriter ignores a non-static builder() method (uses fields-or-setters instead)")
+    @DisplayName("autoWriter ignores a non-static builder() method")
     void autoIgnoresNonStaticBuilder() {
-      // NoStaticBuilder declares an INSTANCE builder() (not static). hasStaticBuilder rejects it,
-      // so autoWriter falls through to setters/fields. NoStaticBuilder has a no-arg ctor and no
-      // setters, so it lands on FieldsWriter.
-      final var writer = Beans.autoWriter(NoStaticBuilder.class);
-      assertNotNull(writer);
-      final var pojo = writer.construct(new String[] { "id" }, n -> "ok");
-      assertEquals("ok", pojo.getId());
+      // NoStaticBuilder declares an INSTANCE builder() (not static), a no-arg ctor and no setters.
+      // hasStaticBuilder rejects the instance method, so nothing but its private fields remains and
+      // autoWriter refuses it rather than calling the instance builder().
+      final var ex = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(NoStaticBuilder.class));
+      assertTrue(ex.getMessage().contains(NoStaticBuilder.class.getName()), ex.getMessage());
+      assertTrue(ex.getMessage().contains("does not write private fields"), ex.getMessage());
     }
   }
 

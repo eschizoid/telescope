@@ -48,7 +48,7 @@
  *   <li>{@link io.github.eschizoid.telescope.mapping.WriteHint#writeBean WriteHint.writeBean(cls,
  *       strategy)} / {@link io.github.eschizoid.telescope.mapping.WriteHint#writeBeans
  *       WriteHint.writeBeans(strategy)} — per-target / default write-strategy hints for bean
- *       reconstruction ({@code SETTERS} / {@code BUILDER} / {@code FIELDS} / {@code CONSTRUCTOR}).
+ *       reconstruction ({@code SETTERS} / {@code BUILDER} / {@code CONSTRUCTOR}).
  *   <li>{@link io.github.eschizoid.telescope.mapping.NullHint} — null-handling strategy ({@code
  *       DEFAULT} substitutes JLS defaults via {@code NullDefaults}; otherwise null propagates).
  * </ul>

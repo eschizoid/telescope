@@ -273,7 +273,7 @@ is unchanged. This is what took the runtime path from ~16–48× MapStruct to ~3
 prior array leaf across a differential fuzz).
 
 Two older structural choices still keep the paths above the leaf lean: **fused source-and-remap** (no source-side
-`Object[]` intermediate for the array leaf that owns builder/field-injection beans) and the **acyclic-pair shell
+`Object[]` intermediate for the array leaf that owns builder and constructor beans) and the **acyclic-pair shell
 bypass** (nested type-pair hops skip the `ThreadLocal` + `IdentityHashMap` cycle guard when SCC analysis proves no value
 cycle is possible; cyclic SCCs keep the full guard).
 

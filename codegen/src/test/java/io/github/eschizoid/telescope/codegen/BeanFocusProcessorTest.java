@@ -328,7 +328,7 @@ class BeanFocusProcessorTest {
     }
 
     @Test
-    @DisplayName("no builder and no no-arg constructor is an error (field injection unavailable to codegen)")
+    @DisplayName("no builder and no no-arg constructor is an error")
     void noStrategyIsRejected() {
       final var compilation = compile(
         source(

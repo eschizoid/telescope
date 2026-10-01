@@ -41,11 +41,14 @@ defaults (`Mapping.toOrElse` / `toOrElseGet`), by-name enum mapping (`Mapping.en
 (`Mapping.via(srcAcc, tgtAcc, mapper)`) work the same way they do for records — see the rows under
 [Type conversion](type-conversion.md).
 
-**`writeBean` — pin a POJO write strategy.** `Beans.autoWriter` picks a ladder: `builder()` → no-arg ctor + setters →
-no-arg ctor + reflective field injection → single public all-args ctor (when compiled with `-parameters` and ctor
-parameter names match the property names). For classes the auto path refuses (immutable all-args-only POJOs without
-`-parameters`, ambiguous multi-ctor classes), pass an explicit `WriteHint.writeBean(target, strategy)` row to force one
-of `BUILDER` / `SETTERS` / `FIELDS` / `CONSTRUCTOR`:
+**`writeBean` — pin a POJO write strategy.** `Beans.autoWriter` picks a ladder: no-arg ctor + setters → `builder()` →
+single public all-args ctor (when compiled with `-parameters` and ctor parameter names match the property names). For
+classes the auto path refuses because they offer a write path it will not guess at (immutable all-args-only POJOs
+without `-parameters`, ambiguous multi-ctor classes), pass an explicit `WriteHint.writeBean(target, strategy)` row to
+force one of `BUILDER` / `SETTERS` / `CONSTRUCTOR`. A class whose only write path is its private fields — a no-arg
+constructor and no other constructor, no public setters and no static `builder()` — is refused outright: add public
+setters, an all-args constructor or a static `builder()`, or supply an explicit mapping row that produces it.
+Package-private setters do not count; neither path calls them.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
@@ -75,6 +78,7 @@ construction shape (the common JPA case: every `@Entity` needs `SETTERS` so Hibe
 `X`. At most one `writeBeans(...)` default per call.
 
 ```java
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.BUILDER;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
@@ -83,7 +87,7 @@ final Mapper<Order, OrderEntity> orderMapper = Telescope.mapper(
   Order.class,
   OrderEntity.class,
   writeBeans(SETTERS), // default for OrderEntity, CustomerEntity, LineItemEntity, AddressEmbeddable, …
-  writeBean(CashRegisterEntity.class, FIELDS) // override on one specific target
+  writeBean(CashRegisterEntity.class, BUILDER) // override on one specific target
 );
 ```
 
@@ -175,8 +179,9 @@ public static final Telescope<LegacyUser, UserRecord> USER_CONVERSION = Telescop
 ## Navigate — `ofBean`
 
 When you'd rather not define a mirror record, navigate the POJO directly. `.field(Pojo::getX)` reads via the getter;
-`set`/`update` rebuild the POJO immutably with that one property changed (write strategy auto-detected per type: builder
-→ setters → field injection). Deep paths and `.each(...)` compose like records:
+`set`/`update` rebuild the POJO immutably with that one property changed (write strategy auto-detected per type: setters
+→ builder → all-args constructor; a POJO writable only through its private fields still reads, and is refused on the
+first write). Deep paths and `.each(...)` compose like records:
 
 ```java
 Telescope.ofBean(LegacyUser.class)
@@ -195,6 +200,7 @@ deep-mapping conversions are cheaper than deep navigation-and-update — the cur
 ## Scope
 
 `Telescope.map(...)` / `@Bridge` match by exact name and need a same-named field on each side (with optional rename rows
-via `Mapping.to(srcAcc, tgtAcc)`); nested collections recurse automatically. The `FIELDS` write strategy (and `ofBean`'s
-field-injection fallback) uses `setAccessible`, so under JPMS the POJO's package must be `opens`'d to
-`io.github.eschizoid.telescope` — `CONSTRUCTOR` / `BUILDER` / `SETTERS` (and all of `@Bridge`) use public members only.
+via `Mapping.to(srcAcc, tgtAcc)`); nested collections recurse automatically. Neither path writes a private field: the
+runtime writes through setters, a static `builder()` or a constructor, the same members `@Bridge` generates calls to,
+and both refuse a POJO that offers none of them. The runtime reaches those members through a private lookup, so under
+JPMS a POJO package that is exported but not opened needs `opens <package> to io.github.eschizoid.telescope`.

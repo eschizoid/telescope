@@ -62,8 +62,8 @@ public final class MhIso {
    * constructor plus a public {@code setX} setter for every property of the bean (not only the
    * mapped ones — the conservative per-class gate). {@code DeepMap} consults this once, at build
    * time, to choose the composed-handle leaf over the array leaf — a shape decision, not a runtime
-   * fallback. A bean that needs a builder or field injection (no no-arg constructor, or any
-   * property with no setter) returns {@code false} and routes to the array leaf.
+   * fallback. A bean that needs a builder or an all-args constructor (no no-arg constructor), or
+   * that has any property with no setter, returns {@code false} and routes to the array leaf.
    */
   public static boolean supports(final Class<?> source, final Class<?> target) {
     // Test seam for the differential parity oracle: with the system property below set,
@@ -106,10 +106,9 @@ public final class MhIso {
     if (cls.isRecord()) return cls.getRecordComponents().length <= MAX_ARITY;
     // A bean side is composable only when it has a no-arg constructor and every one of its
     // properties is writable via a setter. Requiring a setter for every property (not only the
-    // mapped ones) is the conservative gate — it keeps `supports` a pure per-class question, and a
-    // bean with a getter-only property is exactly the field-injection shape the array leaf must own
-    // for correctness. Records rebuild every component through the canonical constructor
-    // regardless.
+    // mapped ones) is the conservative gate: it keeps `supports` a pure per-class question, and a
+    // bean with a getter-only property is a shape the array leaf must own for correctness.
+    // Records rebuild every component through the canonical constructor regardless.
     return Beans.isSetterConstructible(cls, Beans.propertyNames(cls));
   }
 

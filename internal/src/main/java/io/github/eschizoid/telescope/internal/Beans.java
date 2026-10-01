@@ -9,8 +9,6 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.InaccessibleObjectException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
@@ -18,6 +16,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -47,10 +46,11 @@ import java.util.function.Supplier;
  * directly, skipping the per-call lambda allocation — preferred from inner loops (e.g. {@code
  * Reflective.structuralIso(...).from(...)} reads every property of a target).
  *
- * <p><b>Write direction (Map/record &rarr; POJO).</b> Four strategies behind the sealed {@link
- * BeanWriter} — {@link BuilderWriter}, {@link SettersWriter}, {@link FieldsWriter}, {@link
- * ConstructorWriter} — chosen by {@link #autoWriter} or selected explicitly by a {@code
- * WriteHint.writeBean(target, strategy)} row passed to {@code Telescope.map(...)}.
+ * <p><b>Write direction (Map/record &rarr; POJO).</b> Three strategies behind the sealed {@link
+ * BeanWriter} — {@link BuilderWriter}, {@link SettersWriter}, {@link ConstructorWriter} — chosen by
+ * {@link #autoWriter} or selected explicitly by a {@code WriteHint.writeBean(target, strategy)} row
+ * passed to {@code Telescope.map(...)}. Each one writes through a member the class declares for
+ * writing; none injects a value into a private field.
  */
 public final class Beans {
 
@@ -290,9 +290,8 @@ public final class Beans {
   }
 
   /**
-   * Build an LMF-bound no-arg constructor as a {@link Supplier}. Shared between {@link
-   * FieldsWriter} and {@link SettersWriter} (both need a no-arg ctor as a {@code Supplier} for the
-   * hot-path construct step; centralizing here keeps the LMF setup in one place).
+   * Build an LMF-bound no-arg constructor as a {@link Supplier} — the hot-path construct step of
+   * {@link SettersWriter}, kept beside the other LMF builders on this class.
    */
   @SuppressWarnings("unchecked")
   static Supplier<Object> buildCtorSupplier(
@@ -787,25 +786,16 @@ public final class Beans {
   /**
    * A strategy for reconstructing a POJO from named values — the reverse (record &rarr; POJO)
    * direction of a bean bridge. Sealed over the three concrete writers; pick one via {@link
-   * #fieldsWriter}, {@link #constructorWriter}, or {@link #builderWriter}.
+   * #settersWriter}, {@link #constructorWriter}, or {@link #builderWriter}.
    *
    * <p>{@code construct(names, valueByName)} contract: the {@code names} array is the source
    * record's component names in component order; for each name the writer pulls its value from
-   * {@code valueByName} and feeds it to the chosen mechanism (field, constructor argument, or
+   * {@code valueByName} and feeds it to the chosen mechanism (setter, constructor argument, or
    * builder setter), returning the fully built {@code P}.
    */
-  public sealed interface BeanWriter<P> permits FieldsWriter, ConstructorWriter, BuilderWriter, SettersWriter {
+  public sealed interface BeanWriter<P> permits ConstructorWriter, BuilderWriter, SettersWriter {
     /** Build a {@code P}, pulling each value in {@code names} from {@code valueByName}. */
     P construct(String[] names, Function<String, Object> valueByName);
-  }
-
-  /**
-   * Strategy: invoke the no-arg constructor, then inject each named value into the matching field
-   * reflectively (needs no setters). Requires {@code setAccessible} on the fields, so on the module
-   * path the target package may need an {@code opens} directive — see {@link FieldsWriter}.
-   */
-  public static <P> BeanWriter<P> fieldsWriter(final Class<P> pojoClass) {
-    return new FieldsWriter<>(pojoClass);
   }
 
   /**
@@ -876,7 +866,7 @@ public final class Beans {
    * Whether {@code beanClass} can be constructed by the MethodHandle-combinator setter fold: it has
    * a no-arg constructor and a public single-arg {@code setX} setter for every property in {@code
    * requiredProperties}. Consulted by {@code MhIso.supports} as a build-time shape decision — a
-   * bean that needs a builder or field injection (no no-arg ctor, or a mapped property with no
+   * bean that needs a builder or a constructor (no no-arg ctor, or a mapped property with no
    * setter) returns {@code false} and routes to the array leaf instead. No runtime fallback.
    */
   public static boolean isSetterConstructible(final Class<?> beanClass, final String[] requiredProperties) {
@@ -890,16 +880,17 @@ public final class Beans {
 
   /**
    * Pick a <em>name-based</em> write strategy for {@code cls} by probing in priority order: a
-   * static {@code builder()}, then a no-arg constructor with setters, then a no-arg constructor
-   * with field injection, then — as a last resort — a single public all-args constructor (compiled
-   * with {@code -parameters} so its arguments can be matched by name without positional ambiguity).
-   * The result is cached per class.
+   * no-arg constructor with setters, then a static {@code builder()}, then — as a last resort — a
+   * single public all-args constructor (compiled with {@code -parameters} so its arguments can be
+   * matched by name without positional ambiguity). The result is cached per class.
    *
    * <p>Used by both the record-less POJO APIs ({@code Telescope.ofBean}) and by the deep mapping
-   * path when no explicit {@code writeBean} hint applies. Throws if none of the strategies applies
-   * (e.g., an immutable all-args-only POJO compiled without {@code -parameters}); the recommended
-   * escape is to declare a {@code writeBean(target, CONSTRUCTOR)} hint at the {@code
-   * Telescope.map(...)} call site.
+   * path when no explicit {@code writeBean} hint applies. Throws {@link IllegalStateException} if
+   * none of the strategies applies. A class whose only write path is its private fields — a no-arg
+   * constructor and nothing else — is refused, exactly as the {@code @Bridge} processor refuses it:
+   * a private field is not part of the class's write contract. An immutable all-args-only POJO
+   * compiled without {@code -parameters} is refused too; its escape is a {@code writeBean(target,
+   * CONSTRUCTOR)} hint at the {@code Telescope.map(...)} call site.
    */
   @SuppressWarnings("unchecked")
   public static <P> BeanWriter<P> autoWriter(final Class<P> cls) {
@@ -910,14 +901,12 @@ public final class Beans {
     // SETTERS first when the target supports it (no-arg ctor + any setter): the Lombok @Data shape
     // is overwhelmingly the common case in real codebases, and a publicly exposed setter is the
     // user-expected write path. A static builder() takes over when SETTERS isn't applicable
-    // (immutable @Builder-only targets), and field injection backs both up for no-arg-ctor targets
-    // without setters.
+    // (immutable @Builder-only targets), and a name-matched all-args constructor backs both up.
     if (hasNoArgConstructor(cls) && hasAnySetter(cls)) {
       // Unless a builder carries everything they carry and more -- see builderCarriesStrictlyMore.
       return builderCarriesStrictlyMore(cls) ? builderWriter(cls) : settersWriter(cls);
     }
     if (hasStaticBuilder(cls)) return builderWriter(cls);
-    if (hasNoArgConstructor(cls)) return fieldsWriter(cls);
     final var props = propertyNames(cls);
     final var sole = solePublicConstructor(cls, props.length);
     // Refuse to silently use positional fallback: getter-iteration order is not guaranteed to match
@@ -927,11 +916,17 @@ public final class Beans {
     // `"URL"` mismatched against a ctor parameter named `"url"` would silently pass null into the
     // constructor under the lookup `valueByName("url")`.
     if (sole != null && allParameterNamesMatchProperties(sole, props)) return constructorWriter(cls, props.length);
+    // A class that declares a constructor taking arguments has a constructor write path; it gets
+    // the
+    // constructor advice below, which names -parameters and the CONSTRUCTOR hint.
+    if (hasNoArgConstructor(cls) && !declaresConstructorWithParameters(cls)) {
+      throw new IllegalStateException(onlyPrivateFieldsMessage(cls));
+    }
     throw new IllegalStateException(
       "No name-based write strategy for " +
         cls.getName() +
-        " — needs a static builder(), a no-arg constructor with setters, a no-arg constructor" +
-        " (field injection), or exactly one public constructor whose arity matches the" +
+        " — needs a static builder(), a no-arg constructor with setters, or exactly one public" +
+        " constructor whose arity matches the" +
         " property count (" +
         props.length +
         "), was compiled with -parameters, and whose parameter names line up with the" +
@@ -942,6 +937,27 @@ public final class Beans {
         " -parameters is absent — argument order is then the getter-discovery order (not a" +
         " stable, user-defined canonical order), so the hint should still be paired with" +
         " -parameters to be safe."
+    );
+  }
+
+  private static boolean declaresConstructorWithParameters(final Class<?> cls) {
+    for (final var c : cls.getDeclaredConstructors()) if (c.getParameterCount() > 0) return true;
+    return false;
+  }
+
+  /**
+   * The refusal for a class whose only write path is its private fields: a no-arg constructor and
+   * no other constructor, no public setter, and no static {@code builder()}.
+   */
+  private static String onlyPrivateFieldsMessage(final Class<?> cls) {
+    return (
+      "Cannot write " +
+      cls.getName() +
+      ": it has a no-arg constructor but no public setters, no static builder(), and no all-args" +
+      " constructor, and telescope does not write private fields. Add public setters, an" +
+      " all-args constructor (compiled with -parameters), or a static builder() to " +
+      cls.getSimpleName() +
+      ", or supply an explicit Mapping row that produces it."
     );
   }
 
@@ -1006,6 +1022,25 @@ public final class Beans {
    * }</pre>
    */
   public static <P, A> Lens<P, A> lens(final Class<P> pojoClass, final String property, final BeanWriter<P> writer) {
+    return beanLens(pojoClass, property, Objects.requireNonNull(writer, "writer"));
+  }
+
+  /**
+   * The same {@link Lens} as {@link #lens(Class, String, BeanWriter)}, with the writer left to
+   * {@link #autoWriter} and resolved on the first {@code set} / {@code modify}, then kept. A read
+   * never resolves it, so a class {@link #autoWriter} refuses — one only its private fields could
+   * write — can still be read and navigated through, and only a write raises the refusal.
+   */
+  public static <P, A> Lens<P, A> lens(final Class<P> pojoClass, final String property) {
+    return beanLens(pojoClass, property, null);
+  }
+
+  // A null `writer` means autoWriter(pojoClass), resolved on the first write.
+  private static <P, A> Lens<P, A> beanLens(
+    final Class<P> pojoClass,
+    final String property,
+    final BeanWriter<P> writer
+  ) {
     final var names = propertyNames(pojoClass);
     // Capture the full reader map for pojoClass once at construction. The per-property reader is
     // pulled from the same map for both the focused `get` and the off-path carry-over reads in
@@ -1032,9 +1067,18 @@ public final class Beans {
         return (A) readProperty(source, property);
       }
 
+      // Every BeanWriter keeps its state in final fields, so a racing first write that sees this
+      // field unset only resolves the same cached autoWriter entry again.
+      private BeanWriter<P> resolved = writer;
+
       @Override
       public P set(final P source, final A value) {
-        return writer.construct(names, n -> n.equals(property) ? value : readForRebuild(source, n));
+        var w = resolved;
+        if (w == null) {
+          w = autoWriter(pojoClass);
+          resolved = w;
+        }
+        return w.construct(names, n -> n.equals(property) ? value : readForRebuild(source, n));
       }
 
       // modify inherits the Lens default — the writer rebuilds a fresh pojo on null source
@@ -1237,150 +1281,6 @@ public final class Beans {
   }
 
   /**
-   * {@link BeanWriter} backed by a no-arg constructor plus field injection routed through one
-   * cached invoker per member. At construction it resolves the no-arg constructor, walks each
-   * non-static / non-synthetic declared field, calls {@code setAccessible(true)} (still needed for
-   * the {@link MethodHandles.Lookup#unreflectSetter(Field) unreflectSetter} call on non-public
-   * fields, exactly mirroring the previous {@link Field#set} permission model), and binds a {@link
-   * Supplier Supplier&lt;Object&gt;} no-arg-constructor invoker built via {@link LambdaMetafactory}
-   * plus a {@code BiConsumer<Object, Object>} setter per field. The per-field setters wrap a cached
-   * {@link MethodHandle} adapted to {@code (Object, Object) -> void} via {@link MethodHandle#asType
-   * asType} — LMF won't accept setter handles ({@code "Unsupported MethodHandle kind: putField"}),
-   * so the cached MH is the JDK-standard alternative. It still skips the per-call access check that
-   * {@code Field.set} pays; {@code invokeExact} through the captured {@code final} reference is
-   * JIT-inlinable.
-   *
-   * <p>If the JPMS layer forbids access, {@link InaccessibleObjectException} is rethrown as an
-   * {@link IllegalStateException} telling the caller to add an {@code opens} directive. Every
-   * sibling strategy ({@link ConstructorWriter} / {@link BuilderWriter} / {@link SettersWriter})
-   * now reaches the bean through {@link MethodHandles#privateLookupIn} — same JPMS gate — so
-   * switching the hint to a sibling only avoids this error when the sibling's target members are
-   * already accessible (e.g. the bean's {@code builder()} factory is public and lives in a package
-   * the module exports). For a fully closed package, the {@code opens} directive is the real fix
-   * regardless of strategy. The hot path — {@link #construct(String[], Function)} — calls {@code
-   * ctorFn.get()} once and then {@code setter.accept(pojo, value)} per name; neither call reaches
-   * {@link Field#set} or {@link Constructor#newInstance}.
-   */
-  static final class FieldsWriter<P> implements BeanWriter<P> {
-
-    private final Class<P> cls;
-    private final Supplier<Object> ctorFn;
-    private final Map<String, BiConsumer<Object, Object>> setters;
-
-    FieldsWriter(final Class<P> cls) {
-      this.cls = cls;
-      final Constructor<P> ctor;
-      try {
-        ctor = cls.getDeclaredConstructor();
-      } catch (final NoSuchMethodException e) {
-        throw new IllegalStateException("writeBean(" + cls.getName() + ", FIELDS) requires a no-arg constructor", e);
-      }
-      access(ctor);
-      final var fs = new LinkedHashMap<String, Field>();
-      for (final var f : cls.getDeclaredFields()) {
-        if (Modifier.isStatic(f.getModifiers()) || f.isSynthetic()) continue;
-        access(f);
-        fs.put(f.getName(), f);
-      }
-      final var lookup = privateLookupOrThrow(cls, cls, "FIELDS strategy");
-      this.ctorFn = Beans.buildCtorSupplier(cls, ctor, lookup);
-      final var setterMap = new LinkedHashMap<String, BiConsumer<Object, Object>>();
-      for (final var entry : fs.entrySet()) {
-        setterMap.put(entry.getKey(), buildFieldSetter(cls, entry.getValue(), lookup));
-      }
-      this.setters = setterMap;
-    }
-
-    @Override
-    public P construct(final String[] names, final Function<String, Object> valueByName) {
-      // Wrap the LMF-built Supplier invocation in the same stable RuntimeException shape the
-      // pre-LMF Constructor#newInstance path used. Unlike Constructor#newInstance (which surfaced
-      // body failures via InvocationTargetException → checked-exception wrap), the LMF Supplier is
-      // signature-polymorphic and can propagate checked exceptions and Errors directly, so we
-      // catch the same width here. Errors propagate untouched.
-      final P pojo;
-      try {
-        @SuppressWarnings("unchecked")
-        final var built = (P) ctorFn.get();
-        pojo = built;
-      } catch (final Error error) {
-        throw error;
-      } catch (final Throwable t) {
-        throw new RuntimeException("Failed to instantiate " + cls.getName(), t);
-      }
-      for (final var name : names) {
-        final var setter = setters.get(name);
-        // Align with SettersWriter and BuilderWriter: silently skip a name that has no matching
-        // field. Without this the FIELDS strategy throws on the same input the other two writer
-        // strategies tolerate — two POJOs differing only by the presence of setters or a static
-        // builder() factory would have opposite mapping contracts on the same source/target
-        // pair. MapStruct's @MappingTarget ignores unwritable target fields too; match.
-        if (setter == null) continue;
-        setter.accept(pojo, valueByName.apply(name));
-      }
-      return pojo;
-    }
-
-    private void access(final AccessibleObject member) {
-      try {
-        member.setAccessible(true);
-      } catch (final InaccessibleObjectException e) {
-        throw new IllegalStateException(
-          "Cannot access members of " +
-            cls.getName() +
-            " for the FIELDS strategy. Add 'opens " +
-            cls.getPackageName() +
-            " to io.github.eschizoid.telescope;' to that module's module-info.java. Switching" +
-            " the writeBean hint to CONSTRUCTOR / BUILDER / SETTERS reaches the bean through" +
-            " privateLookupIn rather than raw setAccessible, but the JPMS gate is the same —" +
-            " the open directive is the real fix for a fully closed package.",
-          e
-        );
-      }
-    }
-
-    // buildCtorSupplier lives on the outer Beans class so sibling writers (SettersWriter,
-    // FieldsWriter) can share the same LMF Supplier construction.
-
-    private static BiConsumer<Object, Object> buildFieldSetter(
-      final Class<?> cls,
-      final Field field,
-      final MethodHandles.Lookup lookup
-    ) {
-      // LambdaMetafactory rejects setter handles ("Unsupported MethodHandle kind: putField"), so
-      // the cached MethodHandle path is the JDK-standard alternative — `unreflectSetter` resolves
-      // a `(receiver, value) -> void` handle, then `asType` adapts it to the erased
-      // `(Object, Object) -> void` so it can be invoked from a `BiConsumer<Object, Object>` shape.
-      // Still skips the per-call access check {@link Field#set} pays; the JIT inlines invokeExact
-      // through the captured `final` reference.
-      final MethodHandle setterHandle;
-      try {
-        setterHandle = lookup
-          .unreflectSetter(field)
-          .asType(MethodType.methodType(void.class, Object.class, Object.class));
-      } catch (final IllegalAccessException e) {
-        // Lookup.unreflectSetter rejects final fields with IAE regardless of setAccessible(true).
-        // Diagnose the most likely root cause so the adopter doesn't have to read the JDK source
-        // to figure out which of [final, JPMS-closed, missing opens] applies.
-        final var finalHint = Modifier.isFinal(field.getModifiers())
-          ? " — field is final; switch the writeBean hint to SETTERS or BUILDER, or remove" + " final"
-          : "";
-        throw new RuntimeException(
-          "Failed to bind setter for field '" + field.getName() + "' on " + cls.getName() + finalHint,
-          e
-        );
-      }
-      return (pojo, value) -> {
-        try {
-          setterHandle.invokeExact(pojo, value);
-        } catch (final Throwable t) {
-          throw new RuntimeException("Failed to set field '" + field.getName() + "' on " + cls.getName(), t);
-        }
-      };
-    }
-  }
-
-  /**
    * {@link BeanWriter} backed by an all-args constructor routed through a cached spread {@link
    * MethodHandle}. At construction it finds the unique declared constructor with the requested
    * arity (throwing if there are zero or more than one), makes it accessible, and binds a {@code
@@ -1432,8 +1332,8 @@ public final class Beans {
           " otherwise positionally)."
       );
       // No raw setAccessible — buildCtorFn acquires private access through privateLookupOrThrow,
-      // which is consistent with the FIELDS strategy and routes JPMS failures through the same
-      // opens-pointing message instead of a low-context InaccessibleObjectException.
+      // which routes JPMS failures through the opens-pointing message every writer shares instead
+      // of a low-context InaccessibleObjectException.
       this.paramNames = resolveParamNames(found);
       this.ctorFn = buildCtorFn(cls, found, arity);
     }
@@ -1518,8 +1418,7 @@ public final class Beans {
    * <p>Building the synthetic SAMs requires a private lookup on both the target class and the
    * builder type via {@link MethodHandles#privateLookupIn}. For fully-public POJOs in the same
    * module this is equivalent to a plain lookup; for closed-package targets under the module path,
-   * the POJO's module needs an {@code opens} directive — the same JPMS constraint as the previous
-   * {@code setAccessible(true)} path.
+   * the POJO's module needs an {@code opens} directive.
    */
   static final class BuilderWriter<P> implements BeanWriter<P> {
 
@@ -1563,8 +1462,7 @@ public final class Beans {
     public P construct(final String[] names, final Function<String, Object> valueByName) {
       // Dispatch-time exceptions (from builder() / setter / build() execution, or from auto-unbox
       // bridges in LMF setter dispatch) propagate raw, matching the other writer strategies
-      // (FIELDS / SETTERS / CONSTRUCTOR) and the pre-LMF BuilderWriter (which only wrapped
-      // `ReflectiveOperationException` — a class that doesn't exist on the LMF hot path).
+      // (SETTERS / CONSTRUCTOR); no `ReflectiveOperationException` arises on the LMF hot path.
       // Build-time LMF failures are wrapped at construction time in the respective build*Fn
       // methods with the class-context message; runtime is consistent with the rest of the
       // writer family.
@@ -1759,9 +1657,8 @@ public final class Beans {
 
   /**
    * {@link BeanWriter} backed by a no-arg constructor plus public {@code setX(value)} setters,
-   * matched by name. Public-member only — unlike {@link FieldsWriter} it needs no {@code opens}
-   * directive under JPMS for the setter dispatch itself. The natural rebuild strategy for classic
-   * JavaBeans / Hibernate entities.
+   * matched by name. Writes only through the setters the class publishes. The natural rebuild
+   * strategy for classic JavaBeans / Hibernate entities.
    *
    * <p>Hot-path setter dispatch goes through one {@link BiConsumer BiConsumer&lt;Object,
    * Object&gt;} per property, built once via {@link LambdaMetafactory} over the cached setter
@@ -1775,8 +1672,7 @@ public final class Beans {
    * <p>Building the {@code BiConsumer} requires a private lookup on the target class via {@link
    * MethodHandles#privateLookupIn}. For fully-public POJOs in the same module this is equivalent to
    * a plain lookup; for closed-package targets under the module path, the POJO's module needs an
-   * {@code opens} directive — the same JPMS constraint as the previous {@code setAccessible(true)}
-   * path.
+   * {@code opens} directive.
    */
   static final class SettersWriter<P> implements BeanWriter<P> {
 
@@ -1792,10 +1688,9 @@ public final class Beans {
       } catch (final NoSuchMethodException e) {
         throw new IllegalStateException("writeBean(" + cls.getName() + ", SETTERS) requires a no-arg constructor", e);
       }
-      // Build the no-arg ctor as an LMF-bound Supplier — mirrors FieldsWriter / BuilderWriter and
-      // closes the gap that left SettersWriter calling Constructor.newInstance on every
-      // write. SETTERS is the autoWriter default for Lombok @Data beans, so this fires on the
-      // dominant bean-write path.
+      // Build the no-arg ctor as an LMF-bound Supplier, as BuilderWriter does, so a write never
+      // reaches Constructor.newInstance. SETTERS is the autoWriter default for Lombok @Data beans,
+      // so this is the dominant bean-write path.
       final var lookup = privateLookupOrThrow(cls, cls, "SETTERS strategy");
       this.ctorFn = buildCtorSupplier(cls, ctor, lookup);
     }

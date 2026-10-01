@@ -9,8 +9,8 @@ import io.github.eschizoid.telescope.Telescope;
  *
  * <p>Closes the gap on immutable all-args-only POJOs (no builder, no no-arg constructor) by letting
  * the user pin {@link WriteStrategy#CONSTRUCTOR}. Also useful when several strategies apply and the
- * user wants to force a specific one (e.g., {@link WriteStrategy#FIELDS} over a class that also has
- * a builder).
+ * user wants to force a specific one (e.g., {@link WriteStrategy#SETTERS} over a class that also
+ * has a builder).
  *
  * <pre>{@code
  * import static io.github.eschizoid.telescope.mapping.Mapping.to;
@@ -49,8 +49,6 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    * <ul>
    *   <li>{@link #BUILDER} — requires a static {@code builder()} method on the target
    *   <li>{@link #SETTERS} — requires a no-arg constructor and public {@code setX(value)} setters
-   *   <li>{@link #FIELDS} — requires a no-arg constructor; injects values into declared fields
-   *       reflectively (needs {@code opens} under JPMS for private fields)
    *   <li>{@link #CONSTRUCTOR} — uses the all-args constructor; matches arguments by parameter name
    *       when compiled with {@code -parameters}, otherwise positional
    * </ul>
@@ -58,7 +56,6 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
   enum WriteStrategy {
     BUILDER,
     SETTERS,
-    FIELDS,
     CONSTRUCTOR,
   }
 
@@ -80,9 +77,9 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    * <pre>{@code
    * Telescope.mapper(
    *     Order.class, OrderEntity.class,
-   *     writeBeans(SETTERS),                       // default for OrderEntity, CustomerEntity,
-   *                                                // LineItemEntity, AddressEmbeddable, …
-   *     writeBean(CashRegisterEntity.class, FIELDS) // override on one specific target
+   *     writeBeans(SETTERS),                        // default for OrderEntity, CustomerEntity,
+   *                                                 // LineItemEntity, AddressEmbeddable, …
+   *     writeBean(CashRegisterEntity.class, BUILDER) // override on one specific target
    * );
    * }</pre>
    *
