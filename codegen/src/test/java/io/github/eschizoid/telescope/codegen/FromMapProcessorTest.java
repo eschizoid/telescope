@@ -48,15 +48,23 @@ class FromMapProcessorTest {
       assertNotNull(generated, () -> "UserFromMap not generated; saw " + compilation.generated().keySet());
 
       assertTrue(generated.contains("public final class UserFromMap"), generated);
-      assertTrue(generated.contains("public static demo.User fromMap(final Map<String, Object> map)"), generated);
       assertTrue(
-        generated.contains("public static final ForwardMapper<Map<String, Object>, demo.User> FROM_MAP"),
+        generated.contains(
+          "public static demo.User fromMap(final java.util.Map<java.lang.String, java.lang.Object> map)"
+        ),
+        generated
+      );
+      assertTrue(
+        generated.contains(
+          "public static final io.github.eschizoid.telescope.conversion.ForwardMapper<java.util.Map<java.lang.String," +
+            " java.lang.Object>, demo.User> FROM_MAP"
+        ),
         generated
       );
       // Direct canonical-constructor rebuild — no reflection.
       assertTrue(generated.contains("new demo.User("), generated);
       // String field: read the key by name.
-      assertTrue(generated.contains("final Object __m_name = map.get(\"name\");"), generated);
+      assertTrue(generated.contains("final java.lang.Object __m_name = map.get(\"name\");"), generated);
       assertEquals(1, generated.split("map\\.get\\(\"name\"\\)", -1).length - 1, generated);
     }
 
@@ -79,8 +87,8 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.AccountFromMap");
       assertNotNull(generated, () -> "AccountFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("Role.valueOf(String.valueOf(__m_role))"), generated);
-      assertTrue(generated.contains("instanceof Role"), generated);
+      assertTrue(generated.contains("demo.Role.valueOf(java.lang.String.valueOf(__m_role))"), generated);
+      assertTrue(generated.contains("instanceof demo.Role"), generated);
     }
 
     @Test
@@ -115,12 +123,10 @@ class FromMapProcessorTest {
     }
 
     @Test
-    @DisplayName("nested @FromMap in another package imports that package's converter (cross-package" + " recursion)")
-    void nestedFromMapCrossPackageImportsConverter() {
-      // The nested converter is referenced by simple name (AddressFromMap.fromMap(...)); when the
-      // nested type lives in another package, the parent converter must import it or the generated
-      // code won't compile. The harness is -proc:only (no compile-check), so assert the import
-      // text.
+    @DisplayName("nested @FromMap in another package is reached through that package's converter by its qualified name")
+    void nestedFromMapCrossPackageNamesConverter() {
+      // The binder imports nothing, so a converter in another package is named in full. The
+      // harness is -proc:only (no compile-check), so assert the text.
       final var compilation = compile(
         source(
           "demo.Profile",
@@ -145,11 +151,8 @@ class FromMapProcessorTest {
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var generated = compilation.generated().get("demo.ProfileFromMap");
       assertNotNull(generated, () -> "ProfileFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("AddressFromMap.fromMap("), generated);
-      assertTrue(
-        generated.contains("import other.AddressFromMap;"),
-        () -> "cross-package converter import missing:\n" + generated
-      );
+      assertTrue(generated.contains("other.AddressFromMap.fromMap("), generated);
+      assertFalse(generated.contains("import "), () -> "the binder imports nothing:\n" + generated);
     }
 
     @Test
@@ -467,7 +470,10 @@ class FromMapProcessorTest {
       );
       final var generated = compilation.generated().get("demo.OpaqueFromMap");
       assertNotNull(generated, () -> "OpaqueFromMap not generated; saw " + compilation.generated().keySet());
-      assertTrue(generated.contains("(String) "), () -> "a String component still needs its cast: " + generated);
+      assertTrue(
+        generated.contains("(java.lang.String) "),
+        () -> "a String component still needs its cast: " + generated
+      );
     }
   }
 }
