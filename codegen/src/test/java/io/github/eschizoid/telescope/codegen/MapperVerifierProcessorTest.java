@@ -440,8 +440,8 @@ class MapperVerifierProcessorTest {
   }
 
   @Test
-  @DisplayName("an identical wildcard-bearing field pair is skipped, not mis-decided")
-  void wildcardIdentitySkips() {
+  @DisplayName("an identical wildcard-bearing field pair is accepted, as the runtime accepts it")
+  void wildcardIdentityAccepted() {
     final var compilation = verify(
       """
       package demo;
@@ -456,6 +456,26 @@ class MapperVerifierProcessorTest {
       """
     );
     assertTrue(compilation.success(), () -> compilation.errorMessages());
+  }
+
+  @Test
+  @DisplayName("wildcards with different bounds are reported at compile time, as the runtime refuses them")
+  void wildcardBoundsMismatchReported() {
+    final var compilation = verify(
+      """
+      package demo;
+      import io.github.eschizoid.telescope.Telescope;
+      import io.github.eschizoid.telescope.conversion.Mapper;
+      import java.util.List;
+      record Src(List<? super String> xs) {}
+      record Tgt(List<? super Integer> xs) {}
+      class Holder {
+        static final Mapper<Src, Tgt> M = Telescope.mapper(Src.class, Tgt.class);
+      }
+      """
+    );
+    assertFalse(compilation.success(), "the verifier should report the pair");
+    assertTrue(compilation.errorMessages().contains("xs"), () -> compilation.errorMessages());
   }
 
   @Test

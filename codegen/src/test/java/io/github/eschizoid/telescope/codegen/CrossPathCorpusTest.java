@@ -188,13 +188,21 @@ class CrossPathCorpusTest {
 
   /**
    * The element type a cell's container holds. {@code rendered} takes the cell's name prefix and
-   * one element's value, so a cell can say what its own converted elements look like.
+   * one element's value, so a cell can say what its own converted elements look like. {@code
+   * converts} says whether the element changes type, which is also whether the input holds records
+   * rather than strings.
+   *
+   * <p>The wildcard elements are the same on both sides, so each is an identity copy. The two type
+   * systems answer type identity for a wildcard by different rules, and an element that is the same
+   * on both sides is where a disagreement would show.
    */
-  private record Element(String name, String srcType, String tgtType, String rendered) {}
+  private record Element(String name, String srcType, String tgtType, String rendered, boolean converts) {}
 
   private static final List<Element> ELEMENTS = List.of(
-    new Element("scalar", "java.lang.String", "java.lang.String", "%2$s"),
-    new Element("record", "%sLeaf", "%sLeafDto", "%1$sLeafDto[v=%2$s]")
+    new Element("scalar", "java.lang.String", "java.lang.String", "%2$s", false),
+    new Element("record", "%sLeaf", "%sLeafDto", "%1$sLeafDto[v=%2$s]", true),
+    new Element("bounded", "? extends java.lang.String", "? extends java.lang.String", "%2$s", false),
+    new Element("unbounded", "?", "?", "%2$s", false)
   );
 
   /**
@@ -467,7 +475,7 @@ class CrossPathCorpusTest {
    * starts copying here, the cell fails and the decision surfaces rather than changing quietly.
    */
   private static boolean passesThrough(final Family family, final Element element) {
-    return element.name().equals("scalar") && family.src().equals(family.tgt());
+    return !element.converts() && family.src().equals(family.tgt());
   }
 
   private static String inputClassOf(final String kind) {
@@ -822,7 +830,7 @@ class CrossPathCorpusTest {
     final var leaves = new ArrayList<>();
     for (final var value : VALUES) {
       leaves.add(
-        element.name().equals("record")
+        element.converts()
           ? classes.get(PACKAGE + "." + prefix + "Leaf").getConstructor(String.class).newInstance(value)
           : value
       );

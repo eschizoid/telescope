@@ -8,6 +8,7 @@ import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 
@@ -30,7 +31,38 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
 
   @Override
   public boolean sameType(final TypeMirror a, final TypeMirror b) {
+    return sameType(types, a, b);
+  }
+
+  /**
+   * Type identity as {@link PropertySystem#sameType} defines it. {@link Types#isSameType} answers
+   * false whenever either argument is a wildcard, a wildcard and itself included, so a wildcard is
+   * compared here by its bounds and everything else is left to it.
+   */
+  static boolean sameType(final Types types, final TypeMirror a, final TypeMirror b) {
+    if (a instanceof WildcardType wa && b instanceof WildcardType wb) {
+      return (
+        sameBound(types, writtenUpperBound(wa), writtenUpperBound(wb)) &&
+        sameBound(types, wa.getSuperBound(), wb.getSuperBound())
+      );
+    }
     return types.isSameType(a, b);
+  }
+
+  /**
+   * A wildcard's upper bound, or null where it bounds nothing narrower than {@code Object}: {@code
+   * ?} and {@code ? extends Object} admit the same types.
+   */
+  private static TypeMirror writtenUpperBound(final WildcardType wildcard) {
+    final var bound = wildcard.getExtendsBound();
+    final var isObject =
+      bound instanceof DeclaredType declared &&
+      ((TypeElement) declared.asElement()).getQualifiedName().contentEquals("java.lang.Object");
+    return isObject ? null : bound;
+  }
+
+  private static boolean sameBound(final Types types, final TypeMirror a, final TypeMirror b) {
+    return a == null ? b == null : b != null && sameType(types, a, b);
   }
 
   @Override

@@ -3737,7 +3737,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private TypeMirror comparatorTypeMirror(final FieldPlan.Kind kind, final TypeMirror tgtContainer) {
     final var iface = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.Map" : "java.util.Set";
     final var args = containerViewArgs(tgtContainer, iface);
-    return args.isEmpty() ? null : args.getFirst();
+    return args.isEmpty() ? null : instantiable(args.getFirst());
   }
 
   /**
@@ -3908,6 +3908,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // paired, before anything asks about ordering. It is here so this answers null exactly where
     // orderingArg answers empty, which is what keeps the local and the argument in step.
     if (typeArg == null) return "";
+    final var iface = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.Map" : "java.util.Set";
+    if (containerViewArgs(tgtContainer, iface).getFirst() instanceof WildcardType) {
+      // The source's elements are a capture of the wildcard, so no pattern names their type and the
+      // comparator comes back over that capture. The allocation orders the wildcard's bound, which
+      // every captured element is, so the comparator is narrowed to it once, here.
+      final var wide = "java.util.Comparator<? super " + typeArg + ">";
+      final var family = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.SortedMap<?, ?>" : "java.util.SortedSet<?>";
+      return (
+        "    @SuppressWarnings(\"unchecked\")\n    final " +
+        wide +
+        " " +
+        ORDERING_LOCAL +
+        " = src instanceof " +
+        family +
+        " __ordered ? (" +
+        wide +
+        ") __ordered.comparator() : null;"
+      );
+    }
     final var pattern =
       kind == FieldPlan.Kind.MAP_VALUES
         ? "java.util.SortedMap<" + typeArg + ", ?>"
@@ -4071,9 +4090,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var types = processingEnv.getTypeUtils();
     if (implEl.getTypeParameters().isEmpty()) return (DeclaredType) implEl.asType();
     final var iface = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.Map" : "java.util.Set";
-    final var args = containerViewArgs(tgtContainer, iface);
-    if (args.size() != implEl.getTypeParameters().size()) return null;
-    return types.getDeclaredType(implEl, args.toArray(TypeMirror[]::new));
+    final var args = containerViewArgs(tgtContainer, iface).stream().map(this::instantiable).toArray(TypeMirror[]::new);
+    if (args.length != implEl.getTypeParameters().size()) return null;
+    return types.getDeclaredType(implEl, args);
   }
 
   /**
@@ -4193,11 +4212,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * its own, which makes the implementation to allocate the declared class itself; that class is
    * not generic, so the caller writes no diamond and returns before this runs.
    */
-  private List<? extends TypeMirror> allocTypeArguments(final TypeMirror container, final FieldPlan.Kind kind) {
+  private List<TypeMirror> allocTypeArguments(final TypeMirror container, final FieldPlan.Kind kind) {
     final var view = rules.containerViewOf(container);
     return kind == FieldPlan.Kind.MAP_VALUES
-      ? List.of(view.keyType(), view.elementType())
-      : List.of(view.elementType());
+      ? List.of(instantiable(view.keyType()), instantiable(view.elementType()))
+      : List.of(instantiable(view.elementType()));
+  }
+
+  /**
+   * A type argument that can be written after {@code new}, which a wildcard cannot. A wildcard is
+   * replaced by its upper bound, or {@code Object} where it has none: a container of that type
+   * accepts every element the wildcard admits, which is what filling it from the source needs, and
+   * it is assignable to the wildcard-typed field it is returned as. A lower bound gives no element
+   * type the source's elements are known to be, so it allocates over {@code Object} too.
+   */
+  private TypeMirror instantiable(final TypeMirror argument) {
+    if (!(argument instanceof WildcardType wildcard)) return argument;
+    final var upper = wildcard.getExtendsBound();
+    return upper != null ? upper : processingEnv.getElementUtils().getTypeElement("java.lang.Object").asType();
   }
 
   private void emitListHelper(
@@ -4485,7 +4517,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * Whether two TypeMirrors refer to the same type by erasure (handles generics + raw equality).
    */
   private boolean isSameType(final TypeMirror a, final TypeMirror b) {
-    return processingEnv.getTypeUtils().isSameType(a, b);
+    return MirrorProps.sameType(processingEnv.getTypeUtils(), a, b);
   }
 
   // True when one of {a, b} is a primitive and the other is exactly its boxed wrapper (boolean ↔
