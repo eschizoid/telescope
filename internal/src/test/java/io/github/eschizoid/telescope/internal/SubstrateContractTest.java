@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
@@ -71,17 +72,19 @@ class SubstrateContractTest {
         return name;
       }
 
-      // Not a property setter — no uppercase after the prefix. Pre-fix this flipped autoWriter to
-      // SETTERS, whose no-op per property silently lost every field.
+      // Not a property setter — no uppercase after the prefix. Counted as one, it would select
+      // SETTERS, whose no-op per property silently loses every field.
       public void setup(final String ignored) {}
     }
 
     @Test
-    @DisplayName("setup(String) does not select the setters strategy; fields still write")
+    @DisplayName("setup(String) does not select the setters strategy; the bean is refused instead")
     void setupDoesNotFlipStrategy() {
-      final var writer = Beans.autoWriter(GetterOnlyWithSetup.class);
-      final var built = writer.construct(new String[] { "name" }, name -> "VALUE");
-      assertEquals("VALUE", built.getName()); // pre-fix: null — SettersWriter no-op'd it
+      // With setup(String) not counted, nothing but the private field can write `name`, so
+      // autoWriter refuses the class rather than handing back a SettersWriter that would drop the
+      // value.
+      final var ex = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(GetterOnlyWithSetup.class));
+      assertTrue(ex.getMessage().contains("does not write private fields"), ex.getMessage());
     }
 
     @Test

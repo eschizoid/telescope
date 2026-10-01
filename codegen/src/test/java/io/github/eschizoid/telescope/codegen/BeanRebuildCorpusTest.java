@@ -6,6 +6,7 @@ import io.github.eschizoid.telescope.Telescope;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -18,8 +19,8 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The container grid pairs two records in every cell, so nothing in it reaches the bean half of
  * either path. The two halves enumerate write strategies separately — the runtime's {@code
- * BeanWriter} permits four and the processor's rebuild kinds name three of them — and neither table
- * knows what the other holds, which is the shape every divergence closed so far has had.
+ * BeanWriter} permits and the processor's rebuild kinds — and neither table knows what the other
+ * holds, so a strategy one side gains and the other lacks shows up here as a diverging cell.
  *
  * <p>A cell agrees when both paths produce the same rendering, or when both refuse. A disagreement
  * is a defect unless {@link #KNOWN_DIVERGENCES} carries it, and a mutual refusal owes an entry in
@@ -80,15 +81,6 @@ class BeanRebuildCorpusTest {
    * one fails, and an entry whose cell has stopped differing fails too.
    */
   private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.of(
-    // The processor has no field-writing rebuild, so a target offering only fields falls to
-    // no
-    // strategy at all; the runtime's FieldsWriter writes the field directly.
-    "fields/scalar",
-    new Verdict(false, true),
-    "fields/record",
-    new Verdict(false, true),
-    "fields/list",
-    new Verdict(false, true),
     // The runtime matches constructor arguments by parameter name, which javac keeps only
     // under
     // -parameters; the processor reads them from the compilation unit and needs no flag.
@@ -103,7 +95,21 @@ class BeanRebuildCorpusTest {
   /** Cells both paths refuse, each naming a fragment of what each says. */
   private record Refusal(String generatedSays, String reflectiveSays) {}
 
-  private static final Map<String, Refusal> KNOWN_REFUSALS = Map.of();
+  // Neither path writes a private field, so a target whose only write path is its fields offers
+  // both of them nothing to call.
+  private static final Refusal NO_WRITE_SURFACE = new Refusal(
+    "has a no-arg constructor but no setter for 'p'",
+    "does not write private fields"
+  );
+
+  private static final Map<String, Refusal> KNOWN_REFUSALS = Map.of(
+    "fields/scalar",
+    NO_WRITE_SURFACE,
+    "fields/record",
+    NO_WRITE_SURFACE,
+    "fields/list",
+    NO_WRITE_SURFACE
+  );
 
   @Test
   @DisplayName("every bean rebuild route is driven the same way by both paths")
@@ -284,7 +290,7 @@ class BeanRebuildCorpusTest {
     final ProcessorHarness.Compilation plain,
     final String prefix
   ) {
-    final var added = new java.util.LinkedHashMap<>(processed.classes());
+    final var added = new LinkedHashMap<>(processed.classes());
     plain.classes().keySet().forEach(added::remove);
     final var defined = new ProcessorHarness.Compilation(
       processed.success(),

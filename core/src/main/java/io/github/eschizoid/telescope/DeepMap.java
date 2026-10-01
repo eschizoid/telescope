@@ -275,7 +275,6 @@ public final class DeepMap {
     return switch (strategy) {
       case BUILDER -> Beans.builderWriter(raw);
       case SETTERS -> Beans.settersWriter(raw);
-      case FIELDS -> Beans.fieldsWriter(raw);
       case CONSTRUCTOR -> Beans.constructorWriter(raw, Beans.propertyNames(raw).length);
     };
   }
@@ -1197,12 +1196,13 @@ public final class DeepMap {
 
     // Composed-handle leaf for record/bean pairs: the whole conversion is one (S)→T / (T)→S
     // MethodHandle — no Object[] intermediate, no boxing on same-type fields (identity slots read
-    // primitive-to-primitive straight into the canonical constructor, or into the setter fold for a
-    // bean target). Non-identity slots (rename with conversion, nested pair, container lift) still
-    // route through their per-slot Iso. Each side is a record (canonical-ctor rebuild) or a bean
-    // constructible via no-arg ctor + setters; a bean needing a builder or field injection falls to
-    // the array leaf below. This is a build-time shape decision (see MhIso.supports), not a runtime
-    // fallback; it stays lattice-routed — the composed handles are the leaf Iso's transforms.
+    // primitive-to-primitive straight into the canonical constructor, or into the setter fold for
+    // a bean target). Non-identity slots (rename with conversion, nested pair, container lift)
+    // still route through their per-slot Iso. Each side is a record (canonical-ctor rebuild) or a
+    // bean constructible via no-arg ctor + setters; a bean needing a builder or an all-args
+    // constructor falls to the array leaf below. This is a build-time shape decision (see
+    // MhIso.supports), not a runtime fallback, and it stays lattice-routed — the composed handles
+    // are the leaf Iso's transforms.
     if (MhIso.supports(source, target)) {
       return MhIso.pair(
         source,
@@ -1215,8 +1215,8 @@ public final class DeepMap {
       );
     }
 
-    // Array leaf for the pairs MhIso.supports declines — a bean side that needs a builder or
-    // field injection (no no-arg constructor, or a mapped property with no setter). Its
+    // Array leaf for the pairs MhIso.supports declines — a bean side that needs a builder or an
+    // all-args constructor (no no-arg constructor, or a mapped property with no setter). Its
     // construction can't be expressed as the no-arg-ctor + setter-fold combinator, so it stays on
     // the reflective array shape.
     // Fused-source-and-remap: bypass the source-side Object[] intermediate. The previous shape

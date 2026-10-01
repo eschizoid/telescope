@@ -107,10 +107,10 @@ wire up codegen. Only top-level records / classes are supported (the generated t
 nested type's constructor).
 
 **`@BeanFocus` — the POJO analog.** Same surface as `@Focus`, applied to a POJO with either a static `builder()` or a
-no-arg constructor + `setX` setters. Field injection isn't available to generated code, so a POJO that exposes neither
-is a compile error; reach for runtime `Telescope.ofBean` in that case. The runtime `ofBean` 3-level path runs an order
-of magnitude slower than a generated `@Bridge` conversion in the benchmark — the navigator gets you the same
-reflection-free win for navigation.
+no-arg constructor + `setX` setters. A POJO that exposes neither is a compile error; runtime `Telescope.ofBean` also
+accepts a single public all-args constructor compiled with `-parameters`. Neither path writes a private field. The
+runtime `ofBean` 3-level path runs an order of magnitude slower than a generated `@Bridge` conversion in the benchmark —
+the navigator gets you the same reflection-free win for navigation.
 
 ```java
 import io.github.eschizoid.telescope.annotations.BeanFocus;
@@ -243,10 +243,10 @@ This section is JPMS-only.
 
 The precise ledger — "reflection-free" claims are scoped to these rows:
 
-| Path                      | Setup (one-time, cached)                                       | Steady-state dispatch                                        | Generated Java | Native-image                                                           |
-| ------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ | -------------- | ---------------------------------------------------------------------- |
-| Runtime record navigation | `getRecordComponents` + method-ref decode                      | `LambdaMetafactory`-built lambdas                            | none           | `MethodHandle` closures; app registers call-site class (serialization) |
-| Runtime POJO navigation   | getter/setter scans + method-ref decode                        | LMF getters/setters (`FIELDS` strategy uses `setAccessible`) | none           | same gate                                                              |
-| Runtime mapper            | reflective pair discovery, cached per type pair                | composed MethodHandle / LMF leaves                           | none           | verified by the CI native binary                                       |
-| `@Focus` / `@BeanFocus`   | one cached method-ref decode when a path object is first built | direct method-ref + constructor calls                        | yes            | generated navigator class goes in `serialization-config` (CI-verified) |
-| `@Bridge`                 | none (wraps a concrete generated function)                     | direct calls                                                 | yes            | zero-config, CI-verified                                               |
+| Path                      | Setup (one-time, cached)                                       | Steady-state dispatch                 | Generated Java | Native-image                                                           |
+| ------------------------- | -------------------------------------------------------------- | ------------------------------------- | -------------- | ---------------------------------------------------------------------- |
+| Runtime record navigation | `getRecordComponents` + method-ref decode                      | `LambdaMetafactory`-built lambdas     | none           | `MethodHandle` closures; app registers call-site class (serialization) |
+| Runtime POJO navigation   | getter/setter scans + method-ref decode                        | LMF getters/setters/builders          | none           | same gate                                                              |
+| Runtime mapper            | reflective pair discovery, cached per type pair                | composed MethodHandle / LMF leaves    | none           | verified by the CI native binary                                       |
+| `@Focus` / `@BeanFocus`   | one cached method-ref decode when a path object is first built | direct method-ref + constructor calls | yes            | generated navigator class goes in `serialization-config` (CI-verified) |
+| `@Bridge`                 | none (wraps a concrete generated function)                     | direct calls                          | yes            | zero-config, CI-verified                                               |

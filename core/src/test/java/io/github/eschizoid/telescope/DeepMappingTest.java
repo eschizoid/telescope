@@ -5,7 +5,7 @@ import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static io.github.eschizoid.telescope.mapping.Mapping.via;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.BUILDER;
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
-import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.FIELDS;
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.SETTERS;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
 import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -601,14 +601,17 @@ class DeepMappingTest {
 
   record OrderRecord(String sku, int qty) {}
 
-  // A bean with both a builder AND a no-arg ctor + fields, so the precedence test
-  // (writeBean FIELDS over the autoWriter-chosen BUILDER) is observable.
+  // A bean with both a builder AND an all-args constructor, so which strategy wrote it is
+  // observable: autoWriter picks BUILDER, and only the builder marks the name.
   static final class DualPojo {
 
-    private String name;
-    private int score;
+    private final String name;
+    private final int score;
 
-    public DualPojo() {}
+    public DualPojo(final String name, final int score) {
+      this.name = name;
+      this.score = score;
+    }
 
     public static Builder builder() {
       return new Builder();
@@ -634,9 +637,9 @@ class DeepMappingTest {
 
     static final class Builder {
 
-      // Mark the builder path: the resulting DualPojo's name has "[built]" appended. The fields-
-      // strategy path bypasses this entirely, so a FIELDS-hinted mapping yields "alice" while a
-      // BUILDER-hinted (or autoWriter-default) mapping yields "alice[built]".
+      // Mark the builder path: the resulting DualPojo's name has "[built]" appended. The
+      // constructor path bypasses this entirely, so a CONSTRUCTOR-hinted mapping yields "alice"
+      // while a BUILDER-hinted (or autoWriter-default) mapping yields "alice[built]".
       private String name;
       private int score;
 
@@ -651,10 +654,7 @@ class DeepMappingTest {
       }
 
       public DualPojo build() {
-        final var p = new DualPojo();
-        p.name = name;
-        p.score = score;
-        return p;
+        return new DualPojo(name, score);
       }
     }
   }
@@ -723,14 +723,16 @@ class DeepMappingTest {
     }
 
     @Test
-    @DisplayName("FIELDS hint wins over autoWriter when target also has a builder")
-    void fieldsHintWinsOverBuilder() {
-      // DualPojo has BOTH a builder() (autoWriter would pick BuilderWriter) and writable fields.
-      // The FIELDS hint must bypass the builder entirely — observable because the builder mutates
-      // the name (appends "[built]"), so a fields path yields the raw value.
-      final var mapper = Telescope.mapper(DualRecord.class, DualPojo.class, writeBean(DualPojo.class, FIELDS));
+    @DisplayName("CONSTRUCTOR hint wins over the autoWriter-chosen BUILDER when the target offers both")
+    void constructorHintWinsOverBuilder() {
+      // DualPojo has BOTH a builder() (autoWriter picks BuilderWriter) and an all-args constructor.
+      // The builder mutates the name (appends "[built]"), so which strategy ran is visible.
+      final var unhinted = Telescope.mapper(DualRecord.class, DualPojo.class);
+      assertEquals("alice[built]", unhinted.read(new DualRecord("alice", 9)).getName());
+
+      final var mapper = Telescope.mapper(DualRecord.class, DualPojo.class, writeBean(DualPojo.class, CONSTRUCTOR));
       final var pojo = mapper.read(new DualRecord("alice", 9));
-      assertEquals("alice", pojo.getName()); // not "alice[built]"
+      assertEquals("alice", pojo.getName());
       assertEquals(9, pojo.getScore());
     }
 
@@ -751,7 +753,7 @@ class DeepMappingTest {
           OrderRecord.class,
           ImmutablePojo.class,
           writeBean(ImmutablePojo.class, CONSTRUCTOR),
-          writeBean(ImmutablePojo.class, FIELDS)
+          writeBean(ImmutablePojo.class, SETTERS)
         )
       );
       assertTrue(ex.getMessage().contains("Duplicate"), ex.getMessage());
@@ -769,7 +771,7 @@ class DeepMappingTest {
     @DisplayName("a hint whose target class is never reached during recursion is reported, not silently dropped")
     void unusedHintRejected() {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
-        Telescope.map(OrderRecord.class, ImmutablePojo.class, writeBean(DualPojo.class, FIELDS))
+        Telescope.map(OrderRecord.class, ImmutablePojo.class, writeBean(DualPojo.class, CONSTRUCTOR))
       );
       assertTrue(ex.getMessage().contains("Unused"), ex.getMessage());
     }
@@ -777,10 +779,10 @@ class DeepMappingTest {
     @Test
     @DisplayName("writeBeans(STRATEGY) sets a default write strategy applied to every unhinted bean target")
     void writeBeansDefaultAppliesToAllTargets() {
-      // DualPojo has both a builder() and field-injectable fields — autoWriter would pick BUILDER
-      // (and the builder appends "[built]" to name). With writeBeans(FIELDS) as the default, the
-      // engine must skip the builder and inject directly into fields, yielding the raw "alice".
-      final var mapper = Telescope.mapper(DualRecord.class, DualPojo.class, writeBeans(FIELDS));
+      // DualPojo has both a builder() and an all-args constructor — autoWriter would pick BUILDER,
+      // which appends "[built]" to the name. With writeBeans(CONSTRUCTOR) as the default, the
+      // engine must skip the builder and call the constructor, yielding the raw "alice".
+      final var mapper = Telescope.mapper(DualRecord.class, DualPojo.class, writeBeans(CONSTRUCTOR));
       final var pojo = mapper.read(new DualRecord("alice", 9));
       assertEquals("alice", pojo.getName()); // not "alice[built]"
       assertEquals(9, pojo.getScore());
@@ -789,12 +791,12 @@ class DeepMappingTest {
     @Test
     @DisplayName("per-class writeBean(X.class, …) overrides the writeBeans(…) default for that target")
     void perClassHintWinsOverDefault() {
-      // Default says FIELDS, but per-class hint says BUILDER — builder wins for DualPojo, so the
-      // built-in "[built]" suffix surfaces.
+      // Default says CONSTRUCTOR, but per-class hint says BUILDER — builder wins for DualPojo, so
+      // the builder's "[built]" suffix surfaces.
       final var mapper = Telescope.mapper(
         DualRecord.class,
         DualPojo.class,
-        writeBeans(FIELDS),
+        writeBeans(CONSTRUCTOR),
         writeBean(DualPojo.class, BUILDER)
       );
       final var pojo = mapper.read(new DualRecord("alice", 9));
@@ -805,7 +807,7 @@ class DeepMappingTest {
     @DisplayName("two writeBeans(…) defaults are rejected eagerly (at most one default per call)")
     void duplicateDefaultRejected() {
       final var ex = assertThrows(IllegalArgumentException.class, () ->
-        Telescope.map(DualRecord.class, DualPojo.class, writeBeans(FIELDS), writeBeans(BUILDER))
+        Telescope.map(DualRecord.class, DualPojo.class, writeBeans(SETTERS), writeBeans(BUILDER))
       );
       assertTrue(ex.getMessage().contains("writeBeans"), ex.getMessage());
     }

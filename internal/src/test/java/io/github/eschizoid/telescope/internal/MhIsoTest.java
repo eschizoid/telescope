@@ -49,9 +49,7 @@ class MhIsoTest {
     }
   }
 
-  /**
-   * No-arg constructor but no setter for {@code name} — the field-injection shape MhIso declines.
-   */
+  /** No-arg constructor but no setter for {@code name} — a bean shape MhIso declines. */
   static final class GetterOnlyBean {
 
     private final String name = "fixed";

@@ -509,9 +509,10 @@ public sealed class Telescope<
    * Start a <em>native POJO</em> telescope. Unlike {@link #of(Class)} (records only), the resulting
    * telescope navigates JavaBeans-style POJOs directly: {@code .field(Pojo::getX)} reads via the
    * getter, and {@code set}/{@code update} rebuild the POJO immutably with that one property
-   * changed — using a write strategy auto-detected per type (static {@code builder()} &rarr; no-arg
-   * constructor with setters &rarr; field injection). Deep paths and {@code .each(...)} compose
-   * like records, rebuilding the POJO at each level.
+   * changed — using a write strategy auto-detected per type (no-arg constructor with setters &rarr;
+   * static {@code builder()} &rarr; name-matched all-args constructor). A POJO whose only write
+   * path is its private fields reads and navigates normally and is refused on the first write. Deep
+   * paths and {@code .each(...)} compose like records, rebuilding the POJO at each level.
    *
    * <pre>{@code
    * Telescope.ofBean(LegacyUser.class)
@@ -521,7 +522,7 @@ public sealed class Telescope<
    * }</pre>
    *
    * <p>Cost: each level rebuilds the whole POJO via reflection + strategy (slower than the record
-   * canonical-constructor copy), and field injection needs an {@code opens} directive under JPMS.
+   * canonical-constructor copy), and a closed package needs an {@code opens} directive under JPMS.
    * For the reflection-free fast path, annotate the POJO with {@link
    * io.github.eschizoid.telescope.annotations.BeanFocus}.
    *
@@ -2413,7 +2414,10 @@ public sealed class Telescope<
     }
   }
 
-  /** POJOs: read via the getter, rebuild via the auto-detected write strategy. */
+  /**
+   * POJOs: read via the getter, rebuild via the auto-detected write strategy, resolved on the first
+   * write so a POJO that strategy refuses can still be read.
+   */
   private enum BeanFieldOptics implements FieldOptics {
     INSTANCE;
 
@@ -2427,7 +2431,7 @@ public sealed class Telescope<
       final var property = Beans.propertyOf(rawName);
       final var holderLens = Telescope.<A, B>singleHolderLens(implClass, property);
       if (holderLens != null) return holderLens;
-      return Beans.lens(implClass, property, Beans.autoWriter(implClass));
+      return Beans.lens(implClass, property);
     }
   }
 
