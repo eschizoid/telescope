@@ -73,13 +73,10 @@ public interface Lens<S, A> extends Affine<S, A>, Getter<S, A> {
    *       references, 0/false for primitives), matching the reflective {@code SettersWriter} path
    *       above. A single-property focus emits no guard at all, having no off-path read.
    *   <li>{@code Beans.lens} backed by {@code ConstructorWriter} / {@code BuilderWriter} — these
-   *       strategies pass the focused value alongside the writer's per-name lookup but do NOT
-   *       null-guard primitive parameters or builder setters. A null off-path primitive surfaces as
-   *       an NPE: {@code ConstructorWriter} wraps it with its "Failed to construct" diagnostic;
-   *       {@code BuilderWriter} propagates it raw (intentional dispatch-time symmetry — see {@code
-   *       BuilderWriter#construct}). Either way the failure is loud, not silent. For null-tolerant
-   *       N-hop writes pick the SETTERS strategy (the {@code autoWriter} default) or model the
-   *       target with reference-typed fields.
+   *       strategies pass the focused value alongside the writer's per-name lookup, and a null for
+   *       a primitive constructor parameter or builder member becomes its JLS default, the value
+   *       {@code SettersWriter} leaves the field at. So {@code set(null, value)} rebuilds a fresh
+   *       focus through them too, with every off-path property at its JLS default.
    *   <li>{@code Records.fieldLens} (both string and class-aware overloads) — overrides {@code
    *       modify} with an explicit {@code null}-source short-circuit returning {@code null}; this
    *       default never runs and the null-source write surfaces as a missing-leaf result rather

@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import java.io.IOException;
@@ -51,8 +52,8 @@ import javax.tools.StandardLocation;
  *
  * <p>Both sides may be records or POJOs. Each direction reads the opposite side's fields (a record
  * component {@code x()}, or a POJO getter {@code getX()} / {@code isX()}) and rebuilds the near
- * side by an auto-detected strategy: a record via its canonical constructor; a POJO via a public
- * constructor whose parameter names match the fields, then a static {@code builder()}, then a
+ * side by an auto-detected strategy: a record via its canonical constructor; a POJO via a static
+ * {@code builder()}, then a public constructor whose parameter names match the fields, then a
  * no-arg constructor plus {@code setX} setters. Fields match by name and must form a bijection.
  *
  * <p>Guards (each a compile error): the source must be a top-level record/class; the target must be
@@ -4675,36 +4676,60 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * Runs the same ladder the rebuild runs, and stops where it would stop. Consulted before the
    * emission so the check can ask what the emission will do rather than model it.
+   *
+   * <p>AUTO takes the first strategy in {@link BeanWriteStrategy#AUTO_ORDER} the target offers,
+   * which is the order the runtime writer takes, so a bean offering several ways to be built is
+   * built the same way by the bridge and by {@code Telescope.mapper}. A forced strategy is tried
+   * alone.
    */
   private Rebuild rebuildFor(final TypeElement to, final List<Field> toFields, final String writeStrategy) {
     if (to.getKind() == ElementKind.RECORD) return new Rebuild(Rebuild.Kind.RECORD, null, null);
     final var auto = "AUTO".equals(writeStrategy);
-    if (auto || "CONSTRUCTOR".equals(writeStrategy)) {
-      for (final var ctor : ElementFilter.constructorsIn(to.getEnclosedElements())) {
-        if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != toFields.size()) continue;
-        var matched = true;
-        for (final var p : ctor.getParameters()) {
-          if (!hasField(toFields, p.getSimpleName().toString())) {
-            matched = false;
-            break;
-          }
+    final var names = toFields.stream().map(Field::name).toList();
+    final var constructor = auto ? nameMatchedConstructor(to, names) : namedConstructor(to, toFields);
+    final var builder = staticBuilderMethod(to);
+    final var builderType =
+      builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED
+        ? (TypeElement) ((DeclaredType) builder.getReturnType()).asElement()
+        : null;
+    final var strategy = switch (writeStrategy) {
+      case "CONSTRUCTOR" -> constructor != null ? BeanWriteStrategy.CONSTRUCTOR : null;
+      case "BUILDER" -> builderType != null ? BeanWriteStrategy.BUILDER : null;
+      case "SETTERS" -> hasPublicNoArgConstructor(to) ? BeanWriteStrategy.SETTERS : null;
+      default -> autoBeanStrategy(
+        to,
+        names,
+        name -> toFields.get(names.indexOf(name)).type(),
+        hasPublicNoArgConstructor(to)
+      ).orElse(null);
+    };
+    if (strategy == null) return new Rebuild(Rebuild.Kind.NONE, null, null);
+    return switch (strategy) {
+      case BUILDER -> new Rebuild(Rebuild.Kind.BUILDER, null, builderType);
+      case CONSTRUCTOR -> new Rebuild(Rebuild.Kind.CONSTRUCTOR, constructor, null);
+      case SETTERS -> new Rebuild(Rebuild.Kind.SETTERS, null, null);
+    };
+  }
+
+  /**
+   * A public constructor taking one parameter per field, every one named after a field — the
+   * constructor a forced {@code CONSTRUCTOR} strategy calls. AUTO asks {@link
+   * #nameMatchedConstructor} instead, which also requires it to be the only constructor of that
+   * arity, as the runtime writer does.
+   */
+  private static ExecutableElement namedConstructor(final TypeElement to, final List<Field> toFields) {
+    for (final var ctor : ElementFilter.constructorsIn(to.getEnclosedElements())) {
+      if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != toFields.size()) continue;
+      var matched = true;
+      for (final var p : ctor.getParameters()) {
+        if (!hasField(toFields, p.getSimpleName().toString())) {
+          matched = false;
+          break;
         }
-        if (matched) return new Rebuild(Rebuild.Kind.CONSTRUCTOR, ctor, null);
       }
-      if (!auto) return new Rebuild(Rebuild.Kind.NONE, null, null);
+      if (matched) return ctor;
     }
-    if (auto || "BUILDER".equals(writeStrategy)) {
-      final var builder = staticBuilderMethod(to);
-      if (builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED) {
-        final var builderType = (TypeElement) ((DeclaredType) builder.getReturnType()).asElement();
-        return new Rebuild(Rebuild.Kind.BUILDER, null, builderType);
-      }
-      if (!auto) return new Rebuild(Rebuild.Kind.NONE, null, null);
-    }
-    if ((auto || "SETTERS".equals(writeStrategy)) && hasPublicNoArgConstructor(to)) {
-      return new Rebuild(Rebuild.Kind.SETTERS, null, null);
-    }
-    return new Rebuild(Rebuild.Kind.NONE, null, null);
+    return null;
   }
 
   /**
@@ -4802,6 +4827,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var sb = new StringBuilder(toFq + ".builder()");
         for (final var f : toFields) {
           final var method = builderSetter(builderType, f.name());
+          // A property no strategy writes (a computed getter, a final field given its value where
+          // it is declared) is skipped, as the runtime builder writer skips it. One that only a
+          // strategy can set is refused: building without it would drop the value.
+          if (method == null && !storedField(to, f.name())) continue;
           if (method == null) {
             error(
               annotationSite,

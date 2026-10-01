@@ -152,6 +152,22 @@ final class MhFusionParityTest {
     assertFusionParity(OuterBean.class, OuterBean.class, null);
   }
 
+  @Test
+  @DisplayName("a constructor-built child in a builder-built parent: fused == proxy-dispatched")
+  void nestedConstructorAndBuilderFusion() {
+    final var inner = new MhComposedBuildParityTest.Src(1, null, " c ", 2L);
+    assertFusionParity(
+      MhComposedBuildParityTest.OuterRec.class,
+      MhComposedBuildParityTest.OuterBuilt.class,
+      new MhComposedBuildParityTest.OuterRec(" t ", inner)
+    );
+    assertFusionParity(
+      MhComposedBuildParityTest.OuterRec.class,
+      MhComposedBuildParityTest.OuterBuilt.class,
+      new MhComposedBuildParityTest.OuterRec("t", null)
+    );
+  }
+
   /**
    * Build the mapper with fusion enabled (cleared) and disabled (set) and assert forward — and, on
    * a non-null match, backward — are byte-identical. Rebuilds per toggle so the flag is read at

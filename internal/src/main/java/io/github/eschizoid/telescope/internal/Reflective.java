@@ -8,7 +8,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Function;
-import java.util.function.Predicate;
 
 /**
  * The uniform reflective dispatch that {@code DeepMap} drives — abstracts over "this side is a
@@ -19,7 +18,7 @@ import java.util.function.Predicate;
  *
  * <p>The record's fields are the per-side behaviours, and each has a forwarding method ({@link
  * #names(Class)}, {@link #genericType(Class, String)}, {@link #read(Object, String)}, {@link
- * #construct(Class, Function)}, {@link #normalize(String)}, {@link #foldsSetters(Class)}) so a call
+ * #construct(Class, Function)}, {@link #normalize(String)}, {@link #writerFor(Class)}) so a call
  * site reads {@code refl.read(value, name)} rather than {@code refl.read().apply(value, name)}.
  *
  * <p>Two singletons:
@@ -27,8 +26,8 @@ import java.util.function.Predicate;
  * <ul>
  *   <li>{@link #RECORDS} — backed by {@link Records}. Canonical-constructor rebuild, identity name
  *       normalization (record components are already named the user-visible way).
- *   <li>{@link #BEANS} — backed by {@link Beans}. Auto-detected write strategy (no-arg ctor +
- *       setters → {@code builder()} → name-matched all-args ctor), {@code getX/isX} stripped to a
+ *   <li>{@link #BEANS} — backed by {@link Beans}. Auto-detected write strategy ({@code builder()} →
+ *       name-matched all-args ctor → no-arg ctor + setters), {@code getX/isX} stripped to a
  *       property name. A POJO none of those strategies can write — including one whose only write
  *       path is its private fields — is refused by the auto path.
  * </ul>
@@ -44,7 +43,7 @@ public record Reflective(
   BiFunction<Object, String, Object> read,
   BiFunction<Class<?>, Function<String, Object>, Object> construct,
   Function<String, String> normalize,
-  Predicate<Class<?>> writesThroughSetters
+  Function<Class<?>, Beans.BeanWriter<?>> chosenWriter
 ) {
   public static final Reflective RECORDS = new Reflective(
     Records::componentNames,
@@ -52,7 +51,7 @@ public record Reflective(
     Records::read,
     Reflective::constructRecord,
     name -> name,
-    cls -> true
+    cls -> null
   );
 
   public static final Reflective BEANS = new Reflective(
@@ -61,7 +60,7 @@ public record Reflective(
     Beans::readProperty,
     Reflective::constructBean,
     Beans::propertyOf,
-    cls -> true
+    cls -> cls.isRecord() ? null : Beans.autoWriterOrNull(cls)
   );
 
   /**
@@ -78,10 +77,10 @@ public record Reflective(
    * user supplies {@code writeBean(targetClass, strategy)} rows and/or a single {@code
    * writeBeans(strategy)} default. The per-class hint map is keyed on target class and holds a
    * pre-instantiated {@link Beans.BeanWriter}. The default factory is consulted for every class no
-   * hint names: once when the mapper is planned, to decide whether a composed setter fold may build
-   * the class, and again on construction, which is where a default strategy that cannot apply to a
-   * target throws. Per-class LMF reuse happens one layer down in {@link Beans#autoWriter} and its
-   * invoker caches, so this layer holds no state of its own.
+   * hint names: once when the mapper is planned, to decide whether a composed build may stand in
+   * for the writer it picks, and again on construction, which is where a default strategy that
+   * cannot apply to a target throws. Per-class LMF reuse happens one layer down in {@link
+   * Beans#autoWriter} and its invoker caches, so this layer holds no state of its own.
    */
   public static Reflective beansWithHints(
     final Map<Class<?>, Beans.BeanWriter<?>> hints,
@@ -93,7 +92,7 @@ public record Reflective(
       BEANS.read,
       (cls, valueByName) -> constructBeanWithHints(hints, defaultWriterFactory, cls, valueByName),
       BEANS.normalize,
-      cls -> hintedSetters(hints, defaultWriterFactory, cls)
+      cls -> hintedWriter(hints, defaultWriterFactory, cls)
     );
   }
 
@@ -108,12 +107,14 @@ public record Reflective(
   }
 
   /**
-   * Whether this side writes {@code cls} through its setters, which is the only bean write a
-   * composed setter fold can stand in for. An explicit hint or a default strategy that names
-   * another writer is honoured by declining the fold, so the hinted writer builds the value.
+   * The writer this side builds bean {@code cls} with — the per-class hint, else the default
+   * strategy, else the one {@link Beans#autoWriter} picks — or {@code null} for a record, whose
+   * rebuild is its canonical constructor on every path, and for a bean no writer can build, so the
+   * construction that follows raises that refusal itself. A composed build stands in for this
+   * writer and no other, so the two build the same value.
    */
-  public boolean foldsSetters(final Class<?> cls) {
-    return writesThroughSetters.test(cls);
+  public Beans.BeanWriter<?> writerFor(final Class<?> cls) {
+    return chosenWriter.apply(cls);
   }
 
   /** Read a value by name. */
@@ -356,23 +357,24 @@ public record Reflective(
   }
 
   /**
-   * Whether the writer the hints pick for {@code cls} is the setter writer. A default strategy
-   * whose writer cannot be built for {@code cls} answers no, so the construction that follows
-   * raises that failure itself rather than the fold building the value some other way.
+   * The writer the hints pick for {@code cls}: the hint naming {@code cls}, else the default
+   * strategy, else the writer {@link Beans#autoWriter} picks. {@code null} for a record, and for a
+   * class whose writer cannot be built, so the construction that follows raises that failure
+   * itself.
    */
-  private static boolean hintedSetters(
+  private static Beans.BeanWriter<?> hintedWriter(
     final Map<Class<?>, Beans.BeanWriter<?>> hints,
     final Function<Class<?>, Beans.BeanWriter<?>> defaultWriterFactory,
     final Class<?> cls
   ) {
-    if (cls.isRecord()) return true;
+    if (cls.isRecord()) return null;
     final var hinted = hints.get(cls);
-    if (hinted != null) return hinted instanceof Beans.SettersWriter<?>;
-    if (defaultWriterFactory == null) return true;
+    if (hinted != null) return hinted;
+    if (defaultWriterFactory == null) return BEANS.writerFor(cls);
     try {
-      return defaultWriterFactory.apply(cls) instanceof Beans.SettersWriter<?>;
+      return defaultWriterFactory.apply(cls);
     } catch (final RuntimeException e) {
-      return false;
+      return null;
     }
   }
 

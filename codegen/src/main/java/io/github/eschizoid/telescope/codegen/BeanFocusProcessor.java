@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import java.util.LinkedHashSet;
 import java.util.Set;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
@@ -32,6 +33,12 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
 
   private static final Set<String> TRIGGER = Set.of("io.github.eschizoid.telescope.annotations.BeanFocus");
 
+  // Targets carrying a Lombok trigger are deferred to processingOver(). Whether Lombok has patched
+  // a class by the first round depends on where it sits on the processor path, and a read of an
+  // un-patched class misses the builder, constructor and accessors Lombok adds -- which decides the
+  // rebuild strategy, not only whether the bean is readable. By the final round Lombok is done.
+  private final Set<TypeElement> pending = new LinkedHashSet<>();
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var anno = processingEnv
@@ -47,7 +54,12 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
         error(element, "@BeanFocus is only supported on top-level classes");
         continue;
       }
-      emitBeanNavigator((TypeElement) element, "@BeanFocus", TRIGGER);
+      if (!roundEnv.processingOver() && carriesLombokTrigger(element)) pending.add((TypeElement) element);
+      else emitBeanNavigator((TypeElement) element, "@BeanFocus", TRIGGER);
+    }
+    if (roundEnv.processingOver()) {
+      for (final var pojo : pending) emitBeanNavigator(pojo, "@BeanFocus", TRIGGER);
+      pending.clear();
     }
     return true;
   }

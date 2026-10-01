@@ -27,22 +27,22 @@ class BeanRebuildStrategyTest {
   }
 
   @Test
-  @DisplayName("a write lands through the setter, so the builder's normalisation is not applied")
-  void writeUsesTheSetterSurface() {
+  @DisplayName("a write lands through the builder, so the builder's normalisation is applied")
+  void writeUsesTheBuilderSurface() {
     final var written = Telescope.ofBean(NormalisingBean.class).field(NormalisingBean::getCode).set(sample(), "xy");
 
-    assertEquals("xy", written.getCode(), "routed through build() this would be XY");
+    assertEquals("XY", written.getCode(), "routed through the setter this would be xy");
     assertEquals("alice", written.getName(), "the off-path property survives the rebuild");
   }
 
   @Test
   @DisplayName("an update lands the same way, since it rebuilds through the same surface")
-  void updateUsesTheSetterSurface() {
+  void updateUsesTheBuilderSurface() {
     final var updated = Telescope.ofBean(NormalisingBean.class)
       .field(NormalisingBean::getCode)
       .update(sample(), c -> c + "z");
 
-    assertEquals("abz", updated.getCode(), "routed through build() this would be ABZ");
+    assertEquals("ABZ", updated.getCode(), "routed through the setter this would be abz");
   }
 
   @Test

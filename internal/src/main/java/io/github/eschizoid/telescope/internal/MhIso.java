@@ -13,7 +13,8 @@ import java.util.function.Function;
 
 /**
  * MethodHandle-combinator assembly of a structural conversion {@link Iso} where each side is a
- * record (canonical-constructor rebuild) or a JavaBean (no-arg constructor + setters).
+ * record (canonical-constructor rebuild) or a JavaBean built the way its path's writer builds it:
+ * through its setters, a constructor, or its builder.
  *
  * <p>The array-based assembly in {@code DeepMap.assembleIso} allocates an {@code Object[]} per call
  * and boxes every primitive component (its readers are typed {@code Function<Object, Object>} and
@@ -27,13 +28,16 @@ import java.util.function.Function;
  *       primitive-to-primitive with no box; only slots carrying a real per-field {@link Iso}
  *       (rename with conversion, nested pair, container lift, constant, compute, when-gate) route
  *       through that Iso.
- *   <li><b>Construct side (target).</b> A record target pipes the per-slot filters straight into
- *       the raw canonical-constructor handle via {@link MethodHandles#filterArguments} + {@link
- *       MethodHandles#permuteArguments}. A bean target folds the raw no-arg constructor handle with
- *       one raw setter per slot via {@link MethodHandles#foldArguments} — the setter runs as a void
- *       side effect and the bean instance carries through. Identity and reference slots stay
- *       unboxed; a primitive slot fed by a value-producing (non-identity) Iso is read boxed only so
- *       it can be null-guarded before unboxing (see {@code setterFromSource}).
+ *   <li><b>Construct side (target).</b> A record target, and a bean built through a constructor,
+ *       pipe the per-slot filters straight into the raw constructor handle via {@link
+ *       MethodHandles#filterArguments} + {@link MethodHandles#permuteArguments}. A bean built
+ *       through its setters folds the raw no-arg constructor handle with one raw setter per slot
+ *       via {@link MethodHandles#foldArguments} — the setter runs as a void side effect and the
+ *       bean instance carries through; a bean built through its builder folds the builder's members
+ *       over the builder instance the same way and finishes with {@code build()}. Identity and
+ *       reference slots stay unboxed; a primitive slot that can be handed null is read boxed only
+ *       so it can be null-guarded before unboxing (see {@code setterFromSource} and {@code
+ *       argumentFromSource}).
  * </ul>
  *
  * <p><b>Lattice.</b> The result is a {@code Leaf} — an {@link Iso} whose forward/backward
@@ -57,26 +61,55 @@ public final class MhIso {
   private MhIso() {}
 
   /**
-   * Whether the {@code source} &harr; {@code target} conversion can be composed by this assembler:
-   * each side must be a record within the arity ceiling, or a bean constructible via a no-arg
-   * constructor plus a public {@code setX} setter for every property of the bean (not only the
-   * mapped ones — the conservative per-class gate). {@code DeepMap} consults this once, at build
-   * time, to choose the composed-handle leaf over the array leaf — a shape decision, not a runtime
-   * fallback. A bean that needs a builder or an all-args constructor (no no-arg constructor), or
-   * that has any property with no setter, returns {@code false} and routes to the array leaf.
+   * Whether the {@code source} &harr; {@code target} conversion can be composed with each bean side
+   * built through its setters: each side must be a record within the arity ceiling, or a bean with
+   * a no-arg constructor plus a public {@code setX} setter for every property. This is the shape
+   * the seven-argument {@link #pair} composes; {@code DeepMap} instead asks {@link #composesBuild}
+   * per direction, with the writer that direction's path would pick.
    */
   public static boolean supports(final Class<?> source, final Class<?> target) {
+    return composesBuild(source, target, settersOrNull(target)) && composesBuild(target, source, settersOrNull(source));
+  }
+
+  /**
+   * Whether this assembler can compose the one direction that reads {@code from} and builds {@code
+   * to} with {@code writer}, the writer that direction's path picks for {@code to} ({@code null}
+   * for a record). {@code from} must be a record within the arity ceiling or any bean, since a bean
+   * is read through its getters. {@code to} must be a record within the ceiling, or a bean whose
+   * writer the assembler reproduces exactly:
+   *
+   * <ul>
+   *   <li>setters, when the bean has a no-arg constructor and a public setter for every property —
+   *       requiring every property rather than only the mapped ones keeps this a per-class
+   *       question, and a getter-only property is a shape the array leaf owns;
+   *   <li>a constructor, when every argument it reads by name is a property;
+   *   <li>a builder, always: its members are called for the properties it has one for, in property
+   *       order, and {@code build()}'s result is checked as the writer checks it.
+   * </ul>
+   *
+   * <p>No writer routes the direction to the array leaf. The composed build makes the same calls in
+   * the same order as the writer, so the two produce the same value. {@code DeepMap} consults this
+   * once per direction, at build time — a shape decision, not a runtime fallback.
+   */
+  public static boolean composesBuild(final Class<?> from, final Class<?> to, final Beans.BeanWriter<?> writer) {
     // Test seam for the differential parity oracle: with the system property below set,
     // MhIsoDifferentialParityTest routes the identical conversion through the legacy array leaf and
     // asserts byte-identical output against this leaf. Unset in production; read once at build time
     // (never per conversion), so no steady-state cost.
     if (Boolean.getBoolean(DISABLE_PROPERTY)) return false;
-    return constructibleBy(source) && constructibleBy(target);
+    if (from.isRecord() && from.getRecordComponents().length > MAX_ARITY) return false;
+    if (to.isRecord()) return to.getRecordComponents().length <= MAX_ARITY;
+    return switch (writer) {
+      case Beans.SettersWriter<?> ignored -> Beans.isSetterConstructible(to, Beans.propertyNames(to));
+      case Beans.ConstructorWriter<?> constructor -> argumentsAreProperties(to, constructor);
+      case Beans.BuilderWriter<?> ignored -> true;
+      case null -> false;
+    };
   }
 
   /**
    * System property (test-only) that forces every pair to the legacy array leaf. See {@link
-   * #supports}.
+   * #composesBuild}.
    */
   public static final String DISABLE_PROPERTY = "io.github.eschizoid.telescope.mhiso.disabled";
 
@@ -102,14 +135,33 @@ public final class MhIso {
    */
   public static final String FUSION_DISABLE_PROPERTY = "io.github.eschizoid.telescope.mhiso.fusion.disabled";
 
-  private static boolean constructibleBy(final Class<?> cls) {
-    if (cls.isRecord()) return cls.getRecordComponents().length <= MAX_ARITY;
-    // A bean side is composable only when it has a no-arg constructor and every one of its
-    // properties is writable via a setter. Requiring a setter for every property (not only the
-    // mapped ones) is the conservative gate: it keeps `supports` a pure per-class question, and a
-    // bean with a getter-only property is a shape the array leaf must own for correctness.
-    // Records rebuild every component through the canonical constructor regardless.
-    return Beans.isSetterConstructible(cls, Beans.propertyNames(cls));
+  /**
+   * The setter writer for a bean, or {@code null} for a record or a bean it cannot be built for.
+   */
+  private static Beans.BeanWriter<?> settersOrNull(final Class<?> cls) {
+    if (cls.isRecord()) return null;
+    try {
+      return Beans.settersWriter(cls);
+    } catch (final RuntimeException e) {
+      return null;
+    }
+  }
+
+  /**
+   * Whether every name {@code writer} reads an argument by is a property of {@code cls}. The array
+   * leaf looks each up among the target's slots and has no slot for any other name.
+   */
+  private static boolean argumentsAreProperties(final Class<?> cls, final Beans.ConstructorWriter<?> writer) {
+    final var props = Beans.propertyNames(cls);
+    for (final var name : writer.argumentNames(props)) {
+      if (indexOf(props, name) < 0) return false;
+    }
+    return true;
+  }
+
+  private static int indexOf(final String[] names, final String name) {
+    for (var i = 0; i < names.length; i++) if (names[i].equals(name)) return i;
+    return -1;
   }
 
   // (Iso, Object) -> Object  ==  iso.to(v) / iso.from(v). Bound per non-identity field.
@@ -181,15 +233,62 @@ public final class MhIso {
     final Iso<Object, Object>[] bwdIso,
     final Iso<Object, Object> identity
   ) {
+    return pair(
+      source,
+      target,
+      fwdSrcPos,
+      fwdIso,
+      bwdTgtPos,
+      bwdIso,
+      identity,
+      null,
+      true,
+      true,
+      settersOrNull(target),
+      settersOrNull(source)
+    );
+  }
+
+  /**
+   * {@link #pair} with each direction composed only when {@code composeForward} / {@code
+   * composeBackward} says so, building its side with the writer given for it; a direction left out
+   * runs through {@code other} instead. {@code DeepMap} composes a direction when {@link
+   * #composesBuild} accepts the writer that direction's path picks for the side it builds, and
+   * hands the other direction to the array leaf, so a pair whose source no composed build
+   * reproduces still composes the forward direction, which only reads that source.
+   *
+   * <p>The result is still a composed leaf: a direction run through {@code other} exposes its raw
+   * handle as {@code other}'s own transform, so a parent fuses it the same way.
+   *
+   * @param targetWriter the writer the forward direction builds {@code target} with, or {@code
+   *     null} for a record
+   * @param sourceWriter the writer the backward direction builds {@code source} with, or {@code
+   *     null} for a record
+   */
+  public static <S, T> Iso<S, T> pair(
+    final Class<S> source,
+    final Class<T> target,
+    final int[] fwdSrcPos,
+    final Iso<Object, Object>[] fwdIso,
+    final int[] bwdTgtPos,
+    final Iso<Object, Object>[] bwdIso,
+    final Iso<Object, Object> identity,
+    final Iso<Object, Object> other,
+    final boolean composeForward,
+    final boolean composeBackward,
+    final Beans.BeanWriter<?> targetWriter,
+    final Beans.BeanWriter<?> sourceWriter
+  ) {
     // Erase both directions to (Object) -> Object so the Function SAM call site can invokeExact
     // them — the boundary casts (Object -> instance on entry, instance -> Object on exit) are cheap
     // reference casts; the primitive fields inside stay unboxed.
-    final MethodHandle fwd = compose(source, target, fwdSrcPos, fwdIso, ISO_TO, identity).asType(
-      MethodType.methodType(Object.class, Object.class)
-    );
-    final MethodHandle bwd = compose(target, source, bwdTgtPos, bwdIso, ISO_FROM, identity).asType(
-      MethodType.methodType(Object.class, Object.class)
-    );
+    final var erased = MethodType.methodType(Object.class, Object.class);
+    final MethodHandle fwd = composeForward
+      ? compose(source, target, fwdSrcPos, fwdIso, ISO_TO, identity, targetWriter).asType(erased)
+      : ISO_TO.bindTo(other).asType(erased);
+    final MethodHandle bwd = composeBackward
+      ? compose(target, source, bwdTgtPos, bwdIso, ISO_FROM, identity, sourceWriter).asType(erased)
+      : ISO_FROM.bindTo(other).asType(erased);
 
     final Function<S, T> forward = s -> {
       if (s == null) return null;
@@ -270,7 +369,8 @@ public final class MhIso {
     final int[] slotSrcPos,
     final Iso<Object, Object>[] slotIso,
     final MethodHandle isoDir,
-    final Iso<Object, Object> identity
+    final Iso<Object, Object> identity,
+    final Beans.BeanWriter<?> writer
   ) {
     final MethodHandle[] srcAccessors = accessorHandlesFor(srcCls);
     if (tgtCls.isRecord()) {
@@ -289,7 +389,153 @@ public final class MhIso {
       final int[] toSingleInput = new int[slotTypes.length]; // all zeros: every filter reads slot 0
       return MethodHandles.permuteArguments(filtered, MethodType.methodType(tgtCls, srcCls), toSingleInput);
     }
-    return beanSetterFold(srcCls, tgtCls, srcAccessors, slotSrcPos, slotIso, isoDir, identity);
+    return switch (writer) {
+      case Beans.ConstructorWriter<?> constructor -> beanConstructorBuild(
+        srcCls,
+        tgtCls,
+        srcAccessors,
+        slotSrcPos,
+        slotIso,
+        isoDir,
+        identity,
+        constructor
+      );
+      case Beans.BuilderWriter<?> builder -> beanBuilderFold(
+        srcCls,
+        tgtCls,
+        srcAccessors,
+        slotSrcPos,
+        slotIso,
+        isoDir,
+        identity,
+        builder
+      );
+      case Beans.SettersWriter<?> ignored -> beanSetterFold(
+        srcCls,
+        tgtCls,
+        srcAccessors,
+        slotSrcPos,
+        slotIso,
+        isoDir,
+        identity
+      );
+    };
+  }
+
+  /**
+   * A bean built through its constructor, as {@code ConstructorWriter} builds it: one filter per
+   * parameter, reading the property the writer reads that argument by, piped into the constructor
+   * handle like a record's canonical constructor. A failure in the constructor is wrapped as the
+   * writer wraps it.
+   */
+  private static MethodHandle beanConstructorBuild(
+    final Class<?> srcCls,
+    final Class<?> beanCls,
+    final MethodHandle[] srcAccessors,
+    final int[] slotSrcPos,
+    final Iso<Object, Object>[] slotIso,
+    final MethodHandle isoDir,
+    final Iso<Object, Object> identity,
+    final Beans.ConstructorWriter<?> writer
+  ) {
+    final String[] props = Beans.propertyNames(beanCls);
+    final String[] keys = writer.argumentNames(props);
+    final MethodHandle ctor = writer.composableConstructor();
+    final Class<?>[] params = ctor.type().parameterArray();
+    final MethodHandle[] filters = new MethodHandle[params.length];
+    for (var j = 0; j < params.length; j++) {
+      final var slot = indexOf(props, keys[j]);
+      filters[j] = argumentFromSource(
+        srcCls,
+        params[j],
+        srcAccessors,
+        slotSrcPos[slot],
+        slotIso[slot],
+        isoDir,
+        identity,
+        writer.nullArgument(j)
+      );
+    }
+    final MethodHandle filtered = MethodHandles.filterArguments(ctor, 0, filters);
+    final MethodHandle single = MethodHandles.permuteArguments(
+      filtered,
+      MethodType.methodType(filtered.type().returnType(), srcCls),
+      new int[params.length]
+    );
+    return single.asType(MethodType.methodType(beanCls, srcCls));
+  }
+
+  /**
+   * A bean built through its builder, as {@code BuilderWriter} builds it: {@code builder()}, then
+   * the member for each property the builder has one for, in property order and with its return
+   * discarded, then {@code build()} and the writer's check on what it returns. The members fold
+   * over the builder instance the way the setter fold folds over the bean.
+   */
+  private static MethodHandle beanBuilderFold(
+    final Class<?> srcCls,
+    final Class<?> beanCls,
+    final MethodHandle[] srcAccessors,
+    final int[] slotSrcPos,
+    final Iso<Object, Object>[] slotIso,
+    final MethodHandle isoDir,
+    final Iso<Object, Object> identity,
+    final Beans.BuilderWriter<?> writer
+  ) {
+    final String[] props = Beans.propertyNames(beanCls);
+    final Class<?> builderCls = writer.builderType();
+    MethodHandle mk = MethodHandles.dropArguments(writer.composableFactory(), 0, srcCls);
+    for (var i = 0; i < props.length; i++) {
+      final MethodHandle member = writer.composableMember(props[i]);
+      if (member == null) continue;
+      final Class<?> slotType = member.type().parameterType(1);
+      final MethodHandle value = argumentFromSource(
+        srcCls,
+        slotType,
+        srcAccessors,
+        slotSrcPos[i],
+        slotIso[i],
+        isoDir,
+        identity,
+        writer.nullArgument(props[i])
+      );
+      final MethodHandle setFromS = MethodHandles.filterArguments(member, 1, value);
+      final MethodHandle populate = MethodHandles.foldArguments(
+        MethodHandles.dropArguments(MethodHandles.identity(builderCls), 1, srcCls),
+        setFromS
+      );
+      mk = MethodHandles.foldArguments(populate, mk);
+    }
+    return MethodHandles.filterReturnValue(mk, writer.composableBuild()).asType(MethodType.methodType(beanCls, srcCls));
+  }
+
+  /**
+   * {@code (srcCls) -> paramType}: the value a constructor parameter or builder member takes for
+   * one slot. A primitive parameter that the slot can hand null — any slot but an identity read of
+   * a primitive source — reads the value boxed and takes {@code nullValue}, its JLS default, in
+   * place of null, as the constructor and builder writers do; every other parameter reads as the
+   * record path does.
+   */
+  private static MethodHandle argumentFromSource(
+    final Class<?> srcCls,
+    final Class<?> paramType,
+    final MethodHandle[] srcAccessors,
+    final int sp,
+    final Iso<Object, Object> slotIso,
+    final MethodHandle isoDir,
+    final Iso<Object, Object> identity,
+    final Object nullValue
+  ) {
+    final var primitiveRead = slotIso == identity && sp >= 0 && srcAccessors[sp].type().returnType().isPrimitive();
+    if (!paramType.isPrimitive() || primitiveRead) {
+      return buildFilter(srcCls, paramType, srcAccessors, sp, slotIso, isoDir, identity);
+    }
+    final MethodHandle boxed = buildFilter(srcCls, Object.class, srcAccessors, sp, slotIso, isoDir, identity);
+    final MethodHandle orDefault = MethodHandles.guardWithTest(
+      NON_NULL,
+      MethodHandles.identity(Object.class),
+      MethodHandles.dropArguments(MethodHandles.constant(Object.class, nullValue), 0, Object.class)
+    );
+    return MethodHandles.filterReturnValue(boxed, orDefault).asType(MethodType.methodType(paramType, srcCls));
   }
 
   /** Raw, primitive-typed accessor handles for {@code cls} in {@code names(...)} order. */

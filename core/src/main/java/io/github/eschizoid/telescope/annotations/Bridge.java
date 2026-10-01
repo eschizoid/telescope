@@ -21,9 +21,16 @@ import java.lang.annotation.Target;
  *
  * <p>Each direction reads the other side's fields (a record component {@code x()}, or a POJO getter
  * {@code getX()} / {@code isX()}) and rebuilds, auto-detecting a construction strategy at compile
- * time: a record uses its canonical constructor; a POJO uses, in priority order, a public
- * constructor whose parameter names match the fields, then a static {@code builder()}, then a
- * public no-arg constructor plus {@code setX} setters.
+ * time: a record uses its canonical constructor; a POJO uses, in priority order, a static {@code
+ * builder()}, then a public constructor whose parameter names match the fields, then a public
+ * no-arg constructor plus {@code setX} setters. The builder is skipped when it cannot stand in for
+ * the next strategy: when it has no member named for a property that strategy would write — every
+ * property when there is a name-matched constructor, otherwise every property a public setter
+ * writes — since a builder silently drops a property it has no member for; and when a member named
+ * for any property cannot take a value of that property's type (a varargs {@code p(String...)}
+ * behind a {@code String} property), since every write through it would then fail. That is the
+ * order and the rule the runtime takes with no write hint, so a POJO offering several strategies is
+ * built the same way by the bridge and by {@code Telescope.mapper}.
  *
  * <p>Annotate whichever side you own. Records and classes only, and only top-level types on both
  * sides — the generated top-level {@code *Bridge} class cannot name a nested type's constructor.
@@ -224,7 +231,7 @@ public @interface Bridge {
   /**
    * Override for the POJO construction strategy when emitting the target's rebuild block. Records
    * always use the canonical constructor and ignore this setting. Default {@link
-   * WriteStrategy#AUTO} runs the priority ladder (name-matched ctor → static builder() → no-arg +
+   * WriteStrategy#AUTO} runs the priority ladder (static builder() → name-matched ctor → no-arg +
    * setters); the other values force one specific strategy and surface a precise compile error when
    * the POJO doesn't expose the required shape. Mirrors the runtime {@code WriteHint.writeBean(cls,
    * strategy)} hint.

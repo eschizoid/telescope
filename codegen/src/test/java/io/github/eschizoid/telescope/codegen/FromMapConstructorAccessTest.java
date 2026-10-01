@@ -86,6 +86,120 @@ class FromMapConstructorAccessTest {
   }
 
   @Test
+  @DisplayName("a public constructor naming every property comes before the setters, as at runtime")
+  void nameMatchedConstructorComesBeforeSetters() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.Both",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.FromMap;
+        @FromMap
+        public class Both {
+          private String name;
+          public Both() {}
+          public Both(final String name) { this.name = name; }
+          public String getName() { return name; }
+          public void setName(final String n) { this.name = n; }
+        }
+        """
+      )
+    );
+
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var binder = compilation.generated().get("demo.BothFromMap");
+    assertTrue(
+      binder.contains("return new demo.Both((java.lang.String) __m_name);"),
+      () -> "the binder should call the constructor; saw " + binder
+    );
+    assertFalse(binder.contains("bean.setName("), () -> "and not the setter; saw " + binder);
+  }
+
+  @Test
+  @DisplayName("a required key is checked before the constructor rung builds the bean")
+  void requiredKeyIsCheckedBeforeTheConstructor() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.Both",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.FromMap;
+        @FromMap(required = "name")
+        public class Both {
+          private String name;
+          public Both() {}
+          public Both(final String name) { this.name = name; }
+          public String getName() { return name; }
+          public void setName(final String n) { this.name = n; }
+        }
+        """
+      )
+    );
+
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var binder = compilation.generated().get("demo.BothFromMap");
+    final var refusal = binder.indexOf("if (__m_name == null) __refuseMissing(");
+    final var built = binder.indexOf("return new demo.Both(");
+    assertTrue(refusal >= 0 && built > refusal, () -> "the refusal should precede the constructor call; saw " + binder);
+  }
+
+  @Test
+  @DisplayName("a builder binder skips a computed property the builder has no member for")
+  void builderSkipsAComputedProperty() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.Built",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.FromMap;
+        @FromMap
+        public final class Built {
+          private final String name;
+          private Built(final String name) { this.name = name; }
+          public String getName() { return name; }
+          public String getShout() { return name == null ? null : name.toUpperCase(); }
+          public static Builder builder() { return new Builder(); }
+          public static final class Builder {
+            private String name;
+            public Builder name(final String n) { this.name = n; return this; }
+            public Built build() { return new Built(name); }
+          }
+        }
+        """
+      )
+    );
+
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var binder = compilation.generated().get("demo.BuiltFromMap");
+    assertTrue(binder.contains(".builder().name("), () -> binder);
+    assertFalse(binder.contains(".shout("), () -> "nothing writes shout; saw " + binder);
+  }
+
+  @Test
+  @DisplayName("a constructor binder gives a primitive parameter behind a boxed property its default for null")
+  void constructorGuardsAPrimitiveParameter() {
+    final var compilation = compile(
+      ProcessorHarness.source(
+        "demo.Counted",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.FromMap;
+        @FromMap
+        public final class Counted {
+          private final Long count;
+          public Counted(final long count) { this.count = count; }
+          public Long getCount() { return count; }
+        }
+        """
+      )
+    );
+
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var binder = compilation.generated().get("demo.CountedFromMap");
+    assertTrue(binder.contains("== null ? 0L :"), () -> "a null unboxes without the guard; saw " + binder);
+  }
+
+  @Test
   @DisplayName("a private constructor is still refused, since nothing outside the class can call it")
   void privateConstructorIsRefused() {
     // The control. Without it a change that accepted every constructor would satisfy the rows
@@ -94,7 +208,8 @@ class FromMapConstructorAccessTest {
 
     assertFalse(compilation.success(), "a private constructor is reachable from nowhere else");
     assertTrue(
-      compilation.hasError("needs a static builder() or a no-arg constructor"),
+      compilation.hasError("or a no-arg constructor with setters") &&
+        !compilation.errorMessages().contains("public no-arg"),
       () -> "and the diagnostic should not promise that making it public would help: " + compilation.errorMessages()
     );
   }

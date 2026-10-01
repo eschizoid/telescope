@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import javax.annotation.processing.RoundEnvironment;
@@ -20,15 +21,15 @@ import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
-import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 
 /**
  * Emits a reflection-free {@code <X>FromMap} converter for each {@code @FromMap} record or bean: a
  * {@code static X fromMap(Map<String, Object>)} that rebuilds the target (record canonical
- * constructor, or bean builder / no-arg-ctor + setters) with the map values coerced inline, plus a
- * {@code FROM_MAP} {@code ForwardMapper} constant. No {@code SerializedLambda}, no reflection — the
- * generated code is GraalVM native-image clean.
+ * constructor, or a bean's builder, all-args constructor or no-arg-ctor + setters, in the order the
+ * runtime writer tries them) with the map values coerced inline, plus a {@code FROM_MAP} {@code
+ * ForwardMapper} constant. No {@code SerializedLambda}, no reflection — the generated code is
+ * GraalVM native-image clean.
  */
 @SupportedAnnotationTypes("io.github.eschizoid.telescope.annotations.FromMap")
 @SupportedSourceVersion(SourceVersion.RELEASE_21)
@@ -158,41 +159,12 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       error(pojo, "@FromMap: " + pojo.getQualifiedName() + " has no readable properties (getX()/isX())");
       return;
     }
-    final var builder = staticBuilderMethod(pojo);
-    final var builderType =
-      builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED
-        ? (TypeElement) ((DeclaredType) builder.getReturnType()).asElement()
-        : null;
-    final var useBuilder = builderType != null && hasBuildMethod(builderType);
-    // The binder is emitted into the bean's own package, so a protected or package-private
-    // constructor is reachable from it; only private is not. Asking for a public one refuses beans
-    // the navigator accepts and the reflective path has always accepted, for the same bean.
-    if (!useBuilder && !hasAccessibleNoArgConstructor(pojo)) {
-      error(
-        pojo,
-        "@FromMap: " +
-          pojo.getQualifiedName() +
-          " needs a static builder() or a no-arg constructor with setters (Telescope.fromMap" +
-          " also accepts a single public all-args constructor compiled with -parameters)"
-      );
-      return;
-    }
-    final var setters = new String[props.size()];
-    for (var i = 0; i < props.size(); i++) {
-      setters[i] = useBuilder ? builderSetter(builderType, props.get(i).name()) : setterName(pojo, props.get(i).name());
-      if (setters[i] == null) {
-        error(
-          pojo,
-          "@FromMap: no " +
-            (useBuilder ? "builder method" : "setter") +
-            " for property '" +
-            props.get(i).name() +
-            "' on " +
-            pojo.getQualifiedName()
-        );
-        return;
-      }
-    }
+    // The binder is emitted into the bean's own package, so a protected or package-private no-arg
+    // constructor is reachable from it; only private is not. The strategy is the one the runtime
+    // fromMap's writer picks for the same bean.
+    final var rebuild = beanRebuildFor(pojo, props, "@FromMap");
+    if (rebuild == null) return;
+    final var members = rebuild.members();
     final var coercions = props
       .stream()
       .map(p -> resolveCoercion(p.type()))
@@ -213,21 +185,32 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     for (final var coercion : coercions) helpers.putAll(coercion.helpers());
     addRefusal(pojo, required, helpers);
 
+    final Function<Prop, String> coerced = prop -> valueOf(coercions.get(props.indexOf(prop)), prop.name());
     emitConverter(pojo, unchecked, helpers, out -> {
       for (final var prop : props) hoist(out, prop.name());
       emitRefusalCall(out, required, "property");
-      if (useBuilder) {
-        out.print("    return " + pojo.getQualifiedName() + ".builder()");
-        for (var i = 0; i < props.size(); i++) {
-          out.print("." + setters[i] + "(" + valueOf(coercions.get(i), props.get(i).name()) + ")");
+      final var target = pojo.getQualifiedName().toString();
+      switch (rebuild.strategy()) {
+        case BUILDER -> {
+          out.print("    return " + target + ".builder()");
+          for (var i = 0; i < props.size(); i++) {
+            if (members[i] != null) out.print("." + members[i] + "(" + coerced.apply(props.get(i)) + ")");
+          }
+          out.println(".build();");
         }
-        out.println(".build();");
-      } else {
-        out.println("    final var bean = new " + pojo.getQualifiedName() + "();");
-        for (var i = 0; i < props.size(); i++) {
-          out.println("    bean." + setters[i] + "(" + valueOf(coercions.get(i), props.get(i).name()) + ");");
+        case CONSTRUCTOR -> {
+          final var prelude = new StringBuilder();
+          final var args = guardedArguments(props, rebuild.ctorOrder(), rebuild, coerced, prelude);
+          if (!prelude.isEmpty()) out.println("    " + prelude.toString().strip());
+          out.println("    return new " + target + "(" + String.join(", ", args) + ");");
         }
-        out.println("    return bean;");
+        case SETTERS -> {
+          out.println("    final var bean = new " + target + "();");
+          for (var i = 0; i < props.size(); i++) {
+            out.println("    bean." + members[i] + "(" + valueOf(coercions.get(i), props.get(i).name()) + ");");
+          }
+          out.println("    return bean;");
+        }
       }
     });
   }

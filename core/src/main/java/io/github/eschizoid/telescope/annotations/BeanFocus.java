@@ -17,11 +17,12 @@ import java.lang.annotation.Target;
  * speed of a hand-written copy.
  *
  * <p>The lens setter rebuilds the POJO with one property changed via a strategy auto-detected at
- * compile time: a static {@code builder()}, or a no-arg constructor plus {@code setX} setters. A
- * POJO that exposes neither a builder nor setters can't be {@code @BeanFocus}'d; navigate it
- * reflectively with {@code ofBean}, which also accepts a single public all-args constructor
- * compiled with {@code -parameters}. Neither path writes a private field. A missing setter/builder
- * method is a compile error.
+ * compile time, the first the POJO offers of: a static {@code builder()}, a public constructor
+ * whose parameters are named after every property, or a no-arg constructor plus {@code setX}
+ * setters. Runtime {@code ofBean} takes the same order, though it can match a constructor's
+ * parameters by name only when the class is compiled with {@code -parameters}. A POJO that offers
+ * none of them can't be {@code @BeanFocus}'d. Neither path writes a private field. A missing
+ * setter/builder method is a compile error.
  *
  * <pre>{@code
  * @BeanFocus

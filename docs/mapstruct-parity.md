@@ -682,9 +682,9 @@ customizable via BuilderProvider SPI and @Builder(builderMethod=...)
 // probed automatically, Lombok @Builder just works:
 final Mapper<UserDto, UserPojo> m = Telescope.mapper(UserDto.class, UserPojo.class,
     to(UserDto::email, UserPojo::getEmail));
-// Pin it explicitly when the class also has setters (SETTERS wins by default):
+// The builder wins by default over a constructor or setters; pin SETTERS to write through them instead:
 Telescope.mapper(UserDto.class, UserPojo.class,
-    writeBean(UserPojo.class, WriteStrategy.BUILDER));
+    writeBean(UserPojo.class, WriteStrategy.SETTERS));
 // Codegen navigators for Lombok @Builder classes ship in telescope-lombok:
 // @Builder class BuilderUser → generated BuilderUserTelescope with builder() rebuild
 ```
@@ -692,12 +692,13 @@ Telescope.mapper(UserDto.class, UserPojo.class,
 Covers Lombok @Builder (dedicated telescope-lombok module with integration tests) and any conventional static
 builder()/build() pair, including Immutables if you map to the generated ImmutableFoo class directly (its static
 builder() matches). Gaps vs MapStruct: (1) the factory method name is hard-wired to 'builder' — protobuf's newBuilder()
-is NOT detected and there is no @Builder(builderMethod=...) equivalent or BuilderProvider SPI to teach it; (2) no
-per-mapper toggle to prefer builder over setters other than the writeBean hint. Builder setter matching (exact / setX /
-withX) covers Lombok, Immutables-fluent, and JavaBean-style builders.
+is NOT detected and there is no @Builder(builderMethod=...) equivalent or BuilderProvider SPI to teach it; (2) a target
+with a builder is built through it by default, on both the runtime and the codegen path, and preferring its setters or
+constructor takes a writeBean hint (or `@Bridge(writeStrategy = ...)`). Builder setter matching (exact / setX / withX)
+covers Lombok, Immutables-fluent, and JavaBean-style builders.
 
 <sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java — `computeAutoWriter`
-(autoWriter probe order: setters → static builder() → all-args ctor), the `builderWriter` factory, and `BuilderWriter`
+(autoWriter probe order: static builder() → all-args ctor → setters), the `builderWriter` factory, and `BuilderWriter`
 (requires a static method named exactly 'builder()' returning a type with 'build()'; setter matching by exact name /
 setX / withX; LMF-de-reflected dispatch); core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java — the
 `WriteStrategy` javadoc (BUILDER strategy, 'requires a static builder() method');

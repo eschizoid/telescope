@@ -35,6 +35,13 @@ tasks.withType<Test>().configureEach {
     testLogging {
         events("passed", "failed", "skipped")
     }
+    // The annotation-processor path the fixtures compile with, for tests that recompile a fixture
+    // with the processors in a different order.
+    val processorPath: FileCollection = configurations.getByName("testAnnotationProcessor")
+    inputs.files(processorPath)
+    jvmArgumentProviders.add(CommandLineArgumentProvider {
+        listOf("-Dtelescope.test.processorPath=" + processorPath.asPath)
+    })
 }
 
 tasks.jacocoTestReport {

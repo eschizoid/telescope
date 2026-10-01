@@ -1,5 +1,8 @@
 package io.github.eschizoid.telescope.codegen;
 
+import com.sun.source.tree.VariableTree;
+import com.sun.source.util.Trees;
+import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -13,6 +16,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Stream;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.FilerException;
@@ -21,6 +25,7 @@ import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
@@ -269,6 +274,149 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       }
     }
     return null;
+  }
+
+  /**
+   * The builder type a usable static {@code builder()} on {@code type} returns, or {@code null}.
+   * Usable means the builder has a public no-arg {@code build()}, which is what the runtime writer
+   * asks of a builder before it takes one.
+   */
+  protected TypeElement usableBuilderType(final TypeElement type) {
+    final var builder = staticBuilderMethod(type);
+    if (builder == null || builder.getReturnType().getKind() != TypeKind.DECLARED) return null;
+    final var builderType = (TypeElement) ((DeclaredType) builder.getReturnType()).asElement();
+    return hasBuildMethod(builderType) ? builderType : null;
+  }
+
+  /**
+   * The strategy an unhinted rebuild of {@code type} takes, as {@link BeanWriteStrategy#auto}
+   * decides it from this world's view of the bean. {@code hasSetters} is the caller's: a navigator
+   * emitted beside the bean reaches a non-private no-arg constructor, a bridge emitted elsewhere
+   * needs a public one.
+   */
+  Optional<BeanWriteStrategy> autoBeanStrategy(
+    final TypeElement type,
+    final List<String> properties,
+    final Function<String, TypeMirror> propertyType,
+    final boolean hasSetters
+  ) {
+    final var builderType = usableBuilderType(type);
+    final var hasConstructor = nameMatchedConstructor(type, properties) != null;
+    return BeanWriteStrategy.auto(
+      new BeanWriteStrategy.Shape() {
+        @Override
+        public List<String> properties() {
+          return properties;
+        }
+
+        @Override
+        public boolean hasBuilder() {
+          return builderType != null;
+        }
+
+        @Override
+        public BeanWriteStrategy.Member builderMember(final String property) {
+          final var parameter = builderSetterParameter(builderType, property);
+          if (parameter == null) return BeanWriteStrategy.Member.ABSENT;
+          return memberAccepts(parameter, propertyType.apply(property))
+            ? BeanWriteStrategy.Member.ACCEPTS
+            : BeanWriteStrategy.Member.REJECTS;
+        }
+
+        @Override
+        public boolean hasConstructor() {
+          return hasConstructor;
+        }
+
+        @Override
+        public boolean hasSetters() {
+          return hasSetters;
+        }
+
+        @Override
+        public boolean setterWrites(final String property) {
+          return setterName(type, property) != null;
+        }
+
+        @Override
+        public boolean stored(final String property) {
+          return storedField(type, property);
+        }
+      }
+    );
+  }
+
+  /**
+   * Whether {@code field} is given a value where it is declared, or empty when this compilation
+   * cannot say: the field comes from a compiled class rather than source, or the processing
+   * environment is not javac's.
+   */
+  protected Optional<Boolean> initialisedInSource(final VariableElement field) {
+    try {
+      final var tree = Trees.instance(processingEnv).getTree(field);
+      if (!(tree instanceof VariableTree variable)) return Optional.empty();
+      return Optional.of(variable.getInitializer() != null);
+    } catch (final IllegalArgumentException e) {
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * Whether {@code type} or a superclass declares an instance field named {@code name} that only a
+   * write strategy can give a value: one that is not final, or a final one this compilation can see
+   * is not given a value where it is declared. A final field with an initializer is written by
+   * nothing, so no strategy can lose it. The runtime cannot see initializers and counts no final
+   * field; for a final field without one, a builder with no member for it is refused here and taken
+   * there.
+   */
+  protected boolean storedField(final TypeElement type, final String name) {
+    for (var t = type; t != null; ) {
+      for (final var field : ElementFilter.fieldsIn(t.getEnclosedElements())) {
+        if (!field.getSimpleName().contentEquals(name) || field.getModifiers().contains(Modifier.STATIC)) continue;
+        if (!field.getModifiers().contains(Modifier.FINAL)) return true;
+        return initialisedInSource(field)
+          .map(initialised -> !initialised)
+          .orElse(false);
+      }
+      final var parent = t.getSuperclass();
+      t = parent.getKind() == TypeKind.DECLARED ? (TypeElement) ((DeclaredType) parent).asElement() : null;
+      if (t != null && t.getQualifiedName().contentEquals("java.lang.Object")) t = null;
+    }
+    return false;
+  }
+
+  /**
+   * Whether a builder member taking {@code parameter} can hold a value of {@code property}'s type,
+   * by the rule the runtime writer applies to the erased types: a primitive on either side must be
+   * the same primitive, and otherwise the parameter must be assignable from the property. A varargs
+   * member's parameter is an array, which only an array property is assignable to.
+   */
+  private boolean memberAccepts(final TypeMirror parameter, final TypeMirror property) {
+    final var types = processingEnv.getTypeUtils();
+    if (parameter.getKind().isPrimitive() || property.getKind().isPrimitive()) {
+      return types.isSameType(parameter, property);
+    }
+    return types.isAssignable(types.erasure(property), types.erasure(parameter));
+  }
+
+  /**
+   * The constructor an unhinted rebuild calls, or {@code null}: the only constructor {@code type}
+   * declares with one parameter per property, public, with every parameter named after a property.
+   * The runtime writer applies the same rule, except that it can read parameter names only from a
+   * class compiled with {@code -parameters}; a processor reads them from the compilation unit.
+   */
+  protected static ExecutableElement nameMatchedConstructor(final TypeElement type, final List<String> properties) {
+    ExecutableElement found = null;
+    for (final var ctor : ElementFilter.constructorsIn(type.getEnclosedElements())) {
+      if (ctor.getParameters().size() != properties.size()) continue;
+      if (found != null) return null;
+      found = ctor;
+    }
+    if (found == null || !found.getModifiers().contains(Modifier.PUBLIC)) return null;
+    for (final var parameter : found.getParameters()) {
+      if (!properties.contains(parameter.getSimpleName().toString())) return null;
+    }
+    return found;
   }
 
   protected static boolean hasPublicNoArgConstructor(final TypeElement type) {
@@ -987,65 +1135,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       }
     }
 
-    final var builder = staticBuilderMethod(pojo);
-    final var builderType =
-      builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED
-        ? (TypeElement) ((DeclaredType) builder.getReturnType()).asElement()
-        : null;
-    final var hasBuilder = builderType != null && hasBuildMethod(builderType);
-    // Mirror the reflective writer's precedence, which prefers setters wherever the target
-    // supports them and falls back to a builder only where it does not. The generated holder is an
-    // optimisation of the reflective path, so choosing differently here makes the same call return
-    // a different value depending on whether the holder happened to be loadable -- a builder
-    // normalises, defaults and validates on build(), and a setter writes what it was given.
-    //
-    // The reflective side settles for a partial setter surface and silently skips what it cannot
-    // write. This one requires a setter for every property before it prefers them, because a
-    // rebuild that drops a component is worse than one that goes through the builder.
-    final var settersCoverEveryProperty =
-      hasAccessibleNoArgConstructor(pojo) && props.stream().allMatch(p -> setterAcceptsProperty(pojo, p));
-    final var useBuilder = hasBuilder && !settersCoverEveryProperty;
-    if (!useBuilder && !hasAccessibleNoArgConstructor(pojo)) {
-      error(
-        pojo,
-        triggerLabel +
-          ": " +
-          pojo.getQualifiedName() +
-          " needs a static builder() or a no-arg constructor with setters (Telescope.ofBean" +
-          " also accepts a single public all-args constructor compiled with -parameters)"
-      );
-      return;
-    }
-
-    final var setters = new String[props.size()];
-    for (var i = 0; i < props.size(); i++) {
-      final var s = useBuilder
-        ? builderSetter(builderType, props.get(i).name())
-        : setterName(pojo, props.get(i).name());
-      if (s == null) {
-        error(
-          pojo,
-          triggerLabel +
-            ": no " +
-            (useBuilder ? "builder method" : "setter") +
-            " for property '" +
-            props.get(i).name() +
-            "' on " +
-            (useBuilder ? builderType.getQualifiedName() : pojo.getQualifiedName())
-        );
-        return;
-      }
-      setters[i] = s;
-    }
-
-    // Which emitted setter calls need a null test. A setter taking a primitive behind a property
-    // that is not one cannot be handed null -- it unboxes and throws -- so those calls are guarded.
-    // Builder methods are not: a builder takes what the property declares.
-    final var nullGuarded = new boolean[props.size()];
-    for (var i = 0; i < props.size(); i++) {
-      final var param = useBuilder ? null : setterParameter(pojo, props.get(i).name());
-      nullGuarded[i] = param != null && param.getKind().isPrimitive() && !props.get(i).type().getKind().isPrimitive();
-    }
+    final var rebuild = beanRebuildFor(pojo, props, triggerLabel);
+    if (rebuild == null) return;
 
     for (final var p : props) {
       final var shape = traversalKind(p.type());
@@ -1063,7 +1154,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       out -> {
         emitPathClassHeader(out, pathName, pojoName);
         for (var i = 0; i < props.size(); i++) {
-          emitBeanPropertyMethod(out, pojoName, props, setters, nullGuarded, useBuilder, i, navigableAnnotations);
+          emitBeanPropertyMethod(out, pojoName, props, rebuild, i, navigableAnnotations);
         }
         final var bridgeTarget = bridgeTargetFqn(pojo);
         if (bridgeTarget != null) emitBridgeHop(out, pojoName, bridgeTarget);
@@ -1074,23 +1165,165 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // Finally, emit the sibling <X>Telescope metadata holder. If any property carries an
     // un-emittable type (wildcards, type-vars, etc.), we report a compile error and skip the
     // holder emission for that POJO only — the Path navigator above is unaffected.
-    emitBeanMetadataHolder(pojo, pojoName, pathBaseName, pkg, props, setters, nullGuarded, useBuilder, triggerLabel);
+    emitBeanMetadataHolder(pojo, pojoName, pathBaseName, pkg, props, rebuild, triggerLabel);
+  }
+
+  /**
+   * How a generated bean rebuild builds the bean: the strategy, and the member each property goes
+   * through. {@code members[i]} is the builder method or setter for {@code props[i]}, unused by a
+   * constructor rebuild. {@code ctorOrder[j]} is the index of the property passed as the
+   * constructor's {@code j}th argument, unused by the other two. {@code nullGuarded[i]} marks a
+   * setter call that must skip a null.
+   */
+  record BeanRebuild(
+    BeanWriteStrategy strategy,
+    String[] members,
+    int[] ctorOrder,
+    boolean[] nullGuarded,
+    String[] nullDefaults
+  ) {}
+
+  /**
+   * The rebuild a generated navigator, holder or binder uses for {@code pojo}, or {@code null}
+   * after reporting why there is none. The strategy is the first in {@link
+   * BeanWriteStrategy#AUTO_ORDER} the bean offers, the order the runtime writer takes, because the
+   * holder this rebuild is emitted into stands in for that writer: deciding differently here makes
+   * the same call return a different value depending on whether the holder happened to be loadable.
+   */
+  BeanRebuild beanRebuildFor(final TypeElement pojo, final List<Prop> props, final String triggerLabel) {
+    final var names = props.stream().map(Prop::name).toList();
+    final var builderType = usableBuilderType(pojo);
+    final var ctor = nameMatchedConstructor(pojo, names);
+    final var chosen = autoBeanStrategy(
+      pojo,
+      names,
+      name -> props.get(names.indexOf(name)).type(),
+      hasAccessibleNoArgConstructor(pojo)
+    );
+    if (chosen.isEmpty()) {
+      error(
+        pojo,
+        triggerLabel +
+          ": " +
+          pojo.getQualifiedName() +
+          " needs a static builder(), a public constructor whose parameters are named after its" +
+          " properties, or a no-arg constructor with setters"
+      );
+      return null;
+    }
+    final var strategy = chosen.get();
+    final var members = new String[props.size()];
+    final var nullGuarded = new boolean[props.size()];
+    final var nullDefaults = new String[props.size()];
+    if (strategy == BeanWriteStrategy.CONSTRUCTOR) {
+      final var params = ctor.getParameters();
+      final var ctorOrder = new int[params.size()];
+      for (var j = 0; j < params.size(); j++) {
+        final var index = names.indexOf(params.get(j).getSimpleName().toString());
+        ctorOrder[j] = index;
+        guardPrimitiveMember(params.get(j).asType(), props.get(index), index, nullGuarded, nullDefaults);
+      }
+      return new BeanRebuild(strategy, members, ctorOrder, nullGuarded, nullDefaults);
+    }
+    final var useBuilder = strategy == BeanWriteStrategy.BUILDER;
+    for (var i = 0; i < props.size(); i++) {
+      final var s = useBuilder
+        ? builderSetter(builderType, props.get(i).name())
+        : setterName(pojo, props.get(i).name());
+      // A builder is chosen only when every property it has no member for is one nothing else
+      // writes either, so the rebuild skips that property as the runtime builder writer does.
+      if (s == null && useBuilder) continue;
+      if (s == null) {
+        error(
+          pojo,
+          triggerLabel +
+            ": no " +
+            (useBuilder ? "builder method" : "setter") +
+            " for property '" +
+            props.get(i).name() +
+            "' on " +
+            (useBuilder ? builderType.getQualifiedName() : pojo.getQualifiedName())
+        );
+        return null;
+      }
+      members[i] = s;
+    }
+    // A builder member that takes a primitive behind a boxed property cannot take every value the
+    // property holds, so the auto order never builds through such a builder; only setter calls can
+    // be handed a null they have to guard.
+    if (!useBuilder) {
+      for (var i = 0; i < props.size(); i++) {
+        guardPrimitiveMember(setterParameter(pojo, props.get(i).name()), props.get(i), i, nullGuarded, nullDefaults);
+      }
+    }
+    return new BeanRebuild(strategy, members, new int[0], nullGuarded, nullDefaults);
+  }
+
+  /**
+   * Marks a member that takes a primitive behind a property that is not one. Such a member cannot
+   * be handed null -- it unboxes and throws -- so the emitted call guards it: a setter call is
+   * skipped, leaving the field at its JLS default, and a builder or constructor argument takes that
+   * default in place of null. The runtime writers do the same, so the two paths agree on a null.
+   */
+  private static void guardPrimitiveMember(
+    final TypeMirror param,
+    final Prop prop,
+    final int index,
+    final boolean[] nullGuarded,
+    final String[] nullDefaults
+  ) {
+    if (!param.getKind().isPrimitive() || prop.type().getKind().isPrimitive()) return;
+    nullGuarded[index] = true;
+    nullDefaults[index] = primitiveDefaultLiteral(param.getKind()).orElseThrow();
+  }
+
+  /**
+   * The arguments of a builder chain or constructor call, one per property in {@code order}, each
+   * read through {@code read}. A guarded argument is read once into a local declared in {@code
+   * prelude}, and takes the member's JLS default when that read is null.
+   */
+  static List<String> guardedArguments(
+    final List<Prop> props,
+    final int[] order,
+    final BeanRebuild rebuild,
+    final Function<Prop, String> read,
+    final StringBuilder prelude
+  ) {
+    final var args = new ArrayList<String>();
+    for (final var index : order) {
+      final var prop = props.get(index);
+      if (!rebuild.nullGuarded()[index]) {
+        args.add(read.apply(prop));
+        continue;
+      }
+      final var local = "__n_" + prop.name();
+      // Declared as the property's own boxed type, so a read that unboxes on the way still lands in
+      // a local that can be compared with null.
+      prelude
+        .append("final ")
+        .append(prop.type())
+        .append(" ")
+        .append(local)
+        .append(" = ")
+        .append(read.apply(prop))
+        .append("; ");
+      args.add("(" + local + " == null ? " + rebuild.nullDefaults()[index] + " : " + local + ")");
+    }
+    return args;
   }
 
   // Emits the sibling <X>Telescope holder for a bean POJO: one
   // `public static final Telescope<X, PropertyType>` constant per discovered bean property.
   // Containers are emitted as raw container lenses (Telescope<X, List<E>>, etc.) — the consumer
-  // composes via .then(...) to descend. The lens expression reuses the same builder-or-no-arg-ctor
-  // rebuild strategy as the <X>Telescope navigator above, so write semantics are identical.
+  // composes via .then(...) to descend. The lens expression reuses the rebuild the <X>Telescope
+  // navigator above uses, so write semantics are identical.
   private void emitBeanMetadataHolder(
     final TypeElement pojo,
     final String pojoName,
     final String pojoBaseName,
     final String pkg,
     final List<Prop> props,
-    final String[] setters,
-    final boolean[] nullGuarded,
-    final boolean useBuilder,
+    final BeanRebuild rebuild,
     final String triggerLabel
   ) {
     final var holderName = pojoBaseName + "FieldOptics";
@@ -1137,11 +1370,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       out -> {
         for (final var p : props) {
           final var fieldType = shortenStdImports(boxedType(p.type()));
-          final var lensArgs =
-            pojoName + "::" + p.getter() + ", " + beanRebuild(p, props, setters, nullGuarded, useBuilder, pojoName);
+          final var lensArgs = pojoName + "::" + p.getter() + ", " + beanRebuild(p, props, rebuild, pojoName);
           emitFieldConstant(out, pojoName, fieldType, p.name(), lensArgs);
         }
-        emitBeanConstruct(out, pojoName, props, setters, nullGuarded, useBuilder);
+        emitBeanConstruct(out, pojoName, props, rebuild);
         emitConstantsMap(out, props.stream().map(Prop::name).toList());
       }
     );
@@ -1202,9 +1434,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   /**
    * Emit a {@code public static <Pojo> construct(Function<String, Object> values)} on the bean
-   * holder. The emitted body mirrors the same write strategy {@link #emitBeanNavigator} already
-   * picked for the {@code <X>Telescope<R>} lens setters — builder chain when {@code useBuilder} is
-   * true, otherwise no-arg ctor plus per-property setters. The runtime hybrid dispatch in {@code
+   * holder. The emitted body takes the rebuild {@link #emitBeanNavigator} already picked for the
+   * {@code <X>Telescope<R>} lens setters — a builder chain, a constructor call, or a no-arg
+   * constructor plus per-property setters. The runtime hybrid dispatch in {@code
    * MetadataHolderProbe} / {@code Reflective.structuralIso} (both internal to {@code :core}) routes
    * here, bypassing the reflective {@code Beans.BeanWriter} path for annotated beans. The cast
    * types match the constants' {@code fieldType} (boxed primitives, shortened std imports).
@@ -1213,37 +1445,44 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final PrintWriter out,
     final String pojoName,
     final List<Prop> props,
-    final String[] setters,
-    final boolean[] nullGuarded,
-    final boolean useBuilder
+    final BeanRebuild rebuild
   ) {
     out.println("  /** Bean rebuild short-circuit for the runtime forward branch. */");
     out.println("  @SuppressWarnings(\"unchecked\")");
     out.println("  public static " + pojoName + " construct(final Function<String, Object> values) {");
-    if (useBuilder) {
-      out.print("    return " + pojoName + ".builder()");
-      for (var i = 0; i < props.size(); i++) {
-        final var p = props.get(i);
-        out.print("." + setters[i] + "(" + valueExprForProp(p) + ")");
-      }
-      out.println(".build();");
-    } else {
-      out.println("    final var c = new " + pojoName + "();");
-      for (var i = 0; i < props.size(); i++) {
-        final var p = props.get(i);
-        if (nullGuarded[i]) {
-          // valueExprForProp's own guard keys off the property's kind, which says nothing about
-          // the setter's. Where the property is a reference and the parameter is not, the value
-          // arrives as a box that may be null and unboxes on the call, so it is skipped the same
-          // way the lens skips it and the same way the reflective writer does.
-          final var local = "__s_" + p.name();
-          out.println("    final var " + local + " = " + valueExprForProp(p) + ";");
-          out.println("    if (" + local + " != null) c." + setters[i] + "(" + local + ");");
-        } else {
-          out.println("    c." + setters[i] + "(" + valueExprForProp(p) + ");");
+    final var members = rebuild.members();
+    switch (rebuild.strategy()) {
+      case BUILDER -> {
+        out.print("    return " + pojoName + ".builder()");
+        for (var i = 0; i < props.size(); i++) {
+          if (members[i] != null) out.print("." + members[i] + "(" + valueExprForProp(props.get(i)) + ")");
         }
+        out.println(".build();");
       }
-      out.println("    return c;");
+      case CONSTRUCTOR -> {
+        final var prelude = new StringBuilder();
+        final var args = guardedArguments(props, rebuild.ctorOrder(), rebuild, this::valueExprForProp, prelude);
+        if (!prelude.isEmpty()) out.println("    " + prelude.toString().strip());
+        out.println("    return new " + pojoName + "(" + String.join(", ", args) + ");");
+      }
+      case SETTERS -> {
+        out.println("    final var c = new " + pojoName + "();");
+        for (var i = 0; i < props.size(); i++) {
+          final var p = props.get(i);
+          if (rebuild.nullGuarded()[i]) {
+            // valueExprForProp's own guard keys off the property's kind, which says nothing about
+            // the setter's. Where the property is a reference and the parameter is not, the value
+            // arrives as a box that may be null and unboxes on the call, so it is skipped the same
+            // way the lens skips it and the same way the reflective writer does.
+            final var local = "__s_" + p.name();
+            out.println("    final var " + local + " = " + valueExprForProp(p) + ";");
+            out.println("    if (" + local + " != null) c." + members[i] + "(" + local + ");");
+          } else {
+            out.println("    c." + members[i] + "(" + valueExprForProp(p) + ");");
+          }
+        }
+        out.println("    return c;");
+      }
     }
     out.println("  }");
     out.println();
@@ -1317,15 +1556,12 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     final PrintWriter out,
     final String pojoName,
     final List<Prop> props,
-    final String[] setters,
-    final boolean[] nullGuarded,
-    final boolean useBuilder,
+    final BeanRebuild rebuild,
     final int propertyIndex,
     final Set<String> navigableAnnotations
   ) {
     final var target = props.get(propertyIndex);
-    final var lensArgs =
-      pojoName + "::" + target.getter() + ", " + beanRebuild(target, props, setters, nullGuarded, useBuilder, pojoName);
+    final var lensArgs = pojoName + "::" + target.getter() + ", " + beanRebuild(target, props, rebuild, pojoName);
     emitNavigatorMethod(out, pojoName, propertyIndex, target.name(), target.type(), lensArgs, navigableAnnotations);
   }
 
@@ -1536,51 +1772,76 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     out.println();
   }
 
-  // The rebuild expression for property `target`: builder chain or no-arg ctor + per-property
-  // setters, with every other property read from `p` and `target` set to `v`.
+  // The rebuild expression for property `target`: a builder chain, a constructor call, or a no-arg
+  // ctor + per-property setters, with every other property read from `p` and `target` set to `v`.
   private static String beanRebuild(
     final Prop target,
     final List<Prop> all,
-    final String[] setters,
-    final boolean[] nullGuarded,
-    final boolean useBuilder,
+    final BeanRebuild rebuild,
     final String pojoName
   ) {
-    if (useBuilder) {
-      final var sb = new StringBuilder("(p, v) -> " + pojoName + ".builder()");
-      for (var i = 0; i < all.size(); i++) {
-        final var arg = all.get(i).name().equals(target.name()) ? focusedArg(target) : offPathRead(all.get(i));
-        sb.append(".").append(setters[i]).append("(").append(arg).append(")");
+    final var members = rebuild.members();
+    return switch (rebuild.strategy()) {
+      case BUILDER -> {
+        final var read = readFor(target);
+        final var sb = new StringBuilder("(p, v) -> " + pojoName + ".builder()");
+        for (var i = 0; i < all.size(); i++) {
+          if (members[i] != null) sb
+            .append(".")
+            .append(members[i])
+            .append("(")
+            .append(read.apply(all.get(i)))
+            .append(")");
+        }
+        yield sb.append(".build()").toString();
       }
-      return sb.append(".build()").toString();
-    }
-    final var sb = new StringBuilder("(p, v) -> { final var c = new " + pojoName + "(); ");
-    for (var i = 0; i < all.size(); i++) {
-      final var prop = all.get(i);
-      final var arg = prop.name().equals(target.name()) ? focusedArg(target) : offPathRead(prop);
-      if (nullGuarded[i]) {
-        // The setter takes a primitive and the property does not, so null cannot be passed: it
-        // unboxes and throws. The reflective writer skips the property instead, leaving the field
-        // at its JLS default, and this has to do the same or the two disagree on a null. The read
-        // is hoisted because the guard names it twice and a property must be read exactly once.
-        final var local = "__s_" + prop.name();
-        sb
-          .append("final var ")
-          .append(local)
-          .append(" = ")
-          .append(arg)
-          .append("; if (")
-          .append(local)
-          .append(" != null) c.")
-          .append(setters[i])
-          .append("(")
-          .append(local)
-          .append("); ");
-      } else {
-        sb.append("c.").append(setters[i]).append("(").append(arg).append("); ");
+      case CONSTRUCTOR -> {
+        final var prelude = new StringBuilder();
+        final var args = guardedArguments(all, rebuild.ctorOrder(), rebuild, readFor(target), prelude);
+        yield lensBody(prelude, "new " + pojoName + "(" + String.join(", ", args) + ")");
       }
-    }
-    return sb.append("return c; }").toString();
+      case SETTERS -> {
+        final var sb = new StringBuilder("(p, v) -> { final var c = new " + pojoName + "(); ");
+        for (var i = 0; i < all.size(); i++) {
+          final var prop = all.get(i);
+          final var arg = prop.name().equals(target.name()) ? focusedArg(target) : offPathRead(prop);
+          if (rebuild.nullGuarded()[i]) {
+            // The setter takes a primitive and the property does not, so null cannot be passed: it
+            // unboxes and throws. The reflective writer skips the property instead, leaving the
+            // field at its JLS default, and this has to do the same or the two disagree on a null.
+            // The read is hoisted because the guard names it twice and a property must be read
+            // exactly once.
+            final var local = "__s_" + prop.name();
+            sb
+              .append("final var ")
+              .append(local)
+              .append(" = ")
+              .append(arg)
+              .append("; if (")
+              .append(local)
+              .append(" != null) c.")
+              .append(members[i])
+              .append("(")
+              .append(local)
+              .append("); ");
+          } else {
+            sb.append("c.").append(members[i]).append("(").append(arg).append("); ");
+          }
+        }
+        yield sb.append("return c; }").toString();
+      }
+    };
+  }
+
+  /** Reads the focused property from the incoming value and every other one from {@code p}. */
+  private static Function<Prop, String> readFor(final Prop target) {
+    return prop -> prop.name().equals(target.name()) ? focusedArg(target) : offPathRead(prop);
+  }
+
+  /** A lens rebuild lambda: an expression body, or a block when guarded reads need locals. */
+  private static String lensBody(final StringBuilder prelude, final String built) {
+    if (prelude.isEmpty()) return "(p, v) -> " + built;
+    return "(p, v) -> { " + prelude + "return " + built + "; }";
   }
 
   /**

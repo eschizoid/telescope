@@ -106,11 +106,13 @@ annotationProcessor("io.github.eschizoid:telescope-codegen:1.8.0")
 wire up codegen. Only top-level records / classes are supported (the generated top-level navigator can't reference a
 nested type's constructor).
 
-**`@BeanFocus` — the POJO analog.** Same surface as `@Focus`, applied to a POJO with either a static `builder()` or a
-no-arg constructor + `setX` setters. A POJO that exposes neither is a compile error; runtime `Telescope.ofBean` also
-accepts a single public all-args constructor compiled with `-parameters`. Neither path writes a private field. The
-runtime `ofBean` 3-level path runs an order of magnitude slower than a generated `@Bridge` conversion in the benchmark —
-the navigator gets you the same reflection-free win for navigation.
+**`@BeanFocus` — the POJO analog.** Same surface as `@Focus`, applied to a POJO with a static `builder()`, a public
+constructor whose parameters are named after its properties, or a no-arg constructor + `setX` setters. The navigator
+rebuilds through the first of those the POJO offers, in that order, which is the order runtime `Telescope.ofBean` takes;
+the runtime can match a constructor's parameters by name only when the class is compiled with `-parameters`. A POJO that
+exposes none of them is a compile error. Neither path writes a private field. The runtime `ofBean` 3-level path runs an
+order of magnitude slower than a generated `@Bridge` conversion in the benchmark — the navigator gets you the same
+reflection-free win for navigation.
 
 ```java
 import io.github.eschizoid.telescope.annotations.BeanFocus;

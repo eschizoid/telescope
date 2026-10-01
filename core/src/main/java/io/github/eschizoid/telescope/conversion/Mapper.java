@@ -331,10 +331,11 @@ public final class Mapper<A, B> {
    * }</pre>
    *
    * <p>Records: rebuilds via the canonical constructor with the patched values substituted in.
-   * Beans: rebuilds via the auto-detected write strategy (builder / no-arg + setters / fields). The
-   * patch table is populated by the deep factory at the top level of the source/target type pair
-   * only — patches that target nested components write the <em>whole</em> nested value (since
-   * that's what the top-level component holds), not individual sub-component overlays.
+   * Beans: rebuilds via the auto-detected write strategy (builder, then name-matched all-args
+   * constructor, then no-arg + setters). The patch table is populated by the deep factory at the
+   * top level of the source/target type pair only — patches that target nested components write the
+   * <em>whole</em> nested value (since that's what the top-level component holds), not individual
+   * sub-component overlays.
    */
   @SuppressWarnings("unchecked")
   public A patch(final A base, final B partial) {

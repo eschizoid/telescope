@@ -2,19 +2,23 @@ package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.AccessibleObject;
+import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -94,6 +98,30 @@ public final class Beans {
       return new ConcurrentHashMap<>();
     }
   };
+
+  // (Class, Throwable) -> Object == constructorFailed. Bound into a composed constructor's handler.
+  private static final MethodHandle CONSTRUCTOR_FAILED;
+  // (BuilderWriter, Object) -> Object == BuilderWriter.verifyBuilt. Filters a composed build()'s
+  // return value.
+  private static final MethodHandle VERIFY_BUILT;
+
+  static {
+    final var lookup = MethodHandles.lookup();
+    try {
+      CONSTRUCTOR_FAILED = lookup.findStatic(
+        Beans.class,
+        "constructorFailed",
+        MethodType.methodType(Object.class, Class.class, Throwable.class)
+      );
+      VERIFY_BUILT = lookup.findVirtual(
+        BuilderWriter.class,
+        "verifyBuilt",
+        MethodType.methodType(Object.class, Object.class)
+      );
+    } catch (final ReflectiveOperationException e) {
+      throw new ExceptionInInitializerError(e);
+    }
+  }
 
   private static final ClassValue<BeanWriter<?>> AUTO_WRITER_CACHE = new ClassValue<>() {
     @Override
@@ -886,10 +914,19 @@ public final class Beans {
   }
 
   /**
-   * Pick a <em>name-based</em> write strategy for {@code cls} by probing in priority order: a
-   * no-arg constructor with setters, then a static {@code builder()}, then — as a last resort — a
-   * single public all-args constructor (compiled with {@code -parameters} so its arguments can be
-   * matched by name without positional ambiguity). The result is cached per class.
+   * Pick a <em>name-based</em> write strategy for {@code cls}, in the order {@link
+   * BeanWriteStrategy#AUTO_ORDER} gives: a static {@code builder()}, then a single public all-args
+   * constructor (compiled with {@code -parameters} so its arguments can be matched by name without
+   * positional ambiguity), then a no-arg constructor with setters. The generated bridges and
+   * navigators take the same order, so a bean offering several of these is built the same way on
+   * both paths. The result is cached per class.
+   *
+   * <p>A builder is passed over when it has no member for a property the next available strategy
+   * writes — every property when there is a name-matched constructor, else every property a public
+   * setter writes — since it skips that property silently and would lose a value the other strategy
+   * keeps; and when one of its members answers to a property by name but cannot take a value of the
+   * property's type, since every write through it would then fail. {@link BeanWriteStrategy} holds
+   * this rule for every path.
    *
    * <p>Used by both the record-less POJO APIs ({@code Telescope.ofBean}) and by the deep mapping
    * path when no explicit {@code writeBean} hint applies. Throws {@link IllegalStateException} if
@@ -904,16 +941,46 @@ public final class Beans {
     return (BeanWriter<P>) AUTO_WRITER_CACHE.get(cls);
   }
 
-  private static <P> BeanWriter<P> computeAutoWriter(final Class<P> cls) {
-    // SETTERS first when the target supports it (no-arg ctor + any setter): the Lombok @Data shape
-    // is overwhelmingly the common case in real codebases, and a publicly exposed setter is the
-    // user-expected write path. A static builder() takes over when SETTERS isn't applicable
-    // (immutable @Builder-only targets), and a name-matched all-args constructor backs both up.
-    if (hasNoArgConstructor(cls) && hasAnySetter(cls)) {
-      // Unless a builder carries everything they carry and more -- see builderCarriesStrictlyMore.
-      return builderCarriesStrictlyMore(cls) ? builderWriter(cls) : settersWriter(cls);
+  /**
+   * The writer {@link #autoWriter} picks for {@code cls}, or {@code null} where it refuses the
+   * class, so the refusal is raised by the construction that asks for the writer rather than here.
+   */
+  public static BeanWriter<?> autoWriterOrNull(final Class<?> cls) {
+    try {
+      return autoWriter(cls);
+    } catch (final IllegalStateException e) {
+      return null;
     }
-    if (hasStaticBuilder(cls)) return builderWriter(cls);
+  }
+
+  /** An unreflect call, which declares the access failure its lookup has already ruled out. */
+  private interface Unreflect {
+    MethodHandle get() throws IllegalAccessException;
+  }
+
+  /**
+   * The handle {@code unreflect} produces for a composed build. Every caller passes a lookup from
+   * {@link #privateLookupOrThrow}, which has already refused a member it cannot reach with its own
+   * diagnostic, so the declared {@link IllegalAccessException} has nothing left to report.
+   */
+  private static MethodHandle unreflected(final Unreflect unreflect) {
+    try {
+      return unreflect.get();
+    } catch (final IllegalAccessException e) {
+      throw new IllegalStateException(e);
+    }
+  }
+
+  /**
+   * Throws what {@link ConstructorWriter} throws when its constructor fails: the failure wrapped
+   * with the class it was constructing. A composed build calls it from its exception handler so the
+   * two report a failing constructor the same way.
+   */
+  static Object constructorFailed(final Class<?> cls, final Throwable failure) {
+    throw new RuntimeException("Failed to construct " + cls.getName() + " via its constructor", failure);
+  }
+
+  private static <P> BeanWriter<P> computeAutoWriter(final Class<P> cls) {
     final var props = propertyNames(cls);
     final var sole = solePublicConstructor(cls, props.length);
     // Refuse to silently use positional fallback: getter-iteration order is not guaranteed to match
@@ -922,7 +989,60 @@ public final class Beans {
     // parameter name to appear in the getter-derived property set — otherwise `getURL()` → property
     // `"URL"` mismatched against a ctor parameter named `"url"` would silently pass null into the
     // constructor under the lookup `valueByName("url")`.
-    if (sole != null && allParameterNamesMatchProperties(sole, props)) return constructorWriter(cls, props.length);
+    final var nameMatchedConstructor = sole != null && allParameterNamesMatchProperties(sole, props);
+    final var builderType = builderTypeOf(cls);
+    final var chosen = BeanWriteStrategy.auto(
+      new BeanWriteStrategy.Shape() {
+        @Override
+        public List<String> properties() {
+          return List.of(props);
+        }
+
+        @Override
+        public boolean hasBuilder() {
+          return builderType != null;
+        }
+
+        @Override
+        public BeanWriteStrategy.Member builderMember(final String property) {
+          final var member = builderSetterFor(builderType, property);
+          if (member == null) return BeanWriteStrategy.Member.ABSENT;
+          return builderMemberAccepts(member, cls, property)
+            ? BeanWriteStrategy.Member.ACCEPTS
+            : BeanWriteStrategy.Member.REJECTS;
+        }
+
+        @Override
+        public boolean hasConstructor() {
+          return nameMatchedConstructor;
+        }
+
+        @Override
+        public boolean hasSetters() {
+          return hasNoArgConstructor(cls) && hasAnySetter(cls);
+        }
+
+        @Override
+        public boolean setterWrites(final String property) {
+          return isSetterConstructible(cls, new String[] { property });
+        }
+
+        @Override
+        public boolean stored(final String property) {
+          return declaresInstanceField(cls, property);
+        }
+      }
+    );
+    if (chosen.isPresent()) {
+      return switch (chosen.get()) {
+        case BUILDER -> builderWriter(cls);
+        case CONSTRUCTOR -> constructorWriter(cls, props.length);
+        case SETTERS -> settersWriter(cls);
+      };
+    }
+    // A usable builder that was passed over with nothing else to fall to: it cannot carry some
+    // property, and building through it anyway would drop that property's value without a word.
+    if (builderType != null) throw new IllegalStateException(builderCannotCarryMessage(cls, builderType, props));
     // A class that declares a constructor taking arguments has a constructor write path, so it gets
     // the constructor advice below, which names -parameters and the CONSTRUCTOR hint.
     if (hasNoArgConstructor(cls) && !declaresConstructorWithParameters(cls)) {
@@ -944,6 +1064,67 @@ public final class Beans {
         " stable, user-defined canonical order), so the hint should still be paired with" +
         " -parameters to be safe."
     );
+  }
+
+  /** The JLS default of a primitive type, boxed: {@code 0}, {@code false} or {@code '\0'}. */
+  private static Object jlsDefault(final Class<?> primitive) {
+    return Array.get(Array.newInstance(primitive, 1), 0);
+  }
+
+  /** Per parameter, what a null argument becomes: the JLS default for a primitive, else null. */
+  private static Object[] nullArguments(final Class<?>[] parameterTypes) {
+    final var out = new Object[parameterTypes.length];
+    for (var i = 0; i < parameterTypes.length; i++) {
+      if (parameterTypes[i].isPrimitive()) out[i] = jlsDefault(parameterTypes[i]);
+    }
+    return out;
+  }
+
+  /**
+   * The refusal for a class whose only strategy is a builder that cannot carry every property: one
+   * it has no member for, or one whose member cannot take the property's value.
+   */
+  private static String builderCannotCarryMessage(
+    final Class<?> cls,
+    final Class<?> builderType,
+    final String[] props
+  ) {
+    final var missing = new ArrayList<String>();
+    for (final var property : props) {
+      final var member = builderSetterFor(builderType, property);
+      final var lost =
+        member == null ? declaresInstanceField(cls, property) : !builderMemberAccepts(member, cls, property);
+      if (lost) missing.add(property);
+    }
+    return (
+      "Cannot write " +
+      cls.getName() +
+      ": its builder " +
+      builderType.getName() +
+      " has no member that takes " +
+      missing +
+      ", and the class offers no constructor or setters to write them instead. Building through" +
+      " the builder would drop those values. Add a builder member for each, a public all-args" +
+      " constructor (compiled with -parameters), or setters; or supply an explicit Mapping row" +
+      " that produces " +
+      cls.getSimpleName() +
+      "."
+    );
+  }
+
+  /**
+   * Whether {@code cls} or a superclass declares a non-final instance field named {@code name}. A
+   * final field may be given its value where it is declared, which no write strategy can replace
+   * and reflection cannot see, so none is counted.
+   */
+  private static boolean declaresInstanceField(final Class<?> cls, final String name) {
+    for (var c = cls; c != null && c != Object.class; c = c.getSuperclass()) {
+      for (final var field : c.getDeclaredFields()) {
+        if (!field.getName().equals(name) || Modifier.isStatic(field.getModifiers())) continue;
+        return !Modifier.isFinal(field.getModifiers());
+      }
+    }
+    return false;
   }
 
   private static boolean declaresConstructorWithParameters(final Class<?> cls) {
@@ -1122,11 +1303,13 @@ public final class Beans {
    *
    * <p><b>Primitive properties and {@code set(s, null)}:</b> when the focused property is a Java
    * primitive (e.g. {@code int count}), {@code set(s, null)} substitutes the JLS default ({@code 0}
-   * / {@code false} / etc.) rather than throwing — the value flows through {@link SettersWriter}
-   * which null-guards primitive setters. This means the lens-law {@code set(s, null).get == null}
-   * does not hold for primitive properties (you get the JLS default back). The same substitution
-   * applies to {@code modify(s, f)} when {@code f} returns {@code null}. Use a boxed wrapper type
-   * on the property if {@code null} round-trip matters.
+   * / {@code false} / etc.) rather than throwing, whichever writer {@link #autoWriter} picks:
+   * {@link SettersWriter} skips a null for a primitive setter, leaving the field at its default,
+   * and {@link ConstructorWriter} and {@link BuilderWriter} pass the default to a primitive
+   * parameter in place of null. This means the lens-law {@code set(s, null).get == null} does not
+   * hold for primitive properties (you get the JLS default back). The same substitution applies to
+   * {@code modify(s, f)} when {@code f} returns {@code null}. Use a boxed wrapper type on the
+   * property if {@code null} round-trip matters.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public static <P, A> Lens<P, A> fieldLens(final String property) {
@@ -1190,39 +1373,6 @@ public final class Beans {
     } catch (final NoSuchMethodException e) {
       return null;
     }
-  }
-
-  private static boolean hasStaticBuilder(final Class<?> cls) {
-    return builderTypeOf(cls) != null;
-  }
-
-  /**
-   * Whether rebuilding through the builder carries everything the setters carry, and something they
-   * do not.
-   *
-   * <p>Both surfaces skip silently: each installs a no-op for a property it has no member for, so
-   * whichever is chosen, a property outside it is dropped from the rebuilt bean without a word.
-   * Choosing between them is therefore a question about both, and asking only whether the setters
-   * are complete answers about the surface being abandoned. A bean whose setters reach one property
-   * and whose builder reaches a different one moves the loss onto the write that was actually
-   * requested, which is worse than the loss it set out to fix.
-   *
-   * <p>So: never move unless nothing currently writable becomes unwritable, and only move when
-   * something unwritable becomes writable. A getter with no backing field is unwritable either way
-   * and leaves the decision where it was.
-   */
-  private static boolean builderCarriesStrictlyMore(final Class<?> cls) {
-    final var builderType = builderTypeOf(cls);
-    if (builderType == null) return false;
-    var gains = false;
-    for (final var property : propertyNames(cls)) {
-      final var bySetter = isSetterConstructible(cls, new String[] { property });
-      final var builderMember = builderSetterFor(builderType, property);
-      final var byBuilder = builderMember != null && builderMemberAccepts(builderMember, cls, property);
-      if (bySetter && !byBuilder) return false;
-      if (byBuilder && !bySetter) gains = true;
-    }
-    return gains;
   }
 
   /**
@@ -1309,11 +1459,16 @@ public final class Beans {
    */
   static final class ConstructorWriter<P> implements BeanWriter<P> {
 
+    private final Class<P> beanClass;
+    private final Constructor<P> constructor;
     private final Function<Object, Object> ctorFn;
     // Constructor parameter names when the POJO was compiled with -parameters (enables
     // order-independent name matching); null when names are synthetic, so we fall back to
     // positional.
     private final String[] paramNames;
+    // What each argument takes in place of null: the JLS default for a primitive parameter, which
+    // cannot hold null, and null itself for a reference one.
+    private final Object[] nullArguments;
 
     @SuppressWarnings("unchecked")
     ConstructorWriter(final Class<P> cls, final int arity) {
@@ -1340,8 +1495,38 @@ public final class Beans {
       // No raw setAccessible — buildCtorFn acquires private access through privateLookupOrThrow,
       // which routes JPMS failures through the opens-pointing message every writer shares instead
       // of a low-context InaccessibleObjectException.
+      this.beanClass = cls;
+      this.constructor = found;
       this.paramNames = resolveParamNames(found);
+      this.nullArguments = nullArguments(found.getParameterTypes());
       this.ctorFn = buildCtorFn(cls, found, arity);
+    }
+
+    /**
+     * The names {@link #construct} reads its arguments by, in parameter order: the parameter names
+     * when the class kept them, else {@code names} positionally.
+     */
+    String[] argumentNames(final String[] names) {
+      return paramNames != null ? paramNames : names;
+    }
+
+    /** What argument {@code index} takes in place of null. */
+    Object nullArgument(final int index) {
+      return nullArguments[index];
+    }
+
+    /**
+     * The constructor as a handle {@code (T1, ..., Tn) -> P} for a composed build, with a failure
+     * wrapped exactly as {@link #construct} wraps it.
+     */
+    MethodHandle composableConstructor() {
+      final var lookup = privateLookupOrThrow(beanClass, beanClass, "CONSTRUCTOR strategy");
+      final var raw = unreflected(() -> lookup.unreflectConstructor(constructor));
+      final var failed = MethodHandles.insertArguments(CONSTRUCTOR_FAILED, 0, beanClass).asType(
+        MethodType.methodType(beanClass, Throwable.class)
+      );
+      final var handler = MethodHandles.dropArguments(failed, 1, raw.type().parameterList());
+      return MethodHandles.catchException(raw, Throwable.class, handler);
     }
 
     private static String[] resolveParamNames(final Constructor<?> ctor) {
@@ -1390,7 +1575,12 @@ public final class Beans {
       // order.
       final var keys = paramNames != null ? paramNames : names;
       final var args = new Object[keys.length];
-      for (var i = 0; i < keys.length; i++) args[i] = valueByName.apply(keys[i]);
+      for (var i = 0; i < keys.length; i++) {
+        final var value = valueByName.apply(keys[i]);
+        // A primitive parameter takes its JLS default for null, the value a setter write leaves
+        // the field at when SettersWriter skips that null.
+        args[i] = value == null ? nullArguments[i] : value;
+      }
       return (P) ctorFn.apply(args);
     }
 
@@ -1441,6 +1631,8 @@ public final class Beans {
 
     private final Class<P> beanType;
     private final Class<?> builderType;
+    private final Method factoryMethod;
+    private final Method buildMethod;
     private final Supplier<Object> builderSupplier;
     private final Function<Object, Object> buildFn;
     // Each value is one of: BiConsumer<Object, Object> for a void-returning setter, or
@@ -1470,8 +1662,54 @@ public final class Beans {
           e
         );
       }
+      this.factoryMethod = factory;
+      this.buildMethod = buildMethod;
       this.builderSupplier = buildBuilderSupplier(cls, factory);
       this.buildFn = buildBuildFn(builderType, buildMethod);
+    }
+
+    /** The static {@code builder()} as a handle {@code () -> Builder} for a composed build. */
+    MethodHandle composableFactory() {
+      final var lookup = privateLookupOrThrow(factoryMethod.getDeclaringClass(), beanType, "builder factory");
+      return unreflected(() -> lookup.unreflect(factoryMethod)).asType(MethodType.methodType(builderType));
+    }
+
+    /**
+     * The builder member for {@code name} as a handle {@code (Builder, T) -> void}, its return
+     * discarded as {@link #construct} discards it, or {@code null} when the builder has none.
+     */
+    MethodHandle composableMember(final String name) {
+      final var member = builderSetterFor(builderType, name);
+      if (member == null) return null;
+      final var lookup = privateLookupOrThrow(member.getDeclaringClass(), builderType, "builder setter");
+      return unreflected(() -> lookup.unreflect(member)).asType(
+        MethodType.methodType(void.class, builderType, member.getParameterTypes()[0])
+      );
+    }
+
+    /** What the member for {@code name} takes in place of null: its JLS default when primitive. */
+    Object nullArgument(final String name) {
+      final var member = builderSetterFor(builderType, name);
+      if (member == null || !member.getParameterTypes()[0].isPrimitive()) return null;
+      return jlsDefault(member.getParameterTypes()[0]);
+    }
+
+    /**
+     * {@code build()} followed by the check {@link #construct} makes on what it returns, as a
+     * handle {@code (Builder) -> P} for a composed build.
+     */
+    MethodHandle composableBuild() {
+      final var lookup = privateLookupOrThrow(buildMethod.getDeclaringClass(), builderType, "builder build()");
+      final var build = unreflected(() -> lookup.unreflect(buildMethod)).asType(
+        MethodType.methodType(Object.class, builderType)
+      );
+      final var verify = VERIFY_BUILT.bindTo(this);
+      return MethodHandles.filterReturnValue(build, verify).asType(MethodType.methodType(beanType, builderType));
+    }
+
+    /** The builder type {@code builder()} returns. */
+    Class<?> builderType() {
+      return builderType;
     }
 
     @Override
@@ -1503,11 +1741,18 @@ public final class Beans {
           );
         }
       }
-      final var built = buildFn.apply(builder);
-      // What build() makes is not decided by what it declares: a build() typed as an ancestor
-      // satisfies every sibling under that ancestor, and one erasing to Object satisfies anything
-      // at all. Both shapes are admitted deliberately, so the object itself is the only place the
-      // question can be asked. isInstance accepts a subtype, which is the legitimate case.
+      return (P) verifyBuilt(buildFn.apply(builder));
+    }
+
+    /**
+     * {@code built}, once it is known to be an instance of the bean type.
+     *
+     * <p>What build() makes is not decided by what it declares: a build() typed as an ancestor
+     * satisfies every sibling under that ancestor, and one erasing to Object satisfies anything at
+     * all. Both shapes are admitted deliberately, so the object itself is the only place the
+     * question can be asked. isInstance accepts a subtype, which is the legitimate case.
+     */
+    private Object verifyBuilt(final Object built) {
       if (!beanType.isInstance(built)) throw new IllegalStateException(
         "writeBean(" +
           beanType.getName() +
@@ -1518,11 +1763,32 @@ public final class Beans {
           ", which is not a " +
           beanType.getName()
       );
-      return (P) built;
+      return built;
     }
 
     private Object setterFor(final String name) {
-      return setterInvokers.computeIfAbsent(name, this::buildSetterInvoker);
+      return setterInvokers.computeIfAbsent(name, this::buildNullSafeSetterInvoker);
+    }
+
+    /**
+     * The invoker for {@code name}, passing a primitive member its JLS default in place of null. A
+     * primitive parameter cannot hold null, and the default is the value a setter write leaves the
+     * field at when {@code SettersWriter} skips that null, so the three writers agree on it.
+     */
+    @SuppressWarnings("unchecked")
+    private Object buildNullSafeSetterInvoker(final String name) {
+      final var invoker = buildSetterInvoker(name);
+      final var member = builderSetterFor(builderType, name);
+      if (member == null || !member.getParameterTypes()[0].isPrimitive()) return invoker;
+      final var fallback = jlsDefault(member.getParameterTypes()[0]);
+      if (invoker instanceof BiConsumer<?, ?>) {
+        final var consumer = (BiConsumer<Object, Object>) invoker;
+        return (BiConsumer<Object, Object>) (builder, value) ->
+          consumer.accept(builder, value == null ? fallback : value);
+      }
+      final var function = (BiFunction<Object, Object, Object>) invoker;
+      return (BiFunction<Object, Object, Object>) (builder, value) ->
+        function.apply(builder, value == null ? fallback : value);
     }
 
     /**
@@ -1715,8 +1981,9 @@ public final class Beans {
         throw new IllegalStateException("writeBean(" + cls.getName() + ", SETTERS) requires a no-arg constructor", e);
       }
       // Build the no-arg ctor as an LMF-bound Supplier, as BuilderWriter does, so a write never
-      // reaches Constructor.newInstance. SETTERS is the autoWriter default for Lombok @Data beans,
-      // so this is the dominant bean-write path.
+      // reaches Constructor.newInstance. autoWriter picks SETTERS for a bean with neither a builder
+      // nor a name-matched constructor, the plain Lombok @Data shape among them, so this is a
+      // common bean-write path.
       final var lookup = privateLookupOrThrow(cls, cls, "SETTERS strategy");
       this.ctorFn = buildCtorSupplier(cls, ctor, lookup);
     }

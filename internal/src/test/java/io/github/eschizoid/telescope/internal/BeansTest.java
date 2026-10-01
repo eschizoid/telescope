@@ -214,10 +214,9 @@ class BeansTest {
     }
   }
 
-  // The Lombok `@Data @Builder` shape: a public no-arg ctor + setters AND a static builder().
-  // Real-world enterprise codebases are dominated by this combination, and SETTERS is the
-  // user-expected default — exposed publicly by @Setter, idiomatic across web tier and JPA. Pins
-  // the autoWriter probe order's preference for SETTERS over BUILDER when both apply.
+  // The Lombok `@Data @Builder` shape: a public no-arg ctor + setters AND a static builder(), with
+  // the all-args constructor the builder calls kept package-private. Pins the auto order's
+  // preference for BUILDER over SETTERS when both apply.
   static final class DataAndBuilder {
 
     private String name;
@@ -1136,19 +1135,29 @@ class BeansTest {
     }
 
     @Test
-    @DisplayName("autoWriter prefers SettersWriter over BuilderWriter when both apply (@Data @Builder" + " shape)")
-    void autoPrefersSettersOverBuilder() {
+    @DisplayName("autoWriter prefers BuilderWriter over SettersWriter when both apply (@Data @Builder shape)")
+    void autoPrefersBuilderOverSetters() {
       final var writer = Beans.autoWriter(DataAndBuilder.class);
-      assertEquals(
-        "SettersWriter",
-        writer.getClass().getSimpleName(),
-        "for Lombok @Data @Builder POJOs, SETTERS is the user-expected default — the public" +
-          " setters and the builder both apply, and SETTERS wins so no explicit writeBean" +
-          " hint is required"
-      );
+      assertEquals("BuilderWriter", writer.getClass().getSimpleName());
       final var pojo = writer.construct(new String[] { "name", "score" }, n -> Objects.equals(n, "name") ? "y" : 42);
       assertEquals("y", pojo.getName());
       assertEquals(42, pojo.getScore());
+    }
+
+    @Test
+    @DisplayName("autoWriter prefers a name-matched all-args constructor over setters")
+    void autoPrefersConstructorOverSetters() {
+      final var writer = Beans.autoWriter(CtorAndSetters.class);
+      assertEquals("ConstructorWriter", writer.getClass().getSimpleName());
+      assertEquals("y[ctor]", writer.construct(new String[] { "name" }, n -> "y").getName());
+    }
+
+    @Test
+    @DisplayName("autoWriter prefers a builder over a name-matched all-args constructor")
+    void autoPrefersBuilderOverConstructor() {
+      final var writer = Beans.autoWriter(AllThreeRoutes.class);
+      assertEquals("BuilderWriter", writer.getClass().getSimpleName());
+      assertEquals("y[builder]", writer.construct(new String[] { "name" }, n -> "y").getName());
     }
 
     @Test
@@ -1859,6 +1868,68 @@ class BeansTest {
       parent.setId("parent-id");
       assertEquals("child-name", Beans.capturedReader(ChildBean.class, "name").apply(child));
       assertEquals("parent-id", Beans.capturedReader(ParentBean.class, "id").apply(parent));
+    }
+  }
+
+  /**
+   * A no-arg constructor with a setter, and a public all-args constructor; each tags what it built.
+   */
+  public static final class CtorAndSetters {
+
+    private String name;
+
+    public CtorAndSetters() {}
+
+    public CtorAndSetters(final String name) {
+      this.name = name + "[ctor]";
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public void setName(final String name) {
+      this.name = name + "[setters]";
+    }
+  }
+
+  /** A builder, a public all-args constructor, and setters; each tags what it built. */
+  public static final class AllThreeRoutes {
+
+    private String name;
+
+    public AllThreeRoutes() {}
+
+    public AllThreeRoutes(final String name) {
+      this.name = name + "[ctor]";
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public void setName(final String name) {
+      this.name = name + "[setters]";
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    public static final class Builder {
+
+      private String name;
+
+      public Builder name(final String name) {
+        this.name = name;
+        return this;
+      }
+
+      public AllThreeRoutes build() {
+        final var built = new AllThreeRoutes();
+        built.name = name + "[builder]";
+        return built;
+      }
     }
   }
 }

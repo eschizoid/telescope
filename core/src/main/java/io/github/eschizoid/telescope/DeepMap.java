@@ -1199,32 +1199,79 @@ public final class DeepMap {
     final var slotMaps = buildSlotMaps(byTargetName, bySourceName, srcNames, tgtNames);
     final Iso<Object, Object> identity = Iso.identity();
 
-    // Composed-handle leaf for record/bean pairs: the whole conversion is one (S)→T / (T)→S
-    // MethodHandle — no Object[] intermediate, no boxing on same-type fields (identity slots read
-    // primitive-to-primitive straight into the canonical constructor, or into the setter fold for
-    // a bean target). Non-identity slots (rename with conversion, nested pair, container lift)
-    // still route through their per-slot Iso. Each side is a record (canonical-ctor rebuild) or a
-    // bean constructible via no-arg ctor + setters; a bean needing a builder or an all-args
-    // constructor falls to the array leaf below. This is a build-time shape decision (see
-    // MhIso.supports), not a runtime fallback, and it stays lattice-routed — the composed handles
-    // are the leaf Iso's transforms.
-    // A write hint naming another writer than the setters is honoured by declining the fold.
-    if (MhIso.supports(source, target) && srcRefl.foldsSetters(source) && tgtRefl.foldsSetters(target)) {
-      return MhIso.pair(
-        source,
-        target,
-        slotMaps.fwdSrcPos(),
-        slotMaps.fwdIso(),
-        slotMaps.bwdTgtPos(),
-        slotMaps.bwdIso(),
-        identity
-      );
-    }
+    // Composed-handle leaf for record/bean pairs: a direction is one (S)→T or (T)→S MethodHandle —
+    // no Object[] intermediate, no boxing on same-type fields (identity slots read
+    // primitive-to-primitive straight into the canonical constructor, a bean's constructor, its
+    // builder members or its setters). Non-identity slots (rename with conversion, nested pair,
+    // container lift) still route through their per-slot Iso. This is a build-time shape decision,
+    // not a runtime fallback, and it stays lattice-routed — the composed handles are the leaf Iso's
+    // transforms.
+    //
+    // Each direction is decided on its own, by the side it builds: it composes when
+    // MhIso.composesBuild reproduces the writer that side's path picks — the write hint, the
+    // default
+    // strategy or the auto order — so the composed build and the array leaf build the same value.
+    // The side a direction only reads asks nothing, so a forward-only mapper from a source no
+    // composed build reproduces still composes its forward direction.
+    final var targetWriter = tgtRefl.writerFor(target);
+    final var sourceWriter = srcRefl.writerFor(source);
+    final var composeForward = MhIso.composesBuild(source, target, targetWriter);
+    final var composeBackward = MhIso.composesBuild(target, source, sourceWriter);
+    final Iso<S, T> arrayLeaf =
+      composeForward && composeBackward
+        ? null
+        : arrayLeaf(
+            source,
+            target,
+            srcRefl,
+            tgtRefl,
+            srcNames,
+            tgtNames,
+            slotMaps,
+            identity,
+            targetWriter,
+            sourceWriter
+          );
+    if (!composeForward && !composeBackward) return arrayLeaf;
+    @SuppressWarnings("unchecked")
+    final var other = (Iso<Object, Object>) (Iso<?, ?>) arrayLeaf;
+    return MhIso.pair(
+      source,
+      target,
+      slotMaps.fwdSrcPos(),
+      slotMaps.fwdIso(),
+      slotMaps.bwdTgtPos(),
+      slotMaps.bwdIso(),
+      identity,
+      other,
+      composeForward,
+      composeBackward,
+      targetWriter,
+      sourceWriter
+    );
+  }
 
-    // Array leaf for the pairs MhIso.supports declines — a bean side that needs a builder or an
-    // all-args constructor (no no-arg constructor, or a mapped property with no setter). Its
-    // construction can't be expressed as the no-arg-ctor + setter-fold combinator, so it stays on
-    // the reflective array shape.
+  /**
+   * The array leaf for a direction the composed handles do not build — a bean side written through
+   * a builder or an all-args constructor, or one a write hint sends to a writer other than its
+   * setters.
+   */
+  private static <S, T> Iso<S, T> arrayLeaf(
+    final Class<S> source,
+    final Class<T> target,
+    final Reflective srcRefl,
+    final Reflective tgtRefl,
+    final String[] srcNames,
+    final String[] tgtNames,
+    final SlotMaps slotMaps,
+    final Iso<Object, Object> identity,
+    final Beans.BeanWriter<?> targetWriter,
+    final Beans.BeanWriter<?> sourceWriter
+  ) {
+    // A slot whose property the writer does not write — a builder with no member for it, a setter
+    // writer with no setter — is neither read nor converted, as the composed build leaves it out.
+    final var fwdTakes = takenSlots(tgtNames, targetWriter);
+    final var bwdTakes = takenSlots(srcNames, sourceWriter);
     // Fused-source-and-remap: bypass the source-side Object[] intermediate. The previous shape
     // ran S → Object[srcArity] (srcReader) → Object[tgtArity] (remap) → T (tgtBuilder) — two
     // intermediate arrays + three Iso.then virtual dispatches per call. The fused body inlines
@@ -1245,6 +1292,7 @@ public final class DeepMap {
         if (s == null) return null;
         final var tgtArr = new Object[slotMaps.tgtArity()];
         for (var i = 0; i < slotMaps.tgtArity(); i++) {
+          if (!fwdTakes[i]) continue;
           final var sp = slotMaps.fwdSrcPos()[i];
           final var v = sp < 0 ? null : srcReaders[sp].apply(s);
           final var iso = slotMaps.fwdIso()[i];
@@ -1256,6 +1304,7 @@ public final class DeepMap {
         if (t == null) return null;
         final var srcArr = new Object[slotMaps.srcArity()];
         for (var i = 0; i < slotMaps.srcArity(); i++) {
+          if (!bwdTakes[i]) continue;
           final var tp = slotMaps.bwdTgtPos()[i];
           final var v = tp < 0 ? null : tgtReaders[tp].apply(t);
           final var iso = slotMaps.bwdIso()[i];
@@ -1264,6 +1313,15 @@ public final class DeepMap {
         return srcBuilderFn.apply(srcArr);
       }
     );
+  }
+
+  /**
+   * Per slot, whether {@code writer} writes that property; every slot for a record's null writer.
+   */
+  private static boolean[] takenSlots(final String[] names, final Beans.BeanWriter<?> writer) {
+    final var taken = new boolean[names.length];
+    for (var i = 0; i < names.length; i++) taken[i] = writer == null || writer.writes(names[i]);
+    return taken;
   }
 
   /**

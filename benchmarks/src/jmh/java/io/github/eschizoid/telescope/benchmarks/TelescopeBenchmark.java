@@ -1,5 +1,8 @@
 package io.github.eschizoid.telescope.benchmarks;
 
+import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;
+import static io.github.eschizoid.telescope.mapping.WriteHint.writeBean;
+
 import io.github.eschizoid.telescope.Telescope;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -197,6 +200,106 @@ public class TelescopeBenchmark {
     }
   }
 
+  /** {@link UserBeanB}'s properties and setters, plus a builder, which the auto order picks. */
+  public static final class UserBeanBuilt {
+
+    private String id;
+    private String email;
+    private String name;
+
+    public String getId() {
+      return id;
+    }
+
+    public String getEmail() {
+      return email;
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public void setId(final String id) {
+      this.id = id;
+    }
+
+    public void setEmail(final String email) {
+      this.email = email;
+    }
+
+    public void setName(final String name) {
+      this.name = name;
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    public static final class Builder {
+
+      private final UserBeanBuilt built = new UserBeanBuilt();
+
+      public Builder id(final String id) {
+        built.id = id;
+        return this;
+      }
+
+      public Builder email(final String email) {
+        built.email = email;
+        return this;
+      }
+
+      public Builder name(final String name) {
+        built.name = name;
+        return this;
+      }
+
+      public UserBeanBuilt build() {
+        return built;
+      }
+    }
+  }
+
+  /** {@link UserBeanB}'s properties and setters, plus a public all-args constructor. */
+  public static final class UserBeanCtor {
+
+    private String id;
+    private String email;
+    private String name;
+
+    public UserBeanCtor() {}
+
+    public UserBeanCtor(final String id, final String email, final String name) {
+      this.id = id;
+      this.email = email;
+      this.name = name;
+    }
+
+    public String getId() {
+      return id;
+    }
+
+    public String getEmail() {
+      return email;
+    }
+
+    public String getName() {
+      return name;
+    }
+
+    public void setId(final String id) {
+      this.id = id;
+    }
+
+    public void setEmail(final String email) {
+      this.email = email;
+    }
+
+    public void setName(final String name) {
+      this.name = name;
+    }
+  }
+
   // ---- Fixtures -------------------------------------------------------------------------------
 
   private Company company;
@@ -226,6 +329,13 @@ public class TelescopeBenchmark {
 
   // (g) POJO->record bridge.
   private Telescope<UserBeanA, UserEntity> fromBeanConv;
+
+  // (i) POJO->POJO conversion into, and out of, a bean the auto order builds through its builder or
+  //     constructor, against (f) as the setters-only control.
+  private Telescope<UserBeanA, UserBeanBuilt> mapBeanToBuilt;
+  private Telescope<UserBeanA, UserBeanCtor> mapBeanToCtor;
+  private Telescope<UserBeanBuilt, UserBeanB> mapBeanFromBuilt;
+  private UserBeanBuilt userBeanBuilt;
 
   @Setup
   public void setup() {
@@ -292,6 +402,14 @@ public class TelescopeBenchmark {
 
     // (g) POJO->record bridge via the unified deep-map factory.
     fromBeanConv = Telescope.map(UserBeanA.class, UserEntity.class);
+
+    // (i) The auto order takes UserBeanBuilt's builder. This module compiles without -parameters,
+    // so the auto order cannot match UserBeanCtor's constructor by name; the CONSTRUCTOR hint
+    // builds it through the same constructor writer the auto order picks under -parameters.
+    mapBeanToBuilt = Telescope.map(UserBeanA.class, UserBeanBuilt.class);
+    mapBeanToCtor = Telescope.map(UserBeanA.class, UserBeanCtor.class, writeBean(UserBeanCtor.class, CONSTRUCTOR));
+    mapBeanFromBuilt = Telescope.map(UserBeanBuilt.class, UserBeanB.class);
+    userBeanBuilt = mapBeanToBuilt.read(userBeanA);
   }
 
   // ---- (a) deep-field update via reflection ----------------------------------------------------
@@ -373,5 +491,24 @@ public class TelescopeBenchmark {
   @Benchmark
   public void bridgeForwardRead(final Blackhole bh) {
     bh.consume(BenchUserABridge.BRIDGE.read(benchUserA));
+  }
+
+  // ---- (i) POJO -> POJO conversion through a builder or constructor, against (f) ----------------
+  // (f) mapBeanForwardRead writes a setters-only target and is the control for these three.
+
+  @Benchmark
+  public void mapBeanToBuilderTargetRead(final Blackhole bh) {
+    bh.consume(mapBeanToBuilt.read(userBeanA));
+  }
+
+  @Benchmark
+  public void mapBeanToConstructorTargetRead(final Blackhole bh) {
+    bh.consume(mapBeanToCtor.read(userBeanA));
+  }
+
+  // The source has a builder, but the forward direction only reads it, so it composes like (f).
+  @Benchmark
+  public void mapBeanFromBuilderSourceRead(final Blackhole bh) {
+    bh.consume(mapBeanFromBuilt.read(userBeanBuilt));
   }
 }
