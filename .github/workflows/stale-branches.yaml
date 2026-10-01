@@ -1,0 +1,131 @@
+name: Stale Branches
+
+# Deletes a remote branch when either holds:
+#
+#   - its pull request was merged or closed, and the branch tip is still the
+#     commit that pull request ended on (a branch pushed to after its pull
+#     request closed carries new work and is kept);
+#   - its tip commit is older than the cutoff (180 days by default).
+#
+# A branch is never deleted when it is the default branch, is protected, or is
+# the head of an open pull request.
+#
+# The weekly run deletes. A manual run defaults to a dry run that only lists
+# what would go; the job summary carries the list either way.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Delete branches whose last commit is older than this many days."
+        type: string
+        default: "180"
+        required: true
+      dry_run:
+        description: "List the branches that would be deleted without deleting them."
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: stale-branches
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Every branch tip is needed for its commit date; blobs are not.
+          fetch-depth: 0
+          filter: blob:none
+
+      - name: Delete stale branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DAYS: ${{ inputs.days || '180' }}
+          # A scheduled run has no inputs, so it deletes.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$DAYS" =~ ^[0-9]+$ ]]; then
+            echo "::error::days must be a non-negative integer, got '$DAYS'"
+            exit 1
+          fi
+          cutoff=$(( $(date +%s) - DAYS * 86400 ))
+
+          prs=$(mktemp)
+          gh pr list --repo "$REPO" --state all --limit 10000 \
+            --json number,state,headRefName,headRefOid,isCrossRepository \
+            --jq '.[] | select(.isCrossRepository | not)
+                      | [.headRefName, .state, .headRefOid, (.number | tostring)] | @tsv' > "$prs"
+
+          keep=$(mktemp)
+          echo "$DEFAULT_BRANCH" >> "$keep"
+          gh api --paginate "repos/$REPO/branches?protected=true" --jq '.[].name' >> "$keep"
+          awk -F'\t' '$2 == "OPEN" { print $1 }' "$prs" >> "$keep"
+
+          # Branch name -> "MERGED #12" / "CLOSED #34" for pull requests that
+          # ended on the commit the branch still points at.
+          declare -A finished
+          while IFS=$'\t' read -r branch state sha number; do
+            [[ "$state" == "OPEN" ]] && continue
+            [[ "$(git rev-parse -q --verify "refs/remotes/origin/$branch" || true)" == "$sha" ]] || continue
+            finished["$branch"]="${state,,} #$number"
+          done < "$prs"
+
+          stale=()
+          while read -r branch committed; do
+            [[ "$branch" == "HEAD" ]] && continue
+            grep -Fxq -- "$branch" "$keep" && continue
+            if [[ -n "${finished[$branch]:-}" ]]; then
+              stale+=("$branch|$committed|pull request ${finished[$branch]}")
+            elif (( committed < cutoff )); then
+              stale+=("$branch|$committed|older than $DAYS days")
+            fi
+          done < <(git for-each-ref refs/remotes/origin \
+                     --format='%(refname:lstrip=3) %(committerdate:unix)')
+
+          {
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "## Stale branches (dry run)"
+            else
+              echo "## Deleted stale branches"
+            fi
+            echo
+            if (( ${#stale[@]} == 0 )); then
+              echo "None."
+            else
+              echo "| Branch | Last commit | Reason |"
+              echo "| --- | --- | --- |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          failed=0
+          for entry in "${stale[@]}"; do
+            IFS='|' read -r branch committed reason <<< "$entry"
+            date=$(date -u -d "@$committed" +%Y-%m-%d)
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "would delete $branch ($date, $reason)"
+            elif git push origin --delete "$branch"; then
+              echo "deleted $branch ($date, $reason)"
+            else
+              echo "::warning::could not delete $branch"
+              failed=1
+              continue
+            fi
+            echo "| \`$branch\` | $date | $reason |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          exit "$failed"
