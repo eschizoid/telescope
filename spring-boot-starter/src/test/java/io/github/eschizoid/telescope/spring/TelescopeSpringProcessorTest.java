@@ -308,7 +308,7 @@ class TelescopeSpringProcessorTest {
     );
     assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
     assertThat(result.generated().get("demo.ExternalMapperImpl"))
-      .contains("return UserBridge.forward(input);")
+      .contains("return io.github.eschizoid.telescope.spring.blueprint.UserBridge.forward(input);")
       .doesNotContain("transformers");
   }
 
@@ -969,5 +969,45 @@ class TelescopeSpringProcessorTest {
     );
     assertThat(result.success()).isFalse();
     assertThat(result.hasError("from and to must be supplied together")).isTrue();
+  }
+
+  // A bridge for a source carrying a Lombok annotation is emitted in the last processing round,
+  // once
+  // Lombok's patches have fired. A class created in the last round can be referenced by its
+  // qualified
+  // name and cannot be imported, so a mapper that imported its bridge failed to compile for exactly
+  // those sources. The processor recognises the annotation by its name, so a stand-in declaring
+  // that
+  // name reaches the same deferral without Lombok on the classpath.
+  @Test
+  void mapperCompilesAgainstABridgeEmittedInTheLastRound() {
+    final var result = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor(), new TelescopeMapperProcessor()),
+      List.of(),
+      source("lombok.Data", "package lombok; public @interface Data {}"),
+      source(
+        "demo.Entity",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @lombok.Data
+        @Bridge(EntityDto.class)
+        public record Entity(String name) {}
+        """
+      ),
+      source("demo.EntityDto", "package demo; public record EntityDto(String name) {}"),
+      source(
+        "demo.EntityMapper",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.TelescopeMapper;
+        @TelescopeMapper(from = Entity.class, to = EntityDto.class)
+        public interface EntityMapper { EntityDto map(Entity source); }
+        """
+      )
+    );
+
+    assertThat(result.success()).withFailMessage(result.errorMessages()).isTrue();
+    assertThat(result.generated().get("demo.EntityMapperImpl")).contains("return demo.EntityBridge.forward(input);");
   }
 }
