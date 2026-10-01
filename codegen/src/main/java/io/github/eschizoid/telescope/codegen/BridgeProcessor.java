@@ -2499,13 +2499,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       );
     }
 
-    // Mark a LIST/SET/MAP_VALUES plan as a raw (non-generic) Collection/Map subtype container, so
-    // applyForward/applyBackward route to the self-contained raw helpers (no-arg ctor + addAll /
-    // element loop) rather than the generic copy-ctor inline path.
-    static FieldPlan rawContainer(final Kind kind, final String subBridgeName) {
-      return new FieldPlan(kind, Objects.requireNonNull(subBridgeName), null, null, null, null, null, true, false);
-    }
-
     // Primitive ↔ boxed wrapper. The direction that writes the primitive side null-coalesces a null
     // read to that primitive's JLS default; the direction that writes the wrapper passes through
     // (null is a legal wrapper value). Exactly one of the two defaults is non-null for any given
@@ -2577,8 +2570,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * The container shape of a type, asked of the shared pairing spec so that what counts as a
    * container is one decision rather than two. That includes a class declaring no type parameters
    * of its own, which the spec views through the supertype that fixes them. {@code null} when the
-   * spec gives no view, as for a generic class used raw, and {@link #rawContainerShapeOf} is then
-   * asked.
+   * spec gives no view, as for a generic class used raw or a map whose key type the spec cannot
+   * compare, and nothing else is asked: a container the spec gives no view is not lifted here.
    *
    * <p>Both sides are needed because a field declared as the general {@code Collection} has named
    * no shape of its own, and the spec settles such a view against the other side of the pair.
@@ -2601,29 +2594,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       view.elementType(),
       view.keyType()
     );
-  }
-
-  // The container shape of a Collection/Map type written without type arguments, read off its
-  // supertype the way `class ImageUrls extends ArrayList<ImageUrl>` fixes its element there. Asked
-  // only where the shared spec gives no view, so what it answers for is a non-generic subtype the
-  // spec refused for a reason this does not check, such as a map key that is not a plain class.
-  // Returns null for a parameterized type, a generic class used raw, whose supertype names no
-  // element, and a non-container. Optional is final and cannot be subtyped, so it has no such form.
-  private ContainerShape rawContainerShapeOf(final TypeMirror type) {
-    if (!(type instanceof DeclaredType dt) || !dt.getTypeArguments().isEmpty()) return null;
-    if (assignableToRaw(type, "java.util.List")) {
-      final var args = containerViewArgs(type, "java.util.List");
-      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.LIST, args.getFirst(), null) : null;
-    }
-    if (assignableToRaw(type, "java.util.Set")) {
-      final var args = containerViewArgs(type, "java.util.Set");
-      return args.size() == 1 ? new ContainerShape(FieldPlan.Kind.SET, args.getFirst(), null) : null;
-    }
-    if (assignableToRaw(type, "java.util.Map")) {
-      final var args = containerViewArgs(type, "java.util.Map");
-      return args.size() == 2 ? new ContainerShape(FieldPlan.Kind.MAP_VALUES, args.get(1), args.get(0)) : null;
-    }
-    return null;
   }
 
   // The type arguments of `type`'s view as the JDK container `rawFqn` (e.g. the `<ImageUrl>` of the
@@ -3026,62 +2996,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           default -> subPlan;
         };
         plans.put(sf.name(), withImpls);
-        continue;
-      }
-      // (2-raw) A non-generic Collection/Map subtype the shared spec gives no view, on at least one
-      //     side, possibly paired with a parameterized container on the other. The element lives
-      //     in the supertype; the subtype is allocated via its no-arg ctor + element loop. A side
-      //     the spec did view keeps that shape.
-      final var srcRaw = srcShape != null ? srcShape : rawContainerShapeOf(sf.type());
-      final var tgtRaw = tgtShape != null ? tgtShape : rawContainerShapeOf(tf.type());
-      if (srcRaw != null && tgtRaw != null && srcRaw.kind() == tgtRaw.kind()) {
-        if (srcRaw.kind() == FieldPlan.Kind.MAP_VALUES && !isSameType(srcRaw.keyType(), tgtRaw.keyType())) {
-          error(
-            source,
-            "@Bridge " +
-              source.getSimpleName() +
-              " -> " +
-              target.getSimpleName() +
-              ": field '" +
-              sf.name() +
-              "' has incompatible Map key types — " +
-              srcRaw.keyType() +
-              " vs " +
-              tgtRaw.keyType() +
-              ". Map key types must match exactly; codegen preserves source keys."
-          );
-          return null;
-        }
-        // The raw helper allocates each side's concrete container via its no-arg constructor. A
-        // subtype that hides it (`class Wrap extends ArrayList<X> { Wrap(int cap) {} }`) would make
-        // the generated `new Wrap()` fail in the consumer's build with a raw javac error; reject it
-        // here with a telescope-authored diagnostic instead.
-        final var unassignableRaw = firstUnassignableContainer(sf.type(), tf.type(), srcRaw.kind());
-        if (unassignableRaw != null) {
-          error(source, unassignableContainerMessage(source, target, sf.name(), unassignableRaw));
-          return null;
-        }
-        final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), srcRaw.kind());
-        if (badAlloc != null) {
-          error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
-          return null;
-        }
-        final var subPlan = planElementSubBridge(
-          source,
-          target,
-          sf.name(),
-          srcRaw.elementType(),
-          tgtRaw.elementType(),
-          srcRaw.kind(),
-          pending,
-          seen,
-          userDeclared,
-          lenient,
-          parentPkg
-        );
-        if (subPlan == null) return null;
-        if (refusesUnorderable(source, target, sf, tf, srcRaw, tgtRaw)) return null;
-        plans.put(sf.name(), FieldPlan.rawContainer(subPlan.kind(), subPlan.subBridgeName()));
         continue;
       }
       // (3) Cross-paradigm Optional↔nullable bridge — one side has Optional<X>, the other has
@@ -4723,12 +4637,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // A user-package subtype of a JDK Collection/Map (e.g. `class ImageUrls extends
     // ArrayList<ImageUrl>`) clears the prefix filter but must NOT be bean-introspected: ArrayList's
     // synthesized `isEmpty()` reads as a property `empty` with no `setEmpty`, producing a
-    // misleading
-    // "no setter for 'empty'" error. Same-kind subtype pairs are element-bridged by the (2-raw)
+    // misleading "no setter for 'empty'" error. Same-kind container pairs are planned by the
     // container branch before reaching here; this exclusion is the backstop for the pairs that
-    // branch can't claim (a kind mismatch like List-subtype vs Set-subtype, or a Collection/Map
-    // subtype opposite a non-container), so they fall to the accurate "no auto-bridge could be
-    // derived" diagnostic instead of the bean-introspection crash.
+    // branch can't claim (a kind mismatch like List-subtype vs Set-subtype, a Collection/Map
+    // subtype opposite a non-container, or a container the shared spec gives no view), so they
+    // fall to the accurate "no auto-bridge could be derived" diagnostic instead of the
+    // bean-introspection crash.
     return !assignableToRaw(dt, "java.util.Collection") && !assignableToRaw(dt, "java.util.Map");
   }
 

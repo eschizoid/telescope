@@ -938,13 +938,17 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * One pairing with a class that declares no type parameters of its own on at least one side: the
-   * two declared field types, what each input element is built as, and what both paths owe.
+   * One container pairing whose element or key types are found somewhere other than a plain
+   * argument list: on the supertype of a class that declares no type parameters, nowhere at all for
+   * a generic class used raw, or inside a parameterized map key. It carries the two declared field
+   * types, what each input element is built as, and what both paths owe.
    *
    * <p>{@code %1$s} is the cell's prefix and {@code %2$s} the same prefix qualified by the package,
    * for the class a rebuilt container is reported as. {@code input} is {@code str} for the element
    * values as strings, {@code leaf} for each as a record, {@code leafList} and {@code leafOpt} for
-   * each record inside a list or an optional, and {@code strList} for each string inside a list.
+   * each record inside a list or an optional, {@code strList} for each string inside a list, and
+   * {@code leafListKey} for each record under a map key that is a one-element list. An owed value
+   * of {@link #REFUSED} and a fragment of the runtime's message means both paths refuse.
    */
   private record FixedPairing(String name, String src, String tgt, String input, String owed) {}
 
@@ -977,12 +981,20 @@ class CrossPathCorpusTest {
     Map.entry("Groups", "extends java.util.ArrayList<java.util.List<%1$sLeaf>>"),
     Map.entry("MapOfLists", "extends java.util.LinkedHashMap<String, java.util.List<%1$sLeaf>>"),
     Map.entry("OptList", "extends java.util.ArrayList<java.util.Optional<%1$sLeaf>>"),
-    Map.entry("WildMap", "extends java.util.LinkedHashMap<String, java.util.List<?>>")
+    Map.entry("WildMap", "extends java.util.LinkedHashMap<String, java.util.List<?>>"),
+    Map.entry("Gen", "<E> extends java.util.ArrayList<E>"),
+    Map.entry("Gen2", "<E> extends java.util.ArrayList<E>"),
+    Map.entry("ObjectList", "extends java.util.ArrayList<Object>"),
+    Map.entry("ObjectMap", "extends java.util.LinkedHashMap<Object, Object>"),
+    Map.entry("ListKeyLeafMap", "extends java.util.LinkedHashMap<java.util.List<String>, %1$sLeaf>"),
+    Map.entry("ListKeyLeafDtoMap", "extends java.util.LinkedHashMap<java.util.List<String>, %1$sLeafDto>")
   );
 
   private static final String DTOS = "[%1$sLeafDto[v=b], %1$sLeafDto[v=a]]";
   private static final String DTO_MAP = "{k1=%1$sLeafDto[v=b], k2=%1$sLeafDto[v=a]}";
   private static final String SORTED_DTOS = "[%1$sLeafDto[v=a], %1$sLeafDto[v=b]]";
+  private static final String LIST_KEYED_DTOS = "{[k1]=%1$sLeafDto[v=b], [k2]=%1$sLeafDto[v=a]}";
+  private static final String REFUSED = "refused: ";
 
   /**
    * A class declaring no type parameters against an interface, a JDK class, a generic subtype and
@@ -1206,6 +1218,81 @@ class CrossPathCorpusTest {
       "java.util.Map<String, java.util.List<?>>",
       "strList",
       "{k1=[b], k2=[a]} in java.util.LinkedHashMap"
+    ),
+    // A generic class used raw names no element type, so nothing shows its elements are of
+    // the
+    // type the other side fixes, and neither a copy nor a conversion can be planned.
+    new FixedPairing(
+      "raw Gen -> LeafDtoList",
+      "%1$sGen",
+      "%1$sLeafDtoList",
+      "leaf",
+      REFUSED + "a generic container used raw"
+    ),
+    new FixedPairing("raw Gen -> StrList", "%1$sGen", "%1$sStrList", "str", REFUSED + "a generic container used raw"),
+    new FixedPairing(
+      "LeafList -> raw Gen",
+      "%1$sLeafList",
+      "%1$sGen",
+      "leaf",
+      REFUSED + "a generic container used raw"
+    ),
+    // A raw use against another raw use, or against a side holding Object, has nothing its
+    // elements could fail to fit. The runtime copies them; these are registered divergences.
+    new FixedPairing("raw Gen -> ObjectList", "%1$sGen", "%1$sObjectList", "str", "[b, a] in %2$sObjectList"),
+    new FixedPairing("ObjectList -> raw Gen", "%1$sObjectList", "%1$sGen", "str", "[b, a] in %2$sGen"),
+    new FixedPairing(
+      "raw HashMap -> ObjectMap",
+      "java.util.HashMap",
+      "%1$sObjectMap",
+      "str",
+      "{k1=b, k2=a} in %2$sObjectMap"
+    ),
+    new FixedPairing("raw Gen -> raw Gen2", "%1$sGen", "%1$sGen2", "str", "[b, a] in %2$sGen2"),
+    new FixedPairing(
+      "raw ArrayList -> raw LinkedList",
+      "java.util.ArrayList",
+      "java.util.LinkedList",
+      "str",
+      "[b, a] in java.util.LinkedList"
+    ),
+    // A map keyed by a parameterized type: the key is the same type on both sides, so the
+    // keys
+    // carry across and the values convert.
+    new FixedPairing(
+      "ListKeyLeafMap -> ListKeyLeafDtoMap",
+      "%1$sListKeyLeafMap",
+      "%1$sListKeyLeafDtoMap",
+      "leafListKey",
+      LIST_KEYED_DTOS + " in %2$sListKeyLeafDtoMap"
+    ),
+    new FixedPairing(
+      "ListKeyLeafMap -> Map",
+      "%1$sListKeyLeafMap",
+      "java.util.Map<java.util.List<String>, %1$sLeafDto>",
+      "leafListKey",
+      LIST_KEYED_DTOS + " in java.util.LinkedHashMap"
+    ),
+    new FixedPairing(
+      "Map -> Map, both keyed by a list",
+      "java.util.Map<java.util.List<String>, %1$sLeaf>",
+      "java.util.Map<java.util.List<String>, %1$sLeafDto>",
+      "leafListKey",
+      LIST_KEYED_DTOS + " in java.util.LinkedHashMap"
+    ),
+    new FixedPairing(
+      "Map -> Map, both keyed by a wildcard list",
+      "java.util.Map<java.util.List<?>, %1$sLeaf>",
+      "java.util.Map<java.util.List<?>, %1$sLeafDto>",
+      "leafListKey",
+      LIST_KEYED_DTOS + " in java.util.LinkedHashMap"
+    ),
+    new FixedPairing(
+      "Map -> Map, keyed by different lists",
+      "java.util.Map<java.util.List<String>, %1$sLeaf>",
+      "java.util.Map<java.util.List<Integer>, %1$sLeafDto>",
+      "leafListKey",
+      REFUSED + "incompatible Map key types"
     )
   );
 
@@ -1217,6 +1304,7 @@ class CrossPathCorpusTest {
     // same container, and against another of its own kind with different elements, is what shows
     // whether the elements are found and converted rather than carried across as they are.
     final var failures = new ArrayList<String>();
+    final var diverged = new LinkedHashSet<String>();
     var index = 0;
     for (final var pairing : FIXED_PAIRINGS) {
       final var prefix = "Fx" + index++;
@@ -1244,19 +1332,60 @@ class CrossPathCorpusTest {
           : run(items, () -> forward.invoke(null, source));
       final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
 
+      // A refusal is owed as `refused: ` and a fragment of the runtime's message. The generated
+      // path's refusal has to be the processor's own diagnostic, so a javac error inside a
+      // generated
+      // file cannot pass for one. A registered divergence owes the runtime's outcome from the
+      // runtime and that diagnostic from the generated path.
+      final var refusal = pairing.owed().startsWith(REFUSED) ? pairing.owed().substring(REFUSED.length()) : null;
       final var owed =
-        prefix + "Tgt[items=" + pairing.owed().formatted(prefix, qualified).replaceFirst(" in ", "] in ");
+        refusal != null
+          ? pairing.owed()
+          : prefix + "Tgt[items=" + pairing.owed().formatted(prefix, qualified).replaceFirst(" in ", "] in ");
+      final var divergence = FIXED_KNOWN_DIVERGENCES.get(pairing.name());
       for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
-        if (!owed.equals(side.getValue().toString())) {
-          failures.add(pairing.name() + ": " + side.getKey() + " gave " + side.getValue() + ", owed " + owed);
-        }
+        final var outcome = side.getValue();
+        final var generatedSide = side.getKey().equals("generated");
+        final var refuses =
+          refusal != null ||
+          (divergence != null && !(generatedSide ? divergence.generated() : divergence.reflective()));
+        final var met = refuses
+          ? outcome.refusal() != null && outcome.refusal().contains(generatedSide ? "ERROR: @Bridge" : refusal)
+          : owed.equals(outcome.toString());
+        if (!met) failures.add(pairing.name() + ": " + side.getKey() + " gave " + outcome + ", owed " + owed);
       }
+      if (divergence != null) diverged.add(pairing.name());
     }
     assertTrue(
       failures.isEmpty(),
       () -> failures.size() + " fixed pairing(s) failed:\n  " + String.join("\n  ", failures)
     );
+    final var stale = new LinkedHashSet<>(FIXED_KNOWN_DIVERGENCES.keySet());
+    stale.removeAll(diverged);
+    assertTrue(stale.isEmpty(), () -> "registered divergences with no pairing in the table:\n  " + stale);
   }
+
+  /**
+   * Fixed-argument pairings the two paths are known to answer differently, each recorded by which
+   * path converts. Every entry here is a generic container used raw that the runtime copies
+   * unconverted, because neither side names an element type narrower than {@code Object}, and that
+   * {@code @Bridge} refuses, because it plans a container only from a view the shared spec gives,
+   * and a raw use has none. Whether the generated path should emit the same copy for these is an
+   * open question; until it does, each entry holds the runtime to its copy and the generated path
+   * to its diagnostic, so a change on either side fails the pairing rather than passing silently.
+   */
+  private static final Map<String, Verdict> FIXED_KNOWN_DIVERGENCES = Map.of(
+    "raw Gen -> ObjectList",
+    new Verdict(false, true),
+    "ObjectList -> raw Gen",
+    new Verdict(false, true),
+    "raw HashMap -> ObjectMap",
+    new Verdict(false, true),
+    "raw Gen -> raw Gen2",
+    new Verdict(false, true),
+    "raw ArrayList -> raw LinkedList",
+    new Verdict(false, true)
+  );
 
   private static JavaFileObject[] fixedSources(final String prefix, final String srcField, final String tgtField) {
     final var head = "package " + PACKAGE + ";\n";
@@ -1318,6 +1447,7 @@ class CrossPathCorpusTest {
           case "java.util.SortedSet" -> TreeSet.class;
           case "java.util.Map" -> LinkedHashMap.class;
           case "java.util.SortedMap" -> TreeMap.class;
+          case "java.util.HashMap" -> LinkedHashMap.class;
           default -> ArrayList.class;
         };
     final var instance = type.getConstructor().newInstance();
@@ -1325,14 +1455,16 @@ class CrossPathCorpusTest {
     var key = 0;
     for (final var value : VALUES) {
       final Object element = switch (input) {
-        case "leaf" -> leaf.newInstance(value);
+        case "leaf", "leafListKey" -> leaf.newInstance(value);
         case "leafList" -> List.of(leaf.newInstance(value));
         case "leafOpt" -> Optional.of(leaf.newInstance(value));
         case "strList" -> List.of(value);
         default -> value;
       };
       if (instance instanceof Map<?, ?>) {
-        Map.class.getMethod("put", Object.class, Object.class).invoke(instance, "k" + ++key, element);
+        final var name = "k" + ++key;
+        final Object mapKey = input.equals("leafListKey") ? List.of(name) : name;
+        Map.class.getMethod("put", Object.class, Object.class).invoke(instance, mapKey, element);
       } else {
         Collection.class.getMethod("add", Object.class).invoke(instance, element);
       }

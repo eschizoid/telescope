@@ -126,6 +126,32 @@ class PairingRulesTest {
     private static final long serialVersionUID = 1L;
   }
 
+  /** Non-generic subtypes that hold any element, which a raw use's elements always fit. */
+  public static class ObjectList extends ArrayList<Object> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  public static class ObjectMap extends HashMap<Object, Object> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  /** Non-generic maps keyed by a parameterized type, whose values differ. */
+  public static class ListKeyedPoints extends LinkedHashMap<List<String>, Point> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  public static class ListKeyedPointDtos extends LinkedHashMap<List<String>, PointDto> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
   /** Non-generic subtypes whose fixed arguments are themselves parameterized. */
   public static class Groups extends ArrayList<List<String>> {
 
@@ -260,6 +286,14 @@ class PairingRulesTest {
     }
   }
 
+  /** Maps keyed by a type variable, directly and inside a parameterized key. */
+  @SuppressWarnings("unused")
+  static final class KeyHolder<K> {
+
+    Map<K, String> mapVariableToString;
+    Map<List<K>, String> mapListOfVariableToString;
+  }
+
   /** Field declarations whose reflected generic types supply parameterized handles. */
   @SuppressWarnings("unused")
   static final class TypeHolder {
@@ -274,6 +308,8 @@ class PairingRulesTest {
     Map<String, String> mapStringToString;
     Map<Integer, String> mapIntegerToString;
     Map<?, String> mapWildcardToString;
+    Map<List<String>, Integer> mapListToInteger;
+    Map<List<Integer>, Integer> mapListOfIntegerToInteger;
     Box<String> boxOfString;
     Collection<String> collectionOfString;
     Collection<Integer> collectionOfInteger;
@@ -408,11 +444,28 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("a generic container used raw names no element type, so it still copies")
-    void rawUseStillCopies() {
+    @DisplayName("a generic container used raw copies against another used raw, or against one holding Object")
+    void rawUseCopiesWhereAnyElementFits() {
       assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ArrayList.class, LinkedList.class, "f"));
-      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ArrayList.class, PointDtoList.class, "f"));
-      assertInstanceOf(PairDecision.MapCopy.class, rules.decidePair(HashMap.class, PointDtoMap.class, "f"));
+      assertInstanceOf(PairDecision.MapCopy.class, rules.decidePair(HashMap.class, LinkedHashMap.class, "f"));
+      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ArrayList.class, ObjectList.class, "f"));
+      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ObjectList.class, ArrayList.class, "f"));
+      assertInstanceOf(PairDecision.MapCopy.class, rules.decidePair(HashMap.class, ObjectMap.class, "f"));
+    }
+
+    @Test
+    @DisplayName("a generic container used raw is refused against one fixing a narrower element type")
+    void rawUseIsRefusedAgainstANarrowerElement() {
+      final var list = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(ArrayList.class, PointDtoList.class, "f")
+      );
+      assertEquals(
+        PairingMessages.unprovableRawElements("f", ArrayList.class.getName(), PointDtoList.class.getName()),
+        list.message()
+      );
+      assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(PointList.class, ArrayList.class, "f"));
+      assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(HashMap.class, PointDtoMap.class, "f"));
     }
 
     @Test
@@ -593,9 +646,36 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("a Map whose key argument is not a plain class (wildcard) is not a liftable container")
+    @DisplayName("a Map keyed by a wildcard is not a liftable container")
     void wildcardKeyedMapIsNotLiftable() {
       assertNull(rules.containerViewOf(typeOf("mapWildcardToString")));
+    }
+
+    @Test
+    @DisplayName("a Map keyed by a type variable, at any depth, is not a liftable container")
+    void variableKeyedMapIsNotLiftable() throws NoSuchFieldException {
+      for (final var field : List.of("mapVariableToString", "mapListOfVariableToString")) {
+        assertNull(rules.containerViewOf(KeyHolder.class.getDeclaredField(field).getGenericType()), field);
+      }
+    }
+
+    @Test
+    @DisplayName("a Map keyed by a parameterized type is liftable, and lifts against the same key type")
+    void parameterizedKeyedMapIsLiftable() {
+      final var view = rules.containerViewOf(typeOf("mapListToInteger"));
+      assertEquals(ContainerView.Kind.MAP_VALUES, view.kind());
+      assertEquals(typeOf("listOfString"), view.keyType());
+      final var lift = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(ListKeyedPoints.class, ListKeyedPointDtos.class, "f")
+      );
+      assertEquals(typeOf("listOfString"), lift.tgt().keyType());
+      assertEquals(PointDto.class, lift.tgt().elementType());
+      assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(typeOf("mapListToInteger"), typeOf("mapListOfIntegerToInteger"), "f"),
+        "a different parameterized key is still a different key"
+      );
     }
 
     @Test
