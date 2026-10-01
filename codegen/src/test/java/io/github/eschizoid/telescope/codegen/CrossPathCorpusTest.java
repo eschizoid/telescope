@@ -478,6 +478,23 @@ class CrossPathCorpusTest {
       "putString",
       "%sTgt[items={k=s}] in %sStringMap"
     ),
+    // A wildcard among the subtype's own arguments, which an allocation cannot name.
+    new SubtypeView(
+      "wildcard tag",
+      "public class %sTagged<Tag, E> extends java.util.ArrayList<E> {}",
+      "%sTagged<String, %sLeaf>",
+      "%sTagged<? extends CharSequence, %sLeafDto>",
+      "add",
+      "%sTgt[items=[%sLeafDto[v=x]]] in %sTagged"
+    ),
+    new SubtypeView(
+      "unbounded tag on both sides",
+      "public class %sTagged<Tag, E> extends java.util.ArrayList<E> {}",
+      "%sTagged<?, %sLeaf>",
+      "%sTagged<?, %sLeafDto>",
+      "add",
+      "%sTgt[items=[%sLeafDto[v=x]]] in %sTagged"
+    ),
     // Holds Strings whatever its argument says, so its elements and the target's cannot pair.
     new SubtypeView(
       "argument unrelated to the elements",
