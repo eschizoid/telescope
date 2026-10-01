@@ -86,19 +86,42 @@ public final class ReflectionProps implements PropertySystem<Type> {
   @Override
   public boolean isAssignable(final Type from, final Type to) {
     if (from.equals(to)) return true;
+    // Boxing and unboxing, as an assignment context allows.
+    if (from instanceof Class<?> f && f.isPrimitive()) return (
+      !(to instanceof Class<?> t && t.isPrimitive()) && isAssignable(boxed(f), to)
+    );
+    if (to instanceof Class<?> t && t.isPrimitive()) return boxed(t).equals(from);
+    // A type variable is assignable wherever one of its bounds is.
+    if (from instanceof TypeVariable<?> variable) {
+      return Arrays.stream(variable.getBounds()).anyMatch(bound -> isAssignable(bound, to));
+    }
+    final var toComponent = componentOf(to);
+    if (toComponent != null) {
+      final var fromComponent = componentOf(from);
+      if (fromComponent == null) return false;
+      if (fromComponent instanceof Class<?> fc && fc.isPrimitive()) return fromComponent.equals(toComponent);
+      return isAssignable(fromComponent, toComponent);
+    }
     final var source = rawClass(from);
     if (source == null) return false;
     if (to instanceof Class<?> target) return target.isAssignableFrom(source);
     if (!(to instanceof ParameterizedType wanted) || !(wanted.getRawType() instanceof Class<?> target)) return false;
     if (!target.isAssignableFrom(source)) return false;
-    final var actual = argumentsAs(from instanceof TypeVariable<?> variable ? variable.getBounds()[0] : from, target);
-    // A raw source carries no arguments to check, which is the unchecked conversion.
+    // A generic class used raw carries no arguments to check, which is the unchecked conversion.
+    if (from instanceof Class<?> raw && raw.getTypeParameters().length > 0) return true;
+    final var actual = argumentsAs(from, target);
     if (actual.isEmpty()) return true;
     final var expected = wanted.getActualTypeArguments();
     for (int i = 0; i < expected.length; i++) {
       if (!contains(expected[i], actual.get(i))) return false;
     }
     return true;
+  }
+
+  /** An array type's component, or null when the type is not an array. */
+  private static Type componentOf(final Type type) {
+    if (type instanceof GenericArrayType array) return array.getGenericComponentType();
+    return type instanceof Class<?> cls && cls.isArray() ? cls.getComponentType() : null;
   }
 
   /**

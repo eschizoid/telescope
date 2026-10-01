@@ -73,19 +73,11 @@ final class ContainerLifts {
     // Copying elements verbatim leaves an order to carry: the side being filled keeps one, and the
     // side being read has one to give. A supplier is handed no source, so the ordering rule is
     // applied here as it is wherever else a sorted container is built.
-    final var srcAlloc = orderingAware(
-      srcCls,
-      orderingArguments(srcCls, ContainerView.Kind.SET),
-      SortedSet.class,
-      ContainerLifts::setComparator,
-      ignored -> srcSupplier.get()
+    final var srcAlloc = orderingAware(srcCls, srcCls, SortedSet.class, ContainerLifts::setComparator, ignored ->
+      srcSupplier.get()
     );
-    final var tgtAlloc = orderingAware(
-      tgtCls,
-      orderingArguments(tgtCls, ContainerView.Kind.SET),
-      SortedSet.class,
-      ContainerLifts::setComparator,
-      ignored -> tgtSupplier.get()
+    final var tgtAlloc = orderingAware(tgtCls, tgtCls, SortedSet.class, ContainerLifts::setComparator, ignored ->
+      tgtSupplier.get()
     );
     return Iso.of(
       src -> {
@@ -109,19 +101,11 @@ final class ContainerLifts {
     final var srcSupplier = Beans.intermediateAllocator(srcCls);
     final var tgtSupplier = Beans.intermediateAllocator(tgtCls);
     if (srcSupplier.get() == null || tgtSupplier.get() == null) return null;
-    final var srcAlloc = orderingAware(
-      srcCls,
-      orderingArguments(srcCls, ContainerView.Kind.MAP_VALUES),
-      SortedMap.class,
-      ContainerLifts::mapComparator,
-      ignored -> srcSupplier.get()
+    final var srcAlloc = orderingAware(srcCls, srcCls, SortedMap.class, ContainerLifts::mapComparator, ignored ->
+      srcSupplier.get()
     );
-    final var tgtAlloc = orderingAware(
-      tgtCls,
-      orderingArguments(tgtCls, ContainerView.Kind.MAP_VALUES),
-      SortedMap.class,
-      ContainerLifts::mapComparator,
-      ignored -> tgtSupplier.get()
+    final var tgtAlloc = orderingAware(tgtCls, tgtCls, SortedMap.class, ContainerLifts::mapComparator, ignored ->
+      tgtSupplier.get()
     );
     return Iso.of(
       src -> {
@@ -166,12 +150,8 @@ final class ContainerLifts {
   ) {
     final var srcRaw = rawClassOf(srcType);
     final var tgtRaw = rawClassOf(tgtType);
-    final var srcAlloc = set
-      ? setAllocatorFor(srcRaw, orderingArguments(srcType, ContainerView.Kind.SET))
-      : listAllocatorFor(srcRaw);
-    final var tgtAlloc = set
-      ? setAllocatorFor(tgtRaw, orderingArguments(tgtType, ContainerView.Kind.SET))
-      : listAllocatorFor(tgtRaw);
+    final var srcAlloc = set ? setAllocatorFor(srcRaw, srcType) : listAllocatorFor(srcRaw);
+    final var tgtAlloc = set ? setAllocatorFor(tgtRaw, tgtType) : listAllocatorFor(tgtRaw);
     // A sorted output whose elements change type has to see each converted element before it is
     // inserted, and the fused MethodHandle loop offers nowhere to stand between the two. Asking
     // outside the loop instead would mean converting the first element twice, once to test it and
@@ -396,8 +376,8 @@ final class ContainerLifts {
   static Iso<?, ?> liftMapIntoTargetRaw(final Iso<Object, Object> elementIso, final Type srcType, final Type tgtType) {
     final var srcRaw = rawClassOf(srcType);
     final var tgtRaw = rawClassOf(tgtType);
-    final var srcAlloc = mapAllocatorFor(srcRaw, orderingArguments(srcType, ContainerView.Kind.MAP_VALUES));
-    final var tgtAlloc = mapAllocatorFor(tgtRaw, orderingArguments(tgtType, ContainerView.Kind.MAP_VALUES));
+    final var srcAlloc = mapAllocatorFor(srcRaw, srcType);
+    final var tgtAlloc = mapAllocatorFor(tgtRaw, tgtType);
     // MethodHandle entry-loop over the value element's raw handle when it is a composed-handle
     // leaf;
     // keys pass through verbatim. Null value Iso => keep the Java loop.
@@ -517,7 +497,7 @@ final class ContainerLifts {
     );
   }
 
-  private static Function<Object, Object> setAllocatorFor(final Class<?> raw, final List<Type> arguments) {
+  private static Function<Object, Object> setAllocatorFor(final Class<?> raw, final Type declared) {
     final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.SET);
     if (fromSpec != null) return fromSpec;
     // Not in the shared table, for the same reason the list side's is not.
@@ -526,7 +506,7 @@ final class ContainerLifts {
       return size <= 1 ? new CopyOnWriteArraySet<>() : new ArrayList<>(size);
     };
     final var alloc = probeAllocator(raw);
-    if (alloc != null) return orderingAware(raw, arguments, SortedSet.class, ContainerLifts::setComparator, ignored ->
+    if (alloc != null) return orderingAware(raw, declared, SortedSet.class, ContainerLifts::setComparator, ignored ->
       alloc.get()
     );
     final var fallback = fallbackAllocatorFor(raw, LinkedHashSet.class, input ->
@@ -555,11 +535,11 @@ final class ContainerLifts {
    * no-arg constructor doesn't exist (it needs the {@code Class<K>} arg); adopters must use the
    * codegen path or an explicit row.
    */
-  private static Function<Object, Object> mapAllocatorFor(final Class<?> raw, final List<Type> arguments) {
+  private static Function<Object, Object> mapAllocatorFor(final Class<?> raw, final Type declared) {
     final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.MAP_VALUES);
     if (fromSpec != null) return fromSpec;
     final var alloc = probeAllocator(raw);
-    if (alloc != null) return orderingAware(raw, arguments, SortedMap.class, ContainerLifts::mapComparator, ignored ->
+    if (alloc != null) return orderingAware(raw, declared, SortedMap.class, ContainerLifts::mapComparator, ignored ->
       alloc.get()
     );
     final var fallback = fallbackAllocatorFor(raw, LinkedHashMap.class, input ->
@@ -605,7 +585,7 @@ final class ContainerLifts {
    */
   private static Function<Object, Object> orderingAware(
     final Class<?> raw,
-    final List<Type> arguments,
+    final Type declared,
     final Class<?> sortedIface,
     final Function<Object, Comparator<Object>> comparatorOf,
     final Function<Object, Object> plain
@@ -616,7 +596,7 @@ final class ContainerLifts {
     // over anything but a supertype of what the field orders erases to the same signature and can
     // receive nothing the source carries. Java forbids two constructors with one erasure, so there
     // is no other overload to fall back to and the container simply cannot be told its order.
-    if (!ordersTheField(raw, arguments)) return refuseOrdering(raw, comparatorOf, plain);
+    if (!ordersTheField(raw, declared, sortedIface)) return refuseOrdering(raw, comparatorOf, plain);
     try {
       ctor = MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class, Comparator.class));
     } catch (final NoSuchMethodException | IllegalAccessException e) {
@@ -639,19 +619,28 @@ final class ContainerLifts {
    * Whether this container's comparator constructor can be handed a comparator over what the field
    * orders: a map's key type, a set's element type.
    *
-   * <p>{@code arguments} are the field's container arguments, key first where there is one. The
-   * constructor's parameter is resolved against them by position, so a parameter written over the
-   * class's own type variable reads as the type the field fixed it to, and the shared rules decide
-   * from there. A class whose own parameters do not line up with the container's arguments, or a
-   * field that gives none, leaves nothing to resolve against, and the order is refused.
+   * <p>The constructor's parameter is resolved against the arguments the field gave the class it
+   * declares, in the order that class declares its own parameters, which need not be the order
+   * {@code Map} or {@code Set} takes them in. Where the class allocated stands in for the declared
+   * type instead, its parameters are those of the container it implements, so the container's
+   * arguments resolve it. A field that leaves the class raw has nothing to resolve against, and the
+   * order is refused.
    */
-  private static boolean ordersTheField(final Class<?> raw, final List<Type> arguments) {
+  private static boolean ordersTheField(final Class<?> raw, final Type declared, final Class<?> sortedIface) {
+    final var arguments = orderingArguments(
+      declared,
+      sortedIface == SortedMap.class ? ContainerView.Kind.MAP_VALUES : ContainerView.Kind.SET
+    );
     if (arguments.isEmpty()) return false;
     final var variables = raw.getTypeParameters();
-    if (variables.length != 0 && variables.length != arguments.size()) return false;
+    final List<Type> bindings =
+      declared instanceof ParameterizedType parameterized && parameterized.getRawType() == raw
+        ? List.of(parameterized.getActualTypeArguments())
+        : arguments;
+    if (variables.length != 0 && variables.length != bindings.size()) return false;
     for (final var ctor : raw.getConstructors()) {
       if (ctor.getParameterCount() != 1 || !Comparator.class.equals(ctor.getParameterTypes()[0])) continue;
-      final var param = PROPS.resolve(ctor.getGenericParameterTypes()[0], raw, arguments);
+      final var param = PROPS.resolve(ctor.getGenericParameterTypes()[0], raw, bindings);
       return RULES.canOrder(param, arguments.getFirst());
     }
     return false;
