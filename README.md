@@ -415,6 +415,72 @@ user-facing code, because the optics live inside, behind one type.
 
 ---
 
+## Spring mapper transformers
+
+The Spring starter can normalize entity values before mapping them to a REST DTO. `@TelescopeMapper`,
+`@TelescopeTransformer` and the interfaces they annotate come from `telescope-core`; the starter generates the Spring
+components that implement them. Declare transformers on the projection to have Spring inject and apply them in order:
+
+```java
+record CustomerRestDto(String email) {}
+
+record CustomerEntity(String email) {}
+
+@TelescopeTransformer
+interface CustomerEmailTransformer extends TelescopeTransformation<CustomerEntity, String> {
+  default Telescope<CustomerEntity, String> path() {
+    return Telescope.of(CustomerEntity.class).field(CustomerEntity::email);
+  }
+
+  default Transformation<String> transform() {
+    return new Transformation<>("unknown@example.com", (email) -> email.strip().toLowerCase(Locale.ROOT));
+  }
+}
+
+@TelescopeMapper(transformers = CustomerEmailTransformer.class)
+interface CustomerProjection extends TelescopeProjection<CustomerEntity, CustomerRestDto> {}
+
+@Service
+class CustomerService {
+
+  private final CustomerProjection projection;
+
+  CustomerService(CustomerProjection projection) {
+    this.projection = projection;
+  }
+
+  CustomerRestDto register(CustomerEntity customer) {
+    return projection.map(customer);
+  }
+}
+```
+
+`map` applies the transformer before structural mapping. A null email gets the declared default; a non-null email is
+trimmed and lowercased. The original entity is unchanged. For fields with different names, add typed translation rows:
+
+```java
+record AccountEntity(String displayName, String phoneNumber) {}
+
+record AccountRestDto(String name, String phone) {}
+
+@TelescopeMapper("accountMapper")
+interface AccountMapper extends TelescopeProjection<AccountEntity, AccountRestDto> {
+  default void translate(MapperBuilder<AccountEntity, AccountRestDto> mapping) {
+    mapping
+      .from(AccountEntity::displayName)
+      .to(AccountRestDto::name)
+      .from(AccountEntity::phoneNumber)
+      .to(AccountRestDto::phone);
+  }
+}
+```
+
+The generated Spring bean also exposes `forward`, `backward`, and `patch`; transformers run only on the way forward. To
+register transformers from configuration, declare a typed `TelescopeCustomizer<AccountMapper>` bean, with no bean names
+involved. See the [Spring starter guide](spring-boot-starter/README.md) for both forms and their Spring wiring.
+
+---
+
 ## Choosing an entry point
 
 The tour used three entry points, and the table below is the whole map. Two questions decide which one you want. First,

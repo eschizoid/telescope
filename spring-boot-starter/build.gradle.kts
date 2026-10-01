@@ -37,6 +37,17 @@ tasks.withType<Test>().configureEach {
 }
 
 tasks.jacocoTestReport {
+    // TelescopeMapperProcessor lives in :codegen but only runs under this module's in-process compiler
+    // tests, where the Spring annotations exist. The :codegen report excludes it; report it here so the
+    // lines these tests execute are attributed to it instead of reading as untested.
+    val codegen = project(":codegen")
+    dependsOn(":codegen:classes")
+    classDirectories.from(
+        codegen.layout.buildDirectory.dir("classes/java/main").map { dir ->
+            fileTree(dir) { include("**/TelescopeMapperProcessor*.class") }
+        },
+    )
+    sourceDirectories.from(codegen.file("src/main/java"))
     reports {
         csv.required.set(true)
         xml.required.set(true)
@@ -62,6 +73,8 @@ dependencies {
     testRuntimeOnly(libs.junitPlatformLauncher)
     testImplementation("org.springframework.boot:spring-boot-starter-test:$springBootVersion")
     testImplementation("org.assertj:assertj-core:3.27.7")
+    testImplementation(testFixtures(project(":codegen")))
+    testAnnotationProcessor(project(":codegen"))
 }
 
 publishing {

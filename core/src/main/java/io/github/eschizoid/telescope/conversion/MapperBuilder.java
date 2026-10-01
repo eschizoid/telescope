@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.mapping.MapStep;
+import io.github.eschizoid.telescope.mapping.Mapping;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -126,6 +127,32 @@ public final class MapperBuilder<A, B> {
   public MapperBuilder<A, B> add(final MapStep... rows) {
     addAllChecked(rows);
     return this;
+  }
+
+  /** Begin a typed source-to-target field correspondence. */
+  public <X> FieldSelection<X> from(final Telescope.Accessor<A, X> source) {
+    return new FieldSelection<>(source);
+  }
+
+  /** Completes a typed field correspondence started with {@link #from(Telescope.Accessor)}. */
+  public final class FieldSelection<X> {
+
+    private final Telescope.Accessor<A, X> source;
+
+    private FieldSelection(final Telescope.Accessor<A, X> source) {
+      this.source = Objects.requireNonNull(source, "source");
+    }
+
+    /**
+     * Pair the selected source accessor with {@code target} and append the row. Both sides share
+     * the value type {@code X}, so a mismatched pair does not compile.
+     *
+     * @param target the target accessor receiving the source value
+     * @return the owning builder, for chaining further rows
+     */
+    public MapperBuilder<A, B> to(final Telescope.Accessor<B, X> target) {
+      return add(Mapping.to(source, Objects.requireNonNull(target, "target")));
+    }
   }
 
   /**

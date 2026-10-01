@@ -17,6 +17,7 @@ java {
 
 dependencies {
     implementation(project(":core"))
+    jmhImplementation(project(":spring-boot-starter"))
     jmhAnnotationProcessor(project(":codegen"))
     jmhAnnotationProcessor("org.mapstruct:mapstruct-processor:1.6.3")
     jmhImplementation("org.mapstruct:mapstruct:1.6.3")
