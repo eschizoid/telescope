@@ -916,9 +916,8 @@ public final class Beans {
     // `"URL"` mismatched against a ctor parameter named `"url"` would silently pass null into the
     // constructor under the lookup `valueByName("url")`.
     if (sole != null && allParameterNamesMatchProperties(sole, props)) return constructorWriter(cls, props.length);
-    // A class that declares a constructor taking arguments has a constructor write path; it gets
-    // the
-    // constructor advice below, which names -parameters and the CONSTRUCTOR hint.
+    // A class that declares a constructor taking arguments has a constructor write path, so it gets
+    // the constructor advice below, which names -parameters and the CONSTRUCTOR hint.
     if (hasNoArgConstructor(cls) && !declaresConstructorWithParameters(cls)) {
       throw new IllegalStateException(onlyPrivateFieldsMessage(cls));
     }
