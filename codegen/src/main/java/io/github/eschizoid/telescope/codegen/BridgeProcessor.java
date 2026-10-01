@@ -1886,6 +1886,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       pkg
     );
     if (fieldPlans == null) return;
+    final var nested = new LinkedHashMap<>(nestedElements);
 
     // readForward is called with TARGET field names (we walk targetFields). Injected targets
     // (constants, computes) take priority — they're forward-only literal/Supplier expressions with
@@ -2121,6 +2122,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
         );
         emitContainerHelpers(out, fieldPlans, nonDroppedSourceFields, targetFields, renames);
+        emitNestedElements(out, nested);
       }
     );
   }
@@ -2889,6 +2891,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final boolean lenient,
     final String parentPkg
   ) {
+    nestedElements.clear();
     final var plans = new LinkedHashMap<String, FieldPlan>();
     for (final var sf : sourceFields) {
       // Per-field transform supersedes the type-match logic — the transform IS the contract.
@@ -3210,6 +3213,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // sentinel "IDENTITY" sub-bridge name; the emit code recognises it and skips the sub-call.
       return FieldPlan.ofKind(kind, IDENTITY_ELEMENT_SENTINEL);
     }
+    final var innerSrc = containerShapeOf(srcElement, tgtElement);
+    final var innerTgt = containerShapeOf(tgtElement, srcElement);
+    if (
+      innerSrc != null &&
+      innerTgt != null &&
+      innerSrc.kind() == innerTgt.kind() &&
+      innerSrc.kind() != FieldPlan.Kind.OPTIONAL
+    ) {
+      return planNestedElement(
+        parentSource,
+        parentTarget,
+        fieldName,
+        srcElement,
+        tgtElement,
+        innerSrc,
+        innerTgt,
+        kind,
+        pending,
+        seen,
+        userDeclared,
+        lenient,
+        parentPkg
+      );
+    }
     if (
       srcElement instanceof DeclaredType sd &&
       tgtElement instanceof DeclaredType td &&
@@ -3248,6 +3275,120 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         " introspect."
     );
     return null;
+  }
+
+  /**
+   * An element that is itself a container, converted by a generated nested class whose {@code
+   * forward} and {@code backward} each rebuild one inner container. The outer helper calls it the
+   * way it calls a sub-bridge, so containers nest to any depth without a helper of their own kind.
+   */
+  private record NestedElement(TypeMirror src, TypeMirror tgt, FieldPlan plan) {}
+
+  /** The nested element classes the pair being planned needs, by class name. */
+  private final Map<String, NestedElement> nestedElements = new LinkedHashMap<>();
+
+  private FieldPlan planNestedElement(
+    final TypeElement parentSource,
+    final TypeElement parentTarget,
+    final String fieldName,
+    final TypeMirror srcElement,
+    final TypeMirror tgtElement,
+    final ContainerShape innerSrc,
+    final ContainerShape innerTgt,
+    final FieldPlan.Kind kind,
+    final Deque<TypePair> pending,
+    final Set<TypePair> seen,
+    final Set<TypePair> userDeclared,
+    final boolean lenient,
+    final String parentPkg
+  ) {
+    if (innerSrc.kind() == FieldPlan.Kind.MAP_VALUES && !isSameType(innerSrc.keyType(), innerTgt.keyType())) {
+      error(
+        parentSource,
+        "@Bridge " +
+          parentSource.getSimpleName() +
+          " -> " +
+          parentTarget.getSimpleName() +
+          ": container field '" +
+          fieldName +
+          "' has nested Map key types that differ — " +
+          innerSrc.keyType() +
+          " vs " +
+          innerTgt.keyType() +
+          ". Map key types must match exactly; codegen preserves source keys."
+      );
+      return null;
+    }
+    final var inner = planElementSubBridge(
+      parentSource,
+      parentTarget,
+      fieldName,
+      innerSrc.elementType(),
+      innerTgt.elementType(),
+      innerSrc.kind(),
+      pending,
+      seen,
+      userDeclared,
+      lenient,
+      parentPkg
+    );
+    if (inner == null) return null;
+    // The nested class always fills its output through a helper, so each side is asked only
+    // whether it can be allocated and assigned, never whether it has a copy constructor.
+    final var unassignable = firstUnassignableContainer(srcElement, tgtElement, inner.kind());
+    if (unassignable != null) {
+      error(parentSource, unassignableContainerMessage(parentSource, parentTarget, fieldName, unassignable));
+      return null;
+    }
+    final var badAlloc = firstNonAllocatableContainer(srcElement, tgtElement, inner.kind());
+    if (badAlloc != null) {
+      error(parentSource, unallocatableContainerMessage(parentSource, parentTarget, fieldName, badAlloc));
+      return null;
+    }
+    final var name = "__Nested" + nestedElements.size();
+    nestedElements.put(
+      name,
+      new NestedElement(
+        srcElement,
+        tgtElement,
+        inner.withContainerImpls(concreteImplFqn(tgtElement, inner.kind()), concreteImplFqn(srcElement, inner.kind()))
+      )
+    );
+    return FieldPlan.ofKind(kind, name);
+  }
+
+  /**
+   * Writes each nested element class: its {@code forward} rebuilds one inner source container as
+   * the target's, and {@code backward} the reverse, through the same helpers a field uses.
+   */
+  private void emitNestedElements(final PrintWriter out, final Map<String, NestedElement> nested) {
+    for (final var entry : nested.entrySet()) {
+      final var element = entry.getValue();
+      final var plan = element.plan();
+      out.println();
+      out.println("  private static final class " + entry.getKey() + " {");
+      if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) {
+        emitRawContainerHelper(out, "forward", element.src(), element.tgt(), plan, "forward");
+        emitRawContainerHelper(out, "backward", element.tgt(), element.src(), plan, "backward");
+      } else {
+        switch (plan.kind()) {
+          case LIST -> {
+            emitListHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), "forward");
+            emitListHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), "backward");
+          }
+          case SET -> {
+            emitSetHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), "forward");
+            emitSetHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), "backward");
+          }
+          case MAP_VALUES -> {
+            emitMapHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), "forward");
+            emitMapHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), "backward");
+          }
+          default -> throw new IllegalStateException("a nested element of kind " + plan.kind());
+        }
+      }
+      out.println("  }");
+    }
   }
 
   /** Sentinel sub-bridge name meaning "the element passes through unchanged". */
