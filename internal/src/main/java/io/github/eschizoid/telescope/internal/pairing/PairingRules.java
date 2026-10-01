@@ -69,12 +69,16 @@ public final class PairingRules<T> {
       if (primitiveWrapperPair(srcType, tgtType)) return new PairDecision.PrimitiveWrapper<>();
 
       // (a.2) Same-kind Collection / Map pair written without type arguments on both sides:
-      // element copy, which converts nothing. It is right only where there is nothing to convert.
-      // The two sides fix the same element types, and the same key type for a map, or at least one
-      // side is a generic class used raw and so names no element type at all. Two classes that
-      // declare no type parameters of their own and fix different element types, such as `Leaves
-      // extends ArrayList<Leaf>` against `LeafDtos extends ArrayList<LeafDto>`, skip both this and
-      // (b) for the container lift in (c), which converts each element.
+      // element copy, which converts nothing. It is right only where the elements can be shown to
+      // need no conversion. Both sides fix the same element types, and the same key type for a
+      // map; or both are generic classes used raw, which name no element type for either side to
+      // differ by; or one is used raw and the other fixes every argument to Object, which holds
+      // any element. Two classes that declare no type parameters of their own and fix different
+      // element types, such as `Leaves extends ArrayList<Leaf>` against `LeafDtos extends
+      // ArrayList<LeafDto>`, skip both this and (b) for the container lift in (c), which converts
+      // each element. A side used raw against a side fixing anything narrower than Object is
+      // refused: its elements are of no type anything has said, so neither a copy nor a
+      // conversion can be planned for them.
       //
       // The copy is gated on kind-discriminator agreement AND allocability so a provably infeasible
       // copy falls through to the remaining branches exactly like the runtime. UNKNOWN allocability
@@ -83,10 +87,22 @@ public final class PairingRules<T> {
       // construction backstop, never invent one.
       final var collection = sameKindCollection(srcType, tgtType);
       final var map = sameKindMap(srcType, tgtType);
-      final var lift =
-        (collection && elementTypesDiffer(srcType, tgtType, WellKnown.COLLECTION)) ||
-        (map && elementTypesDiffer(srcType, tgtType, WellKnown.MAP));
-      if (!lift) {
+      final var elements = collection
+        ? elementsMatch(srcType, tgtType, WellKnown.COLLECTION)
+        : map
+          ? elementsMatch(srcType, tgtType, WellKnown.MAP)
+          : ElementMatch.SAME;
+      if (elements == ElementMatch.UNPROVABLE) {
+        final var srcRaw = !namesTypes(props.typeArgumentsAs(srcType, map ? WellKnown.MAP : WellKnown.COLLECTION));
+        return new PairDecision.Incompatible<>(
+          PairingMessages.unprovableRawElements(
+            componentName,
+            props.typeName(srcRaw ? srcType : tgtType),
+            props.typeName(srcRaw ? tgtType : srcType)
+          )
+        );
+      }
+      if (elements == ElementMatch.SAME) {
         final var allocable =
           (collection || map) && props.copyAllocability(srcType, tgtType) != PropertySystem.Allocability.NOT_ALLOCABLE;
         if (collection && allocable) return new PairDecision.CollectionCopy<>();
@@ -225,11 +241,9 @@ public final class PairingRules<T> {
    * of its own is viewed through the supertype that fixes them; a generic class used raw has none
    * to name and presents no view. Selection rules: {@code Optional} (final, exact) → OPTIONAL; any
    * {@code List} subtype, and the {@code Deque} and {@code Queue} interfaces by name → LIST; any
-   * {@code Set} subtype → SET; any {@code Map} subtype whose key argument is a plain class handle →
-   * MAP_VALUES (a non-class key — wildcard, type variable, or parameterized type — defeats the
-   * key-equality guarantee, so the type is not treated as a liftable container); the {@code
-   * Collection} interface by name → COLLECTION, which names no shape and is settled against the
-   * other side of the pair by {@link #settledAgainst}.
+   * {@code Set} subtype → SET; any {@code Map} subtype whose key type is one {@link #decidableKey}
+   * accepts → MAP_VALUES; the {@code Collection} interface by name → COLLECTION, which names no
+   * shape and is settled against the other side of the pair by {@link #settledAgainst}.
    */
   public ContainerView<T> containerViewOf(final T t) {
     // A container subtype is viewed through its container supertype rather than through its own
@@ -265,7 +279,7 @@ public final class PairingRules<T> {
       // presents no view.
       if (declaresNoArguments && args.stream().anyMatch(props::mentionsTypeVariable)) return null;
       if (kind == WellKnown.MAP) {
-        if (args.size() != 2 || !props.isClassType(args.getFirst())) return null;
+        if (args.size() != 2 || !decidableKey(args.getFirst())) return null;
         return new ContainerView<>(ContainerView.Kind.MAP_VALUES, args.get(1), args.getFirst(), raw);
       }
       if (args.size() != 1) return null;
@@ -347,20 +361,41 @@ public final class PairingRules<T> {
     return props.isSubtypeOf(a, WellKnown.SORTED_MAP) == props.isSubtypeOf(b, WellKnown.SORTED_MAP);
   }
 
+  /** What two same-kind containers' element types, and key types for a map, say about a copy. */
+  private enum ElementMatch {
+    /**
+     * Carrying the elements across unchanged keeps every one of them of a type the target holds.
+     */
+    SAME,
+    /** Both sides name their types and they differ, so each element needs converting. */
+    DIFFERENT,
+    /** One side names no types, and the other names types its elements cannot be shown to be. */
+    UNPROVABLE,
+  }
+
   /**
-   * Whether two containers of one kind both name their arguments as that kind, element and key
-   * alike, and name different ones, so that carrying an element across unchanged would put a value
-   * of one type in a container of another. A side whose arguments do not resolve to types, which is
-   * what a generic class used raw presents, names nothing to differ from, and answers false.
+   * How the arguments of two containers of one kind, element and key alike, relate. A side whose
+   * arguments do not resolve to types, which is what a generic class used raw presents, says
+   * nothing about its elements: against another such side there is nothing to differ by, against a
+   * side that fixes every argument to {@code Object} any element fits, and against a side fixing
+   * anything narrower nothing shows the elements fit.
    */
-  private boolean elementTypesDiffer(final T a, final T b, final WellKnown kind) {
+  private ElementMatch elementsMatch(final T a, final T b, final WellKnown kind) {
     final var aArgs = props.typeArgumentsAs(a, kind);
     final var bArgs = props.typeArgumentsAs(b, kind);
-    if (!namesTypes(aArgs) || !namesTypes(bArgs) || aArgs.size() != bArgs.size()) return false;
-    for (int i = 0; i < aArgs.size(); i++) {
-      if (!props.sameType(aArgs.get(i), bArgs.get(i))) return true;
+    final var aNames = namesTypes(aArgs);
+    final var bNames = namesTypes(bArgs);
+    if (!aNames && !bNames) return ElementMatch.SAME;
+    if (aNames != bNames) {
+      final var fixed = aNames ? aArgs : bArgs;
+      final var anything = fixed.stream().allMatch(t -> Object.class.getName().equals(props.typeName(t)));
+      return anything ? ElementMatch.SAME : ElementMatch.UNPROVABLE;
     }
-    return false;
+    if (aArgs.size() != bArgs.size()) return ElementMatch.DIFFERENT;
+    for (int i = 0; i < aArgs.size(); i++) {
+      if (!props.sameType(aArgs.get(i), bArgs.get(i))) return ElementMatch.DIFFERENT;
+    }
+    return ElementMatch.SAME;
   }
 
   /**
@@ -368,6 +403,18 @@ public final class PairingRules<T> {
    */
   private boolean namesTypes(final List<T> arguments) {
     return !arguments.isEmpty() && arguments.stream().noneMatch(props::mentionsTypeVariable);
+  }
+
+  /**
+   * Whether a map's key type can be lifted, which needs it to name one type that two sides can be
+   * compared on: a lift carries the source's keys into the target unchanged, so the pair is sound
+   * only when the two key types are the same type. A plain class qualifies, and so does a
+   * parameterized type such as {@code List<String>}. A wildcard key admits keys of types nothing
+   * names, and a key holding a type variable stands for whatever that variable is bound to, so
+   * neither can be shown to be the same type as anything.
+   */
+  private boolean decidableKey(final T key) {
+    return !props.isWildcard(key) && !props.mentionsTypeVariable(key);
   }
 
   /**

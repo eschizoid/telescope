@@ -1,8 +1,12 @@
 package io.github.eschizoid.telescope.containerparity;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
 import org.junit.jupiter.api.DisplayName;
@@ -44,25 +48,80 @@ class FixedArgSubtypeParityTest {
   @SuppressWarnings("rawtypes")
   public record RawSrc(RawArgList items) {}
 
-  /**
-   * A class that fixes its elements, so the pair is two different types written without arguments.
-   */
+  /** A class that fixes its elements to String, which nothing says the raw side's elements are. */
   public record FixedTgt(FixedArgNames items) {}
 
+  /** Another generic class used raw, so neither side names an element type. */
+  @SuppressWarnings("rawtypes")
+  public record RawTgt(ArrayList items) {}
+
   @Test
-  @DisplayName("a generic class used raw is copied into a fixed subtype without an element conversion")
+  @DisplayName("a generic class used raw is refused against a subtype fixing its element type")
+  void aRawUseIsNotCopiedIntoAFixedElementType() {
+    // The raw side's elements are of no type anything has said, so copying them unconverted could
+    // fill the target with elements of a type it does not hold, and no conversion can be planned
+    // from a type nobody named. The pairing is refused while the mapper is built.
+    final var refusal = assertThrows(IllegalStateException.class, () -> Telescope.mapper(RawSrc.class, FixedTgt.class));
+    assertTrue(refusal.getMessage().contains("a generic container used raw"), refusal::getMessage);
+    assertTrue(refusal.getMessage().contains("Mapping.to(src, tgt, fwd, bwd)"), refusal::getMessage);
+  }
+
+  /** The fixed side as the source, so the raw use is the target. */
+  public record FixedSrc(FixedArgNames items) {}
+
+  @Test
+  @DisplayName("a generic class used raw is refused as the target of a subtype fixing its element type")
+  void aFixedElementTypeIsNotCopiedIntoARawUse() {
+    // The rule is about the pair, not the direction: the backward half of the same mapper copies
+    // the other way, so a raw target is refused for the same reason a raw source is.
+    final var refusal = assertThrows(IllegalStateException.class, () -> Telescope.mapper(FixedSrc.class, RawSrc.class));
+    assertTrue(refusal.getMessage().contains("a generic container used raw"), refusal::getMessage);
+  }
+
+  @Test
+  @DisplayName("the row the refusal advises converts the raw side")
   @SuppressWarnings({ "rawtypes", "unchecked" })
-  void aRawUseIsNotReadAsAConcreteContainer() {
-    // One side names no element type, so there is no element pair to convert between, and the
-    // pairing copies the elements as they are into the target's own class. Reading the raw side's
-    // unbound parameter as an element type would instead make the pair look like two containers of
-    // different elements, which it refuses. The raw shape is the subject here, so the warnings it
-    // raises are the fixture rather than a defect.
+  void theAdvisedRowConverts() {
+    // The refusal names a four-argument to(...) row, which converts the whole container in each
+    // direction. The raw shape is the subject here, so the warnings it raises are the fixture.
+    final var mapper = Telescope.mapper(
+      RawSrc.class,
+      FixedTgt.class,
+      to(
+        RawSrc::items,
+        FixedTgt::items,
+        raw -> {
+          final var names = new FixedArgNames();
+          for (final var item : raw) names.add(String.valueOf(item));
+          return names;
+        },
+        names -> {
+          final RawArgList raw = new RawArgList();
+          raw.addAll(names);
+          return raw;
+        }
+      )
+    );
+    final RawArgList items = new RawArgList();
+    items.add(7);
+
+    final var out = mapper.forward(new RawSrc(items));
+
+    assertEquals(FixedArgNames.class, out.items().getClass(), "the target's own class is built");
+    assertEquals(List.of("7"), List.copyOf(out.items()), "each element is converted by the row");
+  }
+
+  @Test
+  @DisplayName("two generic classes used raw copy their elements across unconverted")
+  @SuppressWarnings({ "rawtypes", "unchecked" })
+  void twoRawUsesCopy() {
+    // Neither side names an element type, so the elements have nothing to differ by. The raw shape
+    // is the subject here, so the warnings it raises are the fixture rather than a defect.
     final RawArgList items = new RawArgList();
     items.add("kept");
-    final var out = Telescope.mapper(RawSrc.class, FixedTgt.class).forward(new RawSrc(items));
+    final var out = Telescope.mapper(RawSrc.class, RawTgt.class).forward(new RawSrc(items));
 
-    assertEquals(FixedArgNames.class, out.items().getClass(), "the target's own class is allocated");
+    assertEquals(ArrayList.class, out.items().getClass(), "the target's own class is allocated");
     assertEquals(List.of("kept"), List.copyOf(out.items()), "the value carries across unconverted");
   }
 }

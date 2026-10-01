@@ -121,6 +121,24 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A generic container used raw, paired with a container that fixes element types other than
+   * {@code Object}: nothing says the raw side's elements are of those types.
+   */
+  public static String unprovableRawElements(final String componentName, final String rawType, final String fixedType) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' pairs " +
+      rawType +
+      ", a generic container used raw, with " +
+      fixedType +
+      ", which fixes its element types. Nothing says the raw side's elements are of those types, so they " +
+      "cannot be copied across unconverted. Declare the raw side's type arguments, or convert the component " +
+      "with an explicit Mapping.to(src, tgt, fwd, bwd) row."
+    );
+  }
+
   /** A sorted set target whose converted element class does not implement {@code Comparable}. */
   public static String unorderableSortedElement(
     final String componentName,
