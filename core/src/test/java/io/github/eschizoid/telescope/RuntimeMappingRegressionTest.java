@@ -228,13 +228,34 @@ class RuntimeMappingRegressionTest {
 
   @Test
   void changedSortedSetElementsRequireAnExplicitComparator() {
+    // Neither element is Comparable, so no converted set can be ordered, and the mapper is refused
+    // when it is built rather than on the first conversion.
+    final var failure = assertThrows(IllegalStateException.class, () ->
+      Telescope.mapper(SortedValues.class, SortedValuesDto.class)
+    );
+    assertTrue(failure.getMessage().contains("Mapping.via"));
+  }
+
+  record OrderedValueDto(int n) implements Comparable<OrderedValueDto> {
+    @Override
+    public int compareTo(final OrderedValueDto other) {
+      return Integer.compare(n, other.n());
+    }
+  }
+
+  record OrderedValuesDto(TreeSet<OrderedValueDto> values) {}
+
+  @Test
+  void changedSortedSetElementsRefuseACarriedComparatorBothWays() {
     final var values = new TreeSet<Value>(Comparator.comparingInt(Value::n));
     values.add(new Value(1));
-    final var mapper = Telescope.mapper(SortedValues.class, SortedValuesDto.class);
-    final var failure = assertThrows(IllegalStateException.class, () -> mapper.forward(new SortedValues(values)));
-    assertTrue(failure.getMessage().contains("Mapping.via"));
-    final var dto = new TreeSet<ValueDto>(Comparator.comparingInt(ValueDto::n));
-    assertThrows(IllegalStateException.class, () -> mapper.backward(new SortedValuesDto(dto)));
+    final var mapper = Telescope.mapper(SortedValues.class, OrderedValuesDto.class);
+    final var forward = assertThrows(IllegalStateException.class, () -> mapper.forward(new SortedValues(values)));
+    assertTrue(forward.getMessage().contains("cannot be reused with changed element types"), forward::getMessage);
+    final var dto = new TreeSet<OrderedValueDto>(Comparator.comparingInt(OrderedValueDto::n).reversed());
+    dto.add(new OrderedValueDto(1));
+    final var backward = assertThrows(IllegalStateException.class, () -> mapper.backward(new OrderedValuesDto(dto)));
+    assertTrue(backward.getMessage().contains("cannot be reused with changed element types"), backward::getMessage);
   }
 
   @Test

@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -2717,6 +2718,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
   }
 
+  /**
+   * Reports a sorted set target whose converted elements nothing can order, as the shared rule
+   * decides it, and answers whether it did. Asked once the element pair has planned, so a pairing
+   * refused for another reason keeps that reason.
+   */
+  private boolean refusesUnorderable(
+    final TypeElement source,
+    final TypeElement target,
+    final Field sf,
+    final Field tf,
+    final ContainerShape srcShape,
+    final ContainerShape tgtShape
+  ) {
+    if (srcShape.kind() != FieldPlan.Kind.SET) return false;
+    if (!rules.unorderableSortedTarget(srcShape.elementType(), tgtShape.elementType(), tf.type())) return false;
+    error(
+      source,
+      "@Bridge " +
+        source.getSimpleName() +
+        " -> " +
+        target.getSimpleName() +
+        ": " +
+        PairingMessages.unorderableSortedElement(sf.name(), tf.type().toString(), tgtShape.elementType().toString())
+    );
+    return true;
+  }
+
   private static boolean isContainerKind(final FieldPlan.Kind kind) {
     return kind == FieldPlan.Kind.LIST || kind == FieldPlan.Kind.SET || kind == FieldPlan.Kind.MAP_VALUES;
   }
@@ -2941,6 +2969,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           parentPkg
         );
         if (subPlan == null) return null;
+        if (refusesUnorderable(source, target, sf, tf, srcShape, tgtShape)) return null;
         // Only one of the container routes copy-constructs. The inline copy hands the source
         // container to the output's constructor and is reachable solely when the element type is
         // identity; every other route — the self-contained helper for identity elements, the
@@ -3050,6 +3079,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           parentPkg
         );
         if (subPlan == null) return null;
+        if (refusesUnorderable(source, target, sf, tf, srcRaw, tgtRaw)) return null;
         plans.put(sf.name(), FieldPlan.rawContainer(subPlan.kind(), subPlan.subBridgeName()));
         continue;
       }

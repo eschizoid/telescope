@@ -32,6 +32,7 @@ public interface PropertySystem<T> {
     UUID,
     BOOLEAN_WRAPPER,
     CHARACTER_WRAPPER,
+    COMPARABLE,
   }
 
   /** Whether both sides of a same-kind subtype copy can actually be allocated. */

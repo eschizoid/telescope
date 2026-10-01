@@ -120,12 +120,43 @@ public final class PairingRules<T> {
           )
         );
       }
+      if (
+        tgt.kind() == ContainerView.Kind.SET &&
+        !(decidePair(src.elementType(), tgt.elementType(), componentName) instanceof PairDecision.Incompatible) &&
+        unorderableSortedTarget(src.elementType(), tgt.elementType(), tgtType)
+      ) {
+        return new PairDecision.Incompatible<>(
+          PairingMessages.unorderableSortedElement(
+            componentName,
+            props.typeName(tgtType),
+            props.typeName(tgt.elementType())
+          )
+        );
+      }
       return new PairDecision.LiftContainer<>(src, tgt);
     }
 
     return new PairDecision.Incompatible<>(
       PairingMessages.incompatibleShapes(componentName, props.typeName(srcType), props.typeName(tgtType))
     );
+  }
+
+  /**
+   * Whether a sorted set target's elements, converted from the source's, are of a class nothing can
+   * order. A comparator the source carries orders the type being converted away from and cannot
+   * come across, so the rebuild orders by the element's own {@code compareTo}, and an element class
+   * that does not implement {@code Comparable} fails on the first insert of every conversion. An
+   * interface or wildcard element is let through, since the values a conversion produces for it may
+   * be comparable. Asked only once the element pair is known to convert, so a pairing refused for
+   * another reason keeps that reason.
+   */
+  public boolean unorderableSortedTarget(final T srcElement, final T tgtElement, final T tgtType) {
+    if (!props.isSubtypeOf(props.rawType(tgtType), WellKnown.SORTED_SET)) return false;
+    if (props.sameType(srcElement, tgtElement)) return false;
+    if (props.isWildcard(tgtElement)) return false;
+    final var element = props.rawType(tgtElement);
+    if (props.isInterfaceType(element)) return false;
+    return !props.isSubtypeOf(element, WellKnown.COMPARABLE);
   }
 
   private static final Set<WellKnown> GENERAL = Set.of(WellKnown.DEQUE, WellKnown.QUEUE, WellKnown.COLLECTION);
