@@ -4087,12 +4087,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private String helperOutDeclaration(
     final TypeMirror tgtContainer,
     final FieldPlan.Kind kind,
-    final boolean elementsPreserved,
-    final String typeArgs
+    final boolean elementsPreserved
   ) {
     final var viaBuilder = builderAllocExpr(tgtContainer, kind);
     if (viaBuilder != null) return outDeclaration(viaBuilder, true);
     final var implFqn = concreteImplFqn(tgtContainer, kind);
+    final var typeArgs = allocTypeArguments(tgtContainer, kind)
+      .stream()
+      .map(String::valueOf)
+      .collect(Collectors.joining(", "));
     return outDeclaration(
       sizedAlloc(implFqn, typeArgs, orderingArg(kind, tgtContainer, implFqn, elementsPreserved)),
       false
@@ -4151,26 +4154,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ? "new " + implFqn + "()"
         : ordering + " == null ? new " + implFqn + "() : new " + implFqn + "(" + ordering + ")";
     }
-    final var args = allocTypeArguments(container, kind);
-    if (kind == FieldPlan.Kind.MAP_VALUES) {
-      return sizedAlloc(
-        implFqn,
-        args.get(0) + ", " + args.get(1),
-        orderingArg(kind, container, implFqn, elementsPreserved)
-      );
-    }
-    return sizedAlloc(implFqn, args.getFirst().toString(), orderingArg(kind, container, implFqn, elementsPreserved));
+    final var args = allocTypeArguments(container, kind)
+      .stream()
+      .map(String::valueOf)
+      .collect(Collectors.joining(", "));
+    return sizedAlloc(implFqn, args, orderingArg(kind, container, implFqn, elementsPreserved));
   }
 
   /**
-   * The type arguments to write into an allocation's diamond, key first where there is one.
+   * The type arguments to write into an allocation, key first where there is one.
    *
-   * <p>The shared spec answers for every container that reaches here, so there is no second way to
-   * ask and no absent answer to handle. A container the spec declines carries no type arguments of
-   * its own, which makes the implementation to allocate the declared class itself; that class is
-   * not generic, so the caller writes no diamond and returns before this runs.
+   * <p>They are the arguments of the class being allocated. Where that class is the declared type
+   * itself, they are the declared type's own, which for a subtype need not be its container view's:
+   * {@code class Tagged<Tag, E> extends ArrayList<E>} takes two. Where it is a default
+   * implementation standing in for an interface, they come from the container view, which the
+   * shared spec answers for every container that reaches here.
    */
   private List<TypeMirror> allocTypeArguments(final TypeMirror container, final FieldPlan.Kind kind) {
+    if (
+      container instanceof DeclaredType declared &&
+      ((TypeElement) declared.asElement()).getQualifiedName().contentEquals(concreteImplFqn(container, kind))
+    ) {
+      return declared.getTypeArguments().stream().map(this::instantiable).toList();
+    }
     final var view = rules.containerViewOf(container);
     return kind == FieldPlan.Kind.MAP_VALUES
       ? List.of(instantiable(view.keyType()), instantiable(view.elementType()))
@@ -4197,8 +4203,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * <p>The declared type and the container it is viewed as are two different things for a subtype:
    * {@code class Tagged<Tag, E> extends ArrayList<E>} is declared with two arguments and holds
    * elements of its second. Each element is converted through the view, which is where its type is
-   * found; every type written into the generated source is the declared one, which is the only form
-   * that names the type the field has.
+   * found, and the signature names the declared type, which is the type the field has.
    */
   private static String helperSignature(final String name, final TypeMirror src, final TypeMirror tgt) {
     return "  private static " + declaredContainer(tgt) + " " + name + "(final " + declaredContainer(src) + " src) {";
@@ -4229,7 +4234,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println();
     out.println(helperSignature(name, srcContainer, tgtContainer));
     out.println("    if (src == null) return null;");
-    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false, ownArguments(tgtContainer)));
+    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -4253,7 +4258,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       tgtContainer,
       concreteImplFqn(tgtContainer, FieldPlan.Kind.SET)
     );
-    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false, ownArguments(tgtContainer)));
+    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -4277,7 +4282,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       tgtContainer,
       concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES)
     );
-    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true, ownArguments(tgtContainer)));
+    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true));
     out.println(
       "    for (final var e : src.entrySet()) out.put(e.getKey(), " + subBridge + "." + direction + "(e.getValue()));"
     );

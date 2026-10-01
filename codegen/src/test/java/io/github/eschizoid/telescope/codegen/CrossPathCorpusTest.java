@@ -404,7 +404,10 @@ class CrossPathCorpusTest {
    * declaration, the field type that names it, the target field, how its input is filled, and what
    * both paths owe — the rendering and the class of the rebuilt container, or a refusal.
    *
-   * <p>{@code %s} is the cell's prefix everywhere it appears.
+   * <p>{@code %s} is the cell's prefix everywhere it appears. A refusal is owed as {@code refused:}
+   * followed by a fragment of the processor's own diagnostic, so a javac error inside a generated
+   * file cannot pass for one. The scalar rows copy their elements unchanged, which takes the
+   * self-contained helper rather than the element-bridging ones.
    */
   private record SubtypeView(
     String name,
@@ -451,6 +454,30 @@ class CrossPathCorpusTest {
       "put",
       "%sTgt[items={k=%sLeafDto[v=x]}] in java.util.LinkedHashMap"
     ),
+    new SubtypeView(
+      "scalar into an extra parameter",
+      "public class %sTagged<Tag, E> extends java.util.ArrayList<E> {}",
+      "java.util.List<String>",
+      "%sTagged<Integer, String>",
+      "addString",
+      "%sTgt[items=[s]] in %sTagged"
+    ),
+    new SubtypeView(
+      "scalar, extra parameter on both sides",
+      "public class %sTagged<Tag, E> extends java.util.ArrayList<E> {}",
+      "%sTagged<String, String>",
+      "%sTagged<Integer, String>",
+      "addString",
+      "%sTgt[items=[s]] in %sTagged"
+    ),
+    new SubtypeView(
+      "scalar, fixed map key",
+      "public class %sStringMap<V> extends java.util.HashMap<String, V> {}",
+      "java.util.Map<String, String>",
+      "%sStringMap<String>",
+      "putString",
+      "%sTgt[items={k=s}] in %sStringMap"
+    ),
     // Holds Strings whatever its argument says, so its elements and the target's cannot pair.
     new SubtypeView(
       "argument unrelated to the elements",
@@ -458,7 +485,7 @@ class CrossPathCorpusTest {
       "%sWrap<%sLeaf>",
       "java.util.List<%sLeafDto>",
       "addString",
-      "refused"
+      "refused: element types are incompatible"
     )
   );
 
@@ -466,10 +493,8 @@ class CrossPathCorpusTest {
   @DisplayName("a subtype whose own arguments differ from its container view converts the same way on both paths")
   void aSubtypeViewConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
     // The view is where an element's type is found, and the declared type is what the generated
-    // source has to write: a field of a subtype is a value of that subtype, not of the container it
-    // is viewed as. Taking either for the other is what refused these shapes, or emitted a type
-    // that
-    // does not exist for them.
+    // source has to write: a field of a subtype is a value of that subtype, not of the container
+    // it is viewed as.
     final var failures = new ArrayList<String>();
     var index = 0;
     for (final var shape : SUBTYPE_VIEWS) {
@@ -512,6 +537,7 @@ class CrossPathCorpusTest {
       switch (shape.put()) {
         case "put" -> Map.class.getMethod("put", Object.class, Object.class).invoke(container, "k", leaf);
         case "add" -> Collection.class.getMethod("add", Object.class).invoke(container, leaf);
+        case "putString" -> Map.class.getMethod("put", Object.class, Object.class).invoke(container, "k", "s");
         default -> Collection.class.getMethod("add", Object.class).invoke(container, "s");
       }
       final var source = src.getConstructors()[0].newInstance(container);
@@ -528,12 +554,16 @@ class CrossPathCorpusTest {
         .owed()
         .replace("%s", prefix)
         .replace(prefix + "Tagged", PACKAGE + "." + prefix + "Tagged")
-        .replace(prefix + "Reordered", PACKAGE + "." + prefix + "Reordered");
+        .replace(prefix + "Reordered", PACKAGE + "." + prefix + "Reordered")
+        .replace(prefix + "StringMap", PACKAGE + "." + prefix + "StringMap");
+      final var owesRefusal = owed.startsWith("refused: ");
       for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
-        final var got = side.getValue().refusal() != null ? "refused" : side.getValue().toString();
-        if (!owed.equals(got)) failures.add(
-          shape.name() + ": " + side.getKey() + " gave " + side.getValue() + ", owed " + owed
-        );
+        final var outcome = side.getValue();
+        final var met = owesRefusal
+          ? outcome.refusal() != null &&
+            (side.getKey().equals("reflective") || outcome.refusal().contains(owed.substring("refused: ".length())))
+          : outcome.refusal() == null && owed.equals(outcome.toString());
+        if (!met) failures.add(shape.name() + ": " + side.getKey() + " gave " + outcome + ", owed " + owed);
       }
     }
     assertTrue(
