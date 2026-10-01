@@ -17,10 +17,10 @@ import java.util.function.Function;
  * Accessor)} rows on the typed surface.
  *
  * <p>Sealed. {@link Extract} fills its component from the map where the key carries a value and
- * from a type default where it does not. Future expansions (nested extracts, conditional gates)
- * extend the same surface — the pattern {@link MapStep} uses.
+ * from a type default where it does not; {@link Require} refuses instead. Future expansions (nested
+ * extracts, conditional gates) extend the same surface — the pattern {@link MapStep} uses.
  */
-public sealed interface MapExtractStep permits Extract {
+public sealed interface MapExtractStep permits Extract, Require {
   /** The key to look up in the source {@code Map<String, Object>}. */
   String key();
 
@@ -34,8 +34,8 @@ public sealed interface MapExtractStep permits Extract {
   /**
    * Converter — turns the raw {@code Object} read from the map into the target component's typed
    * value. It receives a value or is not called: a key that is absent, or present holding {@code
-   * null}, is answered before any converter is consulted, so a converter never has to say what the
-   * absence of a value means.
+   * null}, is answered by the row's own kind rather than by the converter, so a converter never has
+   * to say what the absence of a value means.
    */
   Function<Object, ?> converter();
 
@@ -93,7 +93,18 @@ public sealed interface MapExtractStep permits Extract {
     final Accessor<T, X> targetAccessor,
     final ForwardMapper<Map<String, Object>, X> nested
   ) {
-    final Function<Object, X> converter = v -> {
+    return extract(key, targetAccessor, nestedConverter(key, nested));
+  }
+
+  /**
+   * The converter a nested row applies: the cast to {@code Map<String, Object>}, guarded so a key
+   * holding another shape names itself, then the nested mapper.
+   */
+  private static <X> Function<Object, X> nestedConverter(
+    final String key,
+    final ForwardMapper<Map<String, Object>, X> nested
+  ) {
+    return v -> {
       // The mapper answers an absent value before it consults a converter, so this branch is
       // reached only by a caller that holds the converter and applies it directly.
       if (v == null) return null;
@@ -108,6 +119,58 @@ public sealed interface MapExtractStep permits Extract {
       final var nestedMap = (Map<String, Object>) map;
       return nested.forward(nestedMap);
     };
-    return extract(key, targetAccessor, converter);
+  }
+
+  /**
+   * Static factory for a {@link Require} row — one whose key has to carry a value.
+   *
+   * <p>An {@link #extract(String, Accessor, Function) extract} row fills its component from a type
+   * default when the key is absent, and a default is indistinguishable from a supplied value once
+   * it is in the target: an id arrives as {@code null}, a count as {@code 0}, a list as empty.
+   * Where that distinction matters, this row makes the source's obligation part of the declaration.
+   * The conversion is refused with an {@link IllegalArgumentException} before any converter runs,
+   * and the message names every required key the map carries no value for, each beside the
+   * component it was to fill. A {@code @FromMap} type says the same with {@code @FromMap(required =
+   * ...)}.
+   *
+   * <pre>{@code
+   * ForwardMapper<Map<String, Object>, Ticket> m = Telescope.fromMap(
+   *     Ticket.class,
+   *     required("customer_id", Ticket::id,   Object::toString),
+   *     extract("note",         Ticket::note, Object::toString));
+   * }</pre>
+   *
+   * <p>A key present holding {@code null} counts as absent. A map read for a value cannot tell the
+   * two apart without a second lookup, and a caller who wrote the key deliberately with no value
+   * has said the same thing as one who left it out: there is nothing here to convert.
+   *
+   * @param key the map key that has to carry a value
+   * @param targetAccessor method reference naming the target field/component
+   * @param converter raw map value → typed target value, called only when a value is there
+   */
+  static <T, X> MapExtractStep required(
+    final String key,
+    final Accessor<T, X> targetAccessor,
+    final Function<Object, X> converter
+  ) {
+    return new Require<>(key, targetAccessor, converter);
+  }
+
+  /**
+   * Static factory for a nested {@link Require} row: the key has to carry a value, and that value
+   * is a nested {@code Map<String, Object>} the {@code nested} mapper turns into the component. The
+   * required sibling of {@link #extract(String, Accessor, ForwardMapper)}, with the same guarded
+   * cast.
+   *
+   * @param key the map key that has to carry the nested map
+   * @param targetAccessor method reference naming the target field/component
+   * @param nested a {@code fromMap} mapper that converts the nested map into the component value
+   */
+  static <T, X> MapExtractStep required(
+    final String key,
+    final Accessor<T, X> targetAccessor,
+    final ForwardMapper<Map<String, Object>, X> nested
+  ) {
+    return required(key, targetAccessor, nestedConverter(key, nested));
   }
 }

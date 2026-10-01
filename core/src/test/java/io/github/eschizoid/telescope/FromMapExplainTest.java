@@ -1,11 +1,16 @@
 package io.github.eschizoid.telescope;
 
 import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
+import static io.github.eschizoid.telescope.mapping.MapExtractStep.required;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.introspection.OpticNode.Extracted;
+import io.github.eschizoid.telescope.introspection.OpticNode.WhenAbsent;
+import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -15,26 +20,38 @@ class FromMapExplainTest {
   record Row(String name, int count) {}
 
   @Test
-  @DisplayName("a row's report names the type the value arrives as, where a type belongs")
-  void aRowReportsItsTargetType() {
-    // The row's fourth component is the target type, and every other producer of one writes a type
-    // there. A word describing the conversion reads as the component's type to anyone who prints
-    // the report.
+  @DisplayName("each row is reported with its key, its field, the field's type and what an absent key does")
+  void aRowReportsItsKeyFieldTypeAndAbsence() {
     final var report = Telescope.fromMap(
       Row.class,
       extract("n", Row::name, Object::toString),
-      extract("c", Row::count, v -> Integer.parseInt(v.toString()))
+      required("c", Row::count, v -> Integer.parseInt(v.toString()))
     ).explain();
 
-    final var byTarget = report.transformations().stream().collect(Collectors.toMap(t -> t.to(), t -> t.toType()));
-
-    assertEquals(Map.of("name", "String", "count", "int"), byTarget);
-    // The source side is a type slot too, and the report prints it inside the parentheses where a
-    // type belongs. An untyped map hands over an Object.
     assertEquals(
-      Map.of("name", "Object", "count", "Object"),
-      report.transformations().stream().collect(Collectors.toMap(t -> t.to(), t -> t.fromType()))
+      List.of(
+        new Extracted("n", "name", "String", WhenAbsent.DEFAULTS),
+        new Extracted("c", "count", "int", WhenAbsent.REFUSES)
+      ),
+      report.extractions()
     );
+    assertEquals(List.of(), report.transformations(), "a map row is not reported as an unconditional conversion");
+  }
+
+  @Test
+  @DisplayName("an extract row and a required row on the same slot explain differently, as they behave differently")
+  void requiredAndExtractExplainDifferently() {
+    final var optional = Telescope.fromMap(Row.class, extract("n", Row::name, Object::toString));
+    final var must = Telescope.fromMap(Row.class, required("n", Row::name, Object::toString));
+
+    assertEquals(new Row(null, 0), optional.forward(Map.of()));
+    assertThrows(IllegalArgumentException.class, () -> must.forward(Map.of()));
+    assertNotEquals(optional.explain().nodes(), must.explain().nodes());
+    assertTrue(
+      optional.explain().toString().contains("→ name String (default when absent)"),
+      optional.explain()::toString
+    );
+    assertTrue(must.explain().toString().contains("→ name String (required)"), must.explain()::toString);
   }
 
   @Test
@@ -42,7 +59,7 @@ class FromMapExplainTest {
   void anUnfilledSlotIsReportedAsMissing() {
     final var report = Telescope.fromMap(Row.class, extract("n", Row::name, Object::toString)).explain();
 
-    assertEquals(1, report.transformations().size(), "one row, one transformation");
+    assertEquals(1, report.extractions().size(), "one row, one extraction");
     assertTrue(
       report
         .skipped()
@@ -50,5 +67,20 @@ class FromMapExplainTest {
         .anyMatch(s -> s.field().equals("count")),
       () -> "count has no row: " + report.skipped()
     );
+  }
+
+  @Test
+  @DisplayName("a trace shows the value read under each key, and marks a slot an absent key left at its default")
+  void aTraceShowsTheKeyValueAndTheDefault() {
+    final var mapper = Telescope.fromMap(
+      Row.class,
+      extract("n", Row::name, Object::toString),
+      extract("c", Row::count, v -> Integer.parseInt(v.toString()))
+    );
+
+    final var trace = mapper.trace(Map.of("n", "Ada")).toString();
+
+    assertTrue(trace.contains("→ name \"Ada\""), trace);
+    assertTrue(trace.contains("(absent) → count 0 (default)"), trace);
   }
 }

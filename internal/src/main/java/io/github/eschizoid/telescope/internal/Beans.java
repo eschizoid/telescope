@@ -796,6 +796,13 @@ public final class Beans {
   public sealed interface BeanWriter<P> permits ConstructorWriter, BuilderWriter, SettersWriter {
     /** Build a {@code P}, pulling each value in {@code names} from {@code valueByName}. */
     P construct(String[] names, Function<String, Object> valueByName);
+
+    /**
+     * Whether {@link #construct} puts the value for property {@code name} into the bean. A getter
+     * with no setter, builder method or constructor parameter behind it is readable and not
+     * writable: its value is dropped, or never asked for.
+     */
+    boolean writes(String name);
   }
 
   /**
@@ -1386,6 +1393,17 @@ public final class Beans {
       for (var i = 0; i < keys.length; i++) args[i] = valueByName.apply(keys[i]);
       return (P) ctorFn.apply(args);
     }
+
+    /**
+     * A property is written when the constructor takes a parameter of that name; without parameter
+     * names every property is passed positionally. The automatic writer picks a constructor only
+     * when its arity equals the property count and every parameter name is a property, so on that
+     * path every property is a parameter and this answers true for each.
+     */
+    @Override
+    public boolean writes(final String name) {
+      return paramNames == null || Arrays.asList(paramNames).contains(name);
+    }
   }
 
   /**
@@ -1505,6 +1523,15 @@ public final class Beans {
 
     private Object setterFor(final String name) {
       return setterInvokers.computeIfAbsent(name, this::buildSetterInvoker);
+    }
+
+    /**
+     * A property is written when the builder has a {@code name} / {@code setX} / {@code withX}
+     * method for it.
+     */
+    @Override
+    public boolean writes(final String name) {
+      return builderSetterFor(builderType, name) != null;
     }
 
     /**
@@ -1713,6 +1740,23 @@ public final class Beans {
       return setterInvokers.computeIfAbsent(name, this::buildSetterInvoker);
     }
 
+    /** A property is written when the bean has a public single-argument {@code setX} for it. */
+    @Override
+    public boolean writes(final String name) {
+      return setterMethod(name) != null;
+    }
+
+    /**
+     * The public single-argument {@code setX} method for {@code name}, or null when there is none.
+     */
+    private Method setterMethod(final String name) {
+      final var set = "set" + capitalize(name);
+      for (final var m : cls.getMethods()) {
+        if (m.getParameterCount() == 1 && m.getName().equals(set)) return m;
+      }
+      return null;
+    }
+
     /**
      * Resolve the {@code setX(value)} {@link Method} for {@code name} and build a {@link
      * BiConsumer} that dispatches directly to it via {@link LambdaMetafactory}. The SAM signature
@@ -1726,14 +1770,7 @@ public final class Beans {
      */
     @SuppressWarnings("unchecked")
     private BiConsumer<Object, Object> buildSetterInvoker(final String name) {
-      final var set = "set" + capitalize(name);
-      Method setter = null;
-      for (final var m : cls.getMethods()) {
-        if (m.getParameterCount() == 1 && m.getName().equals(set)) {
-          setter = m;
-          break;
-        }
-      }
+      final var setter = setterMethod(name);
       // Getter-only properties (computed fields, immutable accessors, etc.) have no matching
       // setX. Throwing here would make writeBean(SETTERS) unusable on any class with a read-
       // only property. MapStruct silently ignores unwritable target fields; match that by

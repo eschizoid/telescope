@@ -24,9 +24,9 @@ import java.lang.annotation.Target;
  * wrapper, a {@code String} enum name to the enum, a {@code String}-carried JDK value type ({@code
  * Instant}, {@code UUID}, {@code BigDecimal}, {@code LocalDate}, …) via its String factory, a
  * nested {@code Map} to a nested {@code @FromMap} type, and {@code List}/{@code Set}/{@code
- * Map}/{@code Optional} element-mapped. An absent key takes the field's JLS default. A field type
- * that can't be coerced (a non-{@code @FromMap} nested object, a collection subtype) is a compile
- * error, not a runtime failure.
+ * Map}/{@code Optional} element-mapped. An absent key takes the field's JLS default, unless {@link
+ * #required()} names the field. A field type that can't be coerced (a non-{@code @FromMap} nested
+ * object, a collection subtype) is a compile error, not a runtime failure.
  *
  * <p>Coercion is lenient, matching the runtime {@code fromMap}: a wrong-shaped value for a
  * container field yields an empty collection, only {@code "true"} is truthy for a boolean, a
@@ -48,4 +48,20 @@ import java.lang.annotation.Target;
  */
 @Retention(RetentionPolicy.SOURCE)
 @Target(ElementType.TYPE)
-public @interface FromMap {}
+public @interface FromMap {
+  /**
+   * The components (or bean properties) whose key has to carry a value. The generated binder
+   * refuses a map that carries no value for any of them, a {@code null} included, with an {@link
+   * IllegalArgumentException} naming every such key beside its component, before any value is
+   * coerced. A name that is not a component or property of the type is a compile error.
+   *
+   * <p>The sibling of the runtime {@code MapExtractStep.required(key, accessor, converter)} row,
+   * and worded the same way after its own prefix.
+   *
+   * <pre>{@code
+   * @FromMap(required = {"id"})
+   * record Ticket(String id, String note) {}
+   * }</pre>
+   */
+  String[] required() default {};
+}

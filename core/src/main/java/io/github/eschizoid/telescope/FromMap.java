@@ -9,6 +9,7 @@ import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Extract;
 import io.github.eschizoid.telescope.mapping.MapExtractStep;
+import io.github.eschizoid.telescope.mapping.Require;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
@@ -46,8 +47,8 @@ final class FromMap {
     Objects.requireNonNull(rows, "rows");
     final var byField = new LinkedHashMap<String, MapExtractStep>();
     for (final var row : rows) {
-      if (!(row instanceof Extract<?, ?>)) throw new IllegalArgumentException(
-        "Telescope.fromMap rows must be built via MapExtractStep.extract(...)"
+      if (!(row instanceof Extract<?, ?>) && !(row instanceof Require<?, ?>)) throw new IllegalArgumentException(
+        "Telescope.fromMap rows must be built via MapExtractStep.extract(...) or MapExtractStep.required(...)"
       );
       final var fieldName = PropertyNames.property(LambdaIntrospection.methodNameOf(row.targetAccessor()));
       if (byField.put(fieldName, row) != null) throw new IllegalArgumentException(
@@ -93,21 +94,26 @@ final class FromMap {
           reason.get()
       );
     }
+    if (!target.isRecord()) refuseUnwritableRows(target, byField);
     final Function<Map<String, Object>, T> forward = target.isRecord()
       ? recordForward(target, byField)
       : beanForward(target, byField);
     // The slot alignment above already decided every component's fate — surface those decisions
-    // as the explain() trail instead of throwing them away: one Transformed row per extract
-    // (map key → component, through the row's converter), one MISSING_SOURCE skip per defaulted
-    // slot. The report is derived from the same data the forward path runs on, so it cannot drift.
+    // as the explain() trail instead of throwing them away: one Extracted row per row, saying what
+    // an absent key does to it, and one MISSING_SOURCE skip per slot no row names. The report is
+    // derived from the same data the forward path runs on, so it cannot drift.
     final var trail = new ArrayList<OpticNode>(known.size());
     for (final var comp : known) {
       final var row = byField.get(comp);
       if (row != null) {
-        // Both of the row's type components are type names, and the report prints each where a type
-        // belongs. A value read from an untyped map is an Object, which is what the deep-mapping
-        // trail writes for an Object-typed source field through this same helper.
-        trail.add(new OpticNode.Transformed(row.key(), comp, "Object", DeepMap.simpleTypeName(typeByName.get(comp))));
+        trail.add(
+          new OpticNode.Extracted(
+            row.key(),
+            comp,
+            DeepMap.simpleTypeName(typeByName.get(comp)),
+            row instanceof Require<?, ?> ? OpticNode.WhenAbsent.REFUSES : OpticNode.WhenAbsent.DEFAULTS
+          )
+        );
       } else {
         trail.add(new OpticNode.Skipped(comp, OpticNode.Reason.MISSING_SOURCE));
       }
@@ -131,16 +137,22 @@ final class FromMap {
     final var keys = new String[n];
     final var converters = (Function<Object, Object>[]) new Function<?, ?>[n];
     final var defaults = new Object[n];
+    final var names = new String[n];
+    final var required = new boolean[n];
     for (var i = 0; i < n; i++) {
-      final var e = byField.get(comps[i].getName());
+      names[i] = comps[i].getName();
+      final var e = byField.get(names[i]);
       if (e != null) {
         keys[i] = e.key();
         converters[i] = (Function<Object, Object>) e.converter();
+        required[i] = e instanceof Require<?, ?>;
       }
       defaults[i] = unfilledDefault(comps[i].getType(), comps[i].getGenericType());
     }
+    final var refusal = MissingKeys.of(target, "component", keys, names, required);
     return mapSrc -> {
       if (mapSrc == null) return null;
+      refusal.check(mapSrc);
       final var args = new Object[n];
       for (var i = 0; i < n; i++) {
         final var value = keys[i] == null ? null : mapSrc.get(keys[i]);
@@ -168,6 +180,7 @@ final class FromMap {
     @SuppressWarnings("unchecked")
     final var converters = (Function<Object, Object>[]) new Function<?, ?>[n];
     final var defaults = new Object[n];
+    final var required = new boolean[n];
     final var indexByName = HashMap.<String, Integer>newHashMap(n);
     for (var i = 0; i < n; i++) {
       indexByName.put(propertyNames[i], i);
@@ -177,12 +190,15 @@ final class FromMap {
         @SuppressWarnings("unchecked")
         final var conv = (Function<Object, Object>) e.converter();
         converters[i] = conv;
+        required[i] = e instanceof Require<?, ?>;
       }
       final var propertyType = Beans.propertyType(target, propertyNames[i]);
       defaults[i] = unfilledDefault(rawOf(propertyType), propertyType);
     }
+    final var refusal = MissingKeys.of(target, "property", keys, propertyNames, required);
     return mapSrc -> {
       if (mapSrc == null) return null;
+      refusal.check(mapSrc);
       final Function<String, Object> valueByName = name -> {
         final var i = indexByName.get(name);
         if (i == null) return null;
@@ -191,6 +207,32 @@ final class FromMap {
       };
       return writer.construct(propertyNames, valueByName);
     };
+  }
+
+  /**
+   * Refuses a row naming a bean property the bean's writer has no way to set: a getter with no
+   * setter, builder method or constructor parameter behind it. Its value would be read and dropped,
+   * or never read at all, so a source that carried it would come back without it and nothing would
+   * say so.
+   */
+  private static void refuseUnwritableRows(final Class<?> target, final Map<String, MapExtractStep> byField) {
+    final var writer = Beans.autoWriter(target);
+    for (final var row : byField.entrySet()) {
+      if (!writer.writes(row.getKey())) throw new IllegalArgumentException(
+        "Telescope.fromMap: a row names property '" +
+          row.getKey() +
+          "' of " +
+          target.getSimpleName() +
+          ", which has no setter, builder method or constructor parameter to write it, so the value" +
+          " read for key \"" +
+          row.getValue().key() +
+          "\" would be dropped. Remove the row, or give " +
+          target.getSimpleName() +
+          " a way to write '" +
+          row.getKey() +
+          "'."
+      );
+    }
   }
 
   /**
