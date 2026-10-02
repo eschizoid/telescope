@@ -1,5 +1,8 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.conversion.FromMapProvider;
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.math.BigDecimal;
@@ -15,12 +18,16 @@ import java.time.Period;
 import java.time.ZonedDateTime;
 import java.util.Collection;
 import java.util.Currency;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.ServiceConfigurationError;
+import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.UUID;
+import java.util.WeakHashMap;
 import java.util.regex.Pattern;
 
 /**
@@ -98,7 +105,16 @@ final class FromMapRefusals {
     }
     if (CAST_AS_IS.contains(raw) || STRING_BUILT.contains(raw)) return Optional.empty();
     if (isJdk(raw)) return Optional.of(raw.getName() + " can't be built from a map value; " + ROW);
-    return Optional.of(raw.getName() + " is a nested object but isn't @FromMap; annotate it with @FromMap, or " + ROW);
+    return Optional.of(
+      raw.getName() +
+        " has no registered @FromMap binder; annotate it with @FromMap and recompile (on the module path its" +
+        " module-info must also declare \"provides " +
+        FromMapProvider.class.getName() +
+        " with " +
+        raw.getCanonicalName() +
+        "FromMap.Provider;\"), or " +
+        ROW
+    );
   }
 
   private static Optional<String> unsupportedKind(final Type type) {
@@ -112,17 +128,58 @@ final class FromMapRefusals {
   }
 
   /**
-   * Whether the processor generated a binder for {@code raw}, which is what {@code @FromMap} leaves
-   * behind once it is gone: the annotation is source-retained. The binder is generated only for a
-   * top-level type, beside it, under the type's name with {@code FromMap} appended.
+   * Whether a generated {@code @FromMap} binder is registered for {@code raw}, which is what the
+   * annotation leaves behind once it is gone: it is source-retained. The binder registers a {@link
+   * FromMapProvider} naming its target, and {@link ServiceLoader} finds it in whatever compilation
+   * produced it and in a native image. A class that merely shares the binder's name registers
+   * nothing.
    */
   private static boolean hasGeneratedBinder(final Class<?> raw) {
-    if (isJdk(raw) || raw.getEnclosingClass() != null) return false;
-    try {
-      Class.forName(raw.getName() + "FromMap", false, raw.getClassLoader());
-      return true;
-    } catch (final ClassNotFoundException e) {
-      return false;
+    if (isJdk(raw)) return false;
+    final var loader = raw.getClassLoader() != null ? raw.getClassLoader() : FromMapRefusals.class.getClassLoader();
+    final Set<String> targets;
+    synchronized (TARGETS_BY_LOADER) {
+      targets = TARGETS_BY_LOADER.computeIfAbsent(loader, FromMapRefusals::registeredTargets);
     }
+    return targets.contains(raw.getName());
+  }
+
+  /**
+   * The names of the types the providers visible to {@code loader} build, read once per loader.
+   * Names rather than classes, so the cache holds nothing that keeps its loader alive.
+   */
+  private static final Map<ClassLoader, Set<String>> TARGETS_BY_LOADER = new WeakHashMap<>();
+
+  private static final Logger LOG = System.getLogger("io.github.eschizoid.telescope.fromMap");
+
+  /**
+   * Every target a provider visible to {@code loader} names. A registration that cannot be loaded
+   * or a provider that cannot answer is skipped and logged rather than thrown: it belongs to some
+   * other binder, and refusing every mapper over it would break code that never names that type.
+   * The iterator moves past a provider it failed to load, so one broken entry costs only itself.
+   */
+  private static Set<String> registeredTargets(final ClassLoader loader) {
+    final var targets = new HashSet<String>();
+    final var providers = ServiceLoader.load(FromMapProvider.class, loader).iterator();
+    while (true) {
+      final FromMapProvider provider;
+      try {
+        if (!providers.hasNext()) break;
+        provider = providers.next();
+      } catch (final ServiceConfigurationError e) {
+        LOG.log(Level.WARNING, "Skipping a @FromMap binder registration that cannot be loaded: " + e.getMessage(), e);
+        continue;
+      }
+      try {
+        targets.add(provider.targetType().getName());
+      } catch (final RuntimeException | LinkageError e) {
+        LOG.log(
+          Level.WARNING,
+          "Skipping @FromMap binder provider " + provider.getClass().getName() + ", whose targetType() failed: " + e,
+          e
+        );
+      }
+    }
+    return targets;
   }
 }

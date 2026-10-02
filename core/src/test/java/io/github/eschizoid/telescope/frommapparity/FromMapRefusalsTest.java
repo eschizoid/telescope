@@ -336,17 +336,22 @@ class FromMapRefusalsTest {
     }
 
     @Test
-    @DisplayName("a class with no generated binder is refused, top-level or nested, with the annotate remedy")
+    @DisplayName(
+      "a class with no registered binder is refused, top-level or nested, with the annotate and provides remedy"
+    )
     void classesWithoutABinder() {
       assertEquals(
         prefix(UnboundRec.class, "Unbound") +
           Unbound.class.getName() +
-          " is a nested object but isn't @FromMap; annotate it with @FromMap, or " +
+          " has no registered @FromMap binder; annotate it with @FromMap and recompile (on the module path its" +
+          " module-info must also declare \"provides io.github.eschizoid.telescope.conversion.FromMapProvider with " +
+          Unbound.class.getName() +
+          "FromMap.Provider;\"), or " +
           ROW,
         refusal(UnboundRec.class)
       );
       assertTrue(
-        refusal(NestedClassRec.class).contains(NestedCity.class.getName() + " is a nested object but isn't @FromMap")
+        refusal(NestedClassRec.class).contains(NestedCity.class.getName() + " has no registered @FromMap binder")
       );
     }
 
@@ -356,7 +361,9 @@ class FromMapRefusalsTest {
       assertTrue(
         refusal(RefusedElementRec.class).endsWith(": java.lang.Number can't be built from a map value; " + ROW)
       );
-      assertTrue(refusal(RefusedKeyRec.class).contains(": " + Unbound.class.getName() + " is a nested object"));
+      assertTrue(
+        refusal(RefusedKeyRec.class).contains(": " + Unbound.class.getName() + " has no registered @FromMap binder")
+      );
       assertTrue(refusal(RefusedValueRec.class).contains(": java.util.ArrayList is a collection subtype"));
     }
 
