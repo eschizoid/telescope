@@ -360,8 +360,13 @@ this processor**: a navigator emitted only then does not exist yet when same-mod
 `BeanFocusProcessor` the readable-properties check `LombokFocusProcessor` retries on is not enough: hand-written getters
 read complete in round one while the builder or constructor Lombok adds, which decides the rebuild strategy, is still
 missing. A `@BeanFocus` navigator on a Lombok-annotated class is therefore emitted in the final round and cannot be
-named from same-module main code. **Any future processor reading synthesised members of Lombok-annotated types must do
-one or the other; reading them in round one gets an un-patched view.**
+named from same-module main code. The exception is a class that also carries `@Data`, `@Value` or `@Builder` when
+`LombokFocusProcessor` took part in the compilation: that processor writes the same navigator and holder as soon as the
+class is ready, so `BeanFocusProcessor` leaves the class to it; when it did not take part, `BeanFocusProcessor` writes
+them in the final round as usual. Both processors treat `@BeanFocus` and, with telescope-lombok on the path, the Lombok
+bean annotations as marking a child type that has its own navigator, so the navigator is the same whichever writes it.
+**Any future processor reading synthesised members of Lombok-annotated types must do one or the other; reading them in
+round one gets an un-patched view.**
 
 The in-memory `ProcessorHarness` (`:codegen` testFixtures) can't reproduce this — Lombok's javac hooks don't install in
 the in-process `JavaCompiler.CompilationTask` flow. Lombok integration tests must use Gradle's standard

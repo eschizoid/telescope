@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.codegen.AbstractTelescopeProcessor;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
@@ -59,6 +60,12 @@ public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
   private final Set<TypeElement> pending = new LinkedHashSet<>();
 
   @Override
+  public synchronized void init(final ProcessingEnvironment processingEnv) {
+    super.init(processingEnv);
+    markLombokProcessorActive();
+  }
+
+  @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var elements = processingEnv.getElementUtils();
     for (final var triggerFqn : LOMBOK_BEAN_ANNOTATIONS) {
@@ -88,7 +95,7 @@ public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
       // Last-resort pass on processingOver(): a target whose host class never became readable goes
       // through emitBeanNavigator anyway, which finds no properties and reports the "no readable
       // properties" error — so an unreadable target ends as a diagnostic rather than as silence.
-      for (final var pojo : pending) emitBeanNavigator(pojo, "@Data/@Value/@Builder", LOMBOK_BEAN_ANNOTATIONS);
+      for (final var pojo : pending) emitBeanNavigator(pojo, "@Data/@Value/@Builder", navigableBeanAnnotations());
       pending.clear();
     }
     return false;
@@ -103,7 +110,7 @@ public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
    */
   private boolean emitBeanNavigatorIfReady(final TypeElement pojo) {
     if (beanProperties(pojo).isEmpty() || !lombokMembersPresent(pojo)) return false;
-    emitBeanNavigator(pojo, "@Data/@Value/@Builder", LOMBOK_BEAN_ANNOTATIONS);
+    emitBeanNavigator(pojo, "@Data/@Value/@Builder", navigableBeanAnnotations());
     return true;
   }
 

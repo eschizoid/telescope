@@ -31,6 +31,17 @@ final class LombokLastCompiler {
    */
   static Path compile(final Path dir, final String simpleName, final String code, final boolean keepTelescopeLombok)
     throws IOException {
+    return compile(dir, simpleName, code, keepTelescopeLombok, List.of());
+  }
+
+  /** {@link #compile(Path, String, String, boolean)} with {@code extraOptions} passed to javac. */
+  static Path compile(
+    final Path dir,
+    final String simpleName,
+    final String code,
+    final boolean keepTelescopeLombok,
+    final List<String> extraOptions
+  ) throws IOException {
     final var source = dir.resolve("src/demo/" + simpleName + ".java");
     Files.createDirectories(source.getParent());
     Files.writeString(source, code);
@@ -42,17 +53,20 @@ final class LombokLastCompiler {
     final var compiler = ToolProvider.getSystemJavaCompiler();
     final var diagnostics = new DiagnosticCollector<JavaFileObject>();
     try (final var files = compiler.getStandardFileManager(diagnostics, null, null)) {
-      final var options = List.of(
-        "-parameters",
-        "-proc:full",
-        "-processorpath",
-        lombokLast(System.getProperty("telescope.test.processorPath"), keepTelescopeLombok),
-        "-classpath",
-        System.getProperty("java.class.path"),
-        "-s",
-        generated.toString(),
-        "-d",
-        classes.toString()
+      final var options = new ArrayList<String>(extraOptions);
+      options.addAll(
+        List.of(
+          "-parameters",
+          "-proc:full",
+          "-processorpath",
+          lombokLast(System.getProperty("telescope.test.processorPath"), keepTelescopeLombok),
+          "-classpath",
+          System.getProperty("java.class.path"),
+          "-s",
+          generated.toString(),
+          "-d",
+          classes.toString()
+        )
       );
       final var ok = compiler
         .getTask(null, files, diagnostics, options, null, files.getJavaFileObjects(source.toFile()))

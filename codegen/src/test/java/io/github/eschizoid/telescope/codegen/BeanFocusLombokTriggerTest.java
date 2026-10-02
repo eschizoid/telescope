@@ -25,11 +25,20 @@ class BeanFocusLombokTriggerTest {
     """
   );
 
+  private static final JavaFileObject LOMBOK_DATA = ProcessorHarness.source(
+    "lombok.Data",
+    """
+    package lombok;
+    public @interface Data {}
+    """
+  );
+
   private static Compilation compile(final String annotation) {
     return ProcessorHarness.compileFully(
       List.of(new BeanFocusProcessor()),
       List.of(),
       LOMBOK_GETTER,
+      LOMBOK_DATA,
       ProcessorHarness.source(
         "demo.Widget",
         """
@@ -58,6 +67,17 @@ class BeanFocusLombokTriggerTest {
       compilation.errorMessages().contains("demo.WidgetTelescope' created in the last round"),
       compilation::errorMessages
     );
+  }
+
+  @Test
+  @DisplayName("a target carrying @Data is still emitted here when telescope-lombok is not on the processor path")
+  void lombokBeanTriggerWithoutTheLombokProcessor() {
+    // This module's tests have no telescope-lombok, so nothing else would write the navigator; the
+    // yield to that processor applies only where it runs.
+    final var compilation = compile("@lombok.Data");
+    assertTrue(compilation.success(), compilation::errorMessages);
+    assertTrue(compilation.generated().containsKey("demo.WidgetTelescope"), compilation::errorMessages);
+    assertTrue(compilation.generated().containsKey("demo.WidgetFieldOptics"), compilation::errorMessages);
   }
 
   @Test
