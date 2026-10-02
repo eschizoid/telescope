@@ -14,6 +14,7 @@ import java.lang.invoke.MethodType;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -325,30 +326,58 @@ final class ContainerLifts {
    * type reaches {@code Comparable} through an interface as often as it declares one directly, and
    * a walk that stopped at superclasses would relabel exactly those elements' own faults.
    *
+   * <p>A type argument that is a type variable is read through the arguments the walk passed on its
+   * way up, so {@code final class Sa extends Cmp<Sa>} under {@code abstract class Cmp<T extends
+   * Cmp<T>> implements Comparable<T>} is ordered against its own kind. A variable nothing on the
+   * way binds answers false. That is where an instance of a generic class lands when the class
+   * leaves its own parameter as the argument, because a runtime class carries no type arguments.
+   *
    * <p>Raw or absent {@code Comparable} answers false, which routes to the ordering refusal. That
    * is the safer direction: the refusal names the element and keeps the cast as its cause, so a
    * wrong guess here costs a sentence rather than the diagnosis. A raw one takes {@code Object} and
    * casts it itself, so its faults are more often its own than not -- it stays with the refusal
    * because the cause is preserved either way, not because the reading is clearly right.
+   *
+   * <p>The generated bridge answers the same question at compile time, of the declared element
+   * class, with the same walk.
    */
   private static boolean orderedAgainstItsOwnKind(final Object element) {
-    // Seeded with the class chain; each class's own interfaces are reached by the walk below, so
-    // adding them here as well would only be a second route to the same types. The graph is finite
-    // and acyclic, so a diamond costs a repeat visit and nothing more.
-    final var pending = new ArrayDeque<Type>();
-    for (var c = element.getClass(); c != null; c = c.getSuperclass()) pending.add(c);
+    final var own = element.getClass();
+    // The graph is finite and acyclic, so a diamond costs a repeat visit and nothing more.
+    final var pending = new ArrayDeque<Supertype>();
+    pending.add(new Supertype(own, Map.of()));
     while (!pending.isEmpty()) {
-      final var type = pending.poll();
-      // Only a parameterized Comparable answers the question. A raw one names no type argument, so
-      // it reaches the walk as an ordinary class and is followed like any other.
-      if (type instanceof ParameterizedType parameterized && parameterized.getRawType() == Comparable.class) {
-        final var against = parameterized.getActualTypeArguments()[0];
-        return against instanceof Class<?> cls && cls.isAssignableFrom(element.getClass());
-      }
+      final var visit = pending.poll();
+      final var type = visit.type();
       final var raw = type instanceof ParameterizedType parameterized ? parameterized.getRawType() : type;
-      if (raw instanceof Class<?> cls) pending.addAll(List.of(cls.getGenericInterfaces()));
+      if (!(raw instanceof Class<?> cls)) continue;
+      // Only a parameterized Comparable answers the question. A raw one names no type argument, so
+      // it is followed like any other class, and leads nowhere.
+      if (cls == Comparable.class && type instanceof ParameterizedType parameterized) {
+        final var against = visit.resolve(parameterized.getActualTypeArguments()[0]);
+        return against instanceof Class<?> target && target.isAssignableFrom(own);
+      }
+      final Map<TypeVariable<?>, Type> bindings = new HashMap<>();
+      if (type instanceof ParameterizedType parameterized) {
+        final var parameters = cls.getTypeParameters();
+        final var arguments = parameterized.getActualTypeArguments();
+        for (var i = 0; i < parameters.length; i++) bindings.put(parameters[i], visit.resolve(arguments[i]));
+      }
+      if (cls.getGenericSuperclass() != null) pending.add(new Supertype(cls.getGenericSuperclass(), bindings));
+      for (final var iface : cls.getGenericInterfaces()) pending.add(new Supertype(iface, bindings));
     }
     return false;
+  }
+
+  /**
+   * One step of the walk above: a supertype as its declaring class wrote it, with the values the
+   * walk has bound to that class's type variables.
+   */
+  private record Supertype(Type type, Map<TypeVariable<?>, Type> bindings) {
+    /** The type an argument stands for here: a bound variable's value, or the argument as it is. */
+    Type resolve(final Type argument) {
+      return argument instanceof TypeVariable<?> variable ? bindings.getOrDefault(variable, variable) : argument;
+    }
   }
 
   private static boolean copyOnWrite(final Class<?> raw) {
