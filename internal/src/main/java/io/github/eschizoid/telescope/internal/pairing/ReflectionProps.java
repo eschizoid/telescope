@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal.pairing;
 import io.github.eschizoid.telescope.internal.Beans;
 import java.lang.reflect.Array;
 import java.lang.reflect.GenericArrayType;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
@@ -372,12 +373,24 @@ public final class ReflectionProps implements PropertySystem<Type> {
       final var allocable =
         src instanceof Class<?> srcCls &&
         tgt instanceof Class<?> tgtCls &&
-        Beans.intermediateAllocator(srcCls).get() != null &&
-        Beans.intermediateAllocator(tgtCls).get() != null;
+        copyAllocable(srcCls) &&
+        copyAllocable(tgtCls);
       return allocable ? Allocability.ALLOCABLE : Allocability.NOT_ALLOCABLE;
     } catch (final RuntimeException e) {
       return Allocability.NOT_ALLOCABLE;
     }
+  }
+
+  /**
+   * Whether a copy can build this side: an interface or abstract class through the default
+   * implementation the shared table names for it, which the runtime copy allocates in its place,
+   * and any other class through its own allocator.
+   */
+  private boolean copyAllocable(final Class<?> cls) {
+    if (cls.isInterface() || Modifier.isAbstract(cls.getModifiers())) {
+      return new PairingRules<Type>(this).hasDefaultImplementation(cls);
+    }
+    return Beans.intermediateAllocator(cls).get() != null;
   }
 
   @Override

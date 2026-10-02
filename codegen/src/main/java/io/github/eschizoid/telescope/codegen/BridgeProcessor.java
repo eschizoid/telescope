@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.codegen;
 
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
+import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import java.io.IOException;
@@ -19,6 +20,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
@@ -2077,6 +2079,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // <Bridge>.forward(s). The legacy Telescope.from(...).using(::forward, ::backward) path
         // shared one anonymous Iso class body across every bridge, going megamorphic on
         // Function::apply as more bridges were loaded.
+        // Each method reads every field into a local of the field's own type, so a field declared
+        // as
+        // a generic class used raw makes each of them declare a raw local. The record already
+        // says
+        // the type is raw; the methods only repeat it, so they carry the suppression the record's
+        // own declaration needs rather than raising the warning again in a file nobody wrote.
+        final var rawFields = Stream.concat(sourceFields.stream(), targetFields.stream()).anyMatch(f ->
+          mentionsRawUse(f.type())
+        );
+        final var suppressRaw = rawFields ? "  @SuppressWarnings(\"rawtypes\")\n" : "";
+        out.print(suppressRaw);
         out.println("  public static " + targetFq + " forward(final " + sourceFq + " s) {");
         // Null in -> null out, matching the runtime structural Iso. Also lets a null container
         // element (subBridge.forward(null) in the container helpers) pass through as null.
@@ -2084,6 +2097,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         emitMethodBody(out, forwardBody);
         out.println("  }");
         out.println();
+        out.print(suppressRaw);
         out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
         out.println("    if (t == null) return null;");
         emitMethodBody(out, backwardBody);
@@ -2094,6 +2108,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // Reference target components null-gate to base; primitive components autobox to non-null
         // and are always overlaid; nested components are written whole through the sub-bridge's
         // backward when the partial slot is non-null.
+        out.print(suppressRaw);
         out.println(
           "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
         );
@@ -2597,6 +2612,42 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
   }
 
+  /**
+   * The suppression a helper carries when a container it names is, or holds, a generic class used
+   * raw: such a type is raw wherever it is written, and a copy between raw containers is unchecked
+   * by construction.
+   */
+  private static final String RAW_SUPPRESSION = "  @SuppressWarnings({\"unchecked\", \"rawtypes\"})";
+
+  /** Whether a type is, or has among its type arguments at any depth, a generic class used raw. */
+  private static boolean mentionsRawUse(final TypeMirror type) {
+    if (usedRaw(type)) return true;
+    return (
+      type instanceof DeclaredType declared &&
+      declared.getTypeArguments().stream().anyMatch(BridgeProcessor::mentionsRawUse)
+    );
+  }
+
+  /** Whether a declared type is a generic class written without its type arguments. */
+  private static boolean usedRaw(final TypeMirror type) {
+    return (
+      type instanceof DeclaredType declared &&
+      declared.getTypeArguments().isEmpty() &&
+      !((TypeElement) declared.asElement()).getTypeParameters().isEmpty()
+    );
+  }
+
+  /**
+   * The kind a pair is copied as when the shared spec decides an element-for-element copy, or null
+   * when it decides anything else. The spec has already checked that the two sides agree on every
+   * kind axis, so the target alone says which kind that is.
+   */
+  private FieldPlan.Kind copyKindOf(final PairDecision<TypeMirror> decision, final TypeMirror target) {
+    if (decision instanceof PairDecision.MapCopy) return FieldPlan.Kind.MAP_VALUES;
+    if (!(decision instanceof PairDecision.CollectionCopy)) return null;
+    return assignableToRaw(target, "java.util.Set") ? FieldPlan.Kind.SET : FieldPlan.Kind.LIST;
+  }
+
   // The type arguments of `type`'s view as the JDK container `rawFqn` (e.g. the `<ImageUrl>` of the
   // `java.util.List` supertype of `class ImageUrls extends ArrayList<ImageUrl>`). Walks the
   // supertype graph until it finds the declared supertype whose erasure is exactly `rawFqn` and
@@ -2816,9 +2867,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private static String sizedAlloc(final String implFqn, final String typeArgs, final String ordering) {
     return switch (implFqn) {
+      // A factory method takes explicit type arguments or none: a diamond is not written there, and
+      // leaving them off lets the assignment infer them, as the diamond does for a constructor.
       case "java.util.HashSet", "java.util.LinkedHashSet", "java.util.HashMap", "java.util.LinkedHashMap" -> implFqn +
       "." +
-      typeArgs +
+      (typeArgs.equals("<>") ? "" : typeArgs) +
       "new" +
       simpleName(implFqn) +
       "(src.size())";
@@ -2999,6 +3052,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         plans.put(sf.name(), withImpls);
         continue;
       }
+      // (2-copy) A same-kind pair the shared spec copies element for element with no view to lift
+      //     through: a generic class used raw against another used raw, or against a side fixing
+      //     every argument to Object. Nothing either side holds can be of a type the other does not
+      //     admit, so the elements are copied into the class the target allocates.
+      final var copy = copyKindOf(rules.decidePair(sf.type(), tf.type(), sf.name()), tf.type());
+      if (copy != null) {
+        final var unassignable = firstUnassignableContainer(sf.type(), tf.type(), copy);
+        if (unassignable != null) {
+          error(source, unassignableContainerMessage(source, target, sf.name(), unassignable));
+          return null;
+        }
+        final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), copy);
+        if (badAlloc != null) {
+          error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
+          return null;
+        }
+        plans.put(sf.name(), FieldPlan.ofKind(copy, IDENTITY_ELEMENT_SENTINEL).asRawContainer());
+        continue;
+      }
       // (3) Cross-paradigm Optional↔nullable bridge — one side has Optional<X>, the other has
       //     plain (possibly null) X. Element side must be reflectable to bridge.
       if (srcShape != null && srcShape.kind() == FieldPlan.Kind.OPTIONAL && tgtShape == null) {
@@ -3149,6 +3221,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         lenient,
         parentPkg
       );
+    }
+    // An element pair the shared spec copies element for element, such as a generic class used
+    // raw against another, is a nested container with no view to lift through: it gets a nested
+    // element class whose helpers copy, as the same pair does when it is a field.
+    final var copy = copyKindOf(rules.decidePair(srcElement, tgtElement, fieldName), tgtElement);
+    if (copy != null) {
+      final var unassignable = firstUnassignableContainer(srcElement, tgtElement, copy);
+      if (unassignable != null) {
+        error(parentSource, unassignableContainerMessage(parentSource, parentTarget, fieldName, unassignable));
+        return null;
+      }
+      final var badAlloc = firstNonAllocatableContainer(srcElement, tgtElement, copy);
+      if (badAlloc != null) {
+        error(parentSource, unallocatableContainerMessage(parentSource, parentTarget, fieldName, badAlloc));
+        return null;
+      }
+      final var name = "__Nested" + nestedElements.size();
+      nestedElements.put(
+        name,
+        new NestedElement(srcElement, tgtElement, FieldPlan.ofKind(copy, IDENTITY_ELEMENT_SENTINEL).asRawContainer())
+      );
+      return FieldPlan.ofKind(kind, name);
     }
     if (
       srcElement instanceof DeclaredType sd &&
@@ -3660,9 +3754,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var identity = IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName());
     final var sub = plan.subBridgeName();
     out.println();
+    // A generic class used raw is a raw type wherever it is named, and its elements reach the copy
+    // as Object, so the signature and the fill are raw and unchecked by construction. The shared
+    // spec copies such a pair only where nothing it holds can be of a type the other side refuses,
+    // and the suppression keeps a consumer compiling with -Werror from failing on that.
+    if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
     out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
     out.println("    if (src == null) return null;");
-    emitOrderingPrelude(out, plan.kind(), identity, tgtContainer, concreteImplFqn(tgtContainer, plan.kind()));
+    emitOrderingPrelude(
+      out,
+      plan.kind(),
+      identity,
+      tgtContainer,
+      concreteImplFqn(tgtContainer, plan.kind()),
+      srcContainer
+    );
     out.println(rawOutDeclaration(tgtContainer, plan.kind(), identity));
     if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
       if (identity) {
@@ -3777,9 +3883,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String implFqn,
     final boolean elementsPreserved
   ) {
-    if (
-      !carriesOrdering(implFqn, elementsPreserved) || !hasComparatorConstructor(kind, tgtContainer, implFqn)
-    ) return "";
+    if (!carriesOrdering(implFqn, elementsPreserved)) return "";
+    // A container used raw holds elements of no named type, so its comparator is any comparator,
+    // and a constructor taking one is enough.
+    if (usedRaw(tgtContainer)) return hasRawComparatorConstructor(implFqn) ? ORDERING_LOCAL : "";
+    if (!hasComparatorConstructor(kind, tgtContainer, implFqn)) return "";
     // The argument and the local holding it are decided by the same questions, so a rebuild can
     // never name a local the line above it had no type to declare.
     return comparatorTypeArg(kind, tgtContainer) == null ? "" : ORDERING_LOCAL;
@@ -3854,6 +3962,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private record OrderedFamily(String iface) {}
 
   /**
+   * Whether this class, used raw, has a public constructor taking a comparator and nothing else. A
+   * raw use names no element type for the comparator to be checked against, so the parameter's
+   * erasure is the whole question.
+   */
+  private boolean hasRawComparatorConstructor(final String implFqn) {
+    final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
+    final var comparator = processingEnv.getElementUtils().getTypeElement("java.util.Comparator");
+    if (implEl == null || comparator == null || !publiclyNameable(implEl)) return false;
+    final var types = processingEnv.getTypeUtils();
+    for (final var ctor : ElementFilter.constructorsIn(implEl.getEnclosedElements())) {
+      if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != 1) continue;
+      final var param = types.erasure(ctor.getParameters().getFirst().asType());
+      if (types.isSameType(param, types.erasure(comparator.asType()))) return true;
+    }
+    return false;
+  }
+
+  /**
    * Whether this class can be handed a comparator when it is built.
    *
    * <p>Java does not inherit constructors, so a subtype of a sorted container has one only where it
@@ -3924,7 +4050,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         implFqn +
         " declares no constructor taking a Comparator, so the source's \"\n" +
         "        + \"ordering cannot be carried into it. Declare one, declare the field as the" +
-        " interface, or supply an explicit Mapping.via(...) row for it.\");"
+        " interface, or convert it with an explicit Mapping.to(src, tgt, fwd, bwd) row.\");"
       );
     }
     return "";
@@ -3941,14 +4067,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final FieldPlan.Kind kind,
     final boolean elementsPreserved,
     final TypeMirror tgtContainer,
-    final String implFqn
+    final String implFqn,
+    final TypeMirror srcContainer
   ) {
     final var guard = orderingGuard(kind, elementsPreserved, tgtContainer, implFqn);
     if (!guard.isEmpty()) {
       out.println(guard);
       return;
     }
-    final var local = orderingLocal(kind, elementsPreserved, tgtContainer, implFqn);
+    final var local = orderingLocal(kind, elementsPreserved, tgtContainer, implFqn, srcContainer);
     if (!local.isEmpty()) out.println(local);
   }
 
@@ -3959,14 +4086,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * have a {@code comparator()} to call: what decides is the value, and a field written as a plain
    * {@code Map} can hold one that is ordered. The pattern names the type argument the declaration
    * already carries, so the comparator comes back typed for the constructor and nothing is cast.
+   *
+   * <p>Where either side is a generic class used raw, no pattern can name a type argument: a raw
+   * source cannot be tested against a parameterized type, and a raw target has none to give. The
+   * local is then a raw comparator, which any comparator constructor accepts.
    */
   private String orderingLocal(
     final FieldPlan.Kind kind,
     final boolean elementsPreserved,
     final TypeMirror tgtContainer,
-    final String implFqn
+    final String implFqn,
+    final TypeMirror srcContainer
   ) {
     if (orderingArg(kind, tgtContainer, implFqn, elementsPreserved).isEmpty()) return "";
+    final var family = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.SortedMap<?, ?>" : "java.util.SortedSet<?>";
+    if (usedRaw(tgtContainer) || usedRaw(srcContainer)) {
+      // Raw, like a container it orders; the helper writing it suppresses the raw-type warning.
+      return (
+        "    final java.util.Comparator " +
+        ORDERING_LOCAL +
+        " = src instanceof " +
+        family +
+        " __ordered ? __ordered.comparator() : null;"
+      );
+    }
     final var typeArg = comparatorTypeArg(kind, tgtContainer);
     // Not a behavioural guard: a container with no readable arguments is refused while the pair is
     // paired, before anything asks about ordering. It is here so this answers null exactly where
@@ -3978,7 +4121,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // comparator comes back over that capture. The allocation orders the wildcard's bound, which
       // every captured element is, so the comparator is narrowed to it once, here.
       final var wide = "java.util.Comparator<? super " + typeArg + ">";
-      final var family = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.SortedMap<?, ?>" : "java.util.SortedSet<?>";
       return (
         "    @SuppressWarnings(\"unchecked\")\n    final " +
         wide +
@@ -4302,6 +4444,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       return instantiated;
     }
     final var view = rules.containerViewOf(container);
+    // An interface used raw names no element type to write, so its default implementation is
+    // allocated with the diamond and holds whatever it is given.
+    if (view == null) return List.of();
     return kind == FieldPlan.Kind.MAP_VALUES
       ? List.of(instantiable(view.keyType()), instantiable(view.elementType()))
       : List.of(instantiable(view.elementType()));
@@ -4379,6 +4524,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String direction
   ) {
     out.println();
+    if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
     out.println(helperSignature(name, srcContainer, tgtContainer));
     out.println("    if (src == null) return null;");
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false));
@@ -4396,6 +4542,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String direction
   ) {
     out.println();
+    if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
     out.println(helperSignature(name, srcContainer, tgtContainer));
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
@@ -4403,7 +4550,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       FieldPlan.Kind.SET,
       false,
       tgtContainer,
-      concreteImplFqn(tgtContainer, FieldPlan.Kind.SET)
+      concreteImplFqn(tgtContainer, FieldPlan.Kind.SET),
+      srcContainer
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
@@ -4420,6 +4568,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String direction
   ) {
     out.println();
+    if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
     out.println(helperSignature(name, srcContainer, tgtContainer));
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
@@ -4427,7 +4576,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       FieldPlan.Kind.MAP_VALUES,
       true,
       tgtContainer,
-      concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES)
+      concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES),
+      srcContainer
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true));
     out.println(
