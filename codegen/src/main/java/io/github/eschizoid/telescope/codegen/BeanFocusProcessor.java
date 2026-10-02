@@ -6,6 +6,7 @@ import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
 
@@ -31,8 +32,6 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
     super();
   }
 
-  private static final Set<String> TRIGGER = Set.of("io.github.eschizoid.telescope.annotations.BeanFocus");
-
   // Targets carrying a Lombok trigger are deferred to processingOver(). Whether Lombok has patched
   // a class by the first round depends on where it sits on the processor path, and a read of an
   // un-patched class misses the builder, constructor and accessors Lombok adds -- which decides the
@@ -55,12 +54,27 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
         continue;
       }
       if (!roundEnv.processingOver() && carriesLombokTrigger(element)) pending.add((TypeElement) element);
-      else emitBeanNavigator((TypeElement) element, "@BeanFocus", TRIGGER);
+      else emitBeanNavigator((TypeElement) element, "@BeanFocus", navigableBeanAnnotations());
     }
     if (roundEnv.processingOver()) {
-      for (final var pojo : pending) emitBeanNavigator(pojo, "@BeanFocus", TRIGGER);
+      for (final var pojo : pending) {
+        // A class carrying @Data, @Value or @Builder is telescope-lombok's target as well, and that
+        // processor writes the same <X>Telescope and <X>FieldOptics, from the same rebuild, as soon
+        // as the members Lombok adds are visible, so main code in the same compilation can name the
+        // navigator. When it took part in this compilation it has written them or will in this
+        // round, and writing them here too would collide; when it did not, nothing else will.
+        if (carriesLombokBeanTrigger(pojo) && lombokProcessorActive()) continue;
+        emitBeanNavigator(pojo, "@BeanFocus", navigableBeanAnnotations());
+      }
       pending.clear();
     }
     return true;
+  }
+
+  private boolean carriesLombokBeanTrigger(final Element element) {
+    for (final var fqn : LOMBOK_BEAN_ANNOTATIONS) {
+      if (hasAnnotation(element, fqn)) return true;
+    }
+    return false;
   }
 }

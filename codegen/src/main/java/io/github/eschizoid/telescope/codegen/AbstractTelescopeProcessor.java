@@ -7,6 +7,7 @@ import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -15,6 +16,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.WeakHashMap;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -31,6 +33,7 @@ import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
 
 /**
@@ -611,6 +614,56 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * Lombok-annotated sub-component has its own generated Path.
    */
   protected static final Set<String> LOMBOK_BEAN_ANNOTATIONS = Set.of("lombok.Data", "lombok.Value", "lombok.Builder");
+
+  private static final String BEAN_FOCUS = "io.github.eschizoid.telescope.annotations.BeanFocus";
+
+  private static final String LOMBOK_PROCESSOR = "io.github.eschizoid.telescope.codegen.lombok.LombokFocusProcessor";
+
+  // The compilations in which telescope-lombok's processor was initialised, keyed by their type
+  // utilities: one instance per compilation, shared by every processor in it, and held weakly so a
+  // finished compilation drops out.
+  private static final Set<Types> LOMBOK_PROCESSOR_ACTIVE = Collections.synchronizedSet(
+    Collections.newSetFromMap(new WeakHashMap<>())
+  );
+
+  /** Records that telescope-lombok's processor runs in this compilation. */
+  protected final void markLombokProcessorActive() {
+    LOMBOK_PROCESSOR_ACTIVE.add(processingEnv.getTypeUtils());
+  }
+
+  /**
+   * Whether telescope-lombok's processor was initialised in this compilation. javac initialises a
+   * processor the first round an annotation it supports appears, so by the final round this says
+   * whether it took part — including when an explicit {@code -processor} list leaves it out.
+   */
+  protected final boolean lombokProcessorActive() {
+    return LOMBOK_PROCESSOR_ACTIVE.contains(processingEnv.getTypeUtils());
+  }
+
+  /**
+   * The annotations that give a bean its own generated navigator, which a navigator descends into
+   * rather than ending at: {@code @BeanFocus}, and the Lombok bean annotations when
+   * telescope-lombok sits on the processor path, since only then is a navigator written for them.
+   * Both bean processors pass this one set, so a class gets the same navigator whichever of them
+   * writes it. javac loads every discovered processor through one class loader, so
+   * telescope-lombok's processor being loadable from this one's is the test for its being on the
+   * path.
+   */
+  protected final Set<String> navigableBeanAnnotations() {
+    final var navigable = new LinkedHashSet<String>();
+    navigable.add(BEAN_FOCUS);
+    if (loadable(LOMBOK_PROCESSOR)) navigable.addAll(LOMBOK_BEAN_ANNOTATIONS);
+    return navigable;
+  }
+
+  private static boolean loadable(final String className) {
+    try {
+      Class.forName(className, false, AbstractTelescopeProcessor.class.getClassLoader());
+      return true;
+    } catch (final ClassNotFoundException | LinkageError e) {
+      return false;
+    }
+  }
 
   /**
    * Broader set of Lombok annotations that synthesize members readable by {@link
