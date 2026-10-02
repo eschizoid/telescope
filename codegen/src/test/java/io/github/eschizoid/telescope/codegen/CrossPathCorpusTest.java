@@ -18,6 +18,7 @@ import java.util.Optional;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
+import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -863,6 +864,113 @@ class CrossPathCorpusTest {
       "{k1=%sLeafDto[v=b], k2=%sLeafDto[v=a]}"
     )
   );
+
+  /**
+   * A sorted source set whose elements are converted, rebuilt backward from an unsorted target. The
+   * comparator the source carried orders the type converted away from, so the rebuilt set orders
+   * its elements by their own {@code compareTo}. {@code declaration} is the source element's body
+   * after its name, and {@code owed} is what both paths throw: the exception's simple name and its
+   * message, with {@code %s} for the cell's qualified prefix.
+   */
+  private record SortedBackward(String name, String declaration, String owed) {}
+
+  private static final List<SortedBackward> SORTED_BACKWARD = List.of(
+    new SortedBackward(
+      "an element that is not Comparable",
+      "(String v) {}",
+      "IllegalStateException: Deep map: java.util.SortedSet keeps its elements in order, and %sA could not" +
+        " be ordered there, and its type does not implement Comparable. Supply an ordering these elements" +
+        " accept through a Mapping.via(...) row, or declare the target as a set that keeps no order. The" +
+        " cause is the cast itself."
+    ),
+    new SortedBackward(
+      "an element ordered against another type",
+      "(String v) implements Comparable<String> {\n  public int compareTo(final String o) { return v.compareTo(o); }\n}",
+      "IllegalStateException: Deep map: java.util.SortedSet keeps its elements in order, and %sA could not" +
+        " be ordered there, though its type implements Comparable. Supply an ordering these elements" +
+        " accept through a Mapping.via(...) row, or declare the target as a set that keeps no order. The" +
+        " cause is the cast itself."
+    ),
+    // An element ordered against its own kind has said it can be ordered, so a cast escaping
+    // its
+    // compareTo is its own and propagates as it is.
+    new SortedBackward(
+      "an element whose own compareTo casts",
+      "(String v) implements Comparable<%sA> {\n" +
+        "  public int compareTo(final %sA o) { throw new ClassCastException(\"its own\"); }\n}",
+      "ClassCastException: its own"
+    )
+  );
+
+  @Test
+  @DisplayName("a sorted source rebuilt backward from converted elements refuses the same way on both paths")
+  void anUnorderableSortedRebuildRefusesTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var shape : SORTED_BACKWARD) {
+      final var prefix = "Sb" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var sources = new JavaFileObject[] {
+        source(prefix + "A", head + "public record " + prefix + "A" + shape.declaration().replace("%s", prefix) + "\n"),
+        source(prefix + "B", head + "public record " + prefix + "B(String v) {}\n"),
+        source(
+          prefix + "Src",
+          head +
+            "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(" +
+            prefix +
+            "Tgt.class)\npublic record " +
+            prefix +
+            "Src(java.util.SortedSet<" +
+            prefix +
+            "A> items) {}\n"
+        ),
+        source(prefix + "Tgt", head + "public record " + prefix + "Tgt(java.util.Set<" + prefix + "B> items) {}\n"),
+      };
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> shape.name() + " should compile: " + plain.errorMessages());
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      assertTrue(processed.success(), () -> shape.name() + " should bridge: " + processed.errorMessages());
+      // The refusal is built in generated code, which a consumer may compile with every lint on and
+      // warnings as errors, so it has to raise none of its own.
+      final var warnings = processed
+        .diagnostics()
+        .stream()
+        .filter(d -> d.getKind() == Diagnostic.Kind.WARNING || d.getKind() == Diagnostic.Kind.MANDATORY_WARNING)
+        .filter(d -> d.getSource() != null && d.getSource().getName().endsWith("Bridge.java"))
+        .map(d -> d.getMessage(null))
+        .toList();
+      if (!warnings.isEmpty()) failures.add(shape.name() + ": the bridge raised " + warnings);
+
+      final var classes = plain.define(MethodHandles.lookup());
+      final var src = classes.get(PACKAGE + "." + prefix + "Src");
+      final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
+      final var leaf = classes.get(PACKAGE + "." + prefix + "B").getConstructor(String.class);
+      final var items = new LinkedHashSet<Object>();
+      for (final var value : VALUES) items.add(leaf.newInstance(value));
+      final var target = tgt.getConstructors()[0].newInstance(items);
+      final var backward = emitted(processed, plain, prefix).getMethod("backward", tgt);
+
+      final var owed = shape.owed().replace("%s", PACKAGE + "." + prefix);
+      final var generated = thrown(() -> backward.invoke(null, target));
+      final var reflective = thrown(() -> Telescope.mapper(cast(src), cast(tgt)).backward(target));
+      if (!owed.equals(generated)) failures.add(shape.name() + ": generated threw " + generated);
+      if (!owed.equals(reflective)) failures.add(shape.name() + ": reflective threw " + reflective);
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  /** The simple name and message of what an attempt throws, or a note that it threw nothing. */
+  private static String thrown(final Attempt attempt) {
+    try {
+      attempt.get();
+      return "nothing";
+    } catch (final InvocationTargetException e) {
+      final var cause = e.getCause();
+      return cause.getClass().getSimpleName() + ": " + cause.getMessage();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return e.getClass().getSimpleName() + ": " + e.getMessage();
+    }
+  }
 
   private static JavaFileObject[] rawSources(final String prefix, final RawPairing pairing) {
     final var head = "package " + PACKAGE + ";\n";
