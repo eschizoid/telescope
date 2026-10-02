@@ -866,53 +866,189 @@ class CrossPathCorpusTest {
   );
 
   /**
-   * A sorted source set whose elements are converted, rebuilt backward from an unsorted target. The
-   * comparator the source carried orders the type converted away from, so the rebuilt set orders
-   * its elements by their own {@code compareTo}. {@code declaration} is the source element's body
-   * after its name, and {@code owed} is what both paths throw: the exception's simple name and its
-   * message, with {@code %s} for the cell's qualified prefix.
+   * A sorted source set rebuilt backward from an unsorted target, so the rebuilt set orders its
+   * elements by their own {@code compareTo}: a comparator the source carried either orders the type
+   * converted away from, or never reaches a target that keeps no order.
+   *
+   * <p>{@code declarations} are the cell's own types beyond the pair, each a whole top-level
+   * declaration; {@code A} is the source element, and {@code B} the converted one where the
+   * elements change type. {@code srcItems} and {@code tgtItems} are the two field types, and {@code
+   * leaf} is the class the target's elements are built from. A target field whose type is a class
+   * is filled through its own no-argument constructor, and one whose type is an interface holds a
+   * {@code LinkedHashSet}. When {@code nested} is set, the pair holds the two containers one level
+   * down, in records named {@code Inner} and {@code InnerDto}. {@code owed} is what both paths
+   * throw, rendered by {@link #thrown}. {@code %s} is the cell's prefix in the declarations and
+   * field types, and its qualified prefix in {@code owed}.
    */
-  private record SortedBackward(String name, String declaration, String owed) {}
+  private record SortedBackward(
+    String name,
+    List<String> declarations,
+    String srcItems,
+    String tgtItems,
+    String leaf,
+    boolean nested,
+    String owed
+  ) {}
+
+  /** The refusal a sorted container gives an element it cannot order, with the cast underneath. */
+  private static String unorderable(final String container, final String implementing, final String castTo) {
+    return (
+      "IllegalStateException: Deep map: " +
+      container +
+      " keeps its elements in order, and %sA could not be ordered there, " +
+      implementing +
+      ". Supply an ordering these elements accept through a Mapping.via(...) row, or declare the" +
+      " target as a set that keeps no order. The cause is the cast itself. <- ClassCastException:" +
+      " class %sA cannot be cast to class " +
+      castTo
+    );
+  }
+
+  private static final String NOT_COMPARABLE = "public record %sA(String v) {}";
+
+  /**
+   * An element whose {@code Comparable} declaration names its own kind only through a type variable
+   * its subclass binds, and whose {@code compareTo} raises a cast of its own.
+   */
+  private static final List<String> BOUND_THROUGH_A_VARIABLE = List.of(
+    "public abstract class %sCmp<T extends %sCmp<T>> implements Comparable<T> {\n" +
+      "  public int compareTo(final T o) { throw new ClassCastException(\"its own\"); }\n}",
+    "public final class %sA extends %sCmp<%sA> {\n" +
+      "  private String v;\n" +
+      "  public %sA() {}\n" +
+      "  public %sA(final String v) { this.v = v; }\n" +
+      "  public String getV() { return v; }\n" +
+      "  public void setV(final String v) { this.v = v; }\n}"
+  );
 
   private static final List<SortedBackward> SORTED_BACKWARD = List.of(
     new SortedBackward(
       "an element that is not Comparable",
-      "(String v) {}",
-      "IllegalStateException: Deep map: java.util.SortedSet keeps its elements in order, and %sA could not" +
-        " be ordered there, and its type does not implement Comparable. Supply an ordering these elements" +
-        " accept through a Mapping.via(...) row, or declare the target as a set that keeps no order. The" +
-        " cause is the cast itself."
+      List.of(NOT_COMPARABLE),
+      "java.util.SortedSet<%sA>",
+      "java.util.Set<%sB>",
+      "B",
+      false,
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
     ),
     new SortedBackward(
       "an element ordered against another type",
-      "(String v) implements Comparable<String> {\n  public int compareTo(final String o) { return v.compareTo(o); }\n}",
-      "IllegalStateException: Deep map: java.util.SortedSet keeps its elements in order, and %sA could not" +
-        " be ordered there, though its type implements Comparable. Supply an ordering these elements" +
-        " accept through a Mapping.via(...) row, or declare the target as a set that keeps no order. The" +
-        " cause is the cast itself."
+      List.of(
+        "public record %sA(String v) implements Comparable<String> {\n" +
+          "  public int compareTo(final String o) { return v.compareTo(o); }\n}"
+      ),
+      "java.util.SortedSet<%sA>",
+      "java.util.Set<%sB>",
+      "B",
+      false,
+      unorderable("java.util.SortedSet", "though its type implements Comparable", "java.lang.String")
     ),
-    // An element ordered against its own kind has said it can be ordered, so a cast escaping
-    // its
-    // compareTo is its own and propagates as it is.
+    // An element ordered against its own kind has said it can be ordered,
+    // so a cast escaping its compareTo is its own and propagates as it is.
     new SortedBackward(
       "an element whose own compareTo casts",
-      "(String v) implements Comparable<%sA> {\n" +
-        "  public int compareTo(final %sA o) { throw new ClassCastException(\"its own\"); }\n}",
+      List.of(
+        "public record %sA(String v) implements Comparable<%sA> {\n" +
+          "  public int compareTo(final %sA o) { throw new ClassCastException(\"its own\"); }\n}"
+      ),
+      "java.util.SortedSet<%sA>",
+      "java.util.Set<%sB>",
+      "B",
+      false,
       "ClassCastException: its own"
+    ),
+    new SortedBackward(
+      "an element ordered against its own kind through a type variable",
+      BOUND_THROUGH_A_VARIABLE,
+      "java.util.SortedSet<%sA>",
+      "java.util.Set<%sB>",
+      "B",
+      false,
+      "ClassCastException: its own"
+    ),
+    new SortedBackward(
+      "an element copied unchanged that is not Comparable",
+      List.of(NOT_COMPARABLE),
+      "java.util.SortedSet<%sA>",
+      "java.util.Set<%sA>",
+      "A",
+      false,
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
+    ),
+    new SortedBackward(
+      "an element copied unchanged whose own compareTo casts",
+      BOUND_THROUGH_A_VARIABLE,
+      "java.util.SortedSet<%sA>",
+      "java.util.Set<%sA>",
+      "A",
+      false,
+      "ClassCastException: its own"
+    ),
+    new SortedBackward(
+      "an element converted between sorted container subtypes",
+      List.of(
+        NOT_COMPARABLE,
+        "public record %sB(String v) implements Comparable<%sB> {\n" +
+          "  public int compareTo(final %sB o) { return v.compareTo(o.v()); }\n}",
+        "public class %sSorted extends java.util.TreeSet<%sA> {}",
+        "public class %sSortedDto extends java.util.TreeSet<%sB> {}"
+      ),
+      "%sSorted",
+      "%sSortedDto",
+      "B",
+      false,
+      unorderable("%sSorted", "and its type does not implement Comparable", "java.lang.Comparable")
+    ),
+    new SortedBackward(
+      "an element converted one level down",
+      List.of(NOT_COMPARABLE),
+      "java.util.SortedSet<%sA>",
+      "java.util.Set<%sB>",
+      "B",
+      true,
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
+    ),
+    new SortedBackward(
+      "an element copied unchanged one level down",
+      List.of(NOT_COMPARABLE),
+      "java.util.SortedSet<%sA>",
+      "java.util.Set<%sA>",
+      "A",
+      true,
+      unorderable("java.util.SortedSet", "and its type does not implement Comparable", "java.lang.Comparable")
     )
   );
 
   @Test
-  @DisplayName("a sorted source rebuilt backward from converted elements refuses the same way on both paths")
+  @DisplayName("a sorted source rebuilt backward refuses the same way on both paths")
   void anUnorderableSortedRebuildRefusesTheSameWayOnBothPaths() throws ReflectiveOperationException {
     final var failures = new ArrayList<String>();
+    final var declared = Pattern.compile("(?:class|record) (\\w+)");
     var index = 0;
     for (final var shape : SORTED_BACKWARD) {
       final var prefix = "Sb" + index++;
       final var head = "package " + PACKAGE + ";\n";
-      final var sources = new JavaFileObject[] {
-        source(prefix + "A", head + "public record " + prefix + "A" + shape.declaration().replace("%s", prefix) + "\n"),
-        source(prefix + "B", head + "public record " + prefix + "B(String v) {}\n"),
+      final var sources = new ArrayList<JavaFileObject>();
+      for (final var declaration : shape.declarations()) {
+        final var code = declaration.replace("%s", prefix);
+        final var named = declared.matcher(code);
+        if (!named.find()) throw new IllegalStateException("no type declared in " + code);
+        sources.add(source(named.group(1), head + code + "\n"));
+      }
+      if (sources.stream().noneMatch(s -> s.getName().endsWith("/" + prefix + "B.java"))) {
+        sources.add(source(prefix + "B", head + "public record " + prefix + "B(String v) {}\n"));
+      }
+      final var srcItems = shape.srcItems().replace("%s", prefix);
+      final var tgtItems = shape.tgtItems().replace("%s", prefix);
+      final var srcHolds = shape.nested() ? prefix + "Inner" : srcItems;
+      final var tgtHolds = shape.nested() ? prefix + "InnerDto" : tgtItems;
+      if (shape.nested()) {
+        sources.add(source(prefix + "Inner", head + "public record " + prefix + "Inner(" + srcItems + " items) {}\n"));
+        sources.add(
+          source(prefix + "InnerDto", head + "public record " + prefix + "InnerDto(" + tgtItems + " items) {}\n")
+        );
+      }
+      sources.add(
         source(
           prefix + "Src",
           head +
@@ -920,15 +1056,16 @@ class CrossPathCorpusTest {
             prefix +
             "Tgt.class)\npublic record " +
             prefix +
-            "Src(java.util.SortedSet<" +
-            prefix +
-            "A> items) {}\n"
-        ),
-        source(prefix + "Tgt", head + "public record " + prefix + "Tgt(java.util.Set<" + prefix + "B> items) {}\n"),
-      };
-      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+            "Src(" +
+            srcHolds +
+            " items) {}\n"
+        )
+      );
+      sources.add(source(prefix + "Tgt", head + "public record " + prefix + "Tgt(" + tgtHolds + " items) {}\n"));
+      final var compiled = sources.toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), compiled);
       assertTrue(plain.success(), () -> shape.name() + " should compile: " + plain.errorMessages());
-      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), compiled);
       assertTrue(processed.success(), () -> shape.name() + " should bridge: " + processed.errorMessages());
       // The refusal is built in generated code, which a consumer may compile with every lint on and
       // warnings as errors, so it has to raise none of its own.
@@ -944,10 +1081,15 @@ class CrossPathCorpusTest {
       final var classes = plain.define(MethodHandles.lookup());
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
       final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
-      final var leaf = classes.get(PACKAGE + "." + prefix + "B").getConstructor(String.class);
-      final var items = new LinkedHashSet<Object>();
+      final var leaf = classes.get(PACKAGE + "." + prefix + shape.leaf()).getConstructor(String.class);
+      final var container = classes.getOrDefault(PACKAGE + "." + tgtItems, LinkedHashSet.class);
+      @SuppressWarnings("unchecked")
+      final var items = (Collection<Object>) container.getConstructor().newInstance();
       for (final var value : VALUES) items.add(leaf.newInstance(value));
-      final var target = tgt.getConstructors()[0].newInstance(items);
+      final var held = shape.nested()
+        ? classes.get(PACKAGE + "." + prefix + "InnerDto").getConstructors()[0].newInstance(items)
+        : items;
+      final var target = tgt.getConstructors()[0].newInstance(held);
       final var backward = emitted(processed, plain, prefix).getMethod("backward", tgt);
 
       final var owed = shape.owed().replace("%s", PACKAGE + "." + prefix);
@@ -959,17 +1101,34 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
-  /** The simple name and message of what an attempt throws, or a note that it threw nothing. */
+  /**
+   * What an attempt throws, as its simple class name and message followed by its cause's after
+   * {@code <-}, or a note that it threw nothing.
+   */
   private static String thrown(final Attempt attempt) {
     try {
       attempt.get();
       return "nothing";
     } catch (final InvocationTargetException e) {
-      final var cause = e.getCause();
-      return cause.getClass().getSimpleName() + ": " + cause.getMessage();
+      return rendered(e.getCause());
     } catch (final ReflectiveOperationException | RuntimeException e) {
-      return e.getClass().getSimpleName() + ": " + e.getMessage();
+      return rendered(e);
     }
+  }
+
+  /**
+   * A throwable and its causes, each as its simple class name and message. A JDK cast's message
+   * ends with a parenthesised account of the class loaders involved, which differ between the two
+   * paths, so it is cut there.
+   */
+  private static String rendered(final Throwable thrown) {
+    final var message = String.valueOf(thrown.getMessage());
+    final var loaders = message.indexOf(" (");
+    final var own =
+      thrown.getClass().getSimpleName() +
+      ": " +
+      (thrown instanceof ClassCastException && loaders >= 0 ? message.substring(0, loaders) : message);
+    return thrown.getCause() == null ? own : own + " <- " + rendered(thrown.getCause());
   }
 
   private static JavaFileObject[] rawSources(final String prefix, final RawPairing pairing) {

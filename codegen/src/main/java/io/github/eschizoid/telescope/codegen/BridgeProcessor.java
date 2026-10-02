@@ -3672,10 +3672,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           "    for (final var e : src.entrySet()) out.put(e.getKey(), " + sub + "." + direction + "(e.getValue()));"
         );
       }
-    } else if (identity) {
-      out.println("    out.addAll(src);");
     } else {
-      out.println("    for (final var x : src) out.add(" + sub + "." + direction + "(x));");
+      emitCollectionFill(out, tgtContainer, plan.kind(), identity ? null : sub + "." + direction + "(x)");
     }
     out.println("    return out;");
     out.println("  }");
@@ -4406,48 +4404,88 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       concreteImplFqn(tgtContainer, FieldPlan.Kind.SET)
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false));
-    final var implFqn = concreteImplFqn(tgtContainer, FieldPlan.Kind.SET);
-    final var element = setElementOf(tgtContainer);
-    if (orderedFamilyOf(implFqn, FieldPlan.Kind.SET) == null || orderedAgainstItsOwnKind(element)) {
-      out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
-    } else {
-      emitOrderedInsert(out, tgtContainer, subBridge + "." + direction + "(x)");
-    }
+    emitCollectionFill(out, tgtContainer, FieldPlan.Kind.SET, subBridge + "." + direction + "(x)");
     out.println("    return out;");
     out.println("  }");
   }
 
   /**
-   * The fill of a sorted output whose elements are converted, which can fail on the insert: the
-   * converted element is ordered by its own {@code compareTo}, since a comparator over the source's
-   * element type cannot come across, and an element that cannot be ordered there raises a cast from
-   * inside the container. That cast is turned into the refusal the reflective path gives, word for
-   * word, naming the container as declared and the element's runtime class.
+   * Fills {@code out} from {@code src}, each element converted by {@code convert}, an expression
+   * over {@code x}, or copied unchanged when {@code convert} is null. Every helper that fills a
+   * collection emits through here, so an output that keeps an order is guarded on every route.
    *
-   * <p>Each element is converted once into a local and the local is inserted, so a conversion that
-   * counts or generates sees every element exactly once, as it does in the unsorted loop.
+   * <p>A sorted output whose elements are not ordered against their own kind can fail on the
+   * insert: an element that cannot be ordered there raises a cast from inside the container. That
+   * cast is turned into the refusal the reflective path gives, word for word, naming the container
+   * as declared and the element's runtime class. Elements ordered against their own kind keep the
+   * plain fill, so a cast from inside their own {@code compareTo} propagates as it is, as it does
+   * there.
    */
-  private void emitOrderedInsert(final PrintWriter out, final TypeMirror tgtContainer, final String convert) {
+  private void emitCollectionFill(
+    final PrintWriter out,
+    final TypeMirror tgtContainer,
+    final FieldPlan.Kind kind,
+    final String convert
+  ) {
+    final var guarded =
+      kind == FieldPlan.Kind.SET &&
+      orderedFamilyOf(concreteImplFqn(tgtContainer, kind), kind) != null &&
+      !orderedAgainstItsOwnKind(setElementOf(tgtContainer));
+    if (!guarded) {
+      out.println(convert == null ? "    out.addAll(src);" : "    for (final var x : src) out.add(" + convert + ");");
+      return;
+    }
+    if (convert != null) {
+      emitOrderedInsert(out, tgtContainer, "    ", convert);
+      return;
+    }
+    // addAll keeps a sorted container's linear build from a source sorted the same way. When it
+    // fails, the elements are inserted again one at a time to name the one that cannot be ordered;
+    // they are unchanged, so the second pass meets the first failure again.
+    out.println("    try {");
+    out.println("      out.addAll(src);");
+    out.println("    } catch (final ClassCastException __unordered) {");
+    out.println("      out.clear();");
+    emitOrderedInsert(out, tgtContainer, "      ", null);
+    out.println("    }");
+  }
+
+  /**
+   * A loop inserting each element of {@code src} into a sorted {@code out}, turning a cast from the
+   * insert into the reflective path's refusal. {@code convert} is as for {@link
+   * #emitCollectionFill}; a converted element is converted once into a local and the local is
+   * inserted, so a conversion that counts or generates sees every element exactly once, as it does
+   * in the unsorted loop.
+   */
+  private void emitOrderedInsert(
+    final PrintWriter out,
+    final TypeMirror tgtContainer,
+    final String indent,
+    final String convert
+  ) {
     final var declared = (TypeElement) ((DeclaredType) tgtContainer).asElement();
     final var outRaw = processingEnv.getElementUtils().getBinaryName(declared).toString();
-    out.println("    for (final var x : src) {");
-    out.println("      final var __e = " + convert + ";");
-    out.println("      try {");
-    out.println("        out.add(__e);");
-    out.println("      } catch (final ClassCastException __cast) {");
-    out.println("        throw new IllegalStateException(");
-    out.println("          \"Deep map: " + outRaw + " keeps its elements in order, and \"");
-    out.println("            + __e.getClass().getName()");
-    out.println("            + \" could not be ordered there\"");
-    out.println("            + (((Object) __e) instanceof Comparable");
-    out.println("              ? \", though its type implements Comparable\"");
-    out.println("              : \", and its type does not implement Comparable\")");
-    out.println("            + \". Supply an ordering these elements accept through a Mapping.via(...) row, or\"");
-    out.println("            + \" declare the target as a set that keeps no order. The cause is the cast itself.\",");
-    out.println("          __cast");
-    out.println("        );");
-    out.println("      }");
-    out.println("    }");
+    final var element = convert == null ? "x" : "__e";
+    out.println(indent + "for (final var x : src) {");
+    if (convert != null) out.println(indent + "  final var __e = " + convert + ";");
+    out.println(indent + "  try {");
+    out.println(indent + "    out.add(" + element + ");");
+    out.println(indent + "  } catch (final ClassCastException __cast) {");
+    out.println(indent + "    throw new IllegalStateException(");
+    out.println(indent + "      \"Deep map: " + outRaw + " keeps its elements in order, and \"");
+    out.println(indent + "        + " + element + ".getClass().getName()");
+    out.println(indent + "        + \" could not be ordered there\"");
+    out.println(indent + "        + (((Object) " + element + ") instanceof Comparable");
+    out.println(indent + "          ? \", though its type implements Comparable\"");
+    out.println(indent + "          : \", and its type does not implement Comparable\")");
+    out.println(indent + "        + \". Supply an ordering these elements accept through a Mapping.via(...) row, or\"");
+    out.println(
+      indent + "        + \" declare the target as a set that keeps no order. The cause is the cast itself.\","
+    );
+    out.println(indent + "      __cast");
+    out.println(indent + "    );");
+    out.println(indent + "  }");
+    out.println(indent + "}");
   }
 
   /** The element type a set container holds, read through its view as a {@code Set}. */
@@ -4461,19 +4499,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * reflective path's test for a cast escaping a sorted insert being the element's own fault rather
    * than an ordering problem. Such an element's cast is left to propagate, as it does there.
    *
-   * <p>The reflective path asks the element's runtime class and this asks the declared element
-   * type, so the two agree whenever no element is of a subclass that declares {@code Comparable}
-   * differently from the declared type: always for a record, an enum or a final class, and for any
-   * class whose subclasses inherit its declaration. The walk is the same: the first parameterized
-   * {@code Comparable} found among the supertypes answers, and a raw one is followed like any other
-   * type.
+   * <p>The walk is the reflective path's: the first parameterized {@code Comparable} among the
+   * supertypes answers, a type variable in it is read through the arguments passed on the way up,
+   * and a raw one is followed like any other type. It starts from the erasure of the declared
+   * element type because the reflective path starts from a runtime class, which carries no type
+   * arguments; so a variable the class itself leaves open answers false on both.
+   *
+   * <p>The reflective path asks each element's runtime class and this asks the declared element
+   * class. The answers differ only for an element whose runtime class is a proper subclass of the
+   * declared one, ordered against its own kind while the declared class is not: the subclass
+   * declares {@code Comparable} itself, binds a variable the declared class leaves open, or is what
+   * the declared class compares against. The generated code then refuses a cast the reflective path
+   * lets through, with that cast as the cause. The other way round cannot happen: a subclass
+   * inherits its superclass's declaration, and anything a class can be compared with, its
+   * subclasses can be too. A final declared class, a record among them, has no such subclass.
    */
   private boolean orderedAgainstItsOwnKind(final TypeMirror element) {
     if (!(element instanceof DeclaredType)) return false;
     final var comparable = processingEnv.getElementUtils().getTypeElement("java.lang.Comparable");
     if (comparable == null) return false;
     final var types = processingEnv.getTypeUtils();
-    final Deque<TypeMirror> pending = new ArrayDeque<>(List.of(element));
+    final var own = types.erasure(element);
+    final Deque<TypeMirror> pending = new ArrayDeque<>(List.of(own));
     while (!pending.isEmpty()) {
       final var type = pending.poll();
       if (type instanceof DeclaredType declared && declared.asElement().equals(comparable)) {
@@ -4482,7 +4529,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         return (
           against instanceof DeclaredType target &&
           target.getTypeArguments().isEmpty() &&
-          types.isAssignable(types.erasure(element), types.erasure(target))
+          types.isAssignable(own, types.erasure(target))
         );
       }
       pending.addAll(types.directSupertypes(type));
