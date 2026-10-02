@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import java.io.Serializable;
 import java.lang.invoke.SerializedLambda;
+import java.lang.reflect.InaccessibleObjectException;
 
 /**
  * Reflective extraction of method-reference metadata via {@link SerializedLambda}. The runtime
@@ -63,7 +64,19 @@ public final class LambdaIntrospection {
   private static Metadata decode(final Serializable lambda) {
     try {
       final var writeReplace = lambda.getClass().getDeclaredMethod("writeReplace");
-      writeReplace.setAccessible(true);
+      try {
+        writeReplace.setAccessible(true);
+      } catch (final InaccessibleObjectException e) {
+        // The method reference is compiled into the class that wrote it, so reading it back needs
+        // that class's package open to this module, the same opens every accessor needs.
+        throw new IllegalStateException(
+          "Cannot read the method reference " +
+            lambda.getClass().getName() +
+            ". " +
+            ModuleAccess.opensRemedy(lambda.getClass()),
+          e
+        );
+      }
       final var serialized = (SerializedLambda) writeReplace.invoke(lambda);
       final var name = serialized.getImplMethodName();
       if (name.startsWith("lambda$")) throw new IllegalArgumentException(

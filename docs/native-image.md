@@ -92,7 +92,7 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
   in order of how often they fit — see below.
 - **`privateLookupIn`.** All records/beans here are public on the classpath, so `MethodHandles.privateLookupIn` succeeds
   without an `opens` directive. A downstream consumer with JPMS-closed packages still needs
-  `opens ... to io.github.eschizoid.telescope;` — a module-descriptor requirement, not a native-image one.
+  `opens ... to io.github.eschizoid.telescope.internal;` — a module-descriptor requirement, not a native-image one.
 
 ## A container field whose class the runtime does not name
 

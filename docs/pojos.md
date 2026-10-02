@@ -212,4 +212,4 @@ deep-mapping conversions are cheaper than deep navigation-and-update — the cur
 via `Mapping.to(srcAcc, tgtAcc)`); nested collections recurse automatically. Neither path writes a private field: the
 runtime writes through setters, a static `builder()` or a constructor, the same members `@Bridge` generates calls to,
 and both refuse a POJO that offers none of them. The runtime reaches those members through a private lookup, so under
-JPMS a POJO package that is exported but not opened needs `opens <package> to io.github.eschizoid.telescope`.
+JPMS a POJO package that is exported but not opened needs `opens <package> to io.github.eschizoid.telescope.internal`.

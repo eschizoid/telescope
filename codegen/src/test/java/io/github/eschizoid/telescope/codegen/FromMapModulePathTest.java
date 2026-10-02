@@ -4,21 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.lang.module.ModuleFinder;
 import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
-import java.util.jar.JarFile;
-import java.util.stream.Collectors;
 import javax.tools.Diagnostic;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -35,30 +24,10 @@ class FromMapModulePathTest {
     "provides io.github.eschizoid.telescope.conversion.FromMapProvider with demo.InnerFromMap.Provider, " +
     "demo.OuterFromMap.Provider;";
 
-  /**
-   * The modular entries of this test's class path, which is where telescope's modules come from.
-   */
-  private static String modulePath() {
-    return Arrays.stream(System.getProperty("java.class.path").split(File.pathSeparator))
-      .filter(FromMapModulePathTest::isModular)
-      .collect(Collectors.joining(File.pathSeparator));
-  }
-
-  private static boolean isModular(final String entry) {
-    final var path = Path.of(entry);
-    if (Files.isDirectory(path)) return Files.exists(path.resolve("module-info.class"));
-    if (!entry.endsWith(".jar") || !Files.exists(path)) return false;
-    try (final var jar = new JarFile(path.toFile())) {
-      return jar.getEntry("module-info.class") != null;
-    } catch (final IOException e) {
-      throw new UncheckedIOException(e);
-    }
-  }
-
   private static ProcessorHarness.Compilation compileModule(final String directives) {
     return ProcessorHarness.compileFully(
       List.of(new FromMapProcessor()),
-      List.of("--module-path", modulePath()),
+      List.of("--module-path", ModuleLayers.modulePath()),
       ProcessorHarness.source(
         "module-info",
         "module demo {\n  requires io.github.eschizoid.telescope;\n  exports demo;\n  opens demo;\n" +
@@ -127,18 +96,7 @@ class FromMapModulePathTest {
    * Answers with the refusal message, or null when the mapper was built.
    */
   private static String runtimeVerdict(final ProcessorHarness.Compilation compilation) throws Exception {
-    final var dir = Files.createTempDirectory("frommap-module");
-    for (final var entry : compilation.classes().entrySet()) {
-      final var file = dir.resolve(entry.getKey().replace('.', '/') + ".class");
-      Files.createDirectories(file.getParent());
-      Files.write(file, entry.getValue());
-    }
-    final var entries = new ArrayList<Path>();
-    entries.add(dir);
-    for (final var entry : modulePath().split(File.pathSeparator)) entries.add(Path.of(entry));
-    final var finder = ModuleFinder.of(entries.toArray(Path[]::new));
-    final var configuration = ModuleLayer.boot().configuration().resolve(finder, ModuleFinder.of(), Set.of("demo"));
-    final var layer = ModuleLayer.boot().defineModulesWithOneLoader(configuration, ClassLoader.getSystemClassLoader());
+    final var layer = ModuleLayers.layer(compilation, "demo");
     final var loader = layer.findLoader("demo");
     final var outer = loader.loadClass("demo.Outer");
     final var steps = loader.loadClass("io.github.eschizoid.telescope.mapping.MapExtractStep");
