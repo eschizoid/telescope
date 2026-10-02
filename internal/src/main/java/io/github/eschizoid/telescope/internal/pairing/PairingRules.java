@@ -80,11 +80,13 @@ public final class PairingRules<T> {
       // refused: its elements are of no type anything has said, so neither a copy nor a
       // conversion can be planned for them.
       //
-      // The copy is gated on kind-discriminator agreement AND allocability so a provably infeasible
-      // copy falls through to the remaining branches exactly like the runtime. UNKNOWN allocability
-      // (the compile-time world can't probe allocators) resolves in the ACCEPTING direction here:
-      // CollectionCopy/MapCopy are terminal accepts, so optimism can only defer an error to the
-      // construction backstop, never invent one.
+      // The copy is also gated on kind-discriminator agreement and on both sides being buildable.
+      // An interface or abstract class is buildable exactly when the allocation table names a
+      // default implementation for it, which both worlds decide the same way and the runtime copy
+      // then allocates. A concrete class is probed by the runtime; the compile-time world cannot
+      // probe it and answers UNKNOWN, which is accepted here, so the generated code's own checks
+      // on the class it allocates are what refuse one that has no reachable constructor. A copy
+      // provably not buildable falls through to the remaining branches.
       final var collection = sameKindCollection(srcType, tgtType);
       final var map = sameKindMap(srcType, tgtType);
       final var elements = collection
@@ -566,6 +568,22 @@ public final class PairingRules<T> {
     }
     final var entry = BY_DECLARED_NAME.get(name);
     return entry == null || entry.family() != kind ? null : entry.allocation();
+  }
+
+  /**
+   * Whether an interface or abstract container type has a default implementation a copy can build
+   * in its place: the class the allocation table rebuilds it as in the family it belongs to, a
+   * map's for a map, a set's for a set, and a list's for any other collection. Every class the
+   * table names implements the declaration it is named for, so an answer here is a class the field
+   * can hold.
+   */
+  public boolean hasDefaultImplementation(final T declared) {
+    final var kind = props.isSubtypeOf(declared, WellKnown.MAP)
+      ? ContainerView.Kind.MAP_VALUES
+      : props.isSubtypeOf(declared, WellKnown.SET)
+        ? ContainerView.Kind.SET
+        : ContainerView.Kind.LIST;
+    return allocationFor(declared, kind) instanceof Allocation.Build;
   }
 
   /**

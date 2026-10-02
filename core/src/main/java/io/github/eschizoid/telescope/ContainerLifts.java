@@ -26,6 +26,7 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.Stack;
@@ -68,18 +69,10 @@ final class ContainerLifts {
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> collectionCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
-    final var srcSupplier = Beans.intermediateAllocator(srcCls);
-    final var tgtSupplier = Beans.intermediateAllocator(tgtCls);
-    if (srcSupplier.get() == null || tgtSupplier.get() == null) return null;
-    // Copying elements verbatim leaves an order to carry: the side being filled keeps one, and the
-    // side being read has one to give. A supplier is handed no source, so the ordering rule is
-    // applied here as it is wherever else a sorted container is built.
-    final var srcAlloc = orderingAware(srcCls, srcCls, SortedSet.class, ContainerLifts::setComparator, ignored ->
-      srcSupplier.get()
-    );
-    final var tgtAlloc = orderingAware(tgtCls, tgtCls, SortedSet.class, ContainerLifts::setComparator, ignored ->
-      tgtSupplier.get()
-    );
+    final var kind = Set.class.isAssignableFrom(tgtCls) ? ContainerView.Kind.SET : ContainerView.Kind.LIST;
+    final var srcAlloc = copyAllocator(srcCls, kind, SortedSet.class, ContainerLifts::setComparator);
+    final var tgtAlloc = copyAllocator(tgtCls, kind, SortedSet.class, ContainerLifts::setComparator);
+    if (srcAlloc == null || tgtAlloc == null) return null;
     return Iso.of(
       src -> {
         if (src == null) return null;
@@ -96,18 +89,37 @@ final class ContainerLifts {
     );
   }
 
+  /**
+   * The allocation one side of an element copy fills, or null when that side cannot be built.
+   *
+   * <p>An interface or abstract class is built as the default implementation the shared table names
+   * for its family, which carries the source's comparator where the default is a sorted one; the
+   * pairing spec accepts the copy on exactly that condition, so the two cannot disagree. Any other
+   * class is built through its own allocator, and the source's order is carried into it where the
+   * class keeps one.
+   */
+  private static Function<Object, Object> copyAllocator(
+    final Class<?> cls,
+    final ContainerView.Kind kind,
+    final Class<?> sortedIface,
+    final Function<Object, Comparator<Object>> comparatorOf
+  ) {
+    if (cls.isInterface() || Modifier.isAbstract(cls.getModifiers())) return specAllocatorFor(cls, kind);
+    final var supplier = Beans.intermediateAllocator(cls);
+    if (supplier.get() == null) return null;
+    // Copying elements verbatim leaves an order to carry: the side being filled keeps one, and the
+    // side being read has one to give. A supplier is handed no source, so the ordering rule is
+    // applied here as it is wherever else a sorted container is built.
+    return orderingAware(cls, cls, sortedIface, comparatorOf, ignored -> supplier.get());
+  }
+
   /** Map ↔ Map element-copy Iso. Mirror of {@link #collectionCopyIso} via {@code putAll}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> mapCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
-    final var srcSupplier = Beans.intermediateAllocator(srcCls);
-    final var tgtSupplier = Beans.intermediateAllocator(tgtCls);
-    if (srcSupplier.get() == null || tgtSupplier.get() == null) return null;
-    final var srcAlloc = orderingAware(srcCls, srcCls, SortedMap.class, ContainerLifts::mapComparator, ignored ->
-      srcSupplier.get()
-    );
-    final var tgtAlloc = orderingAware(tgtCls, tgtCls, SortedMap.class, ContainerLifts::mapComparator, ignored ->
-      tgtSupplier.get()
-    );
+    final var kind = ContainerView.Kind.MAP_VALUES;
+    final var srcAlloc = copyAllocator(srcCls, kind, SortedMap.class, ContainerLifts::mapComparator);
+    final var tgtAlloc = copyAllocator(tgtCls, kind, SortedMap.class, ContainerLifts::mapComparator);
+    if (srcAlloc == null || tgtAlloc == null) return null;
     return Iso.of(
       src -> {
         if (src == null) return null;
@@ -688,7 +700,7 @@ final class ContainerLifts {
             canonical(raw) +
             " declares no constructor taking a Comparator, so the source's ordering cannot" +
             " be carried into it. Declare one, declare the field as the interface, or" +
-            " supply an explicit Mapping.via(...) row for it."
+            " convert it with an explicit Mapping.to(src, tgt, fwd, bwd) row."
         );
       }
       return plain.apply(input);
