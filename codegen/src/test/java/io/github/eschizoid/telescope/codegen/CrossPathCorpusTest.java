@@ -6,10 +6,12 @@ import io.github.eschizoid.telescope.Telescope;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.AbstractSet;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -1114,6 +1116,90 @@ class CrossPathCorpusTest {
     } catch (final ReflectiveOperationException | RuntimeException e) {
       return rendered(e);
     }
+  }
+
+  /**
+   * A set that yields a different sequence of elements on each pass over it, the last sequence
+   * repeating. Its size is that of the first.
+   */
+  private static final class ShiftingSet extends AbstractSet<Object> {
+
+    private final List<List<Object>> passes;
+    private int pass;
+
+    ShiftingSet(final List<List<Object>> passes) {
+      this.passes = passes;
+    }
+
+    @Override
+    public Iterator<Object> iterator() {
+      return passes.get(Math.min(pass++, passes.size() - 1)).iterator();
+    }
+
+    @Override
+    public int size() {
+      return passes.getFirst().size();
+    }
+  }
+
+  @Test
+  @DisplayName("a sorted rebuild from a source that does not yield the same elements twice refuses on both paths")
+  void aSortedRebuildFromAShiftingSourceRefusesOnBothPaths() throws ReflectiveOperationException {
+    final var head = "package " + PACKAGE + ";\n";
+    // Base cannot be ordered, and Sub can be ordered against a Base:
+    // a Sub alone fills a sorted set, and a Base inserted after it
+    // fails on the cast to Comparable.
+    final var sources = new JavaFileObject[] {
+      source("SsBase", head + "public class SsBase {}\n"),
+      source(
+        "SsSub",
+        head +
+          "public class SsSub extends SsBase implements Comparable<SsBase> {\n" +
+          "  public int compareTo(final SsBase o) { return 0; }\n}\n"
+      ),
+      source(
+        "SsSrc",
+        head +
+          "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(SsTgt.class)\n" +
+          "public record SsSrc(java.util.SortedSet<SsBase> items) {}\n"
+      ),
+      source("SsTgt", head + "public record SsTgt(java.util.Set<SsBase> items) {}\n"),
+    };
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+    assertTrue(plain.success(), () -> "the pair should compile: " + plain.errorMessages());
+    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    assertTrue(processed.success(), () -> "the pair should bridge: " + processed.errorMessages());
+    final var classes = plain.define(MethodHandles.lookup());
+    final var src = classes.get(PACKAGE + ".SsSrc");
+    final var tgt = classes.get(PACKAGE + ".SsTgt");
+    final var base = classes.get(PACKAGE + ".SsBase").getConstructor();
+    final var sub = classes.get(PACKAGE + ".SsSub").getConstructor();
+    final var backward = emitted(processed, plain, "Ss").getMethod("backward", tgt);
+    final var mapper = Telescope.mapper(cast(src), cast(tgt));
+
+    final var refusal = "IllegalStateException: Deep map: java.util.SortedSet keeps its elements in order, and ";
+    final var cause = " <- ClassCastException: ";
+    final var failures = new ArrayList<String>();
+    final Map<String, List<List<Object>>> shapes = new LinkedHashMap<>();
+    shapes.put("a source whose second pass yields nothing", List.of(List.of(base.newInstance()), List.of()));
+    final var kept = sub.newInstance();
+    shapes.put(
+      "a source whose unorderable element is gone on the second pass",
+      List.of(List.of(kept, base.newInstance()), List.of(kept))
+    );
+    for (final var shape : shapes.entrySet()) {
+      final var forGenerated = tgt.getConstructors()[0].newInstance(new ShiftingSet(shape.getValue()));
+      final var forReflective = tgt.getConstructors()[0].newInstance(new ShiftingSet(shape.getValue()));
+      final var generated = thrown(() -> backward.invoke(null, forGenerated));
+      final var reflective = thrown(() -> mapper.backward(forReflective));
+      if (!generated.startsWith(refusal) || !generated.contains(cause)) {
+        failures.add(shape.getKey() + ": generated threw " + generated);
+      }
+      if (!reflective.startsWith(refusal) || !reflective.contains(cause)) {
+        failures.add(shape.getKey() + ": reflective threw " + reflective);
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
   /**

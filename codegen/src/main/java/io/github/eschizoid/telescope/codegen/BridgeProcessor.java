@@ -4439,15 +4439,38 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       emitOrderedInsert(out, tgtContainer, "    ", convert);
       return;
     }
-    // addAll keeps a sorted container's linear build from a source sorted the same way. When it
-    // fails, the elements are inserted again one at a time to name the one that cannot be ordered;
-    // they are unchanged, so the second pass meets the first failure again.
+    // addAll keeps a sorted container's linear build from a source sorted the same way. Once it
+    // has failed, the fill ends in a refusal whatever the source does next: the elements are
+    // inserted again one at a time, and the first that cannot be ordered is named; a source that
+    // does not yield such an element again is refused for the original cast, without a name.
     out.println("    try {");
     out.println("      out.addAll(src);");
     out.println("    } catch (final ClassCastException __unordered) {");
     out.println("      out.clear();");
     emitOrderedInsert(out, tgtContainer, "      ", null);
+    out.println("      throw new IllegalStateException(");
+    out.println("        \"Deep map: " + binaryNameOf(tgtContainer) + " keeps its elements in order, and an element\"");
+    out.println("          + \" could not be ordered there, which a second pass over the source did not meet again\"");
+    out.println("          + \" to name\"");
+    emitRefusalAdvice(out, "        ", "__unordered");
     out.println("    }");
+  }
+
+  /** The declared container's binary name, which is how the reflective path names it. */
+  private String binaryNameOf(final TypeMirror container) {
+    final var declared = (TypeElement) ((DeclaredType) container).asElement();
+    return processingEnv.getElementUtils().getBinaryName(declared).toString();
+  }
+
+  /**
+   * The end of an ordering refusal, from the advice through the closing parenthesis, with {@code
+   * cause} as the cause. Every refusal of an unorderable element ends with these words.
+   */
+  private static void emitRefusalAdvice(final PrintWriter out, final String indent, final String cause) {
+    out.println(indent + "  + \". Supply an ordering these elements accept through a Mapping.via(...) row, or\"");
+    out.println(indent + "  + \" declare the target as a set that keeps no order. The cause is the cast itself.\",");
+    out.println(indent + cause);
+    out.println(indent.substring(2) + ");");
   }
 
   /**
@@ -4463,8 +4486,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String indent,
     final String convert
   ) {
-    final var declared = (TypeElement) ((DeclaredType) tgtContainer).asElement();
-    final var outRaw = processingEnv.getElementUtils().getBinaryName(declared).toString();
+    final var outRaw = binaryNameOf(tgtContainer);
     final var element = convert == null ? "x" : "__e";
     out.println(indent + "for (final var x : src) {");
     if (convert != null) out.println(indent + "  final var __e = " + convert + ";");
@@ -4478,12 +4500,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println(indent + "        + (((Object) " + element + ") instanceof Comparable");
     out.println(indent + "          ? \", though its type implements Comparable\"");
     out.println(indent + "          : \", and its type does not implement Comparable\")");
-    out.println(indent + "        + \". Supply an ordering these elements accept through a Mapping.via(...) row, or\"");
-    out.println(
-      indent + "        + \" declare the target as a set that keeps no order. The cause is the cast itself.\","
-    );
-    out.println(indent + "      __cast");
-    out.println(indent + "    );");
+    emitRefusalAdvice(out, indent + "      ", "__cast");
     out.println(indent + "  }");
     out.println(indent + "}");
   }
