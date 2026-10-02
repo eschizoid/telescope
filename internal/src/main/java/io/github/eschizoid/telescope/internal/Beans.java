@@ -214,7 +214,7 @@ public final class Beans {
       try {
         final var ctor = type.getDeclaredConstructor();
         if (Modifier.isPublic(ctor.getModifiers())) {
-          final var lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
+          final var lookup = ModuleAccess.privateLookupIn(type);
           return buildCtorSupplier(type, ctor, lookup);
         }
       } catch (final NoSuchMethodException ignored) {
@@ -267,11 +267,11 @@ public final class Beans {
   @SuppressWarnings("unchecked")
   private static Supplier<Object> builderDefaultSupplier(final Class<?> type, final Method builderMethod) {
     try {
-      // privateLookupIn lets the lookup cross JPMS module + package boundaries to reach the
-      // user's builder method. The user's package must be `opens io.github.eschizoid.telescope`
-      // (same JPMS requirement as the rest of the runtime path); without it, the unreflect
-      // throws IllegalAccessException and we fall through to the null supplier.
-      final var lookup = MethodHandles.privateLookupIn(type, MethodHandles.lookup());
+      // A private lookup reaches the user's builder method across JPMS module and package
+      // boundaries, once the user's package is open to this module (the same requirement as the
+      // rest of the runtime path); without that, the lookup throws IllegalAccessException and we
+      // fall through to the null supplier.
+      final var lookup = ModuleAccess.privateLookupIn(type);
       final var builderHandle = lookup.unreflect(builderMethod);
       final var builderReturnType = builderMethod.getReturnType();
       final var buildMethod = builderReturnType.getMethod("build");
@@ -280,18 +280,19 @@ public final class Beans {
       // covers it. For builders in different packages we'd need a second privateLookupIn keyed
       // on the builder class; the tests cover the common nested-Builder shape that the same
       // lookup handles.
-      final var buildLookup =
-        builderReturnType == type ? lookup : MethodHandles.privateLookupIn(builderReturnType, MethodHandles.lookup());
+      final var buildLookup = builderReturnType == type ? lookup : ModuleAccess.privateLookupIn(builderReturnType);
       final var buildHandle = buildLookup.unreflect(buildMethod);
       // Native-image: MethodHandle closures for both halves (no runtime class synthesis, see
       // MhAccessors); stock JVM: the LambdaMetafactory bridges.
-      if (NativeImage.IN_IMAGE) {
+      final var builderSpinner = ModuleAccess.spinner(lookup, builderMethod);
+      final var buildSpinner = ModuleAccess.spinner(buildLookup, buildMethod);
+      if (builderSpinner == null || buildSpinner == null) {
         final var mhBuilderFn = MhAccessors.supplier(builderHandle);
         final var mhBuildFn = MhAccessors.function(buildHandle);
         return () -> mhBuildFn.apply(mhBuilderFn.get());
       }
       final var builderCallSite = LambdaMetafactory.metafactory(
-        lookup,
+        builderSpinner,
         "get",
         MethodType.methodType(Supplier.class),
         MethodType.methodType(Object.class),
@@ -300,7 +301,7 @@ public final class Beans {
       );
       final var builderFn = (Supplier<Object>) builderCallSite.getTarget().invoke();
       final var buildCallSite = LambdaMetafactory.metafactory(
-        buildLookup,
+        buildSpinner,
         "apply",
         MethodType.methodType(Function.class),
         MethodType.methodType(Object.class, Object.class),
@@ -330,9 +331,10 @@ public final class Beans {
     try {
       final var handle = lookup.unreflectConstructor(ctor);
       // Native-image path: a MethodHandle closure, no runtime class synthesis — see MhAccessors.
-      if (NativeImage.IN_IMAGE) return MhAccessors.supplier(handle);
+      final var spinner = ModuleAccess.spinner(lookup, ctor);
+      if (spinner == null) return MhAccessors.supplier(handle);
       final var callSite = LambdaMetafactory.metafactory(
-        lookup,
+        spinner,
         "get",
         MethodType.methodType(Supplier.class),
         MethodType.methodType(Object.class),
@@ -569,11 +571,12 @@ public final class Beans {
       // asType relaxes the receiver to Object and unboxes a primitive param from the boxed value,
       // matching the auto-unbox the LMF instantiatedMethodType installs below.
       final BiConsumer<Object, Object> base;
-      if (NativeImage.IN_IMAGE) {
+      final var spinner = ModuleAccess.spinner(lookup, setter);
+      if (spinner == null) {
         base = MhAccessors.biConsumer(handle);
       } else {
         final var callSite = LambdaMetafactory.metafactory(
-          lookup,
+          spinner,
           "accept",
           MethodType.methodType(BiConsumer.class),
           MethodType.methodType(void.class, Object.class, Object.class),
@@ -657,7 +660,9 @@ public final class Beans {
         final var handle = lookup.unreflect(method);
         invokers.put(
           name,
-          NativeImage.IN_IMAGE ? MhAccessors.function(handle) : lmfGetter(handle, method, declaringClass, lookup)
+          ModuleAccess.spinner(lookup, method) == null
+            ? MhAccessors.function(handle)
+            : lmfGetter(handle, method, declaringClass, ModuleAccess.spinner(lookup, method))
         );
       } catch (final Throwable t) {
         throw new IllegalStateException("Failed to build getter invoker for " + cls.getName() + "." + name, t);
@@ -692,9 +697,10 @@ public final class Beans {
 
   /**
    * Resolve a {@link MethodHandles.Lookup} with private access to {@code declaringClass}, or throw
-   * an {@link IllegalStateException} with a JPMS-opens hint. When {@code declaringClass} is
-   * inherited (i.e. differs from {@code ownerClass}), the message points to the declaring class's
-   * package — that's the one that needs the {@code opens} directive, not the inheritor.
+   * an {@link IllegalStateException} naming the {@code opens} directive that grants it. When {@code
+   * declaringClass} is inherited (i.e. differs from {@code ownerClass}), the message points to the
+   * declaring class's package — that's the one that needs the {@code opens} directive, not the
+   * inheritor.
    */
   private static MethodHandles.Lookup privateLookupOrThrow(
     final Class<?> declaringClass,
@@ -702,11 +708,7 @@ public final class Beans {
     final String accessorKind
   ) {
     try {
-      // `privateLookupIn` is needed when the type's module/package isn't open to the telescope
-      // module; for fully-public types in the same module this is equivalent to a plain
-      // `MethodHandles.lookup()`. Same JPMS constraint as `setAccessible(true)` — no worse than
-      // the previous reflection path.
-      return MethodHandles.privateLookupIn(declaringClass, MethodHandles.lookup());
+      return ModuleAccess.privateLookupIn(declaringClass);
     } catch (final IllegalAccessException e) {
       final var inheritedNote =
         declaringClass == ownerClass
@@ -716,11 +718,10 @@ public final class Beans {
         "Cannot access " +
           declaringClass.getName() +
           inheritedNote +
-          " to build LambdaMetafactory " +
+          " to build its " +
           accessorKind +
-          " invokers. Add 'opens " +
-          declaringClass.getPackageName() +
-          " to io.github.eschizoid.telescope;' to that module's module-info.java.",
+          " invokers. " +
+          ModuleAccess.opensRemedy(declaringClass),
         e
       );
     }
@@ -1845,7 +1846,8 @@ public final class Beans {
       try {
         final var handle = lookup.unreflect(setter);
         final var voidSetter = setter.getReturnType() == void.class;
-        if (NativeImage.IN_IMAGE) {
+        final var spinner = ModuleAccess.spinner(lookup, setter);
+        if (spinner == null) {
           // Native-image: MethodHandle closures, no runtime class synthesis (see MhAccessors). A
           // void setter binds as BiConsumer; a fluent setter as BiFunction (the returned builder is
           // discarded at the call site).
@@ -1854,7 +1856,7 @@ public final class Beans {
         if (voidSetter) {
           // Void-returning setter (classic JavaBean style): bind directly as BiConsumer.
           final var callSite = LambdaMetafactory.metafactory(
-            lookup,
+            spinner,
             "accept",
             MethodType.methodType(BiConsumer.class),
             MethodType.methodType(void.class, Object.class, Object.class),
@@ -1865,7 +1867,7 @@ public final class Beans {
         }
         // Fluent setter: bind as BiFunction; the returned builder is discarded at the call site.
         final var callSite = LambdaMetafactory.metafactory(
-          lookup,
+          spinner,
           "apply",
           MethodType.methodType(BiFunction.class),
           MethodType.methodType(Object.class, Object.class, Object.class),
@@ -1893,9 +1895,10 @@ public final class Beans {
       final var lookup = privateLookupOrThrow(factory.getDeclaringClass(), cls, "builder factory");
       try {
         final var handle = lookup.unreflect(factory);
-        if (NativeImage.IN_IMAGE) return MhAccessors.supplier(handle);
+        final var spinner = ModuleAccess.spinner(lookup, factory);
+        if (spinner == null) return MhAccessors.supplier(handle);
         final var callSite = LambdaMetafactory.metafactory(
-          lookup,
+          spinner,
           "get",
           MethodType.methodType(Supplier.class),
           MethodType.methodType(Object.class),
@@ -1924,13 +1927,14 @@ public final class Beans {
       final var lookup = privateLookupOrThrow(declaringClass, builderType, "builder build()");
       try {
         final var handle = lookup.unreflect(buildMethod);
-        if (NativeImage.IN_IMAGE) return MhAccessors.function(handle);
+        final var spinner = ModuleAccess.spinner(lookup, buildMethod);
+        if (spinner == null) return MhAccessors.function(handle);
         // Pin the `instantiatedMethodType` return to the build method's actual return type, not
         // `cls`. A covariant `build()` (e.g. on a generic builder hierarchy) returns a subtype of
         // `cls`, and LMF will refuse the binding ("incorrect return type") if we pin to `cls`.
         // Mirrors the pattern in buildGetterInvokers (`method.getReturnType()`).
         final var callSite = LambdaMetafactory.metafactory(
-          lookup,
+          spinner,
           "apply",
           MethodType.methodType(Function.class),
           MethodType.methodType(Object.class, Object.class),
@@ -2055,12 +2059,13 @@ public final class Beans {
       try {
         final var handle = lookup.unreflect(setter);
         final BiConsumer<Object, Object> baseSetter;
-        if (NativeImage.IN_IMAGE) {
+        final var spinner = ModuleAccess.spinner(lookup, setter);
+        if (spinner == null) {
           // Native-image: a MethodHandle closure, no runtime class synthesis (see MhAccessors).
           baseSetter = MhAccessors.biConsumer(handle);
         } else {
           final var callSite = LambdaMetafactory.metafactory(
-            lookup,
+            spinner,
             "accept",
             MethodType.methodType(BiConsumer.class),
             MethodType.methodType(void.class, Object.class, Object.class),
