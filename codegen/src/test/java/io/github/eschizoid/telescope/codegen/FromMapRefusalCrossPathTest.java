@@ -26,6 +26,11 @@ import org.junit.jupiter.api.Test;
  * compiles the same sources twice: once without the processor, so the runtime path has classes to
  * read, and once through the real processor. Each path is then asked for its verdict, and where
  * both accept, for the value an empty map leaves behind.
+ *
+ * <p>A component type with a generated binder is not among the cases. The runtime finds a binder
+ * through the {@code META-INF/services} registration its compilation wrote, and a class defined
+ * here at test time has none, so that case lives in core, over types Gradle compiled through the
+ * processor.
  */
 class FromMapRefusalCrossPathTest {
 
@@ -79,13 +84,11 @@ class FromMapRefusalCrossPathTest {
     Case.served("java.util.regex.Pattern"),
     Case.served("java.time.DayOfWeek"),
     Case.served("%sTone"),
-    Case.served("%sAnnotated"),
     Case.served("java.util.List<String>"),
     Case.served("java.util.Set<Integer>"),
     Case.served("java.util.Map<String, Integer>"),
     Case.served("java.util.Optional<String>"),
     Case.served("java.util.Optional<java.util.List<String>>"),
-    Case.served("java.util.List<%sAnnotated>"),
     Case.served("java.util.Map<String, java.util.List<java.time.Instant>>"),
     Case.refused("String[]"),
     Case.refused("int[]"),
@@ -234,7 +237,7 @@ class FromMapRefusalCrossPathTest {
 
   /**
    * A record and a bean, each with one {@code value} of {@code type}, plus the helper types a case
-   * can name: an enum, a record the processor binds, and one it does not.
+   * can name: an enum and a record the processor has not bound.
    */
   private static JavaFileObject[] sources(final String prefix, final String type) {
     final var generic = type.equals("T") ? "<T>" : "";
@@ -247,10 +250,6 @@ class FromMapRefusalCrossPathTest {
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Plain",
         "package " + PACKAGE + ";\npublic record " + prefix + "Plain(String city) {}\n"
-      ),
-      ProcessorHarness.source(
-        PACKAGE + "." + prefix + "Annotated",
-        head + "@FromMap\npublic record " + prefix + "Annotated(String city) {}\n"
       ),
       ProcessorHarness.source(
         PACKAGE + "." + prefix + "Rec",

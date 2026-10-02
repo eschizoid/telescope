@@ -604,10 +604,10 @@ native-image workflow goes red.** The JVM keeps LMF (it's faster once JIT-warmed
 `telescope-core`; app DTO/lambda metadata is the app's own reachability config. Two gates cover it. `:core:imageTest`
 and `:internal:imageTest` re-run each module's whole suite with the `imagecode` property set, so every existing
 assertion runs on the substrate an image uses; both are wired into `check`, which is what CI runs. The
-`:examples:graphql` `NativeVerify` native binary (nine capabilities) covers what the image itself does — closed world,
-reachability metadata, `SerializedLambda` — on every substrate push to `main` and weekly. Full contract:
-`docs/native-image.md`, decisions: ADR-0015. The one documented exception is the guarded Hibernate-proxy accessor pair
-(fails safe to `null`; JVM/codegen-only under AOT).
+`:examples:graphql` `NativeVerify` native binary covers what the image itself does — closed world, reachability
+metadata, `SerializedLambda` — on every substrate push to `main` and weekly. Full contract: `docs/native-image.md`,
+decisions: ADR-0015. The one documented exception is the guarded Hibernate-proxy accessor pair (fails safe to `null`;
+JVM/codegen-only under AOT).
 
 ---
 
@@ -645,8 +645,8 @@ reachability metadata, `SerializedLambda` — on every substrate push to `main` 
     (runtime `LambdaMetafactory` class definition, forbidden by AOT) fixed in the substrate: `NativeImage.IN_IMAGE`
     gates every accessor builder to `MhAccessors` `MethodHandle` closures inside an image, LMF stays the JVM hot path.
     Wall A (`SerializedLambda`) = app-level `serialization-config`. Core ships its own `native-image.properties`; no
-    separate `telescope-graalvm` Feature module is needed. The `:examples:graphql` `NativeVerify` binary (nine
-    capabilities) is the CI regression gate.
+    separate `telescope-graalvm` Feature module is needed. The `:examples:graphql` `NativeVerify` binary is the CI
+    regression gate.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.

@@ -76,4 +76,8 @@ module io.github.eschizoid.telescope {
   // Carrier-form @Bridge converters register themselves through this SPI so mapperForward can
   // discover them by (source, target) regardless of the package they were emitted in.
   uses io.github.eschizoid.telescope.conversion.BridgeProvider;
+
+  // A generated @FromMap binder registers itself through this SPI, so fromMap can tell a type with
+  // a binder from one without, whichever compilation produced it and in a native image.
+  uses io.github.eschizoid.telescope.conversion.FromMapProvider;
 }

@@ -390,6 +390,14 @@ own: the same types the `@FromMap` processor refuses, such as an array, a concre
 is built and names the component, its type and the fix. A row that names such a component converts it, and an absent key
 leaves it `null`.
 
+A class counts as having a binder when its generated binder is registered, not because a class of the right name exists.
+Each binder nests a `Provider` implementing `FromMapProvider`, and the processor lists it in `META-INF/services`, which
+is all the class path and a native image need. A named module ignores that file, so on the module path its `module-info`
+must declare `provides io.github.eschizoid.telescope.conversion.FromMapProvider with <pkg>.<Name>FromMap.Provider` for
+each binder; the processor warns with the exact line when the module it compiles lacks it. A fat jar has to merge the
+service files of the jars it combines, with the shade plugin's `ServicesResourceTransformer` in Maven or
+`mergeServiceFiles()` in the Gradle Shadow plugin, or the registrations of all but one are lost.
+
 The backward direction is deliberately absent. A flat `String`-keyed map is a boundary format rather than a typed
 counterpart, so round-tripping to it would have to invent a key-encoding policy, and telescope does not pick one for
 you. Annotating the target with `@FromMap` generates a binder at compile time that uses no reflection, described in

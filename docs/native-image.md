@@ -76,6 +76,12 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
   heap; native-image defaults every class to run-time init, and a heap object of a run-time-init type is a hard error.
   telescope-core ships `--initialize-at-build-time` for the telescope packages in its jar, so **adopters need no build
   args for telescope itself**. The example still initializes its own generated-model package (app-specific).
+- **Generated `@FromMap` binder discovery — nothing to configure.** A runtime `fromMap` accepts a component whose type
+  has a generated binder by finding the binder's `FromMapProvider` through `ServiceLoader`. The processor writes the
+  `META-INF/services` registration beside the binder, and native-image includes the providers that registration lists,
+  so no reflection entry is needed for the binder or its provider. An image built from named modules reads `provides`
+  directives instead, so declare each binder's `<Name>FromMap.Provider` there, and a fat jar fed to native-image must
+  merge the service files of the jars it combines (`ServicesResourceTransformer`, `mergeServiceFiles()`).
 - **`--no-fallback`** — in the example build: fail rather than silently emit a JVM-fallback image, so a reachability gap
   is a hard error, not a slow "native" binary that is really the JVM.
 - **App-level reachability metadata — the app's own types.** The runtime reflective mapper walks its source/target types
@@ -199,19 +205,19 @@ JVM. Only the image is missing something, and only the registration error says s
 
 ## Verdict
 
-**Runtime and codegen both work under GraalVM native-image.** All nine verifier capabilities — record field update,
-record read, bean read, the runtime record→record / record→bean / record→builder-bean mappers, `@FromMap`, `@Bridge`,
-and a generated `@Focus` navigator — build and run in the native binary, confirmed by
-`.github/workflows/native-image.yaml`. Telescope's runtime reflective mapper is AOT-capable out of the box for every
-rebuild strategy (records, no-arg-ctor + setters, immutable `@Builder` targets); Wall B is fixed in `telescope-core`,
-and the adopter supplies only the standard reachability metadata for their own types (`reflect-config.json` for
-runtime-mapper DTOs, `serialization-config.json` for `.field(methodref)` call-site classes). Codegen nuance, verified by
-the ninth capability: `@Bridge` and `@FromMap` need no config at all (they wrap concrete generated functions), while a
-generated `@Focus`/`@BeanFocus` navigator composes its lenses from method references at call time — the generated
-navigator class is itself a lambda-capturing type and goes in `serialization-config.json` alongside your own call-site
-classes. The one runtime path still JVM/codegen-only under AOT is the Hibernate-proxy accessor. The workflow re-checks
-the whole surface on every push to `main` and weekly against GraalVM updates, so a regression in any capability turns
-the job red.
+**Runtime and codegen both work under GraalVM native-image.** Every verifier capability — record field update, record
+read, bean read, the runtime record→record / record→bean / record→builder-bean mappers, `@FromMap`, a runtime `fromMap`
+that leaves a `@FromMap` component to its default, `@Bridge`, and a generated `@Focus` navigator — builds and runs in
+the native binary, confirmed by `.github/workflows/native-image.yaml`. Telescope's runtime reflective mapper is
+AOT-capable out of the box for every rebuild strategy (records, no-arg-ctor + setters, immutable `@Builder` targets);
+Wall B is fixed in `telescope-core`, and the adopter supplies only the standard reachability metadata for their own
+types (`reflect-config.json` for runtime-mapper DTOs, `serialization-config.json` for `.field(methodref)` call-site
+classes). Codegen nuance, verified by the navigator capability: `@Bridge` and `@FromMap` need no config at all (they
+wrap concrete generated functions), while a generated `@Focus`/`@BeanFocus` navigator composes its lenses from method
+references at call time — the generated navigator class is itself a lambda-capturing type and goes in
+`serialization-config.json` alongside your own call-site classes. The one runtime path still JVM/codegen-only under AOT
+is the Hibernate-proxy accessor. The workflow re-checks the whole surface on every push to `main` and weekly against
+GraalVM updates, so a regression in any capability turns the job red.
 
 ## Appendix — feasibility of shading `:internal` into `:core` at publish
 

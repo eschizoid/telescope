@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.examples.graphql.server;
 
+import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
+
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.examples.graphql.model.Account;
@@ -43,6 +45,11 @@ import java.util.Map;
  *       that reaches the builder write path (the target has no no-arg constructor or setters).
  *   <li><b>generated {@code @FromMap}</b> — {@code UserFromMap.fromMap(map)}: the reflection-free
  *       codegen control — no LMF, no {@code SerializedLambda}, just typed method calls.
+ *   <li><b>runtime {@code fromMap} over a {@code @FromMap} component</b> — {@code
+ *       Telescope.fromMap(User, extract("name", ...))} leaves {@link Address} to its default, which
+ *       it accepts only after finding {@code AddressFromMap}'s provider through {@code
+ *       ServiceLoader}: the image has to carry the {@code META-INF/services} registration and the
+ *       provider class, with no reflection entry for either.
  *   <li><b>generated {@code @Bridge}</b> — {@code AccountBridge.BRIDGE.read(a)}: the codegen bridge
  *       constant, a {@code Telescope<Account, AccountEntity>} that lands in the build-time image
  *       heap — which is why the telescope classes take {@code --initialize-at-build-time} from
@@ -51,9 +58,9 @@ import java.util.Map;
  * </ul>
  *
  * <p>A JVM run only validates the harness; a green native-image run is the real verdict, and {@link
- * #runtimeLabel()} says which one just passed. All eight capabilities are required on both
- * runtimes: the Wall B substrate branch plus telescope's build-time-init metadata and the example's
- * own reflection / serialization metadata carry the full runtime + codegen surface through
+ * #runtimeLabel()} says which one just passed. Every capability is required on both runtimes: the
+ * Wall B substrate branch plus telescope's build-time-init metadata and the example's own
+ * reflection / serialization metadata carry the full runtime + codegen surface through
  * native-image, so any FAIL is a real regression.
  */
 public final class NativeVerify {
@@ -80,6 +87,12 @@ public final class NativeVerify {
       guard("runtime record → builder bean mapper (builder() + fluent setters + build())", NativeVerify::builderMapper)
     );
     results.add(guard("generated @FromMap converter (reflection-free codegen control)", NativeVerify::fromMap));
+    results.add(
+      guard(
+        "runtime fromMap finds a generated @FromMap binder (FromMapProvider via ServiceLoader)",
+        NativeVerify::runtimeFromMapFindsBinder
+      )
+    );
     results.add(guard("generated @Bridge constant (AccountBridge.BRIDGE.read())", NativeVerify::bridgeConstant));
     results.add(
       guard("generated @Focus navigator (UserTelescope.of().address().city())", NativeVerify::focusNavigator)
@@ -193,6 +206,15 @@ public final class NativeVerify {
         "New York".equals(user.address().city()),
       "@FromMap conversion mismatch: " + user
     );
+  }
+
+  // (j) runtime fromMap accepting an unnamed component whose type has a generated binder: the
+  // decision rests on the binder's ServiceLoader registration, which the image must carry.
+  private static void runtimeFromMapFindsBinder() {
+    final var user = Telescope.fromMap(User.class, extract("name", User::name, Object::toString)).forward(
+      Map.of("name", "Bea")
+    );
+    expect("Bea".equals(user.name()) && user.address() == null, "runtime fromMap mismatch: " + user);
   }
 
   // (h) generated @Bridge constant — pure typed method calls, baked into the image heap.
