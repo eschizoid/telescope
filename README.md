@@ -699,7 +699,9 @@ Everything is published to Maven Central under `io.github.eschizoid`, and the fa
 | `telescope-quarkus`             | A Quarkus CDI extension with the same registry shape. Compiled and CI-tested against Quarkus 3.39.4.                                                                                                                                                              |
 
 Installation snippets, annotation-processor ordering with Lombok, and JPMS setup are in
-[docs/codegen.md](docs/codegen.md).
+[docs/codegen.md](docs/codegen.md). On the module path the runtime path converts an application module's types once that
+module opens their package to `io.github.eschizoid.telescope.internal` (or opens it unqualified); telescope adds the
+read edge to the application module itself.
 
 ---
 

@@ -163,6 +163,11 @@ public class LmfBenchmark {
   // isolate
   // pure dispatch (unlike the *_lmf rows above, which go through Records.read / Beans.readProperty
   // and pay a per-call string->Function map lookup the *_methodInvoke rows don't).
+  // The same non-public record twice: as the application class loader loads it, and as a loader of
+  // its own defines it. Only the second leaves telescope's lookup without full privilege.
+  private Object appLoaderRecord;
+  private Object childLoaderRecord;
+
   private Function<Object, Object>[] megaFns;
   private Method[] megaMethods;
   private Object megaTarget;
@@ -172,6 +177,8 @@ public class LmfBenchmark {
   @Setup
   public void setup() throws Exception {
     record = new BenchRecord("u1", "Alice", 30);
+    appLoaderRecord = new LoaderRecord("u1", "Alice", 30);
+    childLoaderRecord = childLoaderRecord();
     wideRecord = new BenchWideRecord(
       "c0",
       "c1",
@@ -269,6 +276,50 @@ public class LmfBenchmark {
   @Benchmark
   public void recordComponentRead_handRolled(final Blackhole bh) {
     bh.consume(record.name());
+  }
+
+  /**
+   * A non-public record loaded by the application class loader, as telescope itself is: the lookup
+   * into it has full privilege and the reader is a class spun by {@link LambdaMetafactory}. The
+   * control for {@link #recordComponentRead_closure}, which reads the same record.
+   */
+  @Benchmark
+  public void recordComponentRead_spun(final Blackhole bh) {
+    bh.consume(Records.read(appLoaderRecord, "name"));
+  }
+
+  /**
+   * The same record defined by a class loader of its own, so it sits in another unnamed module and
+   * the lookup into it keeps private access but not module access. Its accessors are not public to
+   * outside code, so the reader is a method handle closure: the dispatch an application module on
+   * the module path, or a native image, gets for such a member.
+   */
+  @Benchmark
+  public void recordComponentRead_closure(final Blackhole bh) {
+    bh.consume(Records.read(childLoaderRecord, "name"));
+  }
+
+  /** {@link LoaderRecord} defined afresh by a loader of its own, and one instance of it. */
+  private static Object childLoaderRecord() throws Exception {
+    final var name = LoaderRecord.class.getName();
+    final byte[] bytes;
+    try (final var in = LoaderRecord.class.getResourceAsStream(LoaderRecord.class.getSimpleName() + ".class")) {
+      bytes = in.readAllBytes();
+    }
+    final var loader = new ClassLoader(LmfBenchmark.class.getClassLoader()) {
+      @Override
+      protected Class<?> loadClass(final String className, final boolean resolve) throws ClassNotFoundException {
+        if (!className.equals(name)) return super.loadClass(className, resolve);
+        synchronized (getClassLoadingLock(className)) {
+          final var loaded = findLoadedClass(className);
+          return loaded != null ? loaded : defineClass(className, bytes, 0, bytes.length);
+        }
+      }
+    };
+    final var type = loader.loadClass(name);
+    final var ctor = type.getDeclaredConstructor(String.class, String.class, int.class);
+    ctor.setAccessible(true);
+    return ctor.newInstance("u1", "Alice", 30);
   }
 
   /**

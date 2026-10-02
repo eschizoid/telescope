@@ -394,18 +394,10 @@ public final class Records {
      */
     private static MethodHandles.Lookup privateLookupIn(final Class<?> cls) {
       try {
-        // `privateLookupIn` is needed when the record (or its module's package) isn't open to the
-        // telescope module; for fully-public records in the same module this is equivalent to a
-        // plain `MethodHandles.lookup()`. Same JPMS constraint as `setAccessible(true)` — no
-        // worse than the previous reflection path.
-        return MethodHandles.privateLookupIn(cls, MethodHandles.lookup());
+        return ModuleAccess.privateLookupIn(cls);
       } catch (final IllegalAccessException e) {
         throw new IllegalStateException(
-          "Cannot access " +
-            cls.getName() +
-            " to build LambdaMetafactory call sites. Add 'opens " +
-            cls.getPackageName() +
-            " to io.github.eschizoid.telescope;' to that module's module-info.java.",
+          "Cannot access " + cls.getName() + " to build its accessors. " + ModuleAccess.opensRemedy(cls),
           e
         );
       }
@@ -430,7 +422,8 @@ public final class Records {
         final var comp = comps[i];
         try {
           final var handle = lookup.unreflect(comp.getAccessor());
-          readers[i] = NativeImage.IN_IMAGE ? MhAccessors.function(handle) : lmfReader(handle, cls, comp, lookup);
+          final var spinner = ModuleAccess.spinner(lookup, comp.getAccessor());
+          readers[i] = spinner == null ? MhAccessors.function(handle) : lmfReader(handle, cls, comp, spinner);
         } catch (final Throwable t) {
           throw new IllegalStateException("Failed to build reader for " + cls.getName() + "." + comp.getName(), t);
         }
