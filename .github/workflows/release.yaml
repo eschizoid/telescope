@@ -124,5 +124,7 @@ jobs:
           if ! git diff --quiet README.md docs/codegen.md; then
             git add README.md docs/codegen.md
             git commit -m "docs: bump README install snippets to ${VERSION}"
-            git push
+            if ! git push; then
+              echo "::warning::Skipping docs-sync push because this branch does not accept direct pushes."
+            fi
           fi
