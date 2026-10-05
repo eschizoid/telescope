@@ -18,7 +18,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     timeout-minutes: 120
 
     steps:
@@ -101,9 +100,13 @@ jobs:
 
       - name: Sync README install snippets to the released version
         run: |
-          # Runs AFTER publishing. Keep release automation branch-protection-safe by
-          # preparing docs changes in the workspace, then opening a PR from a separate
-          # branch in the next step.
+          # Runs AFTER publishing: this step commits on top of the tagged commit, and
+          # axion-release derives the version from git position — a commit past the tag
+          # computes as next-version-SNAPSHOT, which makes JReleaser disable the Maven
+          # Central deployer and demote the GitHub release to the early-access prerelease.
+          # The README pins the release version in its install snippets; rewrite every
+          # io.github.eschizoid:telescope-* coordinate and the Maven <version> block to the
+          # version just tagged, so the docs never trail the release.
           VERSION="${{ steps.version.outputs.version }}"
           for f in README.md docs/codegen.md; do
             sed -i -E "s/(io\.github\.eschizoid:telescope-[a-z-]+:)[0-9]+\.[0-9]+\.[0-9]+/\1${VERSION}/g" "$f"
@@ -118,18 +121,10 @@ jobs:
               { tele = 0; print }
             ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
           done
-
-      - name: Open PR for docs version sync
-        uses: peter-evans/create-pull-request@v7
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          add-paths: |
-            README.md
-            docs/codegen.md
-          branch: release-doc-sync/v${{ steps.version.outputs.version }}
-          base: main
-          delete-branch: true
-          commit-message: "docs: bump README install snippets to ${{ steps.version.outputs.version }}"
-          title: "docs: sync install snippets to v${{ steps.version.outputs.version }}"
-          body: |
-            Syncs release docs snippets to `${{ steps.version.outputs.version }}` after publish.
+          if ! git diff --quiet README.md docs/codegen.md; then
+            git add README.md docs/codegen.md
+            git commit -m "docs: bump README install snippets to ${VERSION}"
+            if ! git push; then
+              echo "::warning::Skipping docs-sync push because this branch does not accept direct pushes."
+            fi
+          fi
