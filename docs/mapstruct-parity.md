@@ -1,10 +1,10 @@
 # telescope ↔ MapStruct — migration coverage matrix
 
 An evidence-grounded audit of MapStruct's feature surface against telescope — a coverage audit, not a parity claim: a
-majority of rows are ⚠️ partial, each with its real limitation stated. Every row was produced by reading telescope's
-actual source and tests (citations below), then adversarially re-verified by a second pass that re-opened every citation
-— two verdicts were downgraded and two snippets corrected in that pass. Audited against MapStruct 1.6.3 semantics and
-telescope `main`.
+majority of rows are ⚠️ partial, each with its real limitation stated. Every row cites the telescope source and tests it
+rests on. A citation names the file and then the class, method, or test display name it means, rather than a line
+number, so it can be searched for and stays true when the lines above it move. Audited against MapStruct 1.6.3 semantics
+and telescope `main`.
 
 **Legend:** ✅ full — the use case is covered, possibly via a different idiom that is no worse · ⚠️ partial — the core
 use case works, with the real limitation stated in the row's notes · ❌ missing.
@@ -71,10 +71,11 @@ the MapStruct-equivalent lenient behavior is Telescope.mapperForward(), which si
 and JLS-defaults unmatched targets. Deep recursion is arguably stronger than MapStruct's: containers lift automatically
 at any depth and cycles terminate.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/Telescope.java:497-563 (deep recursion + 'Same-name
-1-liner' javadoc at 519-523), 573-576 (mapper), 660-666+682-717 (mapperForward lenient-by-default, 'matches MapStruct's
-generated-mapper default'); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:94-116 ('Pure
-same-name deep copy — no overrides needed': Telescope.map(SameAddrEntity.class, SameAddrDto.class) with zero rows);
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/Telescope.java, the javadoc on
+`map(Class, Class, MapStep...)` (deep recursion, and the 'Same-name 1-liner' paragraph),
+`mapper(Class, Class, MapStep...)`, and the 'Lenient by default' paragraph on `mapperForward` ('matches MapStruct's
+generated-mapper default'); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the test 'Pure
+same-name deep copy — no overrides needed' (Telescope.map(SameAddrEntity.class, SameAddrDto.class) with zero rows);
 docs/adr/0002-no-fuzzy-auto-mapping.md</sub>
 
 ### Explicit rename
@@ -98,11 +99,12 @@ references, so IDE rename refactors follow and typos fail at javac, not at annot
 keyed by (sourceClass, targetClass) and applies at every depth where the pair recurses — less repetition than a @Mapping
 per mapper method, at the cost of broader scope when two usages of the same pair need different renames.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:97-100 (to(src, tgt) same-typed
-rename) and 111-118 (to(src, tgt, fwd, bwd) typed transform for renames that also change type);
-core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:122-128 (to(CompanyEntity::founded,
-CompanyDto::since) rename in 5-level nesting); core/src/main/java/io/github/eschizoid/telescope/Telescope.java:509-517
-(javadoc: a rename row applies wherever recursion lands on that type pair)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor)`
+(same-typed rename) and `to(Accessor, Accessor, Function, Function)` (typed transform for renames that also change
+type); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the test '5-level nesting with two renames
+— every field threads through correctly' (to(CompanyEntity::founded, CompanyDto::since) rename in 5-level nesting);
+core/src/main/java/io/github/eschizoid/telescope/Telescope.java, the javadoc on `map(Class, Class, MapStep...)` (a
+rename row applies wherever recursion lands on that type pair)</sub>
 
 ### Nested source path
 
@@ -125,16 +127,18 @@ to(OrderTelescope.of().customer().address().city(), OrderDto::city)
 ```
 
 All three shapes covered: nested source -> flat target, flat source -> nested target (with automatic intermediate
-allocation for record intermediates, Mapping.java:349-355), and nested -> nested. Paths are typed Telescope values
-instead of dotted strings, so javac checks every hop. Rows using Telescope paths apply at the outer (source, target)
-pair only — same scope as MapStruct's per-method @Mapping. Known edge: flat-source -> nested-target intermediate
-allocation needs a via(...) workaround for bean intermediates lacking a no-arg ctor/builder.
+allocation for record intermediates, described in the 'Intermediate allocation' paragraph of `to(Accessor, Telescope)`
+in Mapping.java), and nested -> nested. Paths are typed Telescope values instead of dotted strings, so javac checks
+every hop. Rows using Telescope paths apply at the outer (source, target) pair only — same scope as MapStruct's
+per-method @Mapping. Known edge: flat-source -> nested-target intermediate allocation needs a via(...) workaround for
+bean intermediates lacking a no-arg ctor/builder.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:361-379 (to(`Telescope<A,X>`,
-`Accessor<B,X>`) — javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), 381-402 (both-nested
-to(Telescope, Telescope)), 320-359 (nested-target mirror);
-core/src/test/java/io/github/eschizoid/telescope/TelescopeMappingTest.java:181-193 (forward reads nested source path,
-writes flat target), 200-214 (both-nested), 158-174 (codegen navigators on both sides)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Telescope, Accessor)`
+(javadoc: 'Closes MapStruct's @Mapping(source = "a.b.c", target = "flat")'), `to(Telescope, Telescope)` (both nested),
+and `to(Accessor, Telescope)` (the nested-target mirror);
+core/src/test/java/io/github/eschizoid/telescope/TelescopeMappingTest.java, the tests 'forward reads at the nested
+source path and writes to the flat target accessor', 'single-focus on both sides: read at src telescope, write at tgt
+telescope', and 'real @Focus-generated navigators on BOTH sides of Mapping.to(Telescope, Telescope)'</sub>
 
 ### Multiple source parameters
 
@@ -163,11 +167,13 @@ compile time like toDto(Customer, Address); (2) each source must have a distinct
 (MapStruct disambiguates by parameter name) require pre-aggregating into a holder record; (3) forward-only:
 backward()/patch() throw (MapStruct multi-source is also inherently one-way, so this is minor).
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/Telescope.java:803-859 (merge javadoc + factory, incl.
-'Distinct runtime classes' at 832-835 and 'Backward is unsupported' at 836-840);
-core/src/main/java/io/github/eschizoid/telescope/mapping/MergeStep.java:26-81 (from(src, tgt) class-inferred rows,
-auto(Class) same-name backfill); core/src/test/java/io/github/eschizoid/telescope/MergeTest.java:52-60 (2-source
-forward), 97-104 (arity 3), 121-130 (arity 5, single factory)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/Telescope.java, `merge(Class, MergeStep...)` and its
+javadoc, including the 'Distinct runtime classes' and 'Backward is unsupported' paragraphs;
+core/src/main/java/io/github/eschizoid/telescope/mapping/MergeStep.java, `from(Accessor, Accessor)` (class-inferred
+rows) and `auto(Class)` (same-name backfill); core/src/test/java/io/github/eschizoid/telescope/MergeTest.java, the tests
+'forward assembles a target from two sources, class inference picks each slot', '3-source forward — same factory shape,
+just more rows', '5-source forward — same factory, 5 sources, 5 rows', and 'forward called with a Sources bag missing
+one of the row source classes throws naming the class' (IllegalStateException at forward time)</sub>
 
 ## Conversions
 
@@ -199,13 +205,17 @@ workaround is one explicit to(src, tgt, fwd, bwd) row per pair — compile-typed
 MapStruct generated silently. enum<->enum by name gets first-class sugar (enumTo, with build-time exhaustiveness
 MapStruct lacks); enum<->String does not.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:1016-1035 (Identity / PrimitiveWrapper
-autobox with JLS-default null guard / CollectionCopy branches), DeepMap.java:1049-1069 (`Optional<->nullable` lift);
-core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java:472-500 (primitive<->wrapper auto-boxed,
-null boxed -> JLS default), MigrationRegressionTest.java:2815-2845 (same-name Integer vs String pair fails fast pointing
-at 'to(src, tgt, forward, backward)'; 4-arg transform is the documented fix);
-core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:175-188 (enumTo);
-docs/adr/0002-no-fuzzy-auto-mapping.md (exact name+type only, explicit rows otherwise)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `computeAutoIso` (the Identity,
+PrimitiveWrapper, CollectionCopy and MapCopy branches, and the OptionalToNullable / NullableToOptional branches that
+lift `Optional<->nullable`) and `primitiveWrapperIso` (autobox with a JLS-default null guard);
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingMessages.java, `incompatibleShapes` (a
+same-name pair of differing scalar types is refused with 'add a to(src, tgt, forward, backward) row');
+core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java, the `PrimitiveWrapperAutoboxing` nested
+class ('auto-mapping handles primitive↔wrapper pairs …' and 'null boxed source mapping to primitive target uses JLS
+default …'), and the tests '2-arg to(Integer-getter, String-getter) rename is rejected at build, not a runtime
+ClassCastException' and 'the documented fix — 4-arg to(src, tgt, forward, backward) — round-trips the renamed field';
+core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `enumTo`; docs/adr/0002-no-fuzzy-auto-mapping.md
+(exact name+type only, explicit rows otherwise)</sub>
 
 ### Format strings
 
@@ -234,12 +244,13 @@ hand-writes the formatter and, for bidirectional number formats, the parse leg i
 MapStruct generates. Codegen path needs a whole @Transform + helper class per formatted field — more ceremony than one
 annotation attribute.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:111-148 (4-arg to typed transform
-with Instant::toString/Instant::parse example; toOneWay forward-only);
-core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java:50-100 (per-field BridgeFn / static-method
-qualifier dispatch, DateTimeFormatter example at lines 83-94); README.md, "When MapStruct is the right pick" (which
-names `Mapping.via(...)` as the plain-Java stand-in for qualifier dispatch);
-core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java:2826-2845 (number<->String transform
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java,
+`to(Accessor, Accessor, Function, Function)` (typed transform, with an Instant::toString/Instant::parse example) and
+`toOneWay` (forward-only); core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java, `using()` and
+`method()` (per-field BridgeFn or static-method qualifier dispatch; the `method()` javadoc carries the DateTimeFormatter
+example); README.md, "When MapStruct is the right pick" (which names `Mapping.via(...)` as the plain-Java stand-in for
+qualifier dispatch); core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java, the test 'the
+documented fix — 4-arg to(src, tgt, forward, backward) — round-trips the renamed field' (number<->String transform
 round-trip)</sub>
 
 ### Expressions
@@ -268,14 +279,14 @@ for one source field or the typed afterForward((src, dto) -> ...) hook for multi
 are forward-only by design (backward drops the slot). Codegen @Compute requires a top-level Supplier class (no lambdas
 in annotations) — slightly heavier than runtime form.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:527-553 (compute(tgt, Supplier),
-javadoc names the expression=java(Instant.now()) gap), Mapping.java:582-597 (nested-target compute),
-Mapping.java:276-318 (toOrElseGet closes defaultExpression, plus predicate-gated overload), Mapping.java:142-148
-(toOneWay per-field function); core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:497-522
-(afterForward(`BiFunction<A,B,B>`) source-aware hook, typed @AfterMapping analog);
-core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java:104-148 (fresh-per-call, forward-only
-semantics pinned); core/src/main/java/io/github/eschizoid/telescope/annotations/Compute.java:37-51 (codegen
-@Compute(using = Supplier.class) for @Bridge); README.md, the `constant` / `compute` example under "Mapping"</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `compute(Accessor, Supplier)`
+(javadoc names the expression=java(Instant.now()) gap), `compute(Telescope, Supplier)` (nested target), both
+`toOrElseGet` overloads (defaultExpression, plus the predicate-gated form), and `toOneWay` (per-field function);
+core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `afterForward(BiFunction)` (source-aware hook,
+typed @AfterMapping analog); core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java, the
+nested class 'Mapping.compute(Tgt::field, Supplier) — lazy, fresh per call' (fresh-per-call and forward-only semantics
+pinned); core/src/main/java/io/github/eschizoid/telescope/annotations/Compute.java (codegen @Compute(using =
+Supplier.class) for @Bridge); README.md, the `constant` / `compute` example under "Mapping"</sub>
 
 ### Constants and defaults
 
@@ -308,15 +319,17 @@ constant=...)) work via Telescope paths. Known asymmetries, documented and teste
 drops the slot), and a substituted default round-trips backward as itself rather than the original null. Codegen
 @Default is strict-null only (annotation attributes cannot hold predicates).
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:500-525 (constant(tgt, value),
-javadoc names the @Mapping constant gap), Mapping.java:555-580 (nested-target constant), Mapping.java:227-274 (toOrElse
-strict-null + predicate-gated), Mapping.java:276-318 (toOrElseGet lazy + predicate-gated);
-core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java:46-101 (constant stamps literal;
-backward drops to type default), core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java:27-155
-(null->default, pass-through, lazy supplier, empty-string/empty-collection predicates);
-core/src/main/java/io/github/eschizoid/telescope/annotations/Constant.java:41-50 and
-core/src/main/java/io/github/eschizoid/telescope/annotations/Default.java:48-61 (codegen literals, parsed at emit time
-against field type); README.md, the `constant` / `compute` example under "Mapping"</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `constant(Accessor, Object)`
+(javadoc names the @Mapping constant gap), `constant(Telescope, Object)` (nested target), both `toOrElse` overloads
+(strict-null and predicate-gated), and both `toOrElseGet` overloads (lazy and predicate-gated);
+core/src/test/java/io/github/eschizoid/telescope/MappingConstantComputeTest.java, the nested class
+'Mapping.constant(Tgt::field, value) — eager literal' (constant stamps the literal; backward drops it to the type
+default); core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java, every test (null->default,
+pass-through, lazy supplier, empty-string/empty-collection predicates);
+core/src/main/java/io/github/eschizoid/telescope/annotations/Constant.java and
+core/src/main/java/io/github/eschizoid/telescope/annotations/Default.java (codegen literals, parsed at emit time against
+the field's declared type; the 'Strict-null only' section of Default); README.md, the `constant` / `compute` example
+under "Mapping"</sub>
 
 ## Collections & containers
 
@@ -345,18 +358,24 @@ final Mapper<TeamEntity, TeamDto> teamMapper2 = Telescope.mapper(
 
 Element mapping is reused automatically (same-name recursion) or explicitly (via(...) with a pre-built element Mapper),
 including nested containers like `List<Optional<X>>` and `Map<K,List<X>>`. Bidirectional round-trip comes free. One
-honesty caveat: auto-lift requires SAME-kind containers on both sides (PairingRules.java:79 — srcView.kind() ==
-tgtView.kind()); MapStruct's List -> Set cross-kind copy needs an explicit to(src, tgt, fwd, bwd) row in telescope.
-Target concrete class (ArrayList/LinkedList/CopyOnWriteArrayList/...) is honored via listAllocatorFor
-(`ContainerLifts.listAllocatorFor`).
+honesty caveat: auto-lift requires SAME-kind containers on both sides (`PairingRules.decidePair` compares the two
+container views' kinds); MapStruct's List -> Set cross-kind copy needs an explicit to(src, tgt, fwd, bwd) row in
+telescope. A `Deque` or `Queue` field is viewed as a list, and a field declared as the general `Collection` takes the
+other side's kind (`PairingRules.settledAgainst`). Target concrete class (ArrayList/LinkedList/Deque/...) is honored
+through the allocation table in `PairingRules` that the runtime and codegen paths share, rendered at runtime by
+`ContainerLifts.listAllocatorFor`.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:65-73 (engine javadoc:
-List/Set/Map-values/Optional lift the element Iso, containers nest to any depth), DeepMap.java:1093-1124 (LiftContainer
-dispatch recursing on element type), DeepMap.java:1213-1268 (liftViaIfNeeded: element-level Mapper auto-lifted through
-the accessor's container); core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:427-449 (via javadoc +
-factory: 'List pair, auto-lifts'); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:125-178
-(5-level nesting, element rename fires inside List of List of List), 264-289 (`List<Optional<X>>` and `Map<K,List<X>>`
-auto-lift), 342-372 (via(...) lifts `Mapper<UserEntity,UserDto>` through a List accessor pair, round-trips)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, the class javadoc
+(List/Set/Map-values/Optional lift the element Iso, containers nest to any depth), the LiftContainer branch of
+`computeAutoIso` (recurses on the element type), and `liftViaIfNeeded` (element-level Mapper auto-lifted through the
+accessor's container); core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java,
+`via(Accessor, Accessor, Mapper)` and its javadoc ('List pair, auto-lifts');
+core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the tests '5-level nesting with two renames —
+every field threads through correctly' (element rename fires inside List of List of List),
+`List<Optional<Record>> auto-lifts both layers; empty Optional round-trips`,
+`Map<K, List<Record>> auto-lifts values + list element`, and the `PreBuiltViaMapper` nested class (via(...) lifts
+`Mapper<UserEntity,UserDto>` through a List accessor pair and round-trips, and through a pair declared as the general
+Collection)</sub>
 
 ### Map mapping
 
@@ -379,22 +398,24 @@ to(AuditEntity::timestamps, AuditDto::timestamps,
     ts -> ts.entrySet().stream().collect(toMap(Map.Entry::getKey, e -> LocalDate.parse(e.getValue(), FMT))))
 ```
 
-VALUE mapping is fully covered: auto-lifted through Iso.liftMapValues at any depth, or explicit via(...) with a
-value-level Mapper. KEY mapping is deliberately not supported — key types must match exactly and keys are copied
-verbatim; a key conversion (e.g. String keys -> enum keys) requires a manual whole-field to(src, tgt, fwd, bwd)
-transform over the entire Map. No per-key/per-value format sugar like @MapMapping(valueDateFormat) — the equivalent is a
-hand-written stream/collect transform row. Target Map concrete type is honored; EnumMap targets are rejected with a
+VALUE mapping is fully covered: auto-lifted through `ContainerLifts.liftMapIntoTargetRaw` at any depth, or explicit
+via(...) with a value-level Mapper. KEY mapping is deliberately not supported — key types must match exactly and keys
+are copied verbatim; a key conversion (e.g. String keys -> enum keys) requires a manual whole-field to(src, tgt, fwd,
+bwd) transform over the entire Map. No per-key/per-value format sugar like @MapMapping(valueDateFormat) — the equivalent
+is a hand-written stream/collect transform row. Target Map concrete type is honored; EnumMap targets are rejected with a
 precise error (needs an explicit row).
 
 <sub>Evidence: `DeepMap`'s MAP_VALUES lift; `ContainerLifts.liftMapIntoTargetRaw` ('Preserves source keys verbatim');
 `DeepMap`'s via(...) rejection when Map key types differ ('Key types must match exactly; auto-lifting preserves the
 source keys'); `ContainerLifts.mapAllocatorFor` (HashMap/LinkedHashMap/TreeMap/ConcurrentHashMap/...; EnumMap rejected
-at plan time); internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java:80-91 (mismatched
-key types -> Incompatible), 119-122 (non-class key type arg means the Map is not treated as liftable);
-core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:172-174 (Map values recursed, keys preserved),
-280-289 (`Map<K, List<Record>>` auto-lifts);
-core/src/test/java/io/github/eschizoid/telescope/DeepMapCoverageTest.java:77,152 (key-type mismatch rejection
-asserted)</sub>
+at plan time, by the `EnumMap` entry of the allocation table in `PairingRules`);
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java, `decidePair` (mismatched key
+types -> Incompatible) and `containerViewOf` with `decidableKey` (a wildcard key, or one that mentions a type variable,
+means the Map is not treated as liftable); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the
+test '5-level nesting with two renames — every field threads through correctly' (Map values recursed, keys preserved)
+and `Map<K, List<Record>> auto-lifts values + list element`;
+core/src/test/java/io/github/eschizoid/telescope/DeepMapCoverageTest.java, the nested classes 'D2 — autoIso Map key-type
+mismatch' and 'D4 — via(...) Map key-type mismatch' (key-type mismatch rejection asserted)</sub>
 
 ### Collection target strategies
 
@@ -426,15 +447,19 @@ replaces the collection reference via the setter; it never getItems().clear()/ad
 matters for Hibernate PersistentCollection orphan-removal). into() also requires public setters and rejects record
 targets.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:353-423 (into(): javadoc says
-'Closes MapStruct's @MappingTarget for the bean path'; setter-based, records rejected, two-phase staged writes);
-core/src/test/java/io/github/eschizoid/telescope/MapperIntoTest.java:127-160 (in-place mutation preserves target
-identity, repeatable); core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:1344-1374 + 1441-1461
-(liftListIntoTargetRaw + listAllocatorFor: result runtime class matches declared target raw class, unknown java.base
-subtypes throw at plan time), 1463-1508 (set/map allocators);
-core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java:45-98 (writeBean/writeBeans with
-BUILDER/SETTERS/CONSTRUCTOR — no ADDER); grep for 'adder' across core/ and codegen/ returned only WriteStrategy ladder
-docs (no adder support anywhere)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` (javadoc
+says 'Closes MapStruct's @MappingTarget for the bean path'; setter-based, records rejected, two-phase staged writes);
+core/src/test/java/io/github/eschizoid/telescope/MapperIntoTest.java, the nested class 'Bean target — in-place mutation
+preserves target identity' (identity preserved, repeatable);
+core/src/main/java/io/github/eschizoid/telescope/ContainerLifts.java, `liftListIntoTargetRaw` with `listAllocatorFor`,
+and `setAllocatorFor` / `mapAllocatorFor` (the result's runtime class is the one the shared allocation table in
+`PairingRules` names for the declared type; a type the table does not name is built through its own public no-arg
+constructor, or the family default when it is an interface or abstract class the default implements, and a type none of
+those reaches throws at plan time); core/src/test/java/io/github/eschizoid/telescope/ContainerAllocatorCorpusTest.java,
+'the reflective path allocates exactly what the generated path allocates, and refuses the rest' (every public
+`java.base` container class); core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, `writeBean` /
+`writeBeans` with BUILDER/SETTERS/CONSTRUCTOR — no ADDER; a grep for 'adder' across core/, internal/ and codegen/ finds
+only the word 'ladder' (no adder support anywhere)</sub>
 
 ### Stream support
 
@@ -457,13 +482,14 @@ to(src, tgt, fwd, bwd) row that collects/re-streams). The dominant real-world ca
 which is why this is partial rather than missing. But there is zero sugar: no Stream-shaped factory, no Stream field
 lift, and forward-only (no backward through a consumed Stream).
 
-<sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/ContainerView.java:14-19 (auto-lift
-container kinds are exactly LIST, SET, MAP_VALUES, OPTIONAL — no STREAM);
-internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java:106-125 (containerViewOf
-recognizes only Optional/List/Set/Map — a Stream-typed component falls through to Incompatible); grep for 'Stream<'
-across core/src/main, core/src/test, and examples/ finds one hit, the JDK type used inside ContainerAllocatorCorpusTest,
-and no Stream mapping API. Two fixtures declare a record named Stream (TelescopeTest, and the examples'
-SealedAndFilterDemo); a user type that happens to carry the name is mapped as the record it is</sub>
+<sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/ContainerView.java, the `Kind` enum
+(auto-lift container kinds are exactly LIST, SET, COLLECTION, MAP_VALUES, OPTIONAL — no STREAM);
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java, `containerViewOf` (recognizes
+only Optional, List, Set and Map subtypes and the Deque, Queue and Collection interfaces by name — a Stream-typed
+component falls through to Incompatible); grep for 'Stream<' across core/src/main, core/src/test, and examples/ finds
+one hit, the JDK type used inside ContainerAllocatorCorpusTest, and no Stream mapping API. Two fixtures declare a record
+named Stream (TelescopeTest, and the examples' SealedAndFilterDemo); a user type that happens to carry the name is
+mapped as the record it is</sub>
 
 ## Lifecycle & customization
 
@@ -487,13 +513,14 @@ source and structural result (MapStruct's @AfterMapping-with-source pattern). Ho
 they work for immutable records too — arguably richer than MapStruct, where mutable-target hooks are the norm. Hooks
 survive .asTelescope() and chain left-to-right.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:455 (beforeForward), :493
-(afterForward Function), :509 (afterForward BiFunction — javadoc at :500 explicitly cites MapStruct), :539
-(beforeBackward), :568 and :583 (afterBackward Function/BiFunction);
-core/src/test/java/io/github/eschizoid/telescope/MapperPostHooksTest.java:26-269 (all four hooks, chaining order,
-direction-laziness, asTelescope() propagation);
-core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java:1239, 1268, 1885; README.md:372
-(parity-table row)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `beforeForward`, both
+`afterForward` overloads (the BiFunction one's javadoc cites MapStruct's `@AfterMapping` with `@MappingTarget`),
+`beforeBackward`, and both `afterBackward` overloads (Function and BiFunction);
+core/src/test/java/io/github/eschizoid/telescope/MapperPostHooksTest.java, every nested class (all four hooks, chaining
+order, direction-laziness, asTelescope() propagation);
+core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java, the tests 'Mapper.forward(non-null) still
+threads through hooks', 'Mapper.forward — preForward returning null propagates as null (no NPE in iso.to)', and 'hook
+chain (afterForward) composes with lenient construction — stamped fields land on the leniently-built target'</sub>
 
 ### Context parameters
 
@@ -530,10 +557,10 @@ non-trivial) or closing over a ScopedValue/holder manually. No sugar exists for 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `forward(final A a)` and
 `backward(final B b)` (neither takes a context argument); core/src/main/java/io/github/eschizoid/telescope/DeepMap.java,
 the `FORWARD_SEEN` / `BACKWARD_SEEN` fields (built-in ThreadLocal IdentityHashMap value-level cycle guard);
-core/src/test/java/io/github/eschizoid/telescope/CycleHandlingTest.java:31-86 (Optional/List self-reference and A-B
-mutual recursion map without StackOverflow, zero user code);
-core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:111 (to(src, tgt, fwd, bwd) typed-transform row
-where a closure captures context)</sub>
+core/src/test/java/io/github/eschizoid/telescope/CycleHandlingTest.java, every test (Optional/List self-reference and
+A-B mutual recursion map without StackOverflow, zero user code);
+core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor, Function, Function)`
+(typed-transform row where a closure captures context)</sub>
 
 ### Qualifiers
 
@@ -560,12 +587,14 @@ javac — safer than @Named string matching. Codegen side has the literal @Named
 one mapper per (src,tgt) pair — two semantically-different mappers for the same pair must be injected directly with the
 framework's own @Qualifier, bypassing the registry.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java:59-100 (method() attribute —
-javadoc explicitly says it "unlocks MapStruct's @Named qualifier-dispatch pattern", emits direct
-UsingClass.methodName(value) static call); core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:111
-(to(src, tgt, fwd, bwd) — exact function per row) and :443 (via with an exact Mapper instance);
-spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeMapperRegistry.java:44-66 (duplicate
-(src,tgt) pairs throw with a message directing to Spring @Qualifier + direct injection)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java, `using()` and `method()`
+(the `using()` javadoc says the method-named form "unlocks MapStruct's @Named qualifier-dispatch pattern", and
+`method()` emits a direct UsingClass.methodName(value) static call);
+core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor, Function, Function)`
+(exact function per row) and `via(Accessor, Accessor, Mapper)` (an exact Mapper instance);
+spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeMapperRegistry.java, the constructor and
+the 'Construction' section of the class javadoc (duplicate (src,tgt) pairs throw with a message directing to Spring
+@Qualifier + direct injection)</sub>
 
 ### Mapper composition
 
@@ -598,14 +627,14 @@ it with @ViaMapper (delegate to a bridge class) and @Transform(using = Helper.cl
 methods. Difference in idiom: telescope binds the delegate per field explicitly, MapStruct auto-selects by type from the
 uses list — telescope's form is more verbose when many fields share one nested pair but unambiguous.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:427-449 (via(srcAcc, tgtAcc,
-mapper) factory, element-level auto-lift through List/Set/Optional/Map documented at :432-441);
-core/src/main/java/io/github/eschizoid/telescope/mapping/Via.java:19 (row record);
-core/src/main/java/io/github/eschizoid/telescope/annotations/ViaMapper.java:16-63 (codegen per-field bridge delegation,
-static forward/backward shape); core/src/main/java/io/github/eschizoid/telescope/annotations/Bridge.java:207-222
-(viaMappers attribute); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:356, 377-391 (via
-precedence over auto-recursion); core/src/test/java/io/github/eschizoid/telescope/CycleHandlingTest.java:31-51
-(auto-recursion builds nested sub-mappers with no delegation rows at all)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `via(Accessor, Accessor, Mapper)`
+(its javadoc documents the element-level auto-lift through List/Set/Optional/Map);
+core/src/main/java/io/github/eschizoid/telescope/mapping/Via.java (row record);
+core/src/main/java/io/github/eschizoid/telescope/annotations/ViaMapper.java (codegen per-field bridge delegation, static
+forward/backward shape); core/src/main/java/io/github/eschizoid/telescope/annotations/Bridge.java, `viaMappers()`;
+core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the test 'via(...) takes precedence over
+auto-recursion for its target field'; core/src/test/java/io/github/eschizoid/telescope/CycleHandlingTest.java, the
+self-reference tests (auto-recursion builds nested sub-mappers with no delegation rows at all)</sub>
 
 ## Object creation & update
 
@@ -631,11 +660,13 @@ UnsupportedOperationException (MapStruct can't mutate records in place either). 
 silently skipped — matching MapStruct's @MappingTarget semantics. Bonus over MapStruct: patch() gives null-skipping
 sparse update without NullValuePropertyMappingStrategy.IGNORE config.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:353-423 (into(): javadoc says
-'Closes MapStruct's @MappingTarget for the bean path', two-phase staged writes, returns same reference, records rejected
-with UnsupportedOperationException at :394-400); Mapper.java:290-323 (patch() sparse overlay);
-core/src/test/java/io/github/eschizoid/telescope/MapperIntoTest.java:16 ('Pins Mapper.into(target, source) — the
-@MappingTarget equivalent'), :136-138 (assertSame identity preservation), :150-153 (repeatable mutation)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `into(Object, Object)` (javadoc
+says 'Closes MapStruct's @MappingTarget for the bean path'; two-phase staged writes, returns the same reference, and a
+record target is rejected with UnsupportedOperationException) and `patch(Object, Object)` (sparse overlay);
+core/src/test/java/io/github/eschizoid/telescope/MapperIntoTest.java, the class javadoc ('Pins Mapper.into(target,
+source) — the @MappingTarget equivalent'), the tests 'into(managed, dto) mutates target via setters; reference identity
+preserved' and 'Subsequent into(...) calls re-mutate the same instance', and 'property without a setter is silently
+skipped — matches SettersWriter'</sub>
 
 ### Object factories
 
@@ -663,12 +694,13 @@ instance I obtained elsewhere (JPA/DI)' → mapper.into(existing, source). A tru
 needing values not on the source) forces you out to from/to/using where you hand-write the entire forward function,
 losing auto-mapping for the remaining fields.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java:45-98 (writeBean/writeBeans
-accept only the 4-value WriteStrategy enum at :58-63 — no Supplier/factory function overload);
-core/src/main/java/io/github/eschizoid/telescope/conversion/MapperBuilder.java:91-160 (create/inherit/add/build — no
-factory hook); core/src/main/java/io/github/eschizoid/telescope/Telescope.java:463-495 (from/to/using escape hatch);
-core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:391-423 (into() covers the
-load-existing-instance use case); no ObjectFactory counterpart exists anywhere in the main source sets</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, `writeBean` / `writeBeans`
+(accept only the three-value `WriteHint.WriteStrategy` enum, BUILDER/SETTERS/CONSTRUCTOR — no Supplier/factory function
+overload); core/src/main/java/io/github/eschizoid/telescope/conversion/MapperBuilder.java,
+`create`/`inherit`/`add`/`build` (no factory hook); core/src/main/java/io/github/eschizoid/telescope/Telescope.java,
+`from(Class)` (the from/to/using escape hatch); core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java,
+`into(Object, Object)` (covers the load-existing-instance use case); no ObjectFactory counterpart exists anywhere in the
+main source sets</sub>
 
 ### Builder support
 
@@ -694,14 +726,18 @@ builder()/build() pair, including Immutables if you map to the generated Immutab
 builder() matches). Gaps vs MapStruct: (1) the factory method name is hard-wired to 'builder' — protobuf's newBuilder()
 is NOT detected and there is no @Builder(builderMethod=...) equivalent or BuilderProvider SPI to teach it; (2) a target
 with a builder is built through it by default, on both the runtime and the codegen path, and preferring its setters or
-constructor takes a writeBean hint (or `@Bridge(writeStrategy = ...)`). Builder setter matching (exact / setX / withX)
-covers Lombok, Immutables-fluent, and JavaBean-style builders.
+constructor takes a writeBean hint (or `@Bridge(writeStrategy = ...)`). Both paths pass the builder over on their own
+only when it has no member for a property the next strategy would write, or a member that cannot take the property's
+type. Builder setter matching (exact / setX / withX) covers Lombok, Immutables-fluent, and JavaBean-style builders.
 
-<sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java — `computeAutoWriter`
-(autoWriter probe order: static builder() → all-args ctor → setters), the `builderWriter` factory, and `BuilderWriter`
-(requires a static method named exactly 'builder()' returning a type with 'build()'; setter matching by exact name /
-setX / withX; LMF-de-reflected dispatch); core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java — the
-`WriteStrategy` javadoc (BUILDER strategy, 'requires a static builder() method');
+<sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/BeanWriteStrategy.java,
+`AUTO_ORDER` (static builder() → name-matched all-args ctor → setters, the order shared by the runtime writer and the
+processors) and `auto` (when the builder is passed over);
+internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java — `computeAutoWriter` (the runtime's answers to
+that shape), the `builderWriter` factory, and `BuilderWriter` (requires a static method named exactly 'builder()'
+returning a type with 'build()'; setter matching by exact name / setX / withX; LMF-de-reflected dispatch);
+core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java — the `WriteStrategy` javadoc (BUILDER strategy,
+'requires a static builder() method');
 lombok/src/test/java/io/github/eschizoid/telescope/codegen/lombok/fixtures/BuilderUser.java (@Builder fixture) and
 LombokFocusProcessorTest.java (@Builder and @Value+@Builder navigators verified end-to-end);
 core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java — the `WriteHints` nested class (writeBean
@@ -730,21 +766,25 @@ Records are the native happy path — canonical-constructor rebuild is the defau
 codegen), no configuration needed. Immutable non-record classes work via the CONSTRUCTOR write strategy: auto-detected
 when there is exactly one public all-args constructor compiled with -parameters and parameter names align with
 getter-derived properties; otherwise pin with writeBean(X.class, CONSTRUCTOR). Same -parameters dependency MapStruct has
-for name-based constructor matching. No @Default-style disambiguation among multiple constructors — ambiguous
-constructor sets are refused (Beans.java:801-810) rather than selectable, but the writeBean hint plus the single-ctor
-rule covers the practical cases. Verified limitation: no counterpart to MapStruct's @Default — a target with multiple
+for name-based constructor matching. No @Default-style disambiguation among multiple constructors — a class with more
+than one constructor of the property-count arity is never auto-selected for the constructor strategy (`Beans`'
+`solePublicConstructor`) and is refused when nothing else applies, but the writeBean hint plus the single-ctor rule
+covers the practical cases. Verified limitation: no counterpart to MapStruct's @Default — a target with multiple
 same-arity constructors cannot be disambiguated (records: full; single-ctor immutables: full with -parameters;
 multi-constructor immutables: unsupported).
 
-<sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/Records.java:273-307 (cached
-canonical-constructor invoker per record class, components in canonical order, MethodHandle asSpreader);
-core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:301 ('Records: rebuilds via the canonical
-constructor'); internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java:710-718 (ConstructorWriter:
-name-matched with -parameters, positional fallback) and :769-790 (auto-detected as autoWriter's 4th rung with
--parameters + name-alignment safety check, loud error otherwise);
-core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java:54-55 (CONSTRUCTOR strategy docs);
-core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java:42-59 (record↔record fixtures), :209 (nested
-record mapper), :671-688 ('CONSTRUCTOR hint constructs an immutable all-args-only POJO' + auto-detection test)</sub>
+<sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/Records.java, `RecordInfo` and its
+`buildCtorFn` (cached canonical-constructor invoker per record class, components in canonical order, MethodHandle
+asSpreader); core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, the `patch` javadoc ('Records:
+rebuilds via the canonical constructor'); internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java,
+`ConstructorWriter` (name-matched with -parameters, positional fallback) and `computeAutoWriter` (the constructor is
+autoWriter's second rung, after a builder and before setters, guarded by -parameters and a name-alignment check, with a
+loud error otherwise); core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, the `WriteStrategy` enum
+(CONSTRUCTOR strategy docs); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the record↔record
+fixtures at the top of the class, the test 'backward(forward(entity)) equals entity for a 5-level mapping' (nested
+record mapper), and the `WriteHints` tests 'CONSTRUCTOR hint constructs an immutable all-args-only POJO round-trip',
+'autoWriter constructor fallback handles a same-arity unambiguous immutable POJO without a hint', and 'autoWriter throws
+cleanly for ambiguous multi-ctor POJO when no hint is supplied'</sub>
 
 ## Policies & null handling
 
@@ -777,14 +817,14 @@ strict bidirectional, mapperForward = lenient) rather than per-mapper attribute,
 global javac -A flag plus per-site @UncheckedMapping, not per-mapper. drop(...) is the analog of @Mapping(target=...,
 ignore=true).
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:124-132 (strict bijection — 'unmatched
-fields on EITHER side throw at construction'); DeepMap.java:134-143 (mapperForward lenient, 'Matches MapStruct's default
-behaviour'); core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:451-498 (drop(src) and drop(src,
-Target.class) — 'declare it intentionally NOT mapped');
-codegen/src/main/java/io/github/eschizoid/telescope/codegen/MapperVerifierProcessor.java:61-63
-('-Atelescope.verify=error|warn|off (default error)', '@UncheckedMapping("reason")'), 108-118 (mode ->
-Diagnostic.Kind.ERROR/WARNING/off), 325-328 (unmatchedTargets/unmatchedSources reported);
-docs/adr/0012-compile-time-mapper-verification.md:1-40</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `resolveMapper` (strict bijection —
+'unmatched fields on EITHER side throw at construction') and `resolveForward` (mapperForward lenient, 'Matches
+MapStruct's default behaviour'); core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `drop(Accessor)`
+and `drop(Accessor, Class)` ('declare it intentionally NOT mapped');
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/MapperVerifierProcessor.java, the class javadoc
+('-Atelescope.verify=error|warn|off (default error)', '@UncheckedMapping("reason")'), `init` (mode ->
+Diagnostic.Kind.ERROR/WARNING/off), and `verifyPairCall` (unmatchedTargets/unmatchedSources reported);
+docs/adr/0012-compile-time-mapper-verification.md</sub>
 
 ### Null value strategies
 
@@ -818,20 +858,21 @@ telescope's only patch mode), plus per-field defaultValue/defaultExpression anal
 gaps: (1) no RETURN_DEFAULT for a whole-null source argument — forward(null) is always null; workaround is a caller-side
 `src == null ? emptyDto() : m.forward(src)`; (2) no SET_TO_NULL toggle on update — patch always ignores nulls, so
 'explicit null clears the field' PATCH semantics is not expressible; (3) DEFAULT substitutes only table leaf types —
-record/bean/enum/custom-typed fields stay null unless a per-row toOrElse supplies a value; (4) DEFAULT is forward-only
-(documented; backward preserves nulls).
+record/bean/enum/custom-typed fields stay null unless a per-row toOrElse supplies a value, and a row carrying its own
+conversion functions is not wrapped at all; (4) DEFAULT is forward-only (documented; backward preserves nulls).
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/NullHint.java:60-88 (nullSourceValues,
-PROPAGATE='SET_TO_NULL', DEFAULT='SET_TO_DEFAULT', javadoc lines 8-10 names the MapStruct attributes);
-internal/src/main/java/io/github/eschizoid/telescope/internal/NullDefaults.java:12-53 (per-type default table,
-explicitly 'covers the surface MapStruct's RETURN_DEFAULT populates');
-core/src/main/java/io/github/eschizoid/telescope/DeepMap.java:990-995 + 1138-1144 (DEFAULT wraps every per-component Iso
-via coalesceForward), 1573-1586 (assembleIso: forward(null) returns null = RETURN_NULL);
-core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:243-318 (toOrElse/toOrElseGet per-field defaults);
-core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:290-323 (patch: 'overlay the non-null fields of
-partial ... leaving the rest of base untouched');
-core/src/test/java/io/github/eschizoid/telescope/NullStrategyTest.java:25-100 and tail (PROPAGATE default, DEFAULT
-substitution for String/wrappers/BigDecimal/collections, bean targets, backward-unchanged)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/NullHint.java, `nullSourceValues` and the
+`NullStrategy` enum (PROPAGATE='SET_TO_NULL', DEFAULT='SET_TO_DEFAULT'; the interface javadoc's opening sentence names
+the MapStruct attributes); internal/src/main/java/io/github/eschizoid/telescope/internal/NullDefaults.java, the class
+javadoc and `defaultFor` (per-type default table, explicitly 'covers the surface MapStruct's RETURN_DEFAULT populates');
+core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `autoIso` and `wrapDefaultOnNull` (DEFAULT wraps every
+auto-recursed per-component Iso via coalesceForward);
+core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `forward` (forward(null) returns null =
+RETURN_NULL) and `patch` ('overlay the non-null fields of partial ... leaving the rest of base untouched');
+core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, the `toOrElse` / `toOrElseGet` overloads
+(per-field defaults); core/src/test/java/io/github/eschizoid/telescope/NullStrategyTest.java, every nested class
+(PROPAGATE default, DEFAULT substitution for String/wrappers/BigDecimal/collections, bean targets,
+backward-unchanged)</sub>
 
 ### Null check strategy
 
@@ -849,25 +890,30 @@ Telescope.mapper(Src.class, Dst.class,
     to(Src::amountCents, Dst::amount,
        a -> a == null ? null : BigDecimal.valueOf(a, 2),          // manual guard inside custom fwd fn
        b -> b == null ? null : b.movePointRight(2).longValue()),
-    nullSourceValues(DEFAULT));  // additionally skips wrapped fns on null for table-defaultable leaf types
+    nullSourceValues(DEFAULT));  // substitutes defaults for auto-matched fields only, never inside a row's fns
 ```
 
 Telescope's default posture is effectively ALWAYS for everything the engine owns: null sources, null nested objects, and
 null containers propagate as null instead of NPE-ing, with no configuration. The gap is custom transform rows — the
-user-supplied fwd/bwd functions in to(src, tgt, fwd, bwd) / toOneWay / via ARE invoked with null under the default
-PROPAGATE strategy, and under DEFAULT the coalesce wrap is skipped for target types outside the NullDefaults table
-(records/beans/enums/custom). There is no per-mapper 'never call my conversion with null' switch; the recipe is toOrElse
-for the common cases or a null check inside the function.
+user-supplied fwd/bwd functions in to(src, tgt, fwd, bwd) / toOneWay / via ARE invoked with null under either strategy.
+nullSourceValues(DEFAULT) wraps only auto-matched fields and same-typed to(src, tgt) rows, so a row carrying its own
+functions still receives the null and its result lands on the target, even when the target type has a table default.
+There is no per-mapper 'never call my conversion with null' switch; the recipe is toOrElse for the common cases or a
+null check inside the function.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `assembleIso` (its null guard:
-`if (s == null) return null` on both directions — every auto record/bean pair guarded),
-core/src/main/java/io/github/eschizoid/telescope/ContainerLifts.java, the three `if (src == null) return null` guards in
-the container copy and lift isos; core/src/main/java/io/github/eschizoid/telescope/TelescopeFixups.java,
-`srcT.find(s).orElse(null)` (a telescope-to-telescope row reads leniently through a null intermediate);
-internal/src/main/java/io/github/eschizoid/telescope/internal/optics/Iso.java:140-142 (coalesceForward:
-`x == null ? defaultValue : inner.to(x)` — inner fn skipped on null), 149-163 (liftList null pass-through);
-core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:269-273 + 314-317 (toOrElse/toOrElseGet
-null-short-circuit before user predicates fire)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `arrayLeaf` (its null guard:
+`if (s == null) return null` and `if (t == null) return null`) and `lazyCacheIso` (the null-guarding proxy around a
+nested pair), internal/src/main/java/io/github/eschizoid/telescope/internal/MhIso.java, `pair` (the composed-handle leaf
+guards null the same way) — every auto record/bean pair guarded;
+core/src/main/java/io/github/eschizoid/telescope/ContainerLifts.java, the `null` guards in the container copy and lift
+isos; core/src/main/java/io/github/eschizoid/telescope/TelescopeFixups.java, `srcT.find(s).orElse(null)` (a
+telescope-to-telescope row reads leniently through a null intermediate);
+core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `autoIso` (the only place `wrapDefaultOnNull` is applied)
+and the row branch of `populateIso` (same-typed rows go through `autoIso`, rows carrying functions through `fieldIsoOf`,
+which does not wrap); internal/src/main/java/io/github/eschizoid/telescope/internal/optics/Iso.java, `coalesceForward`
+(`x == null ? defaultValue : inner.to(x)` — inner fn skipped on null) and `liftList` (null pass-through);
+core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, the predicate-gated `toOrElse` and `toOrElseGet`
+(null-short-circuit before user predicates fire)</sub>
 
 ### Conditional mapping
 
@@ -898,15 +944,16 @@ Also: when(...) wraps only telescope-based rows (plain to(srcAcc, tgtAcc)/via/dr
 pointer to toOrElse), when(...) pins its predicate to the top-level source pair (not nested pairs), and there is no
 conditional analog on the patch/update path.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:647-649 (when(predicate, inner)
-factory; javadoc 599-646: 'closes MapStruct's @Condition for whole-source predicate gating', forward-only, nesting
-rejected), 263-273 (toOrElse with `missing` predicate — 'Generalises ... to cover empty-string, empty-collection ...
-MapStruct has no equivalent'), 308-318 (toOrElseGet with predicate);
-core/src/main/java/io/github/eschizoid/telescope/mapping/Conditional.java:88-128 (predicate-gated row; construction-time
-rejection of field-iso/nested inners with alternative hints), 44-57 (predicate evaluated once per top-level forward
-call, thread-safety contract); core/src/test/java/io/github/eschizoid/telescope/MappingWhenTest.java:32-186 (gated
-flat-to-nested, constant, compute, nested-to-flat, nested-to-nested, zip);
-core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java (7 @Test methods)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `when(Predicate, Mapping)` and its
+javadoc ('closes MapStruct's @Condition for whole-source predicate gating', forward-only, nesting rejected), the
+predicate-gated `toOrElse` (the `missing` predicate — 'Generalises ... to cover empty-string, empty-collection ...
+MapStruct has no equivalent'), and the predicate-gated `toOrElseGet`;
+core/src/main/java/io/github/eschizoid/telescope/mapping/Conditional.java, the compact constructor (construction-time
+rejection of field-iso and nested inners with alternative hints) and the 'Predicate purity AND thread-safety' paragraph
+(predicate evaluated once per top-level forward call);
+core/src/test/java/io/github/eschizoid/telescope/MappingWhenTest.java, the nested classes for gated flat-to-nested,
+constant, compute, nested-to-flat, nested-to-nested and zip rows, and 'Construction-time rejection — invalid inner
+rows'; core/src/test/java/io/github/eschizoid/telescope/MappingOrElseTest.java</sub>
 
 ## Advanced
 
@@ -935,15 +982,19 @@ Entity back = mapper.backward(mapper.forward(entity));
 Row groups reuse cleanly across mappers of the SAME (source, target) pair, and the inverse half is free (backward()
 derives from the same rows). Remaining limitation: rows bind to their decoded type pair, so a group cannot be reused
 across DTO variants of different pairs — but a group inherited into a foreign pair now fails fast at build with an error
-naming the unreachable pair and its rows (#223), instead of being silently dropped. Declare a per-variant group typed
-against the variant.
+naming the unreachable pair and its rows, instead of being silently dropped. Declare a per-variant group typed against
+the variant.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/MapperBuilder.java:10-14 (javadoc: "Closes
-MapStruct's @InheritConfiguration"), :106-109 (inherit), :150-152 (build delegates to Telescope.mapper);
-core/src/main/java/io/github/eschizoid/telescope/Telescope.java:602 (mapperBuilder factory);
-core/src/test/java/io/github/eschizoid/telescope/MapperBuilderTest.java:70-87 (same AUDIT_COLUMNS group feeds two
-different mappers); core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:330 (forward), :426-433
-(backward from the same Iso); README.md:442 ("Same Mapping.to(...) row works both ways")</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/MapperBuilder.java, the class javadoc
+("Closes MapStruct's @InheritConfiguration", and 'Row groups bind to their type pair'), `inherit`, and `build`
+(delegates to Telescope.mapper); core/src/main/java/io/github/eschizoid/telescope/Telescope.java, `mapperBuilder`;
+core/src/test/java/io/github/eschizoid/telescope/MapperBuilderTest.java, the tests
+'inherit(AUDIT_COLUMNS).add(constant(...)) — both row groups apply' and 'multiple inherit groups compose; same builder
+feeds multiple distinct mappers' (the same AUDIT_COLUMNS group feeds two mappers of one pair), and the nested class
+'Cross-pair inherit fails fast — rows bound to a foreign type pair cannot be silently dropped';
+core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `forward` and `backward` (both directions from
+the same Iso); README.md, the "Mapping" example (`dtoMapper.backward(dto); // the same row list, run in reverse`) and
+the 'Bidirectional mapping' row of "Capability comparison"</sub>
 
 ### Decorators
 
@@ -970,11 +1021,11 @@ first-class value rather than a generated interface impl, whole-method condition
 composition; the decorated mapper is simply what you register as the bean. The idiom is no weaker than @DecoratedWith —
 it removes the constructor-injection ceremony MapStruct decorators need.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java:455 (beforeForward, javadoc
-:436-439 cites @BeforeMapping), :493 (afterForward, javadoc :472-476 cites @AfterMapping), :509 (source-aware BiFunction
-afterForward, javadoc :497-502 cites @AfterMapping with @MappingTarget), :539 (beforeBackward), :568 (afterBackward);
-:246-252 (asTelescope carries the hook chain), :286-288 (toForwardMapper carries hooks); :151-159 (public
-Mapper.create(forward, backward, ...) for wholesale wrapping)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `beforeForward` (javadoc cites
+@BeforeMapping), `afterForward(Function)` (javadoc cites @AfterMapping), `afterForward(BiFunction)` (source-aware;
+javadoc cites @AfterMapping with @MappingTarget), `beforeBackward`, and `afterBackward`; `asTelescope` (carries the hook
+chain) and `toForwardMapper` (carries hooks); the public `Mapper.create(forward, backward, ...)` factories for wholesale
+wrapping</sub>
 
 ### DI component models
 
@@ -1001,17 +1052,20 @@ Mapper<?, ?> m = telescopeMapperRegistry.get(UserEntity.class, UserDto.class);
 
 Telescope mappers are values built in code, so the @Bean/@Produces method that MapStruct generates is instead the
 one-liner where you build the mapper anyway — zero extra ceremony versus componentModel. Both starters add a
-(sourceClass, targetClass)-indexed TelescopeMapperRegistry MapStruct has no analog for (duplicate pairs fail fast,
-configurable via telescope.registry.fail-fast). Caveat: there is no dedicated plain-Jakarta-EE/jsr330 module — the
-Quarkus module's auto-collection uses ArC's @All — but a Mapper is an ordinary object producible from a standard CDI
-@Produces method in any container.
+(sourceClass, targetClass)-indexed TelescopeMapperRegistry MapStruct has no analog for (duplicate pairs fail when the
+registry is built; telescope.registry.fail-fast decides whether a lookup for an unregistered pair throws or returns
+null). Caveat: there is no dedicated plain-Jakarta-EE/jsr330 module — the Quarkus module's auto-collection uses ArC's
+@All — but a Mapper is an ordinary object producible from a standard CDI @Produces method in any container.
 
-<sub>Evidence:
-spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeAutoConfiguration.java:34-60
-(@AutoConfiguration builds TelescopeMapperRegistry from every Mapper bean; javadoc :26-28 "declare @Bean `Mapper<A, B>`
-and it shows up in the registry");
-quarkus/src/main/java/io/github/eschizoid/telescope/quarkus/TelescopeProducer.java:23-42 (@ApplicationScoped producer,
-ArC @All `List<Mapper<?, ?>>` collector); README.md:373 (starter row in the comparison table)</sub>
+<sub>Evidence: spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeAutoConfiguration.java,
+`telescopeMapperRegistry` (@AutoConfiguration builds TelescopeMapperRegistry from every Mapper bean; the class javadoc
+says "declare @Bean `Mapper<A, B>` and it shows up in the registry");
+spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeMapperRegistry.java and
+quarkus/src/main/java/io/github/eschizoid/telescope/quarkus/TelescopeMapperRegistry.java, the constructor (duplicate
+pairs throw) and `get` (fail-fast on a missing pair);
+quarkus/src/main/java/io/github/eschizoid/telescope/quarkus/TelescopeProducer.java (@ApplicationScoped producer, ArC
+@All `List<Mapper<?, ?>>` collector); README.md, the `telescope-spring-boot-starter` and `telescope-quarkus` rows of
+"Published artifacts", and the `examples/springboot/product-starter/` row of "Examples"</sub>
 
 ### Enum mapping
 
@@ -1037,11 +1091,12 @@ defaults all require a hand-written (though javac-exhaustive and refactor-safe) 
 fwd, bwd) row; enumTo itself deliberately rejects non-bijective enum pairs. Workaround quality is high, but it is manual
 code, not a factory.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java:150-155 (enumTo javadoc: "Closes
-MapStruct's @ValueMapping gap for the common 'status enums that line up by name' case"), :175-188 (enumTo impl over
-Enum.valueOf both ways), :190-225 (factory-time exhaustiveness diff naming missing constants and pointing to to(src,
-tgt, fwd, bwd)); core/src/test/java/io/github/eschizoid/telescope/MappingEnumToTest.java:62 (happy-path round-trip),
-:91-113 (mismatch diagnostics + escape-hatch message); README.md:369, :988 (comparison rows)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `enumTo` (javadoc: "Closes
+MapStruct's @ValueMapping gap for the common 'status enums that line up by name' case"; implemented over Enum.valueOf
+both ways) and `validateEnumCorrespondence` (factory-time exhaustiveness diff naming missing constants and pointing to
+to(src, tgt, fwd, bwd)); core/src/test/java/io/github/eschizoid/telescope/MappingEnumToTest.java, the nested classes
+'Happy path — enums with identical constants line up by name' (round-trip) and 'Exhaustiveness validation at factory
+time' (mismatch diagnostics + escape-hatch message)</sub>
 
 ### Subclass mapping
 
@@ -1059,21 +1114,25 @@ Function<Payment, PaymentDto> dispatch = Match.<Payment, PaymentDto>of(Payment.c
   .when(Crypto.class, cryptoMapper::forward)
   .exhaustive(); // throws at build time naming any uncovered permit; .partial() opts out
 
-// codegen sibling: @Bridge on a sealed interface pair emits a pattern-match switch over the permits
+// codegen sibling: @Bridge on a sealed interface pair emits the same Match.of(...).when(...).exhaustive() dispatch
+// over the permits, one arm per per-case bridge
 ```
 
 For sealed hierarchies the coverage is real and in one way stronger — .exhaustive() names every uncovered permit, and
-the @Bridge codegen path emits a compile-time switch for sealed-to-sealed pairs. Two genuine gaps versus
-@SubclassMapping: (1) Match.of() rejects non-sealed roots, so plain abstract-class hierarchies (common in legacy JPA
-models) have no dispatcher — closest workaround is a hand-rolled instanceof chain; (2) per-permit handlers are
-independent mappers with no automatic inheritance of shared parent-field config (mitigable by sharing a MapStep[] group
-via mapperBuilder().inherit(...), but that is manual). The project's own README lists full @SubclassMapping as a
-MapStruct-only shape.
+the @Bridge codegen path refuses at compile time a sealed-to-sealed pair whose source permits do not each carry a
+@Bridge to a permit of the sealed target. Two genuine gaps versus @SubclassMapping: (1) Match.of() rejects non-sealed
+roots, so plain abstract-class hierarchies (common in legacy JPA models) have no dispatcher — closest workaround is a
+hand-rolled instanceof chain; (2) per-permit handlers are independent mappers with no automatic inheritance of shared
+parent-field config (mitigable by sharing a MapStep[] group via mapperBuilder().inherit(...), but that is manual). The
+project's own README names @SubclassMapping over open hierarchies as a reason to pick MapStruct.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Match.java:41-153 (Match builder; :60-67
-rejects non-sealed roots; :101-120 exhaustive() verifies coverage via Class.getPermittedSubclasses; :127-129 partial();
-:136-153 Prism.downcast-routed dispatch); core/src/test/java/io/github/eschizoid/telescope/MatchTest.java:33-77
-(exhaustive dispatch + missing-permit diagnostics), :103-118 (partial escape hatch);
-codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java:1789-1810 (generateSealed:
-sealed-source bridge emits pattern-match switch, requires every permit @Bridge-annotated to a permit of the sealed
-target); README.md:456-457 (README concedes "full @SubclassMapping polymorphic dispatch" to MapStruct)</sub>
+<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Match.java, `of` (rejects non-sealed roots),
+`when` (Prism.downcast-routed dispatch), `exhaustive()` (verifies coverage via Class.getPermittedSubclasses), and
+`partial()`; core/src/test/java/io/github/eschizoid/telescope/MatchTest.java, the nested classes 'happy path — every
+permit covered' and 'exhaustiveness check' (exhaustive dispatch + missing-permit diagnostics), and 'partial() escape
+hatch — no exhaustiveness check'; codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java,
+`generateSealed` (the sealed-source bridge emits a Match dispatch over the permits and requires every permit
+@Bridge-annotated to a permit of the sealed target);
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/BridgeProcessorTest.java, the nested class 'Sealed roots —
+pattern-match dispatch over per-case bridges' (asserts the emitted `.when(...)` arms and `.exhaustive()`); README.md,
+"When MapStruct is the right pick" (the `@SubclassMapping` bullet)</sub>
