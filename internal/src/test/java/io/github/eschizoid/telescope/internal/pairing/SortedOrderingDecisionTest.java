@@ -248,10 +248,15 @@ class SortedOrderingDecisionTest {
     }
 
     @Test
-    @DisplayName("a raw Set names nothing to order, and a sorted rebuild of it is refused")
-    void aRawSetIsRefused() throws NoSuchFieldException {
-      final var refuse = refused(rules.orderingFor(field("rawSet"), TreeSet.class, ContainerView.Kind.SET, true));
-      assertEquals(PairingMessages.noComparatorConstructor("java.util.TreeSet"), refuse.reason());
+    @DisplayName("a raw interface constrains no comparator, so the class it is built as decides")
+    void aRawInterfaceIsDecidedByTheClassBuilt() throws ReflectiveOperationException {
+      assertEquals(
+        comparatorConstructorParameter(TreeSet.class),
+        carried(rules.orderingFor(field("rawSet"), TreeSet.class, ContainerView.Kind.SET, true)).parameter(),
+        "TreeSet takes a comparator, read over its own element variable"
+      );
+      final var refuse = refused(rules.orderingFor(field("rawSet"), Unordered.class, ContainerView.Kind.SET, true));
+      assertEquals(PairingMessages.noComparatorConstructor(Unordered.class.getCanonicalName()), refuse.reason());
     }
   }
 

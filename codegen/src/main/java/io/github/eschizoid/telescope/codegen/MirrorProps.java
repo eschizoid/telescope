@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem;
 import java.util.List;
 import javax.lang.model.element.Element;
@@ -21,9 +22,10 @@ import javax.lang.model.util.Types;
 /**
  * The {@code javax.lang.model} world's {@link PropertySystem}: type handles are {@link TypeMirror},
  * class handles are non-parameterized declared types (or primitives, matching the reflection
- * world's {@code Class} handles). {@link #copyAllocability} reports {@code UNKNOWN} — compile-time
- * can't probe the real intermediate allocator; how that uncertainty resolves is the shared rules'
- * policy, not this adapter's.
+ * world's {@code Class} handles). {@link #copyAllocability} decides an interface or abstract class
+ * through the shared allocation table, as the reflection world does, and reports {@code UNKNOWN}
+ * for a concrete class, whose constructor compile time does not probe; how that uncertainty
+ * resolves is the shared rules' policy, not this adapter's.
  */
 final class MirrorProps implements PropertySystem<TypeMirror> {
 
@@ -173,7 +175,30 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
 
   @Override
   public Allocability copyAllocability(final TypeMirror src, final TypeMirror tgt) {
-    return Allocability.UNKNOWN;
+    final var srcAnswer = copyAllocability(src);
+    final var tgtAnswer = copyAllocability(tgt);
+    if (srcAnswer == Allocability.NOT_ALLOCABLE || tgtAnswer == Allocability.NOT_ALLOCABLE) {
+      return Allocability.NOT_ALLOCABLE;
+    }
+    return srcAnswer == Allocability.ALLOCABLE && tgtAnswer == Allocability.ALLOCABLE
+      ? Allocability.ALLOCABLE
+      : Allocability.UNKNOWN;
+  }
+
+  /**
+   * One side's answer. An interface or abstract class is decided here, exactly as the reflection
+   * world decides it: through the default implementation the shared table names for it, or not at
+   * all. A concrete class is left unknown, because whether its constructor can be reached is a
+   * question the generated code's own allocation checks answer.
+   */
+  private Allocability copyAllocability(final TypeMirror side) {
+    // A copy pairs two classes the spec has already found to be collections or maps.
+    final var element = ((DeclaredType) side).asElement();
+    final var abstractType = element.getKind().isInterface() || element.getModifiers().contains(Modifier.ABSTRACT);
+    if (!abstractType) return Allocability.UNKNOWN;
+    return new PairingRules<TypeMirror>(this).hasDefaultImplementation(side)
+      ? Allocability.ALLOCABLE
+      : Allocability.NOT_ALLOCABLE;
   }
 
   @Override

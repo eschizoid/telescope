@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.regex.Pattern;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
@@ -1651,9 +1652,11 @@ class CrossPathCorpusTest {
    * <p>{@code %1$s} is the cell's prefix and {@code %2$s} the same prefix qualified by the package,
    * for the class a rebuilt container is reported as. {@code input} is {@code str} for the element
    * values as strings, {@code leaf} for each as a record, {@code leafList} and {@code leafOpt} for
-   * each record inside a list or an optional, {@code strList} for each string inside a list, and
-   * {@code leafListKey} for each record under a map key that is a one-element list. An owed value
-   * of {@link #REFUSED} and a fragment of the runtime's message means both paths refuse.
+   * each record inside a list or an optional, {@code strList} for each string inside a list, {@code
+   * leafListKey} for each record under a map key that is a one-element list, {@code strReversed}
+   * for the strings in a sorted source ordered by a reversing comparator, and {@code genList} or
+   * {@code objectList} for each string inside its own raw {@code Gen} or {@code ObjectList}. An
+   * owed value of {@link #REFUSED} and a fragment of the runtime's message means both paths refuse.
    */
   private record FixedPairing(String name, String src, String tgt, String input, String owed) {}
 
@@ -1689,8 +1692,26 @@ class CrossPathCorpusTest {
     Map.entry("WildMap", "extends java.util.LinkedHashMap<String, java.util.List<?>>"),
     Map.entry("Gen", "<E> extends java.util.ArrayList<E>"),
     Map.entry("Gen2", "<E> extends java.util.ArrayList<E>"),
+    Map.entry(
+      "GTree",
+      "<E> extends java.util.TreeSet<E> {\n" +
+        "  public %1$sGTree() {}\n" +
+        "  %1$sGTree(final java.util.Comparator<? super E> c) { super(c); }\n}"
+    ),
     Map.entry("ObjectList", "extends java.util.ArrayList<Object>"),
     Map.entry("ObjectMap", "extends java.util.LinkedHashMap<Object, Object>"),
+    Map.entry(
+      "ObjectTree",
+      "extends java.util.TreeSet<Object> {\n" +
+        "  public %1$sObjectTree() {}\n" +
+        "  public %1$sObjectTree(final java.util.Comparator<Object> c) { super(c); }\n}"
+    ),
+    Map.entry(
+      "ObjectTreeMap",
+      "extends java.util.TreeMap<Object, Object> {\n" +
+        "  public %1$sObjectTreeMap() {}\n" +
+        "  public %1$sObjectTreeMap(final java.util.Comparator<Object> c) { super(c); }\n}"
+    ),
     Map.entry("ListKeyLeafMap", "extends java.util.LinkedHashMap<java.util.List<String>, %1$sLeaf>"),
     Map.entry("ListKeyLeafDtoMap", "extends java.util.LinkedHashMap<java.util.List<String>, %1$sLeafDto>")
   );
@@ -1943,7 +1964,9 @@ class CrossPathCorpusTest {
       REFUSED + "a generic container used raw"
     ),
     // A raw use against another raw use, or against a side holding Object, has nothing its
-    // elements could fail to fit. The runtime copies them; these are registered divergences.
+    // elements could fail to fit, so both paths copy them into the class the target
+    // allocates.
+    // The sorted rows carry a reversing comparator, which the copy has to hand to the target.
     new FixedPairing("raw Gen -> ObjectList", "%1$sGen", "%1$sObjectList", "str", "[b, a] in %2$sObjectList"),
     new FixedPairing("ObjectList -> raw Gen", "%1$sObjectList", "%1$sGen", "str", "[b, a] in %2$sGen"),
     new FixedPairing(
@@ -1960,6 +1983,158 @@ class CrossPathCorpusTest {
       "java.util.LinkedList",
       "str",
       "[b, a] in java.util.LinkedList"
+    ),
+    new FixedPairing(
+      "raw TreeSet -> raw ConcurrentSkipListSet",
+      "java.util.TreeSet",
+      "java.util.concurrent.ConcurrentSkipListSet",
+      "strReversed",
+      "[b, a] in java.util.concurrent.ConcurrentSkipListSet"
+    ),
+    new FixedPairing(
+      "raw ConcurrentSkipListSet -> raw TreeSet",
+      "java.util.concurrent.ConcurrentSkipListSet",
+      "java.util.TreeSet",
+      "strReversed",
+      "[b, a] in java.util.TreeSet"
+    ),
+    new FixedPairing(
+      "raw TreeMap -> raw ConcurrentSkipListMap",
+      "java.util.TreeMap",
+      "java.util.concurrent.ConcurrentSkipListMap",
+      "strReversed",
+      "{k2=a, k1=b} in java.util.concurrent.ConcurrentSkipListMap"
+    ),
+    // One side raw, the other a sorted subtype fixing Object: the comparator is read without
+    // a type
+    // argument, since a raw source cannot be tested against one, and handed to the subtype.
+    new FixedPairing(
+      "raw TreeSet -> ObjectTree",
+      "java.util.TreeSet",
+      "%1$sObjectTree",
+      "strReversed",
+      "[b, a] in %2$sObjectTree"
+    ),
+    new FixedPairing(
+      "ObjectTree -> raw TreeSet",
+      "%1$sObjectTree",
+      "java.util.TreeSet",
+      "strReversed",
+      "[b, a] in java.util.TreeSet"
+    ),
+    new FixedPairing(
+      "raw TreeMap -> ObjectTreeMap",
+      "java.util.TreeMap",
+      "%1$sObjectTreeMap",
+      "strReversed",
+      "{k2=a, k1=b} in %2$sObjectTreeMap"
+    ),
+    // An interface used raw is built as its family's default implementation, on both paths.
+    new FixedPairing(
+      "raw List -> raw ArrayList",
+      "java.util.List",
+      "java.util.ArrayList",
+      "str",
+      "[b, a] in java.util.ArrayList"
+    ),
+    new FixedPairing(
+      "raw Set -> raw LinkedHashSet",
+      "java.util.Set",
+      "java.util.LinkedHashSet",
+      "str",
+      "[b, a] in java.util.LinkedHashSet"
+    ),
+    new FixedPairing(
+      "raw Deque -> raw ArrayDeque",
+      "java.util.Deque",
+      "java.util.ArrayDeque",
+      "str",
+      "[b, a] in java.util.ArrayDeque"
+    ),
+    new FixedPairing(
+      "raw ArrayDeque -> raw Deque",
+      "java.util.ArrayDeque",
+      "java.util.Deque",
+      "str",
+      "[b, a] in java.util.ArrayDeque"
+    ),
+    new FixedPairing(
+      "raw SortedSet -> raw TreeSet",
+      "java.util.SortedSet",
+      "java.util.TreeSet",
+      "strReversed",
+      "[b, a] in java.util.TreeSet"
+    ),
+    new FixedPairing(
+      "raw TreeMap -> raw SortedMap",
+      "java.util.TreeMap",
+      "java.util.SortedMap",
+      "strReversed",
+      "{k2=a, k1=b} in java.util.TreeMap"
+    ),
+    // An abstract class the allocation table names no default for cannot be built by a copy,
+    // so
+    // neither path copies into or out of it.
+    new FixedPairing(
+      "raw AbstractList -> raw ArrayList",
+      "java.util.AbstractList",
+      "java.util.ArrayList",
+      "str",
+      REFUSED + "IllegalStateException"
+    ),
+    // Two interfaces used raw, each built as its default, carrying the source's comparator.
+    new FixedPairing(
+      "raw SortedSet -> raw NavigableSet",
+      "java.util.SortedSet",
+      "java.util.NavigableSet",
+      "strReversed",
+      "[b, a] in java.util.TreeSet"
+    ),
+    new FixedPairing(
+      "raw ArrayList -> raw AbstractList",
+      "java.util.ArrayList",
+      "java.util.AbstractList",
+      "str",
+      REFUSED + "IllegalStateException"
+    ),
+    // A sorted generic class used raw whose comparator constructor is not public cannot be
+    // told
+    // the source's order, so a source carrying one is refused at conversion.
+    new FixedPairing(
+      "raw TreeSet -> raw sorted subtype with no public comparator constructor",
+      "java.util.TreeSet",
+      "%1$sGTree",
+      "strReversed",
+      REFUSED + "declares no constructor taking a Comparator"
+    ),
+    // A container whose elements are raw uses copies each element as a nested container does.
+    new FixedPairing(
+      "List of raw Gen -> List of ObjectList",
+      "java.util.List<%1$sGen>",
+      "java.util.List<%1$sObjectList>",
+      "genList",
+      "[[b], [a]] in java.util.ArrayList"
+    ),
+    new FixedPairing(
+      "Set of raw Gen -> Set of ObjectList",
+      "java.util.Set<%1$sGen>",
+      "java.util.Set<%1$sObjectList>",
+      "genList",
+      "[[b], [a]] in java.util.LinkedHashSet"
+    ),
+    new FixedPairing(
+      "Map of ObjectList -> Map of raw Gen",
+      "java.util.Map<String, %1$sObjectList>",
+      "java.util.Map<String, %1$sGen>",
+      "objectList",
+      "{k1=[b], k2=[a]} in java.util.LinkedHashMap"
+    ),
+    new FixedPairing(
+      "Map of raw Gen -> Map of raw Gen2",
+      "java.util.Map<String, %1$sGen>",
+      "java.util.Map<String, %1$sGen2>",
+      "genList",
+      "{k1=[b], k2=[a]} in java.util.LinkedHashMap"
     ),
     // A map keyed by a parameterized type: the key is the same type on both sides, so the
     // keys
@@ -2038,10 +2213,10 @@ class CrossPathCorpusTest {
       final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
 
       // A refusal is owed as `refused: ` and a fragment of the runtime's message. The generated
-      // path's refusal has to be the processor's own diagnostic, so a javac error inside a
-      // generated
-      // file cannot pass for one. A registered divergence owes the runtime's outcome from the
-      // runtime and that diagnostic from the generated path.
+      // path refuses either while compiling, with the processor's own diagnostic, or while
+      // converting, with the same fragment the runtime gives; a javac error inside a generated file
+      // is neither, so it cannot pass for one. A registered divergence owes the runtime's outcome
+      // from the runtime and the processor's diagnostic from the generated path.
       final var refusal = pairing.owed().startsWith(REFUSED) ? pairing.owed().substring(REFUSED.length()) : null;
       final var owed =
         refusal != null
@@ -2055,7 +2230,9 @@ class CrossPathCorpusTest {
           refusal != null ||
           (divergence != null && !(generatedSide ? divergence.generated() : divergence.reflective()));
         final var met = refuses
-          ? outcome.refusal() != null && outcome.refusal().contains(generatedSide ? "ERROR: @Bridge" : refusal)
+          ? outcome.refusal() != null &&
+            ((generatedSide && outcome.refusal().contains("ERROR: @Bridge")) ||
+              (refusal != null && outcome.refusal().contains(refusal)))
           : owed.equals(outcome.toString());
         if (!met) failures.add(pairing.name() + ": " + side.getKey() + " gave " + outcome + ", owed " + owed);
       }
@@ -2072,25 +2249,11 @@ class CrossPathCorpusTest {
 
   /**
    * Fixed-argument pairings the two paths are known to answer differently, each recorded by which
-   * path converts. Every entry here is a generic container used raw that the runtime copies
-   * unconverted, because neither side names an element type narrower than {@code Object}, and that
-   * {@code @Bridge} refuses, because it plans a container only from a view the shared spec gives,
-   * and a raw use has none. Whether the generated path should emit the same copy for these is an
-   * open question; until it does, each entry holds the runtime to its copy and the generated path
-   * to its diagnostic, so a change on either side fails the pairing rather than passing silently.
+   * path converts. An entry holds the converting path to the table's outcome and the other to its
+   * refusal, so a change on either side fails the pairing rather than passing silently, and an
+   * entry whose pairing stops diverging or leaves the table fails too.
    */
-  private static final Map<String, Verdict> FIXED_KNOWN_DIVERGENCES = Map.of(
-    "raw Gen -> ObjectList",
-    new Verdict(false, true),
-    "ObjectList -> raw Gen",
-    new Verdict(false, true),
-    "raw HashMap -> ObjectMap",
-    new Verdict(false, true),
-    "raw Gen -> raw Gen2",
-    new Verdict(false, true),
-    "raw ArrayList -> raw LinkedList",
-    new Verdict(false, true)
-  );
+  private static final Map<String, Verdict> FIXED_KNOWN_DIVERGENCES = Map.of();
 
   private static JavaFileObject[] fixedSources(final String prefix, final String srcField, final String tgtField) {
     final var head = "package " + PACKAGE + ";\n";
@@ -2115,7 +2278,9 @@ class CrossPathCorpusTest {
       final var name = prefix + declaration.getKey();
       final var mentioned = Pattern.compile("\\b" + name + "\\b");
       if (!mentioned.matcher(srcField).find() && !mentioned.matcher(tgtField).find()) continue;
-      files.add(source(name, head + "public class " + name + " " + declaration.getValue().formatted(prefix) + " {}\n"));
+      // A declaration that writes its own body, such as one declaring constructors, is taken whole.
+      final var body = declaration.getValue().formatted(prefix);
+      files.add(source(name, head + "public class " + name + " " + body + (body.endsWith("}") ? "\n" : " {}\n")));
     }
     files.add(
       source(
@@ -2153,14 +2318,30 @@ class CrossPathCorpusTest {
           case "java.util.Map" -> LinkedHashMap.class;
           case "java.util.SortedMap" -> TreeMap.class;
           case "java.util.HashMap" -> LinkedHashMap.class;
+          case "java.util.TreeSet" -> TreeSet.class;
+          case "java.util.TreeMap" -> TreeMap.class;
+          case "java.util.Deque", "java.util.ArrayDeque" -> ArrayDeque.class;
+          case "java.util.concurrent.ConcurrentSkipListSet" -> ConcurrentSkipListSet.class;
           default -> ArrayList.class;
         };
-    final var instance = type.getConstructor().newInstance();
+    final var instance = input.equals("strReversed")
+      ? type.getConstructor(Comparator.class).newInstance(Comparator.reverseOrder())
+      : type.getConstructor().newInstance();
     final var leaf = classes.get(PACKAGE + "." + prefix + "Leaf").getConstructor(String.class);
     var key = 0;
     for (final var value : VALUES) {
       final Object element = switch (input) {
         case "leaf", "leafListKey" -> leaf.newInstance(value);
+        case "objectList" -> {
+          final var list = classes.get(PACKAGE + "." + prefix + "ObjectList").getConstructor().newInstance();
+          Collection.class.getMethod("add", Object.class).invoke(list, value);
+          yield list;
+        }
+        case "genList" -> {
+          final var gen = classes.get(PACKAGE + "." + prefix + "Gen").getConstructor().newInstance();
+          Collection.class.getMethod("add", Object.class).invoke(gen, value);
+          yield gen;
+        }
         case "leafList" -> List.of(leaf.newInstance(value));
         case "leafOpt" -> Optional.of(leaf.newInstance(value));
         case "strList" -> List.of(value);

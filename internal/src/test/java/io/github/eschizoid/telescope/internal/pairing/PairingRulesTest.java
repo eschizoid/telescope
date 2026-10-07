@@ -14,6 +14,7 @@ import java.lang.reflect.Type;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.AbstractCollection;
+import java.util.AbstractList;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -27,13 +28,18 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.NavigableSet;
 import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.ConcurrentSkipListMap;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -504,6 +510,45 @@ class PairingRulesTest {
         list.message()
       );
       assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(SortedPointSet.class, PointDtoMap.class, "f"));
+    }
+
+    @Test
+    @DisplayName("an interface used raw has a default implementation exactly where the allocation table names one")
+    void interfacesHaveTheTablesDefaults() {
+      for (final var declared : List.<Class<?>>of(
+        Collection.class,
+        List.class,
+        Deque.class,
+        Queue.class,
+        Set.class,
+        SortedSet.class,
+        NavigableSet.class,
+        Map.class,
+        SortedMap.class,
+        NavigableMap.class
+      )) {
+        assertTrue(rules.hasDefaultImplementation(declared), declared::getName);
+      }
+      assertFalse(rules.hasDefaultImplementation(BlockingDeque.class), "a family the table names no default for");
+      assertFalse(rules.hasDefaultImplementation(AbstractList.class), "an abstract class is never defaulted");
+    }
+
+    @Test
+    @DisplayName("a raw interface copies through its default, and one with no default is not copied")
+    void rawInterfaceCopiesOnlyThroughADefault() {
+      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(List.class, ArrayList.class, "f"));
+      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ArrayDeque.class, Deque.class, "f"));
+      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(SortedSet.class, TreeSet.class, "f"));
+      assertInstanceOf(PairDecision.MapCopy.class, rules.decidePair(TreeMap.class, SortedMap.class, "f"));
+      // Not buildable, and an interface is not a bean either, so nothing is left to plan it with.
+      assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(BlockingDeque.class, ArrayDeque.class, "f"));
+    }
+
+    @Test
+    @DisplayName("a raw abstract class is not copied, since no allocation builds it")
+    void rawAbstractClassIsNotCopied() {
+      final var decision = rules.decidePair(AbstractList.class, ArrayList.class, "f");
+      assertFalse(decision instanceof PairDecision.CollectionCopy, decision::toString);
     }
 
     @Test

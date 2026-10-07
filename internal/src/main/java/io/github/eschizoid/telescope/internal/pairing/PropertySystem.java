@@ -42,9 +42,9 @@ public interface PropertySystem<T> {
     /** At least one side provably not allocable — the pair falls through to the next branch. */
     NOT_ALLOCABLE,
     /**
-     * This world can't tell (the compile-time adapter). {@link PairingRules} resolves the
-     * uncertainty in the accepting direction — an infeasible copy then surfaces at the
-     * construction-time backstop rather than as a speculative compile error.
+     * This world can't tell: the compile-time adapter, for a concrete class whose constructor it
+     * does not probe. {@link PairingRules} resolves the uncertainty in the accepting direction, and
+     * the generated code's own allocation checks then refuse a class it cannot construct.
      */
     UNKNOWN,
   }
@@ -121,10 +121,12 @@ public interface PropertySystem<T> {
   T rawType(T t);
 
   /**
-   * Whether a same-kind collection/map subtype pair can actually be element-copied. A pure fact per
-   * world: the reflection adapter probes the real intermediate allocator; the compile-time adapter
-   * answers {@link Allocability#UNKNOWN}. The uncertainty POLICY (proceed as copyable) lives in
-   * {@link PairingRules}, not here.
+   * Whether a same-kind collection/map pair can actually be element-copied. An interface or
+   * abstract class is built through the default implementation {@link
+   * PairingRules#hasDefaultImplementation} names, in both worlds alike, and is not allocable where
+   * it names none. A concrete class is a fact per world: the reflection adapter probes the real
+   * intermediate allocator, and the compile-time adapter answers {@link Allocability#UNKNOWN}. The
+   * uncertainty POLICY (proceed as copyable) lives in {@link PairingRules}, not here.
    */
   Allocability copyAllocability(T src, T tgt);
 
