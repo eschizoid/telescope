@@ -152,7 +152,7 @@ class SortedContainerFamilyTest {
     assertTrue(compilation.success(), () -> "natural ordering is fine: " + compilation.errorMessages());
     final var bridge = compilation.generated().get("demo.FSrcBridge");
     assertTrue(
-      bridge != null && bridge.contains("__sorted.comparator() != null"),
+      bridge != null && bridge.contains("__ordered.comparator() != null"),
       () -> "the rebuild must refuse a comparator it cannot reuse; saw " + bridge
     );
   }
@@ -189,7 +189,7 @@ class SortedContainerFamilyTest {
     assertTrue(compilation.success(), () -> "bridged elements into a raw subtype: " + compilation.errorMessages());
     final var bridge = compilation.generated().get("demo.BSrcBridge");
     assertTrue(
-      bridge != null && bridge.contains("__sorted.comparator() != null"),
+      bridge != null && bridge.contains("__ordered.comparator() != null"),
       () -> "the fill route converts elements, so it cannot reuse the ordering either; saw " + bridge
     );
   }

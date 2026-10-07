@@ -2,15 +2,19 @@ package io.github.eschizoid.telescope.codegen;
 
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem;
 import java.util.List;
+import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.TypeVariable;
 import javax.lang.model.type.WildcardType;
+import javax.lang.model.util.ElementFilter;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 
@@ -175,6 +179,42 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   @Override
   public String typeName(final TypeMirror t) {
     return t.toString();
+  }
+
+  @Override
+  public String sourceName(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    return element == null ? t.toString() : element.getQualifiedName().toString();
+  }
+
+  @Override
+  public TypeMirror comparatorParameter(final TypeMirror impl, final List<TypeMirror> arguments) {
+    final var implEl = elementOf(types.erasure(impl));
+    final var comparator = elements.getTypeElement("java.util.Comparator");
+    if (implEl == null || comparator == null || !publiclyNameable(implEl)) return null;
+    final var parameters = implEl.getTypeParameters();
+    if (!parameters.isEmpty() && parameters.size() != arguments.size()) return null;
+    final var owner = parameters.isEmpty()
+      ? (DeclaredType) implEl.asType()
+      : types.getDeclaredType(implEl, arguments.toArray(TypeMirror[]::new));
+    for (final var ctor : ElementFilter.constructorsIn(implEl.getEnclosedElements())) {
+      if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != 1) continue;
+      final var declared = ctor.getParameters().getFirst().asType();
+      if (!types.isSameType(types.erasure(declared), types.erasure(comparator.asType()))) continue;
+      return ((ExecutableType) types.asMemberOf(owner, ctor)).getParameterTypes().getFirst();
+    }
+    return null;
+  }
+
+  /**
+   * Whether this type can be named from any package. A nested type qualifies only when every type
+   * enclosing it does too, since naming the inner one means naming the outer ones first.
+   */
+  static boolean publiclyNameable(final TypeElement type) {
+    for (Element el = type; el instanceof TypeElement enclosing; el = enclosing.getEnclosingElement()) {
+      if (!enclosing.getModifiers().contains(Modifier.PUBLIC)) return false;
+    }
+    return true;
   }
 
   /** The {@link TypeElement} of a declared type handle, or {@code null}. */

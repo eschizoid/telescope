@@ -236,6 +236,40 @@ public final class PairingRules<T> {
   }
 
   /**
+   * How a container declared as {@code declared}, built as {@code impl}, is told the order its
+   * source kept. {@code kind} is the family it is built as, and {@code elementsPreserved} whether
+   * its elements, or a map's keys, are the source's own rather than converted.
+   *
+   * <p>A container that keeps no order has nothing to be told. A sorted set whose elements are
+   * converted cannot take the source's comparator, which orders the type converted away from. Any
+   * other sorted container takes it through its comparator constructor, when it has one this world
+   * can call whose parameter can hold a comparator over what the field orders: a map's key type, a
+   * set's element type. That parameter is resolved against the arguments the field gave the class
+   * built, which are the declared type's own when it is that class, so a subtype declaring its
+   * parameters in another order than {@code Map} resolves correctly, and the container's otherwise.
+   * A field that leaves its container raw names nothing to order, and is refused with the rest.
+   */
+  public Ordering<T> orderingFor(
+    final T declared,
+    final T impl,
+    final ContainerView.Kind kind,
+    final boolean elementsPreserved
+  ) {
+    final var map = kind == ContainerView.Kind.MAP_VALUES;
+    if (kind != ContainerView.Kind.SET && !map) return new Ordering.None<>();
+    final var raw = props.rawType(impl);
+    if (!props.isSubtypeOf(raw, map ? WellKnown.SORTED_MAP : WellKnown.SORTED_SET)) return new Ordering.None<>();
+    if (!map && !elementsPreserved) return new Ordering.Refuse<>(PairingMessages.comparatorAcrossConversion());
+    final Ordering<T> refused = new Ordering.Refuse<>(PairingMessages.noComparatorConstructor(props.sourceName(raw)));
+    final var arguments = props.typeArgumentsAs(declared, map ? WellKnown.MAP : WellKnown.SET);
+    if (arguments.isEmpty()) return refused;
+    final var bindings = props.sameType(props.rawType(declared), raw) ? props.typeArguments(declared) : arguments;
+    final var parameter = props.comparatorParameter(raw, bindings);
+    if (parameter == null || !canOrder(parameter, arguments.getFirst())) return refused;
+    return new Ordering.Carry<>(parameter);
+  }
+
+  /**
    * The container view of {@code t}, or {@code null} when {@code t} is not a container the
    * auto-lift understands with element types it can name. A class that declares no type parameters
    * of its own is viewed through the supertype that fixes them; a generic class used raw has none

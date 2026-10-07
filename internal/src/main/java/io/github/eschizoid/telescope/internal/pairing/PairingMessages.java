@@ -160,6 +160,31 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A sorted set whose elements are converted, rebuilt from a source ordered by a comparator, which
+   * orders the type being converted away from.
+   */
+  public static String comparatorAcrossConversion() {
+    return (
+      "Deep map: a custom sorted-set comparator cannot be reused with changed element types." +
+      " Supply an explicit Mapping.via(...) row with a target comparator."
+    );
+  }
+
+  /**
+   * A sorted container rebuilt from a source ordered by a comparator, where the class built has no
+   * constructor that can be handed that comparator.
+   */
+  public static String noComparatorConstructor(final String implName) {
+    return (
+      "Deep map: " +
+      implName +
+      " declares no constructor taking a Comparator, so the source's ordering cannot be carried" +
+      " into it. Declare one, declare the field as the interface, or supply an explicit" +
+      " Mapping.via(...) row for it."
+    );
+  }
+
   /** Terminal shape mismatch — no branch of the compatibility lattice applies. */
   public static String incompatibleShapes(final String componentName, final String srcType, final String tgtType) {
     return (

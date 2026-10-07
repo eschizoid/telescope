@@ -284,6 +284,16 @@ class PairingRulesTest {
     public String typeName(final Type t) {
       return delegate.typeName(t);
     }
+
+    @Override
+    public String sourceName(final Type t) {
+      return delegate.sourceName(t);
+    }
+
+    @Override
+    public Type comparatorParameter(final Type impl, final List<Type> arguments) {
+      return delegate.comparatorParameter(impl, arguments);
+    }
   }
 
   /** Maps keyed by a type variable, directly and inside a parameterized key. */
