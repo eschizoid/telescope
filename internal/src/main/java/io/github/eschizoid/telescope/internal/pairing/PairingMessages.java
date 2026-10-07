@@ -185,6 +185,30 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A sorted map target whose key class does not implement {@code Comparable} and whose class
+   * cannot be handed the comparator a source might carry.
+   */
+  public static String unorderableSortedKey(
+    final String componentName,
+    final String containerType,
+    final String keyType
+  ) {
+    return (
+      "Deep map: component '" +
+      componentName +
+      "' is a " +
+      containerType +
+      ", a sorted map whose key " +
+      keyType +
+      " does not implement Comparable, and which cannot be handed the comparator a source carries," +
+      " so nothing can order its keys. Make " +
+      keyType +
+      " Comparable, declare the field as a map that keeps no order, declare a constructor taking a" +
+      " Comparator, or supply an explicit Mapping.via(...) row that builds the map with a comparator."
+    );
+  }
+
   /** Terminal shape mismatch — no branch of the compatibility lattice applies. */
   public static String incompatibleShapes(final String componentName, final String srcType, final String tgtType) {
     return (

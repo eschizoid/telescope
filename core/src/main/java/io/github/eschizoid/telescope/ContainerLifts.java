@@ -78,18 +78,8 @@ final class ContainerLifts {
     final var srcAlloc = orderingAware(srcCls, srcCls, ContainerView.Kind.SET, ignored -> srcSupplier.get());
     final var tgtAlloc = orderingAware(tgtCls, tgtCls, ContainerView.Kind.SET, ignored -> tgtSupplier.get());
     return Iso.of(
-      src -> {
-        if (src == null) return null;
-        final var fresh = (Collection) tgtAlloc.apply(src);
-        fresh.addAll((Collection<?>) src);
-        return fresh;
-      },
-      tgt -> {
-        if (tgt == null) return null;
-        final var fresh = (Collection) srcAlloc.apply(tgt);
-        fresh.addAll((Collection<?>) tgt);
-        return fresh;
-      }
+      src -> buildConverted(src, tgtAlloc, Function.identity(), tgtCls),
+      tgt -> buildConverted(tgt, srcAlloc, Function.identity(), srcCls)
     );
   }
 
@@ -102,18 +92,8 @@ final class ContainerLifts {
     final var srcAlloc = orderingAware(srcCls, srcCls, ContainerView.Kind.MAP_VALUES, ignored -> srcSupplier.get());
     final var tgtAlloc = orderingAware(tgtCls, tgtCls, ContainerView.Kind.MAP_VALUES, ignored -> tgtSupplier.get());
     return Iso.of(
-      src -> {
-        if (src == null) return null;
-        final var fresh = (Map) tgtAlloc.apply(src);
-        fresh.putAll((Map<?, ?>) src);
-        return fresh;
-      },
-      tgt -> {
-        if (tgt == null) return null;
-        final var fresh = (Map) srcAlloc.apply(tgt);
-        fresh.putAll((Map<?, ?>) tgt);
-        return fresh;
-      }
+      src -> buildMap(src, tgtAlloc, Function.identity(), tgtCls),
+      tgt -> buildMap(tgt, srcAlloc, Function.identity(), srcCls)
     );
   }
 
@@ -300,6 +280,7 @@ final class ContainerLifts {
     final Class<?> outRaw,
     final ClassCastException cause
   ) {
+    final var map = Map.class.isAssignableFrom(outRaw);
     final var implementing =
       element instanceof Comparable
         ? ", though its type implements Comparable"
@@ -307,14 +288,53 @@ final class ContainerLifts {
     return new IllegalStateException(
       "Deep map: " +
         outRaw.getName() +
-        " keeps its elements in order, and " +
+        (map ? " keeps its keys in order, and " : " keeps its elements in order, and ") +
         element.getClass().getName() +
         " could not be ordered there" +
         implementing +
-        ". Supply an ordering these elements accept through a Mapping.via(...) row, or" +
-        " declare the target as a set that keeps no order. The cause is the cast itself.",
+        (map ? ". Supply an ordering these keys accept" : ". Supply an ordering these elements accept") +
+        " through a Mapping.via(...) row, or declare the target as a " +
+        (map ? "map" : "set") +
+        " that keeps no order. The cause is the cast itself.",
       cause
     );
+  }
+
+  /**
+   * Puts one entry into a map being built, turning the cast a sorted map raises on a key it cannot
+   * order into the refusal {@link #unorderable} describes. A cast from inside a key's own {@code
+   * compareTo}, for a key ordered against its own kind, is the key's and propagates as it is.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static void putOrdered(final Map fresh, final Object key, final Object value, final Class<?> outRaw) {
+    try {
+      fresh.put(key, value);
+    } catch (final ClassCastException e) {
+      if (orderedAgainstItsOwnKind(key)) throw e;
+      throw unorderable(key, outRaw, e);
+    }
+  }
+
+  /**
+   * Builds a map from {@code input}'s entries, each value converted by {@code convert} and each key
+   * kept, through {@link #putOrdered} where the map keeps its keys in order.
+   */
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Object buildMap(
+    final Object input,
+    final Function<Object, Object> alloc,
+    final Function<Object, Object> convert,
+    final Class<?> outRaw
+  ) {
+    if (input == null) return null;
+    final var fresh = (Map) alloc.apply(input);
+    final boolean ordered = SortedMap.class.isAssignableFrom(outRaw);
+    for (final var e : ((Map<?, ?>) input).entrySet()) {
+      final var value = convert.apply(e.getValue());
+      if (ordered) putOrdered(fresh, e.getKey(), value, outRaw);
+      else fresh.put(e.getKey(), value);
+    }
+    return fresh;
   }
 
   /**
@@ -415,20 +435,15 @@ final class ContainerLifts {
     // leaf;
     // keys pass through verbatim. Null value Iso => keep the Java loop.
     final var mh = MhIso.liftMap(elementIso, srcAlloc, tgtAlloc);
-    if (mh != null) return mh;
+    // A side that keeps its keys in order has to see each key it inserts, to name one it cannot
+    // order, and the fused loop offers nowhere to stand between the two. Only that side gives the
+    // fused loop up.
+    final boolean loopForward = SortedMap.class.isAssignableFrom(tgtRaw);
+    final boolean loopBackward = SortedMap.class.isAssignableFrom(srcRaw);
+    if (mh != null && !loopForward && !loopBackward) return mh;
     return Iso.of(
-      src -> {
-        if (src == null) return null;
-        final var fresh = (Map) tgtAlloc.apply(src);
-        for (final var e : ((Map<?, ?>) src).entrySet()) fresh.put(e.getKey(), elementIso.to(e.getValue()));
-        return fresh;
-      },
-      tgt -> {
-        if (tgt == null) return null;
-        final var fresh = (Map) srcAlloc.apply(tgt);
-        for (final var e : ((Map<?, ?>) tgt).entrySet()) fresh.put(e.getKey(), elementIso.from(e.getValue()));
-        return fresh;
-      }
+      src -> mh != null && !loopForward ? mh.to(src) : buildMap(src, tgtAlloc, elementIso::to, tgtRaw),
+      tgt -> mh != null && !loopBackward ? mh.from(tgt) : buildMap(tgt, srcAlloc, elementIso::from, srcRaw)
     );
   }
 
