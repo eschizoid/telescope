@@ -4,7 +4,6 @@ import io.github.eschizoid.telescope.codegen.AbstractTelescopeProcessor;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import javax.annotation.processing.ProcessingEnvironment;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
@@ -60,12 +59,6 @@ public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
   private final Set<TypeElement> pending = new LinkedHashSet<>();
 
   @Override
-  public synchronized void init(final ProcessingEnvironment processingEnv) {
-    super.init(processingEnv);
-    markLombokProcessorActive();
-  }
-
-  @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var elements = processingEnv.getElementUtils();
     for (final var triggerFqn : LOMBOK_BEAN_ANNOTATIONS) {
@@ -80,6 +73,7 @@ public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
         // static) would still trip the no-no-arg-ctor or no-public-builder check in
         // emitBeanNavigator, so we don't have to reject them up-front.
         pending.add((TypeElement) element);
+        markWrittenByLombok((TypeElement) element);
       }
     }
     // Emit on EVERY round that has fresh @Data/@Value/@Builder targets, so the navigator exists in

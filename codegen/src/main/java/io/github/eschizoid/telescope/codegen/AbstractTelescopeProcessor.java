@@ -619,25 +619,83 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   private static final String LOMBOK_PROCESSOR = "io.github.eschizoid.telescope.codegen.lombok.LombokFocusProcessor";
 
-  // The compilations in which telescope-lombok's processor was initialised, keyed by their type
+  // The classes telescope-lombok's processor has taken as targets, keyed by their compilation's
+  // type
   // utilities: one instance per compilation, shared by every processor in it, and held weakly so a
   // finished compilation drops out.
-  private static final Set<Types> LOMBOK_PROCESSOR_ACTIVE = Collections.synchronizedSet(
-    Collections.newSetFromMap(new WeakHashMap<>())
-  );
+  private static final Map<Types, Set<String>> LOMBOK_TARGETS = Collections.synchronizedMap(new WeakHashMap<>());
 
-  /** Records that telescope-lombok's processor runs in this compilation. */
-  protected final void markLombokProcessorActive() {
-    LOMBOK_PROCESSOR_ACTIVE.add(processingEnv.getTypeUtils());
+  /**
+   * Records that telescope-lombok's processor writes the navigator for {@code pojo}. That processor
+   * takes a class as its target in the round the class appears, and writes every target it takes:
+   * as soon as the members Lombok adds are visible, or in the final round if they never are.
+   */
+  protected final void markWrittenByLombok(final TypeElement pojo) {
+    LOMBOK_TARGETS.computeIfAbsent(processingEnv.getTypeUtils(), k ->
+      Collections.synchronizedSet(new LinkedHashSet<>())
+    ).add(pojo.getQualifiedName().toString());
   }
 
   /**
-   * Whether telescope-lombok's processor was initialised in this compilation. javac initialises a
-   * processor the first round an annotation it supports appears, so by the final round this says
-   * whether it took part — including when an explicit {@code -processor} list leaves it out.
+   * Whether telescope-lombok's processor has taken {@code pojo} as a target in this compilation.
    */
-  protected final boolean lombokProcessorActive() {
-    return LOMBOK_PROCESSOR_ACTIVE.contains(processingEnv.getTypeUtils());
+  protected final boolean writtenByLombok(final TypeElement pojo) {
+    final var targets = LOMBOK_TARGETS.get(processingEnv.getTypeUtils());
+    return targets != null && targets.contains(pojo.getQualifiedName().toString());
+  }
+
+  /** Whether {@code element} carries one of {@link #LOMBOK_BEAN_ANNOTATIONS}. */
+  protected final boolean carriesLombokBeanTrigger(final Element element) {
+    for (final var fqn : LOMBOK_BEAN_ANNOTATIONS) {
+      if (hasAnnotation(element, fqn)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether the navigator of {@code element}, a type a navigator would descend into, is written
+   * before the final round. Only then can a navigator written in an earlier round name it: javac
+   * does not resolve a name in an earlier round's file against a file written in the final round. A
+   * class carrying a Lombok annotation is written by telescope-lombok's processor when that
+   * processor has taken the class as a target, and otherwise by the {@code @BeanFocus} processor in
+   * the final round, if at all. Every other navigator is written in the round its type appears.
+   */
+  protected final boolean navigatorWrittenInTime(final Element element) {
+    if (element.getKind() != ElementKind.CLASS || !carriesLombokTrigger(element)) return true;
+    return writtenByLombok((TypeElement) element);
+  }
+
+  /**
+   * Whether telescope-lombok's processor may still take {@code element} as a target: it carries a
+   * Lombok bean annotation, the processor is on the path, and it has not taken the class so far.
+   * The processor takes a class in the round the class appears, so by the next round this is
+   * settled — taken, or never to be.
+   */
+  protected final boolean mayBeWrittenByLombok(final Element element) {
+    return (
+      element.getKind() == ElementKind.CLASS &&
+      carriesLombokBeanTrigger(element) &&
+      !writtenByLombok((TypeElement) element) &&
+      loadable(LOMBOK_PROCESSOR)
+    );
+  }
+
+  /**
+   * Whether a navigator over properties of {@code propertyTypes} would descend into a type whose
+   * navigator telescope-lombok's processor may still take on — a property's type, or a container
+   * property's element type. Emitting the navigator now would decide that hop before the answer is
+   * known, so the caller holds the navigator back one round, after which the answer is settled.
+   */
+  protected final boolean awaitsLombokTarget(final List<TypeMirror> propertyTypes) {
+    final var elements = processingEnv.getElementUtils();
+    final var named = new ArrayList<Element>();
+    for (final var type : propertyTypes) {
+      if (type.getKind() == TypeKind.DECLARED) named.add(((DeclaredType) type).asElement());
+      final var shape = traversalKind(type);
+      final var element = shape == null ? null : elements.getTypeElement(shape.elementType());
+      if (element != null) named.add(element);
+    }
+    return named.stream().anyMatch(this::mayBeWrittenByLombok);
   }
 
   /**
@@ -1970,7 +2028,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * Whether the class named by {@code qualifiedName} is annotated with any of {@code
    * annotationFqns}. Used to decide a container step's element-result shape: a List/Set/Map element
    * type whose class carries a navigable annotation gets routed into its own {@code
-   * <Element>Telescope<R>} rather than terminating in {@code Telescope<R, Element>}.
+   * <Element>Telescope<R>} rather than terminating in {@code Telescope<R, Element>}, provided that
+   * navigator is {@linkplain #navigatorWrittenInTime written in time} to be named.
    */
   protected boolean isAnnotatedClass(final String qualifiedName, final Set<String> annotationFqns) {
     final var elements = processingEnv.getElementUtils();
@@ -1980,6 +2039,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // Accept both classes (@BeanFocus, Lombok @Data/@Value/@Builder targets) and records
     // (@Focus targets); the per-annotation registration decides which is actually navigable.
     if (kind != ElementKind.CLASS && kind != ElementKind.RECORD) return false;
+    if (!navigatorWrittenInTime(element)) return false;
     for (final var fqn : annotationFqns) {
       final var anno = elements.getTypeElement(fqn);
       if (anno == null) continue;
@@ -1996,9 +2056,11 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * both {@link #emitBeanNavigator} (POJO targets) and {@link #emitNavigatorMethod} (record /
    * cross-paradigm targets) so the same "is this sub-type navigable" check fires regardless of
    * whether the sub-element is a record-flavored {@code @Focus} target or a bean-flavored
-   * {@code @BeanFocus} / Lombok target.
+   * {@code @BeanFocus} / Lombok target. A type whose navigator is not {@linkplain
+   * #navigatorWrittenInTime written in time} to be named yields {@code null}.
    */
   protected String navigableType(final TypeMirror type, final Set<String> annotationFqns) {
+    if (type.getKind() == TypeKind.DECLARED && !navigatorWrittenInTime(((DeclaredType) type).asElement())) return null;
     for (final var fqn : annotationFqns) {
       final var asClass = navigableType(type, ElementKind.CLASS, fqn);
       if (asClass != null) return asClass;

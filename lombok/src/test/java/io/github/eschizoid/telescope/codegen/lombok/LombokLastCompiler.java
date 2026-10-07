@@ -5,12 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import javax.tools.DiagnosticCollector;
+import javax.tools.ForwardingJavaFileManager;
 import javax.tools.JavaFileObject;
+import javax.tools.StandardJavaFileManager;
+import javax.tools.StandardLocation;
 import javax.tools.ToolProvider;
 
 /**
@@ -18,6 +23,11 @@ import javax.tools.ToolProvider;
  * runs after the telescope processors. Whether Lombok has patched a class by the first round
  * depends on where it sits on the processor path, and this is the order in which a first-round read
  * sees the class without the members Lombok adds.
+ *
+ * <p>The processors are loaded by a class loader over that path alone. javac's own processor loader
+ * delegates to the class loader javac was loaded by, which in a test JVM sees the test class path,
+ * and with it this module's processor and its service registration — so a processor dropped from
+ * the path would still be discovered and run.
  */
 final class LombokLastCompiler {
 
@@ -52,14 +62,26 @@ final class LombokLastCompiler {
 
     final var compiler = ToolProvider.getSystemJavaCompiler();
     final var diagnostics = new DiagnosticCollector<JavaFileObject>();
-    try (final var files = compiler.getStandardFileManager(diagnostics, null, null)) {
+    final var processorPath = lombokLast(System.getProperty("telescope.test.processorPath"), keepTelescopeLombok);
+    try (
+      final var standard = compiler.getStandardFileManager(diagnostics, null, null);
+      final var processorLoader = isolatedLoader(processorPath);
+      final var files = new ForwardingJavaFileManager<StandardJavaFileManager>(standard) {
+        @Override
+        public ClassLoader getClassLoader(final Location location) {
+          return location == StandardLocation.ANNOTATION_PROCESSOR_PATH
+            ? processorLoader
+            : super.getClassLoader(location);
+        }
+      }
+    ) {
       final var options = new ArrayList<String>(extraOptions);
       options.addAll(
         List.of(
           "-parameters",
           "-proc:full",
           "-processorpath",
-          lombokLast(System.getProperty("telescope.test.processorPath"), keepTelescopeLombok),
+          processorPath,
           "-classpath",
           System.getProperty("java.class.path"),
           "-s",
@@ -69,11 +91,18 @@ final class LombokLastCompiler {
         )
       );
       final var ok = compiler
-        .getTask(null, files, diagnostics, options, null, files.getJavaFileObjects(source.toFile()))
+        .getTask(null, files, diagnostics, options, null, standard.getJavaFileObjects(source.toFile()))
         .call();
       assertTrue(ok, () -> "compilation failed: " + diagnostics.getDiagnostics());
     }
     return generated;
+  }
+
+  /** A class loader over {@code path} that delegates only to the platform class loader. */
+  private static URLClassLoader isolatedLoader(final String path) throws IOException {
+    final var urls = new ArrayList<URL>();
+    for (final var entry : path.split(File.pathSeparator)) urls.add(new File(entry).toURI().toURL());
+    return new URLClassLoader(urls.toArray(URL[]::new), ClassLoader.getPlatformClassLoader());
   }
 
   /** The processor path with the Lombok library moved to the end. */
