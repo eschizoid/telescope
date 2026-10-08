@@ -15,16 +15,19 @@ import java.util.Objects;
  *
  * final Mapper<UserEntity, UserDto> userMapper = Telescope.mapper(
  *     UserEntity.class, UserDto.class,
- *     nullSourceValues(DEFAULT),                        // any null source field → type default
+ *     nullSourceValues(DEFAULT),                        // null auto-matched field → type default
  *     to(UserEntity::id, UserDto::userId));
  * }</pre>
  *
- * <p><b>Strategy applies to field-iso rows.</b> The two field-level rows ({@link SameTypedTo},
- * {@link TypedTransformTo}, {@link ForwardOnlyTransformTo}, {@link Via}) wrap their forward
- * function with a null-substitution gate at deep-mapping assembly time. Telescope-based rows
- * ({@link TelescopeTo}, {@link FromTelescopeTo}, {@link TelescopeToTelescope}, {@link Constant},
- * {@link Compute}, {@link Conditional}) are unaffected — they already handle null sources
- * gracefully via the lattice's auto-construction defaults or the predicate machinery.
+ * <p><b>Which rows the strategy applies to.</b> The null-substitution gate wraps the fields that
+ * carry no conversion of their own: auto-matched fields and same-typed {@link SameTypedTo} rows
+ * ({@code to(src, tgt)}), which resolve the same way an auto-matched field does. Rows that carry
+ * their own functions — {@link TypedTransformTo} ({@code to(src, tgt, forward, backward)}), {@link
+ * ForwardOnlyTransformTo} ({@code toOneWay}) and {@link Via} ({@code via}) — are not wrapped. Their
+ * forward function, or the {@code via} mapper, receives a {@code null} source value unchanged, and
+ * whatever it returns lands on the target, even when the target's leaf type has a table default.
+ * Telescope-based rows ({@link TelescopeTo}, {@link FromTelescopeTo}, {@link TelescopeToTelescope},
+ * {@link Constant}, {@link Compute}, {@link Conditional}) are not wrapped either.
  *
  * <p><b>Strategy applies on forward direction only.</b> Backward direction is unchanged. Same
  * retraction posture as the existing {@link Constant} / {@link Compute} rows, which are also
@@ -40,8 +43,9 @@ import java.util.Objects;
  * nested-record default, supply one explicitly via {@link Mapping#toOrElse} on the row that targets
  * that leaf.
  *
- * <p><b>Per-row precedence.</b> {@link Mapping#toOrElse} rows carry their own per-row null handling
- * and ALWAYS win over the per-mapper {@code nullSourceValues(...)} hint. So a single {@code
+ * <p><b>Per-row precedence.</b> {@link Mapping#toOrElse} rows are {@link TypedTransformTo} rows
+ * whose forward function substitutes the row's own default, and the strategy never wraps a row that
+ * carries its own function. The row's default is therefore the one that lands, so a single {@code
  * DEFAULT}-strategy mapper can still pin a specific field's null handling via {@code toOrElse(src,
  * tgt, mySpecialDefault)} on that row without restating the global.
  *

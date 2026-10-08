@@ -7,6 +7,8 @@ import static io.github.eschizoid.telescope.mapping.NullHint.NullStrategy.PROPAG
 import static io.github.eschizoid.telescope.mapping.NullHint.nullSourceValues;
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -120,6 +122,41 @@ class NullStrategyTest {
 
       assertEquals("", defaulted.fullName(), "explicit rename row honors DEFAULT for String");
       assertEquals(0, defaulted.years(), "explicit rename row honors DEFAULT for Integer");
+    }
+  }
+
+  @Nested
+  @DisplayName("DEFAULT leaves rows that carry their own functions unwrapped")
+  class TransformRowsUnwrapped {
+
+    record LabelSrc(String name, String label) {}
+
+    record LabelDst(String name, String text) {}
+
+    @Test
+    @DisplayName("to(src, tgt, fwd, bwd) sees the null source and its result lands without the table default")
+    void transformRowReceivesNullUnchanged() {
+      final List<String> seen = new ArrayList<>();
+      final var mapper = Telescope.mapper(
+        LabelSrc.class,
+        LabelDst.class,
+        nullSourceValues(DEFAULT),
+        to(
+          LabelSrc::label,
+          LabelDst::text,
+          (final String s) -> {
+            seen.add(s);
+            return s;
+          },
+          (final String s) -> s
+        )
+      );
+
+      final var mapped = mapper.forward(new LabelSrc(null, null));
+
+      assertEquals("", mapped.name(), "auto-matched String field takes the table default");
+      assertEquals(Collections.singletonList(null), seen, "forward function is called once, with null");
+      assertNull(mapped.text(), "the forward function's null result is not replaced by \"\"");
     }
   }
 
