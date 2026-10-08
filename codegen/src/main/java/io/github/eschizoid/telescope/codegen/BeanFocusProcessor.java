@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -65,7 +66,7 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
       }
       final var pojo = (TypeElement) element;
       if (!over && carriesLombokTrigger(pojo)) pending.add(pojo);
-      else if (!over && awaitsLombokTarget(propertyTypes(pojo))) held.add(pojo);
+      else if (!over && awaitsLombokTarget(hopTypes(pojo))) held.add(pojo);
       else emitBeanNavigator(pojo, "@BeanFocus", navigableBeanAnnotations());
     }
     if (over) {
@@ -82,7 +83,11 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
     return true;
   }
 
-  private List<TypeMirror> propertyTypes(final TypeElement pojo) {
-    return beanProperties(pojo).stream().map(Prop::type).toList();
+  // The types the navigator's hops lead to: each property's, and the bridge hop's target.
+  private List<TypeMirror> hopTypes(final TypeElement pojo) {
+    final var types = new ArrayList<TypeMirror>();
+    for (final var prop : beanProperties(pojo)) types.add(prop.type());
+    types.addAll(bridgeTargetTypes(pojo));
+    return types;
   }
 }

@@ -54,8 +54,15 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
     super();
   }
 
+  // Records held back one round because their bridge hop leads to a class telescope-lombok's
+  // processor may still take on, which decides whether that hop descends or ends.
+  private final Set<TypeElement> held = new LinkedHashSet<>();
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
+    final var heldLastRound = List.copyOf(held);
+    held.clear();
+    for (final var recordType : heldLastRound) generate(recordType);
     for (final Element element : roundEnv.getElementsAnnotatedWith(
       processingEnv.getElementUtils().getTypeElement("io.github.eschizoid.telescope.annotations.Focus")
     )) {
@@ -71,7 +78,9 @@ public final class FocusProcessor extends AbstractTelescopeProcessor {
         );
         continue;
       }
-      generate((TypeElement) element);
+      final var recordType = (TypeElement) element;
+      if (!roundEnv.processingOver() && awaitsLombokTarget(bridgeTargetTypes(recordType))) held.add(recordType);
+      else generate(recordType);
     }
     return true;
   }
