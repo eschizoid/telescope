@@ -121,8 +121,27 @@ jobs:
               { tele = 0; print }
             ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
           done
+          # main accepts changes only through a pull request, so the bump travels as one and
+          # merges once its checks pass. A pull request opened with GITHUB_TOKEN starts no
+          # workflows, so it is opened with the release token, whose checks then run as usual.
+          # A failure here leaves the README behind the release, and the Docs integrity check
+          # on every later pull request depends on it, so the step fails rather than warns.
           if ! git diff --quiet README.md docs/codegen.md; then
+            BRANCH="docs/pin-${VERSION}"
+            git switch -c "$BRANCH"
             git add README.md docs/codegen.md
-            git commit -m "docs: bump README install snippets to ${VERSION}"
-            git push
+            git commit -m "docs: pin the install snippets to ${VERSION}"
+            git push origin "$BRANCH"
+            PR_URL=$(gh pr create --base main --head "$BRANCH" \
+              --title "docs: pin the install snippets to ${VERSION}" \
+              --body "Pins the README and codegen guide install snippets to ${VERSION}, the release just published.")
+            for _ in $(seq 1 30); do
+              [ -n "$(gh pr view "$PR_URL" --json statusCheckRollup -q '.statusCheckRollup[]')" ] && break
+              sleep 10
+            done
+            gh pr checks "$PR_URL" --watch --fail-fast
+            gh pr merge "$PR_URL" --squash --delete-branch \
+              --subject "docs: pin the install snippets to ${VERSION} (#${PR_URL##*/})" --body ""
           fi
+        env:
+          GH_TOKEN: ${{ secrets.JRELEASER_GITHUB_TOKEN }}
