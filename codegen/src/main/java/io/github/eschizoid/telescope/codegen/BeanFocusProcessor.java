@@ -1,14 +1,15 @@
 package io.github.eschizoid.telescope.codegen;
 
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
-import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.type.TypeMirror;
 
 /**
  * Annotation processor for {@link io.github.eschizoid.telescope.annotations.BeanFocus} — the bean
@@ -38,12 +39,21 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
   // rebuild strategy, not only whether the bean is readable. By the final round Lombok is done.
   private final Set<TypeElement> pending = new LinkedHashSet<>();
 
+  // Targets held back one round because their navigator would name a class telescope-lombok's
+  // processor may still take on, which decides whether that hop descends or ends.
+  private final Set<TypeElement> held = new LinkedHashSet<>();
+
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
     final var anno = processingEnv
       .getElementUtils()
       .getTypeElement("io.github.eschizoid.telescope.annotations.BeanFocus");
     if (anno == null) return false;
+    enterRound(roundEnv);
+    final var heldLastRound = List.copyOf(held);
+    held.clear();
+    for (final var pojo : heldLastRound) emitBeanNavigator(pojo, "@BeanFocus", navigableBeanAnnotations());
+    final var over = roundEnv.processingOver();
     for (final var element : roundEnv.getElementsAnnotatedWith(anno)) {
       if (element.getKind() != ElementKind.CLASS) {
         error(element, "@BeanFocus is only supported on classes (records use @Focus)");
@@ -53,17 +63,18 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
         error(element, "@BeanFocus is only supported on top-level classes");
         continue;
       }
-      if (!roundEnv.processingOver() && carriesLombokTrigger(element)) pending.add((TypeElement) element);
-      else emitBeanNavigator((TypeElement) element, "@BeanFocus", navigableBeanAnnotations());
+      final var pojo = (TypeElement) element;
+      if (!over && carriesLombokTrigger(pojo)) pending.add(pojo);
+      else if (!over && awaitsLombokTarget(propertyTypes(pojo))) held.add(pojo);
+      else emitBeanNavigator(pojo, "@BeanFocus", navigableBeanAnnotations());
     }
-    if (roundEnv.processingOver()) {
+    if (over) {
       for (final var pojo : pending) {
-        // A class carrying @Data, @Value or @Builder is telescope-lombok's target as well, and that
-        // processor writes the same <X>Telescope and <X>FieldOptics, from the same rebuild, as soon
-        // as the members Lombok adds are visible, so main code in the same compilation can name the
-        // navigator. When it took part in this compilation it has written them or will in this
-        // round, and writing them here too would collide; when it did not, nothing else will.
-        if (carriesLombokBeanTrigger(pojo) && lombokProcessorActive()) continue;
+        // A class telescope-lombok's processor has taken as a target gets the same <X>Telescope and
+        // <X>FieldOptics from it, from the same rebuild, as soon as the members Lombok adds are
+        // visible, so main code in the same compilation can name the navigator. Writing them here
+        // too would collide; any other class is written by nothing else.
+        if (writtenByLombok(pojo)) continue;
         emitBeanNavigator(pojo, "@BeanFocus", navigableBeanAnnotations());
       }
       pending.clear();
@@ -71,10 +82,7 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
     return true;
   }
 
-  private boolean carriesLombokBeanTrigger(final Element element) {
-    for (final var fqn : LOMBOK_BEAN_ANNOTATIONS) {
-      if (hasAnnotation(element, fqn)) return true;
-    }
-    return false;
+  private List<TypeMirror> propertyTypes(final TypeElement pojo) {
+    return beanProperties(pojo).stream().map(Prop::type).toList();
   }
 }
