@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.conversion.ContainerCopy;
 import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.optics.Iso;
@@ -59,7 +60,8 @@ final class ContainerLifts {
   private ContainerLifts() {}
 
   /**
-   * Collection ↔ Collection element-copy Iso. The forward allocates the target collection through
+   * Collection ↔ Collection element-copy Iso. A pair of one declared type is copied by {@link
+   * #unchangedCopyIso}. For any other pair the forward allocates the target collection through
    * {@link #copyAllocator} and {@code addAll}'s the source into it; backward is symmetric. The
    * pairing spec decides a copy only when both sides can be built, so this never answers null and
    * every side it is handed can be allocated.
@@ -70,8 +72,13 @@ final class ContainerLifts {
    * class fixing every argument to {@code Object}. Users whose element types differ across sides
    * should declare an explicit row.
    */
+  static Iso<?, ?> collectionCopyIso(final Type srcType, final Type tgtType) {
+    if (PROPS.sameType(srcType, tgtType)) return unchangedCopyIso(srcType);
+    return collectionCopyIso((Class<?>) srcType, (Class<?>) tgtType);
+  }
+
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  static Iso<?, ?> collectionCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
+  private static Iso<?, ?> collectionCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
     final var kind = Set.class.isAssignableFrom(tgtCls) ? ContainerView.Kind.SET : ContainerView.Kind.LIST;
     final var srcAlloc = copyAllocator(srcCls, kind);
     final var tgtAlloc = copyAllocator(tgtCls, kind);
@@ -101,8 +108,13 @@ final class ContainerLifts {
   }
 
   /** Map ↔ Map element-copy Iso. Mirror of {@link #collectionCopyIso} via {@code putAll}. */
+  static Iso<?, ?> mapCopyIso(final Type srcType, final Type tgtType) {
+    if (PROPS.sameType(srcType, tgtType)) return unchangedCopyIso(srcType);
+    return mapCopyIso((Class<?>) srcType, (Class<?>) tgtType);
+  }
+
   @SuppressWarnings({ "unchecked", "rawtypes" })
-  static Iso<?, ?> mapCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
+  private static Iso<?, ?> mapCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
     final var kind = ContainerView.Kind.MAP_VALUES;
     final var srcAlloc = copyAllocator(srcCls, kind);
     final var tgtAlloc = copyAllocator(tgtCls, kind);
@@ -110,6 +122,16 @@ final class ContainerLifts {
       src -> buildMap(src, tgtAlloc, Function.identity(), tgtCls),
       tgt -> buildMap(tgt, srcAlloc, Function.identity(), srcCls)
     );
+  }
+
+  /**
+   * The copy a container of one declared type on both sides takes, in both directions: {@link
+   * ContainerCopy#of} over the declared raw class, the copy a generated bridge makes too.
+   */
+  private static Iso<?, ?> unchangedCopyIso(final Type type) {
+    final var declared = rawClassOf(type);
+    final Function<Object, Object> copy = input -> ContainerCopy.of(input, declared);
+    return Iso.of(copy, copy);
   }
 
   /**

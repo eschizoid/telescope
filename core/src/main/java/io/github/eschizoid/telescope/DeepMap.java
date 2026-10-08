@@ -868,7 +868,8 @@ public final class DeepMap {
     // verifier so what constructs here and what compiles there cannot drift.
     final var decision = PAIRING.decidePair(srcType, tgtType, componentName);
 
-    // (a) Same generic type → identity Iso.
+    // (a) Same type, and not a container the allocation table rebuilds → identity Iso. A
+    //     container of one declared type takes the copy in (a.2) instead.
     if (decision instanceof PairDecision.Identity) return Iso.identity();
 
     // (a.1) Primitive ↔ wrapper pair → autobox / unbox via JLS-default-safe Iso. Forward
@@ -879,19 +880,21 @@ public final class DeepMap {
       return primitiveWrapperIso((Class<?>) srcType, (Class<?>) tgtType);
     }
 
-    // (a.2) Same-kind Collection / Map pair written without type arguments on both sides, whose
-    //       elements need no conversion: two classes declaring no type parameters that fix the
-    //       same element types (`class ImageUrls extends ArrayList<ImageUrl>`), or a generic class
-    //       or interface used raw on either side. Elements are copied with `addAll` / `putAll`
-    //       into a fresh container: a concrete class through its own allocator, an interface as
-    //       the default implementation the shared allocation table names for its family. The
-    //       element-type, kind-discriminator and allocability gates live on the shared spec; the
-    //       decision only fires when the copy is buildable.
+    // (a.2) Same-kind Collection / Map pair whose elements need no conversion, in one of two
+    //       shapes. One declared type on both sides takes ContainerCopy.of, the shallow copy a
+    //       generated bridge makes too, so the target does not share the source's container. A
+    //       pair written without type arguments on both sides, which is two classes declaring no
+    //       type parameters that fix the same element types (`class ImageUrls extends
+    //       ArrayList<ImageUrl>`), or a generic class or interface used raw on either side, is
+    //       copied with `addAll` / `putAll` into a fresh container: a concrete class through its
+    //       own allocator, an interface as the default implementation the shared allocation table
+    //       names for its family. The element-type, kind-discriminator and allocability gates live
+    //       on the shared spec; the decision only fires when the copy is buildable.
     if (decision instanceof PairDecision.CollectionCopy) {
-      return ContainerLifts.collectionCopyIso((Class<?>) srcType, (Class<?>) tgtType);
+      return ContainerLifts.collectionCopyIso(srcType, tgtType);
     }
     if (decision instanceof PairDecision.MapCopy) {
-      return ContainerLifts.mapCopyIso((Class<?>) srcType, (Class<?>) tgtType);
+      return ContainerLifts.mapCopyIso(srcType, tgtType);
     }
 
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.

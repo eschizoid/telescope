@@ -59,7 +59,8 @@ inputs while retaining the small-input path for zero or one element.
 The recommended shape for record-to-record (and POJO↔POJO, and cross-paradigm) conversion: pass the source and target
 classes up front, then varargs of `MapStep` rows (`MapStep` is the sealed supertype of the `Mapping` field rows and the
 `WriteHint` / `NullHint` behavior hints — one varargs slot for all three). **Recursion is the default.** Same-named
-components identity-map, nested records / POJOs recurse, `List<X>↔List<Y>` / `Set<X>↔Set<Y>` / `Map<K, X>↔Map<K, Y>` /
+components identity-map, except a same-typed `List` / `Set` / `Map`, which is copied so the target never shares the
+source's container, nested records / POJOs recurse, `List<X>↔List<Y>` / `Set<X>↔Set<Y>` / `Map<K, X>↔Map<K, Y>` /
 `Optional<X>↔Optional<Y>` lift the inner-element conversion through the container automatically (to any depth —
 `List<Map<K, Set<X>>>` works by construction). You only spell the _differences_.
 

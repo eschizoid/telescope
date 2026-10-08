@@ -9,16 +9,24 @@ package io.github.eschizoid.telescope.internal.pairing;
  * @param <T> the world's type handle
  */
 public sealed interface PairDecision<T> {
-  /** Same type on both sides — identity conversion. */
+  /** Same type on both sides, and not a container the allocation table rebuilds — identity. */
   record Identity<T>() implements PairDecision<T> {}
 
   /** Primitive ↔ wrapper pair over the same scalar — null-safe box/unbox. */
   record PrimitiveWrapper<T>() implements PairDecision<T> {}
 
-  /** Same-kind {@code Collection} subtype pair — element copy into a fresh target instance. */
+  /**
+   * Same-kind {@code Collection} pair whose elements need no conversion — element copy into a fresh
+   * target instance. A pair of one declared type takes it too, so the target never shares the
+   * source's container.
+   */
   record CollectionCopy<T>() implements PairDecision<T> {}
 
-  /** Same-kind {@code Map} subtype pair — entry copy into a fresh target instance. */
+  /**
+   * Same-kind {@code Map} pair whose entries need no conversion — entry copy into a fresh target
+   * instance. A pair of one declared type takes it too, so the target never shares the source's
+   * map.
+   */
   record MapCopy<T>() implements PairDecision<T> {}
 
   /** Both sides reflectable (record or bean) — recurse into the nested pair. */

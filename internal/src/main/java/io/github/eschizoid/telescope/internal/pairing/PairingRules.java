@@ -40,14 +40,15 @@ import java.util.stream.Collectors;
  * through {@link PropertySystem} — so the rules cannot drift between compile time and construction
  * time.
  *
- * <p>Decision order in {@link #decidePair} is load-bearing — it IS the runtime lattice: identity →
- * primitive/wrapper → same-kind subtype copy → reflectable recursion → cross-{@code Optional}
- * bridge → same-kind container lift → incompatible. Subtype copy must precede reflectable
- * recursion: a container subclass that declares no type parameters of its own ({@code class
- * ImageUrls extends ArrayList<ImageUrl>}) counts as reflectable, and bean-decomposing it would fail
- * at the JDK boundary (private lookup into {@code java.base} is rejected) — the copy branch
- * intercepts those pairs first, and a pair of containers it does not take never reaches recursion:
- * it goes to the container lift, which converts each element or refuses the pair by name.
+ * <p>Decision order in {@link #decidePair} is load-bearing — it IS the runtime lattice: same type
+ * (identity, or a copy for a container) → primitive/wrapper → same-kind subtype copy → reflectable
+ * recursion → cross-{@code Optional} bridge → same-kind container lift → incompatible. Subtype copy
+ * must precede reflectable recursion: a container subclass that declares no type parameters of its
+ * own ({@code class ImageUrls extends ArrayList<ImageUrl>}) counts as reflectable, and
+ * bean-decomposing it would fail at the JDK boundary (private lookup into {@code java.base} is
+ * rejected) — the copy branch intercepts those pairs first, and a pair of containers it does not
+ * take never reaches recursion: it goes to the container lift, which converts each element or
+ * refuses the pair by name.
  *
  * @param <T> the world's type handle
  */
@@ -61,8 +62,8 @@ public final class PairingRules<T> {
 
   /** Decide the conversion for one (source type, target type) field pair. Never returns null. */
   public PairDecision<T> decidePair(final T srcType, final T tgtType, final String componentName) {
-    // (a) Same type → identity.
-    if (props.sameType(srcType, tgtType)) return new PairDecision.Identity<>();
+    // (a) Same type → identity, or a copy for a container the allocation table can rebuild.
+    if (props.sameType(srcType, tgtType)) return unchanged(srcType);
 
     if (props.isClassType(srcType) && props.isClassType(tgtType)) {
       // (a.1) Primitive ↔ wrapper over the same scalar — null-safe box/unbox.
@@ -192,6 +193,26 @@ public final class PairingRules<T> {
     return new PairDecision.Incompatible<>(
       PairingMessages.incompatibleShapes(componentName, props.typeName(srcType), props.typeName(tgtType))
     );
+  }
+
+  /**
+   * What a pair whose two sides are one declared type takes.
+   *
+   * <p>A container declared as a type the allocation table rebuilds is copied, so a converted
+   * target never holds the source's own mutable container. The copy is shallow: its elements, or a
+   * map's keys and values, are the source's own. Which class the copy is built as is the consumer's
+   * to decide from the value, since the declared type does not say which class the source is; the
+   * table's answer for the declared type is what a class that cannot be built falls back to.
+   * Anything else passes through as itself: a scalar, a record, an {@code Optional}, and a
+   * container declared as a class the table does not name.
+   */
+  private PairDecision<T> unchanged(final T type) {
+    final var view = settledAgainst(containerViewOf(type), null);
+    if (view == null || view.kind() == ContainerView.Kind.OPTIONAL) return new PairDecision.Identity<>();
+    if (!(allocationFor(type, view.kind()) instanceof Allocation.Build)) return new PairDecision.Identity<>();
+    return view.kind() == ContainerView.Kind.MAP_VALUES
+      ? new PairDecision.MapCopy<>()
+      : new PairDecision.CollectionCopy<>();
   }
 
   /**
