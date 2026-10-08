@@ -1104,6 +1104,325 @@ class CrossPathCorpusTest {
   }
 
   /**
+   * Two container classes that each fix their own element type, which no element copy takes: they
+   * differ in kind, or one of them cannot be allocated. What each class declares, and what both
+   * paths owe in each direction — the target's rendering, held in the class the field declares, or
+   * a fragment of each path's refusal.
+   *
+   * <p>{@code %s} is the cell's prefix, and the two declarations name the classes {@code %sSA} and
+   * {@code %sTB}. A container's elements are no property of it, so such a pair either converts each
+   * element or is refused by name. Rebuilding either side as a bean would hold no elements at all,
+   * which is what every row is here to rule out: the source is never empty, so neither is a
+   * converted target. {@code Leaf} and {@code LeafDto} are both {@code Comparable}, so a sorted
+   * side can hold either; {@code Plain} is not.
+   */
+  private record ContainerClassPair(
+    String name,
+    String srcDeclaration,
+    String tgtDeclaration,
+    String forward,
+    String backward,
+    Refusal refused
+  ) {}
+
+  private static ContainerClassPair converts(
+    final String name,
+    final String srcExtends,
+    final String tgtExtends,
+    final String forward,
+    final String backward
+  ) {
+    return new ContainerClassPair(
+      name,
+      subtype("SA", srcExtends, ""),
+      subtype("TB", tgtExtends, ""),
+      forward,
+      backward,
+      null
+    );
+  }
+
+  private static ContainerClassPair refuses(
+    final String name,
+    final String srcExtends,
+    final String tgtExtends,
+    final Refusal refused
+  ) {
+    return new ContainerClassPair(
+      name,
+      subtype("SA", srcExtends, ""),
+      subtype("TB", tgtExtends, ""),
+      null,
+      null,
+      refused
+    );
+  }
+
+  private static ContainerClassPair refusesDeclared(
+    final String name,
+    final String srcDeclaration,
+    final String tgtDeclaration,
+    final Refusal refused
+  ) {
+    return new ContainerClassPair(name, srcDeclaration, tgtDeclaration, null, null, refused);
+  }
+
+  private static final Refusal DIFFERENT_SHAPES = new Refusal(
+    "has incompatible types",
+    "incompatible source/target shapes"
+  );
+
+  private static final Refusal UNORDERABLE_KEY = new Refusal("a sorted map whose key", "a sorted map whose key");
+
+  private static final Refusal NOT_ALLOCABLE = new Refusal("has no public no-arg constructor", "no allocator for");
+
+  /** A constructor taking only a capacity, which is all a class declaring it can be built with. */
+  private static final String CAPACITY_ONLY = "  public %s(final int capacity) { super(capacity); }\n";
+
+  private static final List<ContainerClassPair> CONTAINER_CLASS_PAIRS = List.of(
+    converts(
+      "a sorted set into a set that keeps no order",
+      "java.util.TreeSet<%sLeaf>",
+      "java.util.LinkedHashSet<%sLeafDto>",
+      "%sTgt[items=[%sLeafDto[v=a], %sLeafDto[v=b]]]",
+      "%sSrc[items=[%sLeaf[v=a], %sLeaf[v=b]]]"
+    ),
+    converts(
+      "a set that keeps no order into a sorted set",
+      "java.util.LinkedHashSet<%sLeaf>",
+      "java.util.TreeSet<%sLeafDto>",
+      "%sTgt[items=[%sLeafDto[v=a], %sLeafDto[v=b]]]",
+      "%sSrc[items=[%sLeaf[v=a], %sLeaf[v=b]]]"
+    ),
+    converts(
+      "a sorted set into a set that keeps no order, elements unchanged",
+      "java.util.TreeSet<String>",
+      "java.util.LinkedHashSet<String>",
+      "%sTgt[items=[a, b]]",
+      "%sSrc[items=[a, b]]"
+    ),
+    converts(
+      "a sorted map into a map that keeps insertion order",
+      "java.util.TreeMap<String, %sLeaf>",
+      "java.util.LinkedHashMap<String, %sLeafDto>",
+      "%sTgt[items={a=%sLeafDto[v=a], b=%sLeafDto[v=b]}]",
+      "%sSrc[items={a=%sLeaf[v=a], b=%sLeaf[v=b]}]"
+    ),
+    converts(
+      "a map that keeps insertion order into a sorted map",
+      "java.util.LinkedHashMap<String, %sLeaf>",
+      "java.util.TreeMap<String, %sLeafDto>",
+      "%sTgt[items={a=%sLeafDto[v=a], b=%sLeafDto[v=b]}]",
+      "%sSrc[items={a=%sLeaf[v=a], b=%sLeaf[v=b]}]"
+    ),
+    refuses(
+      "a set into a sorted set of an element that is not Comparable",
+      "java.util.LinkedHashSet<%sLeaf>",
+      "java.util.TreeSet<%sPlain>",
+      new Refusal("does not implement Comparable", "does not implement Comparable")
+    ),
+    refuses(
+      "a sorted set into a list",
+      "java.util.TreeSet<%sLeaf>",
+      "java.util.ArrayList<%sLeafDto>",
+      DIFFERENT_SHAPES
+    ),
+    refuses(
+      "a set into a map",
+      "java.util.LinkedHashSet<%sLeaf>",
+      "java.util.LinkedHashMap<String, %sLeafDto>",
+      DIFFERENT_SHAPES
+    ),
+    refuses("a deque into a list", "java.util.ArrayDeque<%sLeaf>", "java.util.LinkedList<%sLeafDto>", DIFFERENT_SHAPES),
+    refuses(
+      "a map into a sorted map over keys that are not Comparable",
+      "java.util.LinkedHashMap<%sPlain, %sLeaf>",
+      "java.util.TreeMap<%sPlain, %sLeafDto>",
+      UNORDERABLE_KEY
+    ),
+    refuses(
+      "a map into a sorted map over keys that are not Comparable, values unchanged",
+      "java.util.LinkedHashMap<%sPlain, String>",
+      "java.util.TreeMap<%sPlain, String>",
+      UNORDERABLE_KEY
+    ),
+    // An element carried across unchanged is let through when the pair is built, since a
+    // sorted
+    // source can hand its comparator across with it. Where nothing orders it, it is refused
+    // by name
+    // when it is inserted.
+    refuses(
+      "a set into a sorted set of an element carried unchanged that is not Comparable",
+      "java.util.LinkedHashSet<%sPlain>",
+      "java.util.TreeSet<%sPlain>",
+      new Refusal("could not be ordered there", "could not be ordered there")
+    ),
+    // The same kind and the same elements, which an element copy would take if both classes
+    // could
+    // be allocated. Either side has to be: the forward rebuild allocates the target, and the
+    // backward one the source.
+    refusesDeclared(
+      "a list into a class that takes only a capacity",
+      subtype("SA", "java.util.ArrayList<String>", ""),
+      subtype("TB", "java.util.ArrayList<String>", CAPACITY_ONLY),
+      NOT_ALLOCABLE
+    ),
+    refusesDeclared(
+      "a list from a class that takes only a capacity",
+      subtype("SA", "java.util.ArrayList<String>", CAPACITY_ONLY),
+      subtype("TB", "java.util.ArrayList<String>", ""),
+      NOT_ALLOCABLE
+    ),
+    refusesDeclared(
+      "a map from a class that takes only a capacity",
+      subtype("SA", "java.util.HashMap<String, String>", CAPACITY_ONLY),
+      subtype("TB", "java.util.HashMap<String, String>", ""),
+      NOT_ALLOCABLE
+    ),
+    refusesDeclared(
+      "a list from a class only its own package can allocate",
+      subtype("SA", "java.util.ArrayList<String>", "").substring("public ".length()),
+      subtype("TB", "java.util.ArrayList<String>", ""),
+      NOT_ALLOCABLE
+    )
+  );
+
+  @Test
+  @DisplayName("two container classes no element copy takes convert each element or refuse, the same way on both paths")
+  void containerClassesConvertOrRefuseOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var shape : CONTAINER_CLASS_PAIRS) {
+      final var prefix = "Kc" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var srcDeclaration = shape.srcDeclaration().replace("%s", prefix);
+      final var sources = new JavaFileObject[] {
+        source(prefix + "Leaf", head + comparableRecord(prefix + "Leaf")),
+        source(prefix + "LeafDto", head + comparableRecord(prefix + "LeafDto")),
+        source(prefix + "Plain", head + "public record " + prefix + "Plain(String v) {}\n"),
+        source(prefix + "SA", head + srcDeclaration),
+        source(prefix + "TB", head + shape.tgtDeclaration().replace("%s", prefix)),
+        source(
+          prefix + "Src",
+          head +
+            "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(" +
+            prefix +
+            "Tgt.class)\npublic record " +
+            prefix +
+            "Src(" +
+            prefix +
+            "SA items) {}\n"
+        ),
+        source(prefix + "Tgt", head + "public record " + prefix + "Tgt(" + prefix + "TB items) {}\n"),
+      };
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> shape.name() + " should compile: " + plain.errorMessages());
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+
+      final var classes = plain.define(MethodHandles.lookup());
+      final var src = classes.get(PACKAGE + "." + prefix + "Src");
+      final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
+      final var sa = classes.get(PACKAGE + "." + prefix + "SA");
+      // Looked up as declared rather than as public: the source of a refused row may be a class
+      // only this package can allocate, and the test shares its package.
+      final var input = srcDeclaration.contains("final int capacity")
+        ? sa.getDeclaredConstructor(int.class).newInstance(VALUES.size())
+        : sa.getDeclaredConstructor().newInstance();
+      final var leaf = srcDeclaration.contains(prefix + "Leaf>")
+        ? classes.get(PACKAGE + "." + prefix + "Leaf").getConstructor(String.class)
+        : srcDeclaration.contains(prefix + "Plain>")
+          ? classes.get(PACKAGE + "." + prefix + "Plain").getConstructor(String.class)
+          : null;
+      final var key = srcDeclaration.contains(prefix + "Plain,")
+        ? classes.get(PACKAGE + "." + prefix + "Plain").getConstructor(String.class)
+        : null;
+      for (final var value : VALUES) {
+        final var element = leaf == null ? value : leaf.newInstance(value);
+        if (input instanceof Map<?, ?>) {
+          final var k = key == null ? value : key.newInstance(value);
+          Map.class.getMethod("put", Object.class, Object.class).invoke(input, k, element);
+        } else {
+          Collection.class.getMethod("add", Object.class).invoke(input, element);
+        }
+      }
+      final var source = src.getConstructors()[0].newInstance(input);
+
+      final Outcome generated;
+      final Outcome generatedBack;
+      if (processed.success()) {
+        final var bridge = emitted(processed, plain, prefix);
+        final var forward = bridge.getMethod("forward", src);
+        final var backward = bridge.getMethod("backward", tgt);
+        generated = run(tgt.getMethod("items"), () -> forward.invoke(null, source));
+        generatedBack = run(src.getMethod("items"), () -> backward.invoke(null, forward.invoke(null, source)));
+      } else {
+        generated = Outcome.refused(processed.errorMessages().strip());
+        generatedBack = generated;
+      }
+      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+      final var reflectiveBack = run(src.getMethod("items"), () -> {
+        final var mapper = Telescope.mapper(cast(src), cast(tgt));
+        return mapper.backward(mapper.forward(source));
+      });
+
+      if (shape.refused() != null) {
+        if (generated.refusal() == null || !generated.refusal().contains(shape.refused().generatedSays())) {
+          failures.add(shape.name() + ": generated gave " + generated);
+        }
+        if (reflective.refusal() == null || !reflective.refusal().contains(shape.refused().reflectiveSays())) {
+          failures.add(shape.name() + ": reflective gave " + reflective);
+        }
+        continue;
+      }
+      final var forwardOwed = shape.forward().replace("%s", prefix) + " in " + PACKAGE + "." + prefix + "TB";
+      final var backwardOwed = shape.backward().replace("%s", prefix) + " in " + PACKAGE + "." + prefix + "SA";
+      for (final var side : List.of(
+        Map.entry("generated forward", Map.entry(generated, forwardOwed)),
+        Map.entry("reflective forward", Map.entry(reflective, forwardOwed)),
+        Map.entry("generated backward", Map.entry(generatedBack, backwardOwed)),
+        Map.entry("reflective backward", Map.entry(reflectiveBack, backwardOwed))
+      )) {
+        final var outcome = side.getValue().getKey();
+        final var owed = side.getValue().getValue();
+        if (!owed.equals(outcome.toString())) {
+          failures.add(shape.name() + ": " + side.getKey() + " gave " + outcome + ", owed " + owed);
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " pair(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /** A record of one string, ordered by it. */
+  private static String comparableRecord(final String name) {
+    return (
+      "public record " +
+      name +
+      "(String v) implements Comparable<" +
+      name +
+      "> {\n  public int compareTo(final " +
+      name +
+      " o) { return v.compareTo(o.v()); }\n}\n"
+    );
+  }
+
+  /**
+   * A public class named {@code %s} followed by {@code suffix}, declaring no type parameters and
+   * fixing its supertype's, with {@code members} as its body beside the serial version. A {@code
+   * %s} in the members is the class's own name.
+   */
+  private static String subtype(final String suffix, final String supertype, final String members) {
+    return (
+      "public class %s" +
+      suffix +
+      " extends " +
+      supertype +
+      " {\n  private static final long serialVersionUID = 1L;\n" +
+      members.replace("%s", "%s" + suffix) +
+      "}\n"
+    );
+  }
+
+  /**
    * What an attempt throws, as its simple class name and message followed by its cause's after
    * {@code <-}, or a note that it threw nothing.
    */
