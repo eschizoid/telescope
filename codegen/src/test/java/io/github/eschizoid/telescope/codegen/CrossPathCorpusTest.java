@@ -11,17 +11,26 @@ import java.lang.reflect.Method;
 import java.util.AbstractSet;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.PriorityQueue;
+import java.util.SortedMap;
+import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.PriorityBlockingQueue;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
@@ -55,8 +64,8 @@ class CrossPathCorpusTest {
    * has to produce for the target, and whether that class promises an iteration order.
    *
    * <p>{@code allocates} is what a rebuild produces. A pair that is the same type on both sides
-   * with an element needing no conversion rebuilds nothing at all, and {@link #passesThrough}
-   * decides which of the two a cell owes.
+   * with an element needing no conversion is rebuilt too, unless neither table names its family,
+   * and {@link #passesThrough} decides which of the two a cell owes.
    *
    * <p>{@code kind} decides how the input is built and how a rebuilt container renders. {@code
    * order} decides how much of the rendering a cell can owe: a class that promises no order is
@@ -665,16 +674,17 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * Whether the pair is the same type on both sides with an element that needs no conversion, in
-   * which case neither path allocates anything and the target holds the source's own container.
+   * Whether the pair is the same type on both sides with an element that needs no conversion, and
+   * of a family neither table names, in which case neither path allocates anything and the target
+   * holds the source's own container. A same-typed pair of a family the tables name is copied into
+   * the class the family allocates, like any other pair.
    *
-   * <p>Such a cell would otherwise assert against the class the fixture happened to build, which
-   * the families expect anyway — it would pass whatever either path did. The fixture builds a class
-   * no family names, so the pass-through is visible, and the cell pins it: if either path ever
-   * starts copying here, the cell fails and the decision surfaces rather than changing quietly.
+   * <p>The fixture builds a class no family names, so which of the two a cell did is visible: a
+   * same-typed cell expected to copy fails if either path hands the input across, and one expected
+   * to pass through fails if either path copies.
    */
   private static boolean passesThrough(final Family family, final Element element) {
-    return !element.converts() && family.src().equals(family.tgt());
+    return !element.converts() && family.src().equals(family.tgt()) && family.allocates().isEmpty();
   }
 
   private static String inputClassOf(final String kind) {
@@ -2778,5 +2788,333 @@ class CrossPathCorpusTest {
     } catch (final ReflectiveOperationException | RuntimeException e) {
       return Outcome.refused(e);
     }
+  }
+
+  /**
+   * A component of one declared type on both sides, or a converted container holding one, given an
+   * input whose own class or contents a copy into the declared type's default would lose: the field
+   * types, the input, and what both paths owe for it, forward and backward alike.
+   *
+   * <p>{@code owed} is {@link #copyOutcome}'s description of the result against the input, so a
+   * shared container, a copy of the wrong class, a lost comparator, a collapsed entry and a shared
+   * or copied inner container all read differently.
+   */
+  private record SameTypedInput(String name, String srcField, String tgtField, Supplier<Object> input, String owed) {}
+
+  private static final List<SameTypedInput> SAME_TYPED_INPUTS = List.of(
+    new SameTypedInput(
+      "nested list",
+      "java.util.List<java.util.List<String>>",
+      "java.util.List<java.util.List<String>>",
+      () -> new ArrayList<>(List.of(new ArrayList<>(List.of("b", "a")))),
+      "copy java.util.ArrayList [[b, a]], inner shared"
+    ),
+    new SameTypedInput(
+      "nested map",
+      "java.util.Map<String, java.util.List<String>>",
+      "java.util.Map<String, java.util.List<String>>",
+      () -> new LinkedHashMap<>(Map.of("k", new ArrayList<>(List.of("b", "a")))),
+      "copy java.util.LinkedHashMap {k=[b, a]}, inner shared"
+    ),
+    new SameTypedInput(
+      "same-typed inner of a converted list",
+      "java.util.List<java.util.List<String>>",
+      "java.util.ArrayList<java.util.List<String>>",
+      () -> new ArrayList<>(List.of(new LinkedList<>(List.of("b", "a")))),
+      "copy java.util.ArrayList [[b, a]], inner copied as java.util.LinkedList"
+    ),
+    new SameTypedInput(
+      "List.of",
+      "java.util.List<String>",
+      "java.util.List<String>",
+      () -> List.of("b", "a"),
+      "shared"
+    ),
+    new SameTypedInput(
+      "unmodifiableList",
+      "java.util.List<String>",
+      "java.util.List<String>",
+      () -> Collections.unmodifiableList(new ArrayList<>(List.of("b", "a"))),
+      "shared"
+    ),
+    new SameTypedInput(
+      "Map.of",
+      "java.util.Map<String, String>",
+      "java.util.Map<String, String>",
+      () -> Map.of("k", "v"),
+      "shared"
+    ),
+    new SameTypedInput(
+      "PriorityQueue behind Queue",
+      "java.util.Queue<String>",
+      "java.util.Queue<String>",
+      () -> {
+        final var queue = new PriorityQueue<String>(Comparator.reverseOrder());
+        queue.addAll(List.of("a", "c", "b"));
+        return queue;
+      },
+      "copy java.util.PriorityQueue [c, b, a], comparator kept"
+    ),
+    new SameTypedInput(
+      "case-insensitive TreeSet behind Set",
+      "java.util.Set<String>",
+      "java.util.Set<String>",
+      () -> {
+        final var set = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        set.addAll(List.of("b", "A"));
+        return set;
+      },
+      "copy java.util.TreeSet [A, b], comparator kept"
+    ),
+    new SameTypedInput(
+      "IdentityHashMap behind Map",
+      "java.util.Map<String, String>",
+      "java.util.Map<String, String>",
+      () -> {
+        final var map = new IdentityHashMap<String, String>();
+        map.put(new String("k"), "1");
+        map.put(new String("k"), "2");
+        return map;
+      },
+      "copy java.util.IdentityHashMap of 2"
+    ),
+    new SameTypedInput(
+      "LinkedList holding null behind Deque",
+      "java.util.Deque<String>",
+      "java.util.Deque<String>",
+      () -> new LinkedList<>(Arrays.asList("b", null)),
+      "copy java.util.LinkedList [b, null]"
+    ),
+    new SameTypedInput(
+      "subclass behind Set",
+      "java.util.Set<String>",
+      "java.util.Set<String>",
+      () -> {
+        final var set = new SubclassSet<String>();
+        set.addAll(List.of("b", "a"));
+        return set;
+      },
+      "copy java.util.LinkedHashSet [b, a]"
+    ),
+    new SameTypedInput(
+      "reversed PriorityBlockingQueue behind Queue",
+      "java.util.Queue<String>",
+      "java.util.Queue<String>",
+      () -> {
+        final var queue = new PriorityBlockingQueue<String>(11, Comparator.reverseOrder());
+        queue.addAll(List.of("a", "c", "b"));
+        return queue;
+      },
+      "copy java.util.concurrent.PriorityBlockingQueue [c, b, a], comparator kept"
+    ),
+    new SameTypedInput(
+      "reversed TreeSet subclass behind Set",
+      "java.util.Set<String>",
+      "java.util.Set<String>",
+      () -> {
+        final var set = new SubclassTreeSet(Comparator.<String>reverseOrder());
+        set.addAll(List.of("a", "b"));
+        return set;
+      },
+      "copy java.util.TreeSet [b, a], comparator kept"
+    ),
+    new SameTypedInput(
+      "reversed TreeMap subclass behind Map",
+      "java.util.Map<String, String>",
+      "java.util.Map<String, String>",
+      () -> {
+        final var map = new SubclassTreeMap(Comparator.<String>reverseOrder());
+        map.putAll(Map.of("a", "1", "b", "2"));
+        return map;
+      },
+      "copy java.util.TreeMap [{b=2, a=1}], comparator kept"
+    ),
+    new SameTypedInput(
+      "reversed PriorityQueue subclass behind Queue",
+      "java.util.Queue<String>",
+      "java.util.Queue<String>",
+      () -> {
+        final var queue = new SubclassPriorityQueue(Comparator.<String>reverseOrder());
+        queue.addAll(List.of("a", "c", "b"));
+        return queue;
+      },
+      "copy java.util.PriorityQueue [c, b, a], comparator kept"
+    ),
+    new SameTypedInput(
+      "Arrays.asList behind List",
+      "java.util.List<String>",
+      "java.util.List<String>",
+      () -> Arrays.asList("b", "a"),
+      "copy java.util.ArrayList [b, a]"
+    )
+  );
+
+  @Test
+  @DisplayName("a same-typed container is copied the same way by both paths, whatever its own class")
+  void aSameTypedContainerIsCopiedTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : SAME_TYPED_INPUTS) {
+      final var prefix = "St" + index++;
+      final var sources = new JavaFileObject[] {
+        ProcessorHarness.source(
+          PACKAGE + "." + prefix + "Src",
+          "package " +
+            PACKAGE +
+            ";\n" +
+            "@io.github.eschizoid.telescope.annotations.Bridge(" +
+            prefix +
+            "Tgt.class)\npublic record " +
+            prefix +
+            "Src(" +
+            row.srcField() +
+            " items) {}\n"
+        ),
+        ProcessorHarness.source(
+          PACKAGE + "." + prefix + "Tgt",
+          "package " + PACKAGE + ";\n" + "public record " + prefix + "Tgt(" + row.tgtField() + " items) {}\n"
+        ),
+      };
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), plain::errorMessages);
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      assertTrue(processed.success(), processed::errorMessages);
+      final var classes = plain.define(MethodHandles.lookup());
+      final var src = classes.get(PACKAGE + "." + prefix + "Src");
+      final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
+      final var bridge = emitted(processed, plain, prefix);
+      final var mapper = Telescope.mapper(cast(src), cast(tgt));
+      final var srcItems = src.getMethod("items");
+      final var tgtItems = tgt.getMethod("items");
+      final var forwardIn = row.input().get();
+      final var backwardIn = row.input().get();
+      final var forwardMethod = bridge.getMethod("forward", src);
+      final var backwardMethod = bridge.getMethod("backward", tgt);
+      final var outcomes = Map.of(
+        "generated forward",
+        attempt(forwardIn, () -> tgtItems.invoke(forwardMethod.invoke(null, newRecord(src, forwardIn)))),
+        "reflective forward",
+        attempt(forwardIn, () -> tgtItems.invoke(mapper.forward(newRecord(src, forwardIn)))),
+        "generated backward",
+        attempt(backwardIn, () -> srcItems.invoke(backwardMethod.invoke(null, newRecord(tgt, backwardIn)))),
+        "reflective backward",
+        attempt(backwardIn, () -> srcItems.invoke(mapper.backward(newRecord(tgt, backwardIn))))
+      );
+      outcomes.forEach((side, outcome) -> {
+        if (!row.owed().equals(outcome)) failures.add(
+          row.name() + ", " + side + ": " + outcome + ", owed " + row.owed()
+        );
+      });
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " outcome(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /** One direction of one path, which either produces the converted container or throws. */
+  private interface Conversion {
+    Object run() throws ReflectiveOperationException;
+  }
+
+  /** {@link #copyOutcome} of what {@code conversion} returns, or the exception it ends in. */
+  private static String attempt(final Object in, final Conversion conversion) {
+    try {
+      return copyOutcome(in, conversion.run());
+    } catch (final InvocationTargetException e) {
+      return "threw " + e.getCause().getClass().getName();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return "threw " + e.getClass().getName();
+    }
+  }
+
+  /**
+   * A container class outside the JDK with a public no-argument constructor, which is what a
+   * framework's own collection looks like from outside: a copy is not made in it.
+   */
+  public static final class SubclassSet<E> extends LinkedHashSet<E> {
+
+    private static final long serialVersionUID = 1L;
+
+    public SubclassSet() {}
+  }
+
+  /** Sorted and priority containers outside the JDK, each carrying a comparator of its own. */
+  public static final class SubclassTreeSet extends TreeSet<String> {
+
+    private static final long serialVersionUID = 1L;
+
+    public SubclassTreeSet(final Comparator<String> order) {
+      super(order);
+    }
+  }
+
+  public static final class SubclassTreeMap extends TreeMap<String, String> {
+
+    private static final long serialVersionUID = 1L;
+
+    public SubclassTreeMap(final Comparator<String> order) {
+      super(order);
+    }
+  }
+
+  public static final class SubclassPriorityQueue extends PriorityQueue<String> {
+
+    private static final long serialVersionUID = 1L;
+
+    public SubclassPriorityQueue(final Comparator<String> order) {
+      super(order);
+    }
+  }
+
+  private static Object newRecord(final Class<?> type, final Object items) throws ReflectiveOperationException {
+    return type.getConstructors()[0].newInstance(items);
+  }
+
+  /**
+   * What a conversion did with {@code in}: handed it across, or copied it into some class with some
+   * contents. A sorted or priority container says whether the copy kept the input's comparator, an
+   * identity map says how many entries survived, and a container whose first element is itself a
+   * container says whether that inner one was shared or copied, and as what.
+   */
+  private static String copyOutcome(final Object in, final Object out) {
+    if (in == out) return "shared";
+    final var sb = new StringBuilder("copy ").append(out.getClass().getName());
+    if (out instanceof IdentityHashMap<?, ?> map) return sb.append(" of ").append(map.size()).toString();
+    final var comparator = comparatorOf(out);
+    if (comparator != null) {
+      final var drained = new ArrayList<Object>();
+      if (out instanceof PriorityQueue<?> queue) {
+        final var copy = new PriorityQueue<>(queue);
+        while (!copy.isEmpty()) drained.add(copy.poll());
+      } else if (out instanceof PriorityBlockingQueue<?> queue) {
+        final var copy = new PriorityBlockingQueue<>(queue);
+        while (!copy.isEmpty()) drained.add(copy.poll());
+      } else if (out instanceof Map<?, ?> map) {
+        drained.add(map);
+      } else {
+        drained.addAll((Collection<?>) out);
+      }
+      sb.append(' ').append(drained).append(comparator == comparatorOf(in) ? ", comparator kept" : ", comparator lost");
+      return sb.toString();
+    }
+    sb.append(' ').append(out);
+    final var inner = firstElement(in);
+    if (inner instanceof Collection<?> innerIn) {
+      final var innerOut = firstElement(out);
+      sb.append(innerOut == innerIn ? ", inner shared" : ", inner copied as " + innerOut.getClass().getName());
+    }
+    return sb.toString();
+  }
+
+  private static Comparator<?> comparatorOf(final Object container) {
+    if (container instanceof SortedSet<?> set) return set.comparator();
+    if (container instanceof PriorityQueue<?> queue) return queue.comparator();
+    if (container instanceof PriorityBlockingQueue<?> queue) return queue.comparator();
+    if (container instanceof SortedMap<?, ?> map) return map.comparator();
+    return null;
+  }
+
+  private static Object firstElement(final Object container) {
+    if (container instanceof Map<?, ?> map) return map.isEmpty() ? null : map.values().iterator().next();
+    final var collection = (Collection<?>) container;
+    return collection.isEmpty() ? null : collection.iterator().next();
   }
 }

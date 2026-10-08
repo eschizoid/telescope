@@ -2484,6 +2484,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       OPTIONAL_TO_NULLABLE,
       NULLABLE_TO_OPTIONAL,
       TRANSFORM,
+      // A container of one declared type on both sides, copied by the runtime's ContainerCopy.of
+      // so both paths copy the same way. subBridgeName carries the declared raw type's name.
+      COPY,
     }
 
     static FieldPlan identity() {
@@ -2555,6 +2558,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         null,
         false,
         true
+      );
+    }
+
+    static FieldPlan copy(final String declaredRawFqn) {
+      return new FieldPlan(
+        Kind.COPY,
+        Objects.requireNonNull(declaredRawFqn),
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        false
       );
     }
 
@@ -2952,9 +2969,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         continue;
       }
       final var tf = fieldByName(targetFields, renames.getOrDefault(sf.name(), sf.name()));
-      // (1) Same type → identity. Covers same-typed containers too (List<X>↔List<X> is identity).
+      // (1) Same type → identity, unless the shared rules copy it: a container of one declared
+      //     type is copied by the runtime's ContainerCopy, the copy the reflective path makes, so
+      //     the target never shares the source's container and its elements pass through.
       if (isSameType(sf.type(), tf.type())) {
-        plans.put(sf.name(), FieldPlan.identity());
+        plans.put(
+          sf.name(),
+          passesThrough(sf.type(), sf.name()) ? FieldPlan.identity() : FieldPlan.copy(rawName(sf.type()))
+        );
         continue;
       }
       // (1b) Primitive ↔ its boxed wrapper (boolean↔Boolean, int↔Integer, …). No sub-bridge is
@@ -3207,7 +3229,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (isSameType(srcElement, tgtElement)) {
       // Container kind matters (lift), but no sub-bridge — the element passes through. Use a
       // sentinel "IDENTITY" sub-bridge name; the emit code recognises it and skips the sub-call.
-      return FieldPlan.ofKind(kind, IDENTITY_ELEMENT_SENTINEL);
+      if (passesThrough(srcElement, fieldName)) return FieldPlan.ofKind(kind, IDENTITY_ELEMENT_SENTINEL);
+      // An element that is itself a container the shared rules copy gets a nested element class
+      // whose forward and backward make the runtime's copy of it.
+      final var name = "__Nested" + nestedElements.size();
+      nestedElements.put(name, new NestedElement(srcElement, tgtElement, FieldPlan.copy(rawName(srcElement))));
+      return FieldPlan.ofKind(kind, name);
     }
     final var innerSrc = containerShapeOf(srcElement, tgtElement);
     final var innerTgt = containerShapeOf(tgtElement, srcElement);
@@ -3396,7 +3423,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var plan = element.plan();
       out.println();
       out.println("  private static final class " + entry.getKey() + " {");
-      if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) {
+      if (plan.kind() == FieldPlan.Kind.COPY) {
+        for (final var direction : List.of("forward", "backward")) {
+          out.println(
+            "    static " +
+              element.src() +
+              " " +
+              direction +
+              "(final " +
+              element.src() +
+              " in) { return " +
+              containerCopy("in", plan) +
+              "; }"
+          );
+        }
+      } else if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) {
         emitRawContainerHelper(out, "forward", element.src(), element.tgt(), plan, "forward", bridgePkg);
         emitRawContainerHelper(out, "backward", element.tgt(), element.src(), plan, "backward", bridgePkg);
       } else {
@@ -3603,6 +3644,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var fwdElement = elementIdentity ? "e -> e" : sub + "::forward";
     return switch (plan.kind()) {
       case IDENTITY -> readExpr;
+      case COPY -> containerCopy(readExpr, plan);
       case PRIM_WRAPPER -> plan.fwdNullDefault() == null
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.fwdNullDefault() + " : " + readExpr + ")";
@@ -3663,6 +3705,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var bwdElement = elementIdentity ? "e -> e" : sub + "::backward";
     return switch (plan.kind()) {
       case IDENTITY -> readExpr;
+      case COPY -> containerCopy(readExpr, plan);
       case PRIM_WRAPPER -> plan.bwdNullDefault() == null
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.bwdNullDefault() + " : " + readExpr + ")";
@@ -4892,6 +4935,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private boolean isSameType(final TypeMirror a, final TypeMirror b) {
     return MirrorProps.sameType(processingEnv.getTypeUtils(), a, b);
+  }
+
+  /** The erased type's qualified name, as a class literal in generated source names it. */
+  private String rawName(final TypeMirror type) {
+    return processingEnv.getTypeUtils().erasure(type).toString();
+  }
+
+  /**
+   * The runtime's shallow copy of a same-typed container read once into {@code local}. It is given
+   * the declared type, which is what it rebuilds a container whose own class cannot be built as.
+   */
+  private static String containerCopy(final String local, final FieldPlan plan) {
+    return CONTAINER_COPY + ".of(" + local + ", " + plan.subBridgeName() + ".class)";
+  }
+
+  /** Named in full, so a type the user declares with the same simple name cannot shadow it. */
+  private static final String CONTAINER_COPY = "io.github.eschizoid.telescope.conversion.ContainerCopy";
+
+  /**
+   * Whether a value of {@code type}, paired with the same type, is handed across as itself. The
+   * shared rules decide, so a container the reflective path copies is copied here too.
+   */
+  private boolean passesThrough(final TypeMirror type, final String componentName) {
+    return rules.decidePair(type, type, componentName) instanceof PairDecision.Identity;
   }
 
   // True when one of {a, b} is a primitive and the other is exactly its boxed wrapper (boolean ↔

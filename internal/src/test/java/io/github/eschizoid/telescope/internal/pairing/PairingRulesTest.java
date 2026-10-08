@@ -41,6 +41,7 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -355,6 +356,7 @@ class PairingRulesTest {
     Deque<String> dequeOfString;
     Queue<String> queueOfString;
     ArrayDeque<String> arrayDequeOfString;
+    CopyOnWriteArrayList<String> copyOnWriteListOfString;
   }
 
   /** The kind the pair settles on, read off the decision both worlds consume. */
@@ -378,12 +380,35 @@ class PairingRulesTest {
   class DecidePair {
 
     @Test
-    @DisplayName("same type on both sides decides Identity, for scalars and parameterized types alike")
+    @DisplayName("same type on both sides decides Identity for anything but a container the table rebuilds")
     void sameTypeIsIdentity() {
       assertInstanceOf(PairDecision.Identity.class, rules.decidePair(String.class, String.class, "f"));
+      assertInstanceOf(PairDecision.Identity.class, rules.decidePair(List.class, List.class, "f"));
+      for (final var name : List.of(
+        "optionalOfString",
+        "mapWildcardToString",
+        "arrayDequeOfString",
+        "copyOnWriteListOfString"
+      )) {
+        assertInstanceOf(PairDecision.Identity.class, rules.decidePair(typeOf(name), typeOf(name), "f"), name);
+      }
+    }
+
+    @Test
+    @DisplayName("same type on both sides decides a copy for a container the allocation table rebuilds")
+    void sameTypedContainerIsCopied() {
+      for (final var name : List.of(
+        "listOfString",
+        "setOfString",
+        "collectionOfString",
+        "dequeOfString",
+        "queueOfString"
+      )) {
+        assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(typeOf(name), typeOf(name), "f"), name);
+      }
       assertInstanceOf(
-        PairDecision.Identity.class,
-        rules.decidePair(typeOf("listOfString"), typeOf("listOfString"), "f")
+        PairDecision.MapCopy.class,
+        rules.decidePair(typeOf("mapStringToString"), typeOf("mapStringToString"), "f")
       );
     }
 

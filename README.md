@@ -306,6 +306,16 @@ same interface, and `@InheritInverseConfiguration` derives eligible configuratio
 javadoc excludes expressions, constants, and default values from inheritance. Telescope has the mirror-image caveat,
 because `constant`, `compute`, and one-way rows are forward-only, which is covered below.
 
+A field whose type is the same on both sides is handed across as it is, except a `List`, `Set`, `Map`, or other JDK
+collection, which is copied shallowly, forward, backward, and in `patch`, so changing the target's container never
+changes the source's. The copy behaves like the source and never instantiates a class telescope doesn't know: a JDK
+collection is copied into its own class, anything else into the nearest JDK class that keeps its ordering, and failing
+that the declared type's default. Unmodifiable inputs are returned as they are. `Telescope.mapper(...)` and a `@Bridge`
+make the same copy. A collection backed by a lazy JPA collection, such as Hibernate's `PersistentSet` or
+`PersistentBag`, is iterated while it is copied, which is expected to load it inside a session and to throw
+`LazyInitializationException` outside one, as MapStruct's generated `new HashSet<>(...)` does. To keep a container
+shared, give the field a row with its own functions: `to(Src::items, Tgt::items, x -> x, x -> x)`.
+
 When a flat field needs to land at a nested target leaf, which is MapStruct's
 `@Mapping(source = "flat", target = "a.b.c")`, a navigator emitted by codegen is a first-class argument to
 `Mapping.to(...)`.

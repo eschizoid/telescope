@@ -367,6 +367,14 @@ public final class Mapper<A, B> {
    * Forward conversion {@code A → B}. Public so the {@code mapping} sub-package can wrap a {@link
    * Mapper} as an {@link Iso} when stitching deep recursive mappings together (the {@link
    * io.github.eschizoid.telescope.mapping.Mapping#via via(...)} row).
+   *
+   * <p>A {@code List}, {@code Set} or {@code Map} component whose type is the same on both sides
+   * comes back as a shallow copy, so changing the result's container leaves {@code a}'s as it was.
+   * The copy behaves like the source and never instantiates a class telescope does not know: a JDK
+   * collection is copied into its own class, anything else into the nearest JDK class that keeps
+   * its ordering, and failing that into the declared type's default. Unmodifiable inputs are
+   * returned as they are. A {@code to(src, tgt, x -> x, x -> x)} row for the component hands the
+   * source's container across instead.
    */
   public B forward(final A a) {
     // Null in, null out — matches MapStruct's generated `if (source == null) return null;` and the

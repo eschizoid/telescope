@@ -55,8 +55,9 @@ case, with the residual gaps named in its notes.
 **telescope:**
 
 ```java
-// No rows = pure deep auto-recursion: same-name components identity-map,
-// nested records/POJOs recurse, List/Set/Map/Optional lift automatically
+// No rows = pure deep auto-recursion: same-name components identity-map (a
+// same-typed List/Set/Map is copied), nested records/POJOs recurse,
+// List/Set/Map/Optional lift automatically
 Mapper<UserEntity, UserDto> mapper = Telescope.mapper(UserEntity.class, UserDto.class);
 
 UserDto dto = mapper.forward(entity);

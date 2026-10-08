@@ -487,6 +487,7 @@ Allocation (`-Pjmh.profilers=gc`) is deterministic and does not have this proble
 | `TelescopeBenchmark`                                             | record and bean field updates, mapper reads, hand-rolled baselines                 |
 | `ReadFoldBenchmark`                                              | multi-focus read terminals, and the `read` / `find` head-grab against a loop floor |
 | `ContainerAllocationBenchmark`                                   | mapper container conversion across cardinality                                     |
+| `SameTypedContainerBenchmark`                                    | same-typed List, Set and Map copies by mapper and bridge, against two controls     |
 | `ContainerWriteBenchmark`                                        | `.each()` / `.eachValue()` rebuilds across cardinality                             |
 | `IntoBenchmark`                                                  | `Mapper.into` against `forward`, at five and twenty properties                     |
 | `LmfBenchmark`                                                   | the dispatch substrate: LMF vs reflection vs hand-rolled                           |
