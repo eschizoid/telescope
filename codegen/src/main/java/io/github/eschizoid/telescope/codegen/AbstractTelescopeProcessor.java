@@ -583,18 +583,31 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
+   * The {@code @Bridge} target of {@code source} as a type, or an empty list when it has none: the
+   * type a navigator's bridge hop would descend into.
+   */
+  protected final List<TypeMirror> bridgeTargetTypes(final TypeElement source) {
+    final var fqn = bridgeTargetFqn(source);
+    final var target = fqn == null ? null : processingEnv.getElementUtils().getTypeElement(fqn);
+    return target == null ? List.of() : List.of(target.asType());
+  }
+
+  /**
    * Whether the type named by {@code qualifiedName} is itself navigable — i.e. has a generated
    * {@code <X>Telescope<R>} via {@code @Focus} (on records), {@code @BeanFocus} (on classes), or
    * one of the Lombok bean annotations ({@code @lombok.Data} / {@code @lombok.Value} /
    * {@code @lombok.Builder}) when the {@code telescope-lombok} module is on the processor path.
    * Drives the bridge hop's return type: navigable target → {@code <Target>Telescope<R>}; otherwise
-   * terminal {@code Telescope<R, Target>}. Lombok annotations are looked up by string FQN so this
-   * module incurs no compile-time Lombok dependency.
+   * terminal {@code Telescope<R, Target>}. A target whose navigator is not {@linkplain
+   * #navigatorWrittenInTime written in time} to be named is not navigable here, whichever
+   * annotation it carries. Lombok annotations are looked up by string FQN so this module incurs no
+   * compile-time Lombok dependency.
    */
   protected boolean isNavigablePath(final String qualifiedName) {
     final var elements = processingEnv.getElementUtils();
     final var element = elements.getTypeElement(qualifiedName);
     if (element == null) return false;
+    if (!navigatorWrittenInTime(element)) return false;
     if (element.getKind() == ElementKind.RECORD) {
       return hasAnnotation(element, "io.github.eschizoid.telescope.annotations.Focus");
     }
@@ -697,15 +710,16 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * Whether a navigator over properties of {@code propertyTypes} would descend into a type whose
-   * navigator telescope-lombok's processor may still take on — a property's type, or a container
-   * property's element type. Emitting the navigator now would decide that hop before the answer is
-   * known, so the caller holds the navigator back one round, after which the answer is settled.
+   * Whether a navigator with hops to {@code hopTypes} would descend into a type whose navigator
+   * telescope-lombok's processor may still take on — a property's type, a container property's
+   * element type, or a bridge hop's target. Emitting the navigator now would decide that hop before
+   * the answer is known, so the caller holds the navigator back one round, after which the answer
+   * is settled.
    */
-  protected final boolean awaitsLombokTarget(final List<TypeMirror> propertyTypes) {
+  protected final boolean awaitsLombokTarget(final List<TypeMirror> hopTypes) {
     final var elements = processingEnv.getElementUtils();
     final var named = new ArrayList<Element>();
-    for (final var type : propertyTypes) {
+    for (final var type : hopTypes) {
       if (type.getKind() == TypeKind.DECLARED) named.add(((DeclaredType) type).asElement());
       final var shape = traversalKind(type);
       final var element = shape == null ? null : elements.getTypeElement(shape.elementType());
