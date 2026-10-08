@@ -176,6 +176,7 @@ public final class MetadataHolderProbe {
       );
     }
     try {
+      ModuleAccess.read(holder);
       final var lookup = MethodHandles.lookup();
       final var handle = lookup.unreflect(method);
       if (NativeImage.IN_IMAGE) {

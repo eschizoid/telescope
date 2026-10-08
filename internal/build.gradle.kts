@@ -69,6 +69,8 @@ tasks.named("check") {
 }
 
 tasks.jacocoTestReport {
+    // The accessor-substrate branches only one of the two runs takes (image or not) count too.
+    executionData(imageTest.get())
     reports {
         csv.required.set(true)
         xml.required.set(true)
