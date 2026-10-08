@@ -60,9 +60,9 @@ Java records, POJOs, and Lombok `@Data` classes on Java 21 and later, and the Sp
 ship as separate artifacts.
 
 For evidence, there is a [migration coverage matrix](docs/mapstruct-parity.md) scoring 29 MapStruct features against
-telescope, with 13 covered fully and 16 covered partially, each partial row stating its limitation, and `file:line`
-evidence throughout. There is also a [migration guide](docs/mapstruct-migration.md) that moves one mapper at a time, and
-a [runnable head-to-head module](examples/mapstruct-vs-telescope/) where every claim is a passing test. The
+telescope, with 13 covered fully and 16 covered partially, each partial row stating its limitation, and evidence citing
+the source and tests throughout. There is also a [migration guide](docs/mapstruct-migration.md) that moves one mapper at
+a time, and a [runnable head-to-head module](examples/mapstruct-vs-telescope/) where every claim is a passing test. The
 [full comparison](#how-it-compares-to-mapstruct) is below.
 
 ## What telescope gives you
@@ -588,7 +588,7 @@ The cost of a stale string is worth stating precisely, because the two failure m
 > `@MappingTarget` updates mutate an existing instance in place.
 >
 > For the paper trail, the [coverage matrix](docs/mapstruct-parity.md) scores all 29 MapStruct features against
-> telescope with `file:line` evidence per verdict, at 13 full and 16 partial, and the
+> telescope with source and test evidence per verdict, at 13 full and 16 partial, and the
 > [migration guide](docs/mapstruct-migration.md) turns the matrix into a recipe you apply one mapper at a time.
 
 #### Measured performance
@@ -652,7 +652,7 @@ fact, while a mapping compiled into a generated class is complete at build time,
 | GraalVM native-image              | codegen needs no config, and the runtime path survives AOT too     | fully AOT-compatible for codegen, with no runtime path to need it    |
 
 The full accounting is the [coverage matrix](docs/mapstruct-parity.md), which scores all 29 MapStruct features with the
-telescope idiom, its limitation, and `file:line` evidence.
+telescope idiom, its limitation, and the source and tests that back it.
 
 #### When MapStruct is the right pick
 
