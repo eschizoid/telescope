@@ -727,8 +727,9 @@ builder() matches). Gaps vs MapStruct: (1) the factory method name is hard-wired
 is NOT detected and there is no @Builder(builderMethod=...) equivalent or BuilderProvider SPI to teach it; (2) a target
 with a builder is built through it by default, on both the runtime and the codegen path, and preferring its setters or
 constructor takes a writeBean hint (or `@Bridge(writeStrategy = ...)`). Both paths pass the builder over on their own
-only when it has no member for a property the next strategy would write, or a member that cannot take the property's
-type. Builder setter matching (exact / setX / withX) covers Lombok, Immutables-fluent, and JavaBean-style builders.
+only when it has a member that cannot take a property's type, or has no member for a property the next strategy would
+write (with no other strategy available, any property stored in a field). Builder setter matching (exact / setX / withX)
+covers Lombok, Immutables-fluent, and JavaBean-style builders.
 
 <sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/BeanWriteStrategy.java,
 `AUTO_ORDER` (static builder() → name-matched all-args ctor → setters, the order shared by the runtime writer and the
@@ -890,16 +891,16 @@ Telescope.mapper(Src.class, Dst.class,
     to(Src::amountCents, Dst::amount,
        a -> a == null ? null : BigDecimal.valueOf(a, 2),          // manual guard inside custom fwd fn
        b -> b == null ? null : b.movePointRight(2).longValue()),
-    nullSourceValues(DEFAULT));  // substitutes defaults for auto-matched fields only, never inside a row's fns
+    nullSourceValues(DEFAULT));  // auto-matched fields and same-typed to(...) rows only, never a row's own fns
 ```
 
 Telescope's default posture is effectively ALWAYS for everything the engine owns: null sources, null nested objects, and
 null containers propagate as null instead of NPE-ing, with no configuration. The gap is custom transform rows — the
-user-supplied fwd/bwd functions in to(src, tgt, fwd, bwd) / toOneWay / via ARE invoked with null under either strategy.
-nullSourceValues(DEFAULT) wraps only auto-matched fields and same-typed to(src, tgt) rows, so a row carrying its own
-functions still receives the null and its result lands on the target, even when the target type has a table default.
-There is no per-mapper 'never call my conversion with null' switch; the recipe is toOrElse for the common cases or a
-null check inside the function.
+user-supplied fwd/bwd functions in to(src, tgt, fwd, bwd) / toOneWay ARE invoked with null under either strategy, and a
+via(...) row hands the null to its Mapper, which returns null. nullSourceValues(DEFAULT) wraps only auto-matched fields
+and same-typed to(src, tgt) rows, so a row carrying its own functions still receives the null and its result lands on
+the target, even when the target type has a table default. There is no per-mapper 'never call my conversion with null'
+switch; the recipe is toOrElse for the common cases or a null check inside the function.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `arrayLeaf` (its null guard:
 `if (s == null) return null` and `if (t == null) return null`) and `lazyCacheIso` (the null-guarding proxy around a
@@ -1024,8 +1025,8 @@ it removes the constructor-injection ceremony MapStruct decorators need.
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `beforeForward` (javadoc cites
 @BeforeMapping), `afterForward(Function)` (javadoc cites @AfterMapping), `afterForward(BiFunction)` (source-aware;
 javadoc cites @AfterMapping with @MappingTarget), `beforeBackward`, and `afterBackward`; `asTelescope` (carries the hook
-chain) and `toForwardMapper` (carries hooks); the public `Mapper.create(forward, backward, ...)` factories for wholesale
-wrapping</sub>
+chain) and `toForwardMapper` (carries hooks); `Mapper.create(Function, Function, Class, Class, Map)` for wholesale
+wrapping (its six-argument sibling is marked module-internal)</sub>
 
 ### DI component models
 
