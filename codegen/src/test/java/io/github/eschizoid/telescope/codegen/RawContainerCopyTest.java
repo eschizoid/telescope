@@ -71,6 +71,7 @@ class RawContainerCopyTest {
       List.of("Gen", "java.util.LinkedList"),
       List.of("java.util.HashMap", "java.util.LinkedHashMap"),
       List.of("java.util.TreeSet", "java.util.concurrent.ConcurrentSkipListSet"),
+      List.of("java.util.TreeMap", "java.util.concurrent.ConcurrentSkipListMap"),
       List.of("java.util.TreeSet", "ObjectTree"),
       List.of("java.util.List", "java.util.ArrayList"),
       List.of("java.util.List<Gen>", "java.util.List<Objects>")

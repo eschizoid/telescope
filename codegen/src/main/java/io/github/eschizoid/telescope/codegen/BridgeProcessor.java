@@ -3775,7 +3775,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
     out.println(rawOutDeclaration(tgtContainer, plan.kind(), identity));
     final var element = plan.kind() == FieldPlan.Kind.MAP_VALUES ? "(e.getValue())" : "(x)";
-    emitFill(out, tgtContainer, plan.kind(), identity ? null : sub + "." + direction + element);
+    emitFill(out, tgtContainer, srcContainer, plan.kind(), identity ? null : sub + "." + direction + element);
     out.println("    return out;");
     out.println("  }");
   }
@@ -4377,7 +4377,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       srcContainer
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false));
-    emitFill(out, tgtContainer, FieldPlan.Kind.SET, subBridge + "." + direction + "(x)");
+    emitFill(out, tgtContainer, srcContainer, FieldPlan.Kind.SET, subBridge + "." + direction + "(x)");
     out.println("    return out;");
     out.println("  }");
   }
@@ -4399,6 +4399,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private void emitFill(
     final PrintWriter out,
     final TypeMirror tgtContainer,
+    final TypeMirror srcContainer,
     final FieldPlan.Kind kind,
     final String convert
   ) {
@@ -4421,7 +4422,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     final var family = map ? OrderedNouns.MAP : OrderedNouns.SET;
     if (convert != null) {
-      emitOrderedInsert(out, tgtContainer, family, "    ", convert);
+      emitOrderedInsert(out, tgtContainer, srcContainer, family, "    ", convert);
       return;
     }
     // addAll and putAll keep a sorted container's linear build from a source sorted the same way.
@@ -4433,7 +4434,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println(map ? "      out.putAll(src);" : "      out.addAll(src);");
     out.println("    } catch (final ClassCastException __unordered) {");
     out.println("      out.clear();");
-    emitOrderedInsert(out, tgtContainer, family, "      ", null);
+    emitOrderedInsert(out, tgtContainer, srcContainer, family, "      ", null);
     out.println("      throw new IllegalStateException(");
     out.println(
       "        \"Deep map: " +
@@ -4520,6 +4521,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private void emitOrderedInsert(
     final PrintWriter out,
     final TypeMirror tgtContainer,
+    final TypeMirror srcContainer,
     final OrderedNouns family,
     final String indent,
     final String convert
@@ -4529,7 +4531,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String ordered;
     if (map) {
       ordered = "__k";
-      out.println(indent + "for (final var e : src.entrySet()) {");
+      if (usedRaw(srcContainer)) {
+        // A map used raw yields its entries as Object. Read through a view naming no types, which
+        // a raw map is assignable to without a warning, they come back as entries.
+        out.println(indent + "final java.util.Map<?, ?> __entries = src;");
+        out.println(indent + "for (final var e : __entries.entrySet()) {");
+      } else {
+        out.println(indent + "for (final var e : src.entrySet()) {");
+      }
       out.println(indent + "  final var __k = e.getKey();");
       out.println(indent + "  final var __v = " + (convert == null ? "e.getValue()" : convert) + ";");
     } else {
@@ -4619,7 +4628,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       srcContainer
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true));
-    emitFill(out, tgtContainer, FieldPlan.Kind.MAP_VALUES, subBridge + "." + direction + "(e.getValue())");
+    emitFill(
+      out,
+      tgtContainer,
+      srcContainer,
+      FieldPlan.Kind.MAP_VALUES,
+      subBridge + "." + direction + "(e.getValue())"
+    );
     out.println("    return out;");
     out.println("  }");
   }
