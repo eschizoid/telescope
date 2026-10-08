@@ -27,6 +27,7 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.Stack;
@@ -58,39 +59,53 @@ final class ContainerLifts {
   private ContainerLifts() {}
 
   /**
-   * Collection ↔ Collection element-copy Iso. The forward instantiates the target collection via
-   * {@link Beans#intermediateAllocator(Class)} (cached LMF-bound Supplier) and {@code addAll}'s the
-   * source; backward is symmetric. Returns {@code null} when either side has no usable allocator,
-   * letting the caller fall through to the next branch (typically the shape-mismatch IAE).
+   * Collection ↔ Collection element-copy Iso. The forward allocates the target collection through
+   * {@link #copyAllocator} and {@code addAll}'s the source into it; backward is symmetric. The
+   * pairing spec decides a copy only when both sides can be built, so this never answers null and
+   * every side it is handed can be allocated.
    *
-   * <p>No element-type recursion: this branch fires on raw, non-parameterised subtypes (e.g. {@code
-   * class ImageUrls extends ArrayList<ImageUrl>}), where the raw class itself carries no runtime
-   * generic info. Users whose element types differ across sides should declare an explicit row.
+   * <p>No element-type recursion: a copy is decided only where neither side names an element type
+   * the other could refuse, such as a class declaring no type parameters that fixes them ({@code
+   * class ImageUrls extends ArrayList<ImageUrl>}), a generic class or interface used raw, or a
+   * class fixing every argument to {@code Object}. Users whose element types differ across sides
+   * should declare an explicit row.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> collectionCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
-    final var srcSupplier = Beans.intermediateAllocator(srcCls);
-    final var tgtSupplier = Beans.intermediateAllocator(tgtCls);
-    if (srcSupplier.get() == null || tgtSupplier.get() == null) return null;
-    // Copying elements verbatim leaves an order to carry: the side being filled keeps one, and the
-    // side being read has one to give. A supplier is handed no source, so the ordering rule is
-    // applied here as it is wherever else a sorted container is built.
-    final var srcAlloc = orderingAware(srcCls, srcCls, ContainerView.Kind.SET, ignored -> srcSupplier.get());
-    final var tgtAlloc = orderingAware(tgtCls, tgtCls, ContainerView.Kind.SET, ignored -> tgtSupplier.get());
+    final var kind = Set.class.isAssignableFrom(tgtCls) ? ContainerView.Kind.SET : ContainerView.Kind.LIST;
+    final var srcAlloc = copyAllocator(srcCls, kind);
+    final var tgtAlloc = copyAllocator(tgtCls, kind);
     return Iso.of(
       src -> buildConverted(src, tgtAlloc, Function.identity(), tgtCls),
       tgt -> buildConverted(tgt, srcAlloc, Function.identity(), srcCls)
     );
   }
 
+  /**
+   * The allocation one side of an element copy fills. The pairing spec decides a copy only when
+   * both sides can be built, so every side reaching here can be.
+   *
+   * <p>An interface is built as the default implementation the shared table names for its family,
+   * which carries the source's comparator where the default is a sorted one; the spec accepts the
+   * copy on exactly that condition, so the two cannot disagree. An abstract class has no default
+   * and never reaches here. Any other class is built through its own allocator, and the source's
+   * order is carried into it where the class keeps one.
+   */
+  private static Function<Object, Object> copyAllocator(final Class<?> cls, final ContainerView.Kind kind) {
+    if (cls.isInterface()) return specAllocatorFor(cls, kind);
+    final var supplier = Beans.intermediateAllocator(cls);
+    // Copying elements verbatim leaves an order to carry: the side being filled keeps one, and the
+    // side being read has one to give. A supplier is handed no source, so the ordering rule is
+    // applied here as it is wherever else a sorted container is built.
+    return orderingAware(cls, cls, kind, ignored -> supplier.get());
+  }
+
   /** Map ↔ Map element-copy Iso. Mirror of {@link #collectionCopyIso} via {@code putAll}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> mapCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {
-    final var srcSupplier = Beans.intermediateAllocator(srcCls);
-    final var tgtSupplier = Beans.intermediateAllocator(tgtCls);
-    if (srcSupplier.get() == null || tgtSupplier.get() == null) return null;
-    final var srcAlloc = orderingAware(srcCls, srcCls, ContainerView.Kind.MAP_VALUES, ignored -> srcSupplier.get());
-    final var tgtAlloc = orderingAware(tgtCls, tgtCls, ContainerView.Kind.MAP_VALUES, ignored -> tgtSupplier.get());
+    final var kind = ContainerView.Kind.MAP_VALUES;
+    final var srcAlloc = copyAllocator(srcCls, kind);
+    final var tgtAlloc = copyAllocator(tgtCls, kind);
     return Iso.of(
       src -> buildMap(src, tgtAlloc, Function.identity(), tgtCls),
       tgt -> buildMap(tgt, srcAlloc, Function.identity(), srcCls)

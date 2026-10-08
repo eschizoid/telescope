@@ -84,15 +84,22 @@ class SortedComparatorParameterParityTest {
 
   private static final String REFUSAL = "declares no constructor taking a Comparator";
 
+  /**
+   * The remedy both refusals name: a row converting the whole component, which works for any side.
+   */
+  private static final String REMEDY = "Mapping.to(src, tgt, fwd, bwd)";
+
   private static void assertGeneratedRefuses(final Pair pair, final Object source) {
     final var thrown = assertThrows(InvocationTargetException.class, () -> pair.forward().invoke(null, source));
     final var cause = assertInstanceOf(IllegalStateException.class, thrown.getCause());
     assertTrue(cause.getMessage().contains(REFUSAL), cause::getMessage);
+    assertTrue(cause.getMessage().contains(REMEDY), cause::getMessage);
   }
 
   private static void assertReflectiveRefuses(final Pair pair, final Object source) {
     final var thrown = assertThrows(IllegalStateException.class, () -> reflectiveItems(pair, source));
     assertTrue(thrown.getMessage().contains(REFUSAL), thrown::getMessage);
+    assertTrue(thrown.getMessage().contains(REMEDY), thrown::getMessage);
   }
 
   private static Object generatedItems(final Pair pair, final Object source) throws ReflectiveOperationException {
