@@ -8,13 +8,14 @@ import io.github.eschizoid.telescope.codegen.ProcessorHarness;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import java.io.IOException;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.net.URI;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -58,12 +59,7 @@ import org.junit.jupiter.api.Test;
 public class ContainerAllocatorCorpusTest {
 
   /** A container the reflective path is expected to handle, and the lift that would handle it. */
-  private record Family(
-    String label,
-    Class<?> iface,
-    Class<?> fallback,
-    BiFunction<Class<?>, Class<?>, Iso<?, ?>> lift
-  ) {}
+  private record Family(String label, Class<?> iface, Class<?> fallback, BiFunction<Type, Type, Iso<?, ?>> lift) {}
 
   private static final List<Family> FAMILIES = List.of(
     new Family("List", List.class, ArrayList.class, (s, t) ->
@@ -233,6 +229,53 @@ public class ContainerAllocatorCorpusTest {
       : name + "<java.lang.Object>";
   }
 
+  /**
+   * The key and element type the reflective side is asked with, the runtime twin of the {@code Key}
+   * enum each generated pair declares. Both paths are asked about the same declaration, so a
+   * container built from its key class, which an {@code EnumMap} is, is given one on both.
+   */
+  enum Key {
+    A,
+    B,
+  }
+
+  /** {@link #source} as a reflective type. */
+  private static Type sourceType(final Class<?> iface, final int targetArity) {
+    if (targetArity != 0) return declaredType(iface, targetArity);
+    return Map.class.isAssignableFrom(iface)
+      ? new Parameterized(iface, new Type[] { Object.class, Object.class })
+      : new Parameterized(iface, new Type[] { Object.class });
+  }
+
+  /** {@link #declared} as a reflective type. */
+  private static Type declaredType(final Class<?> c, final int arity) {
+    return switch (arity) {
+      case 0 -> c;
+      case 1 -> new Parameterized(c, new Type[] { Key.class });
+      default -> new Parameterized(c, new Type[] { Key.class, String.class });
+    };
+  }
+
+  /**
+   * A class applied to type arguments, which reflection only hands out for a declaration it read.
+   */
+  private record Parameterized(Class<?> raw, Type[] arguments) implements ParameterizedType {
+    @Override
+    public Type[] getActualTypeArguments() {
+      return arguments.clone();
+    }
+
+    @Override
+    public Type getRawType() {
+      return raw;
+    }
+
+    @Override
+    public Type getOwnerType() {
+      return raw.getDeclaringClass();
+    }
+  }
+
   /** The declared type as source text, with as many arguments as the class itself takes. */
   private static String declared(final Class<?> c, final String pkg, final int arity) {
     final var name = c.getCanonicalName();
@@ -271,14 +314,7 @@ public class ContainerAllocatorCorpusTest {
    *
    * <p>Each entry carries its own reason inline, beside the direction it records.
    */
-  private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.of(
-    // Reached by the element-preserving copy, which never consults the allocation guard: the
-    // processor writes a copy-constructor call where the reflective path refuses the type
-    // outright. The harmful direction of the two, a build that succeeds and a conversion that
-    // does not.
-    "Map " + EnumMap.class.getName(),
-    new Verdict(true, false)
-  );
+  private static final Map<String, Verdict> KNOWN_DIVERGENCES = Map.of();
 
   /**
    * Abstract, with a static {@code builder()} that makes something concrete — the shape a {@code
@@ -426,7 +462,8 @@ public class ContainerAllocatorCorpusTest {
         final var generatedAllocates = generated.get(family.label()).get(c);
         var reflectiveAllocates = true;
         try {
-          family.lift().apply(c, c);
+          final var arity = c.getTypeParameters().length;
+          family.lift().apply(sourceType(family.iface(), arity), declaredType(c, arity));
         } catch (final IllegalStateException e) {
           // A refusal has to arrive here, while the plan is being built, carrying the type's name
           // and what to do instead. Any other throwable means the plan was built and the failure
