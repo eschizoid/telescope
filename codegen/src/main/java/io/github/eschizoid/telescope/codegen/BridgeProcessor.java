@@ -1,6 +1,8 @@
 package io.github.eschizoid.telescope.codegen;
 
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
+import io.github.eschizoid.telescope.internal.pairing.ContainerView;
+import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import java.io.IOException;
@@ -3643,7 +3645,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (plan.rawContainer()) return true;
     if (!IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) return false;
     if (plan.kind() != FieldPlan.Kind.SET && plan.kind() != FieldPlan.Kind.MAP_VALUES) return false;
-    return outputImpl != null && orderedFamilyOf(outputImpl, plan.kind()) != null;
+    return outputImpl != null && keepsOrder(outputImpl, plan.kind());
   }
 
   // Emit one direction of a raw Collection/Map subtype container helper. Every type is rendered
@@ -3722,7 +3724,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The bridge is emitted in the source's package, which need not be the container's, so a
     // builder type that is not public cannot be named from where the call lands. Its own build()
     // being public is not enough: a method on an inaccessible class is inaccessible with it.
-    if (!publiclyNameable(builderEl)) return null;
+    if (!MirrorProps.publiclyNameable(builderEl)) return null;
     final var types = processingEnv.getTypeUtils();
     // All members, not the declared ones: build() may be inherited from a shared builder base, and
     // it produces the same value wherever it is written.
@@ -3760,14 +3762,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * The constructor argument that carries a sorted container's ordering across the rebuild, or
-   * empty when the rebuilt container has nowhere to put one. A sorted container orders by its
-   * comparator, and a rebuild that drops one does not merely reorder: where the keys implement no
-   * natural ordering it throws on the first insert, though the source it was built from worked.
-   *
-   * <p>A sorted map's comparator always transfers. It orders the keys, and a bridged map's keys are
-   * required to match on both sides, so it fits the rebuilt map exactly. A sorted set's orders the
-   * elements, which are what the bridge converts, so it transfers only while those stay the same
-   * type: a comparator over the source's element type cannot order the target's.
+   * empty when the shared rules decide the rebuilt container takes none.
    */
   private String orderingArg(
     final FieldPlan.Kind kind,
@@ -3775,12 +3770,30 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String implFqn,
     final boolean elementsPreserved
   ) {
-    if (
-      !carriesOrdering(implFqn, elementsPreserved) || !hasComparatorConstructor(kind, tgtContainer, implFqn)
-    ) return "";
+    if (!(ordering(kind, tgtContainer, implFqn, elementsPreserved) instanceof Ordering.Carry<TypeMirror>)) return "";
     // The argument and the local holding it are decided by the same questions, so a rebuild can
     // never name a local the line above it had no type to declare.
     return comparatorTypeArg(kind, tgtContainer) == null ? "" : ORDERING_LOCAL;
+  }
+
+  /**
+   * How the rebuilt container is told the order its source kept, as the shared rules decide it for
+   * the reflective path too.
+   */
+  private Ordering<TypeMirror> ordering(
+    final FieldPlan.Kind kind,
+    final TypeMirror tgtContainer,
+    final String implFqn,
+    final boolean elementsPreserved
+  ) {
+    final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
+    if (implEl == null) return new Ordering.None<>();
+    final var family = switch (kind) {
+      case SET -> ContainerView.Kind.SET;
+      case MAP_VALUES -> ContainerView.Kind.MAP_VALUES;
+      default -> ContainerView.Kind.LIST;
+    };
+    return rules.orderingFor(tgtContainer, implEl.asType(), family, elementsPreserved);
   }
 
   /**
@@ -3810,81 +3823,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private static final String ORDERING_LOCAL = "__cmp";
 
-  /**
-   * Whether the rebuilt container keeps an order, so an ordering is something it could be given.
-   *
-   * <p>A map's comparator orders its keys, and a bridged map's keys match on both sides, so it fits
-   * the rebuilt map whatever happens to the values. A set's orders its elements, so it fits only
-   * while those stay the same type.
-   *
-   * <p>The question is asked of the class being allocated rather than of a list of names, because a
-   * subtype of a sorted container keeps the contract its supertype declares while answering to none
-   * of those names. It is not asked of the declared source type at all: a field written as a plain
-   * {@code Map} can hold one ordered by a comparator, so whether there is an order to carry is a
-   * property of the value and is tested where the value is in hand.
-   */
-  private boolean carriesOrdering(final String implFqn, final boolean elementsPreserved) {
+  /** Whether the class being allocated keeps its elements, or a map's keys, in an order. */
+  private boolean keepsOrder(final String implFqn, final FieldPlan.Kind kind) {
     final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
     if (implEl == null) return false;
-    if (assignableToRaw(implEl.asType(), "java.util.SortedMap")) return true;
-    if (assignableToRaw(implEl.asType(), "java.util.SortedSet")) return elementsPreserved;
-    return false;
+    if (kind == FieldPlan.Kind.MAP_VALUES) return assignableToRaw(implEl.asType(), "java.util.SortedMap");
+    return kind == FieldPlan.Kind.SET && assignableToRaw(implEl.asType(), "java.util.SortedSet");
   }
 
   /**
-   * The sorted family the class being allocated belongs to, or null when it keeps no order. The
-   * interface comes back in the form an {@code instanceof} needs, since the test is made against a
-   * value whose type arguments are not known where it is written.
-   */
-  private OrderedFamily orderedFamilyOf(final String implFqn, final FieldPlan.Kind kind) {
-    final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
-    if (implEl == null) return null;
-    if (kind == FieldPlan.Kind.MAP_VALUES && assignableToRaw(implEl.asType(), "java.util.SortedMap")) {
-      return new OrderedFamily("java.util.SortedMap<?, ?>");
-    }
-    if (kind == FieldPlan.Kind.SET && assignableToRaw(implEl.asType(), "java.util.SortedSet")) {
-      return new OrderedFamily("java.util.SortedSet<?>");
-    }
-    return null;
-  }
-
-  /** The wildcarded interface an ordering test is written against. */
-  private record OrderedFamily(String iface) {}
-
-  /**
-   * Whether this class can be handed a comparator when it is built.
-   *
-   * <p>Java does not inherit constructors, so a subtype of a sorted container has one only where it
-   * declares one. A subtype that declares nothing but a no-argument constructor has nowhere to put
-   * the order its declared type promises to keep.
-   */
-  private boolean hasComparatorConstructor(
-    final FieldPlan.Kind kind,
-    final TypeMirror tgtContainer,
-    final String implFqn
-  ) {
-    final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
-    if (implEl == null) return false;
-    // A public constructor on a class that cannot be named is not reachable, and the reflective
-    // path binds this same constructor through a public lookup, which asks the same question.
-    if (!publiclyNameable(implEl)) return false;
-    final var own = comparatorTypeMirror(kind, tgtContainer);
-    if (own == null) return false;
-    // Java forbids two constructors with the same erasure, so the one found by erasure is the only
-    // one there is: a parameter that cannot hold a comparator over this container's own type means
-    // the class has no usable route, not that another overload might. Reading the parameter as
-    // declared would accept a comparator over the entries, which erases the same way and which
-    // nothing the source carries can be narrowed to.
-    final var param = comparatorParamType(kind, tgtContainer, implFqn);
-    return param != null && canOrder(param, own);
-  }
-
-  /**
-   * The check a rebuild has to make before it loses an order, or empty when it has none to make.
-   * Two shapes lose one: a set whose elements change, where a comparator over the source's element
-   * type cannot order the target's; and a container whose declared type promises an order but
-   * declares no constructor able to receive one. Natural ordering carries over untouched either
-   * way, which is why the test is on the comparator rather than on sortedness.
+   * The check a rebuild has to make before it loses an order, or empty when it has none to make:
+   * the refusal the shared rules decide, raised when the source turns out to be ordered by a
+   * comparator. Natural ordering carries over untouched, which is why the test is on the comparator
+   * rather than on sortedness.
    *
    * <p>The test is on the value rather than the declared type, because a field declared as a plain
    * {@code Set} can hold a sorted one. That is what the reflective path checks, and the two are
@@ -3896,36 +3847,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror tgtContainer,
     final String implFqn
   ) {
-    // A set whose elements change first: its comparator orders the type being converted away from,
-    // so no constructor could take it and the reason it cannot come across is its own.
-    if (kind == FieldPlan.Kind.SET && !elementsPreserved && keepsOrder(tgtContainer)) {
-      return (
-        "    if (src instanceof java.util.SortedSet<?> __sorted && __sorted.comparator() !=" +
-        " null) throw new IllegalStateException(\n" +
-        "      \"Deep map: a custom sorted-set comparator cannot be reused with changed" +
-        " \"\n" +
-        "        + \"element types. Supply an explicit Mapping.via(...) row with a target" +
-        " comparator.\");"
-      );
+    if (!(ordering(kind, tgtContainer, implFqn, elementsPreserved) instanceof Ordering.Refuse<TypeMirror> refuse)) {
+      return "";
     }
-    // Then a container that keeps an order and is built without one. The order is a property of
-    // the value, not of the declaration: a field written as a plain Map can hold one ordered by a
-    // comparator, and reading only the declared type cannot tell. So the test is the one the
-    // reflective allocator makes, on the value, at the moment of conversion.
-    final var ordered = orderedFamilyOf(implFqn, kind);
-    if (ordered != null && orderingArg(kind, tgtContainer, implFqn, elementsPreserved).isEmpty()) {
-      return (
-        "    if (src instanceof " +
-        ordered.iface() +
-        " __ordered && __ordered.comparator() != null) throw new IllegalStateException(\n" +
-        "      \"Deep map: " +
-        implFqn +
-        " declares no constructor taking a Comparator, so the source's \"\n" +
-        "        + \"ordering cannot be carried into it. Declare one, declare the field as the" +
-        " interface, or supply an explicit Mapping.via(...) row for it.\");"
-      );
-    }
-    return "";
+    final var family = kind == FieldPlan.Kind.MAP_VALUES ? "java.util.SortedMap<?, ?>" : "java.util.SortedSet<?>";
+    return (
+      "    if (src instanceof " +
+      family +
+      " __ordered && __ordered.comparator() != null) throw new IllegalStateException(\"" +
+      escapeJavaString(refuse.reason()) +
+      "\");"
+    );
   }
 
   /**
@@ -3994,9 +3926,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         ? "java.util.SortedMap<" + typeArg + ", ?>"
         : "java.util.SortedSet<" + typeArg + ">";
     final var read = "src instanceof " + pattern + " __ordered ? __ordered.comparator() : null;";
-    final var param = comparatorParamType(kind, tgtContainer, implFqn);
+    final var param = (
+      (Ordering.Carry<TypeMirror>) ordering(kind, tgtContainer, implFqn, elementsPreserved)
+    ).parameter();
     final var own = comparatorTypeMirror(kind, tgtContainer);
-    if (param == null || own == null || acceptsWideComparator(param, own)) {
+    if (own == null || acceptsWideComparator(param, own)) {
       return "    final java.util.Comparator<? super " + typeArg + "> " + ORDERING_LOCAL + " = " + read;
     }
     // A parameter naming the type exactly cannot hold a comparator over a supertype of it, so the
@@ -4025,24 +3959,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var comparator = processingEnv.getElementUtils().getTypeElement("java.util.Comparator");
     if (comparator == null) return true;
     return types.isAssignable(types.getDeclaredType(comparator, types.getWildcardType(null, own)), param);
-  }
-
-  /**
-   * Whether a comparator over the container's own type can be handed to this parameter. The rule is
-   * the shared one the reflective allocator asks too.
-   */
-  private boolean canOrder(final TypeMirror param, final TypeMirror own) {
-    return rules.canOrder(param, own);
-  }
-
-  /**
-   * Whether a declared container type keeps its elements in an order, and so needs a comparator.
-   */
-  private boolean keepsOrder(final TypeMirror container) {
-    final var sortedSet = processingEnv.getElementUtils().getTypeElement("java.util.SortedSet");
-    if (sortedSet == null) return false;
-    final var types = processingEnv.getTypeUtils();
-    return types.isAssignable(types.erasure(container), types.erasure(sortedSet.asType()));
   }
 
   /**
@@ -4088,73 +4004,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var types = processingEnv.getTypeUtils();
     if (!types.isAssignable(types.erasure(implEl.asType()), types.erasure(container))) return true;
     return !hasPublicNoArgConstructor(implEl);
-  }
-
-  /**
-   * The type the target's comparator constructor will actually bind, with the implementation's type
-   * variables replaced by what the field fixed them to. Null where no such constructor is
-   * reachable, or where the implementation's arity does not line up with the container's view and
-   * substituting would invent an argument.
-   *
-   * <p>Reading the parameter as declared answers with the implementation's own variables, and a
-   * constructor is free to write {@code Comparator<K>} where the JDK writes {@code Comparator<?
-   * super K>}. Both accept a comparator over the key type and only the second accepts one over a
-   * supertype, so which was written decides whether the read needs a cast.
-   */
-  private TypeMirror comparatorParamType(
-    final FieldPlan.Kind kind,
-    final TypeMirror tgtContainer,
-    final String implFqn
-  ) {
-    final var elements = processingEnv.getElementUtils();
-    final var types = processingEnv.getTypeUtils();
-    final var implEl = elements.getTypeElement(implFqn);
-    final var comparator = elements.getTypeElement("java.util.Comparator");
-    if (implEl == null || comparator == null) return null;
-    final var owner = implWithFieldArgs(kind, tgtContainer, implEl);
-    if (owner == null) return null;
-    for (final var ctor : ElementFilter.constructorsIn(implEl.getEnclosedElements())) {
-      if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != 1) continue;
-      final var declared = ctor.getParameters().getFirst().asType();
-      if (!types.isSameType(types.erasure(declared), types.erasure(comparator.asType()))) continue;
-      return ((ExecutableType) types.asMemberOf(owner, ctor)).getParameterTypes().getFirst();
-    }
-    return null;
-  }
-
-  /**
-   * The implementation parameterised by the arguments the field gave it, which is what a member has
-   * to be resolved against. They are the arguments the allocation writes: the declared type's own
-   * when it is the class allocated, so a subtype declaring its parameters in another order than
-   * {@code Map} resolves correctly, and the container's otherwise. Null when the implementation
-   * takes a different number of parameters than those, since pairing them off by position would
-   * then substitute the wrong ones.
-   */
-  private DeclaredType implWithFieldArgs(
-    final FieldPlan.Kind kind,
-    final TypeMirror tgtContainer,
-    final TypeElement implEl
-  ) {
-    if (implEl.getTypeParameters().isEmpty()) return (DeclaredType) implEl.asType();
-    final var arguments = allocTypeArguments(tgtContainer, kind);
-    if (arguments.size() != implEl.getTypeParameters().size()) return null;
-    // An argument no type can be written for is resolved as the field declares it, wildcard and
-    // all: a constructor parameter that names it then orders nothing the field can supply.
-    final var declared = ((DeclaredType) tgtContainer).getTypeArguments();
-    final var args = new TypeMirror[arguments.size()];
-    for (int i = 0; i < args.length; i++) args[i] = arguments.get(i) != null ? arguments.get(i) : declared.get(i);
-    return processingEnv.getTypeUtils().getDeclaredType(implEl, args);
-  }
-
-  /**
-   * Whether this type can be named from any package. A nested type qualifies only when every type
-   * enclosing it does too, since naming the inner one means naming the outer ones first.
-   */
-  private static boolean publiclyNameable(final TypeElement type) {
-    for (Element el = type; el instanceof TypeElement enclosing; el = enclosing.getEnclosingElement()) {
-      if (!enclosing.getModifiers().contains(Modifier.PUBLIC)) return false;
-    }
-    return true;
   }
 
   /**
@@ -4429,7 +4278,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var guarded =
       kind == FieldPlan.Kind.SET &&
-      orderedFamilyOf(concreteImplFqn(tgtContainer, kind), kind) != null &&
+      keepsOrder(concreteImplFqn(tgtContainer, kind), kind) &&
       !orderedAgainstItsOwnKind(setElementOf(tgtContainer));
     if (!guarded) {
       out.println(convert == null ? "    out.addAll(src);" : "    for (final var x : src) out.add(" + convert + ");");

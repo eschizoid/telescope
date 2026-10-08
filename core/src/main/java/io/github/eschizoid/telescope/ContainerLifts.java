@@ -5,8 +5,8 @@ import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.Allocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
+import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
-import io.github.eschizoid.telescope.internal.pairing.PropertySystem;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -75,12 +75,8 @@ final class ContainerLifts {
     // Copying elements verbatim leaves an order to carry: the side being filled keeps one, and the
     // side being read has one to give. A supplier is handed no source, so the ordering rule is
     // applied here as it is wherever else a sorted container is built.
-    final var srcAlloc = orderingAware(srcCls, srcCls, SortedSet.class, ContainerLifts::setComparator, ignored ->
-      srcSupplier.get()
-    );
-    final var tgtAlloc = orderingAware(tgtCls, tgtCls, SortedSet.class, ContainerLifts::setComparator, ignored ->
-      tgtSupplier.get()
-    );
+    final var srcAlloc = orderingAware(srcCls, srcCls, ContainerView.Kind.SET, ignored -> srcSupplier.get());
+    final var tgtAlloc = orderingAware(tgtCls, tgtCls, ContainerView.Kind.SET, ignored -> tgtSupplier.get());
     return Iso.of(
       src -> {
         if (src == null) return null;
@@ -103,12 +99,8 @@ final class ContainerLifts {
     final var srcSupplier = Beans.intermediateAllocator(srcCls);
     final var tgtSupplier = Beans.intermediateAllocator(tgtCls);
     if (srcSupplier.get() == null || tgtSupplier.get() == null) return null;
-    final var srcAlloc = orderingAware(srcCls, srcCls, SortedMap.class, ContainerLifts::mapComparator, ignored ->
-      srcSupplier.get()
-    );
-    final var tgtAlloc = orderingAware(tgtCls, tgtCls, SortedMap.class, ContainerLifts::mapComparator, ignored ->
-      tgtSupplier.get()
-    );
+    final var srcAlloc = orderingAware(srcCls, srcCls, ContainerView.Kind.MAP_VALUES, ignored -> srcSupplier.get());
+    final var tgtAlloc = orderingAware(tgtCls, tgtCls, ContainerView.Kind.MAP_VALUES, ignored -> tgtSupplier.get());
     return Iso.of(
       src -> {
         if (src == null) return null;
@@ -184,19 +176,19 @@ final class ContainerLifts {
     // need not be: building a sorted container out of an unsorted one leaves nothing to ask about,
     // and the result takes natural ordering. That is a silent reordering, and it is what the
     // generated path does too -- one decision on both, rather than two that differ.
-    final boolean buildingSortedTarget = set && converts && keepsOrder(tgtRaw);
-    final boolean buildingSortedSource = set && converts && keepsOrder(srcRaw);
-    // Either of the two above implies this, so it alone decides whether the wrapper is needed.
+    final var targetRefusal = set && converts ? convertedRefusal(tgtType, tgtRaw) : null;
+    final var sourceRefusal = set && converts ? convertedRefusal(srcType, srcRaw) : null;
+    // Either refusal implies this, so it alone decides whether the wrapper is needed.
     final boolean sortedEitherWay = set && (keepsOrder(tgtRaw) || keepsOrder(srcRaw));
     final boolean finish = copyOnWrite(srcRaw) || copyOnWrite(tgtRaw);
     if (!sortedEitherWay && !finish) return loop;
     return Iso.of(
       src -> {
-        if (buildingSortedTarget) refuseCarriedComparator(src);
+        if (targetRefusal != null) refuseCarriedComparator(src, ContainerView.Kind.SET, targetRefusal);
         return finishCollection(loop.to(src), tgtRaw);
       },
       tgt -> {
-        if (buildingSortedSource) refuseCarriedComparator(tgt);
+        if (sourceRefusal != null) refuseCarriedComparator(tgt, ContainerView.Kind.SET, sourceRefusal);
         return finishCollection(loop.from(tgt), srcRaw);
       }
     );
@@ -214,13 +206,24 @@ final class ContainerLifts {
     return SortedSet.class.isAssignableFrom(raw);
   }
 
-  private static void refuseCarriedComparator(final Object input) {
-    if (input instanceof SortedSet<?> sorted && sorted.comparator() != null) {
-      throw new IllegalStateException(
-        "Deep map: a custom sorted-set comparator cannot be reused with changed " +
-          "element types. Supply an explicit Mapping.via(...) row with a target comparator."
-      );
-    }
+  /**
+   * What the shared rules refuse a sorted set whose elements are converted, in the words they
+   * refuse it with, or null where the set keeps no order to lose. The class asked about is the
+   * declared one: a declaration is built as itself or as a family default that keeps an order
+   * exactly when it does, and whether there is an order is all this question turns on.
+   */
+  private static String convertedRefusal(final Type declared, final Class<?> raw) {
+    return RULES.orderingFor(declared, raw, ContainerView.Kind.SET, false) instanceof Ordering.Refuse<Type> refuse
+      ? refuse.reason()
+      : null;
+  }
+
+  /**
+   * Refuses a source ordered by a comparator, in {@code reason}'s words. A source in natural order
+   * has no order the rebuild could lose, and passes.
+   */
+  private static void refuseCarriedComparator(final Object input, final ContainerView.Kind kind, final String reason) {
+    if (comparatorOf(kind, input) != null) throw new IllegalStateException(reason);
   }
 
   /**
@@ -536,9 +539,7 @@ final class ContainerLifts {
       return size <= 1 ? new CopyOnWriteArraySet<>() : new ArrayList<>(size);
     };
     final var alloc = probeAllocator(raw);
-    if (alloc != null) return orderingAware(raw, declared, SortedSet.class, ContainerLifts::setComparator, ignored ->
-      alloc.get()
-    );
+    if (alloc != null) return orderingAware(raw, declared, ContainerView.Kind.SET, ignored -> alloc.get());
     final var fallback = fallbackAllocatorFor(raw, LinkedHashSet.class, input ->
       LinkedHashSet.newLinkedHashSet(((Collection<?>) input).size())
     );
@@ -569,9 +570,7 @@ final class ContainerLifts {
     final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.MAP_VALUES);
     if (fromSpec != null) return fromSpec;
     final var alloc = probeAllocator(raw);
-    if (alloc != null) return orderingAware(raw, declared, SortedMap.class, ContainerLifts::mapComparator, ignored ->
-      alloc.get()
-    );
+    if (alloc != null) return orderingAware(raw, declared, ContainerView.Kind.MAP_VALUES, ignored -> alloc.get());
     final var fallback = fallbackAllocatorFor(raw, LinkedHashMap.class, input ->
       LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size())
     );
@@ -604,36 +603,47 @@ final class ContainerLifts {
    * Wraps an allocator so a declared subtype of a sorted container keeps the order its source
    * carried.
    *
-   * <p>The JDK's own sorted classes are allocated by name above, with the source's comparator
-   * handed to a constructor that takes one. A subtype answers to none of those names, and Java does
-   * not inherit constructors, so it can receive a comparator only where it declares a constructor
-   * for one. Where it declares one, that constructor is used. Where it does not, a source ordered
-   * by a comparator has nowhere to put it, and a rebuild would reorder by the elements' own {@code
-   * compareTo} while producing a container of the right type and size — so it fails instead of
-   * returning something quietly different. A source ordered naturally loses nothing and is
-   * allocated as before.
+   * <p>The JDK's own sorted classes are allocated by name, with the source's comparator handed to a
+   * constructor that takes one. A subtype answers to none of those names, and Java does not inherit
+   * constructors, so whether it can receive a comparator is the shared rules' decision. Where it
+   * can, that constructor is used. Where it cannot, a source ordered by a comparator has nowhere to
+   * put it, and a rebuild would reorder by the elements' own {@code compareTo} while producing a
+   * container of the right type and size — so it fails instead of returning something quietly
+   * different. A source ordered naturally loses nothing and is allocated as before.
    */
   private static Function<Object, Object> orderingAware(
     final Class<?> raw,
     final Type declared,
-    final Class<?> sortedIface,
-    final Function<Object, Comparator<Object>> comparatorOf,
+    final ContainerView.Kind kind,
     final Function<Object, Object> plain
   ) {
-    if (!sortedIface.isAssignableFrom(raw)) return plain;
+    return switch (RULES.orderingFor(declared, raw, kind, true)) {
+      case Ordering.None<Type> none -> plain;
+      case Ordering.Refuse<Type> refuse -> input -> {
+        refuseCarriedComparator(input, kind, refuse.reason());
+        return plain.apply(input);
+      };
+      case Ordering.Carry<Type> carry -> carrying(raw, kind, plain);
+    };
+  }
+
+  /**
+   * An allocator that hands the source's comparator to the class's comparator constructor, which
+   * the shared rules found callable through a public lookup.
+   */
+  private static Function<Object, Object> carrying(
+    final Class<?> raw,
+    final ContainerView.Kind kind,
+    final Function<Object, Object> plain
+  ) {
     final MethodHandle ctor;
-    // A constructor found by erasure is not automatically one this rebuild can use: a comparator
-    // over anything but a supertype of what the field orders erases to the same signature and can
-    // receive nothing the source carries. Java forbids two constructors with one erasure, so there
-    // is no other overload to fall back to and the container simply cannot be told its order.
-    if (!ordersTheField(raw, declared, sortedIface)) return refuseOrdering(raw, comparatorOf, plain);
     try {
       ctor = MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class, Comparator.class));
     } catch (final NoSuchMethodException | IllegalAccessException e) {
-      return refuseOrdering(raw, comparatorOf, plain);
+      throw new IllegalStateException("Deep map: " + canonical(raw) + " hides its Comparator constructor", e);
     }
     return input -> {
-      final var comparator = comparatorOf.apply(input);
+      final var comparator = comparatorOf(kind, input);
       // Natural ordering is what the no-argument constructor already produces, and a constructor
       // taking a comparator is free to reject a null one.
       if (comparator == null) return plain.apply(input);
@@ -643,49 +653,6 @@ final class ContainerLifts {
         throw new IllegalStateException("Deep map: " + canonical(raw) + " refused its Comparator constructor", t);
       }
     };
-  }
-
-  /**
-   * Whether this container's comparator constructor can be handed a comparator over what the field
-   * orders: a map's key type, a set's element type.
-   *
-   * <p>The constructor's parameter is resolved against the arguments the field gave the class it
-   * declares, in the order that class declares its own parameters, which need not be the order
-   * {@code Map} or {@code Set} takes them in. Where the class allocated stands in for the declared
-   * type instead, its parameters are those of the container it implements, so the container's
-   * arguments resolve it. A field that leaves the class raw has nothing to resolve against, and the
-   * order is refused.
-   */
-  private static boolean ordersTheField(final Class<?> raw, final Type declared, final Class<?> sortedIface) {
-    final var arguments = orderingArguments(
-      declared,
-      sortedIface == SortedMap.class ? ContainerView.Kind.MAP_VALUES : ContainerView.Kind.SET
-    );
-    if (arguments.isEmpty()) return false;
-    final var variables = raw.getTypeParameters();
-    final List<Type> bindings =
-      declared instanceof ParameterizedType parameterized && parameterized.getRawType() == raw
-        ? List.of(parameterized.getActualTypeArguments())
-        : arguments;
-    if (variables.length != 0 && variables.length != bindings.size()) return false;
-    for (final var ctor : raw.getConstructors()) {
-      if (ctor.getParameterCount() != 1 || !Comparator.class.equals(ctor.getParameterTypes()[0])) continue;
-      final var param = PROPS.resolve(ctor.getGenericParameterTypes()[0], raw, bindings);
-      return RULES.canOrder(param, arguments.getFirst());
-    }
-    return false;
-  }
-
-  /**
-   * The arguments a container type gives {@code Map} or {@code Set}, key first where there is one,
-   * read through its supertypes so a subtype that fixes them in its declaration answers too. Empty
-   * where the type is used raw.
-   */
-  private static List<Type> orderingArguments(final Type container, final ContainerView.Kind kind) {
-    return PROPS.typeArgumentsAs(
-      container,
-      kind == ContainerView.Kind.MAP_VALUES ? PropertySystem.WellKnown.MAP : PropertySystem.WellKnown.SET
-    );
   }
 
   /** The class a declared container type erases to. */
@@ -700,28 +667,9 @@ final class ContainerLifts {
     return raw.getCanonicalName() == null ? raw.getName() : raw.getCanonicalName();
   }
 
-  /**
-   * Refuses a source that carries an ordering this container cannot be told, and converts one that
-   * carries none. Both refusals reach here so the two read identically whether the constructor is
-   * missing or unusable, which is the same sentence the generated path emits.
-   */
-  private static Function<Object, Object> refuseOrdering(
-    final Class<?> raw,
-    final Function<Object, Comparator<Object>> comparatorOf,
-    final Function<Object, Object> plain
-  ) {
-    return input -> {
-      if (comparatorOf.apply(input) != null) {
-        throw new IllegalStateException(
-          "Deep map: " +
-            canonical(raw) +
-            " declares no constructor taking a Comparator, so the source's ordering cannot" +
-            " be carried into it. Declare one, declare the field as the interface, or" +
-            " supply an explicit Mapping.via(...) row for it."
-        );
-      }
-      return plain.apply(input);
-    };
+  /** The comparator a source container of this family is ordered by, or null where it has none. */
+  private static Comparator<Object> comparatorOf(final ContainerView.Kind kind, final Object input) {
+    return kind == ContainerView.Kind.MAP_VALUES ? mapComparator(input) : setComparator(input);
   }
 
   @SuppressWarnings("unchecked")

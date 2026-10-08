@@ -1,6 +1,8 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 import io.github.eschizoid.telescope.internal.Beans;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Array;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.ParameterizedType;
@@ -10,6 +12,7 @@ import java.lang.reflect.WildcardType;
 import java.time.temporal.Temporal;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
@@ -383,6 +386,29 @@ public final class ReflectionProps implements PropertySystem<Type> {
   @Override
   public String typeName(final Type t) {
     return t.getTypeName();
+  }
+
+  @Override
+  public String sourceName(final Type t) {
+    if (!(rawType(t) instanceof Class<?> raw)) return t.getTypeName();
+    return raw.getCanonicalName() == null ? raw.getName() : raw.getCanonicalName();
+  }
+
+  @Override
+  public Type comparatorParameter(final Type impl, final List<Type> arguments) {
+    if (!(rawType(impl) instanceof Class<?> raw)) return null;
+    final var variables = raw.getTypeParameters();
+    if (variables.length != 0 && !arguments.isEmpty() && variables.length != arguments.size()) return null;
+    try {
+      MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class, Comparator.class));
+    } catch (final NoSuchMethodException | IllegalAccessException e) {
+      return null;
+    }
+    for (final var ctor : raw.getConstructors()) {
+      if (ctor.getParameterCount() != 1 || ctor.getParameterTypes()[0] != Comparator.class) continue;
+      return resolve(ctor.getGenericParameterTypes()[0], raw, arguments);
+    }
+    return null;
   }
 
   private static Class<?> classOf(final WellKnown wellKnown) {
