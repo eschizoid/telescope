@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope;
 
+import io.github.eschizoid.telescope.internal.NativeImage;
 import io.github.eschizoid.telescope.internal.Records;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
@@ -84,7 +85,9 @@ final class Fusion {
    * identity key that drives trie sharing (kind-tagged so key domains cannot collide), the hop's
    * un-composed optic segment, and — for component-anchored hops — the owning class and component
    * name, plus the inner container traversal for traverse hops (used when the hop folds into a
-   * record slot plan).
+   * record slot plan). {@code ownSetter} marks a component-anchored hop whose segment writes
+   * through a generated setter rather than through the reflective record and bean helpers; the key
+   * ignores it, so such a hop shares prefixes and fuses with the hand-written hop it names.
    */
   record Hop(
     Kind kind,
@@ -92,7 +95,8 @@ final class Fusion {
     Traversal<Object, Object> segment,
     Class<?> owner,
     String component,
-    Traversal<Object, Object> inner
+    Traversal<Object, Object> inner,
+    boolean ownSetter
   ) {
     enum Kind {
       FIELD,
@@ -102,7 +106,11 @@ final class Fusion {
     }
 
     static Hop field(final Class<?> owner, final String component, final Traversal<Object, Object> lens) {
-      return new Hop(Kind.FIELD, List.of(Kind.FIELD, owner, component), lens, owner, component, null);
+      return new Hop(Kind.FIELD, List.of(Kind.FIELD, owner, component), lens, owner, component, null, false);
+    }
+
+    static Hop component(final Class<?> owner, final String component, final Traversal<Object, Object> lens) {
+      return new Hop(Kind.FIELD, List.of(Kind.FIELD, owner, component), lens, owner, component, null, true);
     }
 
     static Hop traverse(
@@ -110,7 +118,8 @@ final class Fusion {
       final String component,
       final String containerKind,
       final Traversal<Object, Object> segment,
-      final Traversal<Object, Object> inner
+      final Traversal<Object, Object> inner,
+      final boolean ownSetter
     ) {
       return new Hop(
         Kind.TRAVERSE,
@@ -118,18 +127,19 @@ final class Fusion {
         segment,
         owner,
         component,
-        inner
+        inner,
+        ownSetter
       );
     }
 
     static Hop narrow(final Class<?> subType, final Traversal<Object, Object> prism) {
-      return new Hop(Kind.NARROW, List.of(Kind.NARROW, subType), prism, null, null, null);
+      return new Hop(Kind.NARROW, List.of(Kind.NARROW, subType), prism, null, null, null, false);
     }
 
     static Hop filter(final Object predicate, final Traversal<Object, Object> filtered) {
       // The predicate object is the key: sharing is equals-based, which for lambdas (no equals
       // override) means the same instance on a shared prefix — lambda equality cannot be decided.
-      return new Hop(Kind.FILTER, predicate, filtered, null, null, null);
+      return new Hop(Kind.FILTER, predicate, filtered, null, null, null, false);
     }
   }
 
@@ -227,6 +237,7 @@ final class Fusion {
     // where cross-branch order is provably irrelevant. Filter / narrow hops never participate in a
     // branch — a filtered branch and a direct branch can edit the same component.
     Class<?> owner = null;
+    var everyOwnSetter = true;
     final var seenComponents = new HashSet<String>();
     for (final var child : kids) {
       final var h = child.hop;
@@ -234,6 +245,7 @@ final class Fusion {
       if (owner == null) owner = h.owner();
       else if (owner != h.owner()) return null;
       if (!seenComponents.add(h.component())) return null; // field vs each on one component — bail
+      everyOwnSetter &= h.ownSetter();
     }
 
     final var childFns = new ArrayList<Function<Object, Object>>(kids.size());
@@ -252,6 +264,12 @@ final class Fusion {
       sequential = sequential.andThen(x -> seg.modify(x, fn));
     }
     if (!owner.isRecord()) return sequential;
+    // The positional rebuild discovers the record's components and canonical constructor
+    // reflectively, and a native image answers that only for records registered for reflection. A
+    // level whose every branch writes through its own generated setter needs no such discovery, so
+    // inside an image it rebuilds through those setters, one per branch, and leaves the record's
+    // reflection metadata optional. The prefix above the level is still walked once.
+    if (NativeImage.IN_IMAGE && everyOwnSetter) return sequential;
 
     // Record slot plan: one positional rebuild for the whole branch level. Readers are captured at
     // compile time (no per-call name lookup); traverse branches fold in as their component's slot

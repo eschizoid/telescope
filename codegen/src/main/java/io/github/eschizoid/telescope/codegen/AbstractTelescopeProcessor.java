@@ -1822,9 +1822,12 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * returning method; scalar → terminal {@code Telescope<R, T>} method.
    *
    * <p>Shared by both record and bean flavors. The caller supplies the lens-construction expression
-   * that goes inside {@code Telescope.lens(...)} — {@code "Record::comp, (r, v) -> ..."} for
-   * records, or {@code "Pojo::getX, beanRebuild..."} for beans — so the rest of the emission is
-   * identical.
+   * that goes inside {@code Telescope.componentLens(...)} — {@code "Record::comp, (r, v) -> ..."}
+   * for records, or {@code "Pojo::getX, beanRebuild..."} for beans — so the rest of the emission is
+   * identical. The navigated class and the component name go in as literals ahead of it, so {@code
+   * componentLens} records the fusion identity a hand-written {@code field(...)} records without
+   * loading a class by name, and {@code Telescope.all} fuses navigator paths like hand-written
+   * ones.
    */
   protected void emitNavigatorMethod(
     final PrintWriter out,
@@ -1875,7 +1878,11 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         enclosingSimpleName +
         ", " +
         componentTypeStr +
-        "> LENS = Telescope.lens(" +
+        "> LENS = Telescope.componentLens(" +
+        enclosingSimpleName +
+        ".class, \"" +
+        componentName +
+        "\", " +
         lensArgs +
         ");"
     );

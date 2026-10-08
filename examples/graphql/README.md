@@ -52,11 +52,12 @@ GRAALVM_HOME=/path/to/graalvm JAVA_HOME=/path/to/graalvm \
 
 The image entry is `NativeVerify`: it runs every capability (record field update and read, bean-getter read, the runtime
 record→record / record→bean / record→builder-bean mappers, generated `@FromMap`, a runtime `fromMap` that finds a
-generated binder through its `ServiceLoader` registration, generated `@Bridge`, generated `@Focus` navigator) and exits
-non-zero on any mismatch — so building _and running_ the binary is the test. Config in play: `--no-fallback` plus
-build-time init for the model package in `build.gradle.kts`; the telescope packages come from `telescope-core`'s own
+generated binder through its `ServiceLoader` registration, generated `@Bridge`, generated `@Focus` navigator, and a
+fused `Telescope.all` over navigator paths on records with no reflection registration) and exits non-zero on any
+mismatch — so building _and running_ the binary is the test. Config in play: `--no-fallback` plus build-time init for
+the model package in `build.gradle.kts`; the telescope packages come from `telescope-core`'s own
 `native-image.properties` inside the jar; the module's `reflect-config.json` registers the model types and
-`serialization-config.json` registers `NativeVerify`. The whole contract is in
+`serialization-config.json` registers `NativeVerify` and the generated navigators. The whole contract is in
 [`docs/native-image.md`](../../docs/native-image.md).
 
 ## Layout & tests

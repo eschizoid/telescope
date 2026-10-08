@@ -29,6 +29,7 @@ any failure — so `native-image` compiling and running the binary **is** the te
 | Runtime record → builder `mapper` | the `Beans` `BuilderWriter` — `builder()` `Supplier` + fluent-setter `BiFunction` + `build()` `Function` |
 | Generated `@FromMap`              | reflection-free codegen `Map → record` converter — the control (no LMF, no `SerializedLambda`)           |
 | Generated `@Bridge` constant      | the emitted `AccountBridge.BRIDGE` (`Telescope<Account, AccountEntity>`) baked into the image heap       |
+| Navigator-only `Telescope.all`    | fused multi-edit over generated navigator paths, on records with no `reflect-config.json` entry          |
 
 `Records` / `Beans` live in `:internal`, JPMS-sealed to `:core`, so the verifier cannot call them directly. It reaches
 the identical LMF call sites through the public `Telescope.of(...).field(...).read()` /
@@ -211,17 +212,19 @@ program works on the JVM. Only the image is missing something, and only the regi
 
 **Runtime and codegen both work under GraalVM native-image.** Every verifier capability — record field update, record
 read, bean read, the runtime record→record / record→bean / record→builder-bean mappers, `@FromMap`, a runtime `fromMap`
-that leaves a `@FromMap` component to its default, `@Bridge`, and a generated `@Focus` navigator — builds and runs in
-the native binary, confirmed by `.github/workflows/native-image.yaml`. Telescope's runtime reflective mapper is
-AOT-capable out of the box for every rebuild strategy (records, no-arg-ctor + setters, immutable `@Builder` targets);
-Wall B is fixed in `telescope-core`, and the adopter supplies only the standard reachability metadata for their own
-types (`reflect-config.json` for runtime-mapper DTOs, `serialization-config.json` for `.field(methodref)` call-site
-classes). Codegen nuance, verified by the navigator capability: `@Bridge` and `@FromMap` need no config at all (they
-wrap concrete generated functions), while a generated `@Focus`/`@BeanFocus` navigator composes its lenses from method
-references at call time — the generated navigator class is itself a lambda-capturing type and goes in
-`serialization-config.json` alongside your own call-site classes. The one runtime path still JVM/codegen-only under AOT
-is the Hibernate-proxy accessor. The workflow re-checks the whole surface on every push to `main` and weekly against
-GraalVM updates, so a regression in any capability turns the job red.
+that leaves a `@FromMap` component to its default, `@Bridge`, a generated `@Focus` navigator, and a fused
+`Telescope.all` over navigator paths alone — builds and runs in the native binary, confirmed by
+`.github/workflows/native-image.yaml`. Telescope's runtime reflective mapper is AOT-capable out of the box for every
+rebuild strategy (records, no-arg-ctor + setters, immutable `@Builder` targets); Wall B is fixed in `telescope-core`,
+and the adopter supplies only the standard reachability metadata for their own types (`reflect-config.json` for
+runtime-mapper DTOs, `serialization-config.json` for `.field(methodref)` call-site classes). Codegen nuance, verified by
+the navigator capability: `@Bridge` and `@FromMap` need no config at all (they wrap concrete generated functions), while
+a generated `@Focus`/`@BeanFocus` navigator composes its lenses from method references at call time — the generated
+navigator class is itself a lambda-capturing type and goes in `serialization-config.json` alongside your own call-site
+classes. A `Telescope.all` built only from navigator paths fuses inside an image without any reflection registration for
+the navigated records: each record level whose edits all came from a navigator rebuilds through the generated setters.
+The one runtime path still JVM/codegen-only under AOT is the Hibernate-proxy accessor. The workflow re-checks the whole
+surface on every push to `main` and weekly against GraalVM updates, so a regression in any capability turns the job red.
 
 ## Appendix — feasibility of shading `:internal` into `:core` at publish
 
