@@ -22,10 +22,9 @@ static final Telescope<Company, String> EMAILS = Telescope.of(Company.class)
   .field(User::email);
 ```
 
-Once you hold a path, the rest of the library follows from it. You can read through it, rebuild the whole tree through
-it without mutating anything (`EMAILS.update(company, String::toLowerCase)`), collect or count every value it reaches,
-and lift an update through an async or validation effect. You can also map between two types, because a mapping is the
-same path applied across two shapes, with each row pairing a source path to a target path.
+Once you hold a path, you can read through it, collect or count every value it reaches, and rebuild the whole tree
+through it without mutating anything (`EMAILS.update(company, String::toLowerCase)`). Mapping between two types uses the
+same idea, with each row pairing a source path to a target path.
 
 ```java
 Mapper<Order, OrderDto> mapper = Telescope.mapper(
@@ -35,14 +34,12 @@ Mapper<Order, OrderDto> mapper = Telescope.mapper(
 );
 
 OrderDto dto = mapper.forward(order); // same-name fields map automatically, and nesting recurses
-Order back = mapper.backward(dto);    // reversible rows run backward from the same definition
 mapper.explain();                     // the report is built from the mapper you are holding
 ```
 
-The last line is the architectural difference with [MapStruct](https://mapstruct.org/) in one call. MapStruct's
-abstraction is generated bean mapping, and it is very good at that job, so by design the mapping becomes a generated
-class at compile time. Telescope's abstraction is the path, mapping is one use of it, and the result stays a value you
-can compose with `.then(...)`, reuse across call sites, and ask questions of in production.
+The mapper is a value you can hold, reuse across call sites, compose with `.then(...)`, and ask questions of in
+production. [MapStruct](https://mapstruct.org/) turns a mapping into a generated class at compile time, and it does that
+job well. The sections below explain where telescope differs for someone who uses MapStruct today.
 
 <p align="center">
   <img src="img/head-to-head.gif" alt="The telescope and MapStruct head-to-head test printing its own output: identical results, the default-policy unmapped-target case, a deep immutable update, and a mapper reporting what it maps." width="820" />
@@ -51,34 +48,134 @@ can compose with `.then(...)`, reuse across call sites, and ask questions of in 
   output, trimmed for width.</sub>
 </p>
 
-There is one surface with two implementations behind it, and each one answers a different question. The runtime path
-composes paths and mappers while the program runs, with no annotations and no build step, and it keeps working under
-GraalVM native-image ([a native binary in CI checks this](docs/native-image.md)). When a loop turns hot, the `@Focus`
-and `@Bridge` processors compile the same shapes to direct calls, which lands in the same performance range as
-MapStruct's generated code in the included JMH workloads ([figures below](#measured-performance)). Telescope works on
-Java records, POJOs, and Lombok `@Data` classes on Java 21 and later, and the Spring Boot starter and Quarkus extension
-ship as separate artifacts.
+## Typed paths instead of strings
 
-For evidence, there is a [migration coverage matrix](docs/mapstruct-parity.md) scoring 29 MapStruct features against
-telescope, with 13 covered fully and 16 covered partially, each partial row stating its limitation, and evidence citing
-the source and tests throughout. There is also a [migration guide](docs/mapstruct-migration.md) that moves one mapper at
-a time, and a [runnable head-to-head module](examples/mapstruct-vs-telescope/) where every claim is a passing test. The
-[full comparison](#how-it-compares-to-mapstruct) is below.
+Every field a telescope mapping row names is a method reference, so `javac` checks it and your IDE's ordinary rename
+moves it. MapStruct names fields with strings inside `@Mapping` annotations. Its processor validates those strings at
+compile time, and the [MapStruct IDEA plugin](https://mapstruct.org/documentation/ide-support/) refactors them according
+to its documentation, but a plain rename in the editor doesn't touch them.
 
-## What telescope gives you
+```java
+// MapStruct
+@Mapping(source = "customerName", target = "fullName")
+OrderDto toDto(Order order);
 
-| Need                                      | Telescope gives you                                                                                       |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Deep reads and immutable updates          | One reusable `Telescope<S, A>` path, with `read`, `find`, `toList`, `set`, `update`, `updateValidated`.   |
-| Mapping between records, POJOs, or both   | `Telescope.mapper(A.class, B.class, rows...)`, strict by default, bidirectional when rows are reversible. |
-| Reading an untyped `Map<String, Object>`  | `Telescope.fromMap(T.class, extract(...))`, or `@FromMap` for a generated binder with no reflection.      |
-| A gradual move from runtime to hot paths  | Start with no annotations, then move hot navigators and converters to `@Focus`, `@BeanFocus`, `@Bridge`.  |
-| Production debugging without reading code | `explain()`, `trace(input)`, and opt-in `System.Logger` output, all from the mapper you already hold.     |
-| Native-image and framework integration    | GraalVM metadata in core, a native verifier in CI, and Spring Boot and Quarkus registry artifacts.        |
+// telescope
+Telescope.mapper(Order.class, OrderDto.class, to(Order::customerName, OrderDto::fullName));
+```
 
-If generated bean-to-bean mapping is all you need, MapStruct remains a strong choice. Telescope is for the cases where
-the path itself is useful, which means deep updates, reusable navigation, effectful transforms, mappings you can run in
-both directions, and composition at runtime that you can compile down later.
+The two tools fail differently when a name goes stale. Renaming a source property that an explicit
+`@Mapping(source = ...)` names fails the MapStruct build with an error, which you then fix by hand in every mapper when
+the plugin isn't installed. Renaming or adding a target property with no source counterpart only produces a warning
+under MapStruct's default `unmappedTargetPolicy = WARN`, and the field is `null` at run time. `ReportingPolicy.ERROR`
+turns that warning into a build failure with one line. Telescope's `mapper(...)` refuses unmapped fields when the mapper
+is built, so the difference is the default rather than the ceiling.
+
+Nested targets stay typed too. MapStruct writes `@Mapping(source = "flat", target = "a.b.c")` with a dotted string,
+while telescope accepts a navigator generated by `@Focus` as the target of a row.
+
+```java
+Telescope.mapper(Cart.class, CartDto.class,
+  to(Cart::customerName, CartDtoTelescope.of().shipping().recipient().fullName()));
+```
+
+Each hop in the navigator is a typed method call, so `javac` checks every step. The generated `@Bridge` path is the one
+place telescope also uses names in an annotation, in `@Rename(source = "...", target = "...")`, and its processor
+rejects a misspelled name on either side as a compile error. The [head-to-head module](examples/mapstruct-vs-telescope/)
+tests the `javac` behavior of both MapStruct failure modes, while the IDE plugin's behavior is cited from its
+documentation rather than tested here.
+
+## One mapping, two engines, the same answer
+
+You can start at run time with no annotations and no build step, and compile the conversion later when a loop turns hot.
+`Telescope.mapper(...)` builds the conversion while the program runs. Putting `@Bridge` on the source type makes the
+processor generate the same conversion as plain Java, with renames moved into `@Rename` entries on the annotation.
+
+```java
+@Bridge(InvoiceDto.class)
+public record Invoice(Long id, String customer, long totalCents) {}
+
+public record InvoiceDto(Long id, String customer, long totalCents) {}
+
+// at run time, with or without the annotation
+InvoiceDto viaMapper = Telescope.mapper(Invoice.class, InvoiceDto.class).forward(invoice);
+
+// compiled, for a hot loop
+InvoiceDto viaBridge = InvoiceBridge.BRIDGE_FN.forward(invoice);
+```
+
+Both engines are held to the same answer by a test. `CrossPathCorpusTest` builds a grid of container families crossed
+with element shapes, runs one input through each engine for every cell, and fails when the two disagree. It runs as part
+of `./gradlew check`, which is what CI runs, so a new disagreement fails the build. Its container grid has no known
+disagreements. A few shapes in other grids do differ, and each is recorded in its test with its direction. A target that
+can only be built through a private constructor is built at run time and refused by the processor. An `EnumMap` field is
+accepted by `@Bridge` and refused by `mapper(...)`. A recorded difference that quietly closes fails the build too, so
+the list stays current.
+
+The runtime path also works under GraalVM native-image, which [Native image](#native-image) below covers.
+
+## Failing loudly instead of silently
+
+A field telescope can't map or convert is refused by name, either when `mapper(...)` builds the mapper or when the code
+compiles, and it's never returned empty. The message names the field, the types involved, and the fix. A record `Tgt`
+with a field `b` that `Src` doesn't have gets this message from `Telescope.mapper(Src.class, Tgt.class)`.
+
+```text
+Deep map Src → Tgt: target field 'b' has no same-name source field. Add a rename row to(sourceAccessor, targetAccessor) that maps to 'b'.
+```
+
+You don't have to wait for run time to see it. With `telescope-codegen` on the annotation processor path, a mapper
+verifier reports the same message as a compile error on a `Telescope.mapper(...)` call whose types it can read.
+`-Atelescope.verify=warn` turns it into a warning, and `=off` turns it off. The forward-only `mapperForward(...)` is
+lenient by default, and leaves an unmatched target field at its JLS default instead.
+
+Containers are copied rather than shared. A field whose declared type is the same on both sides is handed across as it
+is, except a `List`, `Set`, `Map`, or other JDK collection, which gets a shallow copy forward, backward, and in `patch`.
+Changing the target's container then never changes the source's. The copy keeps the source's ordering, including a
+sorted set's comparator, and it never instantiates a class telescope doesn't know, such as a framework's own collection.
+A JDK collection is copied into its own class, anything else into the nearest JDK class that keeps its ordering, and
+failing that into the declared type's default. Unmodifiable inputs are returned as they are. `Telescope.mapper(...)` and
+a `@Bridge` make the same copy.
+
+A collection backed by a lazy JPA collection, such as Hibernate's `PersistentSet` or `PersistentBag`, is iterated while
+it's copied. Inside a session it loads, and outside one it throws `LazyInitializationException`, as MapStruct's
+generated `new HashSet<>(...)` does. To keep a container shared, give the field a row with its own functions.
+
+```java
+Telescope.mapper(Src.class, Tgt.class, to(Src::items, Tgt::items, x -> x, x -> x));
+```
+
+## Measured performance
+
+<!-- metrics: refresh from the next MapStructComparisonBenchmark run -->
+
+Telescope's generated code allocates exactly what MapStruct allocates, and runs within N% of it on every tier.
+
+<!-- metrics: refresh from the next MapStructComparisonBenchmark run -->
+
+| Tier, codegen against codegen | telescope against MapStruct                                            |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| flat, 5 scalars               | about 1.07 times, which is a fifth of a nanosecond                     |
+| nested, one nested type       | 1.04 to 1.46 times across runs, on a microbenchmark, not a service     |
+| deep, 3 levels and list hops  | 1.06 to 1.18 times across runs, or 4 ns on a 62 ns conversion, at best |
+| Set or Map field, 100 items   | the same allocation, and timings are pending a re-run                  |
+
+The figures come from the included JMH workloads, run with MapStruct 1.6.3 on CI hardware with JDK 25. MapStruct's own
+rows are the control, so each ratio is read within one run. The ranges are what the same benchmark has produced across
+runs, and the [methodology and history](docs/perf-mapstruct-comparison.md) are recorded separately.
+
+The runtime path is slower than generated code, and the gap shrinks as the work per call grows. Without codegen,
+`Telescope.mapper(...)` composes each record or bean pair into a single `MethodHandle`, and it comes within about 1.04
+to 3.3 times of MapStruct in the same workloads. Flat is about 3.3 times, nested about 2.7, deep about 1.3, and
+container fields about 1.04 to 1.06. A fixed cost of about 7 ns per call is nearly the whole gap on flat and nested
+shapes. Deep and container shapes add a cost per converted element on top, so the absolute gap grows while the ratio
+falls.
+
+Flat, nested, and deep conversions take well under a microsecond on both paths, and the 100-item container rows take
+more than one on both. Read the tier that matches your shape rather than the summary. Whether the runtime path is fast
+enough is your call, and `@Bridge` puts you back in the codegen range when a loop turns hot. You can reproduce any of it
+from the [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action, and the full matrix is in
+[`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison-apples-to-apples).
 
 ---
 
@@ -107,8 +204,8 @@ are [listed below](#published-artifacts).
 
 ## Quick start
 
-Suppose you have nested data and you want to update a field deep inside it without writing copy constructors. The
-example below is complete, so you can paste it into a `main` and run it.
+You can update a field deep inside nested data without writing copy constructors. The example below is complete, so you
+can paste it into a `main` and run it.
 
 ```java
 import io.github.eschizoid.telescope.Telescope;
@@ -128,26 +225,131 @@ String city = userCity.read(alice); // "Springfield"
 User shouted = userCity.update(alice, String::toUpperCase); // city becomes "SPRINGFIELD", and alice is untouched
 ```
 
-The model is that small. Everything else is the same path with a different terminal method, whether you are mapping
-between types, navigating containers, or lifting through an async or validation effect.
+Everything else in the library is the same path with a different terminal method. Mapping between types, navigating
+containers, and lifting an update through an async or validation effect all start from a path like `userCity`.
 
-Where to go next:
+The guides go deeper on each part.
 
-- Navigate `List<X>`, `Optional<X>`, and `Map<K, V>`, plus the whole DSL surface, in
-  [docs/navigation.md](docs/navigation.md)
-- Convert between types, either record to record or POJO to record, in
-  [docs/type-conversion.md](docs/type-conversion.md)
-- Ask a mapper what it maps, using `explain()`, `trace()`, or a log level, in
-  [docs/introspection.md](docs/introspection.md)
-- Lift through async, validated, either, and optional effects in [docs/effects.md](docs/effects.md)
-- Bind navigators at compile time for hot paths in [docs/codegen.md](docs/codegen.md)
+- [docs/navigation.md](docs/navigation.md) covers `List<X>`, `Optional<X>`, `Map<K, V>`, and the whole DSL surface.
+- [docs/type-conversion.md](docs/type-conversion.md) covers conversion from record to record and from POJO to record.
+- [docs/introspection.md](docs/introspection.md) covers `explain()`, `trace()`, and turning on logging with a log level.
+- [docs/effects.md](docs/effects.md) covers async, validated, either, and optional effects, and
+  [docs/codegen.md](docs/codegen.md) covers binding navigators at compile time.
 
 ---
 
-## Records, mapping, and beans
+## Choosing an entry point
 
-Quick start showed one deep update. The three shapes below are the ones you will spend most of your time in, and each
-one fits in a screenful.
+Two questions decide which entry point you want. The first is whether you're working with records or POJOs. The second
+is whether you want to navigate one type in place or convert between two types. Each row has a runtime form and a
+compile-time form, and you can start with the runtime one and move a hot path to codegen later.
+
+| You want to                        | Records                                       | POJOs                                | POJO and record together                        |
+| ---------------------------------- | --------------------------------------------- | ------------------------------------ | ----------------------------------------------- |
+| **Navigate and update** in place   | `Telescope.of(R.class)`                       | `Telescope.ofBean(P.class)`          | convert first (below), then navigate the record |
+| **Convert or map** between types   | `Telescope.map(A.class, B.class, to(...), …)` | `Telescope.map(A.class, B.class, …)` | `Telescope.map(P.class, R.class, …)`            |
+| **Read an untyped map**            | `Telescope.fromMap(R.class, extract(...))`    | `Telescope.fromMap(P.class, …)`      | `@FromMap` for a generated binder               |
+| **Bind at compile time** (codegen) | `@Focus` to navigate                          | `@BeanFocus` to navigate             | `@Bridge` to convert any pair                   |
+
+The runtime entry points need no annotations and no build step. `@Focus` and `@BeanFocus` generate a navigator whose
+every hop is a typed method call, and `@Bridge` generates a conversion as plain Java for a known pair. The codegen guide
+is [docs/codegen.md](docs/codegen.md).
+
+A conversion that runs in both directions composes into a longer navigation path with `.then(...)`. Mismatched names get
+an explicit `Mapping.to(srcAccessor, tgtAccessor)` row in the `Telescope.map(...)` call, and classes the auto-detection
+can't handle get a `WriteHint.writeBean(target, strategy)` row. Both are covered in [docs/pojos.md](docs/pojos.md).
+
+The rest of this README uses four terms consistently.
+
+- **Navigation** is `of`, `ofBean`, `.field`, and `.each`, which build a typed path into one structure.
+- **Automatic structural mapping** is `Telescope.map` and `mapper`, which match same-name fields by exact name and type,
+  recursively, and never fuzzily.
+- **Explicit conversion** is `from/to/using`, where you write both directions and nothing is automatic.
+- **Generated structural mapping** is `@Bridge`.
+
+For a sealed root, `Match.of(...)` dispatches over the permitted subtypes, and `.exhaustive()` reads the permits and
+throws when a subtype has no handler. The check happens when you call `.exhaustive()`, not at compile time.
+
+---
+
+## Mapping, records, and beans
+
+The four shapes below are the ones you'll spend most of your time in, and each one fits in a screenful.
+
+### Mapping
+
+A mapping applies paths across two shapes. Below, a `Company` tree is translated to a partner-facing `CompanyDto` with a
+few renamed fields.
+
+```java
+record AddressDto(String town, String postalCode) {}
+
+record UserDto(String fullName, int age, String email, AddressDto address) {}
+
+record TeamDto(String name, List<UserDto> users) {}
+
+record DepartmentDto(String name, List<TeamDto> teams) {}
+
+record CompanyDto(String name, List<DepartmentDto> departments) {}
+
+final Mapper<Company, CompanyDto> dtoMapper = Telescope.mapper(
+  Company.class,
+  CompanyDto.class,
+  to(User::name, UserDto::fullName), // a rename, applied everywhere User and UserDto recurse
+  to(Address::city, AddressDto::town),
+  to(Address::zip, AddressDto::postalCode)
+);
+
+final CompanyDto dto = dtoMapper.forward(company);
+
+final Company restored = dtoMapper.backward(dto); // the same row list, run in reverse
+```
+
+You only name what changes. Same-name fields map automatically and recursion is automatic, which covers `User::email`,
+`User::age`, and all the list and tree wiring. The `Company`, `Department`, `Team`, `User`, and `Address` records are
+the ones defined under [Records](#records) below.
+
+The same row list also runs backward for the rows that are structurally reversible. MapStruct's reverse direction is a
+second method on the same interface, and `@InheritInverseConfiguration` derives eligible configuration from the forward
+method, though its javadoc excludes expressions, constants, and default values from inheritance. Telescope has the
+mirror-image caveat, because `constant`, `compute`, and one-way rows are forward-only.
+
+Constants and computed values go in the same call. They're MapStruct's `@Mapping(constant = "...")` and
+`@Mapping(expression = "java(...)")`.
+
+```java
+Telescope.mapper(Order.class, OrderDto.class,
+  to(Order::id, OrderDto::id),
+  constant(OrderDto::tenant, "production"),   // an eager literal
+  compute(OrderDto::createdAt, Instant::now), // fresh on every call
+  compute(OrderDto::traceId, UUID::randomUUID),
+  compute(OrderDto::metadata, HashMap::new)); // a fresh container on every call
+```
+
+`constant` captures its value once when the row is built, and `compute` calls the supplier on each forward call. Use
+`compute` whenever a literal would share one mutable reference, as `HashMap::new`, `Instant::now`, and
+`UUID::randomUUID` would. Both are forward-only by design. The backward direction leaves the slot out of the source
+rebuild, so references come back `null` and primitives come back at their JLS default. MapStruct documents the same
+class of exclusion for inverse-inherited configuration.
+
+Every mapper built this way can report what it does, with no generated source to read.
+
+```java
+dtoMapper.explain();
+// Mapped:
+//   ✓ name → fullName
+//   ✓ city → town
+//   ...
+```
+
+The rendered text is a view of data you can assert on. For a strict bidirectional mapper,
+`explain().skipped().isEmpty() && explain().unusedSources().isEmpty()` means every field on both sides is accounted for.
+Constant and computed slots are populated rather than skipped, so they don't appear as rows. The rest, including
+`trace(input)` with real values and narrating every conversion through a log level, is in
+[docs/introspection.md](docs/introspection.md).
+
+How same-typed containers are copied is described under
+[Failing loudly instead of silently](#failing-loudly-instead-of-silently).
 
 ### Records
 
@@ -210,8 +412,8 @@ final Telescope<Company, String> emails = Telescope.of(Company.class)
 final Company lowered = emails.update(company, String::toLowerCase);
 ```
 
-The first version is about 25 lines of manual reconstruction, where every constructor is spelled out and every untouched
-field is threaded through by hand. The second is one path, and the path is reusable rather than single-use.
+The first version is about 25 lines of manual reconstruction, with every constructor spelled out and every untouched
+field threaded through by hand. The second is one path, and you can reuse it.
 
 ```java
 emails.toList(company);   // List<String> of every email
@@ -235,10 +437,10 @@ final Company result = observedEmails.update(company, String::toLowerCase);
 
 An observer runs synchronously when a terminal operation executes, once for each value reached at that hop. Reads report
 the current values from the outside in, and updates report rebuilt values from the inside out. Failed input futures,
-`Either.Left`, `Optional.empty`, and `Validated.Invalid` skip observation, and a later reconstruction failure cannot
-undo observations that were already emitted.
+`Either.Left`, `Optional.empty`, and `Validated.Invalid` skip observation. A later reconstruction failure can't undo
+observations that were already emitted.
 
-For example, you can count the users a read visits using an injected
+For example, you can count the users a read visits with an injected
 [Micrometer `MeterRegistry`](https://docs.micrometer.io/micrometer/reference/concepts/counters.html).
 
 ```java
@@ -254,8 +456,8 @@ final Telescope<Company, String> meteredEmails = Telescope.of(Company.class)
 final List<String> values = meteredEmails.toList(company);
 ```
 
-When you want several edits on one structure rather than one, `Telescope.all` folds them into a single reusable
-normalizer, with one `over(...)` row per path.
+`Telescope.all` folds several edits on one structure into a single reusable normalizer, with one `over(...)` row per
+path.
 
 ```java
 final Telescope<Company, Company> normalize = Telescope.all(
@@ -270,159 +472,11 @@ The two edits above touch different fields of the same root, so the fold rebuild
 that share a longer prefix save more, because the hops they have in common are walked once. A path built by `then(...)`,
 by `Telescope.lens(...)`, or by a generated navigator carries no hop record and falls back to running sequentially.
 
-### Mapping
-
-A mapping is the path applied across two shapes. Below is the same tree, translated to a partner-facing `CompanyDto`
-with a few renamed fields, written as one definition that runs in both directions for the rows that are structurally
-reversible.
-
-```java
-record AddressDto(String town, String postalCode) {}
-
-record UserDto(String fullName, int age, String email, AddressDto address) {}
-
-record TeamDto(String name, List<UserDto> users) {}
-
-record DepartmentDto(String name, List<TeamDto> teams) {}
-
-record CompanyDto(String name, List<DepartmentDto> departments) {}
-
-final Mapper<Company, CompanyDto> dtoMapper = Telescope.mapper(
-  Company.class,
-  CompanyDto.class,
-  to(User::name, UserDto::fullName), // a rename, applied everywhere User and UserDto recurse
-  to(Address::city, AddressDto::town),
-  to(Address::zip, AddressDto::postalCode)
-);
-
-final CompanyDto dto = dtoMapper.forward(company);
-
-final Company restored = dtoMapper.backward(dto); // the same row list, run in reverse
-```
-
-Same-name fields map automatically and recursion is automatic, which covers `User::email`, `User::age`, and all the list
-and tree wiring, so you only name what changes. For comparison, MapStruct's reverse direction is a second method on the
-same interface, and `@InheritInverseConfiguration` derives eligible configuration from the forward method, though its
-javadoc excludes expressions, constants, and default values from inheritance. Telescope has the mirror-image caveat,
-because `constant`, `compute`, and one-way rows are forward-only, which is covered below.
-
-A field whose type is the same on both sides is handed across as it is, except a `List`, `Set`, `Map`, or other JDK
-collection, which is copied shallowly, forward, backward, and in `patch`, so changing the target's container never
-changes the source's. The copy behaves like the source and never instantiates a class telescope doesn't know: a JDK
-collection is copied into its own class, anything else into the nearest JDK class that keeps its ordering, and failing
-that the declared type's default. Unmodifiable inputs are returned as they are. `Telescope.mapper(...)` and a `@Bridge`
-make the same copy. A collection backed by a lazy JPA collection, such as Hibernate's `PersistentSet` or
-`PersistentBag`, is iterated while it is copied, which is expected to load it inside a session and to throw
-`LazyInitializationException` outside one, as MapStruct's generated `new HashSet<>(...)` does. To keep a container
-shared, give the field a row with its own functions: `to(Src::items, Tgt::items, x -> x, x -> x)`.
-
-When a flat field needs to land at a nested target leaf, which is MapStruct's
-`@Mapping(source = "flat", target = "a.b.c")`, a navigator emitted by codegen is a first-class argument to
-`Mapping.to(...)`.
-
-```java
-Telescope.mapper(Cart.class, CartDto.class,
-  to(Cart::customerName, CartDtoTelescope.of().shipping().recipient().fullName()));
-```
-
-Every hop in that navigator is a typed method call, so `javac` checks each step and an IDE rename follows it.
-
-For eager literals and per-call computed values stamped onto the target, which are MapStruct's
-`@Mapping(constant = "...")` and `@Mapping(expression = "java(...)")`, you declare them in the same
-`Telescope.mapper(...)` call.
-
-```java
-Telescope.mapper(Order.class, OrderDto.class,
-  to(Order::id, OrderDto::id),
-  constant(OrderDto::tenant, "production"),   // an eager literal
-  compute(OrderDto::createdAt, Instant::now), // fresh on every call
-  compute(OrderDto::traceId, UUID::randomUUID),
-  compute(OrderDto::metadata, HashMap::new)); // a fresh container on every call
-```
-
-`constant` captures its value once when the row is built, and `compute` invokes the supplier on each forward call, which
-is the right choice whenever a literal would share one mutable reference, as `HashMap::new`, `Instant::now`, and
-`UUID::randomUUID` would. Both are forward-only by design, and the backward direction leaves the slot out of the source
-rebuild, so references come back `null` and primitives come back at their JLS default. MapStruct documents the same
-class of exclusion for inverse-inherited configuration.
-
-Every mapper built this way can report what it does, with no generated source to read.
-
-```java
-dtoMapper.explain();
-// Mapped:
-//   ✓ name → fullName
-//   ✓ city → town
-//   ...
-```
-
-The rendered text is a view, and the structure behind it is data you can assert on. For a strict bidirectional mapper,
-`explain().skipped().isEmpty() && explain().unusedSources().isEmpty()` means every field on both sides is accounted for,
-and constant and computed slots are populated rather than skipped, so they do not appear as rows. The rest of the story,
-including `trace(input)` with real values and narrating every conversion by flipping a log level, is in
-[docs/introspection.md](docs/introspection.md).
-
-### Reading an untyped map
-
-Data arriving from a JSON body, a JDBC row, or a message header is often a `Map<String, Object>` rather than a typed
-object. `Telescope.fromMap` binds one to a record or POJO, with one `extract(...)` row per component you want filled.
-
-```java
-final ForwardMapper<Map<String, Object>, CaseListRequest> requests = Telescope.fromMap(
-  CaseListRequest.class,
-  extract("bookingType", CaseListRequest::getBookingType, Object::toString),
-  extract("caseId", CaseListRequest::getCaseId, Object::toString),
-  extract("priority", CaseListRequest::getPriority, (v) -> Integer.parseInt(v.toString()))
-);
-
-final CaseListRequest request = requests.forward(payload);
-```
-
-A component with no value, whether its key is absent, holds `null`, or no row names it, takes a default for its declared
-type: `null` for a reference, zero or `false` for a primitive, and an empty one for a component declared exactly `List`,
-`Set`, `Map` or `Optional`. The binder generated by `@FromMap` produces the same values for the same record, so the path
-you reach a map through does not change the record you get back. A converter is called only for a value that is present,
-so it never has to say what the absence of one means. These defaults differ from those of `mapperForward`, which leaves
-an unpaired container `null`, so do not assume the two factories are interchangeable.
-
-Where a key has to carry a value, write `required(...)` in place of `extract(...)`. A map with no value under that key,
-or `null` under it, is refused with an `IllegalArgumentException` before any converter runs, and the message names every
-missing required key beside the component it was to fill. On a `@FromMap` type, `@FromMap(required = {"id"})` makes the
-generated binder refuse the same maps with the same message. `explain()` reports each row with what an absent key does
-to it, `default when absent` or `required`.
-
-A row that names a bean property with no setter, builder method or constructor parameter behind it is refused while the
-mapper is built, because the value it reads would be dropped.
-
-A component no row names is filled only by that default, so `fromMap` refuses one whose declared type has none of its
-own: the same types the `@FromMap` processor refuses, such as an array, a concrete container like `ArrayList`, a
-`Collection` or `Iterable`, or a class the processor has not generated a binder for. The refusal comes while the mapper
-is built and names the component, its type and the fix. A row that names such a component converts it, and an absent key
-leaves it `null`.
-
-A class counts as having a binder when its generated binder is registered, not because a class of the right name exists.
-Each binder nests a `Provider` implementing `FromMapProvider`, and the processor lists it in `META-INF/services`, which
-is all the class path and a native image need. A named module ignores that file, so on the module path its `module-info`
-must declare `provides io.github.eschizoid.telescope.conversion.FromMapProvider with <pkg>.<Name>FromMap.Provider` for
-each binder; the processor warns with the exact line when the module it compiles lacks it. A fat jar has to merge the
-service files of the jars it combines, with the shade plugin's `ServicesResourceTransformer` in Maven or
-`mergeServiceFiles()` in the Gradle Shadow plugin, or the registrations of all but one are lost.
-
-The backward direction is deliberately absent. A flat `String`-keyed map is a boundary format rather than a typed
-counterpart, so round-tripping to it would have to invent a key-encoding policy, and telescope does not pick one for
-you. Annotating the target with `@FromMap` generates a binder at compile time that uses no reflection, described in
-[docs/codegen.md](docs/codegen.md); it keys strictly by field name with no per-row converter.
-
-MapStruct maps from a map too. Its processor reads the keys as properties, and a method declared as
-`Target fromMap(Map<String, Object> src)` generates the same shape of binder, once you also declare the conversion
-methods it asks for. The difference is where a per-key conversion goes, since telescope takes it inline as the third
-argument to `extract(...)` and MapStruct takes it as a separate mapping method on the interface.
-
 ### Beans
 
-POJOs do not need a mirror record. You navigate the bean directly with `ofBean`, and `set` and `update` build a new root
-and rebuild the modified path. The update is persistent-style rather than a deep clone, so the original is never
-mutated, and untouched mutable subtrees are shared between the old and new roots ([details](docs/pojos.md)).
+POJOs don't need a mirror record. You navigate the bean directly with `ofBean`, and `set` and `update` build a new root
+and rebuild the modified path. The update shares untouched mutable subtrees between the old and new roots rather than
+cloning them, and it never mutates the original ([details](docs/pojos.md)).
 
 ```java
 class Address {
@@ -439,19 +493,80 @@ final User moved = Telescope.ofBean(User.class)
   .update(user, String::toUpperCase); // a new User, and `user` is untouched
 ```
 
-If you would rather stay in records, convert a POJO with `Telescope.map(Pojo.class, Record.class, ...)` and navigate the
+If you'd rather stay in records, convert a POJO with `Telescope.map(Pojo.class, Record.class, ...)` and navigate the
 record instead, which [docs/pojos.md](docs/pojos.md) covers.
 
-The library ends there. No `Iso`, `Lens`, `Prism`, `Affine`, `Traversal`, `Getter`, `Setter`, or `Fold` appears in
-user-facing code, because the optics live inside, behind one type.
+No `Iso`, `Lens`, `Prism`, `Affine`, `Traversal`, `Getter`, `Setter`, or `Fold` appears in user-facing code. The optics
+live inside the library, behind one type.
+
+### Reading an untyped map
+
+`Telescope.fromMap` binds a `Map<String, Object>` to a record or POJO, with one `extract(...)` row per component you
+want filled. Data from a JSON body, a JDBC row, or a message header often arrives in that shape.
+
+```java
+final ForwardMapper<Map<String, Object>, CaseListRequest> requests = Telescope.fromMap(
+  CaseListRequest.class,
+  extract("bookingType", CaseListRequest::getBookingType, Object::toString),
+  extract("caseId", CaseListRequest::getCaseId, Object::toString),
+  extract("priority", CaseListRequest::getPriority, (v) -> Integer.parseInt(v.toString()))
+);
+
+final CaseListRequest request = requests.forward(payload);
+```
+
+A component with no value takes a default for its declared type. The value is missing when its key is absent, when the
+key holds `null`, or when no row names it. The default is `null` for a reference, zero or `false` for a primitive, and
+an empty one for a component declared exactly `List`, `Set`, `Map` or `Optional`. The binder generated by `@FromMap`
+produces the same values for the same record, so the path you reach a map through doesn't change the record you get
+back. A converter is called only for a value that's present, so it never has to say what a missing one means. The
+defaults differ from those of `mapperForward`, which leaves an unpaired container `null`, so don't treat the two
+factories as interchangeable.
+
+Write `required(...)` in place of `extract(...)` where a key has to carry a value. A map with no value under that key,
+or `null` under it, is refused with an `IllegalArgumentException` before any converter runs, and the message names every
+missing required key beside the component it was to fill. On a `@FromMap` type, `@FromMap(required = {"id"})` makes the
+generated binder refuse the same maps with the same message. `explain()` reports each row with what an absent key does
+to it, `default when absent` or `required`.
+
+Some rows and components are refused while the mapper is built.
+
+- A row that names a bean property with no setter, builder method or constructor parameter behind it is refused, because
+  the value it reads would be dropped.
+- A component no row names, whose declared type has no default of its own, is refused with a message naming the
+  component, its type and the fix. Such types are the ones the `@FromMap` processor refuses, such as an array, a
+  concrete container like `ArrayList`, a `Collection` or `Iterable`, or a class the processor hasn't generated a binder
+  for.
+- A row that names such a component converts it, and an absent key leaves it `null`.
+
+A class counts as having a binder when its generated binder is registered, not because a class of the right name exists.
+Each binder nests a `Provider` implementing `FromMapProvider`, and the processor lists it in `META-INF/services`, which
+is all the class path and a native image need. A named module ignores that file. On the module path, its `module-info`
+must declare `provides io.github.eschizoid.telescope.conversion.FromMapProvider with <pkg>.<Name>FromMap.Provider` for
+each binder, and the processor warns with the exact line when the module it compiles lacks it. A fat jar has to merge
+the service files of the jars it combines, with the shade plugin's `ServicesResourceTransformer` in Maven or
+`mergeServiceFiles()` in the Gradle Shadow plugin, or it loses the registrations of all but one.
+
+There's no backward direction. A flat `String`-keyed map is a boundary format rather than a typed counterpart, so a
+round trip would have to invent a key-encoding policy, and telescope doesn't pick one for you. Annotating the target
+with `@FromMap` generates a binder at compile time that uses no reflection, described in
+[docs/codegen.md](docs/codegen.md). It keys strictly by field name with no per-row converter.
+
+MapStruct maps from a map too. Its processor reads the keys as properties, and a method declared as
+`Target fromMap(Map<String, Object> src)` generates the same shape of binder once you also declare the conversion
+methods it asks for. The difference is where a per-key conversion goes. Telescope takes it inline as the third argument
+to `extract(...)`, and MapStruct takes it as a separate mapping method on the interface.
 
 ---
 
-## Spring mapper transformers
+## Integrations
 
-The Spring starter can normalize entity values before mapping them to a REST DTO. `@TelescopeMapper`,
-`@TelescopeTransformer` and the interfaces they annotate come from `telescope-core`; the starter generates the Spring
-components that implement them. Declare transformers on the projection to have Spring inject and apply them in order:
+### Spring Boot starter
+
+`telescope-spring-boot-starter` registers every `Mapper<A, B>` bean in a `TelescopeMapperRegistry`, indexed by source
+and target class. It also generates Spring components for two annotations from `telescope-core`, `@TelescopeMapper` and
+`@TelescopeTransformer`. The starter can then normalize entity values before mapping them to a REST DTO. Declare
+transformers on the projection, and Spring injects and applies them in order.
 
 ```java
 record CustomerRestDto(String email) {}
@@ -487,8 +602,8 @@ class CustomerService {
 }
 ```
 
-`map` applies the transformer before structural mapping. A null email gets the declared default; a non-null email is
-trimmed and lowercased. The original entity is unchanged. For fields with different names, add typed translation rows:
+`map` applies the transformer before structural mapping. A null email gets the declared default, and a non-null email is
+trimmed and lowercased. The original entity is unchanged. For fields with different names, add typed translation rows.
 
 ```java
 record AccountEntity(String displayName, String phoneNumber) {}
@@ -507,43 +622,43 @@ interface AccountMapper extends TelescopeProjection<AccountEntity, AccountRestDt
 }
 ```
 
-The generated Spring bean also exposes `forward`, `backward`, and `patch`; transformers run only on the way forward. To
-register transformers from configuration, declare a typed `TelescopeCustomizer<AccountMapper>` bean, with no bean names
-involved. See the [Spring starter guide](spring-boot-starter/README.md) for both forms and their Spring wiring.
+The generated Spring bean also exposes `forward`, `backward`, and `patch`, and transformers run only on the way forward.
+To register transformers from configuration, declare a typed `TelescopeCustomizer<AccountMapper>` bean, with no bean
+names involved. The [Spring starter guide](spring-boot-starter/README.md) covers both forms and their Spring wiring.
 
----
+### Quarkus
 
-## Choosing an entry point
+`telescope-quarkus` is a Quarkus CDI extension with the same registry shape. Any `Mapper<A, B>` the container can see,
+from a `@Produces` method or an `@ApplicationScoped` class, shows up in `TelescopeMapperRegistry` under its source and
+target class. The generated `@TelescopeMapper` beans are Spring-only for now. The [Quarkus guide](quarkus/README.md) has
+the setup.
 
-The tour used three entry points, and the table below is the whole map. Two questions decide which one you want. First,
-are you working with records or POJOs. Second, do you want to navigate one type in place or convert between two types.
+### Lombok
 
-| You want to                        | Records                                       | POJOs                                | POJO and record together                        |
-| ---------------------------------- | --------------------------------------------- | ------------------------------------ | ----------------------------------------------- |
-| **Navigate and update** in place   | `Telescope.of(R.class)`                       | `Telescope.ofBean(P.class)`          | convert first (below), then navigate the record |
-| **Convert or map** between types   | `Telescope.map(A.class, B.class, to(...), …)` | `Telescope.map(A.class, B.class, …)` | `Telescope.map(P.class, R.class, …)`            |
-| **Read an untyped map**            | `Telescope.fromMap(R.class, extract(...))`    | `Telescope.fromMap(P.class, …)`      | `@FromMap` for a generated binder               |
-| **Bind at compile time** (codegen) | `@Focus` to navigate                          | `@BeanFocus` to navigate             | `@Bridge` to convert any pair                   |
+`telescope-lombok` is a Lombok-aware variant of the annotation processor. It finds `@Data`, `@Value`, and `@Builder`
+POJOs on its own and emits the same typed navigator that `@Focus` gives a record, with no annotation of telescope's on
+your classes. It has to come after Lombok in the processor list, which the [Lombok guide](lombok/README.md) and
+[docs/codegen.md](docs/codegen.md) explain.
 
-Conversions are bidirectional, so any cell in the second row composes into a longer navigation path with `.then(...)`.
-Mismatched names get an explicit `Mapping.to(srcAccessor, tgtAccessor)` row in the `Telescope.map(...)` call, and
-classes the auto-detection cannot handle get a `WriteHint.writeBean(target, strategy)` row. Both are covered in
-[docs/pojos.md](docs/pojos.md).
+### Native image
 
-The vocabulary is used consistently from here on. **Navigation** is `of`, `ofBean`, `.field`, and `.each`, which build a
-typed path into one structure. **Automatic structural mapping** is `Telescope.map` and `mapper`, which match same-name
-fields by exact name and type, recursively, and never fuzzily. **Explicit conversion** is `from/to/using`, where you
-write both directions and nothing is automatic. **Generated structural mapping** is `@Bridge`.
+The runtime path keeps working inside a GraalVM native image, so `Telescope.mapper(...)` and `.field(User::name)` run
+there with no build step. Generated code was never the question, because MapStruct's generated mappers and telescope's
+are both free of reflection and both build under native-image with no configuration. Inside an image, telescope swaps
+its `LambdaMetafactory` accessors for plain `MethodHandle` closures, because `LambdaMetafactory` defines classes at run
+time and the closed world of native-image forbids it. One `static final boolean` picks the branch. `telescope-core`
+carries its own native-image metadata, and you register your own DTO types the way you would in any GraalVM application.
 
-For a sealed root, `Match.of(...)` dispatches over the permitted subtypes, and `.exhaustive()` reads the permits and
-throws when a subtype has no handler. The check happens when you call `.exhaustive()`, not at compile time.
+Two gates cover it. The `:core:imageTest` and `:internal:imageTest` tasks re-run each module's whole suite with the
+`imagecode` property set, so every existing assertion runs on the code an image uses, and both are wired into `check`.
+Separately, a verifier covering nine capabilities compiles and runs as a real native binary in CI on every push to
+`main` that touches the substrate, and weekly. Setup and limits are in [`docs/native-image.md`](docs/native-image.md).
 
 ---
 
 ## Examples
 
-When a screenful is not enough, the runnable modules below cover the surface, so pick the one matching what you are
-evaluating.
+The runnable modules below cover the surface, so pick the one that matches what you're evaluating.
 
 | Module                                                                         | Stack                         | Pick when                                                                                                   |
 | ------------------------------------------------------------------------------ | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -561,91 +676,32 @@ Start with [`order-jpa/`](examples/springboot/order-jpa/) for the broadest view,
 
 ## How it compares to MapStruct
 
-MapStruct is a compile-time bean mapper with a mature ecosystem and broad adoption, and it converts whole objects
-including nested graphs, using dotted paths, automatic sub-mapping methods, collections, builders, multi-source methods,
-and update mappings. Nothing below disputes any of that, because the comparison is about abstraction rather than
-quality.
+MapStruct is a compile-time bean mapper with a mature ecosystem and broad adoption. It converts whole objects, including
+nested graphs, with dotted paths, automatic sub-mapping methods, collections, builders, multi-source methods, and update
+mappings. The comparison below is about abstraction rather than quality. The comparisons pin MapStruct 1.6.3, which is
+the version the head-to-head module and the benchmarks build against.
 
-Telescope overlaps MapStruct on mapping, and it adds reusable typed paths. MapStruct has no way to point at
-`company.departments[].address.city` as a value you can hold, read, immutably update, or lift through an effect. Where
-the two overlap, the architectural difference is how fields are named. Telescope uses method references, which are Java
-symbols, checked by `javac`, and moved by any IDE's standard rename. MapStruct uses annotation strings, which its
-processor validates at compile time and which the
-[MapStruct IDEA plugin](https://mapstruct.org/documentation/ide-support/) refactors according to its documentation. The
-head-to-head module tests the `javac` behavior of both failure modes, and the IDE-plugin behavior is cited rather than
-tested here. Dotted nested paths remain strings either way. The comparisons below pin MapStruct 1.6.3, which is the
-version the head-to-head module and the benchmarks build against.
+Telescope overlaps MapStruct on mapping and adds reusable typed paths. MapStruct has no way to point at
+`company.departments[].address.city` as a value you can hold, read, update without mutation, or lift through an effect.
+Where the two overlap, the main difference is how fields are named, which
+[Typed paths instead of strings](#typed-paths-instead-of-strings) covers.
 
-The cost of a stale string is worth stating precisely, because the two failure modes differ.
+The runnable head-to-head module writes the same `Order` to `OrderDto` mapping both ways, in
+[`examples/mapstruct-vs-telescope`](examples/mapstruct-vs-telescope/).
 
-- **Renaming a source property named in an explicit `@Mapping(source = ...)`** fails the MapStruct build with an error.
-  The string is not unsafe, it is hard to refactor without the IDE plugin, and it is fixed by hand across mappers when
-  the plugin is absent.
-- **Renaming or adding a target property with no source counterpart** succeeds with a warning under the default
-  `unmappedTargetPolicy = WARN`, and the field is `null` at runtime. `ReportingPolicy.ERROR` is a one-line opt-in that
-  turns it into a build failure, and serious MapStruct setups enable it. Telescope's strict `mapper(...)` refuses
-  unmapped fields at construction by default, so the difference is the default rather than the ceiling.
+```bash
+./gradlew :examples:mapstruct-vs-telescope:test
+```
 
-> **Runnable head-to-head.** The same `Order` to `OrderDto` mapping is written both ways in one module,
-> [`examples/mapstruct-vs-telescope`](examples/mapstruct-vs-telescope/).
->
-> ```bash
-> ./gradlew :examples:mapstruct-vs-telescope:test
-> ```
->
-> Every claim is a passing test, covering both rename failure modes above, each labelled, the default-policy
-> unmapped-target case, and a deep immutable update, which sits outside MapStruct's mapping abstraction because its
-> `@MappingTarget` updates mutate an existing instance in place.
->
-> For the paper trail, the [coverage matrix](docs/mapstruct-parity.md) scores all 29 MapStruct features against
-> telescope with source and test evidence per verdict, at 13 full and 16 partial, and the
-> [migration guide](docs/mapstruct-migration.md) turns the matrix into a recipe you apply one mapper at a time.
+Every claim in it is a passing test. The tests cover both rename failure modes, each labelled, the default-policy
+unmapped-target case, and a deep immutable update. The deep update sits outside MapStruct's mapping abstraction, because
+its `@MappingTarget` updates mutate an existing instance in place.
 
-#### Measured performance
+### Capability comparison
 
-In the included JMH workloads, using MapStruct 1.6.3 on CI hardware with JDK 25, telescope codegen and MapStruct codegen
-land in the same performance range. Figures from a single run are comparable with each other, and the ranges are what
-the same benchmark has produced across runs, with [methodology and history](docs/perf-mapstruct-comparison.md) recorded
-separately.
-
-| Tier, codegen against codegen | telescope against MapStruct                                            |
-| ----------------------------- | ---------------------------------------------------------------------- |
-| flat, 5 scalars               | about 1.07 times, which is a fifth of a nanosecond                     |
-| nested, one nested type       | 1.04 to 1.46 times across runs, on a microbenchmark, not a service     |
-| deep, 3 levels and list hops  | 1.06 to 1.18 times across runs, or 4 ns on a 62 ns conversion, at best |
-| Set or Map field, 100 items   | the same allocation, and timings are pending a re-run                  |
-
-Without codegen, `Telescope.mapper(...)` composes each record or bean pair into a single `MethodHandle`, with no
-annotations and no build step, and it comes within about 1.04 to 3.3 times of MapStruct in the same workloads. Flat is
-about 3.3 times, nested about 2.7, deep about 1.3, and container fields about 1.04 to 1.06. The ratio narrows as the
-work per call grows, because a fixed cost of about 7 ns per call is nearly the whole gap on flat and nested shapes,
-while the deep and container shapes add a further cost per converted element on top, so the absolute gap grows while the
-ratio falls. Flat, nested, and deep conversions are well under a microsecond on both paths, and the 100-item container
-rows are above it on both, so read the tier that matches your shape rather than the summary. Whether the runtime path is
-fast enough is your call, and `@Bridge` puts you back in the codegen range when a loop turns hot. You can reproduce any
-of it from the [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action, and the full matrix is in
-[`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison-apples-to-apples).
-
-#### Native-image
-
-Codegen was never the question here, because MapStruct's generated mappers and telescope's are both free of reflection
-and both build under GraalVM native-image with no configuration. The difference is the runtime path, which MapStruct
-does not have and telescope's keeps working inside a native image, so `Telescope.mapper(...)` and `.field(User::name)`
-run with no build step. Inside an image the substrate swaps its `LambdaMetafactory` accessors, which define classes at
-runtime and which the closed world of native-image forbids, for plain `MethodHandle` closures, and one
-`static final boolean` picks the branch. `telescope-core` carries its own native-image metadata, and you register your
-own DTO types the way you would in any GraalVM application.
-
-Two gates cover it. The `:core:imageTest` and `:internal:imageTest` tasks re-run each module's whole suite with the
-`imagecode` property set, so every existing assertion runs on the substrate an image uses, and both are wired into
-`check`, which is what CI runs. Separately, a verifier covering nine capabilities compiles and runs as a real native
-binary in CI on every substrate push and weekly. Setup and limits are in [`docs/native-image.md`](docs/native-image.md).
-
-#### Capability comparison
-
-The rows below are differences in architecture rather than things MapStruct cannot do, and most of them trace to one
-root. A mapping held as a runtime value can be composed, reversed, lifted through effects, and asked about after the
-fact, while a mapping compiled into a generated class is complete at build time, by design.
+The rows below are differences in design rather than things MapStruct can't do, and most of them come from one choice. A
+mapping held as a value while the program runs can be composed, reversed, lifted through effects, and asked about after
+the fact. A mapping compiled into a generated class is complete at build time, by design.
 
 | Capability                        | telescope                                                          | MapStruct                                                            |
 | --------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
@@ -654,44 +710,37 @@ fact, while a mapping compiled into a generated class is complete at build time,
 | Effectful update                  | `updateAsync`, `updateOptional`, `updateEither`, `updateValidated` | not in scope, so pair it with external machinery                     |
 | Accumulating validation           | `Validated.combine(...)` collects every failure in one pass        | not in scope, so pair it with Bean Validation or write it            |
 | Reading an untyped map            | `Telescope.fromMap(T.class, extract(...))` and `@FromMap`          | supported, with the per-key conversion as a separate mapping method  |
-| Mapper introspection              | `explain()`, `trace(input)`, or a log level                        | read the generated source, which is genuinely debuggable             |
+| Mapper introspection              | `explain()`, `trace(input)`, or a log level                        | read the generated source, which you can step through                |
 | Unmapped-target safety            | strict at construction by default                                  | `WARN` by default, with `ERROR` a one-line opt-in                    |
 | Sealed-root dispatch              | `Match.of(...).when(...).exhaustive()`, checked over the permits   | `@SubclassMapping`, broader hierarchies, no sealed check             |
 | Multi-source merge, many to one   | `Telescope.merge(Target.class, from(...), ...)`                    | first-class multi-source methods, disambiguated by string            |
 | Runtime path, no codegen required | `Telescope.of(Class)`, with `@Focus` as a later opt-in             | compile-time only                                                    |
 | GraalVM native-image              | codegen needs no config, and the runtime path survives AOT too     | fully AOT-compatible for codegen, with no runtime path to need it    |
 
-The full accounting is the [coverage matrix](docs/mapstruct-parity.md), which scores all 29 MapStruct features with the
-telescope idiom, its limitation, and the source and tests that back it.
+The [coverage matrix](docs/mapstruct-parity.md) scores 29 MapStruct features against telescope, 13 covered fully and 16
+partially. Each partial row states its limitation, and every verdict cites the source and tests behind it. The
+[migration guide](docs/mapstruct-migration.md) turns the matrix into a recipe you apply one mapper at a time.
 
-#### When MapStruct is the right pick
+### When MapStruct is the right pick
 
 - You need mapping bodies written in an embedded expression language, such as `@Mapping(expression = "java(...)")` or
-  qualifier dispatch, inline in the annotation rather than as plain Java mappers passed to `Mapping.via(...)`
-- You need `@SubclassMapping` fan-out across hierarchies that are open rather than sealed, since telescope's `Match`
-  covers sealed roots and the [coverage matrix](docs/mapstruct-parity.md) scores the gap
-- Conversion is the whole job, with no path reuse, deep updates, effects, or bidirectional values, and generated mapper
-  source that your team can read is a feature rather than a cost
+  qualifier dispatch, inline in the annotation rather than as plain Java mappers passed to `Mapping.via(...)`.
+- You need `@SubclassMapping` fan-out across hierarchies that are open rather than sealed. Telescope's `Match` covers
+  sealed roots, and the [coverage matrix](docs/mapstruct-parity.md) scores the gap.
+- Conversion is the whole job, with no path reuse, deep updates, or effects, and generated mapper source your team can
+  read is a feature rather than a cost.
 
-#### When telescope is the right pick
+### When telescope is the right pick
 
-- Your problem includes deep navigation alongside mapping, where every extra level is one more hop on a value you
-  already hold rather than another block of rebuild code
-- You want both directions from one definition, using `forward(...)` and `backward(...)` on one value, with no second
-  method to keep in sync
-- You need to lift a mapping or a field update through an effect, using `updateValidated`, `updateAsync`,
-  `updateEither`, or `updateOptional`
-- You have mappers that read from several sources at once, where `Telescope.merge(...)` returns a `Mapper<Sources, T>`
-  declared once
-- You have a sealed root and want every permitted subtype accounted for, checked against the permits when the matcher is
-  built
-- You are navigating a mix of records and POJOs at any depth without creating intermediate DTOs
-- You read untyped `Map<String, Object>` payloads at a boundary and want them bound to typed objects by the same library
-- You are deploying to GraalVM native-image and want mapping with no build step
-- You want one abstraction for reading, updating, mapping, and validation, which is the path
+- Your problem includes deep navigation and updates alongside mapping, on records, POJOs, or a mix, at any depth.
+- You want field names checked by `javac`, and unmapped fields refused by default.
+- You need to lift a mapping or an update through an effect, merge several sources, or dispatch over a sealed root with
+  every permitted subtype accounted for.
+- You read untyped `Map<String, Object>` payloads at a boundary, or deploy to GraalVM native-image and want mapping with
+  no build step.
 
 To try it, write your next mapper as one `Telescope.mapper(...)` call and leave every existing MapStruct mapper alone.
-The [migration guide](docs/mapstruct-migration.md) covers running both side by side whenever you want to do more.
+The [migration guide](docs/mapstruct-migration.md) covers running both side by side.
 
 ---
 
@@ -702,15 +751,15 @@ Everything is published to Maven Central under `io.github.eschizoid`, and the fa
 | Artifact                        | Role                                                                                                                                                                                                                                                              |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `telescope-core`                | The DSL, meaning `Telescope`, `Mapper`, `Mapping`, `Either`, `Validated`, and the annotations. Add this one for the runtime path.                                                                                                                                 |
-| `telescope-internal`            | The optic lattice and reflection helpers. Transitive only, so it arrives automatically. A consumer that is itself a JPMS module cannot compile against it, because the exports are qualified to `:core`; a classpath consumer can reach it and should not.        |
+| `telescope-internal`            | The optic lattice and reflection helpers. Transitive only, so it arrives automatically. A consumer that is itself a JPMS module can't compile against it, because the exports are qualified to `:core`. A classpath consumer can reach it and shouldn't.          |
 | `telescope-codegen`             | The optional annotation processor for `@Focus`, `@BeanFocus`, `@Bridge`, and `@FromMap`, described in [docs/codegen.md](docs/codegen.md). It also registers the mapper verifier, which runs on every compilation and is turned off with `-Atelescope.verify=off`. |
 | `telescope-lombok`              | A Lombok-aware variant of the processor, for `@Data`, `@Value`, and `@Builder` POJOs.                                                                                                                                                                             |
 | `telescope-spring-boot-starter` | Spring Boot autoconfiguration plus a `Mapper<A, B>` bean registry. Compiled and CI-tested against Spring Boot 4.1.1.                                                                                                                                              |
-| `telescope-quarkus`             | A Quarkus CDI extension with the same registry shape. Compiled and CI-tested against Quarkus 3.39.4.                                                                                                                                                              |
+| `telescope-quarkus`             | A Quarkus CDI extension with the same registry shape. Compiled and CI-tested against Quarkus 3.40.1.                                                                                                                                                              |
 
 Installation snippets, annotation-processor ordering with Lombok, and JPMS setup are in
-[docs/codegen.md](docs/codegen.md). On the module path the runtime path converts an application module's types once that
-module opens their package to `io.github.eschizoid.telescope.internal` (or opens it unqualified); telescope adds the
+[docs/codegen.md](docs/codegen.md). On the module path, the runtime path converts an application module's types once
+that module opens their package to `io.github.eschizoid.telescope.internal`, or opens it unqualified. Telescope adds the
 read edge to the application module itself.
 
 ---
@@ -734,38 +783,37 @@ read edge to the application module itself.
 
 ## Constraints
 
-- **Records and JavaBeans-style POJOs.** Records rebuild through the canonical constructor, and POJOs rebuild through an
-  auto-detected write strategy, tried as builder, then all-args constructor, then setters, and overridable per class
-  with `WriteHint.writeBean(...)`.
-- **Method references, not lambdas.** `.field(User::name)` works, and `.field(u -> u.name())` is rejected when the path
-  is built, with an error saying so. Field names are recovered from the reference, and a lambda has none.
-- **Accessor types are checked at compile time, and discovery happens at runtime.** `javac` verifies the source and
-  focus types of every method reference. Path construction then runs eager checks, covering lambda rejection, bean
-  write-strategy resolution, and mapper row validation at factory time. The late-bound entry points are
-  `.fieldByName(String)`, its `Class<B>` overload, and the no-argument `each()`, all named to say so and all resolving
-  at first use.
-- **Structural mapping is exact.** Same-name matching is exact on name and type, recursively, with no fuzzy matching and
-  no implicit conversion between `String` and numbers. What MapStruct generates silently, you write as a row.
-- **Null semantics are uniform.** Null containers and null `Optional` fields focus nothing, null intermediate hops
-  propagate on reads, and `forward(null)` returns `null`. The full table is in [docs/navigation.md](docs/navigation.md).
-- **The runtime and codegen paths are checked against each other.** They are separate implementations, so a test
-  enumerates the JDK's own `List`, `Set`, and `Map` types alongside adopter-shaped ones, and compares which of them each
-  path accepts and refuses. A new disagreement fails the build. Known ones are recorded in the test with their
-  direction, so the gate tells you which types compile under `@Bridge` and throw under `mapper(...)`, rather than
-  claiming none do.
-- **Not a general transformation language.** One path focuses one type, and heterogeneous bulk edits go through
-  `Telescope.all` with one edit per path.
+Telescope works on records and JavaBeans-style POJOs. Records rebuild through the canonical constructor. POJOs rebuild
+through a write strategy it detects, trying a builder, then an all-args constructor, then setters, and you can override
+the choice per class with `WriteHint.writeBean(...)`.
+
+Paths take method references, not lambdas. `.field(User::name)` works, and `.field(u -> u.name())` is rejected when the
+path is built, with an error saying so. Telescope recovers the field name from the reference, and a lambda has none.
+
+Accessor types are checked at compile time, and discovery happens at run time. `javac` verifies the source and focus
+types of every method reference. Building a path then runs eager checks, covering lambda rejection, bean write-strategy
+resolution, and mapper row validation. The late-bound entry points are `.fieldByName(String)`, its `Class<B>` overload,
+and the no-argument `each()`. Each is named to say so, and each resolves at first use.
+
+Structural mapping is exact. Same-name matching is exact on name and type, recursively, with no fuzzy matching and no
+implicit conversion between `String` and numbers. What MapStruct generates silently, you write as a row.
+
+Null handling is uniform. Null containers and null `Optional` fields focus nothing, null intermediate hops propagate on
+reads, and `forward(null)` returns `null`. The full table is in [docs/navigation.md](docs/navigation.md).
+
+Telescope isn't a general transformation language. One path focuses one type, and bulk edits of different types go
+through `Telescope.all` with one edit per path.
 
 ---
 
 ## Architecture
 
-There are two layers. The public layer is one type, `Telescope<S, A>`, plus `Mapper`, `Mapping`, the two effect types,
-and the annotations. The internal layer is an optic lattice, made of `Iso`, `Lens`, `Prism`, `Affine`, and `Traversal`,
-which are the same shapes as Haskell's lens and Scala's Monocle, and the public layer composes them. JPMS qualified
-exports keep the lattice invisible to consumers. Runtime accessor dispatch uses lambdas built by `LambdaMetafactory`, or
-plain `MethodHandle` closures inside a native image, and discovery is reflective and cached per class. The rest,
-including why the lattice is hidden and what the codegen emits, is in the ADRs under [`docs/adr/`](docs/adr/).
+The public layer is one type, `Telescope<S, A>`, plus `Mapper`, `Mapping`, the two effect types, and the annotations.
+Underneath it is an optic lattice, made of `Iso`, `Lens`, `Prism`, `Affine`, and `Traversal`, which are the same shapes
+as Haskell's lens and Scala's Monocle. The public layer composes them, and JPMS qualified exports keep the lattice
+invisible to consumers. Runtime accessor dispatch uses lambdas built by `LambdaMetafactory`, or plain `MethodHandle`
+closures inside a native image, and discovery is reflective and cached per class. The ADRs under
+[`docs/adr/`](docs/adr/) explain the rest, including why the lattice is hidden and what the codegen emits.
 
 ---
 
@@ -778,7 +826,7 @@ including why the lattice is hidden and what the codegen emits, is in the ADRs u
 ./gradlew :benchmarks:jmh -Pjmh.includes=MapStructComparisonBenchmark   # the head-to-head numbers
 ```
 
-Java 21 or later is enough to consume telescope, and the build itself uses a newer toolchain. CI builds every module on
+Java 21 or later is enough to use telescope, and the build itself uses a newer toolchain. CI builds every module on
 Temurin JDK 25.
 
 ---
