@@ -161,11 +161,12 @@ three.
 | Set field, 100 entries                | 0.93 to 1.01 times | 1.02 times         | 7,576 forward, 7,544 back |
 
 The table times the composable `BRIDGE.read` value. The `BRIDGE_FN` constant and the static `forward` method measured
-1.00 times MapStruct forward on flat, 1.37 times on nested, and 1.06 to 1.10 times on deep. The table comes from GitHub
-Actions run 37761344960 on `main` at `f7be3f30`, using the included JMH workloads with MapStruct 1.6.3 on JDK 25. The
-run used 4 forks of 8 measured iterations each. MapStruct's own rows are the control, so each ratio is read within this
-one run. Where the error bands of the two rows overlap, the table gives a range instead of one ratio. The
-[methodology, per-fork figures, and earlier runs](docs/perf-mapstruct-comparison.md) are recorded separately.
+1.00 times MapStruct forward on flat, 1.37 times on nested, and 1.06 on deep for static `forward` and 1.10 for
+`BRIDGE_FN`. The table comes from GitHub Actions run 37761344960 on `main` at `f7be3f30`, using the included JMH
+workloads with MapStruct 1.6.3 on JDK 25. The run used 4 forks of 8 measured iterations each. MapStruct's own rows are
+the control, so each ratio is read within this one run. Where the error bands of the two rows overlap, the table gives a
+range instead of one ratio. The [methodology, per-fork figures, and earlier runs](docs/perf-mapstruct-comparison.md) are
+recorded separately.
 
 Runtime mappers are slower than generated ones, and the gap shrinks as the work per call grows. Without codegen,
 `Telescope.mapper(...)` composes each record or bean pair into a single `MethodHandle`. On the same run it measured 3.34
