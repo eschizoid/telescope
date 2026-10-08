@@ -23,9 +23,10 @@ public enum WriteStrategy {
   AUTO,
 
   /**
-   * Force the name-matched constructor strategy. The POJO must expose a public constructor whose
-   * parameter names match the bridge fields. Useful for POJOs whose builder is incidental and
-   * shouldn't be exercised, since {@link #AUTO} prefers the builder.
+   * Force the name-matched constructor strategy. The POJO must expose a constructor whose parameter
+   * names match the bridge fields, and that the generated bridge can call: public, or not private
+   * and declared in the package the bridge is emitted into. Useful for POJOs whose builder is
+   * incidental and shouldn't be exercised, since {@link #AUTO} prefers the builder.
    */
   CONSTRUCTOR,
 
@@ -38,8 +39,9 @@ public enum WriteStrategy {
   BUILDER,
 
   /**
-   * Force the no-arg constructor plus setters strategy. The POJO must expose a public no-arg
-   * constructor and a public {@code setX(...)} per bridge field. The canonical JavaBeans /
+   * Force the no-arg constructor plus setters strategy. The POJO must expose a no-arg constructor
+   * the generated bridge can call (public, or not private and declared in the package the bridge is
+   * emitted into) and a public {@code setX(...)} per bridge field. The canonical JavaBeans /
    * Hibernate entity shape, and the way to keep setter writes on a POJO that also offers a builder
    * or a name-matched constructor, which {@link #AUTO} would prefer.
    */

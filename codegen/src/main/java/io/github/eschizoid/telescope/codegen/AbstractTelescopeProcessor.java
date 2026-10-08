@@ -294,9 +294,10 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
 
   /**
    * The strategy an unhinted rebuild of {@code type} takes, as {@link BeanWriteStrategy#auto}
-   * decides it from this world's view of the bean. {@code hasSetters} is the caller's: a navigator
-   * emitted beside the bean reaches a non-private no-arg constructor, a bridge emitted elsewhere
-   * needs a public one.
+   * decides it from this world's view of the bean. {@code hasSetters} is the caller's, since it
+   * turns on which no-arg constructor the generated code can call: a navigator emitted beside the
+   * bean reaches any non-private one, a bridge reaches a public one or one declared in the package
+   * it is emitted into.
    */
   Optional<BeanWriteStrategy> autoBeanStrategy(
     final TypeElement type,

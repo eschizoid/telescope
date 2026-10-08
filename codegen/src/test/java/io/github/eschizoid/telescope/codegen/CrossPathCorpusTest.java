@@ -3,6 +3,8 @@ package io.github.eschizoid.telescope.codegen;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.mapping.WriteHint;
+import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -1823,6 +1825,219 @@ class CrossPathCorpusTest {
       }
     }
     return instance;
+  }
+
+  /**
+   * A target built through a member of narrower access than public: its name, the write strategy
+   * both paths are asked for, the target's body after its name, and what both paths owe — the built
+   * target's rendering, or {@link #REFUSED} and a fragment of the runtime's message.
+   *
+   * <p>{@code %1$s} is the cell's prefix. Source and target share a package, as every cell here
+   * does, so a package-private or protected member is one the generated bridge can call and a
+   * private one is not.
+   */
+  private record Construction(String name, String strategy, String target, String owed) {}
+
+  private static final String NAME_PROPERTY = """
+      private String name;
+      public String getName() { return name; }
+      public void setName(final String name) { this.name = name; }
+      public String toString() { return "built " + name; }
+    """;
+
+  private static final String FINAL_NAME = """
+      private final String name;
+      public String getName() { return name; }
+      public String toString() { return "built " + name; }
+    """;
+
+  private static final String TGT_BUILDER = """
+      public static final class Builder {
+        private String name;
+        public Builder name(final String name) { this.name = name; return this; }
+        public %1$sTgt build() { return new %1$sTgt(name); }
+      }
+    """;
+
+  private static final List<Construction> CONSTRUCTIONS = List.of(
+    new Construction(
+      "package-private class, implicit no-arg constructor",
+      "AUTO",
+      "class %1$sTgt {\n" + NAME_PROPERTY + "}\n",
+      "built x"
+    ),
+    new Construction(
+      "package-private no-arg constructor",
+      "AUTO",
+      "public class %1$sTgt {\n  %1$sTgt() {}\n" + NAME_PROPERTY + "}\n",
+      "built x"
+    ),
+    new Construction(
+      "package-private no-arg constructor, setters asked for",
+      "SETTERS",
+      "public class %1$sTgt {\n  %1$sTgt() {}\n" + NAME_PROPERTY + "}\n",
+      "built x"
+    ),
+    new Construction(
+      "private no-arg constructor, setters asked for",
+      "SETTERS",
+      "public class %1$sTgt {\n  private %1$sTgt() {}\n" + NAME_PROPERTY + "}\n",
+      "built x"
+    ),
+    new Construction(
+      "package-private name-matched constructor, constructor asked for",
+      "CONSTRUCTOR",
+      "public class %1$sTgt {\n  %1$sTgt(final String name) { this.name = name; }\n" + FINAL_NAME + "}\n",
+      "built x"
+    ),
+    new Construction(
+      "private name-matched constructor, constructor asked for",
+      "CONSTRUCTOR",
+      "public class %1$sTgt {\n  private %1$sTgt(final String name) { this.name = name; }\n" + FINAL_NAME + "}\n",
+      "built x"
+    ),
+    new Construction(
+      "package-private name-matched constructor",
+      "AUTO",
+      "public class %1$sTgt {\n  %1$sTgt(final String name) { this.name = name; }\n" + FINAL_NAME + "}\n",
+      REFUSED + "No name-based write strategy"
+    ),
+    new Construction(
+      "package-private static builder()",
+      "AUTO",
+      "public class %1$sTgt {\n  private %1$sTgt(final String name) { this.name = name; }\n" +
+        "  static Builder builder() { return new Builder(); }\n" +
+        FINAL_NAME +
+        TGT_BUILDER +
+        "}\n",
+      REFUSED + "No name-based write strategy"
+    ),
+    new Construction(
+      "package-private static builder(), builder asked for",
+      "BUILDER",
+      "public class %1$sTgt {\n  private %1$sTgt(final String name) { this.name = name; }\n" +
+        "  static Builder builder() { return new Builder(); }\n" +
+        FINAL_NAME +
+        TGT_BUILDER +
+        "}\n",
+      REFUSED + "requires a static builder()"
+    ),
+    new Construction(
+      "public static builder() returning a package-private builder",
+      "AUTO",
+      "public class %1$sTgt {\n  private %1$sTgt(final String name) { this.name = name; }\n" +
+        "  public static Builder builder() { return new Builder(); }\n" +
+        FINAL_NAME +
+        TGT_BUILDER.replace("public static final class", "static final class") +
+        "}\n",
+      "built x"
+    )
+  );
+
+  /**
+   * Constructions the two paths are known to answer differently, each recorded by which path builds
+   * the target. The runtime writer calls a private constructor through a private lookup; the
+   * generated bridge is ordinary source in another class and cannot, so it refuses with a
+   * diagnostic. Each entry holds the runtime to its build and the generated path to that
+   * diagnostic.
+   */
+  private static final Map<String, Verdict> CONSTRUCTION_KNOWN_DIVERGENCES = Map.of(
+    "private no-arg constructor, setters asked for",
+    new Verdict(false, true),
+    "private name-matched constructor, constructor asked for",
+    new Verdict(false, true)
+  );
+
+  @Test
+  @DisplayName("a target reachable only through a narrower-than-public member is built the same way on both paths")
+  void aNarrowerThanPublicMemberBuildsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    final var diverged = new LinkedHashSet<String>();
+    var index = 0;
+    for (final var construction : CONSTRUCTIONS) {
+      final var prefix = "Ct" + index++;
+      final var qualified = PACKAGE + "." + prefix;
+      final var head = "package " + PACKAGE + ";\n";
+      final var asked = construction.strategy().equals("AUTO")
+        ? ""
+        : ", writeStrategy = io.github.eschizoid.telescope.annotations.WriteStrategy." + construction.strategy();
+      final var sources = new JavaFileObject[] {
+        source(
+          prefix + "Src",
+          head +
+            "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(value = " +
+            prefix +
+            "Tgt.class" +
+            asked +
+            ")\npublic record " +
+            prefix +
+            "Src(String name) {}\n"
+        ),
+        source(prefix + "Tgt", head + construction.target().formatted(prefix)),
+      };
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(
+        plain.success(),
+        () -> construction.name() + " should compile without the processor: " + plain.errorMessages()
+      );
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(qualified + "Src"));
+      final Class<Object> tgt = cast(classes.get(qualified + "Tgt"));
+      final var source = src.getConstructors()[0].newInstance("x");
+      final var forward = processed.success() ? emitted(processed, plain, prefix).getMethod("forward", src) : null;
+      final var generated =
+        forward == null ? REFUSED + processed.errorMessages().strip() : built(() -> forward.invoke(null, source));
+      final var reflective = built(() ->
+        (construction.strategy().equals("AUTO")
+          ? Telescope.mapper(src, tgt)
+          : Telescope.mapper(src, tgt, WriteHint.writeBean(tgt, WriteStrategy.valueOf(construction.strategy())))
+        ).forward(source)
+      );
+
+      // A refusal is owed as `refused: ` and a fragment of the runtime's message. The generated
+      // path's refusal has to be the processor's own diagnostic, so a javac error inside a
+      // generated file cannot pass for one.
+      final var refusal = construction.owed().startsWith(REFUSED)
+        ? construction.owed().substring(REFUSED.length())
+        : null;
+      final var divergence = CONSTRUCTION_KNOWN_DIVERGENCES.get(construction.name());
+      for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+        final var generatedSide = side.getKey().equals("generated");
+        final var refuses =
+          refusal != null ||
+          (divergence != null && !(generatedSide ? divergence.generated() : divergence.reflective()));
+        final var met = refuses
+          ? side.getValue().startsWith(REFUSED) && side.getValue().contains(generatedSide ? "ERROR: @Bridge" : refusal)
+          : construction.owed().equals(side.getValue());
+        if (!met) {
+          failures.add(
+            construction.name() + ": " + side.getKey() + " gave " + side.getValue() + ", owed " + construction.owed()
+          );
+        }
+      }
+      if (divergence != null) diverged.add(construction.name());
+    }
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " construction(s) failed:\n  " + String.join("\n  ", failures)
+    );
+    final var stale = new LinkedHashSet<>(CONSTRUCTION_KNOWN_DIVERGENCES.keySet());
+    stale.removeAll(diverged);
+    assertTrue(stale.isEmpty(), () -> "registered divergences with no construction in the table:\n  " + stale);
+  }
+
+  /** What building a target rendered as, or {@link #REFUSED} and why it was not built. */
+  private static String built(final Attempt attempt) {
+    try {
+      return String.valueOf(attempt.get());
+    } catch (final InvocationTargetException e) {
+      final var cause = e.getCause() == null ? e : e.getCause();
+      return REFUSED + cause.getClass().getSimpleName() + ": " + cause.getMessage();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return REFUSED + e.getClass().getSimpleName() + ": " + e.getMessage();
+    }
   }
 
   private static JavaFileObject[] sources(final String prefix, final Family family, final Element element) {

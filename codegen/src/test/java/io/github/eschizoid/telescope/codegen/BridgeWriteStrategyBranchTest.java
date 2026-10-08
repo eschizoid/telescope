@@ -43,9 +43,9 @@ class BridgeWriteStrategyBranchTest {
   }
 
   @Test
-  @DisplayName("a forced constructor skips a non-public one of the right shape")
-  void forcedConstructorSkipsANonPublicOne() {
-    final var compilation = compile("CONSTRUCTOR", GETTER + "  Tgt(final String v) { this.v = v; }\n");
+  @DisplayName("a forced constructor skips a private one of the right shape")
+  void forcedConstructorSkipsAPrivateOne() {
+    final var compilation = compile("CONSTRUCTOR", GETTER + "  private Tgt(final String v) { this.v = v; }\n");
     assertFalse(compilation.success());
     assertTrue(compilation.hasError("writeStrategy = CONSTRUCTOR"), compilation::errorMessages);
   }
@@ -70,11 +70,11 @@ class BridgeWriteStrategyBranchTest {
   }
 
   @Test
-  @DisplayName("forced setters are refused without a public no-arg constructor")
-  void forcedSettersWithoutANoArgConstructor() {
+  @DisplayName("forced setters are refused when the only no-arg constructor is private")
+  void forcedSettersWithAPrivateNoArgConstructor() {
     final var compilation = compile(
       "SETTERS",
-      GETTER + "  Tgt() {}\n  public void setV(final String v) { this.v = v; }\n"
+      GETTER + "  private Tgt() {}\n  public void setV(final String v) { this.v = v; }\n"
     );
     assertFalse(compilation.success());
     assertTrue(compilation.hasError("writeStrategy = SETTERS"), compilation::errorMessages);

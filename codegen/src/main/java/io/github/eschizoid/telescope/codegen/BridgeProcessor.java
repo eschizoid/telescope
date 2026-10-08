@@ -1270,10 +1270,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var rawDefaults = cfg.defaults();
     final var viaMappers = cfg.viaMappers();
     final var writeStrategy = cfg.writeStrategy();
+    // The package the bridge is emitted into: beside the carrier for a carrier-form pair, beside
+    // the source otherwise. A member the bridge calls, a constructor included, has to be reachable
+    // from there.
+    final var bridgePackage = processingEnv.getElementUtils().getPackageOf(carrierEl != null ? carrierEl : source);
     // The rung each side's rebuild will stop at, decided once and consulted by both the check
     // below and the emission further down, so the two cannot answer differently.
-    final var targetRebuild = rebuildFor(target, targetFields, writeStrategy);
-    final var sourceRebuild = rebuildFor(source, sourceFields, writeStrategy);
+    final var targetRebuild = rebuildFor(target, targetFields, writeStrategy, bridgePackage);
+    final var sourceRebuild = rebuildFor(source, sourceFields, writeStrategy, bridgePackage);
     final var rawConstants = cfg.constants();
     final var computes = cfg.computes();
     // A pair is lenient if its own config says so, or if an enclosing lenient @Bridge referenced it
@@ -1354,11 +1358,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // interface arguments only where the using type exposes no concrete override. A
           // covariant override narrows the return type and Java binds the narrow one, so the
           // interface arguments describe a signature the call site does not use.
-          // A member has to be reachable from wherever the bridge lands, and a carrier-form pair
-          // lands in the carrier's package rather than the source's.
-          final var bridgePackage = processingEnv
-            .getElementUtils()
-            .getPackageOf(carrierEl != null ? carrierEl : source);
           final var fwdRes = resolvedFn(usingEl, "forward", sfType, bridgePackage);
           final var bwdRes = resolvedFn(usingEl, "backward", tfType, bridgePackage);
           // An ambiguous call is one Java refuses outright rather than resolving, so neither a
@@ -4738,12 +4737,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * which is the order the runtime writer takes, so a bean offering several ways to be built is
    * built the same way by the bridge and by {@code Telescope.mapper}. A forced strategy is tried
    * alone.
+   *
+   * <p>A constructor counts when the bridge, emitted into {@code bridgePackage}, can call it: a
+   * public one, or a package-private or protected one declared in that package. The runtime writer
+   * calls any no-arg constructor, and a forced constructor of any access, through a private lookup;
+   * a private one is the part of that the generated code cannot reach.
    */
-  private Rebuild rebuildFor(final TypeElement to, final List<Field> toFields, final String writeStrategy) {
+  private Rebuild rebuildFor(
+    final TypeElement to,
+    final List<Field> toFields,
+    final String writeStrategy,
+    final PackageElement bridgePackage
+  ) {
     if (to.getKind() == ElementKind.RECORD) return new Rebuild(Rebuild.Kind.RECORD, null, null);
     final var auto = "AUTO".equals(writeStrategy);
     final var names = toFields.stream().map(Field::name).toList();
-    final var constructor = auto ? nameMatchedConstructor(to, names) : namedConstructor(to, toFields);
+    final var constructor = auto ? nameMatchedConstructor(to, names) : namedConstructor(to, toFields, bridgePackage);
+    final var hasNoArgConstructor = hasNoArgConstructorFrom(to, bridgePackage);
     final var builder = staticBuilderMethod(to);
     final var builderType =
       builder != null && builder.getReturnType().getKind() == TypeKind.DECLARED
@@ -4752,12 +4762,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var strategy = switch (writeStrategy) {
       case "CONSTRUCTOR" -> constructor != null ? BeanWriteStrategy.CONSTRUCTOR : null;
       case "BUILDER" -> builderType != null ? BeanWriteStrategy.BUILDER : null;
-      case "SETTERS" -> hasPublicNoArgConstructor(to) ? BeanWriteStrategy.SETTERS : null;
+      case "SETTERS" -> hasNoArgConstructor ? BeanWriteStrategy.SETTERS : null;
       default -> autoBeanStrategy(
         to,
         names,
         name -> toFields.get(names.indexOf(name)).type(),
-        hasPublicNoArgConstructor(to)
+        hasNoArgConstructor
       ).orElse(null);
     };
     if (strategy == null) return new Rebuild(Rebuild.Kind.NONE, null, null);
@@ -4769,14 +4779,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * A public constructor taking one parameter per field, every one named after a field — the
-   * constructor a forced {@code CONSTRUCTOR} strategy calls. AUTO asks {@link
-   * #nameMatchedConstructor} instead, which also requires it to be the only constructor of that
-   * arity, as the runtime writer does.
+   * Whether {@code to} declares a no-arg constructor a bridge emitted into {@code bridgePackage}
+   * can call.
    */
-  private static ExecutableElement namedConstructor(final TypeElement to, final List<Field> toFields) {
+  private boolean hasNoArgConstructorFrom(final TypeElement to, final PackageElement bridgePackage) {
     for (final var ctor : ElementFilter.constructorsIn(to.getEnclosedElements())) {
-      if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != toFields.size()) continue;
+      if (ctor.getParameters().isEmpty() && bindableFrom(ctor, bridgePackage)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * A constructor taking one parameter per field, every one named after a field, that a bridge
+   * emitted into {@code bridgePackage} can call — the constructor a forced {@code CONSTRUCTOR}
+   * strategy calls. AUTO asks {@link #nameMatchedConstructor} instead, which requires it to be
+   * public and the only constructor of that arity, as the runtime writer does.
+   */
+  private ExecutableElement namedConstructor(
+    final TypeElement to,
+    final List<Field> toFields,
+    final PackageElement bridgePackage
+  ) {
+    for (final var ctor : ElementFilter.constructorsIn(to.getEnclosedElements())) {
+      if (!bindableFrom(ctor, bridgePackage) || ctor.getParameters().size() != toFields.size()) continue;
       var matched = true;
       for (final var p : ctor.getParameters()) {
         if (!hasField(toFields, p.getSimpleName().toString())) {
@@ -4945,8 +4970,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       annotationSite.getQualifiedName() +
       " (target " +
       toFq +
-      "): no public constructor whose parameter names match the bridge fields. Switch to" +
-      " AUTO, BUILDER, or SETTERS, or add a name-matched constructor.";
+      "): no constructor the bridge's package can call whose parameter names match the" +
+      " bridge fields. Switch to AUTO, BUILDER, or SETTERS, or add a name-matched constructor.";
       case "BUILDER" -> "@Bridge writeStrategy = BUILDER on " +
       annotationSite.getQualifiedName() +
       " (target " +
@@ -4957,8 +4982,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       annotationSite.getQualifiedName() +
       " (target " +
       toFq +
-      "): no public no-arg constructor. Switch to AUTO, CONSTRUCTOR, or BUILDER, or add" +
-      " a no-arg constructor.";
+      "): no no-arg constructor the bridge's package can call. Switch to AUTO," +
+      " CONSTRUCTOR, or BUILDER, or add a public no-arg constructor.";
       default -> "@Bridge: " +
       toFq +
       " has no usable construction strategy — needs a record canonical constructor, a" +

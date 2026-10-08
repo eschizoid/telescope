@@ -109,13 +109,8 @@ class BeanRebuildCorpusTest {
     Map.entry("ctor/scalar", new Verdict(true, false)),
     Map.entry("ctor/record", new Verdict(true, false)),
     Map.entry("ctor/list", new Verdict(true, false)),
-    // The bridge is emitted in the source's package, which need not be the target's, so its
-    // setter rebuild asks for a public no-arg constructor; the runtime calls a declared one
-    // of
-    // any access through a private lookup.
-    Map.entry("protected-setters/scalar", new Verdict(false, true)),
-    Map.entry("protected-setters/record", new Verdict(false, true)),
-    Map.entry("protected-setters/list", new Verdict(false, true)),
+    // The runtime calls a private no-arg constructor through a private lookup. The bridge is
+    // ordinary source in another class and cannot call it.
     Map.entry("private-setters/scalar", new Verdict(false, true)),
     Map.entry("private-setters/record", new Verdict(false, true)),
     Map.entry("private-setters/list", new Verdict(false, true)),
