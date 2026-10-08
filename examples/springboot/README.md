@@ -241,7 +241,7 @@ in one place: validated update with error accumulation, sparse-PATCH composition
 terminals (`read`/`find`/`count`/`exists`), lossy projections via `from/to/using`, sealed-narrow with paradigm hop, deep
 cycle handling. Each of those would be hand-rolled. See
 [How it compares to MapStruct → "When telescope is the right pick"](../../README.md#when-telescope-is-the-right-pick)
-and [Performance honesty](../../README.md#performance-honesty) in the root README.
+and [Measured performance](../../README.md#measured-performance) in the root README.
 
 **Perf receipts:** see `:benchmarks` —
 [`TelescopeBenchmark.java`](../../benchmarks/src/jmh/java/io/github/eschizoid/telescope/benchmarks/TelescopeBenchmark.java).

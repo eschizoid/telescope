@@ -2,7 +2,7 @@
 
 The load-bearing claims the README makes, each with its evidence and where CI exercises it. When a claim's evidence
 moves or its version pin changes, this table is the checklist. Last audited: 2026-07-24, against telescope `1.3.0`,
-MapStruct `1.6.3`, Spring Boot `4.1.0`, Quarkus `3.37.3`.
+MapStruct `1.6.3`, Spring Boot `4.1.1`, Quarkus `3.40.1`.
 
 | Claim                                                                                                                                  | Evidence                                                                                                                                          | CI                                                      |
 | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
@@ -22,6 +22,9 @@ MapStruct `1.6.3`, Spring Boot `4.1.0`, Quarkus `3.37.3`.
 | `explain()` rows: mapped / transformed / skipped / unusedSources; constants-computed slots don't appear as rows                        | `MapperExplainTest`                                                                                                                               | `ci.yaml`                                               |
 | Spring registry discovers `Mapper` beans; Quarkus ditto                                                                                | starter unit tests (registries; no `@SpringBootTest`)                                                                                             | `ci.yaml`                                               |
 | Multi-edit `Telescope.all` fuses provably-disjoint paths into one pass, identical results                                              | `AllOverFusionTest` (equivalence matrix + counterexample pins)                                                                                    | `ci.yaml`                                               |
+| Runtime and `@Bridge` paths agree on every cell of the container grid; recorded differences fail the build if they close               | `CrossPathCorpusTest` (empty `KNOWN_DIVERGENCES`, construction register), `ContainerAllocatorCorpusTest` (`EnumMap`)                              | `ci.yaml` (`check`)                                     |
+| A same-typed container is copied, keeps its ordering, and a `to(src, tgt, x -> x, x -> x)` row shares it                               | `SameTypedContainerCopyTest`, `SameTypedContainerCopyParityTest`                                                                                  | `ci.yaml`                                               |
+| A strict mapper's refusal names the field, the types and the fix, at construction and at compile time                                  | `DeepMappingTest`, `MapperVerifierProcessorTest` (unmatched target field)                                                                         | `ci.yaml`                                               |
 | README quick-start and tour snippets compile and run                                                                                   | `ReadmeSnippetsTest`                                                                                                                              | `ci.yaml`                                               |
 
 Rules of the table: a claim with no row does not go in the README; a "partial" in the
