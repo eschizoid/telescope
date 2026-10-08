@@ -209,16 +209,22 @@ public final class PairingRules<T> {
    * handed one. Keys pass through a conversion unchanged, so a comparator the source carries could
    * order them, but only where the target's class can be told it: a declared interface is built as
    * the family default, which can, and a class can when the shared rules carry an ordering into it.
-   * Where it cannot, the rebuild orders by the key's own {@code compareTo}, and a key class that
-   * does not implement {@code Comparable} fails on the first insert of every non-empty conversion.
-   * An interface or wildcard key is let through, since the keys it admits may be comparable.
+   * Where it cannot, the rebuild orders by the key's own {@code compareTo}.
+   *
+   * <p>A key that passes through unchanged can be any subtype of its declared type, and a subtype
+   * may implement {@code Comparable} where its declared type does not, as a {@code String} key does
+   * in a map declared over {@code Object}. So only a key type that can have no subtypes decides: a
+   * record or an array that does not implement {@code Comparable} fails on the first insert of
+   * every non-empty conversion. Every other key, an interface, a wildcard, a variable or a class
+   * open to subclassing, is let through, and a key it admits that cannot be ordered is refused by
+   * name when it is inserted.
    */
   public boolean unorderableSortedKeys(final T keyType, final T tgtType) {
     final var raw = props.rawType(tgtType);
     if (!props.isSubtypeOf(raw, WellKnown.SORTED_MAP)) return false;
-    if (props.isWildcard(keyType)) return false;
     final var key = props.rawType(keyType);
-    if (props.isInterfaceType(key) || props.isSubtypeOf(key, WellKnown.COMPARABLE)) return false;
+    if (!props.isRecordType(key) && !props.isArrayType(key)) return false;
+    if (props.isSubtypeOf(key, WellKnown.COMPARABLE)) return false;
     if (props.isInterfaceType(raw)) return false;
     return !(orderingFor(tgtType, raw, ContainerView.Kind.MAP_VALUES, true) instanceof Ordering.Carry<T>);
   }

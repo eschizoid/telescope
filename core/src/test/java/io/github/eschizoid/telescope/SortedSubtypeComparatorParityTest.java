@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeMap;
@@ -119,6 +121,10 @@ class SortedSubtypeComparatorParityTest {
 
   @SuppressWarnings("rawtypes")
   public record RawOtherSwapped(OtherSwappedByKey items) {}
+
+  public record SrcObjectKeys(Map<Object, String> items) {}
+
+  public record ToPlainObjectKeys(PlainMap<Object, String> items) {}
 
   public record SrcSwapped(SortedMap<String, Integer> items) {}
 
@@ -262,5 +268,17 @@ class SortedSubtypeComparatorParityTest {
     final var out = Telescope.mapper(RawSwapped.class, RawOtherSwapped.class).forward(new RawSwapped(src));
 
     assertEquals(List.of("b", "a"), List.copyOf(out.items().keySet()));
+  }
+
+  @Test
+  @DisplayName("a sorted map over keys declared as Object builds, and orders the comparable keys it holds")
+  void keysDeclaredAsObjectAreOrderedByWhatTheyHold() {
+    final var src = new LinkedHashMap<Object, String>();
+    src.put("b", "2");
+    src.put("a", "1");
+
+    final var out = Telescope.mapper(SrcObjectKeys.class, ToPlainObjectKeys.class).forward(new SrcObjectKeys(src));
+
+    assertEquals(List.of("a", "b"), List.copyOf(out.items().keySet()));
   }
 }
