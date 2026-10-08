@@ -2073,13 +2073,14 @@ class CrossPathCorpusTest {
       "{k2=a, k1=b} in java.util.TreeMap"
     ),
     // An abstract class the allocation table names no default for cannot be built
-    // by a copy, so neither path copies into or out of it.
+    // by a copy, and two containers are never rebuilt as beans, so both paths
+    // refuse the pair by name.
     new FixedPairing(
       "raw AbstractList -> raw ArrayList",
       "java.util.AbstractList",
       "java.util.ArrayList",
       "str",
-      REFUSED + "IllegalStateException"
+      REFUSED + "incompatible source/target shapes — java.util.AbstractList vs java.util.ArrayList"
     ),
     // Two interfaces used raw, each built as its default, carrying the source's comparator.
     new FixedPairing(
@@ -2094,7 +2095,7 @@ class CrossPathCorpusTest {
       "java.util.ArrayList",
       "java.util.AbstractList",
       "str",
-      REFUSED + "IllegalStateException"
+      REFUSED + "incompatible source/target shapes — java.util.ArrayList vs java.util.AbstractList"
     ),
     // A sorted generic class used raw whose comparator constructor is not public
     // cannot be told the source's order, so a source carrying one is refused at
