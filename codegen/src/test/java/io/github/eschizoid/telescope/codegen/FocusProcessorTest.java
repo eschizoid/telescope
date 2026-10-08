@@ -67,9 +67,9 @@ class FocusProcessorTest {
       // get() exposes the current path as a Telescope.
       assertTrue(generated.contains("public Telescope<R, Person> get()"), generated);
 
-      // Scalar component: terminal Telescope<R, String> method built from Telescope.lens.
+      // Scalar component: terminal Telescope<R, String> method built from Telescope.componentLens.
       assertTrue(generated.contains("public Telescope<R, String> name()"), generated);
-      assertTrue(generated.contains("Telescope.lens(Person::name,"), generated);
+      assertTrue(generated.contains("Telescope.componentLens(Person::name,"), generated);
 
       // Sub-record component: returns the sub-record's Telescope<R>.
       assertTrue(generated.contains("public demo.AddressTelescope<R> address()"), generated);

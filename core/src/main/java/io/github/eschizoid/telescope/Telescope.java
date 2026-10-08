@@ -367,7 +367,7 @@ public sealed class Telescope<
       path.firstHopName,
       path.trail,
       path.hops,
-      ContainerHop.promotion()
+      ContainerHop.promotion(path)
     );
   }
 
@@ -380,7 +380,7 @@ public sealed class Telescope<
       path.firstHopName,
       path.trail,
       path.hops,
-      ContainerHop.promotion()
+      ContainerHop.promotion(path)
     );
   }
 
@@ -411,7 +411,7 @@ public sealed class Telescope<
       path.firstHopName,
       path.trail,
       path.hops,
-      ContainerHop.promotion()
+      ContainerHop.promotion(path)
     );
   }
 
@@ -424,7 +424,7 @@ public sealed class Telescope<
       path.firstHopName,
       path.trail,
       path.hops,
-      ContainerHop.promotion()
+      ContainerHop.promotion(path)
     );
   }
 
@@ -437,7 +437,7 @@ public sealed class Telescope<
       path.firstHopName,
       path.trail,
       path.hops,
-      ContainerHop.promotion()
+      ContainerHop.promotion(path)
     );
   }
 
@@ -584,6 +584,42 @@ public sealed class Telescope<
       RecordFieldOptics.INSTANCE,
       identityChain(),
       LambdaIntrospection.methodNameOf(getter)
+    );
+  }
+
+  /**
+   * <b>Codegen-support seam — NOT for hand-written call sites.</b> The lens a generated {@code
+   * <X>Telescope} navigator composes for one component, carrying the same fusion identity — owner
+   * class and component name — that {@link #field(Accessor)} records for the same accessor. A
+   * navigator path and a hand-written path through the same components therefore share prefixes and
+   * sibling rebuilds inside {@link #all(Edit[])}, and fuse with each other.
+   *
+   * <p>That identity is a promise about the setter: it must rebuild the owner with only this
+   * component changed, exactly as the owner's canonical constructor (records) or its write strategy
+   * (beans) does. {@link #all(Edit[])} may replace several such setters on one record with a single
+   * positional rebuild through the canonical constructor. A hand-rolled lens whose setter does
+   * anything else belongs in {@link #lens(Accessor, BiFunction)}, which records no identity and is
+   * never fused.
+   *
+   * @param getter a method reference to the component accessor or bean getter
+   * @param setter rebuilds the owner with the component replaced
+   * @return a single-focus telescope recorded for fusion as a field hop
+   */
+  @SuppressWarnings("unchecked")
+  public static <S, A> Telescope<S, A> componentLens(
+    final Accessor<S, A> getter,
+    final BiFunction<? super S, ? super A, ? extends S> setter
+  ) {
+    final Lens<S, A> lens = Lens.of(getter, setter);
+    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var hop = Fusion.Hop.field(owner, fieldNameOf(getter), (Traversal<Object, Object>) (Traversal<?, ?>) lens);
+    return new Telescope<>(
+      lens,
+      RecordFieldOptics.INSTANCE,
+      identityChain(),
+      LambdaIntrospection.methodNameOf(getter),
+      List.of(),
+      List.of(hop)
     );
   }
 
@@ -1455,12 +1491,25 @@ public sealed class Telescope<
       joined.addAll(next.trail);
       joinedTrail = Collections.unmodifiableList(joined);
     }
+    // A hop record describes its optic segment by segment, so two described sides compose into a
+    // described whole by concatenation. Either side undescribed leaves the whole undescribed.
+    final List<Fusion.Hop> joinedHops;
+    if (hops == null || next.hops == null) joinedHops = null;
+    else if (next.hops.isEmpty()) joinedHops = hops;
+    else if (hops.isEmpty()) joinedHops = next.hops;
+    else {
+      final var joined = new ArrayList<Fusion.Hop>(hops.size() + next.hops.size());
+      joined.addAll(hops);
+      joined.addAll(next.hops);
+      joinedHops = Collections.unmodifiableList(joined);
+    }
     return new Telescope<>(
       optic.then(next.optic),
       fieldOptics,
       chain,
       firstHopName != null ? firstHopName : next.firstHopName,
-      joinedTrail
+      joinedTrail,
+      joinedHops
     );
   }
 
@@ -1496,7 +1545,7 @@ public sealed class Telescope<
    * @return a copy with the hop recorded; the optic and all other state are unchanged
    */
   public Telescope<S, A> hop(final OpticNode node) {
-    return new Telescope<>(optic, fieldOptics, chain, firstHopName, plus(node));
+    return new Telescope<>(optic, fieldOptics, chain, firstHopName, plus(node), hops);
   }
 
   /**
@@ -2482,8 +2531,8 @@ public sealed class Telescope<
 
     // Provenance of the container hop, so each() can emit the SAME trail node and fusion hop the
     // fused each(getter) form produces — the split form must not be invisible to explain()/fusion.
-    // Null owner marks a promotion (asList) of an arbitrary path: the promoted trail/hops are
-    // preserved as-is, and each() keeps the trail but degrades hops to null (identity unknown).
+    // A promotion (asList) keeps the promoted trail as-is; its hops keep a fusion identity only
+    // when the promoted path ends at a recorded field hop.
     private final ContainerHop<S> origin;
 
     ListTelescope(
@@ -2509,8 +2558,13 @@ public sealed class Telescope<
    * Provenance of a typed-container step ({@code list}/{@code setField}/{@code mapField}/{@code
    * optional}): the pre-field trail/hops plus the field's owner, component name, and lens — enough
    * for the container terminal to emit the exact trail node and fusion hop the fused {@code
-   * each(getter)} form produces. A promotion ({@code asList(...)} etc.) has no provenance: {@code
-   * descend} then preserves the promoted trail and degrades hops to null.
+   * each(getter)} form produces.
+   *
+   * <p>A promotion ({@code asList(...)} etc.) carries no pre-field trail, so {@code descend} keeps
+   * the promoted trail as it is. Its fusion identity comes from the promoted path's hop record:
+   * when that record ends at a field hop, the field hop is the container's provenance, and the
+   * element step replaces it with the traverse hop {@code each(getter)} records. Any other promoted
+   * path has no identity to give, and the element step records none.
    */
   record ContainerHop<S>(
     List<OpticNode> preTrail,
@@ -2519,8 +2573,12 @@ public sealed class Telescope<
     String component,
     Traversal<Object, Object> lens
   ) {
-    static <S> ContainerHop<S> promotion() {
-      return new ContainerHop<>(null, null, null, null, null);
+    static <S> ContainerHop<S> promotion(final Telescope<S, ?> path) {
+      final var hops = path.hops;
+      if (hops == null || hops.isEmpty()) return new ContainerHop<>(null, null, null, null, null);
+      final var last = hops.get(hops.size() - 1);
+      if (last.kind() != Fusion.Hop.Kind.FIELD) return new ContainerHop<>(null, null, null, null, null);
+      return new ContainerHop<>(null, hops.subList(0, hops.size() - 1), last.owner(), last.component(), last.segment());
     }
 
     @SuppressWarnings("unchecked")
@@ -2532,12 +2590,17 @@ public sealed class Telescope<
     ) {
       final var composed = step.optic.then((Traversal<A, E>) elements);
       if (owner == null) {
-        // Promotion of an arbitrary path: keep the (possibly partial) trail, no fusion identity.
+        // Promotion of a path with no field hop at its end: keep the trail, no fusion identity.
         return new Telescope<>(composed, step.fieldOptics, step.chain, step.firstHopName, step.trail, null);
       }
-      final var trailOut = new ArrayList<OpticNode>(preTrail.size() + 1);
-      trailOut.addAll(preTrail);
-      trailOut.add(new OpticNode.Traverse(component, containerLabel));
+      final List<OpticNode> trailOut;
+      if (preTrail == null) trailOut = step.trail;
+      else {
+        final var extended = new ArrayList<OpticNode>(preTrail.size() + 1);
+        extended.addAll(preTrail);
+        extended.add(new OpticNode.Traverse(component, containerLabel));
+        trailOut = Collections.unmodifiableList(extended);
+      }
       final var segment = (Traversal<Object, Object>) (Traversal<?, ?>) lens.then(
         (Traversal<Object, Object>) (Traversal<?, ?>) elements
       );
@@ -2557,14 +2620,7 @@ public sealed class Telescope<
         h.add(hop);
         hopsOut = Collections.unmodifiableList(h);
       }
-      return new Telescope<>(
-        composed,
-        step.fieldOptics,
-        step.chain,
-        step.firstHopName,
-        Collections.unmodifiableList(trailOut),
-        hopsOut
-      );
+      return new Telescope<>(composed, step.fieldOptics, step.chain, step.firstHopName, trailOut, hopsOut);
     }
   }
 

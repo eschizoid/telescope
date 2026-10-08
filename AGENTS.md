@@ -148,7 +148,9 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
   slot fusion — and equal full paths fuse by composing their leaf functions in edit order. The fold falls back to
   sequential when an edit is user-implemented rather than built by `over(...)`, when a path carries no hop record
   (`fieldByName`, bridge hops, `from/to/using`, custom lenses), when one path is a strict prefix of another, or when a
-  trie node would branch on anything but same-owner, pairwise-distinct components.
+  trie node would branch on anything but same-owner, pairwise-distinct components. A generated navigator's paths record
+  the same hops as the hand-written path through the same components, so the two forms fuse with each other, and `then`
+  keeps a hop record when both sides carry one.
 - **Write — multi-edit chain (alternative):** the inline-path shape, for edits built up in place rather than as rows.
   - `update(Telescope<S, X>, Function<X, X>)` — pre-built path; equivalent end-state to `over(...)` but accumulated
     inline.

@@ -28,6 +28,12 @@ import org.openjdk.jmh.annotations.State;
  * <p>The tree rows repeat the question where it costs most: k edits under a shared {@code
  * .each(...)} prefix over a 100-element list rebuild the whole container k times.
  *
+ * <p>The {@code navigator*} rows build the same edits from generated {@code @Focus} navigators, and
+ * the {@code runtime*} rows build them by hand over the same annotated records. Fusion keys on
+ * owner and component, not on how a path was built, so each navigator row should sit on its runtime
+ * twin; a navigator row near the sequential cost means its paths fell back to one pass per edit.
+ * The hand-fused rows and the unannotated {@code all*} rows are the controls for runner speed.
+ *
  * <pre>{@code
  * ./gradlew :benchmarks:jmh -Pjmh.includes=MultiEditBenchmark -Pjmh.fork=3   # fork >= 3 for gating reads
  * }</pre>
@@ -54,6 +60,14 @@ public class MultiEditBenchmark {
   private Telescope<Flat, Flat> flat4;
   private Telescope<Org, Org> tree1;
   private Telescope<Org, Org> tree3;
+
+  private BenchFusionFlat focusFlat;
+  private BenchFusionOrg focusOrg;
+
+  private Telescope<BenchFusionFlat, BenchFusionFlat> navigatorFlat4;
+  private Telescope<BenchFusionFlat, BenchFusionFlat> runtimeFlat4;
+  private Telescope<BenchFusionOrg, BenchFusionOrg> navigatorTree3;
+  private Telescope<BenchFusionOrg, BenchFusionOrg> runtimeTree3;
 
   @Setup
   public void setup() {
@@ -82,6 +96,39 @@ public class MultiEditBenchmark {
     final var ages = Telescope.of(Org.class).each(Org::users).field(User::age);
     tree1 = Telescope.all(over(emails, String::toLowerCase));
     tree3 = Telescope.all(over(emails, String::toLowerCase), over(names, String::trim), over(ages, a -> a + 1));
+
+    focusFlat = new BenchFusionFlat("Alpha", "Beta", "Gamma", "Delta", 41, 7);
+    final var focusUsers = new ArrayList<BenchFusionUser>(100);
+    for (var i = 0; i < 100; i++) {
+      focusUsers.add(new BenchFusionUser(" Name" + i + " ", "USER" + i + "@ACME.COM", i));
+    }
+    focusOrg = new BenchFusionOrg("org", List.copyOf(focusUsers));
+
+    navigatorFlat4 = Telescope.all(
+      over(BenchFusionFlatTelescope.of().a(), String::toLowerCase),
+      over(BenchFusionFlatTelescope.of().b(), String::trim),
+      over(BenchFusionFlatTelescope.of().c(), String::toUpperCase),
+      over(BenchFusionFlatTelescope.of().d(), String::strip)
+    );
+    final var flatRoot = Telescope.of(BenchFusionFlat.class);
+    runtimeFlat4 = Telescope.all(
+      over(flatRoot.field(BenchFusionFlat::a), String::toLowerCase),
+      over(flatRoot.field(BenchFusionFlat::b), String::trim),
+      over(flatRoot.field(BenchFusionFlat::c), String::toUpperCase),
+      over(flatRoot.field(BenchFusionFlat::d), String::strip)
+    );
+
+    navigatorTree3 = Telescope.all(
+      over(BenchFusionOrgTelescope.of().users().each().email(), String::toLowerCase),
+      over(BenchFusionOrgTelescope.of().users().each().name(), String::trim),
+      over(BenchFusionOrgTelescope.of().users().each().age(), a -> a + 1)
+    );
+    final var orgUsers = Telescope.of(BenchFusionOrg.class).each(BenchFusionOrg::users);
+    runtimeTree3 = Telescope.all(
+      over(orgUsers.field(BenchFusionUser::email), String::toLowerCase),
+      over(orgUsers.field(BenchFusionUser::name), String::trim),
+      over(orgUsers.field(BenchFusionUser::age), a -> a + 1)
+    );
   }
 
   @Benchmark
@@ -120,6 +167,26 @@ public class MultiEditBenchmark {
   @Benchmark
   public Org allTree3Edits() {
     return tree3.apply(org);
+  }
+
+  @Benchmark
+  public BenchFusionFlat navigatorFlat4Edits() {
+    return navigatorFlat4.apply(focusFlat);
+  }
+
+  @Benchmark
+  public BenchFusionFlat runtimeFlat4Edits() {
+    return runtimeFlat4.apply(focusFlat);
+  }
+
+  @Benchmark
+  public BenchFusionOrg navigatorTree3Edits() {
+    return navigatorTree3.apply(focusOrg);
+  }
+
+  @Benchmark
+  public BenchFusionOrg runtimeTree3Edits() {
+    return runtimeTree3.apply(focusOrg);
   }
 
   /**
