@@ -840,7 +840,8 @@ import static io.github.eschizoid.telescope.mapping.Mapping.toOrElse;
 import static io.github.eschizoid.telescope.mapping.NullHint.NullStrategy.DEFAULT;
 import static io.github.eschizoid.telescope.mapping.NullHint.nullSourceValues;
 
-// SET_TO_DEFAULT analog — per-mapper hint: null source fields become "" / 0 / List.of() / Optional.empty()
+// SET_TO_DEFAULT analog — per-mapper hint: a null auto-matched or same-typed to(src, tgt) field becomes
+// "" / 0 / List.of() / Optional.empty(); a row carrying its own functions receives the null unchanged
 final Mapper<UserEntity, UserDto> m = Telescope.mapper(
   UserEntity.class,
   UserDto.class,
