@@ -91,7 +91,7 @@ class RawContainerCopyTest {
     // that cannot resolve; only the processor's own diagnostic, raised on the annotated record,
     // tells the user which field and which class.
     final var refusal =
-      "@Bridge Src -> Tgt: field 'items' container type 'demo.Sized' has no public no-arg constructor";
+      "@Bridge Src -> Tgt: field 'items': Deep map: demo.Sized has no no-argument constructor a rebuild can call";
     for (final var pair : List.of(
       List.of("java.util.ArrayList", "Sized"),
       List.of("java.util.List<java.util.ArrayList>", "java.util.List<Sized>")

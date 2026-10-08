@@ -1,6 +1,8 @@
 package io.github.eschizoid.telescope.codegen;
 
+import io.github.eschizoid.telescope.internal.pairing.Allocation;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
+import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
@@ -83,10 +85,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /** The shared pairing spec, over the mirror world, consulted for container classification. */
   private PairingRules<TypeMirror> rules;
 
+  /** The shared container allocation rules, over this world's type handles. */
+  private ContainerAllocation<TypeMirror> allocation;
+
   @Override
   public synchronized void init(final ProcessingEnvironment processingEnv) {
     super.init(processingEnv);
-    rules = new PairingRules<>(new MirrorProps(processingEnv.getTypeUtils(), processingEnv.getElementUtils()));
+    final var props = new MirrorProps(processingEnv.getTypeUtils(), processingEnv.getElementUtils());
+    rules = new PairingRules<>(props);
+    allocation = new ContainerAllocation<>(props);
   }
 
   /**
@@ -2712,56 +2719,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Why a container field cannot be emitted when nothing telescope can construct is of its declared
-   * type. The declared type is what rules out every candidate, so the fix is to name one telescope
-   * can build or to convert the field explicitly.
+   * Why a container field cannot be emitted, in the words the shared allocation rules refuse it
+   * with, which are the words the reflective path refuses the same field with.
    */
-  private static String unassignableContainerMessage(
+  private static String refusedContainerMessage(
     final TypeElement source,
     final TypeElement target,
     final String fieldName,
-    final String container
+    final String reason
   ) {
     return (
-      "@Bridge " +
-      source.getSimpleName() +
-      " -> " +
-      target.getSimpleName() +
-      ": field '" +
-      fieldName +
-      "' is declared as '" +
-      container +
-      "', which telescope cannot construct — the class it would allocate is not of that type." +
-      " Declare the field as a concrete container, or supply an explicit @ViaMapper for it."
-    );
-  }
-
-  /**
-   * Why a container field cannot be emitted, and what the author can do about it. Every route but
-   * the inline identity copy allocates no-arg, so a class without that constructor cannot be built.
-   * The remedy depends on who owns the class: adding a constructor is only advice the author can
-   * act on for a type they wrote.
-   */
-  private static String unallocatableContainerMessage(
-    final TypeElement source,
-    final TypeElement target,
-    final String fieldName,
-    final String badAlloc
-  ) {
-    return (
-      "@Bridge " +
-      source.getSimpleName() +
-      " -> " +
-      target.getSimpleName() +
-      ": field '" +
-      fieldName +
-      "' container type '" +
-      badAlloc +
-      "' has no public no-arg constructor — codegen allocates it directly. " +
-      (badAlloc.startsWith("java.")
-        ? "Declare the field as a type that has one, or supply an explicit @ViaMapper"
-        : "Add a no-arg constructor, or use the runtime mapper with an explicit row") +
-      " for this field."
+      "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": field '" + fieldName + "': " + reason
     );
   }
 
@@ -2800,74 +2768,55 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return true;
   }
 
+  /**
+   * Whether this side may be built by handing {@code from}, the other side's value, to a copy
+   * constructor, as the shared allocation rules decide it for the reflective path too. The test is
+   * directional: a constructor that takes a {@code Collection} accepts any of them, while one
+   * narrowed to {@code ArrayList} does not accept a {@code List}, and only the value actually being
+   * passed decides which. A side reached through its builder is never copied: the builder is what
+   * builds it.
+   */
+  private boolean copyConstructs(
+    final TypeMirror container,
+    final FieldPlan.Kind kind,
+    final TypeMirror from,
+    final String bridgePkg
+  ) {
+    if (builderAllocExpr(container, kind, bridgePkg) != null) return false;
+    return allocation.copiesInPlace(container, family(kind), from, bridgePkg);
+  }
+
   private static boolean isContainerKind(final FieldPlan.Kind kind) {
     return kind == FieldPlan.Kind.LIST || kind == FieldPlan.Kind.SET || kind == FieldPlan.Kind.MAP_VALUES;
   }
 
   /**
-   * Whether this side's container can be built by handing {@code argument} to its constructor,
-   * which is what the inline identity copy does. The test is directional: a constructor that takes
-   * a {@code Collection} accepts any of them, while one narrowed to {@code ArrayList} does not
-   * accept a {@code List}, and only the value actually being passed decides which. It is also a
-   * property of the class rather than of its package — most JDK containers offer such a constructor
-   * and {@code java.util.Stack} does not, while a subtype has one only where it declares one,
-   * because constructors are not inherited.
-   *
-   * <p>The comparison is by erasure, which is what lets a parameter written {@code Collection<?
-   * extends T>} match at all: its type variable is unresolved here. A constructor sharing an
-   * erasure with the argument but not its type argument therefore reads as usable.
+   * The class a container declared as {@code container}, built as {@code kind}, is rebuilt as, by
+   * the shared allocation rules the reflective path builds the same field by: the class the shared
+   * table names, the family default standing in for an interface or abstract type, or the declared
+   * class itself. A declaration the rules refuse answers its own name, which every gate refuses
+   * before anything is rendered from it.
    */
-  private boolean hasCopyConstructorAccepting(
-    final TypeMirror container,
-    final FieldPlan.Kind kind,
-    final TypeMirror argument
-  ) {
-    final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
-    if (implEl == null) return false;
-    final var types = processingEnv.getTypeUtils();
-    for (final var ctor : ElementFilter.constructorsIn(implEl.getEnclosedElements())) {
-      if (!ctor.getModifiers().contains(Modifier.PUBLIC)) continue;
-      final var params = ctor.getParameters();
-      if (
-        params.size() == 1 && types.isAssignable(types.erasure(argument), types.erasure(params.getFirst().asType()))
-      ) return true;
-    }
-    return false;
+  private String concreteImplFqn(final TypeMirror container, final FieldPlan.Kind kind) {
+    return allocation.implementationFor(container, family(kind)) instanceof Allocation.Build build
+      ? build.implName()
+      : ((TypeElement) ((DeclaredType) container).asElement()).getQualifiedName().toString();
   }
 
-  // FQN of the concrete, instantiable class to allocate for a container field of the given declared
-  // type — the declared subtype itself when it is an instantiable class (ArrayList, TreeSet,
-  // TreeMap, …), else the default impl for the interface family. The interface-family defaults
-  // match the runtime allocators in ContainerLifts for every interface raw either of them names,
-  // so codegen and the reflective path produce the same runtime class for an interface-typed field.
-  // Adding a family to one table without the other compiles under @Bridge and throws under
-  // mapper(...), which is the swap the two paths exist to make interchangeable.
-  //
-  // The two plain hash families default to their insertion-ordered form because a conversion that
-  // is not asked to reorder should not: an ordered source behind an interface-typed field keeps its
-  // order across the rebuild. The sorted and concurrent interfaces name a contract no hash
-  // container keeps at all, so each takes the implementation that keeps it.
-  private static String concreteImplFqn(final TypeMirror container, final FieldPlan.Kind kind) {
-    final var el = (TypeElement) ((DeclaredType) container).asElement();
-    if (el.getKind() == ElementKind.CLASS && !el.getModifiers().contains(Modifier.ABSTRACT)) {
-      return el.getQualifiedName().toString();
-    }
-    // A rebuild into a LinkedHashMap satisfies a SortedMap-typed field and silently drops its
-    // ordering, which is why the family decides the impl before the kind does.
-    final var declared = el.getQualifiedName().toString();
-    return switch (declared) {
-      case "java.util.SortedSet", "java.util.NavigableSet" -> "java.util.TreeSet";
-      case "java.util.SortedMap", "java.util.NavigableMap" -> "java.util.TreeMap";
-      case "java.util.concurrent.ConcurrentMap" -> "java.util.concurrent.ConcurrentHashMap";
-      // Viewed as lists, but an ArrayList satisfies neither declaration -- so the family decides
-      // here too, exactly as the sorted and concurrent ones above it do.
-      case "java.util.Deque", "java.util.Queue" -> "java.util.ArrayDeque";
-      default -> switch (kind) {
-        case LIST -> "java.util.ArrayList";
-        case SET -> "java.util.LinkedHashSet";
-        case MAP_VALUES -> "java.util.LinkedHashMap";
-        default -> throw new IllegalStateException("not a collection/map kind: " + kind);
-      };
+  /**
+   * The shared rules' answer for a container the bridge, emitted into {@code bridgePkg}, builds.
+   */
+  private Allocation allocationOf(final TypeMirror container, final FieldPlan.Kind kind, final String bridgePkg) {
+    return allocation.allocate(container, family(kind), bridgePkg);
+  }
+
+  /** The family a container plan builds, as the shared rules name it. */
+  private static ContainerView.Kind family(final FieldPlan.Kind kind) {
+    return switch (kind) {
+      case LIST -> ContainerView.Kind.LIST;
+      case SET -> ContainerView.Kind.SET;
+      case MAP_VALUES -> ContainerView.Kind.MAP_VALUES;
+      default -> throw new IllegalStateException("not a collection/map kind: " + kind);
     };
   }
 
@@ -2877,41 +2826,55 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Allocation expression for a container that will be filled with {@code src.size()} elements.
+   * Allocation expression for a container that will be filled with {@code src.size()} elements,
+   * written through the call the shared allocation rules decide, which is the call the reflective
+   * path makes for the same class.
    *
-   * <p>{@code ArrayList}'s int constructor takes an exact element capacity, but the hash
-   * containers' takes a table capacity: a table built straight from an element count resizes
-   * whenever that count exceeds {@code 0.75 * nextPowerOfTwo(count)}, costing one reallocation plus
-   * a rehash of everything already inserted. Those route through the JDK's {@code newXxx}
-   * factories, which apply the load factor for the caller. A container with neither is filled from
-   * its default capacity.
-   *
-   * <p>Only the JDK default impls can be sized at all: a user subtype declares no sized constructor
-   * (constructors are not inherited), and one it declares itself carries whatever meaning its
-   * author gave the argument.
+   * <p>An ordering to carry decides first, whatever the call: a sorted container is built from the
+   * order its source kept rather than from a size. A comparator that is null is natural ordering,
+   * which the no-argument constructor already gives; handing the null over instead would reach a
+   * constructor free to reject it.
    *
    * @param typeArgs the emitted type-argument clause, angle brackets included, or empty for a class
-   *     that declares no type parameters; see {@link #typeArgumentClause}
+   *     that declares no type parameters or is allocated raw; see {@link #typeArgumentClause}
    * @param ordering the constructor argument carrying a sorted container's ordering, empty for
-   *     every impl that has none to carry
+   *     every class that has none to carry
    */
-  private static String sizedAlloc(final String implFqn, final String typeArgs, final String ordering) {
-    return switch (implFqn) {
+  private String sizedAlloc(
+    final TypeMirror container,
+    final FieldPlan.Kind kind,
+    final String implFqn,
+    final String typeArgs,
+    final String ordering
+  ) {
+    if (!ordering.isEmpty()) {
+      return (
+        ordering + " == null ? new " + implFqn + typeArgs + "() : new " + implFqn + typeArgs + "(" + ordering + ")"
+      );
+    }
+    final var call =
+      allocation.implementationFor(container, family(kind)) instanceof Allocation.Build build
+        ? build.call()
+        : Allocation.Call.NO_ARG;
+    return switch (call) {
       // A factory method takes explicit type arguments or none: a diamond is not written there, and
       // leaving them off lets the assignment infer them, as the diamond does for a constructor.
-      case "java.util.HashSet", "java.util.LinkedHashSet", "java.util.HashMap", "java.util.LinkedHashMap" -> implFqn +
+      case TABLE_FACTORY -> implFqn +
       "." +
       (typeArgs.equals("<>") ? "" : typeArgs) +
       "new" +
       simpleName(implFqn) +
       "(src.size())";
-      case "java.util.ArrayList" -> "new " + implFqn + typeArgs + "(src.size())";
-      // A comparator that is null is natural ordering, which the no-argument constructor already
-      // gives. Handing the null over instead would reach a constructor free to reject it.
-      default -> ordering.isEmpty()
-        ? "new " + implFqn + typeArgs + "()"
-        : ordering + " == null ? new " + implFqn + typeArgs + "() : new " + implFqn + typeArgs + "(" + ordering + ")";
+      case COUNT -> "new " + implFqn + typeArgs + "(src.size())";
+      case TABLE_ARITHMETIC -> "new " + implFqn + typeArgs + "((int) Math.ceil(src.size() / 0.75d))";
+      case KEY_CLASS -> "new " + implFqn + typeArgs + "(" + keyClassLiteral(container) + ")";
+      case NO_ARG, ORDERING -> "new " + implFqn + typeArgs + "()";
     };
+  }
+
+  /** The class literal of a declared map's key type, which a container built from one is handed. */
+  private String keyClassLiteral(final TypeMirror container) {
+    return processingEnv.getTypeUtils().erasure(rules.containerViewOf(container).keyType()) + ".class";
   }
 
   /**
@@ -3045,24 +3008,21 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // type. That is decided before the route is, so it is asked first.
           final var unassignable = firstUnassignableContainer(sf.type(), tf.type(), subPlan.kind(), parentPkg);
           if (unassignable != null) {
-            error(source, unassignableContainerMessage(source, target, sf.name(), unassignable));
+            error(source, refusedContainerMessage(source, target, sf.name(), unassignable));
             return null;
           }
           final var elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(subPlan.subBridgeName());
-          // A copy constructor belongs to the class the family default names, so a side reached
-          // through its builder instead would be copy-constructed into something the field cannot
-          // hold. Asking the allocator keeps that decision in one place rather than re-deriving
-          // what makes a container need the builder.
+          // Which side a copy constructor can build is the shared allocation rules' decision, which
+          // the reflective path makes too. A side reached through its builder is not copied, since
+          // the builder is what builds it.
           final var inlineCopy =
             elementIdentity &&
-            builderAllocExpr(sf.type(), subPlan.kind(), parentPkg) == null &&
-            builderAllocExpr(tf.type(), subPlan.kind(), parentPkg) == null &&
-            hasCopyConstructorAccepting(tf.type(), subPlan.kind(), sf.type()) &&
-            hasCopyConstructorAccepting(sf.type(), subPlan.kind(), tf.type());
+            copyConstructs(tf.type(), subPlan.kind(), sf.type(), parentPkg) &&
+            copyConstructs(sf.type(), subPlan.kind(), tf.type(), parentPkg);
           if (!inlineCopy) {
             final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), subPlan.kind(), parentPkg);
             if (badAlloc != null) {
-              error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
+              error(source, refusedContainerMessage(source, target, sf.name(), badAlloc));
               return null;
             }
             // Identity elements have no helper of their own, so they take the self-contained one.
@@ -3098,7 +3058,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // construction. A concrete class it cannot probe, and its constructor is checked here.
         final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), copy, parentPkg);
         if (badAlloc != null) {
-          error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
+          error(source, refusedContainerMessage(source, target, sf.name(), badAlloc));
           return null;
         }
         plans.put(sf.name(), FieldPlan.ofKind(copy, IDENTITY_ELEMENT_SENTINEL).asRawContainer());
@@ -3274,7 +3234,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       final var badAlloc = firstNonAllocatableContainer(srcElement, tgtElement, copy, parentPkg);
       if (badAlloc != null) {
-        error(parentSource, unallocatableContainerMessage(parentSource, parentTarget, fieldName, badAlloc));
+        error(parentSource, refusedContainerMessage(parentSource, parentTarget, fieldName, badAlloc));
         return null;
       }
       final var name = "__Nested" + nestedElements.size();
@@ -3384,7 +3344,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // whether it can be allocated and assigned, never whether it has a copy constructor.
     final var unassignable = firstUnassignableContainer(srcElement, tgtElement, inner.kind(), parentPkg);
     if (unassignable != null) {
-      error(parentSource, unassignableContainerMessage(parentSource, parentTarget, fieldName, unassignable));
+      error(parentSource, refusedContainerMessage(parentSource, parentTarget, fieldName, unassignable));
       return null;
     }
     final var unnameable = firstUnnameableContainer(srcElement, tgtElement, parentPkg);
@@ -3394,7 +3354,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     final var badAlloc = firstNonAllocatableContainer(srcElement, tgtElement, inner.kind(), parentPkg);
     if (badAlloc != null) {
-      error(parentSource, unallocatableContainerMessage(parentSource, parentTarget, fieldName, badAlloc));
+      error(parentSource, refusedContainerMessage(parentSource, parentTarget, fieldName, badAlloc));
       return null;
     }
     final var name = "__Nested" + nestedElements.size();
@@ -3815,8 +3775,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * other case: which constructor {@code new TreeSet<>(src)} binds is fixed by the declared type of
    * {@code src}, so a source written as a plain {@code Set} that holds a {@code SortedSet} is
    * copied through the {@code Collection} overload and loses its comparator. The helper reads the
-   * comparator from the value. The question is asked per direction, because the helper allocates
-   * through a no-argument constructor, which an unsorted output such as {@code EnumMap} lacks.
+   * comparator from the value. The question is asked per direction, because only an output that
+   * keeps an order needs the helper, and the other direction keeps the copy constructor.
    */
   private boolean copiesThroughHelper(final FieldPlan plan, final String outputImpl) {
     if (plan.rawContainer()) return true;
@@ -3863,10 +3823,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The first of the two container types whose chosen allocation class cannot be assigned to it, or
-   * null when both fit. Picking a class and being able to name it are separate obligations from
-   * being able to assign it: an interface or abstract type the adopter wrote falls through to the
-   * family default, which is instantiable and has the right shape and is still not that type.
+   * Why the first of the two container types that nothing a rebuild can build is an instance of is
+   * refused, or null when both have a class to build. That is asked of the shared allocation rules
+   * before anything else, because whichever route a container takes it allocates a class that has
+   * to be the declared type: an interface or abstract type the table does not name is built as its
+   * family default, which has the right shape and need not be that type.
    */
   private String firstUnassignableContainer(
     final TypeMirror srcContainer,
@@ -3874,16 +3835,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final FieldPlan.Kind kind,
     final String bridgePkg
   ) {
-    final var types = processingEnv.getTypeUtils();
     for (final var container : List.of(srcContainer, tgtContainer)) {
       // A declared type nothing allocatable is an instance of may still be reachable through its
       // own builder, which is the route the reflective path takes for exactly this shape. The test
       // is the allocator's own, so a gate never refuses a container the emitter would have built.
       if (builderAllocExpr(container, kind, bridgePkg) != null) continue;
-      final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
-      if (implEl == null) continue;
-      if (!types.isAssignable(types.erasure(implEl.asType()), types.erasure(container))) {
-        return container.toString();
+      if (allocation.implementationFor(container, family(kind)) instanceof Allocation.Refuse refuse) {
+        return refuse.reason();
       }
     }
     return null;
@@ -3919,12 +3877,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return null;
   }
 
-  // The first of the two raw-container fields whose concrete allocation class lacks a public no-arg
-  // constructor (the generated `new <impl>()` would not compile), or null when both are
-  // allocatable.
-  // The JDK default impls (ArrayList / LinkedHashSet / LinkedHashMap) always qualify; only a user
-  // subtype
-  // can hide its no-arg ctor.
   /**
    * The first of two containers held inside a field's type whose class the bridge's package cannot
    * name, or null when it can name both. The nested element class writes each container's type as a
@@ -3969,6 +3921,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
   }
 
+  /**
+   * Why the first of the two containers the bridge cannot build is refused, or null when it can
+   * build both. The shared allocation rules decide, for a rebuild emitted into {@code bridgePkg}:
+   * the class they name has to have a no-argument constructor that package can call. A container
+   * whose builder makes it needs no constructor of its own, which is the point of hiding one.
+   */
   private String firstNonAllocatableContainer(
     final TypeMirror srcContainer,
     final TypeMirror tgtContainer,
@@ -3976,12 +3934,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String bridgePkg
   ) {
     for (final var container : List.of(srcContainer, tgtContainer)) {
-      // A type whose builder makes it needs no constructor of its own, which is the point of
-      // hiding one.
       if (builderAllocExpr(container, kind, bridgePkg) != null) continue;
-      final var implFqn = concreteImplFqn(container, kind);
-      final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
-      if (implEl != null && !hasPublicNoArgConstructor(implEl)) return implFqn;
+      if (allocationOf(container, kind, bridgePkg) instanceof Allocation.Refuse refuse) return refuse.reason();
     }
     return null;
   }
@@ -4218,7 +4172,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * when its {@code build()} produces the declared type.
    */
   private String builderAllocExpr(final TypeMirror container, final FieldPlan.Kind kind, final String bridgePkg) {
-    if (!needsBuilderRoute(container, kind)) return null;
+    if (!needsBuilderRoute(container, kind, bridgePkg)) return null;
     // A container allocated by its builder carries whatever ordering build() chose, which nothing
     // here can pass a comparator to. A declared type promising an order would keep the promise only
     // by luck, so the route is not offered and the pairing is refused by name instead.
@@ -4235,20 +4189,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * under which its builder should be called.
    *
    * <p>A builder is a way to reach a type that cannot be constructed, not a better way to reach one
-   * that can. A concrete container with a public no-argument constructor is allocated through it
-   * and sized from the source in one step; routing such a type through its builder instead drops
-   * that sizing and adopts whatever {@code build()} chose to return, for a type whose allocation
-   * was never in question.
+   * that can. A container the shared allocation rules can allocate is built and sized from the
+   * source in one step; routing such a type through its builder instead drops that sizing and
+   * adopts whatever {@code build()} chose to return, for a type whose allocation was never in
+   * question.
    */
-  private boolean needsBuilderRoute(final TypeMirror container, final FieldPlan.Kind kind) {
-    if (container.getKind() != TypeKind.DECLARED) return false;
-    final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
-    // Every name that method yields is either the declared class itself or a java.base container,
-    // so this resolves for anything reaching here and the verdict below is what decides the route.
-    if (implEl == null) return false;
-    final var types = processingEnv.getTypeUtils();
-    if (!types.isAssignable(types.erasure(implEl.asType()), types.erasure(container))) return true;
-    return !hasPublicNoArgConstructor(implEl);
+  private boolean needsBuilderRoute(final TypeMirror container, final FieldPlan.Kind kind, final String bridgePkg) {
+    return (
+      container.getKind() == TypeKind.DECLARED && allocationOf(container, kind, bridgePkg) instanceof Allocation.Refuse
+    );
   }
 
   /**
@@ -4282,14 +4231,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var implFqn = concreteImplFqn(tgtContainer, kind);
     final var arguments = allocTypeArguments(tgtContainer, kind);
     if (arguments.stream().anyMatch(Objects::isNull)) {
-      return rawTypedOutDeclaration(tgtContainer, implFqn, orderingArg(kind, tgtContainer, implFqn, elementsPreserved));
+      return rawTypedOutDeclaration(
+        tgtContainer,
+        sizedAlloc(tgtContainer, kind, implFqn, "", orderingArg(kind, tgtContainer, implFqn, elementsPreserved))
+      );
     }
     final var typeArgs = typeArgumentClause(
       implFqn,
       arguments.stream().map(String::valueOf).collect(Collectors.joining(", "))
     );
     return outDeclaration(
-      sizedAlloc(implFqn, typeArgs, orderingArg(kind, tgtContainer, implFqn, elementsPreserved)),
+      sizedAlloc(tgtContainer, kind, implFqn, typeArgs, orderingArg(kind, tgtContainer, implFqn, elementsPreserved)),
       false
     );
   }
@@ -4312,7 +4264,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       !declared.getTypeArguments().isEmpty() &&
       allocTypeArguments(container, kind).stream().anyMatch(Objects::isNull)
     ) {
-      return rawTypedOutDeclaration(container, implFqn, orderingArg(kind, container, implFqn, elementsPreserved));
+      return rawTypedOutDeclaration(
+        container,
+        sizedAlloc(container, kind, implFqn, "", orderingArg(kind, container, implFqn, elementsPreserved))
+      );
     }
     return outDeclaration(rawAllocExpr(container, kind, elementsPreserved), false);
   }
@@ -4324,10 +4279,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * declared as the field's own type, which every element the helper adds already fits, and the
    * unchecked conversion that takes is suppressed on that one declaration.
    */
-  private static String rawTypedOutDeclaration(final TypeMirror declared, final String implFqn, final String ordering) {
-    final var alloc = ordering.isEmpty()
-      ? "new " + implFqn + "()"
-      : ordering + " == null ? new " + implFqn + "() : new " + implFqn + "(" + ordering + ")";
+  private static String rawTypedOutDeclaration(final TypeMirror declared, final String alloc) {
     return "    @SuppressWarnings({\"unchecked\", \"rawtypes\"}) final " + declared + " out = " + alloc + ";";
   }
 
@@ -4372,7 +4324,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       .stream()
       .map(String::valueOf)
       .collect(Collectors.joining(", "));
-    return sizedAlloc(implFqn, "<" + args + ">", orderingArg(kind, container, implFqn, elementsPreserved));
+    return sizedAlloc(
+      container,
+      kind,
+      implFqn,
+      "<" + args + ">",
+      orderingArg(kind, container, implFqn, elementsPreserved)
+    );
   }
 
   /**
@@ -4568,48 +4526,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     emitOrderedInsert(out, tgtContainer, srcContainer, family, "      ", null);
     out.println("      throw new IllegalStateException(");
     out.println(
-      "        \"Deep map: " +
-        binaryNameOf(tgtContainer) +
-        " keeps its " +
-        family.plural() +
-        " in order, and " +
-        family.one() +
-        "\""
+      "        " +
+        literal(
+          PairingMessages.unorderableInsertHead(binaryNameOf(tgtContainer), map) +
+            PairingMessages.unorderableInsertUnnamed(map)
+        )
     );
-    out.println("          + \" could not be ordered there, which a second pass over the source did not meet again\"");
-    out.println("          + \" to name\"");
     emitRefusalAdvice(out, family, "        ", "__unordered");
     out.println("    }");
   }
 
-  /**
-   * How an ordering refusal names what a sorted container orders: a set's elements, a map's keys,
-   * and the container to declare instead.
-   */
+  /** Which of the two sorted families an ordering refusal is about. */
   private enum OrderedNouns {
-    SET("elements", "an element", "set"),
-    MAP("keys", "a key", "map");
+    SET,
+    MAP;
 
-    private final String plural;
-    private final String one;
-    private final String container;
-
-    OrderedNouns(final String plural, final String one, final String container) {
-      this.plural = plural;
-      this.one = one;
-      this.container = container;
-    }
-
-    String plural() {
-      return plural;
-    }
-
-    String one() {
-      return one;
-    }
-
-    String container() {
-      return container;
+    boolean map() {
+      return this == MAP;
     }
   }
 
@@ -4629,17 +4562,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String indent,
     final String cause
   ) {
-    out.println(
-      indent + "  + \". Supply an ordering these " + family.plural() + " accept through a Mapping.via(...) row, or\""
-    );
-    out.println(
-      indent +
-        "  + \" declare the target as a " +
-        family.container() +
-        " that keeps no order. The cause is the cast itself.\","
-    );
+    out.println(indent + "  + " + literal(PairingMessages.unorderableInsertAdvice(family.map())) + ",");
     out.println(indent + cause);
     out.println(indent.substring(2) + ");");
+  }
+
+  /** {@code text} as a Java string literal. */
+  private static String literal(final String text) {
+    return "\"" + escapeJavaString(text) + "\"";
   }
 
   /**
@@ -4681,15 +4611,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println(indent + (map ? "    out.put(__k, __v);" : "    out.add(" + ordered + ");"));
     out.println(indent + "  } catch (final ClassCastException __cast) {");
     out.println(indent + "    throw new IllegalStateException(");
-    out.println(indent + "      \"Deep map: " + outRaw + " keeps its " + family.plural() + " in order, and \"");
+    out.println(indent + "      " + literal(PairingMessages.unorderableInsertHead(outRaw, map)));
     out.println(indent + "        + " + ordered + ".getClass().getName()");
-    out.println(indent + "        + \" could not be ordered there\"");
     // Asked through the class object rather than with instanceof: a value of a final type that is
     // not Comparable makes instanceof a compile error, and casting to Object first is redundant
     // where the value is already Object, as it is in a copy between containers used raw.
     out.println(indent + "        + (Comparable.class.isInstance(" + ordered + ")");
-    out.println(indent + "          ? \", though its type implements Comparable\"");
-    out.println(indent + "          : \", and its type does not implement Comparable\")");
+    out.println(indent + "          ? " + literal(PairingMessages.unorderableInsertComparable(true)));
+    out.println(indent + "          : " + literal(PairingMessages.unorderableInsertComparable(false)) + ")");
     emitRefusalAdvice(out, family, indent + "      ", "__cast");
     out.println(indent + "  }");
     out.println(indent + "}");

@@ -364,8 +364,8 @@ honesty caveat: auto-lift requires SAME-kind containers on both sides (`PairingR
 container views' kinds); MapStruct's List -> Set cross-kind copy needs an explicit to(src, tgt, fwd, bwd) row in
 telescope. A `Deque` or `Queue` field is viewed as a list, and a field declared as the general `Collection` takes the
 other side's kind (`PairingRules.settledAgainst`). Target concrete class (ArrayList/LinkedList/Deque/...) is honored
-through the allocation table in `PairingRules` that the runtime and codegen paths share, rendered at runtime by
-`ContainerLifts.listAllocatorFor`.
+through the allocation table in `PairingRules` and the rules `ContainerAllocation` layers on it, which the runtime and
+codegen paths share, rendered at runtime by `ContainerLifts.allocatorFor`.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, the class javadoc
 (List/Set/Map-values/Optional lift the element Iso, containers nest to any depth), the LiftContainer branch of
@@ -404,13 +404,13 @@ VALUE mapping is fully covered: auto-lifted through `ContainerLifts.liftMapIntoT
 via(...) with a value-level Mapper. KEY mapping is deliberately not supported — key types must match exactly and keys
 are copied verbatim; a key conversion (e.g. String keys -> enum keys) requires a manual whole-field to(src, tgt, fwd,
 bwd) transform over the entire Map. No per-key/per-value format sugar like @MapMapping(valueDateFormat) — the equivalent
-is a hand-written stream/collect transform row. Target Map concrete type is honored; EnumMap targets are rejected with a
-precise error (needs an explicit row).
+is a hand-written stream/collect transform row. Target Map concrete type is honored; an EnumMap target is built from the
+key class its declaration names.
 
 <sub>Evidence: `DeepMap`'s MAP_VALUES lift; `ContainerLifts.liftMapIntoTargetRaw` ('Preserves source keys verbatim');
 `DeepMap`'s via(...) rejection when Map key types differ ('Key types must match exactly; auto-lifting preserves the
-source keys'); `ContainerLifts.mapAllocatorFor` (HashMap/LinkedHashMap/TreeMap/ConcurrentHashMap/...; EnumMap rejected
-at plan time, by the `EnumMap` entry of the allocation table in `PairingRules`);
+source keys'); `ContainerLifts.allocatorFor` (HashMap/LinkedHashMap/TreeMap/ConcurrentHashMap/...; EnumMap built from
+its key class, by the `EnumMap` entry of the allocation table in `PairingRules`);
 internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java, `decidePair` (mismatched key
 types -> Incompatible) and `containerViewOf` with `decidableKey` (a wildcard key, or one that mentions a type variable,
 means the Map is not treated as liftable); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the
@@ -453,15 +453,15 @@ targets.
 says 'Closes MapStruct's @MappingTarget for the bean path'; setter-based, records rejected, two-phase staged writes);
 core/src/test/java/io/github/eschizoid/telescope/MapperIntoTest.java, the nested class 'Bean target — in-place mutation
 preserves target identity' (identity preserved, repeatable);
-core/src/main/java/io/github/eschizoid/telescope/ContainerLifts.java, `liftListIntoTargetRaw` with `listAllocatorFor`,
-and `setAllocatorFor` / `mapAllocatorFor` (the result's runtime class is the one the shared allocation table in
-`PairingRules` names for the declared type; a type the table does not name is built through its own public no-arg
-constructor, or the family default when it is an interface or abstract class the default implements, and a type none of
-those reaches throws at plan time); core/src/test/java/io/github/eschizoid/telescope/ContainerAllocatorCorpusTest.java,
-'the reflective path allocates exactly what the generated path allocates, and refuses the rest' (every public
-`java.base` container class); core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, `writeBean` /
-`writeBeans` with BUILDER/SETTERS/CONSTRUCTOR — no ADDER; a grep for 'adder' across core/, internal/ and codegen/ finds
-only the word 'ladder' (no adder support anywhere)</sub>
+core/src/main/java/io/github/eschizoid/telescope/ContainerLifts.java, `liftListIntoTargetRaw` with `allocatorFor` (the
+result's runtime class is the one `ContainerAllocation` decides for the declared type: the class the shared allocation
+table in `PairingRules` names, the family default when it is an interface or abstract class the default implements, or
+the type itself through a no-arg constructor that is not private, and a type none of those reaches throws at plan time);
+core/src/test/java/io/github/eschizoid/telescope/ContainerAllocatorCorpusTest.java, 'the reflective path allocates
+exactly what the generated path allocates, and refuses the rest' (every public `java.base` container class);
+core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, `writeBean` / `writeBeans` with
+BUILDER/SETTERS/CONSTRUCTOR — no ADDER; a grep for 'adder' across core/, internal/ and codegen/ finds only the word
+'ladder' (no adder support anywhere)</sub>
 
 ### Stream support
 

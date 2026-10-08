@@ -5,13 +5,12 @@ import io.github.eschizoid.telescope.internal.Beans;
 import io.github.eschizoid.telescope.internal.MhIso;
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.pairing.Allocation;
+import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.Ordering;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
-import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.lang.reflect.TypeVariable;
@@ -19,6 +18,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -42,18 +42,18 @@ import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 /**
  * Container-shape lifting for {@link DeepMap}: element-copy Isos for same-kind container pairs
  * written without type arguments whose elements need no conversion, element-wise {@code List} /
  * {@code Set} / {@code Map}-values lifts that allocate the target's concrete raw class, and the
- * allocator renderings backing them. JDK collection classes live in {@code java.base} — {@link
- * Beans#intermediateAllocator} can't bind them via LambdaMetafactory's {@code privateLookupIn} — so
- * the common JDK raws are rendered by name, with {@code intermediateAllocator} as the fallback for
- * user-defined subclasses (where LMF DOES work via the user's own package). Each lift consults
- * {@link MhIso} first so a composed-handle leaf element iterates via a dedicated MethodHandle loop
- * rather than a megamorphic Java-loop lambda.
+ * allocator renderings backing them. Which class is built, through which call, and whether it can
+ * be built at all are the shared allocation rules' decisions; this file renders them. JDK
+ * collection classes live in {@code java.base}, where LambdaMetafactory's {@code privateLookupIn}
+ * cannot bind them, so the classes those rules name are written out by name, and a class of the
+ * adopter's own is bound through its constructor in its own package. Each lift consults {@link
+ * MhIso} first so a composed-handle leaf element iterates via a dedicated MethodHandle loop rather
+ * than a megamorphic Java-loop lambda.
  */
 final class ContainerLifts {
 
@@ -95,16 +95,11 @@ final class ContainerLifts {
    * <p>An interface is built as the default implementation the shared table names for its family,
    * which carries the source's comparator where the default is a sorted one; the spec accepts the
    * copy on exactly that condition, so the two cannot disagree. An abstract class has no default
-   * and never reaches here. Any other class is built through its own allocator, and the source's
-   * order is carried into it where the class keeps one.
+   * and never reaches here. Any other class is built as the shared allocation rules decide, and the
+   * source's order is carried into it where the class keeps one.
    */
   private static Function<Object, Object> copyAllocator(final Class<?> cls, final ContainerView.Kind kind) {
-    if (cls.isInterface()) return specAllocatorFor(cls, kind);
-    final var supplier = Beans.intermediateAllocator(cls);
-    // Copying elements verbatim leaves an order to carry: the side being filled keeps one, and the
-    // side being read has one to give. A supplier is handed no source, so the ordering rule is
-    // applied here as it is wherever else a sorted container is built.
-    return orderingAware(cls, cls, kind, ignored -> supplier.get());
+    return cls.isInterface() ? specAllocatorFor(cls, kind) : allocatorFor(cls, cls, kind);
   }
 
   /** Map ↔ Map element-copy Iso. Mirror of {@link #collectionCopyIso} via {@code putAll}. */
@@ -161,8 +156,7 @@ final class ContainerLifts {
   ) {
     final var srcRaw = rawClassOf(srcType);
     final var tgtRaw = rawClassOf(tgtType);
-    final var srcAlloc = set ? setAllocatorFor(srcRaw, srcType) : listAllocatorFor(srcRaw);
-    final var tgtAlloc = set ? setAllocatorFor(tgtRaw, tgtType) : listAllocatorFor(tgtRaw);
+    final var kind = set ? ContainerView.Kind.SET : ContainerView.Kind.LIST;
     // A sorted output whose elements change type has to see each converted element before it is
     // inserted, and the fused MethodHandle loop offers nowhere to stand between the two. Asking
     // outside the loop instead would mean converting the first element twice, once to test it and
@@ -170,19 +164,34 @@ final class ContainerLifts {
     // that counts or generates would see element zero twice and every other element once. The loop
     // converts once and tests what it is about to insert, so the fusion is what gives way.
     final boolean converts = elementIso != Iso.<Object>identity();
+    final boolean copies = !converts && copiesBothWays(srcRaw, srcType, tgtRaw, tgtType, kind);
+    final var srcCopy = copies ? copyConstructorIfRefused(srcRaw, srcType, kind, tgtRaw) : null;
+    final var tgtCopy = copies ? copyConstructorIfRefused(tgtRaw, tgtType, kind, srcRaw) : null;
+    final var srcAlloc = srcCopy != null ? null : liftAllocatorFor(srcRaw, srcType, kind);
+    final var tgtAlloc = tgtCopy != null ? null : liftAllocatorFor(tgtRaw, tgtType, kind);
     // Only the side being built has an ordering to establish, so only that side gives up its fused
     // loop. Asking the pair instead would cost the other direction its fusion to buy nothing: the
     // forward half of a sorted-source-to-unsorted-target conversion inserts into a container that
     // orders nothing and can raise no cast for the refusal to describe.
-    final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
+    final var mh = srcCopy == null && tgtCopy == null ? MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc) : null;
     final boolean loopForward = set && converts && keepsOrder(tgtRaw);
     final boolean loopBackward = set && converts && keepsOrder(srcRaw);
     final Iso<Object, Object> loop =
       mh != null && !loopForward && !loopBackward
         ? mh
         : Iso.of(
-            src -> mh != null && !loopForward ? mh.to(src) : buildConverted(src, tgtAlloc, elementIso::to, tgtRaw),
-            tgt -> mh != null && !loopBackward ? mh.from(tgt) : buildConverted(tgt, srcAlloc, elementIso::from, srcRaw)
+            src ->
+              tgtCopy != null
+                ? copied(src, tgtCopy)
+                : mh != null && !loopForward
+                  ? mh.to(src)
+                  : buildConverted(src, tgtAlloc, elementIso::to, tgtRaw),
+            tgt ->
+              srcCopy != null
+                ? copied(tgt, srcCopy)
+                : mh != null && !loopBackward
+                  ? mh.from(tgt)
+                  : buildConverted(tgt, srcAlloc, elementIso::from, srcRaw)
           );
     // A comparator is a problem only for the side being built. Carrying one across a conversion
     // would mean ordering the new element type with an ordering written for the old one, which
@@ -318,21 +327,11 @@ final class ContainerLifts {
     final ClassCastException cause
   ) {
     final var map = Map.class.isAssignableFrom(outRaw);
-    final var implementing =
-      element instanceof Comparable
-        ? ", though its type implements Comparable"
-        : ", and its type does not implement Comparable";
     return new IllegalStateException(
-      "Deep map: " +
-        outRaw.getName() +
-        (map ? " keeps its keys in order, and " : " keeps its elements in order, and ") +
+      PairingMessages.unorderableInsertHead(outRaw.getName(), map) +
         element.getClass().getName() +
-        " could not be ordered there" +
-        implementing +
-        (map ? ". Supply an ordering these keys accept" : ". Supply an ordering these elements accept") +
-        " through a Mapping.via(...) row, or declare the target as a " +
-        (map ? "map" : "set") +
-        " that keeps no order. The cause is the cast itself.",
+        PairingMessages.unorderableInsertComparable(element instanceof Comparable) +
+        PairingMessages.unorderableInsertAdvice(map),
       cause
     );
   }
@@ -459,19 +458,24 @@ final class ContainerLifts {
    * Map-level lift that writes into the target's concrete raw class. Mirror of {@link
    * #liftListIntoTargetRaw} for Maps. Preserves source keys verbatim (matches {@link
    * Iso#liftMapValues}); the calling site already ensured the key classes match. Falls back to
-   * {@link LinkedHashMap} when the raw class is the {@link Map} interface itself (see {@link
-   * #mapAllocatorFor}).
+   * {@link LinkedHashMap} when the raw class is the {@link Map} interface itself, as the shared
+   * allocation table decides (see {@link #allocatorFor}).
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> liftMapIntoTargetRaw(final Iso<Object, Object> elementIso, final Type srcType, final Type tgtType) {
     final var srcRaw = rawClassOf(srcType);
     final var tgtRaw = rawClassOf(tgtType);
-    final var srcAlloc = mapAllocatorFor(srcRaw, srcType);
-    final var tgtAlloc = mapAllocatorFor(tgtRaw, tgtType);
+    final var kind = ContainerView.Kind.MAP_VALUES;
+    final boolean copies =
+      elementIso == Iso.<Object>identity() && copiesBothWays(srcRaw, srcType, tgtRaw, tgtType, kind);
+    final var srcCopy = copies ? copyConstructorIfRefused(srcRaw, srcType, kind, tgtRaw) : null;
+    final var tgtCopy = copies ? copyConstructorIfRefused(tgtRaw, tgtType, kind, srcRaw) : null;
+    final var srcAlloc = srcCopy != null ? null : allocatorFor(srcRaw, srcType, kind);
+    final var tgtAlloc = tgtCopy != null ? null : allocatorFor(tgtRaw, tgtType, kind);
     // MethodHandle entry-loop over the value element's raw handle when it is a composed-handle
     // leaf;
     // keys pass through verbatim. Null value Iso => keep the Java loop.
-    final var mh = MhIso.liftMap(elementIso, srcAlloc, tgtAlloc);
+    final var mh = srcCopy == null && tgtCopy == null ? MhIso.liftMap(elementIso, srcAlloc, tgtAlloc) : null;
     // A side that keeps its keys in order has to see each key it inserts, to name one it cannot
     // order, and the fused loop offers nowhere to stand between the two. Only that side gives the
     // fused loop up.
@@ -479,161 +483,156 @@ final class ContainerLifts {
     final boolean loopBackward = SortedMap.class.isAssignableFrom(srcRaw);
     if (mh != null && !loopForward && !loopBackward) return mh;
     return Iso.of(
-      src -> mh != null && !loopForward ? mh.to(src) : buildMap(src, tgtAlloc, elementIso::to, tgtRaw),
-      tgt -> mh != null && !loopBackward ? mh.from(tgt) : buildMap(tgt, srcAlloc, elementIso::from, srcRaw)
+      src ->
+        tgtCopy != null
+          ? copied(src, tgtCopy)
+          : mh != null && !loopForward
+            ? mh.to(src)
+            : buildMap(src, tgtAlloc, elementIso::to, tgtRaw),
+      tgt ->
+        srcCopy != null
+          ? copied(tgt, srcCopy)
+          : mh != null && !loopBackward
+            ? mh.from(tgt)
+            : buildMap(tgt, srcAlloc, elementIso::from, srcRaw)
     );
   }
 
   /**
-   * The intermediate allocator for {@code raw}, or {@code null} when there is not one. Probing it
-   * means calling it, so a class whose constructor throws fails here — which is where it should
-   * fail, while the plan is being built, rather than once per conversion afterwards.
-   *
-   * <p>The call cannot fail by being impossible, only by throwing. Of the two ways the allocator
-   * builds a supplier, one binds a constructor handle and refuses an abstract type before doing so,
-   * and the other binds {@code builder()} and {@code build()}, which are ordinary methods. So no
-   * supplier it returns can raise a linkage error for having nothing to instantiate, which is what
-   * a catch here used to guard against.
+   * Whether a pair whose elements pass through unchanged is built by copy constructor where the
+   * shared allocation rules can allocate nothing for a side. They allow it only where each side can
+   * be built from the other, and neither is a side its builder makes, which is the condition the
+   * generated bridge copies inline under.
    */
-  private static Supplier<Object> probeAllocator(final Class<?> raw) {
-    final var alloc = Beans.intermediateAllocator(raw);
-    return alloc.get() == null ? null : alloc;
+  private static boolean copiesBothWays(
+    final Class<?> srcRaw,
+    final Type srcType,
+    final Class<?> tgtRaw,
+    final Type tgtType,
+    final ContainerView.Kind kind
+  ) {
+    return (
+      ALLOCATION.copiesInPlace(tgtType, kind, srcType, null) &&
+      ALLOCATION.copiesInPlace(srcType, kind, tgtType, null) &&
+      !builtByBuilder(srcRaw, srcType, kind) &&
+      !builtByBuilder(tgtRaw, tgtType, kind)
+    );
+  }
+
+  /** Whether the shared rules allocate nothing for this side and its builder builds it instead. */
+  private static boolean builtByBuilder(final Class<?> raw, final Type declared, final ContainerView.Kind kind) {
+    return (
+      ALLOCATION.allocate(declared, kind, null) instanceof Allocation.Refuse &&
+      Beans.intermediateAllocator(raw).get() != null
+    );
   }
 
   /**
-   * The last two questions an allocator asks before giving up, shared by all three families.
-   *
-   * <p>A declared type that cannot be instantiated at all — an interface, an abstract class — is
-   * asking for whatever implements its contract, so the family's default stands in. That is what
-   * the generated path does for the same declaration, and a type it allocates and this one refuses
-   * is a program that compiles under {@code @Bridge} and throws under {@code mapper(...)}.
-   *
-   * <p>A concrete one gets a public-lookup constructor handle. The tables below exist because
-   * {@code privateLookupIn} refuses {@code java.base}, which {@code publicLookup} does not need: it
-   * binds a public no-argument constructor on any exported class. Under native image such a
-   * constructor needs reachability metadata, where a hard-coded allocator needs none — so the table
-   * keeps the common shapes direct and only the tail comes through here.
-   *
-   * @return an allocator, or {@code null} when neither question has an answer
+   * The copy constructor a side the shared rules allocate nothing for is built by, handed the other
+   * side's container, or null for a side with an allocation to fill. Where several accept that
+   * container, the one with the narrowest parameter is the one Java's overload resolution binds, so
+   * it is the one the generated {@code new} calls too.
    */
-  private static Function<Object, Object> fallbackAllocatorFor(
+  private static Function<Object, Object> copyConstructorIfRefused(
     final Class<?> raw,
-    final Class<?> defaultImpl,
-    final Function<Object, Object> defaultAlloc
+    final Type declared,
+    final ContainerView.Kind kind,
+    final Class<?> from
   ) {
-    if (raw.isInterface() || Modifier.isAbstract(raw.getModifiers())) {
-      // Only where the default is one of them. A declared type the default does not implement
-      // cannot hold it, so allocating one moves the failure from plan time to the first conversion
-      // and turns a diagnostic naming the type into a bare cast error. The generated path refuses
-      // that pairing outright, so refusing is what keeps the two in step.
-      //
-      // The allocator handed in is the family's sized one, so a type reaching this branch is
-      // allocated exactly as a type the table names would be.
-      return raw.isAssignableFrom(defaultImpl) ? defaultAlloc : null;
+    if (!(ALLOCATION.allocate(declared, kind, null) instanceof Allocation.Refuse)) return null;
+    Class<?> parameter = null;
+    for (final var ctor : raw.getConstructors()) {
+      if (ctor.getParameterCount() != 1 || !ctor.getParameterTypes()[0].isAssignableFrom(from)) continue;
+      final var candidate = ctor.getParameterTypes()[0];
+      if (parameter == null || parameter.isAssignableFrom(candidate)) parameter = candidate;
     }
-    try {
-      final var ctor = MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class));
-      return ignored -> {
-        try {
-          return ctor.invoke();
-        } catch (final Throwable t) {
-          throw new IllegalStateException("Deep map: " + raw.getName() + " refused its no-argument constructor", t);
-        }
-      };
-    } catch (final NoSuchMethodException | IllegalAccessException e) {
-      return null;
-      // A missing-registration Error under exact reachability metadata is deliberately not caught:
-      // it names the class the image was built without, which is more useful to an adopter than
-      // this method's fallthrough would be.
-    }
+    final var handle = parameter == null ? null : Beans.publicConstructor(raw, parameter);
+    if (handle == null) return null;
+    return input -> {
+      try {
+        return handle.invoke(input);
+      } catch (final Throwable t) {
+        throw new IllegalStateException("Deep map: " + canonical(raw) + " refused its copy constructor", t);
+      }
+    };
   }
 
-  // JDK collection classes live in java.base — `Beans.intermediateAllocator` can't bind them
-  // via LambdaMetafactory's privateLookupIn (java.base doesn't grant private lookup to app code).
-  // The shared table names the common JDK Collection / Map raws so the standard shapes are
-  // allocated by a
-  // direct `new`, needing no lookup and no reachability metadata. A declared type the table does
-  // not name goes to `probeAllocator`, whose lookup does reach a user-defined subclass via the
-  // user's own package, and then to `fallbackAllocatorFor` for the tail.
-  private static Function<Object, Object> listAllocatorFor(final Class<?> raw) {
-    final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.LIST);
-    if (fromSpec != null) return fromSpec;
-    // Not in the shared table: above one element this allocates a staging list rather than its own
-    // type, which is a way of building rather than a decision about what to build.
+  /** {@code copy} applied to a container, which a null one passes through untouched. */
+  private static Object copied(final Object input, final Function<Object, Object> copy) {
+    return input == null ? null : copy.apply(input);
+  }
+
+  /**
+   * The allocator a lift fills for a container declared as {@code declared}, built as {@code kind}.
+   *
+   * <p>Which class is built, and through which call, is the shared allocation rules' decision, the
+   * same one the generated bridge renders as text. What is left here is making the call. A class
+   * the shared table names, or a family default standing in for an interface or abstract type, is
+   * written out by name: {@code java.base} constructors cannot be bound through {@code
+   * LambdaMetafactory}, and a direct {@code new} needs no reachability metadata under native image.
+   * A class built as itself is bound through its no-argument constructor, and a source's order is
+   * carried into it where it keeps one.
+   *
+   * <p>Where the rules refuse, a static {@code builder()} is the one route left, as it is on the
+   * generated path; a class with none is refused in the rules' words, while the plan is built.
+   */
+  private static Function<Object, Object> allocatorFor(
+    final Class<?> raw,
+    final Type declared,
+    final ContainerView.Kind kind
+  ) {
+    final var decision = ALLOCATION.allocate(declared, kind, null);
+    if (decision instanceof Allocation.Build build) {
+      final var named = rendered(build, kind, build.call() == Allocation.Call.KEY_CLASS ? keyClassOf(declared) : null);
+      if (named != null) return named;
+      // Probing means calling, so a constructor that throws fails here, while the plan is built,
+      // rather than once per conversion afterwards.
+      final var ctor = Beans.noArgConstructor(raw);
+      if (ctor != null && ctor.get() != null) return orderingAware(raw, declared, kind, ignored -> ctor.get());
+    }
+    final var builder = Beans.intermediateAllocator(raw);
+    if (builder.get() != null) return orderingAware(raw, declared, kind, ignored -> builder.get());
+    throw new IllegalStateException(
+      decision instanceof Allocation.Refuse refuse
+        ? refuse.reason()
+        : PairingMessages.noReachableConstructor(canonical(raw))
+    );
+  }
+
+  /**
+   * The allocator an element-wise collection lift fills, which stages a copy-on-write container's
+   * elements before {@link #finishCollection} copies them across.
+   */
+  private static Function<Object, Object> liftAllocatorFor(
+    final Class<?> raw,
+    final Type declared,
+    final ContainerView.Kind kind
+  ) {
+    final var staged = copyOnWriteAllocator(raw);
+    return staged != null ? staged : allocatorFor(raw, declared, kind);
+  }
+
+  /**
+   * The copy-on-write containers, which no table row names because what sets them apart is how they
+   * are filled rather than which class they are: above one element the lift stages the elements in
+   * a list and {@link #finishCollection} copies them across in one step, instead of copying the
+   * whole array once per element added.
+   */
+  private static Function<Object, Object> copyOnWriteAllocator(final Class<?> raw) {
     if (raw == CopyOnWriteArrayList.class) return input -> {
       final int size = ((Collection<?>) input).size();
       return size <= 1 ? new CopyOnWriteArrayList<>() : new ArrayList<>(size);
     };
-    final var alloc = probeAllocator(raw);
-    if (alloc != null) return ignored -> alloc.get();
-    final var fallback = fallbackAllocatorFor(raw, ArrayList.class, input ->
-      new ArrayList<>(((Collection<?>) input).size())
-    );
-    if (fallback != null) return fallback;
-    // Nothing can make one of these. Falling back to ArrayList would silently write the wrong
-    // runtime class into the target field and CCE at the setter, so this throws at plan time with
-    // a precise diagnostic instead.
-    throw new IllegalStateException(
-      "Deep map: no allocator for List subtype " +
-        raw.getName() +
-        ". Add it to the shared allocation table and render it here (java.base classes can't" +
-        " bind via LambdaMetafactory's privateLookupIn) or supply an explicit" +
-        " `Mapping.via(...)` row."
-    );
-  }
-
-  private static Function<Object, Object> setAllocatorFor(final Class<?> raw, final Type declared) {
-    final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.SET);
-    if (fromSpec != null) return fromSpec;
-    // Not in the shared table, for the same reason the list side's is not.
     if (raw == CopyOnWriteArraySet.class) return input -> {
       final int size = ((Collection<?>) input).size();
       return size <= 1 ? new CopyOnWriteArraySet<>() : new ArrayList<>(size);
     };
-    final var alloc = probeAllocator(raw);
-    if (alloc != null) return orderingAware(raw, declared, ContainerView.Kind.SET, ignored -> alloc.get());
-    final var fallback = fallbackAllocatorFor(raw, LinkedHashSet.class, input ->
-      LinkedHashSet.newLinkedHashSet(((Collection<?>) input).size())
-    );
-    if (fallback != null) return fallback;
-    throw new IllegalStateException(
-      "Deep map: no allocator for Set subtype " +
-        raw.getName() +
-        ". Add it to the shared allocation table and render it here (java.base classes can't" +
-        " bind via LambdaMetafactory's privateLookupIn) or supply an explicit" +
-        " `Mapping.via(...)` row."
-    );
+    return null;
   }
 
-  /**
-   * Map-side allocator. A bare {@code Map} rebuilds as a {@code LinkedHashMap}, so an ordered
-   * source behind an interface-typed field keeps its iteration order across the conversion, and the
-   * Map side matches the Set side, which has always rebuilt as a {@code LinkedHashSet}. A field
-   * declared as {@code HashMap} asked for that class specifically and still gets it.
-   *
-   * <p>{@code IdentityHashMap} and {@code WeakHashMap} are accepted but carry different semantics
-   * from a plain {@code HashMap} ({@code IdentityHashMap} uses reference equality for keys, {@code
-   * WeakHashMap} GCs keys without strong references) — adopters needing preservation declare an
-   * explicit {@code Mapping.via(...)} row. {@code EnumMap} is rejected at plan-time because its
-   * no-arg constructor doesn't exist (it needs the {@code Class<K>} arg); adopters must use the
-   * codegen path or an explicit row.
-   */
-  private static Function<Object, Object> mapAllocatorFor(final Class<?> raw, final Type declared) {
-    final var fromSpec = specAllocatorFor(raw, ContainerView.Kind.MAP_VALUES);
-    if (fromSpec != null) return fromSpec;
-    final var alloc = probeAllocator(raw);
-    if (alloc != null) return orderingAware(raw, declared, ContainerView.Kind.MAP_VALUES, ignored -> alloc.get());
-    final var fallback = fallbackAllocatorFor(raw, LinkedHashMap.class, input ->
-      LinkedHashMap.newLinkedHashMap(((Map<?, ?>) input).size())
-    );
-    if (fallback != null) return fallback;
-    throw new IllegalStateException(
-      "Deep map: no allocator for Map subtype " +
-        raw.getName() +
-        ". Add it to the shared allocation table and render it here (java.base classes can't" +
-        " bind via LambdaMetafactory's privateLookupIn) or supply an explicit" +
-        " `Mapping.via(...)` row."
-    );
+  /** The class of a declared map's keys, which a container built from its key class is handed. */
+  private static Class<?> keyClassOf(final Type declared) {
+    return rawClassOf(RULES.containerViewOf(declared).keyType());
   }
 
   /**
@@ -736,32 +735,47 @@ final class ContainerLifts {
   /** The shared rules, over reflection handles. */
   private static final PairingRules<Type> RULES = new PairingRules<>(PROPS);
 
+  /** The shared allocation rules, over reflection handles. */
+  private static final ContainerAllocation<Type> ALLOCATION = new ContainerAllocation<>(PROPS);
+
   /**
-   * The allocator the shared table asks for, or null where it names nothing and this file's own
-   * fallbacks decide.
+   * The allocator the shared table asks for, or null where it names nothing.
    *
-   * <p>Which class is built, and which of its constructors, are decided in {@code internal.pairing}
-   * where the generated bridge can read the same answer once it is moved across. What is left here
-   * is making the call, because {@code java.base} constructors cannot be bound through {@code
-   * LambdaMetafactory} and each has to be written out.
-   *
-   * <p>The call is dispatched on before the class is, so a decision that names the wrong
-   * constructor reaches a group that does not know the class and yields nothing, rather than
-   * quietly building the right class the wrong way.
+   * <p>Only the table is asked, not the rules layered on it, so a class the table does not name
+   * answers null rather than being bound. A container built from its key class is handed the class
+   * the source map was built from, which is the declared one wherever this is reached: an interface
+   * is never built that way, and a pair of one declared type reads an instance of that type.
    */
   private static Function<Object, Object> specAllocatorFor(final Class<?> raw, final ContainerView.Kind kind) {
     final var decision = RULES.allocationFor(raw, kind);
     if (decision == null) return null;
-    if (decision instanceof Allocation.Refuse refuse) {
-      throw new IllegalStateException("Deep map: " + refuse.reason());
-    }
-    final var build = (Allocation.Build) decision;
+    if (decision instanceof Allocation.Refuse refuse) throw new IllegalStateException(refuse.reason());
+    return rendered((Allocation.Build) decision, kind, null);
+  }
+
+  /**
+   * A decided allocation as a function of the source, or null where {@code build} names a class
+   * none of the calls below write out by name, which is a class built as itself.
+   *
+   * <p>The call is dispatched on before the class is, so a decision that names the wrong
+   * constructor reaches a group that does not know the class and yields nothing, rather than
+   * quietly building the right class the wrong way.
+   *
+   * @param keyClass the declared key class a container built from one is handed, or null to read it
+   *     off the source, which is then a map of that same class
+   */
+  private static Function<Object, Object> rendered(
+    final Allocation.Build build,
+    final ContainerView.Kind kind,
+    final Class<?> keyClass
+  ) {
     return switch (build.call()) {
       case NO_ARG -> noArg(build.implName());
       case COUNT -> fromCount(build.implName(), kind);
       case TABLE_FACTORY -> fromTableFactory(build.implName(), kind);
       case TABLE_ARITHMETIC -> fromTableArithmetic(build.implName());
       case ORDERING -> fromOrdering(build.implName(), kind);
+      case KEY_CLASS -> fromKeyClass(build.implName(), keyClass);
     };
   }
 
@@ -810,6 +824,19 @@ final class ContainerLifts {
       case "java.util.TreeMap" -> input -> new TreeMap<>(mapComparator(input));
       case "java.util.concurrent.ConcurrentSkipListMap" -> input -> new ConcurrentSkipListMap<>(mapComparator(input));
       default -> null;
+    };
+  }
+
+  @SuppressWarnings({ "unchecked", "rawtypes" })
+  private static Function<Object, Object> fromKeyClass(final String implName, final Class<?> keyClass) {
+    if (!EnumMap.class.getName().equals(implName)) return null;
+    if (keyClass != null) return ignored -> new EnumMap(keyClass);
+    // An EnumMap's own copy constructor is the one public way to learn its key class from an
+    // instance, so the source is copied and emptied.
+    return input -> {
+      final var fresh = new EnumMap((EnumMap) input);
+      fresh.clear();
+      return fresh;
     };
   }
 

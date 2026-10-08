@@ -181,7 +181,7 @@ class ContainerParityConversionTest {
     );
 
     assertTrue(
-      thrown.getMessage().contains("no allocator for"),
+      thrown.getMessage().contains(AbsElems.class.getCanonicalName() + " has no instance of its own"),
       () -> "the refusal should name the type and what to do about it: " + thrown.getMessage()
     );
     assertFalse(

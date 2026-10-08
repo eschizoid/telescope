@@ -166,7 +166,7 @@ class ContainerThroughBuilderTest {
   private static void assertRefused(final Family family, final Compilation compilation) {
     assertFalse(compilation.success(), () -> family + " should be refused; it compiled");
     assertTrue(
-      compilation.hasError("which telescope cannot construct"),
+      compilation.hasError("has no instance of its own"),
       () -> family + " should be refused by name; saw " + compilation.errorMessages()
     );
   }
@@ -444,7 +444,7 @@ class ContainerThroughBuilderTest {
 
     assertFalse(compilation.success(), () -> reason + ": should be refused; it compiled");
     assertTrue(
-      compilation.hasError("which telescope cannot construct"),
+      compilation.hasError("has no instance of its own"),
       () -> reason + ": should be refused by name; saw " + compilation.errorMessages()
     );
   }
@@ -566,7 +566,7 @@ class ContainerThroughBuilderTest {
 
     assertFalse(compilation.success(), "should be refused; it compiled");
     assertTrue(
-      compilation.hasError("which telescope cannot construct"),
+      compilation.hasError("has no instance of its own"),
       () -> "should be refused by name; saw " + compilation.errorMessages()
     );
   }
@@ -607,7 +607,7 @@ class ContainerThroughBuilderTest {
 
     assertFalse(compilation.success(), () -> "an ordered container should be refused; it compiled");
     assertTrue(
-      compilation.hasError("which telescope cannot construct"),
+      compilation.hasError("has no instance of its own"),
       () -> "it should be refused by name; saw " + compilation.errorMessages()
     );
   }

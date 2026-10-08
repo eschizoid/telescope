@@ -625,18 +625,7 @@ public final class PairingRules<T> {
     map(ConcurrentSkipListMap.class, ConcurrentSkipListMap.class, Allocation.Call.ORDERING),
     map(IdentityHashMap.class, IdentityHashMap.class, Allocation.Call.COUNT),
     map(WeakHashMap.class, WeakHashMap.class, Allocation.Call.TABLE_ARITHMETIC),
-    Map.entry(
-      EnumMap.class.getName(),
-      new Entry(
-        ContainerView.Kind.MAP_VALUES,
-        new Allocation.Refuse(
-          "EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg" +
-            " constructor (it needs the Class<K> key class). Use the codegen path" +
-            " or supply an explicit `Mapping.via(...)` row that constructs the" +
-            " EnumMap with its key class."
-        )
-      )
-    )
+    map(EnumMap.class, EnumMap.class, Allocation.Call.KEY_CLASS)
   );
 
   /** The families, computed once: the table's own iteration order is not meaningful. */
@@ -693,6 +682,20 @@ public final class PairingRules<T> {
     }
     final var entry = BY_DECLARED_NAME.get(name);
     return entry == null || entry.family() != kind ? null : entry.allocation();
+  }
+
+  /**
+   * What a family builds in place of a declaration the table does not name: the answer its root
+   * interface gets, so an abstract type standing in for a list is built as a {@code List} is.
+   */
+  static Allocation.Build familyDefault(final ContainerView.Kind kind) {
+    final var root = switch (kind) {
+      case LIST -> List.class;
+      case SET -> Set.class;
+      case MAP_VALUES -> Map.class;
+      case OPTIONAL, COLLECTION -> throw new IllegalArgumentException("no family default for " + kind);
+    };
+    return (Allocation.Build) BY_DECLARED_NAME.get(root.getName()).allocation();
   }
 
   /**

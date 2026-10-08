@@ -126,6 +126,56 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public boolean isAbstractType(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    return element != null && (element.getKind().isInterface() || element.getModifiers().contains(Modifier.ABSTRACT));
+  }
+
+  @Override
+  public boolean isImplementedBy(final TypeMirror t, final String className) {
+    final var impl = elements.getTypeElement(className.replace('$', '.'));
+    return impl != null && types.isAssignable(types.erasure(impl.asType()), types.erasure(t));
+  }
+
+  @Override
+  public Access noArgConstructorAccess(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    if (element == null || isAbstractType(t)) return Access.NONE;
+    for (final var ctor : ElementFilter.constructorsIn(element.getEnclosedElements())) {
+      if (!ctor.getParameters().isEmpty()) continue;
+      final var modifiers = ctor.getModifiers();
+      if (modifiers.contains(Modifier.PUBLIC)) return Access.PUBLIC;
+      return modifiers.contains(Modifier.PRIVATE) ? Access.PRIVATE : Access.PACKAGE;
+    }
+    return Access.NONE;
+  }
+
+  @Override
+  public TypeMirror typeNamed(final String binaryName) {
+    final var element = elements.getTypeElement(binaryName.replace('$', '.'));
+    return element == null ? null : element.asType();
+  }
+
+  @Override
+  public boolean hasPublicConstructorAccepting(final TypeMirror t, final TypeMirror argument) {
+    final var element = elementOf(types.erasure(t));
+    if (element == null) return false;
+    for (final var ctor : ElementFilter.constructorsIn(element.getEnclosedElements())) {
+      if (!ctor.getModifiers().contains(Modifier.PUBLIC) || ctor.getParameters().size() != 1) continue;
+      if (types.isAssignable(types.erasure(argument), types.erasure(ctor.getParameters().getFirst().asType()))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @Override
+  public String packageName(final TypeMirror t) {
+    final var element = elementOf(types.erasure(t));
+    return element == null ? "" : elements.getPackageOf(element).getQualifiedName().toString();
+  }
+
+  @Override
   public boolean isSubtypeOf(final TypeMirror t, final WellKnown wellKnown) {
     final var target = elements.getTypeElement(fqnOf(wellKnown));
     if (target == null) return false;

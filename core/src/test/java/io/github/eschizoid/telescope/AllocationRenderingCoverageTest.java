@@ -10,6 +10,7 @@ import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.reflect.Method;
 import java.lang.reflect.Type;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -62,9 +63,15 @@ class AllocationRenderingCoverageTest {
     final var rendered = (Function<Object, Object>) render.invoke(null, declared, kind);
     assertNotNull(rendered, () -> label + " is decided but nothing renders it");
 
-    final var made = rendered.apply(
-      kind == ContainerView.Kind.MAP_VALUES ? Map.of("kind", "value") : List.of("a", "b")
-    );
+    // A container built from its key class reads that class off a source of its own class when no
+    // declaration is in hand, so it is handed one.
+    final Object source =
+      build.call() == Allocation.Call.KEY_CLASS
+        ? new EnumMap<>(Map.of(ContainerView.Kind.LIST, "value"))
+        : kind == ContainerView.Kind.MAP_VALUES
+          ? Map.of("kind", "value")
+          : List.of("a", "b");
+    final var made = rendered.apply(source);
     assertEquals(
       build.implName(),
       made.getClass().getName(),
