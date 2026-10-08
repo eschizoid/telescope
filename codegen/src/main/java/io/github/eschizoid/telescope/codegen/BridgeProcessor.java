@@ -2695,9 +2695,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * Reports a sorted set target whose converted elements nothing can order, as the shared rule
-   * decides it, and answers whether it did. Asked once the element pair has planned, so a pairing
-   * refused for another reason keeps that reason.
+   * Reports a sorted target nothing can order, as the shared rules decide it, and answers whether
+   * it did: a set whose converted elements are of a class that is not comparable, or a map whose
+   * keys are of one and whose class cannot be handed a comparator. Asked once the element pair has
+   * planned, so a pairing refused for another reason keeps that reason.
    */
   private boolean refusesUnorderable(
     final TypeElement source,
@@ -2707,17 +2708,24 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final ContainerShape srcShape,
     final ContainerShape tgtShape
   ) {
-    if (srcShape.kind() != FieldPlan.Kind.SET) return false;
-    if (!rules.unorderableSortedTarget(srcShape.elementType(), tgtShape.elementType(), tf.type())) return false;
-    error(
-      source,
-      "@Bridge " +
-        source.getSimpleName() +
-        " -> " +
-        target.getSimpleName() +
-        ": " +
-        PairingMessages.unorderableSortedElement(sf.name(), tf.type().toString(), tgtShape.elementType().toString())
-    );
+    final String message;
+    if (
+      srcShape.kind() == FieldPlan.Kind.SET &&
+      rules.unorderableSortedTarget(srcShape.elementType(), tgtShape.elementType(), tf.type())
+    ) {
+      message = PairingMessages.unorderableSortedElement(
+        sf.name(),
+        tf.type().toString(),
+        tgtShape.elementType().toString()
+      );
+    } else if (
+      srcShape.kind() == FieldPlan.Kind.MAP_VALUES && rules.unorderableSortedKeys(tgtShape.keyType(), tf.type())
+    ) {
+      message = PairingMessages.unorderableSortedKey(sf.name(), tf.type().toString(), tgtShape.keyType().toString());
+    } else {
+      return false;
+    }
+    error(source, "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + message);
     return true;
   }
 
@@ -3666,17 +3674,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(out, plan.kind(), identity, tgtContainer, concreteImplFqn(tgtContainer, plan.kind()));
     out.println(rawOutDeclaration(tgtContainer, plan.kind(), identity));
-    if (plan.kind() == FieldPlan.Kind.MAP_VALUES) {
-      if (identity) {
-        out.println("    out.putAll(src);");
-      } else {
-        out.println(
-          "    for (final var e : src.entrySet()) out.put(e.getKey(), " + sub + "." + direction + "(e.getValue()));"
-        );
-      }
-    } else {
-      emitCollectionFill(out, tgtContainer, plan.kind(), identity ? null : sub + "." + direction + "(x)");
-    }
+    final var element = plan.kind() == FieldPlan.Kind.MAP_VALUES ? "(e.getValue())" : "(x)";
+    emitFill(out, tgtContainer, plan.kind(), identity ? null : sub + "." + direction + element);
     out.println("    return out;");
     out.println("  }");
   }
@@ -4253,56 +4252,108 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       concreteImplFqn(tgtContainer, FieldPlan.Kind.SET)
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false));
-    emitCollectionFill(out, tgtContainer, FieldPlan.Kind.SET, subBridge + "." + direction + "(x)");
+    emitFill(out, tgtContainer, FieldPlan.Kind.SET, subBridge + "." + direction + "(x)");
     out.println("    return out;");
     out.println("  }");
   }
 
   /**
-   * Fills {@code out} from {@code src}, each element converted by {@code convert}, an expression
-   * over {@code x}, or copied unchanged when {@code convert} is null. Every helper that fills a
-   * collection emits through here, so an output that keeps an order is guarded on every route.
+   * Fills {@code out} from {@code src}. A collection's elements are each converted by {@code
+   * convert}, an expression over {@code x}; a map's values by {@code convert} over {@code
+   * e.getValue()}, its keys passing through; and either is copied unchanged when {@code convert} is
+   * null. Every helper that fills a set or a map emits through here, so an output that keeps an
+   * order is guarded on every route.
    *
-   * <p>A sorted output whose elements are not ordered against their own kind can fail on the
-   * insert: an element that cannot be ordered there raises a cast from inside the container. That
-   * cast is turned into the refusal the reflective path gives, word for word, naming the container
-   * as declared and the element's runtime class. Elements ordered against their own kind keep the
-   * plain fill, so a cast from inside their own {@code compareTo} propagates as it is, as it does
-   * there.
+   * <p>A sorted output whose elements, or a sorted map whose keys, are not ordered against their
+   * own kind can fail on the insert: one that cannot be ordered there raises a cast from inside the
+   * container. That cast is turned into the refusal the reflective path gives, word for word,
+   * naming the container as declared and the offending element's or key's runtime class. Those
+   * ordered against their own kind keep the plain fill, so a cast from inside their own {@code
+   * compareTo} propagates as it is, as it does there.
    */
-  private void emitCollectionFill(
+  private void emitFill(
     final PrintWriter out,
     final TypeMirror tgtContainer,
     final FieldPlan.Kind kind,
     final String convert
   ) {
+    final var map = kind == FieldPlan.Kind.MAP_VALUES;
     final var guarded =
-      kind == FieldPlan.Kind.SET &&
+      (kind == FieldPlan.Kind.SET || map) &&
       keepsOrder(concreteImplFqn(tgtContainer, kind), kind) &&
-      !orderedAgainstItsOwnKind(setElementOf(tgtContainer));
+      !orderedAgainstItsOwnKind(comparatorTypeMirror(kind, tgtContainer));
     if (!guarded) {
-      out.println(convert == null ? "    out.addAll(src);" : "    for (final var x : src) out.add(" + convert + ");");
+      if (convert == null) {
+        out.println(map ? "    out.putAll(src);" : "    out.addAll(src);");
+      } else {
+        out.println(
+          map
+            ? "    for (final var e : src.entrySet()) out.put(e.getKey(), " + convert + ");"
+            : "    for (final var x : src) out.add(" + convert + ");"
+        );
+      }
       return;
     }
+    final var family = map ? OrderedNouns.MAP : OrderedNouns.SET;
     if (convert != null) {
-      emitOrderedInsert(out, tgtContainer, "    ", convert);
+      emitOrderedInsert(out, tgtContainer, family, "    ", convert);
       return;
     }
-    // addAll keeps a sorted container's linear build from a source sorted the same way. Once it
-    // has failed, the fill ends in a refusal whatever the source does next: the elements are
-    // inserted again one at a time, and the first that cannot be ordered is named; a source that
-    // does not yield such an element again is refused for the original cast, without a name.
+    // addAll and putAll keep a sorted container's linear build from a source sorted the same way.
+    // Once one has failed, the fill ends in a refusal whatever the source does next: the source is
+    // inserted again one at a time, and the first element or key that cannot be ordered is named;
+    // a source that does not yield such a one again is refused for the original cast, without a
+    // name.
     out.println("    try {");
-    out.println("      out.addAll(src);");
+    out.println(map ? "      out.putAll(src);" : "      out.addAll(src);");
     out.println("    } catch (final ClassCastException __unordered) {");
     out.println("      out.clear();");
-    emitOrderedInsert(out, tgtContainer, "      ", null);
+    emitOrderedInsert(out, tgtContainer, family, "      ", null);
     out.println("      throw new IllegalStateException(");
-    out.println("        \"Deep map: " + binaryNameOf(tgtContainer) + " keeps its elements in order, and an element\"");
+    out.println(
+      "        \"Deep map: " +
+        binaryNameOf(tgtContainer) +
+        " keeps its " +
+        family.plural() +
+        " in order, and " +
+        family.one() +
+        "\""
+    );
     out.println("          + \" could not be ordered there, which a second pass over the source did not meet again\"");
     out.println("          + \" to name\"");
-    emitRefusalAdvice(out, "        ", "__unordered");
+    emitRefusalAdvice(out, family, "        ", "__unordered");
     out.println("    }");
+  }
+
+  /**
+   * How an ordering refusal names what a sorted container orders: a set's elements, a map's keys,
+   * and the container to declare instead.
+   */
+  private enum OrderedNouns {
+    SET("elements", "an element", "set"),
+    MAP("keys", "a key", "map");
+
+    private final String plural;
+    private final String one;
+    private final String container;
+
+    OrderedNouns(final String plural, final String one, final String container) {
+      this.plural = plural;
+      this.one = one;
+      this.container = container;
+    }
+
+    String plural() {
+      return plural;
+    }
+
+    String one() {
+      return one;
+    }
+
+    String container() {
+      return container;
+    }
   }
 
   /** The declared container's binary name, which is how the reflective path names it. */
@@ -4313,51 +4364,67 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
   /**
    * The end of an ordering refusal, from the advice through the closing parenthesis, with {@code
-   * cause} as the cause. Every refusal of an unorderable element ends with these words.
+   * cause} as the cause. Every refusal of an unorderable element or key ends with these words.
    */
-  private static void emitRefusalAdvice(final PrintWriter out, final String indent, final String cause) {
-    out.println(indent + "  + \". Supply an ordering these elements accept through a Mapping.via(...) row, or\"");
-    out.println(indent + "  + \" declare the target as a set that keeps no order. The cause is the cast itself.\",");
+  private static void emitRefusalAdvice(
+    final PrintWriter out,
+    final OrderedNouns family,
+    final String indent,
+    final String cause
+  ) {
+    out.println(
+      indent + "  + \". Supply an ordering these " + family.plural() + " accept through a Mapping.via(...) row, or\""
+    );
+    out.println(
+      indent +
+        "  + \" declare the target as a " +
+        family.container() +
+        " that keeps no order. The cause is the cast itself.\","
+    );
     out.println(indent + cause);
     out.println(indent.substring(2) + ");");
   }
 
   /**
-   * A loop inserting each element of {@code src} into a sorted {@code out}, turning a cast from the
-   * insert into the reflective path's refusal. {@code convert} is as for {@link
-   * #emitCollectionFill}; a converted element is converted once into a local and the local is
-   * inserted, so a conversion that counts or generates sees every element exactly once, as it does
-   * in the unsorted loop.
+   * A loop inserting each element of {@code src}, or each entry of a map, into a sorted {@code
+   * out}, turning a cast from the insert into the reflective path's refusal. {@code convert} is as
+   * for {@link #emitFill}; a converted element or value is converted once into a local and the
+   * local is inserted, so a conversion that counts or generates sees each one exactly once, as it
+   * does in the unsorted loop.
    */
   private void emitOrderedInsert(
     final PrintWriter out,
     final TypeMirror tgtContainer,
+    final OrderedNouns family,
     final String indent,
     final String convert
   ) {
     final var outRaw = binaryNameOf(tgtContainer);
-    final var element = convert == null ? "x" : "__e";
-    out.println(indent + "for (final var x : src) {");
-    if (convert != null) out.println(indent + "  final var __e = " + convert + ";");
+    final var map = family == OrderedNouns.MAP;
+    final String ordered;
+    if (map) {
+      ordered = "__k";
+      out.println(indent + "for (final var e : src.entrySet()) {");
+      out.println(indent + "  final var __k = e.getKey();");
+      out.println(indent + "  final var __v = " + (convert == null ? "e.getValue()" : convert) + ";");
+    } else {
+      ordered = convert == null ? "x" : "__e";
+      out.println(indent + "for (final var x : src) {");
+      if (convert != null) out.println(indent + "  final var __e = " + convert + ";");
+    }
     out.println(indent + "  try {");
-    out.println(indent + "    out.add(" + element + ");");
+    out.println(indent + (map ? "    out.put(__k, __v);" : "    out.add(" + ordered + ");"));
     out.println(indent + "  } catch (final ClassCastException __cast) {");
     out.println(indent + "    throw new IllegalStateException(");
-    out.println(indent + "      \"Deep map: " + outRaw + " keeps its elements in order, and \"");
-    out.println(indent + "        + " + element + ".getClass().getName()");
+    out.println(indent + "      \"Deep map: " + outRaw + " keeps its " + family.plural() + " in order, and \"");
+    out.println(indent + "        + " + ordered + ".getClass().getName()");
     out.println(indent + "        + \" could not be ordered there\"");
-    out.println(indent + "        + (((Object) " + element + ") instanceof Comparable");
+    out.println(indent + "        + (((Object) " + ordered + ") instanceof Comparable");
     out.println(indent + "          ? \", though its type implements Comparable\"");
     out.println(indent + "          : \", and its type does not implement Comparable\")");
-    emitRefusalAdvice(out, indent + "      ", "__cast");
+    emitRefusalAdvice(out, family, indent + "      ", "__cast");
     out.println(indent + "  }");
     out.println(indent + "}");
-  }
-
-  /** The element type a set container holds, read through its view as a {@code Set}. */
-  private TypeMirror setElementOf(final TypeMirror container) {
-    final var args = containerViewArgs(container, "java.util.Set");
-    return args.isEmpty() ? null : instantiable(args.getFirst());
   }
 
   /**
@@ -4422,9 +4489,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES)
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true));
-    out.println(
-      "    for (final var e : src.entrySet()) out.put(e.getKey(), " + subBridge + "." + direction + "(e.getValue()));"
-    );
+    emitFill(out, tgtContainer, FieldPlan.Kind.MAP_VALUES, subBridge + "." + direction + "(e.getValue())");
     out.println("    return out;");
     out.println("  }");
   }

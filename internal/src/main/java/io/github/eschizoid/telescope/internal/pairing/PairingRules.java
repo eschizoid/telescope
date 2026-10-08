@@ -106,7 +106,19 @@ public final class PairingRules<T> {
         final var allocable =
           (collection || map) && props.copyAllocability(srcType, tgtType) != PropertySystem.Allocability.NOT_ALLOCABLE;
         if (collection && allocable) return new PairDecision.CollectionCopy<>();
-        if (map && allocable) return new PairDecision.MapCopy<>();
+        if (map && allocable) {
+          final var keys = props.typeArgumentsAs(tgtType, WellKnown.MAP);
+          if (!keys.isEmpty() && unorderableSortedKeys(keys.getFirst(), tgtType)) {
+            return new PairDecision.Incompatible<>(
+              PairingMessages.unorderableSortedKey(
+                componentName,
+                props.typeName(tgtType),
+                props.typeName(keys.getFirst())
+              )
+            );
+          }
+          return new PairDecision.MapCopy<>();
+        }
 
         // (b) Both reflectable (record or bean) → recurse into the nested pair.
         if (reflectable(srcType) && reflectable(tgtType)) return new PairDecision.RecursePair<>();
@@ -142,6 +154,15 @@ public final class PairingRules<T> {
             props.typeName(src.keyType()),
             props.typeName(tgt.keyType())
           )
+        );
+      }
+      if (
+        tgt.kind() == ContainerView.Kind.MAP_VALUES &&
+        !(decidePair(src.elementType(), tgt.elementType(), componentName) instanceof PairDecision.Incompatible) &&
+        unorderableSortedKeys(tgt.keyType(), tgtType)
+      ) {
+        return new PairDecision.Incompatible<>(
+          PairingMessages.unorderableSortedKey(componentName, props.typeName(tgtType), props.typeName(tgt.keyType()))
         );
       }
       if (
@@ -181,6 +202,31 @@ public final class PairingRules<T> {
     final var element = props.rawType(tgtElement);
     if (props.isInterfaceType(element)) return false;
     return !props.isSubtypeOf(element, WellKnown.COMPARABLE);
+  }
+
+  /**
+   * Whether a sorted map target is built over keys of a class nothing can order, with no way to be
+   * handed one. Keys pass through a conversion unchanged, so a comparator the source carries could
+   * order them, but only where the target's class can be told it: a declared interface is built as
+   * the family default, which can, and a class can when the shared rules carry an ordering into it.
+   * Where it cannot, the rebuild orders by the key's own {@code compareTo}.
+   *
+   * <p>A key that passes through unchanged can be any subtype of its declared type, and a subtype
+   * may implement {@code Comparable} where its declared type does not, as a {@code String} key does
+   * in a map declared over {@code Object}. So only a key type that can have no subtypes decides: a
+   * record or an array that does not implement {@code Comparable} fails on the first insert of
+   * every non-empty conversion. Every other key, an interface, a wildcard, a variable or a class
+   * open to subclassing, is let through, and a key it admits that cannot be ordered is refused by
+   * name when it is inserted.
+   */
+  public boolean unorderableSortedKeys(final T keyType, final T tgtType) {
+    final var raw = props.rawType(tgtType);
+    if (!props.isSubtypeOf(raw, WellKnown.SORTED_MAP)) return false;
+    final var key = props.rawType(keyType);
+    if (!props.isRecordType(key) && !props.isArrayType(key)) return false;
+    if (props.isSubtypeOf(key, WellKnown.COMPARABLE)) return false;
+    if (props.isInterfaceType(raw)) return false;
+    return !(orderingFor(tgtType, raw, ContainerView.Kind.MAP_VALUES, true) instanceof Ordering.Carry<T>);
   }
 
   private static final Set<WellKnown> GENERAL = Set.of(WellKnown.DEQUE, WellKnown.QUEUE, WellKnown.COLLECTION);
