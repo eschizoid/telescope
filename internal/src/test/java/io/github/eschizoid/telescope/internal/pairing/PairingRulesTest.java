@@ -678,6 +678,32 @@ class PairingRulesTest {
         incompatible.message()
       );
     }
+
+    @Test
+    @DisplayName("a container class against a scalar is Incompatible in either direction, never recursed into")
+    void containerAgainstAScalarIsIncompatible() {
+      // Only one side is a container, so the container guard lets the pair through to the
+      // reflectability check, and the scalar side is what keeps it out of recursion.
+      assertTrue(rules.reflectable(ImageUrls.class), "premise: the container side alone could be recursed into");
+      assertFalse(rules.reflectable(String.class), "premise: the scalar side cannot");
+
+      final var into = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(ImageUrls.class, String.class, "urls")
+      );
+      assertEquals(
+        PairingMessages.incompatibleShapes("urls", ImageUrls.class.getName(), "java.lang.String"),
+        into.message()
+      );
+      final var from = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(String.class, ImageUrls.class, "urls")
+      );
+      assertEquals(
+        PairingMessages.incompatibleShapes("urls", "java.lang.String", ImageUrls.class.getName()),
+        from.message()
+      );
+    }
   }
 
   @Nested

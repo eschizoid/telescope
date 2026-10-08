@@ -1176,6 +1176,26 @@ class CrossPathCorpusTest {
 
   private static final Refusal NOT_ALLOCABLE = new Refusal("has no public no-arg constructor", "no allocator for");
 
+  /**
+   * A collection that is neither a list, a set nor a queue, keeping its elements in a {@code
+   * values} bean property. {@code %s} is the class's own name.
+   */
+  private static final String VALUES_BACKED =
+    "  private java.util.List<String> values = new java.util.ArrayList<>();\n" +
+    "  public %s() {}\n" +
+    "  public java.util.List<String> getValues() { return values; }\n" +
+    "  public void setValues(final java.util.List<String> values) { this.values = values; }\n" +
+    "  @Override public java.util.Iterator<String> iterator() { return values.iterator(); }\n" +
+    "  @Override public int size() { return values.size(); }\n" +
+    "  @Override public boolean add(final String value) { return values.add(value); }\n";
+
+  /** The same collection with a bean property beside its elements. */
+  private static final String VALUES_BACKED_TITLED =
+    VALUES_BACKED +
+    "  private String title;\n" +
+    "  public String getTitle() { return title; }\n" +
+    "  public void setTitle(final String title) { this.title = title; }\n";
+
   /** A constructor taking only a capacity, which is all a class declaring it can be built with. */
   private static final String CAPACITY_ONLY = "  public %s(final int capacity) { super(capacity); }\n";
 
@@ -1246,21 +1266,34 @@ class CrossPathCorpusTest {
       "java.util.TreeMap<%sPlain, String>",
       UNORDERABLE_KEY
     ),
-    // An element carried across unchanged is let through when the pair is built, since a
-    // sorted
-    // source can hand its comparator across with it. Where nothing orders it, it is refused
-    // by name
-    // when it is inserted.
+    // An element carried across unchanged is let through when the pair is built,
+    // since a sorted source can hand its comparator across with it. Where nothing
+    // orders it, it is refused by name when it is inserted.
     refuses(
       "a set into a sorted set of an element carried unchanged that is not Comparable",
       "java.util.LinkedHashSet<%sPlain>",
       "java.util.TreeSet<%sPlain>",
       new Refusal("could not be ordered there", "could not be ordered there")
     ),
-    // The same kind and the same elements, which an element copy would take if both classes
-    // could
-    // be allocated. Either side has to be: the forward rebuild allocates the target, and the
-    // backward one the source.
+    // A collection that names no shape has no container view, so no lift can
+    // rebuild it. It is a container, so it is not decomposed as a bean either: its
+    // elements are not what its properties describe, and a class that adds a
+    // property of its own beside them shows why. Both paths refuse the pair by name.
+    refusesDeclared(
+      "a collection that is neither a list, a set nor a queue",
+      subtype("SA", "java.util.AbstractCollection<String>", VALUES_BACKED),
+      subtype("TB", "java.util.AbstractCollection<String>", VALUES_BACKED),
+      DIFFERENT_SHAPES
+    ),
+    refusesDeclared(
+      "a collection that is neither a list, a set nor a queue, with a property of its own",
+      subtype("SA", "java.util.AbstractCollection<String>", VALUES_BACKED_TITLED),
+      subtype("TB", "java.util.AbstractCollection<String>", VALUES_BACKED_TITLED),
+      DIFFERENT_SHAPES
+    ),
+    // The same kind and the same elements, which an element copy would take if
+    // both classes could be allocated. Either side has to be: the forward rebuild
+    // allocates the target, and the backward one the source.
     refusesDeclared(
       "a list into a class that takes only a capacity",
       subtype("SA", "java.util.ArrayList<String>", ""),
