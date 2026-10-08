@@ -120,10 +120,11 @@ carries a wide ±0.35 band both runs, so the nested ratio is a JMH-noisy figure,
 don't publish a single number for it. On the dispatch spread, both runs agree: `BRIDGE_FN` tracks `static forward`
 within error (run 2 flat: identical at 3.183), while `BRIDGE.read` sits a wrapper tax above the floor that grows with
 depth — 0.14 → 0.31 → 0.77 ns across flat/nested/deep on the tight-band run, each outside its error band. So `BRIDGE_FN`
-is the floor on these two runs — a reading deep later reversed, see the dispatch section; the lattice wrapper is a small
-(≤0.8 ns) tax that scales with nesting depth; and on deep the residual over MapStruct sits below the first dispatch hop
-(`static forward` alone is ~1.12× on deep, ~5.6 ns of the ~6.3 ns gap). What that residual _is_ was read at the time as
-the emitted body doing more work; it is not — see [So is there a real gap?](#so-is-there-a-real-gap).
+is the floor on these two runs — a reading run 4 appeared to reverse on deep, see the dispatch section; the lattice
+wrapper is a small (≤0.8 ns) tax that scales with nesting depth; and on deep the residual over MapStruct sits below the
+first dispatch hop (`static forward` alone is ~1.12× on deep, ~5.6 ns of the ~6.3 ns gap). What that residual _is_ was
+read at the time as the emitted body doing more work; it is not — see
+[So is there a real gap?](#so-is-there-a-real-gap).
 
 **The whole of the following paragraph is superseded** — the runtime tier now lands at ~3.3× / ~2.7× / ~1.3× and
 ~1.04–1.06× on containers, and backward no longer trails forward. It is kept because the dispatch analysis below was
@@ -133,7 +134,7 @@ written against it. As measured on these two runs: forward flat 40.14, nested 64
 was the convenience surface for "I don't want to write codegen for this one mapper" rather than a contender; the lattice
 sharpenings that closed the gap are recorded in `benchmarks/README.md`.
 
-## Dispatch — `BRIDGE_FN` at the floor on flat and nested, and a sub-nanosecond lattice tax
+## Dispatch — `BRIDGE_FN` at or near the floor on every tier, and a sub-nanosecond lattice tax
 
 The `*_codegen_static_forward` (zero dispatch), `*_bridgefn_forward` (one interface hop), and `*_codegen_forward`
 (`BRIDGE.read`, full lattice) benchmarks isolate the dispatch cost by call shape. The `wrapper tax` column is the raw
@@ -151,52 +152,60 @@ The `*_codegen_static_forward` (zero dispatch), `*_bridgefn_forward` (one interf
 | R3 nested |                    5.913 |               5.908 |                   5.604 |    −0.31 ns | yes (±0.03)      |
 | R3 deep   |                    66.27 |             69.22\* |                   66.57 |     0.30 ns | no (±0.27–0.52)  |
 | R4 deep   |                   67.155 |             74.114† |                  67.133 |    −0.02 ns | no (±0.11–0.61)  |
+| R5 flat   |                    2.390 |               2.385 |                   2.687 |     0.30 ns | yes (±0.01–0.02) |
+| R5 nested |                    4.279 |               4.279 |                   4.409 |     0.13 ns | yes (±0.01)      |
+| R5 deep   |                   53.047 |              52.766 |                  54.096 |     1.05 ns | no (±0.51–1.36)  |
+| R6 deep   |                   66.490 |              67.530 |                  67.530 |     1.04 ns | no (±0.70–1.47)  |
+| R7 deep   |                   38.231 |              39.338 |                  37.964 |    −0.27 ns | no (±0.56–0.60)  |
 
-\* R3 deep's `BRIDGE_FN` carries a ±5.3 ns band against `static forward`'s ±0.27 — about twenty times wider — so that
-one cell neither confirms nor contradicts the floor claim below.
+\* R3 deep's `BRIDGE_FN` carries a ±5.3 ns band against `static forward`'s ±0.27 — about twenty times wider. R3 ran two
+forks, and that row's forks averaged 65.89 and 72.54 ns: one at the floor and one in the slower compiled shape
+[Run 5](#run-5--deep-forward-across-forks) describes.
 
-† R4 deep's `BRIDGE_FN` is the first deep measurement of that cell tight enough to resolve, and it lands ~7 ns **above**
-the floor rather than at it, bands disjoint. See [Run 4](#run-4--the-deep-tier-with-allocation-profiling).
+† R4 ran a single fork, and that fork compiled the benchmark into a slower shape that any of the three deep rows can
+land in. Run 5 shows the same thing happening to `static forward` and `BRIDGE.read`; see
+[Run 5](#run-5--deep-forward-across-forks).
 
-R1's bands are 2–27× wider than the others' and every one of its rows reads "no" — too wide to resolve any of these
-gaps. R2 resolves all three tiers; R3 resolves flat and nested but not deep. Where both resolve they agree on flat and
-disagree on nested, which is itself the finding. Three things hold:
+R1, R2 and R4 ran one fork each, R3 two, R5 three, and R6 and R7 eight. R1's bands are 2–27× wider than the others' and
+every one of its rows reads "no" — too wide to resolve any of these gaps. R2 resolves all three tiers; R3 and R5 resolve
+flat and nested but not deep. Three things hold:
 
-First, **`BRIDGE_FN` tracks the `static forward` floor on flat and nested**: identical on R2 flat (both 3.183), tied on
-R2 nested (5.896 vs 5.902), and the same on R3. The one-interface-hop constant is monomorphic (one concrete `Fn` per
-bridge) and the JIT inlines it to the raw static call. On R1 and R2 nothing measures below it; on R4 deep both the
-static floor and the full lattice do, with disjoint bands, which is the reversal the next paragraph is about; R3 nested
-is the one row where the lattice value does.
-
-**Deep is the exception, and it took four runs to see it.** No earlier run resolved that cell: R1's ±4.0 and R3's ±5.3
-bands are far too wide, and R2's ±0.675 merely overlaps static rather than matching it. R4 is the first deep measurement
-tight enough to separate them, and it puts `BRIDGE_FN` ~7 ns above both the static floor and the full lattice, bands
-disjoint. One resolving run is not a settled result, but it is the only evidence that resolves on this tier, and it
-points the opposite way to the claim.
+First, **`BRIDGE_FN` tracks the `static forward` floor on flat and nested, and stays within about a nanosecond of it on
+deep**. It is identical on R2 flat (both 3.183) and R5 nested (both 4.279), tied on R2 and R3 nested, and within error
+on R5 flat. The one-interface-hop constant is monomorphic (one concrete `Fn` per bridge) and the JIT inlines it to the
+raw static call; the inlining log in Run 5 shows that hop inlined in every fork, deep included. On deep, the three
+multi-fork runs put `BRIDGE_FN` 0.28 ns below the floor (R5) and 1.0–1.1 ns above it (R6, R7), and on none of them do
+the two bands separate. R4's 74.114 is the one deep cell that does separate, and it was a single fork in a compiled
+shape that is not specific to `BRIDGE_FN`: R6 caught `BRIDGE.read` at 74.26 ns and `static forward` at 69.71 ns in that
+same shape. R3 nested is the one row where the lattice value measures below `BRIDGE_FN` with disjoint bands.
 
 Second, **the full-lattice `BRIDGE.read` sits a small wrapper tax above that floor** — on R2, 0.14 ns (flat) → 0.31 ns
 (nested) → 0.77 ns (deep), each outside the tight error bands, which read as the lattice composition depth showing
 through: more nesting, more `Iso.then(...)` hops the wrapper carries.
 
-**R3 does not reproduce that climb, so treat the depth-scaling as provisional.** On the same clean CI hardware it
-measures +0.20 ns on flat (real), −0.31 ns on nested — the lattice value _below_ the static floor, outside the bands,
-which is the "static-slower-than-lattice" shape the lesson below separates from the genuine laptop artifacts — and +0.30
-ns on deep, inside the bands and therefore not a measurement at all. What survives all three runs is the magnitude: the
-tax is under a nanosecond wherever it is resolvable, and on deep it is small against the residual over MapStruct anyway
-(see [So is there a real gap?](#so-is-there-a-real-gap)). What does not survive is the monotonic ordering.
+**R3 and R5 do not reproduce that climb, so treat the depth-scaling as provisional.** R3 measures +0.20 ns on flat
+(real), −0.31 ns on nested — the lattice value _below_ the static floor, outside the bands, which is the
+"static-slower-than-lattice" shape the lesson below separates from the genuine laptop artifacts — and +0.30 ns on deep,
+inside the bands and therefore not a measurement at all. R5 measures +0.30 ns on flat and +0.13 ns on nested, both
+outside the bands, so its flat tax is larger than its nested one. On deep, R5, R6 and R7 all land inside the bands. What
+survives every run is the magnitude: the tax is under a nanosecond wherever it is resolvable, and on deep it is small
+against the residual over MapStruct anyway (see [So is there a real gap?](#so-is-there-a-real-gap)). What does not
+survive is the monotonic ordering.
 
 An earlier run reported a ~0.3–0.7 ns "lattice slice" and proposed closing it by emitting a directly-callable
-`BRIDGE_FN` constant. `BRIDGE_FN` shipped (#182) — and on flat and nested it lands at the `static forward` floor, so an
-adopter who wants the fastest passable value has it on every row there but R3 nested. On deep, run 4 puts it ~7 ns above
-the floor. The tax that remains sits only on the _composable_ `BRIDGE.read` value and is sub-nanosecond wherever it
-resolves at all; the type-specialized subclass (remediation #2) would remove only that, for only the narrow case of
-hot-looping the composable value while refusing to switch to `BRIDGE_FN`. Not worth it.
+`BRIDGE_FN` constant. `BRIDGE_FN` shipped (#182) and lands at the `static forward` floor on flat and nested and within
+about a nanosecond of it on deep, so an adopter who wants a fast passable value has it on every tier. The tax that
+remains sits only on the _composable_ `BRIDGE.read` value and is sub-nanosecond wherever it resolves at all; the
+type-specialized subclass (remediation #2) would remove only that, for only the narrow case of hot-looping the
+composable value while refusing to switch to `BRIDGE_FN`. Not worth it.
 
-The lesson stands: **smoke runs lie, and one CI run can too.** Run 1's 1.04× nested looked like a headline until run 2
-returned 1.42× on the same branch — the nested MapStruct baseline is JMH-noisy (±0.35). Laptop smoke runs earlier
-produced a 2.9–3.6× "forward gap" that clean CI hardware dissolved, plus two claims that survived it — see
-[Superseded and retracted](#superseded-and-retracted). Trust the numbers that reproduce across runs: flat ~1.07×, deep
-1.06×–1.18×, and `BRIDGE_FN` at the floor on flat and nested.
+The lesson stands: **smoke runs lie, and one CI run can too, and so can one fork.** Run 1's 1.04× nested looked like a
+headline until run 2 returned 1.42× on the same branch — the nested MapStruct baseline is JMH-noisy (±0.35). Laptop
+smoke runs earlier produced a 2.9–3.6× "forward gap" that clean CI hardware dissolved, plus two claims that survived it
+— see [Superseded and retracted](#superseded-and-retracted). Run 4's `BRIDGE_FN` cell was a single fork that compiled
+into a slower shape; its band was tight because the iterations within one fork agree with each other, not because the
+fork was representative. Trust the numbers that reproduce across runs and across forks: flat ~1.07×, deep 1.06×–1.18×,
+and `BRIDGE_FN` at the floor on flat and nested and within about a nanosecond of it on deep.
 
 ## Run 4 — the deep tier with allocation profiling
 
@@ -234,8 +243,69 @@ allocation, trailing by six percent in one direction and leading by five in the 
 is that telescope now leads one of the two.
 
 **`BRIDGE_FN` lands ~7 ns above the floor**, at 74.114 against `static forward`'s 67.155 and `BRIDGE.read`'s 67.133,
-disjoint from both. That is the opposite of what the dispatch section concludes; the qualification is recorded there,
-next to the claim.
+disjoint from both. This run used a single fork, and [Run 5](#run-5--deep-forward-across-forks) shows that one fork can
+compile any of the three deep rows into a shape that runs 3.5 to 8 ns slower. Across forks, `BRIDGE_FN` stays within
+about a nanosecond of the floor.
+
+## Run 5 — deep forward across forks
+
+Run 4's `BRIDGE_FN` cell was dispatched again to find out whether it reproduces and, if it does, why. Three runs carry
+the timings, all on GitHub Actions `ubuntu-latest` with `-Pjmh.profilers=gc` and 5 warmup iterations of 2 s:
+
+- **R5** — Actions run 37753841536, main at `a94ce9a3`, the forward rows of all three tiers, 3 forks × 8 measured
+  iterations of 2 s.
+- **R6** — Actions run 37756968239, the four deep forward rows only, 8 forks × 5 iterations of 2 s.
+- **R7** — Actions run 37755457582, the same as R6.
+
+R6 and R7 ran from a branch whose benchmark sources and generated code are main's; it adds only the workflow's
+`jvm_args` input. R7 landed on a much faster runner — its MapStruct control row reads 38.2 ns against R6's 62.2 — so
+compare its rows with each other, never with R6's.
+
+R6's per-fork means show what a single pooled figure hides:
+
+| Deep row (R6)           | per-fork means, ns/op                                   |   pooled mean | allocation |
+| ----------------------- | ------------------------------------------------------- | ------------: | ---------: |
+| MapStruct forward       | 62.36 62.27 61.97 63.11 62.05 61.89 61.85 61.77         | 62.160 ± 0.28 |   376 B/op |
+| `static forward`        | 66.16 66.03 66.04 66.09 66.07 **69.71** 65.85 65.97     | 66.490 ± 0.70 |   376 B/op |
+| `BRIDGE_FN`             | **72.50** 66.24 66.06 66.53 66.88 66.06 **69.91** 66.05 | 67.530 ± 1.29 |   376 B/op |
+| `BRIDGE.read` (lattice) | 66.54 66.18 66.48 **74.26** 66.44 66.91 66.80 66.64     | 67.530 ± 1.47 |   376 B/op |
+
+**The forks are bimodal, and the slow mode is not specific to `BRIDGE_FN`.** Most forks of all three telescope rows land
+between 65.8 and 66.9 ns. A few land 3.5 to 8 ns higher, and that happened to `static forward` and `BRIDGE.read` as well
+as to `BRIDGE_FN`; the slowest fork in the run is a `BRIDGE.read` fork at 74.26, the same figure run 4 recorded for
+`BRIDGE_FN`. Run 4 ran a single fork, so its cell was one draw from this distribution, and its ±0.110 band measured how
+well the iterations of that one fork agree with each other.
+
+**The slow mode is a race between C2 compiles, not the interface hop.** Actions run 37758385903 repeated the
+`static forward` and `BRIDGE_FN` rows with 10 forks each and
+`jvm_args: -XX:+UnlockDiagnosticVMOptions -XX:+PrintCompilation -XX:+PrintInlining`. Three forks landed slow —
+`BRIDGE_FN` fork 10 at 72.29 ns, `static forward` fork 1 at 71.12 and fork 7 at 70.92 — and those three are the only
+forks in the run whose final compile of JMH's measurement loop refuses to inline the `@Benchmark` method, with
+`failed to inline: already compiled into a big method`. In those forks C2 had already compiled the benchmark method on
+its own, into code larger than `InlineSmallCode`, so the loop calls it out of line. In every other fork the loop inlines
+the benchmark method and the conversion down to the bridge's `forward`, and calls the separately compiled
+`__fwd_departments` list helper. Which compile finishes first depends on background-compilation timing, so it varies
+from fork to fork while the code stays the same. In all ten `BRIDGE_FN` forks, slow and fast, both `Fn.forward` frames
+are inlined (`inline (hot)`): the constant is devirtualized and inlined on deep exactly as on the shallower tiers.
+
+A control run supports the reading. With `jvm_args: -XX:InlineSmallCode=6000` and otherwise the same configuration as R6
+(Actions run 37755467862), no `static forward` or `BRIDGE_FN` fork measured above 67.4 ns, and the two rows agree at
+66.958 ± 0.142 and 66.796 ± 0.227, against MapStruct at 64.703 ± 0.492. That flag changes every compile in the JVM, so
+it is a diagnostic here, not a recommendation.
+
+Nothing in flat or nested shows the same split: R5's per-fork means agree within 0.03 ns on every flat and nested
+codegen row.
+
+Three things follow:
+
+- **`BRIDGE_FN` is not measurably slower than the static call on deep.** Across R5, R6 and R7 it measures 0.28 ns below
+  the floor once and 1.0–1.1 ns above it twice, with overlapping bands each time. Reaching for it in a tight loop is as
+  sound on deep as on flat and nested.
+- **A deep figure from a single fork can be 3.5–8 ns high on any codegen row.** Deep figures worth publishing come from
+  runs with several forks, read per fork before they are pooled.
+- **This is not the residual over MapStruct.** On R6 every MapStruct fork sits between 61.77 and 63.11 ns, and the fast
+  forks of the three telescope rows still sit about 4 ns above that. See
+  [So is there a real gap?](#so-is-there-a-real-gap).
 
 ## So is there a real gap?
 
@@ -257,9 +327,13 @@ asymmetry the sentence described is not there.
 
 **What is still open.** Deep forward's residual is real within a run and moves between them — 1.06×, 1.07×, 1.14× and
 1.18× across the four — and deep backward has been resolved twice in opposite directions, 1.18× on run 1 against 0.95×
-on run 4. Code alignment, inlining decisions and profile pollution remain live candidates, and none of them is visible
-in source or in bytecode. Separating them needs a `perfasm` run. Until one names a mechanism, no deep-tier emitter
-change has a target, and the wrapper is not what an adopter would be paying for either way.
+on run 4. Part of that movement is per fork: the runs before run 5 used one or two forks, and
+[Run 5](#run-5--deep-forward-across-forks) shows a single fork can land a telescope row in a compiled shape that runs
+3.5 to 8 ns slower. That does not account for the residual itself, because on R6 the fast forks of all three telescope
+rows still sit about 4 ns above every MapStruct fork. Code alignment, inlining decisions and profile pollution remain
+live candidates, and none of them is visible in source or in bytecode. Separating them needs a `perfasm` run. Until one
+names a mechanism, no deep-tier emitter change has a target, and the wrapper is not what an adopter would be paying for
+either way.
 
 Whether the gap matters at all:
 
@@ -275,10 +349,12 @@ Whether the gap matters at all:
 
 `public static final BridgeFn<S, T> BRIDGE_FN = new Fn();` ships per generated bridge (asserted in
 `BridgeProcessorTest`). It gives adopters a passable one-hop mapper value instead of a static method. The benchmark
-tables above show it measures **at the `static forward` floor on flat and nested** — the JIT inlines the monomorphic hop
-to the raw static call, so on those tiers it is the fastest passable value there is. Deep is the exception and the only
-run that resolves it disagrees: run 4 puts `BRIDGE_FN` ~7 ns above the floor with disjoint bands, where R1, R2 and R3
-all carried bands too wide to separate the two. Against `BRIDGE.read` it is usually the faster of the two by the
+tables above show it measures **at the `static forward` floor on flat and nested, and within about a nanosecond of it on
+deep** — the JIT inlines the monomorphic hop to the raw static call, and the inlining log in
+[Run 5](#run-5--deep-forward-across-forks) shows it doing so on deep in every fork. Run 4's reading of ~7 ns above the
+floor on deep was a single fork in a slower compiled shape that `static forward` and `BRIDGE.read` land in too. So it is
+as sound a choice for a tight inner loop on deep as on the shallower tiers, and calling the static `forward` directly
+buys nothing that the multi-fork runs can resolve. Against `BRIDGE.read` it is usually the faster of the two by the
 sub-nanosecond lattice-wrapper tax, though not always: on R3 nested the lattice value measured below it with disjoint
 bands. So it is the ergonomic value (a `BridgeFn` you can pass around) and, on most rows, marginally the fast one.
 
@@ -300,13 +376,17 @@ allocations, so there is no emitter change with a target until a `perfasm` run n
 The manual `Benchmarks` workflow produces the full matrix on dedicated hardware with tight error bands. Future PRs
 trigger it on their branch and baseline-diff against a prior run's artifact. `-prof gc` is wired as a `profilers` input
 (`gc`, `stack`, `perfasm`; locally `-Pjmh.profilers=gc`) for decomposing call cost vs allocation when chasing a
-residual.
+residual. A `jvm_args` input (locally `-Pjmh.jvmArgsAppend=...`) passes flags to every forked benchmark JVM, such as
+`-XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining` to read the inlining decisions behind a figure on the runner that
+measured it. Use several forks for any deep-tier figure: a single fork can land in a slower compiled shape and still
+report a tight band.
 
 ## What this revision ships
 
 - **`BRIDGE_FN` benchmarked across all three tiers** (`nested_*_bridgefn_forward`, `deep_*_bridgefn_forward`; flat
   already existed). This is what lets the forward tables compare all four call shapes — static, one-hop, lattice,
-  MapStruct — on each run, which is what later let run 4 separate `BRIDGE_FN` from the floor on deep.
+  MapStruct — on each run, which is what let run 4 and run 5 between them show that a single deep fork can land any of
+  the three codegen shapes in a slower compiled shape.
 - **The container tier**, Set- and Map-valued — see the headline table for the figures and
   [What the container tier is for](#what-the-container-tier-is-for) for why it was added. It was published carrying an
   allocation win on the Map shape; the footnote on that row records what became of it.
@@ -333,8 +413,8 @@ dispatch table above carries both runs so the disagreement stays visible.
 
 **An earlier revision proposed closing a ~0.3–0.7 ns "lattice slice"** by emitting a directly-callable constant, and a
 first fresh run then over-corrected the other way to "dispatch is free everywhere". `BRIDGE_FN` shipped and lands at the
-floor on flat and nested, so that half is done; the Remediations section above records why the second proposal was
-declined.
+floor on flat and nested and within about a nanosecond of it on deep, so that half is done; the Remediations section
+above records why the second proposal was declined.
 
 **The deep residual was attributed to the generated body**, as "six leaf conversions, two list allocations and per-field
 null-guards against MapStruct's directly-inlined field sequence". A line-by-line read of the two generated classes found
@@ -343,9 +423,11 @@ the two, and run 4 measured allocation identical at 376 B/op on every deep row. 
 forward is still measured; the mechanism is retracted, and [So is there a real gap?](#so-is-there-a-real-gap) is the one
 place that now says so.
 
-**`BRIDGE_FN` was published as the floor on every tier.** It is, on flat and nested. On deep no run resolved that cell
-until run 4, which measured it ~7 ns _above_ the floor with disjoint bands — so the claim is now scoped to the tiers
-that support it.
+**`BRIDGE_FN` was published as the floor on every tier**, and then, after run 4 measured it ~7 ns _above_ the floor on
+deep with disjoint bands, as the floor on flat and nested only. Neither form holds. Run 4 was a single fork that
+compiled into a slower shape any of the three deep codegen rows can land in; across forks, `BRIDGE_FN` is at the floor
+on flat and nested and within about a nanosecond of it on deep, with the bands overlapping on every multi-fork run. See
+[Run 5](#run-5--deep-forward-across-forks).
 
 **Deep was briefly published as ~1.07× flat-out.** The number is this run's measurement and still stands in the headline
 table; what was wrong was presenting it as deep's figure rather than as one end of a spread, now 1.06×–1.18× with run
@@ -357,13 +439,12 @@ Telescope codegen is in MapStruct's performance class. The headline table has th
 stable across runs and which are ranges; the short version is that flat is settled, deep and nested are ranges, and the
 two container shapes allocate identically, with their timings pending a re-run.
 
-On dispatch, one half is settled on two tiers of three. `BRIDGE_FN` is the floor on flat and nested — it tracks the
-zero-dispatch static call there on every run within error, because the JIT inlines the monomorphic hop. On deep the only
-run whose bands resolve it puts it ~7 ns above the floor instead. The full-lattice `BRIDGE.read` carries a
+On dispatch, one half is settled. `BRIDGE_FN` is the floor on flat and nested and within about a nanosecond of it on
+deep, because the JIT inlines the monomorphic hop on every tier; the ~7 ns run 4 measured on deep was a single fork in a
+slower compiled shape that the static call and the lattice value land in too. The full-lattice `BRIDGE.read` carries a
 sub-nanosecond wrapper tax wherever it resolves at all, but its size and even its sign move between runs, so how it
 scales with depth is provisional and only the magnitude is durable. Both proposed remediations are settled either way:
-one shipped and reached the floor on flat and nested, and the other would remove only that tax, which is small against
-the deep residual.
+one shipped and reached the floor, and the other would remove only that tax, which is small against the deep residual.
 
 What remains over MapStruct on deep forward is not dispatch: the zero-dispatch floor is itself above parity. Nor are the
 emitted bodies doing more work — they carry the same guards on the same paths and allocate the same objects, and run 4
