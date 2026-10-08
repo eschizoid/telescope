@@ -227,8 +227,9 @@ annotation attribute, MapStruct generates DecimalFormat/SimpleDateFormat code fo
 ```java
 private static final DateTimeFormatter D = DateTimeFormatter.ofPattern("dd.MM.yyyy");
 
-Telescope.mapper(Order.class, OrderDto.class,
-    to(Order::shipDate, OrderDto::shipDateText, D::format, s -> LocalDate.parse(s, D)), // bidirectional
+// toOneWay rows need mapperForward; Telescope.mapper refuses them at build time
+Telescope.mapperForward(Order.class, OrderDto.class,
+    to(Order::shipDate, OrderDto::shipDateText, D::format, s -> LocalDate.parse(s, D)), // parse leg serves a Mapper
     toOneWay(Order::createdAt, OrderDto::createdAtIso, Instant::toString));             // forward-only
 
 // Codegen (@Bridge) form — static helper via @Transform(method = ...):
