@@ -46,8 +46,8 @@ import java.util.stream.Collectors;
  * recursion: a container subclass that declares no type parameters of its own ({@code class
  * ImageUrls extends ArrayList<ImageUrl>}) counts as reflectable, and bean-decomposing it would fail
  * at the JDK boundary (private lookup into {@code java.base} is rejected) — the copy branch
- * intercepts those pairs first, and a pair of them whose element types differ skips recursion for
- * the container lift.
+ * intercepts those pairs first, and a pair of containers it does not take never reaches recursion:
+ * it goes to the container lift, which converts each element or refuses the pair by name.
  *
  * @param <T> the world's type handle
  */
@@ -120,8 +120,14 @@ public final class PairingRules<T> {
           return new PairDecision.MapCopy<>();
         }
 
-        // (b) Both reflectable (record or bean) → recurse into the nested pair.
-        if (reflectable(srcType) && reflectable(tgtType)) return new PairDecision.RecursePair<>();
+        // (b) Both reflectable (record or bean) → recurse into the nested pair. Two containers are
+        // never recursed into: a container's elements are no property of it, so decomposing one
+        // as a bean rebuilds the target with none of them. A pair of containers the copy above
+        // does not take, because the kinds differ or one side cannot be allocated, goes on to the
+        // container views, which convert each element or refuse the pair by name.
+        if (!bothContainers(srcType, tgtType) && reflectable(srcType) && reflectable(tgtType)) {
+          return new PairDecision.RecursePair<>();
+        }
       }
     }
 
@@ -430,6 +436,15 @@ public final class PairingRules<T> {
     if (aSet) return props.isSubtypeOf(a, WellKnown.SORTED_SET) == props.isSubtypeOf(b, WellKnown.SORTED_SET);
     if (!props.isSubtypeOf(a, WellKnown.QUEUE) || !props.isSubtypeOf(b, WellKnown.QUEUE)) return false;
     return props.isSubtypeOf(a, WellKnown.DEQUE) == props.isSubtypeOf(b, WellKnown.DEQUE);
+  }
+
+  /** Whether each side is a {@code Collection} or a {@code Map}, of the same kind or not. */
+  private boolean bothContainers(final T a, final T b) {
+    return isContainer(a) && isContainer(b);
+  }
+
+  private boolean isContainer(final T t) {
+    return props.isSubtypeOf(t, WellKnown.COLLECTION) || props.isSubtypeOf(t, WellKnown.MAP);
   }
 
   /**

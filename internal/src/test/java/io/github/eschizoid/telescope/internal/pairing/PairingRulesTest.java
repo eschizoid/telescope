@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -121,6 +122,28 @@ class PairingRulesTest {
   }
 
   public static class PointDtoMap extends HashMap<String, PointDto> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  /**
+   * Non-generic containers that differ from the ones above in kind as well as in element: a sorted
+   * set, a set that keeps no order, and a sorted map.
+   */
+  public static class SortedPointSet extends TreeSet<Point> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  public static class PointDtoSet extends LinkedHashSet<PointDto> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  public static class SortedPointMap extends TreeMap<String, Point> {
 
     @Serial
     private static final long serialVersionUID = 1L;
@@ -454,6 +477,36 @@ class PairingRulesTest {
     }
 
     @Test
+    @DisplayName("non-generic containers of different kinds lift or are refused, and are never recursed into")
+    void differentKindsAreNeverRecursedInto() {
+      assertTrue(rules.reflectable(SortedPointSet.class), "premise: the recursion branch could claim the source");
+      assertTrue(rules.reflectable(PointDtoSet.class), "premise: and the target");
+      assertFalse(rules.sameKindCollection(SortedPointSet.class, PointDtoSet.class), "premise: no copy takes them");
+
+      final var set = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(SortedPointSet.class, PointDtoSet.class, "f")
+      );
+      assertEquals(Point.class, set.src().elementType());
+      assertEquals(PointDto.class, set.tgt().elementType());
+      final var map = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(SortedPointMap.class, PointDtoMap.class, "f")
+      );
+      assertEquals(PointDto.class, map.tgt().elementType());
+
+      final var list = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(PointDtoSet.class, PointDtoList.class, "f")
+      );
+      assertEquals(
+        PairingMessages.incompatibleShapes("f", PointDtoSet.class.getName(), PointDtoList.class.getName()),
+        list.message()
+      );
+      assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(SortedPointSet.class, PointDtoMap.class, "f"));
+    }
+
+    @Test
     @DisplayName("a generic container used raw copies against another used raw, or against one holding Object")
     void rawUseCopiesWhereAnyElementFits() {
       assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ArrayList.class, LinkedList.class, "f"));
@@ -490,15 +543,27 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("a same-kind pair that is provably not allocable falls through to reflectable recursion")
-    void notAllocableSameKindPairFallsThrough() {
+    @DisplayName("a same-kind pair that is provably not allocable lifts rather than recursing, in either direction")
+    void notAllocableSameKindPairLifts() {
       assertTrue(rules.sameKindCollection(ImageUrls.class, NoPublicCtorUrls.class), "premise: same-kind pair");
+      assertTrue(rules.reflectable(NoPublicCtorUrls.class), "premise: the recursion branch could claim this pair");
       assertEquals(
         Allocability.NOT_ALLOCABLE,
         new ReflectionProps().copyAllocability(ImageUrls.class, NoPublicCtorUrls.class),
         "premise: provably not allocable"
       );
-      assertInstanceOf(PairDecision.RecursePair.class, rules.decidePair(ImageUrls.class, NoPublicCtorUrls.class, "f"));
+      // The lift's allocator is what refuses the class by name; recursion would rebuild it as a
+      // bean holding none of the source's elements.
+      final var into = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(ImageUrls.class, NoPublicCtorUrls.class, "f")
+      );
+      assertEquals(NoPublicCtorUrls.class, into.tgt().rawType());
+      final var from = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(NoPublicCtorUrls.class, ImageUrls.class, "f")
+      );
+      assertEquals(NoPublicCtorUrls.class, from.src().rawType());
     }
 
     @Test
@@ -611,6 +676,32 @@ class PairingRulesTest {
       assertEquals(
         PairingMessages.incompatibleShapes("sorId", "java.lang.String", "java.lang.Integer"),
         incompatible.message()
+      );
+    }
+
+    @Test
+    @DisplayName("a container class against a scalar is Incompatible in either direction, never recursed into")
+    void containerAgainstAScalarIsIncompatible() {
+      // Only one side is a container, so the container guard lets the pair through to the
+      // reflectability check, and the scalar side is what keeps it out of recursion.
+      assertTrue(rules.reflectable(ImageUrls.class), "premise: the container side alone could be recursed into");
+      assertFalse(rules.reflectable(String.class), "premise: the scalar side cannot");
+
+      final var into = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(ImageUrls.class, String.class, "urls")
+      );
+      assertEquals(
+        PairingMessages.incompatibleShapes("urls", ImageUrls.class.getName(), "java.lang.String"),
+        into.message()
+      );
+      final var from = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(String.class, ImageUrls.class, "urls")
+      );
+      assertEquals(
+        PairingMessages.incompatibleShapes("urls", "java.lang.String", ImageUrls.class.getName()),
+        from.message()
       );
     }
   }
