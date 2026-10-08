@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -121,6 +122,40 @@ class FinalRoundChildHopTest {
   void hopToAPlainChildDescends() {
     final var compilation = compileHolderOf("", "PartTelescope<Holder>");
     assertTrue(compilation.success(), compilation::errorMessages);
+  }
+
+  @Test
+  @DisplayName("a navigator written in the final round descends into a child written in that round")
+  void finalRoundHolderDescendsIntoAFinalRoundChild() {
+    final var compilation = ProcessorHarness.compileFully(
+      List.of(new BeanFocusProcessor()),
+      List.of(),
+      LOMBOK_GETTER,
+      bean("Part", "@lombok.Getter"),
+      ProcessorHarness.source(
+        "demo.Holder",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.BeanFocus;
+        @BeanFocus
+        @lombok.Getter
+        public class Holder {
+          private Part part;
+          public Holder() {}
+          public Part getPart() { return part; }
+          public void setPart(final Part part) { this.part = part; }
+        }
+        """
+      )
+    );
+    assertTrue(compilation.success(), compilation::errorMessages);
+    final var hop = compilation
+      .generated()
+      .get("demo.HolderTelescope")
+      .lines()
+      .filter(line -> line.contains(" part()"))
+      .toList();
+    assertEquals(List.of("  public demo.PartTelescope<R> part() {"), hop);
   }
 
   /**

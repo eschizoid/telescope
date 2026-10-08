@@ -22,6 +22,7 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.FilerException;
+import javax.annotation.processing.RoundEnvironment;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
@@ -620,10 +621,22 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   private static final String LOMBOK_PROCESSOR = "io.github.eschizoid.telescope.codegen.lombok.LombokFocusProcessor";
 
   // The classes telescope-lombok's processor has taken as targets, keyed by their compilation's
-  // type
-  // utilities: one instance per compilation, shared by every processor in it, and held weakly so a
-  // finished compilation drops out.
+  // type utilities: one instance per compilation, shared by every processor in it, and held weakly
+  // so a finished compilation drops out.
   private static final Map<Types, Set<String>> LOMBOK_TARGETS = Collections.synchronizedMap(new WeakHashMap<>());
+
+  // Whether the round this processor is in is the final one. Every file written in the final round
+  // can name every other file written in it, so a navigator written then can descend into any
+  // child whose navigator is written at all.
+  private boolean inFinalRound;
+
+  /**
+   * Records whether {@code roundEnv} is the final round. A processor that writes bean navigators
+   * calls this at the start of every round; one that does not is treated as never being in it.
+   */
+  protected final void enterRound(final RoundEnvironment roundEnv) {
+    inFinalRound = roundEnv.processingOver();
+  }
 
   /**
    * Records that telescope-lombok's processor writes the navigator for {@code pojo}. That processor
@@ -653,16 +666,19 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
   }
 
   /**
-   * Whether the navigator of {@code element}, a type a navigator would descend into, is written
-   * before the final round. Only then can a navigator written in an earlier round name it: javac
-   * does not resolve a name in an earlier round's file against a file written in the final round. A
-   * class carrying a Lombok annotation is written by telescope-lombok's processor when that
+   * Whether the navigator of {@code element}, a type a navigator would descend into, is written in
+   * time to be named from the navigator being written now. javac does not resolve a name in an
+   * earlier round's file against a file written in the final round, so before the final round only
+   * a navigator written before it qualifies; in the final round any navigator written at all does.
+   * A class carrying a Lombok annotation is written by telescope-lombok's processor when that
    * processor has taken the class as a target, and otherwise by the {@code @BeanFocus} processor in
-   * the final round, if at all. Every other navigator is written in the round its type appears.
+   * the final round, if it carries {@code @BeanFocus}. Every other navigator is written in the
+   * round its type appears.
    */
   protected final boolean navigatorWrittenInTime(final Element element) {
     if (element.getKind() != ElementKind.CLASS || !carriesLombokTrigger(element)) return true;
-    return writtenByLombok((TypeElement) element);
+    if (writtenByLombok((TypeElement) element)) return true;
+    return inFinalRound && hasAnnotation(element, BEAN_FOCUS);
   }
 
   /**

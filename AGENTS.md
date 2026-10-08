@@ -363,7 +363,7 @@ missing. A `@BeanFocus` navigator on a Lombok-annotated class is therefore emitt
 named from same-module main code. The exception is a class `LombokFocusProcessor` has taken as a target, which it
 records per class: that processor writes the same navigator and holder as soon as the class is ready, so
 `BeanFocusProcessor` leaves the class to it and writes every other one in the final round as usual. A navigator written
-before the final round cannot name one written in it, so a hop to a child whose navigator only the final round writes
+before the final round cannot name one written in it, so its hop to a child whose navigator only the final round writes
 ends at the child (`Telescope<R, Child>`) instead of descending; a `@BeanFocus` parent whose child telescope-lombok may
 still take is held back one round, until that is settled. Both processors treat `@BeanFocus` and, with telescope-lombok
 on the path, the Lombok bean annotations as marking a child type that has its own navigator, so the navigator is the

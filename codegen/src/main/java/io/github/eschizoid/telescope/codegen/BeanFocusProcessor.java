@@ -49,6 +49,7 @@ public final class BeanFocusProcessor extends AbstractTelescopeProcessor {
       .getElementUtils()
       .getTypeElement("io.github.eschizoid.telescope.annotations.BeanFocus");
     if (anno == null) return false;
+    enterRound(roundEnv);
     final var heldLastRound = List.copyOf(held);
     held.clear();
     for (final var pojo : heldLastRound) emitBeanNavigator(pojo, "@BeanFocus", navigableBeanAnnotations());

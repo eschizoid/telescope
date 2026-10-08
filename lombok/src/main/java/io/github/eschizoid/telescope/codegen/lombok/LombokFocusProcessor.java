@@ -60,6 +60,7 @@ public final class LombokFocusProcessor extends AbstractTelescopeProcessor {
 
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
+    enterRound(roundEnv);
     final var elements = processingEnv.getElementUtils();
     for (final var triggerFqn : LOMBOK_BEAN_ANNOTATIONS) {
       final var anno = elements.getTypeElement(triggerFqn);
