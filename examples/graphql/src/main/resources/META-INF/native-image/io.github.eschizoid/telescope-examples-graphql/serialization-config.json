@@ -8,6 +8,12 @@
     },
     {
       "name": "io.github.eschizoid.telescope.examples.graphql.model.AddressTelescope"
+    },
+    {
+      "name": "io.github.eschizoid.telescope.examples.graphql.model.ShiftTelescope"
+    },
+    {
+      "name": "io.github.eschizoid.telescope.examples.graphql.model.CrewmateTelescope"
     }
   ],
   "types": [],
