@@ -43,6 +43,11 @@ on:
         type: string
         default: ""
         required: false
+      jvm_args:
+        description: "Optional JVM flags appended to every forked benchmark JVM, space-separated (e.g. `-XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining`). Leave empty to skip."
+        type: string
+        default: ""
+        required: false
 
 permissions:
   contents: read
@@ -71,6 +76,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
 
       - name: Display run configuration
+        env:
+          JVM_ARGS: ${{ inputs.jvm_args }}
         run: |
           echo "## Benchmark run configuration" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -83,6 +90,7 @@ jobs:
           echo "| warmup_time | ${{ inputs.warmup_time }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| forks | ${{ inputs.forks }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| profilers | \`${{ inputs.profilers }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| jvm_args | \`${JVM_ARGS}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Triggered by **${{ github.actor }}** on \`${{ github.ref_name }}\` (sha \`${{ github.sha }}\`)." >> "$GITHUB_STEP_SUMMARY"
 
@@ -92,6 +100,8 @@ jobs:
         # "cannot serialize Gradle script object references" on the
         # :benchmarks:compileJmhJava task. The JMH plugin itself is fine; the
         # cache annotations on the generated task are not.
+        env:
+          JVM_ARGS: ${{ inputs.jvm_args }}
         run: |
           ARGS=(
             ":benchmarks:jmh"
@@ -107,6 +117,9 @@ jobs:
           )
           if [ -n "${{ inputs.profilers }}" ]; then
             ARGS+=("-Pjmh.profilers=${{ inputs.profilers }}")
+          fi
+          if [ -n "$JVM_ARGS" ]; then
+            ARGS+=("-Pjmh.jvmArgsAppend=$JVM_ARGS")
           fi
           ./gradlew "${ARGS[@]}"
 
