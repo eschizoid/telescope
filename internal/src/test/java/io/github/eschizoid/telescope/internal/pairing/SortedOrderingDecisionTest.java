@@ -225,7 +225,17 @@ class SortedOrderingDecisionTest {
       assertRefusedByName("unordered", Unordered.class);
       assertRefusedByName("unrelated", Unrelated.class);
       assertRefusedByName("hidden", Hidden.class);
-      assertRefusedByName("secluded", Secluded.class);
+    }
+
+    @Test
+    @DisplayName("a public comparator constructor on a class that is not public carries the order")
+    void aClassThatIsNotPublicCarries() throws NoSuchFieldException {
+      // Its no-argument constructor is reached through a private lookup, and the comparator
+      // constructor is bound the same way, so the class being reachable is what decides both.
+      assertEquals(
+        field("superString"),
+        carried(rules.orderingFor(field("secluded"), Secluded.class, ContainerView.Kind.SET, true)).parameter()
+      );
     }
 
     private void assertRefusedByName(final String declared, final Class<?> impl) throws NoSuchFieldException {
@@ -271,6 +281,11 @@ class SortedOrderingDecisionTest {
       assertEquals(field("superString"), props.comparatorParameter(field("ordered"), List.of(String.class)));
       assertEquals(
         field("superString"),
+        props.comparatorParameter(Secluded.class, List.of(String.class)),
+        "a class that is not public, whose public constructor is reached like its no-argument one"
+      );
+      assertEquals(
+        field("superString"),
         props.comparatorParameter(Swapped.class, List.of(Integer.class, String.class)),
         "arguments pair off with the class's own parameters, value first"
       );
@@ -281,7 +296,6 @@ class SortedOrderingDecisionTest {
     void noComparatorParameterWhereNoneCanBeCalled() {
       assertNull(props.comparatorParameter(Unordered.class, List.of(String.class)), "no such constructor");
       assertNull(props.comparatorParameter(Hidden.class, List.of(String.class)), "a constructor that is not public");
-      assertNull(props.comparatorParameter(Secluded.class, List.of(String.class)), "a class that is not public");
       assertNull(props.comparatorParameter(Tagged.class, List.of(String.class)), "one argument for two parameters");
       assertNull(props.comparatorParameter(Ordered.class.getTypeParameters()[0], List.of()), "not a class");
     }

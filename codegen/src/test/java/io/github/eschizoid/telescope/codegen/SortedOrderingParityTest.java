@@ -24,7 +24,8 @@ import org.junit.jupiter.api.Test;
  * <p>Each row names a container class, the source and target field types, and what both paths owe
  * when the source is ordered in reverse: the reversed contents, or the refusal for a class that
  * cannot be told its order. The rows vary the comparator constructor's parameter, its visibility,
- * the order a subtype declares its type parameters in, and whether the subtype fixes them itself.
+ * the visibility of the class declaring it and of the class enclosing that one, the order a subtype
+ * declares its type parameters in, and whether the subtype fixes them itself.
  */
 class SortedOrderingParityTest {
 
@@ -145,6 +146,32 @@ class SortedOrderingParityTest {
       "%C<String>",
       KEPT_SET
     ),
+    // The bridge is emitted in the container's own package, where a class that is not
+    // public is named like any other, and so is a public class nested in one.
+    new Row(
+      "a class that is not public",
+      "class %C<E> extends java.util.TreeSet<E> {\n  public %C() {}\n" +
+        "  public %C(final java.util.Comparator<? super E> o) { super(o); }\n}",
+      "java.util.SortedSet<String>",
+      "%C<String>",
+      KEPT_SET
+    ),
+    new Row(
+      "a set nested in a class that is not public",
+      "class %C {\n  public static class Inner<E> extends java.util.TreeSet<E> {\n    public Inner() {}\n" +
+        "    public Inner(final java.util.Comparator<? super E> o) { super(o); }\n  }\n}",
+      "java.util.SortedSet<String>",
+      "%C.Inner<String>",
+      KEPT_SET
+    ),
+    new Row(
+      "a map nested in a class that is not public",
+      "class %C {\n  public static class Inner<K, V> extends java.util.TreeMap<K, V> {\n    public Inner() {}\n" +
+        "    public Inner(final java.util.Comparator<? super K> o) { super(o); }\n  }\n}",
+      "java.util.SortedMap<String, Integer>",
+      "%C.Inner<String, Integer>",
+      KEPT_MAP
+    ),
     new Row(
       "a concurrent sorted set subtype",
       "public class %C<E> extends java.util.concurrent.ConcurrentSkipListSet<E> {\n  public %C() {}\n" +
@@ -235,7 +262,8 @@ class SortedOrderingParityTest {
       thrown = e;
     }
     final var message = String.valueOf(thrown.getMessage());
-    return thrown instanceof IllegalStateException && message.contains("declares no constructor taking a Comparator")
+    return thrown instanceof IllegalStateException &&
+      message.contains("declares no public constructor taking a Comparator")
       ? REFUSED
       : thrown.getClass().getSimpleName() + ": " + message;
   }

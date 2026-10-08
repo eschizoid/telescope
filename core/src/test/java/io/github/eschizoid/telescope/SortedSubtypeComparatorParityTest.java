@@ -243,7 +243,7 @@ class SortedSubtypeComparatorParityTest {
     final var thrown = assertThrows(IllegalStateException.class, () ->
       mapper.forward(new SrcSwapped(reversedIntMap()))
     );
-    assertTrue(thrown.getMessage().contains("declares no constructor taking a Comparator"), thrown::getMessage);
+    assertTrue(thrown.getMessage().contains("declares no public constructor taking a Comparator"), thrown::getMessage);
   }
 
   @Test

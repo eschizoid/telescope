@@ -173,13 +173,13 @@ public final class PairingMessages {
 
   /**
    * A sorted container rebuilt from a source ordered by a comparator, where the class built has no
-   * constructor that can be handed that comparator.
+   * public constructor that can be handed that comparator.
    */
   public static String noComparatorConstructor(final String implName) {
     return (
       "Deep map: " +
       implName +
-      " declares no constructor taking a Comparator, so the source's ordering cannot be carried" +
+      " declares no public constructor taking a Comparator, so the source's ordering cannot be carried" +
       " into it. Declare one, declare the field as the interface, or convert it with an explicit" +
       " Mapping.to(src, tgt, fwd, bwd) row."
     );

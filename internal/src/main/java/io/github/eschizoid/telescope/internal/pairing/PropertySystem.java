@@ -148,9 +148,11 @@ public interface PropertySystem<T> {
    * non-empty {@code arguments} does not supply exactly one for each, since pairing them off by
    * position would then substitute the wrong ones.
    *
-   * <p>Java forbids two constructors with one erasure, so there is at most one to find. Whether it
-   * can be called is the world's own fact: a generated bridge has to name the class in source, and
-   * the reflective path binds the constructor through a public lookup.
+   * <p>Java forbids two constructors with one erasure, so there is at most one to find. It counts
+   * where it is public and the class can be built at all, which is decided before this is asked:
+   * the constructor is the alternative to a no-argument one on the same class, so whatever reaches
+   * that class reaches this constructor with it. A generated bridge names the class in the same
+   * allocation either way, and the reflective path binds both constructors through the same lookup.
    */
   T comparatorParameter(T impl, List<T> arguments);
 }
