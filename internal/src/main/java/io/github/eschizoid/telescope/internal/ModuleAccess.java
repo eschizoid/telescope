@@ -47,17 +47,55 @@ final class ModuleAccess {
    * and every type it names are public, and their packages are exported (or opened, which counts as
    * exported at run time) to this module. Anything else, and everything in a native image, which
    * cannot spin a class at all, is a closure.
+   *
+   * <p>The spun class is defined in the spinning lookup's class loader and names the member's
+   * declaring class, parameter types and return type, which that loader resolves by name when the
+   * class links. A loader that resolves one of those names to nothing, or to a different class, as
+   * this module's loader does for a class a child loader holds, would leave the accessor failing
+   * with {@link NoClassDefFoundError} on its first call, so such a member is a closure too.
    */
   static MethodHandles.Lookup spinner(final MethodHandles.Lookup lookup, final Executable member) {
     if (NativeImage.IN_IMAGE) return null;
-    if (lookup.hasFullPrivilegeAccess()) return lookup;
-    if (!Modifier.isPublic(member.getModifiers()) || !reachable(member.getDeclaringClass())) return null;
-    for (final var parameter : member.getParameterTypes()) if (!reachable(parameter)) return null;
-    if (member instanceof Method method && !reachable(method.getReturnType())) return null;
-    return OWN;
+    final MethodHandles.Lookup candidate;
+    if (lookup.hasFullPrivilegeAccess()) {
+      candidate = lookup;
+    } else {
+      if (!Modifier.isPublic(member.getModifiers()) || !reachable(member.getDeclaringClass())) return null;
+      for (final var parameter : member.getParameterTypes()) if (!reachable(parameter)) return null;
+      if (member instanceof Method method && !reachable(method.getReturnType())) return null;
+      candidate = OWN;
+    }
+    return resolvable(candidate, member) ? candidate : null;
   }
 
   private static final MethodHandles.Lookup OWN = MethodHandles.lookup();
+
+  /**
+   * Whether {@code spinner}'s loader resolves every type {@code member} names to that same type.
+   */
+  private static boolean resolvable(final MethodHandles.Lookup spinner, final Executable member) {
+    final var loader = spinner.lookupClass().getClassLoader();
+    if (!resolves(loader, member.getDeclaringClass())) return false;
+    for (final var parameter : member.getParameterTypes()) if (!resolves(loader, parameter)) return false;
+    return !(member instanceof Method method) || resolves(loader, method.getReturnType());
+  }
+
+  /**
+   * Whether {@code loader} resolves {@code type}'s name to {@code type}. A type held by the boot
+   * loader or by {@code loader} itself always is; any other is asked of {@code loader}, since
+   * delegation, not parentage, decides what a loader can see.
+   */
+  private static boolean resolves(final ClassLoader loader, final Class<?> type) {
+    if (type.isArray()) return resolves(loader, type.getComponentType());
+    if (type.isPrimitive()) return true;
+    final var holder = type.getClassLoader();
+    if (holder == null || holder == loader) return true;
+    try {
+      return Class.forName(type.getName(), false, loader) == type;
+    } catch (final ClassNotFoundException | LinkageError e) {
+      return false;
+    }
+  }
 
   /** Whether code in this module may name {@code type}: public, in a package exported to it. */
   private static boolean reachable(final Class<?> type) {
