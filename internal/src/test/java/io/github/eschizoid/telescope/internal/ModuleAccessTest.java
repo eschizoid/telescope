@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -8,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.eschizoid.telescope.internal.spinfixtures.SpinTarget;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -16,9 +18,10 @@ import org.junit.jupiter.api.Test;
 
 /**
  * How {@link ModuleAccess} decides, for a lookup into a class and one of its members, whether an
- * accessor is spun by {@code LambdaMetafactory} and with which lookup, on the class path. A class
- * defined by a loader of its own sits in another unnamed module, which is how a lookup into it
- * comes to lack full privilege here; the named-module cases are in {@link ModuleAccessLayerTest}.
+ * accessor is spun by {@code LambdaMetafactory} and with which lookup, on the class path. A lookup
+ * into a class of another module lacks module access, which a lookup here is given by dropping it;
+ * the named-module cases are in {@link ModuleAccessLayerTest}. A class defined afresh by a loader
+ * of its own is the case this module's loader resolves to a different class.
  */
 class ModuleAccessTest {
 
@@ -50,8 +53,11 @@ class ModuleAccessTest {
     }
   }
 
-  private static Class<?> isolatedTarget() throws ClassNotFoundException {
-    return new FixtureLoader().loadClass(FIXTURES + "SpinTarget");
+  /** A private lookup into {@code target} without module access, as one into another module is. */
+  private static MethodHandles.Lookup withoutModuleAccess(final Class<?> target) throws IllegalAccessException {
+    final var lookup = ModuleAccess.privateLookupIn(target).dropLookupMode(MethodHandles.Lookup.MODULE);
+    assertTrue(!lookup.hasFullPrivilegeAccess(), "a lookup without module access has no full privilege");
+    return lookup;
   }
 
   @Test
@@ -69,12 +75,10 @@ class ModuleAccessTest {
   @Test
   @DisplayName("without full privilege, a public member naming only public types is spun with this module's lookup")
   void aReachableMemberSpinsInThisModule() throws Exception {
-    final var target = isolatedTarget();
-    final var lookup = ModuleAccess.privateLookupIn(target);
-    assertTrue(!lookup.hasFullPrivilegeAccess(), "a lookup into another unnamed module keeps no module access");
+    final var lookup = withoutModuleAccess(SpinTarget.class);
 
     for (final var member : new String[] { "name", "numbers" }) {
-      final var spinner = ModuleAccess.spinner(lookup, target.getMethod(member));
+      final var spinner = ModuleAccess.spinner(lookup, SpinTarget.class.getMethod(member));
       if (NativeImage.IN_IMAGE) {
         assertNull(spinner, member);
       } else {
@@ -82,23 +86,25 @@ class ModuleAccessTest {
         assertSame(ModuleAccess.class.getModule(), spinner.lookupClass().getModule(), member);
       }
     }
-    final var ctor = ModuleAccess.spinner(lookup, target.getConstructor());
+    final var ctor = ModuleAccess.spinner(lookup, SpinTarget.class.getConstructor());
     assertEquals(!NativeImage.IN_IMAGE, ctor != null, "a public constructor of a public class spins too");
   }
 
   @Test
   @DisplayName("without full privilege, a member that is not public or names a non-public type is a closure")
   void anUnreachableMemberIsAClosure() throws Exception {
-    final var target = isolatedTarget();
-    final var lookup = ModuleAccess.privateLookupIn(target);
-    final var hidden = target.getClassLoader().loadClass(FIXTURES + "Hidden");
+    final var lookup = withoutModuleAccess(SpinTarget.class);
+    final var hidden = Class.forName(FIXTURES + "Hidden");
+    final var target = SpinTarget.class;
 
     final var closures = new ArrayList<String>();
     if (ModuleAccess.spinner(lookup, target.getDeclaredMethod("secret")) == null) closures.add("non-public member");
     if (ModuleAccess.spinner(lookup, target.getMethod("hidden")) == null) closures.add("non-public return type");
     if (ModuleAccess.spinner(lookup, target.getMethod("hiddens")) == null) closures.add("array of a non-public type");
     if (ModuleAccess.spinner(lookup, target.getMethod("accept", hidden)) == null) closures.add("non-public parameter");
-    if (ModuleAccess.spinner(lookup, hidden.getMethod("label")) == null) closures.add("member of a non-public class");
+    if (ModuleAccess.spinner(withoutModuleAccess(hidden), hidden.getMethod("label")) == null) {
+      closures.add("member of a non-public class");
+    }
 
     assertEquals(
       List.of(
@@ -110,6 +116,18 @@ class ModuleAccessTest {
       ),
       closures
     );
+  }
+
+  @Test
+  @DisplayName("a public member of a class this module's loader resolves to a different class is a closure")
+  void aClassResolvedToAnotherIsAClosure() throws Exception {
+    final var target = new FixtureLoader().loadClass(FIXTURES + "SpinTarget");
+    assertNotSame(SpinTarget.class, target, "the same name, defined twice");
+    final var lookup = ModuleAccess.privateLookupIn(target);
+    assertTrue(!lookup.hasFullPrivilegeAccess(), "a lookup into another unnamed module keeps no module access");
+
+    assertNull(ModuleAccess.spinner(lookup, target.getMethod("name")));
+    assertNull(ModuleAccess.spinner(lookup, target.getConstructor()));
   }
 
   @Test

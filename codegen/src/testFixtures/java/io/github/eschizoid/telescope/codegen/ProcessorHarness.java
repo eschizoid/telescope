@@ -139,12 +139,12 @@ public final class ProcessorHarness {
      * <p>Running what was compiled is what lets a test compare the generated path against the
      * reflective one on the same input, rather than comparing generated text against an
      * expectation. The lookup is a parameter rather than something this fixture builds because it
-     * decides the module, and the module decides whether the runtime path can read the class at
-     * all: {@link MethodHandles#privateLookupIn} keeps {@code MODULE} access only when the target
-     * class and the caller share a module, and {@link java.lang.invoke.LambdaMetafactory} rejects a
-     * caller without it. Every class loader owns a distinct unnamed module, so a class held by a
-     * loader of its own is unreadable to the accessor substrate however public it is. Defining
-     * through the caller's lookup puts it in the caller's module instead.
+     * decides the loader and module the classes land in, and those decide which accessors the
+     * runtime path builds for them. A class in the caller's module is read through accessors {@link
+     * java.lang.invoke.LambdaMetafactory} spins. A class held by a loader of its own sits in a
+     * distinct unnamed module, under a name the runtime's own loader cannot resolve, and is read
+     * through method handle closures instead. Defining through the caller's lookup keeps a test on
+     * the path an application on the class path takes.
      *
      * <p>Two consequences for whoever writes the sources. {@link MethodHandles.Lookup#defineClass}
      * takes only bytes naming the lookup class's own package, so the sources have to declare that

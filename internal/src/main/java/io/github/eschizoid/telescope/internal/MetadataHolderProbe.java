@@ -179,15 +179,17 @@ public final class MetadataHolderProbe {
       ModuleAccess.read(holder);
       final var lookup = MethodHandles.lookup();
       final var handle = lookup.unreflect(method);
-      if (NativeImage.IN_IMAGE) {
-        // Native-image: a MethodHandle closure (see MhAccessors), no runtime class synthesis. The
-        // holder's construct(Function) takes a Function<String, Object> argument, which the erased
+      final var spinner = ModuleAccess.spinner(lookup, method);
+      if (spinner == null) {
+        // A MethodHandle closure (see MhAccessors): in a native image, which cannot spin a class,
+        // and for a holder this module's loader cannot resolve by name. The holder's
+        // construct(Function) takes a Function<String, Object> argument, which the erased
         // (Object) -> Object closure accepts, so the method reference adapts to the wider input.
         final Function<Object, Object> constructor = MhAccessors.function(handle);
         return constructor::apply;
       }
       final var callSite = LambdaMetafactory.metafactory(
-        lookup,
+        spinner,
         "apply",
         MethodType.methodType(Function.class),
         MethodType.methodType(Object.class, Object.class),
