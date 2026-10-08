@@ -3,6 +3,8 @@ package io.github.eschizoid.telescope.internal.pairing;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.internal.pairing.Allocation.Call;
@@ -242,9 +244,9 @@ class ContainerAllocationTest {
     @Test
     @DisplayName("which class is built does not depend on who builds it")
     void theClassIsDecidedWithoutTheConstructor() {
-      // A gate that asks which class first and who can build it second has to see a class here: the
-      // refusal belongs to the second question, and a field refused for the first names the wrong
-      // cause.
+      // A gate that asks which class first and who can build it second has to see a
+      // class here: the refusal belongs to the second question, and a field refused
+      // for the first names the wrong cause.
       assertInstanceOf(Allocation.Build.class, ALLOCATION.implementationFor(PrivateCtorList.class, Kind.LIST));
     }
   }
@@ -279,6 +281,158 @@ class ContainerAllocationTest {
       assertFalse(ALLOCATION.copiesInPlace(Stack.class, Kind.LIST, List.class, null), "Stack has no copy constructor");
       // An EnumMap's copy constructor refuses an empty map that is not an EnumMap.
       assertFalse(ALLOCATION.copiesInPlace(declared("byDay"), Kind.MAP_VALUES, Map.class, null));
+    }
+  }
+
+  @Nested
+  @DisplayName("what a pair of same-kind containers is refused for")
+  class PairRefusals {
+
+    private final PairingRules<Type> rules = new PairingRules<>(new ReflectionProps());
+
+    @Test
+    @DisplayName(
+      "a raw map into a raw EnumMap is refused because the EnumMap names no key class, not as a shape mismatch"
+    )
+    void aRawEnumMapIsRefusedForItsKeyClass() {
+      final var refused = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(Map.class, EnumMap.class, "items")
+      );
+
+      assertEquals(PairingMessages.noKeyClass("java.util.EnumMap"), refused.message());
+      assertEquals(PairingMessages.noKeyClass("java.util.EnumMap"), rules.copyRefusal(Map.class, EnumMap.class));
+    }
+
+    @Test
+    @DisplayName("an abstract side is left to the container lift, which refuses it in the same words on both paths")
+    void anAbstractSideIsNotRefusedHere() {
+      assertNull(rules.copyRefusal(AbstractSequentialList.class, ArrayList.class));
+      assertNull(rules.copyRefusal(ArrayList.class, PublicCtorList.class));
+    }
+
+    @Test
+    @DisplayName("only a list, a set or a map has a family default")
+    void onlyTheThreeFamiliesHaveADefault() {
+      assertThrows(IllegalArgumentException.class, () -> PairingRules.familyDefault(Kind.OPTIONAL));
+      assertThrows(IllegalArgumentException.class, () -> PairingRules.familyDefault(Kind.COLLECTION));
+      assertEquals(Kind.MAP_VALUES, rules.familyOf(EnumMap.class));
+      assertEquals(Kind.SET, rules.familyOf(TreeSet.class));
+      assertEquals(Kind.LIST, rules.familyOf(Collection.class));
+    }
+  }
+
+  @Nested
+  @DisplayName("the refusal a sorted insert earns")
+  class SortedInsertWording {
+
+    @Test
+    @DisplayName("names the container, the value's class and where an ordering could come from, for a set")
+    void aSetRefusalReadsAsOneSentence() {
+      assertEquals(
+        "Deep map: java.util.TreeSet keeps its elements in order, and demo.Leaf could not be ordered there, and its" +
+          " type does not implement Comparable. Supply an ordering these elements accept through a Mapping.via(...)" +
+          " row, or declare the target as a set that keeps no order. The cause is the cast itself.",
+        PairingMessages.unorderableInsertHead("java.util.TreeSet", false) +
+          "demo.Leaf" +
+          PairingMessages.unorderableInsertComparable(false) +
+          PairingMessages.unorderableInsertAdvice(false)
+      );
+    }
+
+    @Test
+    @DisplayName("names keys rather than elements for a map, and says so when the type is Comparable")
+    void aMapRefusalNamesKeys() {
+      assertEquals(
+        "Deep map: java.util.TreeMap keeps its keys in order, and demo.Key could not be ordered there, though its" +
+          " type implements Comparable. Supply an ordering these keys accept through a Mapping.via(...) row, or" +
+          " declare the target as a map that keeps no order. The cause is the cast itself.",
+        PairingMessages.unorderableInsertHead("java.util.TreeMap", true) +
+          "demo.Key" +
+          PairingMessages.unorderableInsertComparable(true) +
+          PairingMessages.unorderableInsertAdvice(true)
+      );
+    }
+
+    @Test
+    @DisplayName("names no value where a second pass met none to name")
+    void anUnnamedRefusalSaysWhyItNamesNothing() {
+      assertEquals(
+        "an element could not be ordered there, which a second pass over the source did not meet again to name",
+        PairingMessages.unorderableInsertUnnamed(false)
+      );
+      assertTrue(PairingMessages.unorderableInsertUnnamed(true).startsWith("a key could not be ordered there"));
+    }
+  }
+
+  @Nested
+  @DisplayName("the facts the reflection world answers with")
+  class ReflectionFacts {
+
+    private final ReflectionProps props = new ReflectionProps();
+
+    /** A type variable, which names no class: every class-level fact about it is the empty one. */
+    private final Type variable = List.class.getTypeParameters()[0];
+
+    @Test
+    @DisplayName("a type that names no class is not abstract, implements nothing, has no constructor and no package")
+    void aTypeVariableHasNoClassFacts() {
+      assertFalse(props.isAbstractType(variable));
+      assertFalse(props.isImplementedBy(variable, "java.util.ArrayList"));
+      assertEquals(PropertySystem.Access.NONE, props.noArgConstructorAccess(variable));
+      assertEquals("", props.packageName(variable));
+      assertFalse(props.hasPublicConstructorAccepting(variable, List.class));
+      assertFalse(props.hasPublicConstructorAccepting(ArrayList.class, variable));
+    }
+
+    @Test
+    @DisplayName("a class this world cannot find implements nothing and names nothing")
+    void anUnknownClassIsNothing() {
+      assertFalse(props.isImplementedBy(List.class, "no.such.Container"));
+      assertNull(props.typeNamed("no.such.Container"));
+      assertEquals(ArrayList.class, props.typeNamed("java.util.ArrayList"));
+    }
+
+    @Test
+    @DisplayName("a parameterized type is answered for by its class")
+    void aParameterizedTypeIsItsClass() {
+      final var byDay = declared("byDay");
+
+      assertFalse(props.isAbstractType(byDay));
+      assertEquals(PropertySystem.Access.PUBLIC, props.noArgConstructorAccess(PublicCtorList.class));
+      assertEquals(
+        PropertySystem.Access.NONE,
+        props.noArgConstructorAccess(byDay),
+        "EnumMap has no no-arg constructor"
+      );
+      assertEquals(PropertySystem.Access.NONE, props.noArgConstructorAccess(AbstractList.class));
+      assertEquals("java.util", props.packageName(byDay));
+    }
+  }
+
+  @Nested
+  @DisplayName("the decision, for a type that is not a table row")
+  class OffTheTable {
+
+    @Test
+    @DisplayName(
+      "an abstract type is allocated as its family default from any package, and refused where that is not one of it"
+    )
+    void anAbstractTypeIsAllocatedAsItsDefault() {
+      assertEquals(
+        new Allocation.Build("java.util.ArrayList", Call.COUNT),
+        ALLOCATION.allocate(AbstractList.class, Kind.LIST, ELSEWHERE)
+      );
+      assertInstanceOf(Allocation.Refuse.class, ALLOCATION.allocate(AbstractSequentialList.class, Kind.LIST, null));
+    }
+
+    @Test
+    @DisplayName(
+      "an abstract type is copied through its family default's copy constructor, and not at all where it has none"
+    )
+    void anAbstractTypeIsCopiedThroughItsDefault() {
+      assertTrue(ALLOCATION.copiesInPlace(AbstractList.class, Kind.LIST, List.class, null));
+      assertFalse(ALLOCATION.copiesInPlace(AbstractSequentialList.class, Kind.LIST, List.class, null));
     }
   }
 }

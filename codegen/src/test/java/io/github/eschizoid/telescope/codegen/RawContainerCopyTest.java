@@ -83,7 +83,9 @@ class RawContainerCopyTest {
   }
 
   @Test
-  @DisplayName("a raw use with no public no-argument constructor is refused by name, as a field and as an element")
+  @DisplayName(
+    "a raw use with no no-argument constructor a rebuild can call is refused by name, as a field and as an element"
+  )
   void aCopyIntoAClassWithNoConstructorIsRefused() {
     // The compile-time world does not probe a concrete class's constructors, so the shared spec
     // accepts the copy and the processor's allocation check is what refuses it. Without that

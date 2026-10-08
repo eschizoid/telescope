@@ -760,7 +760,8 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
-      "a raw collection subtype with no public no-arg constructor is rejected with a telescope" + " diagnostic"
+      "a raw collection subtype with no no-argument constructor a rebuild can call is rejected with a" +
+        " telescope diagnostic"
     )
     void rawCollectionSubtypeWithoutNoArgCtorIsRejected() {
       // The raw helper allocates `new Wrap()`; a subtype that hides the no-arg ctor would fail in
@@ -996,10 +997,9 @@ class BridgeProcessorTest {
         )
       );
 
-      // EnumMap has no no-argument constructor, and its copy constructor refuses an empty map that
-      // is
-      // not an EnumMap, so the helper hands it the key class instead. Only the full pipeline
-      // attributes the generated file.
+      // EnumMap has no no-argument constructor, and its copy constructor refuses an
+      // empty map that is not an EnumMap, so the helper hands it the key class
+      // instead. Only the full pipeline attributes the generated file.
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.EmOrderBridge");
       assertTrue(bridge.contains("new java.util.EnumMap<demo.EmDay, java.lang.String>(demo.EmDay.class)"), bridge);

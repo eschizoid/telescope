@@ -10,7 +10,6 @@ import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.reflect.Method;
 import java.lang.reflect.Type;
 import java.util.Collection;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -33,9 +32,10 @@ class AllocationRenderingCoverageTest {
   @DisplayName("every declared type the shared table answers for is rendered by this module")
   void everyTableEntryIsRendered() throws Exception {
     final Method render = ContainerLifts.class.getDeclaredMethod(
-      "specAllocatorFor",
-      Class.class,
-      ContainerView.Kind.class
+      "rendered",
+      Allocation.Build.class,
+      ContainerView.Kind.class,
+      Class.class
     );
     render.setAccessible(true);
 
@@ -59,18 +59,13 @@ class AllocationRenderingCoverageTest {
     final var build = (Allocation.Build) decision;
     final var label = declared.getName() + " as " + kind;
 
+    // A container built from its key class is handed one, as the declaration naming it would be.
+    final Class<?> keyClass = build.call() == Allocation.Call.KEY_CLASS ? ContainerView.Kind.class : null;
     @SuppressWarnings("unchecked")
-    final var rendered = (Function<Object, Object>) render.invoke(null, declared, kind);
+    final var rendered = (Function<Object, Object>) render.invoke(null, build, kind, keyClass);
     assertNotNull(rendered, () -> label + " is decided but nothing renders it");
 
-    // A container built from its key class reads that class off a source of its own class when no
-    // declaration is in hand, so it is handed one.
-    final Object source =
-      build.call() == Allocation.Call.KEY_CLASS
-        ? new EnumMap<>(Map.of(ContainerView.Kind.LIST, "value"))
-        : kind == ContainerView.Kind.MAP_VALUES
-          ? Map.of("kind", "value")
-          : List.of("a", "b");
+    final Object source = kind == ContainerView.Kind.MAP_VALUES ? Map.of("kind", "value") : List.of("a", "b");
     final var made = rendered.apply(source);
     assertEquals(
       build.implName(),

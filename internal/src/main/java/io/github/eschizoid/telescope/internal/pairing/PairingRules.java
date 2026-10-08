@@ -106,6 +106,8 @@ public final class PairingRules<T> {
         );
       }
       if (elements == ElementMatch.SAME) {
+        final var classless = (collection || map) ? copyRefusal(srcType, tgtType) : null;
+        if (classless != null) return new PairDecision.Incompatible<>(classless);
         final var allocable =
           (collection || map) && props.copyAllocability(srcType, tgtType) != PropertySystem.Allocability.NOT_ALLOCABLE;
         if (collection && allocable) return new PairDecision.CollectionCopy<>();
@@ -682,6 +684,24 @@ public final class PairingRules<T> {
     }
     final var entry = BY_DECLARED_NAME.get(name);
     return entry == null || entry.family() != kind ? null : entry.allocation();
+  }
+
+  /**
+   * Why a pair of same-kind container classes cannot be copied whoever builds it, or null when each
+   * side has a class to build. Asked of a concrete side only: one the table refuses outright, which
+   * a raw {@code EnumMap} is, since it names no key class to build from. An interface or abstract
+   * side with no default goes on to the container lift, which refuses it in the same words on both
+   * paths.
+   */
+  public String copyRefusal(final T srcType, final T tgtType) {
+    final var allocation = new ContainerAllocation<T>(props);
+    for (final var side : List.of(srcType, tgtType)) {
+      if (props.isAbstractType(props.rawType(side))) continue;
+      if (
+        allocation.implementationFor(side, familyOf(side)) instanceof Allocation.Refuse refuse
+      ) return refuse.reason();
+    }
+    return null;
   }
 
   /**

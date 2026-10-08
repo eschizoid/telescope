@@ -1579,8 +1579,8 @@ class MigrationRegressionTest {
       assertEquals(MyMap.class, back.getItems().getClass());
     }
 
-    // EnumMap target — built from the key class its declaration names, since it has no no-arg
-    // constructor.
+    // EnumMap target — built from the key class its declaration names, since it has
+    // no no-arg constructor.
     enum Region {
       US,
       EU,
@@ -1632,8 +1632,8 @@ class MigrationRegressionTest {
       // An EnumMap iterates in the enum's declaration order, whatever order the source kept.
       assertEquals(List.of(Region.US, Region.EU), List.copyOf(tgt.getByRegion().keySet()));
       assertEquals("u", tgt.getByRegion().get(Region.US).id());
-      // An empty source has no key to learn the class from, which is why the declaration supplies
-      // it.
+      // An empty source has no key to learn the class from, which is why the
+      // declaration supplies it.
       src.setByRegion(new LinkedHashMap<>());
       assertTrue(mapper.forward(src).getByRegion().isEmpty());
     }
@@ -1681,8 +1681,8 @@ class MigrationRegressionTest {
     }
 
     // User subclass WITHOUT a no-arg ctor — the negative side of userListSubclassToArrayListWorks.
-    // The shared allocation rules find no constructor a rebuild can call, so the plan-time refusal
-    // fires.
+    // The shared allocation rules find no constructor a rebuild can call, so the
+    // plan-time refusal fires.
     public static class NoCtorList<E> extends ArrayList<E> {
 
       @Serial

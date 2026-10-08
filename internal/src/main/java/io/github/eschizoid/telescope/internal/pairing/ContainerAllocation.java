@@ -126,8 +126,9 @@ public final class ContainerAllocation<T> {
    */
   private Allocation keyed(final Allocation table, final T declared) {
     if (!(table instanceof Allocation.Build build) || build.call() != Allocation.Call.KEY_CLASS) return table;
-    final var view = rules.containerViewOf(declared);
-    return view != null && view.kind() == ContainerView.Kind.MAP_VALUES
+    // A map whose key type the rules can name has a view; one used raw, or keyed by a wildcard or a
+    // type variable, has none, and names no class to build from.
+    return rules.containerViewOf(declared) != null
       ? table
       : new Allocation.Refuse(PairingMessages.noKeyClass(props.sourceName(props.rawType(declared))));
   }

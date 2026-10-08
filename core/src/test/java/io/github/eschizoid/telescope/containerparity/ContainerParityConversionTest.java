@@ -145,9 +145,9 @@ class ContainerParityConversionTest {
 
     // A swallowed probe leaves the plan valid and throws nothing here, which is what assertThrows
     // above catches. The message assertion catches a different mutation: one where the plan is
-    // still refused, but with telescope's own generic "no allocator for this type" text in place
-    // of the constructor's failure -- a refusal that names the wrong cause and sends the adopter
-    // to fix a table when the class is what is broken.
+    // still refused, but with telescope's own sentence that the class has no constructor a rebuild
+    // can call in place of the constructor's failure -- a refusal that names the wrong cause and
+    // sends the adopter to add a constructor the class already has.
     assertEquals(REFUSAL, thrown.getMessage(), "the container's own refusal, not a generic one");
   }
 

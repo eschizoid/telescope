@@ -10,7 +10,10 @@ import io.github.eschizoid.telescope.Telescope;
 import java.io.Serial;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -125,5 +128,159 @@ class ContainerConstructorReachTest {
     );
 
     assertTrue(thrown.getMessage().contains("has no no-argument constructor a rebuild can call"), thrown::getMessage);
+  }
+
+  /** A map with only a copy constructor. */
+  public static class CopyOnlyMap<K, V> extends LinkedHashMap<K, V> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+
+    public CopyOnlyMap(final Map<? extends K, ? extends V> copied) {
+      super(copied);
+    }
+  }
+
+  /** A list whose copy constructors say which of them built it. */
+  public static class Overloaded<E> extends ArrayList<E> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+
+    private final String builtBy;
+
+    public Overloaded(final Collection<? extends E> copied) {
+      super(copied);
+      builtBy = "Collection";
+    }
+
+    public Overloaded(final List<? extends E> copied) {
+      super(copied);
+      builtBy = "List";
+    }
+
+    public Overloaded(final int capacity) {
+      super(capacity);
+      builtBy = "int";
+    }
+
+    String builtBy() {
+      return builtBy;
+    }
+  }
+
+  /** A list whose copy constructor refuses what it is handed. */
+  public static class Refusing<E> extends ArrayList<E> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+
+    public Refusing(final Collection<? extends E> copied) {
+      throw new IllegalArgumentException("not this one");
+    }
+  }
+
+  /**
+   * A list with a hidden constructor, a copy constructor, and a builder, which counts its builds.
+   */
+  public static class Built<E> extends ArrayList<E> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+
+    static final AtomicInteger BUILDS = new AtomicInteger();
+
+    private Built() {}
+
+    public Built(final Collection<? extends E> copied) {
+      super(copied);
+    }
+
+    public static Builder builder() {
+      return new Builder();
+    }
+
+    public static final class Builder {
+
+      public Built<Object> build() {
+        BUILDS.incrementAndGet();
+        return new Built<>();
+      }
+    }
+  }
+
+  record MapOfString(Map<String, String> items) {}
+
+  record CopyOnlyMapOfString(CopyOnlyMap<String, String> items) {}
+
+  record OverloadedOfString(Overloaded<String> items) {}
+
+  record RefusingOfString(Refusing<String> items) {}
+
+  record BuiltOfString(Built<String> items) {}
+
+  @Test
+  @DisplayName("a source with only a copy constructor is rebuilt by it on the way back")
+  void aCopyOnlySourceIsCopiedBackward() {
+    final var mapper = Telescope.mapper(CopyOnlyOfString.class, ListOfString.class);
+
+    final var back = mapper.backward(new ListOfString(List.of("b", "a")));
+
+    assertInstanceOf(CopyOnly.class, back.items());
+    assertEquals(List.of("b", "a"), back.items());
+  }
+
+  @Test
+  @DisplayName("a map with only a copy constructor is built by it, in both directions")
+  void aCopyOnlyMapIsCopied() {
+    final var mapper = Telescope.mapper(MapOfString.class, CopyOnlyMapOfString.class);
+    final var source = new LinkedHashMap<String, String>();
+    source.put("b", "B");
+    source.put("a", "A");
+
+    final var out = mapper.forward(new MapOfString(source));
+
+    assertInstanceOf(CopyOnlyMap.class, out.items());
+    assertEquals(List.of("b", "a"), List.copyOf(out.items().keySet()));
+    assertEquals(source, mapper.backward(out).items());
+  }
+
+  @Test
+  @DisplayName(
+    "of several copy constructors, the narrowest one accepting the source builds it, as Java's overload resolution would"
+  )
+  void theNarrowestCopyConstructorIsCalled() {
+    final var out = Telescope.mapper(ListOfString.class, OverloadedOfString.class).forward(
+      new ListOfString(new ArrayList<>(List.of("a")))
+    );
+
+    assertEquals("List", out.items().builtBy());
+  }
+
+  @Test
+  @DisplayName("a copy constructor that throws is reported by name, with what it threw as the cause")
+  void aThrowingCopyConstructorIsNamed() {
+    final var mapper = Telescope.mapper(ListOfString.class, RefusingOfString.class);
+
+    final var thrown = assertThrows(IllegalStateException.class, () -> mapper.forward(new ListOfString(List.of("a"))));
+
+    assertEquals(
+      "Deep map: " + Refusing.class.getCanonicalName() + " refused its copy constructor",
+      thrown.getMessage()
+    );
+    assertInstanceOf(IllegalArgumentException.class, thrown.getCause());
+  }
+
+  @Test
+  @DisplayName("a side its builder makes is built by the builder, not by its copy constructor")
+  void aBuilderBeatsACopyConstructor() {
+    final var before = Built.BUILDS.get();
+
+    final var out = Telescope.mapper(ListOfString.class, BuiltOfString.class).forward(
+      new ListOfString(List.of("b", "a"))
+    );
+
+    assertEquals(List.of("b", "a"), out.items());
+    assertTrue(Built.BUILDS.get() > before, "the builder made the container");
   }
 }

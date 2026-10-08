@@ -99,7 +99,7 @@ final class ContainerLifts {
    * source's order is carried into it where the class keeps one.
    */
   private static Function<Object, Object> copyAllocator(final Class<?> cls, final ContainerView.Kind kind) {
-    return cls.isInterface() ? specAllocatorFor(cls, kind) : allocatorFor(cls, cls, kind);
+    return allocatorFor(cls, cls, kind);
   }
 
   /** Map ↔ Map element-copy Iso. Mirror of {@link #collectionCopyIso} via {@code putAll}. */
@@ -742,21 +742,6 @@ final class ContainerLifts {
   private static final ContainerAllocation<Type> ALLOCATION = new ContainerAllocation<>(PROPS);
 
   /**
-   * The allocator the shared table asks for, or null where it names nothing.
-   *
-   * <p>Only the table is asked, not the rules layered on it, so a class the table does not name
-   * answers null rather than being bound. A container built from its key class is handed the class
-   * the source map was built from, which is the declared one wherever this is reached: an interface
-   * is never built that way, and a pair of one declared type reads an instance of that type.
-   */
-  private static Function<Object, Object> specAllocatorFor(final Class<?> raw, final ContainerView.Kind kind) {
-    final var decision = RULES.allocationFor(raw, kind);
-    if (decision == null) return null;
-    if (decision instanceof Allocation.Refuse refuse) throw new IllegalStateException(refuse.reason());
-    return rendered((Allocation.Build) decision, kind, null);
-  }
-
-  /**
    * A decided allocation as a function of the source, or null where {@code build} names a class
    * none of the calls below write out by name, which is a class built as itself.
    *
@@ -764,8 +749,8 @@ final class ContainerLifts {
    * constructor reaches a group that does not know the class and yields nothing, rather than
    * quietly building the right class the wrong way.
    *
-   * @param keyClass the declared key class a container built from one is handed, or null to read it
-   *     off the source, which is then a map of that same class
+   * @param keyClass the declared key class a container built from one is handed, null for every
+   *     other call
    */
   private static Function<Object, Object> rendered(
     final Allocation.Build build,
@@ -832,14 +817,9 @@ final class ContainerLifts {
 
   @SuppressWarnings({ "unchecked", "rawtypes" })
   private static Function<Object, Object> fromKeyClass(final String implName, final Class<?> keyClass) {
-    if (!EnumMap.class.getName().equals(implName)) return null;
-    if (keyClass != null) return ignored -> new EnumMap(keyClass);
-    // An EnumMap's own copy constructor is the one public way to learn its key class from an
-    // instance, so the source is copied and emptied.
-    return input -> {
-      final var fresh = new EnumMap((EnumMap) input);
-      fresh.clear();
-      return fresh;
+    return switch (implName) {
+      case "java.util.EnumMap" -> ignored -> new EnumMap(keyClass);
+      default -> null;
     };
   }
 

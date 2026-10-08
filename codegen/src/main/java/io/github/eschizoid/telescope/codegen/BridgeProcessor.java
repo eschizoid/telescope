@@ -2872,9 +2872,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     };
   }
 
-  /** The class literal of a declared map's key type, which a container built from one is handed. */
+  /**
+   * The class literal of a declared map's key type, which a container built from one is handed. The
+   * shared rules build such a container only where the declaration names a key type, and every gate
+   * asks them before anything is rendered, so a missing one is a broken invariant, reported as the
+   * refusal those rules would have made rather than as a null dereference.
+   */
   private String keyClassLiteral(final TypeMirror container) {
-    return processingEnv.getTypeUtils().erasure(rules.containerViewOf(container).keyType()) + ".class";
+    final var view = rules.containerViewOf(container);
+    if (view == null || view.keyType() == null) {
+      throw new IllegalStateException(PairingMessages.noKeyClass(container.toString()));
+    }
+    return processingEnv.getTypeUtils().erasure(view.keyType()) + ".class";
   }
 
   /**
@@ -3051,6 +3060,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       //     through: a generic class used raw against another used raw, or against a side fixing
       //     every argument to Object. Nothing either side holds can be of a type the other does not
       //     admit, so the elements are copied into the class the target allocates.
+      final var copyRefusal = rules.copyRefusal(sf.type(), tf.type());
+      if (
+        copyRefusal != null && rules.decidePair(sf.type(), tf.type(), sf.name()) instanceof PairDecision.Incompatible
+      ) {
+        // A pair of same-kind containers the shared spec refuses because one side has no class to
+        // build, refused in the spec's words, which are the reflective path's.
+        error(source, refusedContainerMessage(source, target, sf.name(), copyRefusal));
+        return null;
+      }
       final var copy = copyKindOf(rules.decidePair(sf.type(), tf.type(), sf.name()), tf.type());
       if (copy != null) {
         // The spec copies an interface only where the allocation table names a default for it, and
@@ -3289,7 +3307,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * forward} and {@code backward} each rebuild one inner container. The outer helper calls it the
    * way it calls a sub-bridge, so containers nest to any depth without a helper of their own kind.
    */
-  private record NestedElement(TypeMirror src, TypeMirror tgt, FieldPlan plan) {}
+  private record NestedElement(TypeMirror src, TypeMirror tgt, FieldPlan plan, boolean copied) {
+    NestedElement(final TypeMirror src, final TypeMirror tgt, final FieldPlan plan) {
+      this(src, tgt, plan, false);
+    }
+  }
 
   /** The nested element classes the pair being planned needs, by class name. */
   private final Map<String, NestedElement> nestedElements = new LinkedHashMap<>();
@@ -3340,8 +3362,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       parentPkg
     );
     if (inner == null) return null;
-    // The nested class always fills its output through a helper, so each side is asked only
-    // whether it can be allocated and assigned, never whether it has a copy constructor.
     final var unassignable = firstUnassignableContainer(srcElement, tgtElement, inner.kind(), parentPkg);
     if (unassignable != null) {
       error(parentSource, refusedContainerMessage(parentSource, parentTarget, fieldName, unassignable));
@@ -3352,7 +3372,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       error(parentSource, unnameableContainerMessage(parentSource, parentTarget, fieldName, unnameable, parentPkg));
       return null;
     }
-    final var badAlloc = firstNonAllocatableContainer(srcElement, tgtElement, inner.kind(), parentPkg);
+    // An inner container whose elements pass through is copied by constructor where each side can
+    // be built from the other, as a field is and as the reflective path does at any depth. Every
+    // other inner container is filled through a helper, which has to be able to allocate it.
+    final var copied =
+      IDENTITY_ELEMENT_SENTINEL.equals(inner.subBridgeName()) &&
+      copyConstructs(tgtElement, inner.kind(), srcElement, parentPkg) &&
+      copyConstructs(srcElement, inner.kind(), tgtElement, parentPkg);
+    final var badAlloc = copied ? null : firstNonAllocatableContainer(srcElement, tgtElement, inner.kind(), parentPkg);
     if (badAlloc != null) {
       error(parentSource, refusedContainerMessage(parentSource, parentTarget, fieldName, badAlloc));
       return null;
@@ -3363,7 +3390,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       new NestedElement(
         srcElement,
         tgtElement,
-        inner.withContainerImpls(concreteImplFqn(tgtElement, inner.kind()), concreteImplFqn(srcElement, inner.kind()))
+        inner.withContainerImpls(concreteImplFqn(tgtElement, inner.kind()), concreteImplFqn(srcElement, inner.kind())),
+        copied
       )
     );
     return FieldPlan.ofKind(kind, name);
@@ -3398,8 +3426,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           );
         }
       } else if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) {
-        emitRawContainerHelper(out, "forward", element.src(), element.tgt(), plan, "forward", bridgePkg);
-        emitRawContainerHelper(out, "backward", element.tgt(), element.src(), plan, "backward", bridgePkg);
+        emitNestedDirection(
+          out,
+          "forward",
+          element.src(),
+          element.tgt(),
+          plan,
+          plan.fwdContainerImpl(),
+          element.copied(),
+          bridgePkg
+        );
+        emitNestedDirection(
+          out,
+          "backward",
+          element.tgt(),
+          element.src(),
+          plan,
+          plan.bwdContainerImpl(),
+          element.copied(),
+          bridgePkg
+        );
       } else {
         switch (plan.kind()) {
           case LIST -> {
@@ -3419,6 +3465,39 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       out.println("  }");
     }
+  }
+
+  /**
+   * One direction of a nested element whose inner elements pass through: handed to the output's
+   * copy constructor where the pair is copied, as a field's inline copy is, and filled by the
+   * self-contained helper otherwise, which an output that keeps an order always is.
+   */
+  private void emitNestedDirection(
+    final PrintWriter out,
+    final String direction,
+    final TypeMirror from,
+    final TypeMirror to,
+    final FieldPlan plan,
+    final String outputImpl,
+    final boolean copied,
+    final String bridgePkg
+  ) {
+    if (!copied || copiesThroughHelper(plan, outputImpl)) {
+      emitRawContainerHelper(out, direction, from, to, plan, direction, bridgePkg);
+      return;
+    }
+    out.println();
+    out.println(
+      "  private static " +
+        to +
+        " " +
+        direction +
+        "(final " +
+        from +
+        " src) { return src == null ? null : new " +
+        withDiamond(requireImpl(outputImpl, direction)) +
+        "(src); }"
+    );
   }
 
   /** Sentinel sub-bridge name meaning "the element passes through unchanged". */

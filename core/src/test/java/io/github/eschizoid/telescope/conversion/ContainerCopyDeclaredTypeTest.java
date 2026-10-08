@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.conversion;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.AbstractMap;
 import java.util.AbstractSet;
@@ -84,5 +85,19 @@ class ContainerCopyDeclaredTypeTest {
 
     assertInstanceOf(LinkedHashMap.class, copy);
     assertEquals(List.of("b", "a"), List.copyOf(copy.keySet()));
+  }
+
+  /** A set interface of the adopter's own, which no class the rules build is an instance of. */
+  interface OwnSetType<E> extends Set<E> {}
+
+  @Test
+  @DisplayName("a container declared as an interface no class the rules build implements is refused by name")
+  void anUnbuildableDeclarationIsRefused() {
+    final Set<String> source = new OwnSet<>();
+    source.add("a");
+
+    final var thrown = assertThrows(IllegalStateException.class, () -> ContainerCopy.of(source, OwnSetType.class));
+
+    assertEquals("telescope rebuilds no copy of " + OwnSetType.class.getName(), thrown.getMessage());
   }
 }
