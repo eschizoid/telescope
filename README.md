@@ -150,30 +150,32 @@ depending on tier, direction and call shape. They allocated the same bytes per c
 exception is in MapStruct's own Set forward row, where one of its four forks allocated 32 bytes less than the other
 three.
 
-<!-- metrics: from MapStructComparisonBenchmark, Actions run 37761344960 -->
+<!-- metrics: from MapStructComparisonBenchmark, Actions run 37761344960; the Map row spans three runs on main -->
 
-| Tier, `BRIDGE.read` against MapStruct | forward time       | backward time      | bytes per call, telescope |
-| ------------------------------------- | ------------------ | ------------------ | ------------------------- |
-| flat, 5 scalars                       | 1.07 times         | 1.04 times         | 32                        |
-| nested, one nested type               | 1.29 times         | 1.02 times         | 48                        |
-| deep, 3 levels and list hops          | 1.10 times         | 1.00 to 1.10 times | 376                       |
-| Map field, 100 entries                | 1.14 times         | 1.10 times         | 7,528                     |
-| Set field, 100 entries                | 0.93 to 1.01 times | 1.02 times         | 7,576 forward, 7,544 back |
+| Tier, `BRIDGE.read` against MapStruct | forward time                           | backward time                          | bytes per call, telescope |
+| ------------------------------------- | -------------------------------------- | -------------------------------------- | ------------------------- |
+| flat, 5 scalars                       | 1.07 times                             | 1.04 times                             | 32                        |
+| nested, one nested type               | 1.29 times                             | 1.02 times                             | 48                        |
+| deep, 3 levels and list hops          | 1.10 times                             | 1.00 to 1.10 times                     | 376                       |
+| Map field, 100 entries                | 1.02 to 1.14 times, three runs on main | 0.97 to 1.10 times, three runs on main | 7,528, same as MapStruct  |
+| Set field, 100 entries                | 0.93 to 1.01 times                     | 1.02 times                             | 7,576 forward, 7,544 back |
 
 The table times the composable `BRIDGE.read` value. The `BRIDGE_FN` constant and the static `forward` method measured
 1.00 times MapStruct forward on flat, 1.37 times on nested, and 1.06 on deep for static `forward` and 1.10 for
 `BRIDGE_FN`. The table comes from GitHub Actions run 37761344960 on `main` at `f7be3f30`, using the included JMH
 workloads with MapStruct 1.6.3 on JDK 25. The run used 4 forks of 8 measured iterations each. MapStruct's own rows are
 the control, so each ratio is read within this one run. Where the error bands of the two rows overlap, the table gives a
-range instead of one ratio. The [methodology, per-fork figures, and earlier runs](docs/perf-mapstruct-comparison.md) are
-recorded separately.
+range instead of one ratio. The Map row is the exception. It gives the spread of the per-run ratios across three runs on
+main, which are listed in the methodology document. The
+[methodology, per-fork figures, and earlier runs](docs/perf-mapstruct-comparison.md) are recorded separately.
 
 Runtime mappers are slower than generated ones, and the gap shrinks as the work per call grows. Without codegen,
 `Telescope.mapper(...)` composes each record or bean pair into a single `MethodHandle`. On the same run it measured 3.34
-times MapStruct forward on flat, 2.68 on nested, and 1.27 on deep. On the 100-entry fields it measured 1.12 times on Map
-and 1.03 times on Set. It allocated the same bytes as MapStruct on every tier except the Map field, where it allocated
-32 bytes more. A fixed cost of about 7 ns per call is nearly the whole gap on flat and nested shapes. Deep and container
-shapes add a cost per converted element, so their absolute gap grows while the ratio falls.
+times MapStruct forward on flat, 2.68 on nested, and 1.27 on deep. On the 100-entry fields it measured 1.03 times on
+Set, and between 1.05 and 1.12 times on Map across the same three runs on main. It allocated the same bytes as MapStruct
+on every tier except the Map field, where it allocated 32 bytes more. A fixed cost of about 7 ns per call is nearly the
+whole gap on flat and nested shapes. Deep and container shapes add a cost per converted element, so their absolute gap
+grows while the ratio falls.
 
 Flat, nested, and deep conversions take well under a microsecond with both kinds of mapper. The 100-entry container rows
 take more than one with both. Read the tier that matches your shape. You can reproduce any of it from the

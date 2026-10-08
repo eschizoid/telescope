@@ -369,12 +369,29 @@ Set forward is also the one row where allocation differs. Telescope allocated 7,
 allocated 7,576 in three forks and 7,544 in the fourth, which is the same fork that ran slow, so its pooled figure is
 7,568. Telescope never allocated more than MapStruct's usual figure on this row.
 
-### The Map row since the headline run
+### The Map row across five runs
 
-The headline run, Actions 34470676359, measured the Map row as a tie at 1262 against 1244 ns. This run measures it at
-1.14 times forward and 1.10 times backward, with disjoint bands. Several container changes landed on `main` between the
-two runs, and the two were taken on different runners. A separate investigation is checking whether the difference is a
-regression. This document doesn't name a cause.
+The headline run, Actions 34470676359, measured the Map row as a tie at 1262 against 1244 ns. Run 8 measured it at 1.14
+times forward and 1.10 times backward, with disjoint bands. Four more runs, each with 4 forks, then measured only the
+`container_map.*` rows, to compare `main` with the v1.9.0 release.
+
+| Actions run | ref    | codegen forward | codegen backward | runtime forward | allocation, codegen and MapStruct |
+| ----------- | ------ | --------------: | ---------------: | --------------: | --------------------------------- |
+| 37761344960 | main   |            1.14 |             1.10 |            1.12 | 7,528 B/op                        |
+| 37789674703 | main   |            1.02 |             0.97 |            1.05 | 7,528 B/op                        |
+| 37789690617 | main   |            1.07 |             0.98 |            1.06 | 7,528 B/op                        |
+| 37789681271 | v1.9.0 |            1.04 |             1.10 |            1.11 | 7,528 B/op                        |
+| 37789695822 | v1.9.0 |            1.03 |             0.95 |            1.05 | 7,528 B/op                        |
+
+Each ratio is telescope's time over MapStruct's time on the same run. The runs on `main` used `f7be3f30` for Run 8 and
+`d5f7c0b8` for the other two, and the runs on the release used its tag commit `6886f19d`. The release's forward and
+runtime ratios fall inside `main`'s spread, and its backward ratios (0.95 and 1.10) bracket `main`'s 0.97 to 1.10. These
+five runs show no regression between v1.9.0 and `main`. Across them, the generated mapper and MapStruct both allocated
+7,528 B/op on every run. The runtime mapper allocated 7,560 B/op on every run.
+
+The old tie predates the change that rebuilds an interface-typed `Map` field as a `LinkedHashMap` sized with
+`LinkedHashMap.newLinkedHashMap(size)`. That change makes telescope build the same container class as MapStruct, which
+the footnote under the headline table describes.
 
 ## So is there a real gap?
 
