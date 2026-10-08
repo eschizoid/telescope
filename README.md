@@ -87,7 +87,7 @@ both directions, and composition at runtime that you can compile down later.
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-  implementation("io.github.eschizoid:telescope-core:1.8.0")
+  implementation("io.github.eschizoid:telescope-core:1.9.0")
 }
 ```
 
@@ -96,7 +96,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.8.0</version>
+  <version>1.9.0</version>
 </dependency>
 ```
 
