@@ -259,7 +259,7 @@ The [migration guide](docs/mapstruct-migration.md) covers running both side by s
 ```kotlin
 // Gradle (Kotlin DSL)
 dependencies {
-  implementation("io.github.eschizoid:telescope-core:1.9.0")
+  implementation("io.github.eschizoid:telescope-core:2.0.0")
 }
 ```
 
@@ -268,7 +268,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.9.0</version>
+  <version>2.0.0</version>
 </dependency>
 ```
 
