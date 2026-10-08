@@ -252,7 +252,7 @@ same `opens` message. See
 name is not enough. Each binder nests a `Provider` implementing `FromMapProvider`, and the processor lists it in
 `META-INF/services`. The class path and a native image need nothing more.
 
-A named module ignores that file. On the module path, its `module-info` must declare
+A named module ignores `META-INF/services`. On the module path, its `module-info` must declare
 `provides io.github.eschizoid.telescope.conversion.FromMapProvider with <pkg>.<Name>FromMap.Provider` for each binder.
 The processor warns with the exact line when the module it compiles lacks it.
 

@@ -92,10 +92,10 @@ them as manual steps instead, and the IDE plugin's behavior is cited from its do
 
 ## Runtime and generated mappers give the same result on container shapes
 
-Telescope has two ways to run the same mapping. The runtime path, `Telescope.mapper(...)`, builds the conversion while
-the program runs, with no annotations and no build step. Putting `@Bridge(Target.class)` on the source type makes the
-`telescope-codegen` annotation processor generate the same conversion as plain Java. You can start with the runtime path
-and move a mapping to `@Bridge` later, when a code path needs the speed.
+Telescope can run the same mapping in two ways. A runtime mapper, built by `Telescope.mapper(...)`, does the conversion
+while the program runs, with no annotations and no build step. Putting `@Bridge(Target.class)` on the source type makes
+the `telescope-codegen` annotation processor generate the same conversion as plain Java, which is a generated mapper.
+You can start with a runtime mapper and move a mapping to `@Bridge` later, when that code needs the speed.
 
 ```java
 @Bridge(InvoiceDto.class)
@@ -110,15 +110,15 @@ InvoiceDto viaMapper = Telescope.mapper(Invoice.class, InvoiceDto.class).forward
 InvoiceDto viaBridge = InvoiceBridge.BRIDGE_FN.forward(invoice);
 ```
 
-A test holds the two paths to the same result on container shapes and on how a target is constructed.
-`CrossPathCorpusTest` crosses container families with element shapes and runs one input through each path for every
+A test holds the two kinds of mapper to the same result on container shapes and on how a target is constructed.
+`CrossPathCorpusTest` crosses container families with element shapes and runs one input through each kind for every
 cell. It fails when the two disagree. It runs as part of `./gradlew check`, which is what CI runs. Its container grid
 has no recorded disagreements. Renames, null strategies, and defaults aren't cross-checked by it.
 
 Two known differences are recorded in tests, each with its direction. In `CrossPathCorpusTest`, a target reachable only
 through a private constructor is built at run time. The processor refuses it when `@Bridge`'s `writeStrategy` asks for
 setters or for a constructor. In `ContainerAllocatorCorpusTest`, `@Bridge` accepts a `Map` field mapped onto an
-`EnumMap` field, and `Telescope.mapper(...)` refuses it. The runtime path only converts an `EnumMap` target whose source
+`EnumMap` field, and `Telescope.mapper(...)` refuses it. A runtime mapper only converts an `EnumMap` target whose source
 is the same `EnumMap` type. Each test also fails the build when a recorded difference goes away, so the list stays
 accurate.
 
@@ -145,30 +145,35 @@ Same-typed JDK collections are copied rather than shared, so changing the target
 
 ## Measured performance
 
-The table below compares telescope's generated code with MapStruct's on the same JMH workloads.
+In the latest run, telescope's generated mappers took between about the same time as MapStruct and 1.29 times its time,
+depending on the tier and direction. They allocated the same bytes per call as MapStruct on every row. The one exception
+is in MapStruct's own Set forward row, where one of its four forks allocated 32 bytes less than the other three.
 
-<!-- metrics: refresh from the next MapStructComparisonBenchmark run -->
+<!-- metrics: from MapStructComparisonBenchmark, Actions run 37761344960 -->
 
-| Tier, codegen against codegen | telescope against MapStruct                                            |
-| ----------------------------- | ---------------------------------------------------------------------- |
-| flat, 5 scalars               | about 1.07 times, which is a fifth of a nanosecond                     |
-| nested, one nested type       | 1.04 to 1.46 times across runs, on a microbenchmark, not a service     |
-| deep, 3 levels and list hops  | 1.06 to 1.18 times across runs, or 4 ns on a 62 ns conversion, at best |
-| Set or Map field, 100 items   | the same allocation, and timings are pending a re-run                  |
+| Tier, generated mapper against MapStruct | forward time       | backward time      | bytes per call, both sides |
+| ---------------------------------------- | ------------------ | ------------------ | -------------------------- |
+| flat, 5 scalars                          | 1.07 times         | 1.04 times         | 32                         |
+| nested, one nested type                  | 1.29 times         | 1.02 times         | 48                         |
+| deep, 3 levels and list hops             | 1.10 times         | 1.00 to 1.10 times | 376                        |
+| Map field, 100 entries                   | 1.14 times         | 1.10 times         | 7,528                      |
+| Set field, 100 entries                   | 0.93 to 1.01 times | 1.02 times         | 7,576 forward, 7,544 back  |
 
-The table comes from GitHub Actions run 34470676359, using the included JMH workloads with MapStruct 1.6.3 on JDK 25.
-MapStruct's own rows are the control, so each ratio is read within one run. The ranges are what the same benchmark has
-produced across runs. The [methodology and history](docs/perf-mapstruct-comparison.md) are recorded separately.
+The table comes from GitHub Actions run 37761344960 on `main` at `f7be3f30`, using the included JMH workloads with
+MapStruct 1.6.3 on JDK 25. The run used 4 forks of 8 measured iterations each. MapStruct's own rows are the control, so
+each ratio is read within this one run. Where the error bands of the two rows overlap, the table gives a range instead
+of one ratio. The [methodology, per-fork figures, and earlier runs](docs/perf-mapstruct-comparison.md) are recorded
+separately.
 
-The runtime path is slower than generated code, and the gap shrinks as the work per call grows. Without codegen,
-`Telescope.mapper(...)` composes each record or bean pair into a single `MethodHandle`. On that run it measured about
-3.3 times MapStruct on flat, 2.7 on nested, and 1.3 on deep. Its container figure of 1.04 to 1.06 is pending a re-run,
-because the Map shape was measured before a change to how Map containers are built. A fixed cost of about 7 ns per call
-is nearly the whole gap on flat and nested shapes. Deep and container shapes add a cost per converted element. On those
-shapes the absolute gap grows while the ratio falls.
+Runtime mappers are slower than generated ones, and the gap shrinks as the work per call grows. Without codegen,
+`Telescope.mapper(...)` composes each record or bean pair into a single `MethodHandle`. On the same run it measured 3.34
+times MapStruct forward on flat, 2.68 on nested, and 1.27 on deep. On the 100-entry fields it measured 1.12 times on Map
+and 1.03 times on Set. It allocated the same bytes as MapStruct on every tier except the Map field, where it allocated
+32 bytes more. A fixed cost of about 7 ns per call is nearly the whole gap on flat and nested shapes. Deep and container
+shapes add a cost per converted element, so their absolute gap grows while the ratio falls.
 
-Flat, nested, and deep conversions take well under a microsecond on both paths. The 100-item container rows take more
-than one on both. Read the tier that matches your shape. You can reproduce any of it from the
+Flat, nested, and deep conversions take well under a microsecond with both kinds of mapper. The 100-entry container rows
+take more than one with both. Read the tier that matches your shape. You can reproduce any of it from the
 [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action. The full matrix is in
 [`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison-apples-to-apples).
 
@@ -212,8 +217,8 @@ build time, by design.
 | Unmapped-target safety            | strict at construction by default                                  | `WARN` by default, with `ERROR` a one-line opt-in                    |
 | Sealed-root dispatch              | `Match.of(...).when(...).exhaustive()`, checked over the permits   | `@SubclassMapping`, broader hierarchies, no sealed check             |
 | Multi-source merge, many to one   | `Telescope.merge(Target.class, from(...), ...)`                    | first-class multi-source methods, disambiguated by string            |
-| Runtime path, no codegen required | `Telescope.of(Class)`, with `@Focus` as a later opt-in             | compile-time only                                                    |
-| GraalVM native-image              | codegen needs no config, and the runtime path works there too      | fully AOT-compatible for codegen, with no runtime path to need it    |
+| No codegen required               | `Telescope.of(Class)`, with `@Focus` as a later opt-in             | compile-time only                                                    |
+| GraalVM native-image              | codegen needs no config, and runtime mappers work there too        | fully AOT-compatible for codegen, with no runtime mapper to need it  |
 
 The [coverage matrix](docs/mapstruct-parity.md) scores 29 MapStruct features against telescope. It rates 13 as covered
 fully and 16 as covered partially. Each partial row states its limitation, and every verdict cites the source and tests
@@ -329,10 +334,11 @@ Rows handle the cases that same-name matching can't. A field with a different na
 
 The rest of this README uses these terms.
 
-- The **runtime path** is every entry point that works while the program runs, with no annotations and no build step,
-  such as `Telescope.of`, `Telescope.mapper`, and `Telescope.fromMap`.
-- The **generated path** is the code the `telescope-codegen` processor writes at compile time for `@Focus`,
-  `@BeanFocus`, `@Bridge`, and `@FromMap`.
+- A **typed path** is a `Telescope<S, A>` value built from method references, such as `EMAILS` at the top of this page.
+- A **runtime mapper** is a mapper built while the program runs, by `Telescope.mapper`, `Telescope.map`, or
+  `Telescope.fromMap`, with no annotations and no build step.
+- A **generated mapper** is the conversion the `telescope-codegen` processor writes at compile time for `@Bridge` or
+  `@FromMap`.
 
 For a sealed root, `Match.of(...)` dispatches over the permitted subtypes. `.exhaustive()` reads the permits and throws
 when a subtype has no handler. The check happens when you call `.exhaustive()`, not at compile time.
@@ -719,9 +725,9 @@ Lombok in the processor list, which the [Lombok guide](lombok/README.md) and [do
 
 ### Native image
 
-The runtime path works inside a GraalVM native image, so `Telescope.mapper(...)` and `.field(User::name)` run there with
-no build step. Generated code from MapStruct and from telescope is free of reflection. Both build under native-image
-with no configuration.
+Runtime mappers and typed paths work inside a GraalVM native image, so `Telescope.mapper(...)` and `.field(User::name)`
+run there with no build step. Generated code from MapStruct and from telescope is free of reflection. Both build under
+native-image with no configuration.
 
 Inside an image, telescope swaps its `LambdaMetafactory` accessors for plain `MethodHandle` closures.
 `LambdaMetafactory` defines classes at run time, and native-image forbids that. One `static final boolean` picks the
@@ -760,7 +766,7 @@ Everything is published to Maven Central under `io.github.eschizoid`.
 
 | Artifact                        | Role                                                                                                                                                                                                                                                              |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `telescope-core`                | The DSL, meaning `Telescope`, `Mapper`, `Mapping`, `Either`, `Validated`, and the annotations. Add this one for the runtime path.                                                                                                                                 |
+| `telescope-core`                | The DSL, meaning `Telescope`, `Mapper`, `Mapping`, `Either`, `Validated`, and the annotations. Add this one for typed paths and runtime mappers.                                                                                                                  |
 | `telescope-internal`            | The optic lattice and reflection helpers. Transitive only, so it arrives automatically. A consumer that is itself a JPMS module can't compile against it, because the exports are qualified to `:core`. A classpath consumer can reach it and shouldn't.          |
 | `telescope-codegen`             | The optional annotation processor for `@Focus`, `@BeanFocus`, `@Bridge`, and `@FromMap`, described in [docs/codegen.md](docs/codegen.md). It also registers the mapper verifier, which runs on every compilation and is turned off with `-Atelescope.verify=off`. |
 | `telescope-lombok`              | A Lombok-aware variant of the processor, for `@Data`, `@Value`, and `@Builder` POJOs.                                                                                                                                                                             |
@@ -768,7 +774,7 @@ Everything is published to Maven Central under `io.github.eschizoid`.
 | `telescope-quarkus`             | A Quarkus CDI extension with the same registry shape. Compiled and CI-tested against Quarkus 3.40.1.                                                                                                                                                              |
 
 Installation snippets, annotation-processor ordering with Lombok, and JPMS setup are in
-[docs/codegen.md](docs/codegen.md). On the module path, the runtime path converts an application module's types once
+[docs/codegen.md](docs/codegen.md). On the module path, a runtime mapper converts an application module's types once
 that module opens their package to `io.github.eschizoid.telescope.internal`. An unqualified `opens` works too. Telescope
 adds the read edge to the application module itself.
 
