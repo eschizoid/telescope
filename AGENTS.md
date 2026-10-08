@@ -148,7 +148,9 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
   slot fusion — and equal full paths fuse by composing their leaf functions in edit order. The fold falls back to
   sequential when an edit is user-implemented rather than built by `over(...)`, when a path carries no hop record
   (`fieldByName`, bridge hops, `from/to/using`, custom lenses), when one path is a strict prefix of another, or when a
-  trie node would branch on anything but same-owner, pairwise-distinct components.
+  trie node would branch on anything but same-owner, pairwise-distinct components. A generated navigator's paths record
+  the same hops as the hand-written path through the same components, so the two forms fuse with each other, and `then`
+  keeps a hop record when both sides carry one.
 - **Write — multi-edit chain (alternative):** the inline-path shape, for edits built up in place rather than as rows.
   - `update(Telescope<S, X>, Function<X, X>)` — pre-built path; equivalent end-state to `over(...)` but accumulated
     inline.
@@ -272,11 +274,20 @@ from "compile-checked" to "runtime-checked" is a regression.
   `Class<B>` is **not validated** against the actual field type at compile OR runtime; it's pure inference sugar, same
   pattern as `Telescope.of(Class<S>)`. Honest javadoc says so.
 
+### Codegen-support seams (public, not for hand-written call sites)
+
+- `hop(OpticNode)` — appends an introspection node; generated navigators call it after each step.
+- `componentLens(Class, String, getter, setter)` — the lens a navigator composes per component, carrying the fusion
+  identity `field(...)` records. The `String` names the component and is checked once against the getter, throwing
+  `IllegalArgumentException` on a mismatch. The setter's promise to change only that component is not checked: a setter
+  that writes more makes `Telescope.all` fuse to a different result than the sequential fold.
+
 ### Zero runtime-check points: codegen path
 
 The `@Focus` / `@BeanFocus` / `@Bridge` annotation processors generate `<X>Telescope<R>` navigators where every step is
-a typed method call against a generated method. No `SerializedLambda` decode, no string-keyed lens lookup, no runtime
-container dispatch. This is the "if it compiles, it runs" path.
+a typed method call against a generated method. No per-call `SerializedLambda` decode (each component's getter is
+decoded once, when its lens is built), no string-keyed lens lookup, no runtime container dispatch. This is the "if it
+compiles, it runs" path.
 
 ---
 
@@ -291,8 +302,12 @@ For each `@Focus` / `@BeanFocus` type, the processor emits a sibling `<X>Telesco
 `Telescope<R, X>` field, with:
 
 - `static <X>Telescope<X> of()` factory + `Telescope<R, X> get()` extractor.
-- One method per component returning the composed `Telescope<R, Field>` via `path.then(Telescope.lens(getter, setter))`,
-  with a `.hop(...)` appending an `OpticNode` so `explain()` and `trace()` answer on generated navigators too.
+- One method per component returning the composed `Telescope<R, Field>` via
+  `path.then(Telescope.componentLens(X.class, "field", getter, setter))`, with a `.hop(...)` appending an `OpticNode` so
+  `explain()` and `trace()` answer on generated navigators too. `componentLens` records the same fusion hop `field(...)`
+  does, so `Telescope.all` fuses navigator paths with each other and with hand-written ones. Inside a native image, a
+  record level whose every edit came from `componentLens` rebuilds through those generated setters rather than the
+  reflectively discovered canonical constructor, so a navigator-only model needs no reflection registration.
 - The full Telescope op-surface forwarded (`read`, `find`, `toList`, `set`, `update*`, `then`, …) so any hop can read /
   update without dropping back to `.get()`. Forwarders are emitted by
   `AbstractTelescopeProcessor#emitTelescopeForwarders`.

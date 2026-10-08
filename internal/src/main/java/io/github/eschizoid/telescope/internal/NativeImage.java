@@ -13,10 +13,10 @@ package io.github.eschizoid.telescope.internal;
  * no dependency on {@code org.graalvm.nativeimage}: {@code org.graalvm.nativeimage.imagecode} is
  * set to {@code buildtime} / {@code runtime} inside an image and absent on a stock JVM.
  */
-final class NativeImage {
+public final class NativeImage {
 
   /** True when running inside a GraalVM native image (build-time analysis or the final binary). */
-  static final boolean IN_IMAGE = System.getProperty("org.graalvm.nativeimage.imagecode") != null;
+  public static final boolean IN_IMAGE = System.getProperty("org.graalvm.nativeimage.imagecode") != null;
 
   private NativeImage() {}
 }
