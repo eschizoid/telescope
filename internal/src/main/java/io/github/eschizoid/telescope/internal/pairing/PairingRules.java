@@ -46,8 +46,8 @@ import java.util.stream.Collectors;
  * recursion: a container subclass that declares no type parameters of its own ({@code class
  * ImageUrls extends ArrayList<ImageUrl>}) counts as reflectable, and bean-decomposing it would fail
  * at the JDK boundary (private lookup into {@code java.base} is rejected) — the copy branch
- * intercepts those pairs first, and a pair of them whose element types differ skips recursion for
- * the container lift.
+ * intercepts those pairs first, and a pair of containers it does not take never reaches recursion:
+ * it goes to the container lift, which converts each element or refuses the pair by name.
  *
  * @param <T> the world's type handle
  */
@@ -80,11 +80,13 @@ public final class PairingRules<T> {
       // refused: its elements are of no type anything has said, so neither a copy nor a
       // conversion can be planned for them.
       //
-      // The copy is gated on kind-discriminator agreement AND allocability so a provably infeasible
-      // copy falls through to the remaining branches exactly like the runtime. UNKNOWN allocability
-      // (the compile-time world can't probe allocators) resolves in the ACCEPTING direction here:
-      // CollectionCopy/MapCopy are terminal accepts, so optimism can only defer an error to the
-      // construction backstop, never invent one.
+      // The copy is also gated on kind-discriminator agreement and on both sides being buildable.
+      // An interface or abstract class is buildable exactly when the allocation table names a
+      // default implementation for it, which both worlds decide the same way and the runtime copy
+      // then allocates. A concrete class is probed by the runtime; the compile-time world cannot
+      // probe it and answers UNKNOWN, which is accepted here, so the generated code's own checks
+      // on the class it allocates are what refuse one that has no reachable constructor. A copy
+      // provably not buildable falls through to the remaining branches.
       final var collection = sameKindCollection(srcType, tgtType);
       final var map = sameKindMap(srcType, tgtType);
       final var elements = collection
@@ -120,8 +122,14 @@ public final class PairingRules<T> {
           return new PairDecision.MapCopy<>();
         }
 
-        // (b) Both reflectable (record or bean) → recurse into the nested pair.
-        if (reflectable(srcType) && reflectable(tgtType)) return new PairDecision.RecursePair<>();
+        // (b) Both reflectable (record or bean) → recurse into the nested pair. Two containers are
+        // never recursed into: a container's elements are no property of it, so decomposing one
+        // as a bean rebuilds the target with none of them. A pair of containers the copy above
+        // does not take, because the kinds differ or one side cannot be allocated, goes on to the
+        // container views, which convert each element or refuse the pair by name.
+        if (!bothContainers(srcType, tgtType) && reflectable(srcType) && reflectable(tgtType)) {
+          return new PairDecision.RecursePair<>();
+        }
       }
     }
 
@@ -293,9 +301,13 @@ public final class PairingRules<T> {
    * set's element type. That parameter is resolved against the arguments the field gave the class
    * built, which are the declared type's own when it is that class, so a subtype declaring its
    * parameters in another order than {@code Map} resolves correctly, and the container's otherwise.
-   * A field that uses the class built raw gives it no arguments, so the parameter is read over the
-   * class's own type variables, and a comparator the source carried fits it as it is. A raw {@code
-   * Set} or {@code Map} names nothing to order, and is refused with the rest.
+   *
+   * <p>A declaration used raw constrains no comparator: whatever the source was ordered by orders
+   * the elements copied from it. Its arguments read as the class's own type variables in one world
+   * and as none in the other, and either way the parameter is read over the built class's own type
+   * variables, so the only question left is whether that class has a comparator constructor this
+   * world can call. A raw interface such as {@code SortedSet} is answered by the class it is built
+   * as.
    */
   public Ordering<T> orderingFor(
     final T declared,
@@ -310,7 +322,10 @@ public final class PairingRules<T> {
     if (!map && !elementsPreserved) return new Ordering.Refuse<>(PairingMessages.comparatorAcrossConversion());
     final Ordering<T> refused = new Ordering.Refuse<>(PairingMessages.noComparatorConstructor(props.sourceName(raw)));
     final var arguments = props.typeArgumentsAs(declared, map ? WellKnown.MAP : WellKnown.SET);
-    if (arguments.isEmpty()) return refused;
+    if (arguments.isEmpty()) {
+      final var parameter = props.comparatorParameter(raw, List.of());
+      return parameter == null ? refused : new Ordering.Carry<>(parameter);
+    }
     final var bindings = props.sameType(props.rawType(declared), raw) ? props.typeArguments(declared) : arguments;
     final var parameter = props.comparatorParameter(raw, bindings);
     if (parameter == null || !canOrder(parameter, arguments.getFirst())) return refused;
@@ -430,6 +445,15 @@ public final class PairingRules<T> {
     if (aSet) return props.isSubtypeOf(a, WellKnown.SORTED_SET) == props.isSubtypeOf(b, WellKnown.SORTED_SET);
     if (!props.isSubtypeOf(a, WellKnown.QUEUE) || !props.isSubtypeOf(b, WellKnown.QUEUE)) return false;
     return props.isSubtypeOf(a, WellKnown.DEQUE) == props.isSubtypeOf(b, WellKnown.DEQUE);
+  }
+
+  /** Whether each side is a {@code Collection} or a {@code Map}, of the same kind or not. */
+  private boolean bothContainers(final T a, final T b) {
+    return isContainer(a) && isContainer(b);
+  }
+
+  private boolean isContainer(final T t) {
+    return props.isSubtypeOf(t, WellKnown.COLLECTION) || props.isSubtypeOf(t, WellKnown.MAP);
   }
 
   /**
@@ -648,6 +672,22 @@ public final class PairingRules<T> {
     }
     final var entry = BY_DECLARED_NAME.get(name);
     return entry == null || entry.family() != kind ? null : entry.allocation();
+  }
+
+  /**
+   * Whether an interface or abstract container type has a default implementation a copy can build
+   * in its place: the class the allocation table rebuilds it as in the family it belongs to, a
+   * map's for a map, a set's for a set, and a list's for any other collection. Every class the
+   * table names implements the declaration it is named for, so an answer here is a class the field
+   * can hold.
+   */
+  public boolean hasDefaultImplementation(final T declared) {
+    final var kind = props.isSubtypeOf(declared, WellKnown.MAP)
+      ? ContainerView.Kind.MAP_VALUES
+      : props.isSubtypeOf(declared, WellKnown.SET)
+        ? ContainerView.Kind.SET
+        : ContainerView.Kind.LIST;
+    return allocationFor(declared, kind) instanceof Allocation.Build;
   }
 
   /**

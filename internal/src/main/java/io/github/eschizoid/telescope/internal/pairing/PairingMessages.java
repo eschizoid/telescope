@@ -180,8 +180,8 @@ public final class PairingMessages {
       "Deep map: " +
       implName +
       " declares no constructor taking a Comparator, so the source's ordering cannot be carried" +
-      " into it. Declare one, declare the field as the interface, or supply an explicit" +
-      " Mapping.via(...) row for it."
+      " into it. Declare one, declare the field as the interface, or convert it with an explicit" +
+      " Mapping.to(src, tgt, fwd, bwd) row."
     );
   }
 

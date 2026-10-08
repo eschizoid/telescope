@@ -14,6 +14,7 @@ import java.lang.reflect.Type;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.AbstractCollection;
+import java.util.AbstractList;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -23,16 +24,22 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.NavigableSet;
 import java.util.Optional;
 import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.ConcurrentSkipListMap;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -121,6 +128,28 @@ class PairingRulesTest {
   }
 
   public static class PointDtoMap extends HashMap<String, PointDto> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  /**
+   * Non-generic containers that differ from the ones above in kind as well as in element: a sorted
+   * set, a set that keeps no order, and a sorted map.
+   */
+  public static class SortedPointSet extends TreeSet<Point> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  public static class PointDtoSet extends LinkedHashSet<PointDto> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+  }
+
+  public static class SortedPointMap extends TreeMap<String, Point> {
 
     @Serial
     private static final long serialVersionUID = 1L;
@@ -454,6 +483,75 @@ class PairingRulesTest {
     }
 
     @Test
+    @DisplayName("non-generic containers of different kinds lift or are refused, and are never recursed into")
+    void differentKindsAreNeverRecursedInto() {
+      assertTrue(rules.reflectable(SortedPointSet.class), "premise: the recursion branch could claim the source");
+      assertTrue(rules.reflectable(PointDtoSet.class), "premise: and the target");
+      assertFalse(rules.sameKindCollection(SortedPointSet.class, PointDtoSet.class), "premise: no copy takes them");
+
+      final var set = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(SortedPointSet.class, PointDtoSet.class, "f")
+      );
+      assertEquals(Point.class, set.src().elementType());
+      assertEquals(PointDto.class, set.tgt().elementType());
+      final var map = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(SortedPointMap.class, PointDtoMap.class, "f")
+      );
+      assertEquals(PointDto.class, map.tgt().elementType());
+
+      final var list = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(PointDtoSet.class, PointDtoList.class, "f")
+      );
+      assertEquals(
+        PairingMessages.incompatibleShapes("f", PointDtoSet.class.getName(), PointDtoList.class.getName()),
+        list.message()
+      );
+      assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(SortedPointSet.class, PointDtoMap.class, "f"));
+    }
+
+    @Test
+    @DisplayName("an interface used raw has a default implementation exactly where the allocation table names one")
+    void interfacesHaveTheTablesDefaults() {
+      for (final var declared : List.<Class<?>>of(
+        Collection.class,
+        List.class,
+        Deque.class,
+        Queue.class,
+        Set.class,
+        SortedSet.class,
+        NavigableSet.class,
+        Map.class,
+        SortedMap.class,
+        NavigableMap.class
+      )) {
+        assertTrue(rules.hasDefaultImplementation(declared), declared::getName);
+      }
+      assertFalse(rules.hasDefaultImplementation(BlockingDeque.class), "a family the table names no default for");
+      assertFalse(rules.hasDefaultImplementation(AbstractList.class), "an abstract class is never defaulted");
+    }
+
+    @Test
+    @DisplayName("a raw interface copies through its default, and one with no default is not copied")
+    void rawInterfaceCopiesOnlyThroughADefault() {
+      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(List.class, ArrayList.class, "f"));
+      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ArrayDeque.class, Deque.class, "f"));
+      assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(SortedSet.class, TreeSet.class, "f"));
+      assertInstanceOf(PairDecision.MapCopy.class, rules.decidePair(TreeMap.class, SortedMap.class, "f"));
+      // Not buildable, and an interface is not a bean either, so nothing is left to plan it with.
+      assertInstanceOf(PairDecision.Incompatible.class, rules.decidePair(BlockingDeque.class, ArrayDeque.class, "f"));
+    }
+
+    @Test
+    @DisplayName("a raw abstract class is not copied, since no allocation builds it")
+    void rawAbstractClassIsNotCopied() {
+      final var decision = rules.decidePair(AbstractList.class, ArrayList.class, "f");
+      assertFalse(decision instanceof PairDecision.CollectionCopy, decision::toString);
+    }
+
+    @Test
     @DisplayName("a generic container used raw copies against another used raw, or against one holding Object")
     void rawUseCopiesWhereAnyElementFits() {
       assertInstanceOf(PairDecision.CollectionCopy.class, rules.decidePair(ArrayList.class, LinkedList.class, "f"));
@@ -490,15 +588,27 @@ class PairingRulesTest {
     }
 
     @Test
-    @DisplayName("a same-kind pair that is provably not allocable falls through to reflectable recursion")
-    void notAllocableSameKindPairFallsThrough() {
+    @DisplayName("a same-kind pair that is provably not allocable lifts rather than recursing, in either direction")
+    void notAllocableSameKindPairLifts() {
       assertTrue(rules.sameKindCollection(ImageUrls.class, NoPublicCtorUrls.class), "premise: same-kind pair");
+      assertTrue(rules.reflectable(NoPublicCtorUrls.class), "premise: the recursion branch could claim this pair");
       assertEquals(
         Allocability.NOT_ALLOCABLE,
         new ReflectionProps().copyAllocability(ImageUrls.class, NoPublicCtorUrls.class),
         "premise: provably not allocable"
       );
-      assertInstanceOf(PairDecision.RecursePair.class, rules.decidePair(ImageUrls.class, NoPublicCtorUrls.class, "f"));
+      // The lift's allocator is what refuses the class by name; recursion would rebuild it as a
+      // bean holding none of the source's elements.
+      final var into = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(ImageUrls.class, NoPublicCtorUrls.class, "f")
+      );
+      assertEquals(NoPublicCtorUrls.class, into.tgt().rawType());
+      final var from = assertInstanceOf(
+        PairDecision.LiftContainer.class,
+        rules.decidePair(NoPublicCtorUrls.class, ImageUrls.class, "f")
+      );
+      assertEquals(NoPublicCtorUrls.class, from.src().rawType());
     }
 
     @Test
@@ -611,6 +721,32 @@ class PairingRulesTest {
       assertEquals(
         PairingMessages.incompatibleShapes("sorId", "java.lang.String", "java.lang.Integer"),
         incompatible.message()
+      );
+    }
+
+    @Test
+    @DisplayName("a container class against a scalar is Incompatible in either direction, never recursed into")
+    void containerAgainstAScalarIsIncompatible() {
+      // Only one side is a container, so the container guard lets the pair through to the
+      // reflectability check, and the scalar side is what keeps it out of recursion.
+      assertTrue(rules.reflectable(ImageUrls.class), "premise: the container side alone could be recursed into");
+      assertFalse(rules.reflectable(String.class), "premise: the scalar side cannot");
+
+      final var into = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(ImageUrls.class, String.class, "urls")
+      );
+      assertEquals(
+        PairingMessages.incompatibleShapes("urls", ImageUrls.class.getName(), "java.lang.String"),
+        into.message()
+      );
+      final var from = assertInstanceOf(
+        PairDecision.Incompatible.class,
+        rules.decidePair(String.class, ImageUrls.class, "urls")
+      );
+      assertEquals(
+        PairingMessages.incompatibleShapes("urls", "java.lang.String", ImageUrls.class.getName()),
+        from.message()
       );
     }
   }

@@ -9,8 +9,15 @@ import io.github.eschizoid.telescope.internal.pairing.PropertySystem.Allocabilit
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem.WellKnown;
 import java.io.Serial;
 import java.lang.reflect.Type;
+import java.util.AbstractList;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.SortedMap;
+import java.util.SortedSet;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.concurrent.BlockingDeque;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -200,6 +207,22 @@ class ReflectionPropsTest {
     void missingPublicNoArgCtorIsNotAllocable() {
       assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(Urls.class, NoPublicCtorUrls.class));
       assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(NoPublicCtorUrls.class, Urls.class));
+    }
+
+    @Test
+    @DisplayName("an interface is ALLOCABLE through the default the allocation table names for it, and only then")
+    void interfaceIsAllocableThroughItsDefault() {
+      assertEquals(Allocability.ALLOCABLE, props.copyAllocability(List.class, ArrayList.class));
+      assertEquals(Allocability.ALLOCABLE, props.copyAllocability(SortedSet.class, TreeSet.class));
+      assertEquals(Allocability.ALLOCABLE, props.copyAllocability(TreeMap.class, SortedMap.class));
+      assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(BlockingDeque.class, ArrayDeque.class));
+    }
+
+    @Test
+    @DisplayName("an abstract class has no default, so it is NOT_ALLOCABLE even where a subclass could be built")
+    void abstractClassIsNotAllocable() {
+      assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(AbstractList.class, ArrayList.class));
+      assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(ArrayList.class, AbstractList.class));
     }
   }
 }

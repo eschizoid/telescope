@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.regex.Pattern;
 import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
@@ -1106,6 +1107,358 @@ class CrossPathCorpusTest {
   }
 
   /**
+   * Two container classes that each fix their own element type, which no element copy takes: they
+   * differ in kind, or one of them cannot be allocated. What each class declares, and what both
+   * paths owe in each direction — the target's rendering, held in the class the field declares, or
+   * a fragment of each path's refusal.
+   *
+   * <p>{@code %s} is the cell's prefix, and the two declarations name the classes {@code %sSA} and
+   * {@code %sTB}. A container's elements are no property of it, so such a pair either converts each
+   * element or is refused by name. Rebuilding either side as a bean would hold no elements at all,
+   * which is what every row is here to rule out: the source is never empty, so neither is a
+   * converted target. {@code Leaf} and {@code LeafDto} are both {@code Comparable}, so a sorted
+   * side can hold either; {@code Plain} is not.
+   */
+  private record ContainerClassPair(
+    String name,
+    String srcDeclaration,
+    String tgtDeclaration,
+    String forward,
+    String backward,
+    Refusal refused
+  ) {}
+
+  private static ContainerClassPair converts(
+    final String name,
+    final String srcExtends,
+    final String tgtExtends,
+    final String forward,
+    final String backward
+  ) {
+    return new ContainerClassPair(
+      name,
+      subtype("SA", srcExtends, ""),
+      subtype("TB", tgtExtends, ""),
+      forward,
+      backward,
+      null
+    );
+  }
+
+  private static ContainerClassPair refuses(
+    final String name,
+    final String srcExtends,
+    final String tgtExtends,
+    final Refusal refused
+  ) {
+    return new ContainerClassPair(
+      name,
+      subtype("SA", srcExtends, ""),
+      subtype("TB", tgtExtends, ""),
+      null,
+      null,
+      refused
+    );
+  }
+
+  private static ContainerClassPair refusesDeclared(
+    final String name,
+    final String srcDeclaration,
+    final String tgtDeclaration,
+    final Refusal refused
+  ) {
+    return new ContainerClassPair(name, srcDeclaration, tgtDeclaration, null, null, refused);
+  }
+
+  private static final Refusal DIFFERENT_SHAPES = new Refusal(
+    "has incompatible types",
+    "incompatible source/target shapes"
+  );
+
+  private static final Refusal UNORDERABLE_KEY = new Refusal("a sorted map whose key", "a sorted map whose key");
+
+  private static final Refusal NOT_ALLOCABLE = new Refusal("has no public no-arg constructor", "no allocator for");
+
+  /**
+   * A collection that is neither a list, a set nor a queue, keeping its elements in a {@code
+   * values} bean property. {@code %s} is the class's own name.
+   */
+  private static final String VALUES_BACKED =
+    "  private java.util.List<String> values = new java.util.ArrayList<>();\n" +
+    "  public %s() {}\n" +
+    "  public java.util.List<String> getValues() { return values; }\n" +
+    "  public void setValues(final java.util.List<String> values) { this.values = values; }\n" +
+    "  @Override public java.util.Iterator<String> iterator() { return values.iterator(); }\n" +
+    "  @Override public int size() { return values.size(); }\n" +
+    "  @Override public boolean add(final String value) { return values.add(value); }\n";
+
+  /** The same collection with a bean property beside its elements. */
+  private static final String VALUES_BACKED_TITLED =
+    VALUES_BACKED +
+    "  private String title;\n" +
+    "  public String getTitle() { return title; }\n" +
+    "  public void setTitle(final String title) { this.title = title; }\n";
+
+  /** A constructor taking only a capacity, which is all a class declaring it can be built with. */
+  private static final String CAPACITY_ONLY = "  public %s(final int capacity) { super(capacity); }\n";
+
+  private static final List<ContainerClassPair> CONTAINER_CLASS_PAIRS = List.of(
+    converts(
+      "a sorted set into a set that keeps no order",
+      "java.util.TreeSet<%sLeaf>",
+      "java.util.LinkedHashSet<%sLeafDto>",
+      "%sTgt[items=[%sLeafDto[v=a], %sLeafDto[v=b]]]",
+      "%sSrc[items=[%sLeaf[v=a], %sLeaf[v=b]]]"
+    ),
+    converts(
+      "a set that keeps no order into a sorted set",
+      "java.util.LinkedHashSet<%sLeaf>",
+      "java.util.TreeSet<%sLeafDto>",
+      "%sTgt[items=[%sLeafDto[v=a], %sLeafDto[v=b]]]",
+      "%sSrc[items=[%sLeaf[v=a], %sLeaf[v=b]]]"
+    ),
+    converts(
+      "a sorted set into a set that keeps no order, elements unchanged",
+      "java.util.TreeSet<String>",
+      "java.util.LinkedHashSet<String>",
+      "%sTgt[items=[a, b]]",
+      "%sSrc[items=[a, b]]"
+    ),
+    converts(
+      "a sorted map into a map that keeps insertion order",
+      "java.util.TreeMap<String, %sLeaf>",
+      "java.util.LinkedHashMap<String, %sLeafDto>",
+      "%sTgt[items={a=%sLeafDto[v=a], b=%sLeafDto[v=b]}]",
+      "%sSrc[items={a=%sLeaf[v=a], b=%sLeaf[v=b]}]"
+    ),
+    converts(
+      "a map that keeps insertion order into a sorted map",
+      "java.util.LinkedHashMap<String, %sLeaf>",
+      "java.util.TreeMap<String, %sLeafDto>",
+      "%sTgt[items={a=%sLeafDto[v=a], b=%sLeafDto[v=b]}]",
+      "%sSrc[items={a=%sLeaf[v=a], b=%sLeaf[v=b]}]"
+    ),
+    refuses(
+      "a set into a sorted set of an element that is not Comparable",
+      "java.util.LinkedHashSet<%sLeaf>",
+      "java.util.TreeSet<%sPlain>",
+      new Refusal("does not implement Comparable", "does not implement Comparable")
+    ),
+    refuses(
+      "a sorted set into a list",
+      "java.util.TreeSet<%sLeaf>",
+      "java.util.ArrayList<%sLeafDto>",
+      DIFFERENT_SHAPES
+    ),
+    refuses(
+      "a set into a map",
+      "java.util.LinkedHashSet<%sLeaf>",
+      "java.util.LinkedHashMap<String, %sLeafDto>",
+      DIFFERENT_SHAPES
+    ),
+    refuses("a deque into a list", "java.util.ArrayDeque<%sLeaf>", "java.util.LinkedList<%sLeafDto>", DIFFERENT_SHAPES),
+    refuses(
+      "a map into a sorted map over keys that are not Comparable",
+      "java.util.LinkedHashMap<%sPlain, %sLeaf>",
+      "java.util.TreeMap<%sPlain, %sLeafDto>",
+      UNORDERABLE_KEY
+    ),
+    refuses(
+      "a map into a sorted map over keys that are not Comparable, values unchanged",
+      "java.util.LinkedHashMap<%sPlain, String>",
+      "java.util.TreeMap<%sPlain, String>",
+      UNORDERABLE_KEY
+    ),
+    // An element carried across unchanged is let through when the pair is built,
+    // since a sorted source can hand its comparator across with it. Where nothing
+    // orders it, it is refused by name when it is inserted.
+    refuses(
+      "a set into a sorted set of an element carried unchanged that is not Comparable",
+      "java.util.LinkedHashSet<%sPlain>",
+      "java.util.TreeSet<%sPlain>",
+      new Refusal("could not be ordered there", "could not be ordered there")
+    ),
+    // A collection that names no shape has no container view, so no lift can
+    // rebuild it. It is a container, so it is not decomposed as a bean either: its
+    // elements are not what its properties describe, and a class that adds a
+    // property of its own beside them shows why. Both paths refuse the pair by name.
+    refusesDeclared(
+      "a collection that is neither a list, a set nor a queue",
+      subtype("SA", "java.util.AbstractCollection<String>", VALUES_BACKED),
+      subtype("TB", "java.util.AbstractCollection<String>", VALUES_BACKED),
+      DIFFERENT_SHAPES
+    ),
+    refusesDeclared(
+      "a collection that is neither a list, a set nor a queue, with a property of its own",
+      subtype("SA", "java.util.AbstractCollection<String>", VALUES_BACKED_TITLED),
+      subtype("TB", "java.util.AbstractCollection<String>", VALUES_BACKED_TITLED),
+      DIFFERENT_SHAPES
+    ),
+    // The same kind and the same elements, which an element copy would take if
+    // both classes could be allocated. Either side has to be: the forward rebuild
+    // allocates the target, and the backward one the source.
+    refusesDeclared(
+      "a list into a class that takes only a capacity",
+      subtype("SA", "java.util.ArrayList<String>", ""),
+      subtype("TB", "java.util.ArrayList<String>", CAPACITY_ONLY),
+      NOT_ALLOCABLE
+    ),
+    refusesDeclared(
+      "a list from a class that takes only a capacity",
+      subtype("SA", "java.util.ArrayList<String>", CAPACITY_ONLY),
+      subtype("TB", "java.util.ArrayList<String>", ""),
+      NOT_ALLOCABLE
+    ),
+    refusesDeclared(
+      "a map from a class that takes only a capacity",
+      subtype("SA", "java.util.HashMap<String, String>", CAPACITY_ONLY),
+      subtype("TB", "java.util.HashMap<String, String>", ""),
+      NOT_ALLOCABLE
+    ),
+    refusesDeclared(
+      "a list from a class only its own package can allocate",
+      subtype("SA", "java.util.ArrayList<String>", "").substring("public ".length()),
+      subtype("TB", "java.util.ArrayList<String>", ""),
+      NOT_ALLOCABLE
+    )
+  );
+
+  @Test
+  @DisplayName("two container classes no element copy takes convert each element or refuse, the same way on both paths")
+  void containerClassesConvertOrRefuseOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var shape : CONTAINER_CLASS_PAIRS) {
+      final var prefix = "Kc" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var srcDeclaration = shape.srcDeclaration().replace("%s", prefix);
+      final var sources = new JavaFileObject[] {
+        source(prefix + "Leaf", head + comparableRecord(prefix + "Leaf")),
+        source(prefix + "LeafDto", head + comparableRecord(prefix + "LeafDto")),
+        source(prefix + "Plain", head + "public record " + prefix + "Plain(String v) {}\n"),
+        source(prefix + "SA", head + srcDeclaration),
+        source(prefix + "TB", head + shape.tgtDeclaration().replace("%s", prefix)),
+        source(
+          prefix + "Src",
+          head +
+            "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(" +
+            prefix +
+            "Tgt.class)\npublic record " +
+            prefix +
+            "Src(" +
+            prefix +
+            "SA items) {}\n"
+        ),
+        source(prefix + "Tgt", head + "public record " + prefix + "Tgt(" + prefix + "TB items) {}\n"),
+      };
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> shape.name() + " should compile: " + plain.errorMessages());
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+
+      final var classes = plain.define(MethodHandles.lookup());
+      final var src = classes.get(PACKAGE + "." + prefix + "Src");
+      final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
+      final var sa = classes.get(PACKAGE + "." + prefix + "SA");
+      // Looked up as declared rather than as public: the source of a refused row may be a class
+      // only this package can allocate, and the test shares its package.
+      final var input = srcDeclaration.contains("final int capacity")
+        ? sa.getDeclaredConstructor(int.class).newInstance(VALUES.size())
+        : sa.getDeclaredConstructor().newInstance();
+      final var leaf = srcDeclaration.contains(prefix + "Leaf>")
+        ? classes.get(PACKAGE + "." + prefix + "Leaf").getConstructor(String.class)
+        : srcDeclaration.contains(prefix + "Plain>")
+          ? classes.get(PACKAGE + "." + prefix + "Plain").getConstructor(String.class)
+          : null;
+      final var key = srcDeclaration.contains(prefix + "Plain,")
+        ? classes.get(PACKAGE + "." + prefix + "Plain").getConstructor(String.class)
+        : null;
+      for (final var value : VALUES) {
+        final var element = leaf == null ? value : leaf.newInstance(value);
+        if (input instanceof Map<?, ?>) {
+          final var k = key == null ? value : key.newInstance(value);
+          Map.class.getMethod("put", Object.class, Object.class).invoke(input, k, element);
+        } else {
+          Collection.class.getMethod("add", Object.class).invoke(input, element);
+        }
+      }
+      final var source = src.getConstructors()[0].newInstance(input);
+
+      final Outcome generated;
+      final Outcome generatedBack;
+      if (processed.success()) {
+        final var bridge = emitted(processed, plain, prefix);
+        final var forward = bridge.getMethod("forward", src);
+        final var backward = bridge.getMethod("backward", tgt);
+        generated = run(tgt.getMethod("items"), () -> forward.invoke(null, source));
+        generatedBack = run(src.getMethod("items"), () -> backward.invoke(null, forward.invoke(null, source)));
+      } else {
+        generated = Outcome.refused(processed.errorMessages().strip());
+        generatedBack = generated;
+      }
+      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
+      final var reflectiveBack = run(src.getMethod("items"), () -> {
+        final var mapper = Telescope.mapper(cast(src), cast(tgt));
+        return mapper.backward(mapper.forward(source));
+      });
+
+      if (shape.refused() != null) {
+        if (generated.refusal() == null || !generated.refusal().contains(shape.refused().generatedSays())) {
+          failures.add(shape.name() + ": generated gave " + generated);
+        }
+        if (reflective.refusal() == null || !reflective.refusal().contains(shape.refused().reflectiveSays())) {
+          failures.add(shape.name() + ": reflective gave " + reflective);
+        }
+        continue;
+      }
+      final var forwardOwed = shape.forward().replace("%s", prefix) + " in " + PACKAGE + "." + prefix + "TB";
+      final var backwardOwed = shape.backward().replace("%s", prefix) + " in " + PACKAGE + "." + prefix + "SA";
+      for (final var side : List.of(
+        Map.entry("generated forward", Map.entry(generated, forwardOwed)),
+        Map.entry("reflective forward", Map.entry(reflective, forwardOwed)),
+        Map.entry("generated backward", Map.entry(generatedBack, backwardOwed)),
+        Map.entry("reflective backward", Map.entry(reflectiveBack, backwardOwed))
+      )) {
+        final var outcome = side.getValue().getKey();
+        final var owed = side.getValue().getValue();
+        if (!owed.equals(outcome.toString())) {
+          failures.add(shape.name() + ": " + side.getKey() + " gave " + outcome + ", owed " + owed);
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " pair(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /** A record of one string, ordered by it. */
+  private static String comparableRecord(final String name) {
+    return (
+      "public record " +
+      name +
+      "(String v) implements Comparable<" +
+      name +
+      "> {\n  public int compareTo(final " +
+      name +
+      " o) { return v.compareTo(o.v()); }\n}\n"
+    );
+  }
+
+  /**
+   * A public class named {@code %s} followed by {@code suffix}, declaring no type parameters and
+   * fixing its supertype's, with {@code members} as its body beside the serial version. A {@code
+   * %s} in the members is the class's own name.
+   */
+  private static String subtype(final String suffix, final String supertype, final String members) {
+    return (
+      "public class %s" +
+      suffix +
+      " extends " +
+      supertype +
+      " {\n  private static final long serialVersionUID = 1L;\n" +
+      members.replace("%s", "%s" + suffix) +
+      "}\n"
+    );
+  }
+
+  /**
    * What an attempt throws, as its simple class name and message followed by its cause's after
    * {@code <-}, or a note that it threw nothing.
    */
@@ -1301,9 +1654,11 @@ class CrossPathCorpusTest {
    * <p>{@code %1$s} is the cell's prefix and {@code %2$s} the same prefix qualified by the package,
    * for the class a rebuilt container is reported as. {@code input} is {@code str} for the element
    * values as strings, {@code leaf} for each as a record, {@code leafList} and {@code leafOpt} for
-   * each record inside a list or an optional, {@code strList} for each string inside a list, and
-   * {@code leafListKey} for each record under a map key that is a one-element list. An owed value
-   * of {@link #REFUSED} and a fragment of the runtime's message means both paths refuse.
+   * each record inside a list or an optional, {@code strList} for each string inside a list, {@code
+   * leafListKey} for each record under a map key that is a one-element list, {@code strReversed}
+   * for the strings in a sorted source ordered by a reversing comparator, and {@code genList} or
+   * {@code objectList} for each string inside its own raw {@code Gen} or {@code ObjectList}. An
+   * owed value of {@link #REFUSED} and a fragment of the runtime's message means both paths refuse.
    */
   private record FixedPairing(String name, String src, String tgt, String input, String owed) {}
 
@@ -1339,8 +1694,26 @@ class CrossPathCorpusTest {
     Map.entry("WildMap", "extends java.util.LinkedHashMap<String, java.util.List<?>>"),
     Map.entry("Gen", "<E> extends java.util.ArrayList<E>"),
     Map.entry("Gen2", "<E> extends java.util.ArrayList<E>"),
+    Map.entry(
+      "GTree",
+      "<E> extends java.util.TreeSet<E> {\n" +
+        "  public %1$sGTree() {}\n" +
+        "  %1$sGTree(final java.util.Comparator<? super E> c) { super(c); }\n}"
+    ),
     Map.entry("ObjectList", "extends java.util.ArrayList<Object>"),
     Map.entry("ObjectMap", "extends java.util.LinkedHashMap<Object, Object>"),
+    Map.entry(
+      "ObjectTree",
+      "extends java.util.TreeSet<Object> {\n" +
+        "  public %1$sObjectTree() {}\n" +
+        "  public %1$sObjectTree(final java.util.Comparator<Object> c) { super(c); }\n}"
+    ),
+    Map.entry(
+      "ObjectTreeMap",
+      "extends java.util.TreeMap<Object, Object> {\n" +
+        "  public %1$sObjectTreeMap() {}\n" +
+        "  public %1$sObjectTreeMap(final java.util.Comparator<Object> c) { super(c); }\n}"
+    ),
     Map.entry("ListKeyLeafMap", "extends java.util.LinkedHashMap<java.util.List<String>, %1$sLeaf>"),
     Map.entry("ListKeyLeafDtoMap", "extends java.util.LinkedHashMap<java.util.List<String>, %1$sLeafDto>")
   );
@@ -1592,8 +1965,10 @@ class CrossPathCorpusTest {
       "leaf",
       REFUSED + "a generic container used raw"
     ),
-    // A raw use against another raw use, or against a side holding Object, has nothing its
-    // elements could fail to fit. The runtime copies them; these are registered divergences.
+    // A raw use against another raw use, or against a side holding Object, has
+    // nothing its elements could fail to fit, so both paths copy them into the
+    // class the target allocates. The sorted rows carry a reversing comparator,
+    // which the copy has to hand to the target.
     new FixedPairing("raw Gen -> ObjectList", "%1$sGen", "%1$sObjectList", "str", "[b, a] in %2$sObjectList"),
     new FixedPairing("ObjectList -> raw Gen", "%1$sObjectList", "%1$sGen", "str", "[b, a] in %2$sGen"),
     new FixedPairing(
@@ -1610,6 +1985,158 @@ class CrossPathCorpusTest {
       "java.util.LinkedList",
       "str",
       "[b, a] in java.util.LinkedList"
+    ),
+    new FixedPairing(
+      "raw TreeSet -> raw ConcurrentSkipListSet",
+      "java.util.TreeSet",
+      "java.util.concurrent.ConcurrentSkipListSet",
+      "strReversed",
+      "[b, a] in java.util.concurrent.ConcurrentSkipListSet"
+    ),
+    new FixedPairing(
+      "raw ConcurrentSkipListSet -> raw TreeSet",
+      "java.util.concurrent.ConcurrentSkipListSet",
+      "java.util.TreeSet",
+      "strReversed",
+      "[b, a] in java.util.TreeSet"
+    ),
+    new FixedPairing(
+      "raw TreeMap -> raw ConcurrentSkipListMap",
+      "java.util.TreeMap",
+      "java.util.concurrent.ConcurrentSkipListMap",
+      "strReversed",
+      "{k2=a, k1=b} in java.util.concurrent.ConcurrentSkipListMap"
+    ),
+    // One side raw, the other a sorted subtype fixing Object: the comparator is
+    // read without a type argument, since a raw source cannot be tested against
+    // one, and handed to the subtype.
+    new FixedPairing(
+      "raw TreeSet -> ObjectTree",
+      "java.util.TreeSet",
+      "%1$sObjectTree",
+      "strReversed",
+      "[b, a] in %2$sObjectTree"
+    ),
+    new FixedPairing(
+      "ObjectTree -> raw TreeSet",
+      "%1$sObjectTree",
+      "java.util.TreeSet",
+      "strReversed",
+      "[b, a] in java.util.TreeSet"
+    ),
+    new FixedPairing(
+      "raw TreeMap -> ObjectTreeMap",
+      "java.util.TreeMap",
+      "%1$sObjectTreeMap",
+      "strReversed",
+      "{k2=a, k1=b} in %2$sObjectTreeMap"
+    ),
+    // An interface used raw is built as its family's default implementation, on both paths.
+    new FixedPairing(
+      "raw List -> raw ArrayList",
+      "java.util.List",
+      "java.util.ArrayList",
+      "str",
+      "[b, a] in java.util.ArrayList"
+    ),
+    new FixedPairing(
+      "raw Set -> raw LinkedHashSet",
+      "java.util.Set",
+      "java.util.LinkedHashSet",
+      "str",
+      "[b, a] in java.util.LinkedHashSet"
+    ),
+    new FixedPairing(
+      "raw Deque -> raw ArrayDeque",
+      "java.util.Deque",
+      "java.util.ArrayDeque",
+      "str",
+      "[b, a] in java.util.ArrayDeque"
+    ),
+    new FixedPairing(
+      "raw ArrayDeque -> raw Deque",
+      "java.util.ArrayDeque",
+      "java.util.Deque",
+      "str",
+      "[b, a] in java.util.ArrayDeque"
+    ),
+    new FixedPairing(
+      "raw SortedSet -> raw TreeSet",
+      "java.util.SortedSet",
+      "java.util.TreeSet",
+      "strReversed",
+      "[b, a] in java.util.TreeSet"
+    ),
+    new FixedPairing(
+      "raw TreeMap -> raw SortedMap",
+      "java.util.TreeMap",
+      "java.util.SortedMap",
+      "strReversed",
+      "{k2=a, k1=b} in java.util.TreeMap"
+    ),
+    // An abstract class the allocation table names no default for cannot be built
+    // by a copy, and two containers are never rebuilt as beans, so both paths
+    // refuse the pair by name.
+    new FixedPairing(
+      "raw AbstractList -> raw ArrayList",
+      "java.util.AbstractList",
+      "java.util.ArrayList",
+      "str",
+      REFUSED + "incompatible source/target shapes — java.util.AbstractList vs java.util.ArrayList"
+    ),
+    // Two interfaces used raw, each built as its default, carrying the source's comparator.
+    new FixedPairing(
+      "raw SortedSet -> raw NavigableSet",
+      "java.util.SortedSet",
+      "java.util.NavigableSet",
+      "strReversed",
+      "[b, a] in java.util.TreeSet"
+    ),
+    new FixedPairing(
+      "raw ArrayList -> raw AbstractList",
+      "java.util.ArrayList",
+      "java.util.AbstractList",
+      "str",
+      REFUSED + "incompatible source/target shapes — java.util.ArrayList vs java.util.AbstractList"
+    ),
+    // A sorted generic class used raw whose comparator constructor is not public
+    // cannot be told the source's order, so a source carrying one is refused at
+    // conversion.
+    new FixedPairing(
+      "raw TreeSet -> raw sorted subtype with no public comparator constructor",
+      "java.util.TreeSet",
+      "%1$sGTree",
+      "strReversed",
+      REFUSED + "declares no constructor taking a Comparator"
+    ),
+    // A container whose elements are raw uses copies each element as a nested container does.
+    new FixedPairing(
+      "List of raw Gen -> List of ObjectList",
+      "java.util.List<%1$sGen>",
+      "java.util.List<%1$sObjectList>",
+      "genList",
+      "[[b], [a]] in java.util.ArrayList"
+    ),
+    new FixedPairing(
+      "Set of raw Gen -> Set of ObjectList",
+      "java.util.Set<%1$sGen>",
+      "java.util.Set<%1$sObjectList>",
+      "genList",
+      "[[b], [a]] in java.util.LinkedHashSet"
+    ),
+    new FixedPairing(
+      "Map of ObjectList -> Map of raw Gen",
+      "java.util.Map<String, %1$sObjectList>",
+      "java.util.Map<String, %1$sGen>",
+      "objectList",
+      "{k1=[b], k2=[a]} in java.util.LinkedHashMap"
+    ),
+    new FixedPairing(
+      "Map of raw Gen -> Map of raw Gen2",
+      "java.util.Map<String, %1$sGen>",
+      "java.util.Map<String, %1$sGen2>",
+      "genList",
+      "{k1=[b], k2=[a]} in java.util.LinkedHashMap"
     ),
     // A map keyed by a parameterized type: the key is the same type on both sides, so the
     // keys
@@ -1688,10 +2215,11 @@ class CrossPathCorpusTest {
       final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
 
       // A refusal is owed as `refused: ` and a fragment of the runtime's message. The generated
-      // path's refusal has to be the processor's own diagnostic, so a javac error inside a
-      // generated
-      // file cannot pass for one. A registered divergence owes the runtime's outcome from the
-      // runtime and that diagnostic from the generated path.
+      // path refuses either while compiling, where only the processor's own diagnostic counts, or
+      // while converting, where it has to give the same fragment the runtime gives. A javac error
+      // inside a generated file is a compile refusal without that diagnostic, so it cannot pass
+      // for one, whatever its text. A registered divergence owes the runtime's outcome from the
+      // runtime and the processor's diagnostic from the generated path.
       final var refusal = pairing.owed().startsWith(REFUSED) ? pairing.owed().substring(REFUSED.length()) : null;
       final var owed =
         refusal != null
@@ -1704,8 +2232,12 @@ class CrossPathCorpusTest {
         final var refuses =
           refusal != null ||
           (divergence != null && !(generatedSide ? divergence.generated() : divergence.reflective()));
+        final var refusedWhileCompiling = generatedSide && forward == null;
         final var met = refuses
-          ? outcome.refusal() != null && outcome.refusal().contains(generatedSide ? "ERROR: @Bridge" : refusal)
+          ? outcome.refusal() != null &&
+            (refusedWhileCompiling
+              ? outcome.refusal().contains("ERROR: @Bridge")
+              : refusal != null && outcome.refusal().contains(refusal))
           : owed.equals(outcome.toString());
         if (!met) failures.add(pairing.name() + ": " + side.getKey() + " gave " + outcome + ", owed " + owed);
       }
@@ -1722,25 +2254,11 @@ class CrossPathCorpusTest {
 
   /**
    * Fixed-argument pairings the two paths are known to answer differently, each recorded by which
-   * path converts. Every entry here is a generic container used raw that the runtime copies
-   * unconverted, because neither side names an element type narrower than {@code Object}, and that
-   * {@code @Bridge} refuses, because it plans a container only from a view the shared spec gives,
-   * and a raw use has none. Whether the generated path should emit the same copy for these is an
-   * open question; until it does, each entry holds the runtime to its copy and the generated path
-   * to its diagnostic, so a change on either side fails the pairing rather than passing silently.
+   * path converts. An entry holds the converting path to the table's outcome and the other to its
+   * refusal, so a change on either side fails the pairing rather than passing silently, and an
+   * entry whose pairing stops diverging or leaves the table fails too.
    */
-  private static final Map<String, Verdict> FIXED_KNOWN_DIVERGENCES = Map.of(
-    "raw Gen -> ObjectList",
-    new Verdict(false, true),
-    "ObjectList -> raw Gen",
-    new Verdict(false, true),
-    "raw HashMap -> ObjectMap",
-    new Verdict(false, true),
-    "raw Gen -> raw Gen2",
-    new Verdict(false, true),
-    "raw ArrayList -> raw LinkedList",
-    new Verdict(false, true)
-  );
+  private static final Map<String, Verdict> FIXED_KNOWN_DIVERGENCES = Map.of();
 
   private static JavaFileObject[] fixedSources(final String prefix, final String srcField, final String tgtField) {
     final var head = "package " + PACKAGE + ";\n";
@@ -1765,7 +2283,9 @@ class CrossPathCorpusTest {
       final var name = prefix + declaration.getKey();
       final var mentioned = Pattern.compile("\\b" + name + "\\b");
       if (!mentioned.matcher(srcField).find() && !mentioned.matcher(tgtField).find()) continue;
-      files.add(source(name, head + "public class " + name + " " + declaration.getValue().formatted(prefix) + " {}\n"));
+      // A declaration that writes its own body, such as one declaring constructors, is taken whole.
+      final var body = declaration.getValue().formatted(prefix);
+      files.add(source(name, head + "public class " + name + " " + body + (body.endsWith("}") ? "\n" : " {}\n")));
     }
     files.add(
       source(
@@ -1803,14 +2323,30 @@ class CrossPathCorpusTest {
           case "java.util.Map" -> LinkedHashMap.class;
           case "java.util.SortedMap" -> TreeMap.class;
           case "java.util.HashMap" -> LinkedHashMap.class;
+          case "java.util.TreeSet" -> TreeSet.class;
+          case "java.util.TreeMap" -> TreeMap.class;
+          case "java.util.Deque", "java.util.ArrayDeque" -> ArrayDeque.class;
+          case "java.util.concurrent.ConcurrentSkipListSet" -> ConcurrentSkipListSet.class;
           default -> ArrayList.class;
         };
-    final var instance = type.getConstructor().newInstance();
+    final var instance = input.equals("strReversed")
+      ? type.getConstructor(Comparator.class).newInstance(Comparator.reverseOrder())
+      : type.getConstructor().newInstance();
     final var leaf = classes.get(PACKAGE + "." + prefix + "Leaf").getConstructor(String.class);
     var key = 0;
     for (final var value : VALUES) {
       final Object element = switch (input) {
         case "leaf", "leafListKey" -> leaf.newInstance(value);
+        case "objectList" -> {
+          final var list = classes.get(PACKAGE + "." + prefix + "ObjectList").getConstructor().newInstance();
+          Collection.class.getMethod("add", Object.class).invoke(list, value);
+          yield list;
+        }
+        case "genList" -> {
+          final var gen = classes.get(PACKAGE + "." + prefix + "Gen").getConstructor().newInstance();
+          Collection.class.getMethod("add", Object.class).invoke(gen, value);
+          yield gen;
+        }
         case "leafList" -> List.of(leaf.newInstance(value));
         case "leafOpt" -> Optional.of(leaf.newInstance(value));
         case "strList" -> List.of(value);
