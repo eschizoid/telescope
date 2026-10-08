@@ -3645,7 +3645,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (plan.rawContainer()) return true;
     if (!IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) return false;
     if (plan.kind() != FieldPlan.Kind.SET && plan.kind() != FieldPlan.Kind.MAP_VALUES) return false;
-    return outputImpl != null && orderedFamilyOf(outputImpl, plan.kind()) != null;
+    return outputImpl != null && keepsOrder(outputImpl, plan.kind());
   }
 
   // Emit one direction of a raw Collection/Map subtype container helper. Every type is rendered
@@ -3823,25 +3823,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    */
   private static final String ORDERING_LOCAL = "__cmp";
 
-  /**
-   * The sorted family the class being allocated belongs to, or null when it keeps no order. The
-   * interface comes back in the form an {@code instanceof} needs, since the test is made against a
-   * value whose type arguments are not known where it is written.
-   */
-  private OrderedFamily orderedFamilyOf(final String implFqn, final FieldPlan.Kind kind) {
+  /** Whether the class being allocated keeps its elements, or a map's keys, in an order. */
+  private boolean keepsOrder(final String implFqn, final FieldPlan.Kind kind) {
     final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
-    if (implEl == null) return null;
-    if (kind == FieldPlan.Kind.MAP_VALUES && assignableToRaw(implEl.asType(), "java.util.SortedMap")) {
-      return new OrderedFamily("java.util.SortedMap<?, ?>");
-    }
-    if (kind == FieldPlan.Kind.SET && assignableToRaw(implEl.asType(), "java.util.SortedSet")) {
-      return new OrderedFamily("java.util.SortedSet<?>");
-    }
-    return null;
+    if (implEl == null) return false;
+    if (kind == FieldPlan.Kind.MAP_VALUES) return assignableToRaw(implEl.asType(), "java.util.SortedMap");
+    return kind == FieldPlan.Kind.SET && assignableToRaw(implEl.asType(), "java.util.SortedSet");
   }
-
-  /** The wildcarded interface an ordering test is written against. */
-  private record OrderedFamily(String iface) {}
 
   /**
    * The check a rebuild has to make before it loses an order, or empty when it has none to make:
@@ -3971,16 +3959,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var comparator = processingEnv.getElementUtils().getTypeElement("java.util.Comparator");
     if (comparator == null) return true;
     return types.isAssignable(types.getDeclaredType(comparator, types.getWildcardType(null, own)), param);
-  }
-
-  /**
-   * Whether a declared container type keeps its elements in an order, and so needs a comparator.
-   */
-  private boolean keepsOrder(final TypeMirror container) {
-    final var sortedSet = processingEnv.getElementUtils().getTypeElement("java.util.SortedSet");
-    if (sortedSet == null) return false;
-    final var types = processingEnv.getTypeUtils();
-    return types.isAssignable(types.erasure(container), types.erasure(sortedSet.asType()));
   }
 
   /**
@@ -4300,7 +4278,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     final var guarded =
       kind == FieldPlan.Kind.SET &&
-      orderedFamilyOf(concreteImplFqn(tgtContainer, kind), kind) != null &&
+      keepsOrder(concreteImplFqn(tgtContainer, kind), kind) &&
       !orderedAgainstItsOwnKind(setElementOf(tgtContainer));
     if (!guarded) {
       out.println(convert == null ? "    out.addAll(src);" : "    for (final var x : src) out.add(" + convert + ");");

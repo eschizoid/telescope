@@ -140,9 +140,11 @@ public interface PropertySystem<T> {
   /**
    * The parameter type of {@code impl}'s single-argument constructor taking a {@code Comparator},
    * with {@code impl}'s type parameters replaced, in the order {@code impl} declares them, by
-   * {@code arguments}. Null where there is none this world can call, and where {@code impl}
-   * declares type parameters and {@code arguments} does not supply exactly one for each, since
-   * pairing them off by position would then substitute the wrong ones.
+   * {@code arguments}. Empty {@code arguments} replace nothing, which reads the parameter over
+   * {@code impl}'s own type variables, the way a class used raw is read. Null where there is no
+   * constructor this world can call, and where {@code impl} declares type parameters and a
+   * non-empty {@code arguments} does not supply exactly one for each, since pairing them off by
+   * position would then substitute the wrong ones.
    *
    * <p>Java forbids two constructors with one erasure, so there is at most one to find. Whether it
    * can be called is the world's own fact: a generated bridge has to name the class in source, and

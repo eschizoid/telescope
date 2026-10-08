@@ -398,7 +398,7 @@ public final class ReflectionProps implements PropertySystem<Type> {
   public Type comparatorParameter(final Type impl, final List<Type> arguments) {
     if (!(rawType(impl) instanceof Class<?> raw)) return null;
     final var variables = raw.getTypeParameters();
-    if (variables.length != 0 && variables.length != arguments.size()) return null;
+    if (variables.length != 0 && !arguments.isEmpty() && variables.length != arguments.size()) return null;
     try {
       MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class, Comparator.class));
     } catch (final NoSuchMethodException | IllegalAccessException e) {

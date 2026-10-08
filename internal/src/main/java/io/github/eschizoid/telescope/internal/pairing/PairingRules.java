@@ -247,7 +247,9 @@ public final class PairingRules<T> {
    * set's element type. That parameter is resolved against the arguments the field gave the class
    * built, which are the declared type's own when it is that class, so a subtype declaring its
    * parameters in another order than {@code Map} resolves correctly, and the container's otherwise.
-   * A field that leaves its container raw names nothing to order, and is refused with the rest.
+   * A field that uses the class built raw gives it no arguments, so the parameter is read over the
+   * class's own type variables, and a comparator the source carried fits it as it is. A raw {@code
+   * Set} or {@code Map} names nothing to order, and is refused with the rest.
    */
   public Ordering<T> orderingFor(
     final T declared,

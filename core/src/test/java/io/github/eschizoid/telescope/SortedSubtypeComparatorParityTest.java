@@ -84,6 +84,42 @@ class SortedSubtypeComparatorParityTest {
     public SwappedByValue(final Comparator<? super V> ignored) {}
   }
 
+  /** A second sorted set subtype that can take a comparator, so a raw copy has to rebuild. */
+  public static class OtherCmpSet<E> extends TreeSet<E> {
+
+    private static final long serialVersionUID = 1L;
+
+    public OtherCmpSet() {}
+
+    public OtherCmpSet(final Comparator<? super E> c) {
+      super(c);
+    }
+  }
+
+  /** A second key-ordering subtype declaring its parameters value first. */
+  public static class OtherSwappedByKey<V, K> extends TreeMap<K, V> {
+
+    private static final long serialVersionUID = 1L;
+
+    public OtherSwappedByKey() {}
+
+    public OtherSwappedByKey(final Comparator<? super K> c) {
+      super(c);
+    }
+  }
+
+  @SuppressWarnings("rawtypes")
+  public record RawCmpSet(CmpSet items) {}
+
+  @SuppressWarnings("rawtypes")
+  public record RawOtherCmpSet(OtherCmpSet items) {}
+
+  @SuppressWarnings("rawtypes")
+  public record RawSwapped(SwappedByKey items) {}
+
+  @SuppressWarnings("rawtypes")
+  public record RawOtherSwapped(OtherSwappedByKey items) {}
+
   public record SrcSwapped(SortedMap<String, Integer> items) {}
 
   public record ToSwappedByKey(SwappedByKey<Integer, String> items) {}
@@ -202,5 +238,29 @@ class SortedSubtypeComparatorParityTest {
       mapper.forward(new SrcSwapped(reversedIntMap()))
     );
     assertTrue(thrown.getMessage().contains("declares no constructor taking a Comparator"), thrown::getMessage);
+  }
+
+  @Test
+  @DisplayName("a sorted set subtype used raw is rebuilt in the source's order")
+  @SuppressWarnings("unchecked")
+  void aRawSetSubtypeKeepsTheOrder() {
+    final var src = new CmpSet<String>(Comparator.<String>reverseOrder());
+    src.add("a");
+    src.add("b");
+    final var out = Telescope.mapper(RawCmpSet.class, RawOtherCmpSet.class).forward(new RawCmpSet(src));
+
+    assertEquals(List.of("b", "a"), List.copyOf(out.items()));
+  }
+
+  @Test
+  @DisplayName("a sorted map subtype used raw is rebuilt in the source's order, whatever order it declares")
+  @SuppressWarnings("unchecked")
+  void aRawMapSubtypeKeepsTheOrder() {
+    final var src = new SwappedByKey<Integer, String>(Comparator.<String>reverseOrder());
+    src.put("a", 1);
+    src.put("b", 2);
+    final var out = Telescope.mapper(RawSwapped.class, RawOtherSwapped.class).forward(new RawSwapped(src));
+
+    assertEquals(List.of("b", "a"), List.copyOf(out.items().keySet()));
   }
 }

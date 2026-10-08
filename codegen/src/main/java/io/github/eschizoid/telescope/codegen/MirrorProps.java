@@ -193,8 +193,9 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
     final var comparator = elements.getTypeElement("java.util.Comparator");
     if (implEl == null || comparator == null || !publiclyNameable(implEl)) return null;
     final var parameters = implEl.getTypeParameters();
-    if (!parameters.isEmpty() && parameters.size() != arguments.size()) return null;
-    final var owner = parameters.isEmpty()
+    final var substitutes = !parameters.isEmpty() && !arguments.isEmpty();
+    if (substitutes && parameters.size() != arguments.size()) return null;
+    final var owner = !substitutes
       ? (DeclaredType) implEl.asType()
       : types.getDeclaredType(implEl, arguments.toArray(TypeMirror[]::new));
     for (final var ctor : ElementFilter.constructorsIn(implEl.getEnclosedElements())) {
