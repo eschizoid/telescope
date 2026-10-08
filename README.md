@@ -69,8 +69,8 @@ The two tools fail differently when a name goes stale. Renaming a source propert
 `@Mapping(source = ...)` names fails the MapStruct build with an error. Without the plugin, you then fix the string by
 hand in every mapper. Renaming or adding a target property with no source counterpart is different. Under MapStruct's
 default `unmappedTargetPolicy = WARN` it only produces a warning, and the field is `null` at run time.
-`ReportingPolicy.ERROR` turns that warning into a build failure with one line. Telescope's `Telescope.mapper(...)`
-refuses unmapped fields when the mapper is built, so telescope differs here only in its default.
+`ReportingPolicy.ERROR` turns that warning into a build failure with one line. `Telescope.mapper(...)` refuses unmapped
+fields when the mapper is built, so telescope differs here only in its default.
 
 Nested targets stay typed too. MapStruct writes `@Mapping(source = "flat", target = "a.b.c")` with a dotted string.
 Telescope accepts a navigator as the target of a row. The `@Focus` annotation processor generates such a navigator for a
@@ -81,9 +81,9 @@ Telescope.mapper(Cart.class, CartDto.class,
   to(Cart::customerName, CartDtoTelescope.of().shipping().recipient().fullName()));
 ```
 
-The generated path, `@Bridge`, does name fields with strings. Its `@Rename`, `@Compute`, `@Constant`, `@Default`,
-`@Transform`, and `@ViaMapper` entries and its `drops` list all take field names as strings. The processor reports a
-name that isn't a field of the class as a compile error. `@FromMap(required = ...)` also takes strings, which name map
+`@Bridge` is an annotation that has the `telescope-codegen` processor generate a mapper at compile time, and it does
+name fields with strings. Its entries, e.g. `@Rename` and `@Compute`, take field names as strings. The processor reports
+a name that isn't a field of the class as a compile error. `@FromMap(required = ...)` also takes strings, which name map
 keys.
 
 The [head-to-head module](examples/mapstruct-vs-telescope/) tests MapStruct's default-policy unmapped-target case. The
@@ -92,10 +92,10 @@ them as manual steps instead, and the IDE plugin's behavior is cited from its do
 
 ## Runtime and generated mappers give the same result on container shapes
 
-Telescope has two engines for the same mapping. `Telescope.mapper(...)` builds the conversion while the program runs,
-with no annotations and no build step. Putting `@Bridge(Target.class)` on the source type makes the `telescope-codegen`
-annotation processor generate the same conversion as plain Java. You can start with the runtime engine and move a
-mapping to `@Bridge` later, when a code path needs the speed.
+Telescope has two ways to run the same mapping. The runtime path, `Telescope.mapper(...)`, builds the conversion while
+the program runs, with no annotations and no build step. Putting `@Bridge(Target.class)` on the source type makes the
+`telescope-codegen` annotation processor generate the same conversion as plain Java. You can start with the runtime path
+and move a mapping to `@Bridge` later, when a code path needs the speed.
 
 ```java
 @Bridge(InvoiceDto.class)
@@ -110,17 +110,17 @@ InvoiceDto viaMapper = Telescope.mapper(Invoice.class, InvoiceDto.class).forward
 InvoiceDto viaBridge = InvoiceBridge.BRIDGE_FN.forward(invoice);
 ```
 
-A test holds the two engines to the same result on container shapes and on how a target is constructed.
-`CrossPathCorpusTest` crosses container families with element shapes and runs one input through each engine for every
-cell. It fails when the two disagree, and it runs as part of `./gradlew check`, which is what CI runs. Its container
-grid has no recorded disagreements. Renames, null strategies, and defaults aren't cross-checked by it.
+A test holds the two paths to the same result on container shapes and on how a target is constructed.
+`CrossPathCorpusTest` crosses container families with element shapes and runs one input through each path for every
+cell. It fails when the two disagree. It runs as part of `./gradlew check`, which is what CI runs. Its container grid
+has no recorded disagreements. Renames, null strategies, and defaults aren't cross-checked by it.
 
-A few known differences are recorded with their direction. `CrossPathCorpusTest` records a pair of them. When
-`@Bridge`'s `writeStrategy` asks for setters or for a constructor, a target reachable only through a private constructor
-is built at run time but refused by the processor. `ContainerAllocatorCorpusTest` records the other one. `@Bridge`
-accepts a `Map` field mapped onto an `EnumMap` field, and `Telescope.mapper(...)` refuses it. The runtime engine only
-converts an `EnumMap` target whose source is the same `EnumMap` type. Each register also fails the build when a recorded
-difference goes away, so the list stays accurate.
+Two known differences are recorded in tests, each with its direction. In `CrossPathCorpusTest`, a target reachable only
+through a private constructor is built at run time. The processor refuses it when `@Bridge`'s `writeStrategy` asks for
+setters or for a constructor. In `ContainerAllocatorCorpusTest`, `@Bridge` accepts a `Map` field mapped onto an
+`EnumMap` field, and `Telescope.mapper(...)` refuses it. The runtime path only converts an `EnumMap` target whose source
+is the same `EnumMap` type. Each test also fails the build when a recorded difference goes away, so the list stays
+accurate.
 
 ## Unconvertible fields are refused
 
@@ -140,10 +140,12 @@ Some entry points are lenient on purpose. `mapperForward(...)` and `@Bridge(leni
 field at its default value, which is `null`, zero, or `false`. `Telescope.fromMap(...)` fills a component with no value
 from a default for its type. `Mapper.into(...)` writes onto an existing bean and skips a property with no public setter.
 
-Same-typed containers are copied rather than shared, so changing the target's list never changes the source's.
+Same-typed JDK collections are copied rather than shared, so changing the target's list never changes the source's.
 [Mapping](#mapping) has the details.
 
 ## Measured performance
+
+The table below compares telescope's generated code with MapStruct's on the same JMH workloads.
 
 <!-- metrics: refresh from the next MapStructComparisonBenchmark run -->
 
@@ -158,15 +160,15 @@ The table comes from GitHub Actions run 34470676359, using the included JMH work
 MapStruct's own rows are the control, so each ratio is read within one run. The ranges are what the same benchmark has
 produced across runs. The [methodology and history](docs/perf-mapstruct-comparison.md) are recorded separately.
 
-The runtime engine is slower than generated code, and the gap shrinks as the work per call grows. Without codegen,
+The runtime path is slower than generated code, and the gap shrinks as the work per call grows. Without codegen,
 `Telescope.mapper(...)` composes each record or bean pair into a single `MethodHandle`. On that run it measured about
 3.3 times MapStruct on flat, 2.7 on nested, and 1.3 on deep. Its container figure of 1.04 to 1.06 is pending a re-run,
 because the Map shape was measured before a change to how Map containers are built. A fixed cost of about 7 ns per call
 is nearly the whole gap on flat and nested shapes. Deep and container shapes add a cost per converted element. On those
 shapes the absolute gap grows while the ratio falls.
 
-Flat, nested, and deep conversions take well under a microsecond on both engines. The 100-item container rows take more
-than one on both. Read the tier that matches your shape rather than the summary. You can reproduce any of it from the
+Flat, nested, and deep conversions take well under a microsecond on both paths. The 100-item container rows take more
+than one on both. Read the tier that matches your shape. You can reproduce any of it from the
 [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action. The full matrix is in
 [`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison-apples-to-apples).
 
@@ -316,10 +318,10 @@ annotations that the `telescope-codegen` processor reads. `@Focus` and `@BeanFoc
 method calls. `@Bridge` generates a conversion as plain Java for a known pair. The codegen guide is
 [docs/codegen.md](docs/codegen.md).
 
-`Telescope.mapper(...)` returns a `Mapper`, which has `forward`, `backward`, and `patch`. `patch(base, partial)` copies
-the non-null fields of a partial target back onto an existing source. `Telescope.map(...)` takes the same rows and
-returns a `Telescope` path instead. A conversion that runs in both directions composes into a longer path with
-`.then(...)`.
+`Telescope.mapper(...)` returns a `Mapper`, which has `forward`, `backward`, and `patch`. `patch(base, partial)` returns
+a copy of `base` with the partial's non-null reference fields, and all of its primitive fields, written over it.
+`Telescope.map(...)` takes the same rows and returns a `Telescope` path instead. A conversion that runs in both
+directions composes into a longer path with `.then(...)`.
 
 Rows handle the cases that same-name matching can't. A field with a different name gets a
 `Mapping.to(srcAccessor, tgtAccessor)` row. A class whose write strategy isn't detected gets a
@@ -327,11 +329,10 @@ Rows handle the cases that same-name matching can't. A field with a different na
 
 The rest of this README uses these terms.
 
-- **Navigation** is `of`, `ofBean`, `.field`, and `.each`, which build a typed path into one structure.
-- **Automatic structural mapping** is `Telescope.mapper` and `Telescope.map`. They match same-name fields by exact name
-  and type, recursively, and never fuzzily.
-- **Explicit conversion** is `from/to/using`, where you write both directions and nothing is automatic.
-- **Generated structural mapping** is `@Bridge`.
+- The **runtime path** is every entry point that works while the program runs, with no annotations and no build step,
+  such as `Telescope.of`, `Telescope.mapper`, and `Telescope.fromMap`.
+- The **generated path** is the code the `telescope-codegen` processor writes at compile time for `@Focus`,
+  `@BeanFocus`, `@Bridge`, and `@FromMap`.
 
 For a sealed root, `Match.of(...)` dispatches over the permitted subtypes. `.exhaustive()` reads the permits and throws
 when a subtype has no handler. The check happens when you call `.exhaustive()`, not at compile time.
@@ -340,7 +341,8 @@ when a subtype has no handler. The check happens when you call `.exhaustive()`, 
 
 ## Records, mapping, beans, and untyped maps
 
-The sections below cover the shapes you'll use most.
+The sections below show a deep update on records, a mapping to DTOs, an update on POJOs, and binding a
+`Map<String, Object>`.
 
 ### Records
 
@@ -537,7 +539,8 @@ values, and a log level can narrate every conversion. [docs/introspection.md](do
 A field whose declared type is the same on both sides is handed across as the same instance, with some exceptions. A
 `List`, `Set`, `Map`, or other JDK collection gets a shallow copy instead. The copy happens forward, backward, and in
 `patch`. Changing the target's container then never changes the source's. Arrays aren't copied, so the target holds the
-source's array.
+source's array. A field declared as your own collection class, such as `class Urls extends ArrayList<String>`, is handed
+across as it is too.
 
 The copy keeps the source's order, including a sorted set's comparator. It never creates an instance of a class
 telescope doesn't know, such as a framework's own collection.
@@ -716,19 +719,20 @@ Lombok in the processor list, which the [Lombok guide](lombok/README.md) and [do
 
 ### Native image
 
-The runtime engine works inside a GraalVM native image, so `Telescope.mapper(...)` and `.field(User::name)` run there
-with no build step. Generated code from MapStruct and from telescope is free of reflection. Both build under
-native-image with no configuration.
+The runtime path works inside a GraalVM native image, so `Telescope.mapper(...)` and `.field(User::name)` run there with
+no build step. Generated code from MapStruct and from telescope is free of reflection. Both build under native-image
+with no configuration.
 
 Inside an image, telescope swaps its `LambdaMetafactory` accessors for plain `MethodHandle` closures.
 `LambdaMetafactory` defines classes at run time, and native-image forbids that. One `static final boolean` picks the
 branch. `telescope-core` carries its own native-image metadata. You register your own DTO types the way you would in any
 GraalVM application.
 
-CI checks this in two ways. The `:core:imageTest` and `:internal:imageTest` tasks re-run each module's whole suite with
-the `imagecode` property set. Every existing assertion then runs on the code an image uses, and both tasks are part of
-`check`. A verifier covering nine capabilities also compiles and runs as a native binary. It runs on every push to
-`main` that touches the substrate, and weekly. Setup and limits are in [`docs/native-image.md`](docs/native-image.md).
+CI checks native-image support in two ways. The `:core:imageTest` and `:internal:imageTest` tasks re-run each module's
+whole suite with the `imagecode` property set. Every existing assertion then runs on the code an image uses, and both
+tasks are part of `check`. A verifier covering nine capabilities also compiles and runs as a native binary. It runs on
+every push to `main` that touches the substrate, and weekly. Setup and limits are in
+[`docs/native-image.md`](docs/native-image.md).
 
 ---
 

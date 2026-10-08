@@ -228,7 +228,7 @@ you declare nothing for that. Without the `opens`, the private lookup is refused
 
 On the module path the runtime path calls your accessors through method handles rather than through classes it spins
 with `LambdaMetafactory`: a lookup into another named module keeps private access but not the full privilege that
-spinning a class needs. That is the dispatch a native image uses for the same reason, and the conversions are the same.
+spinning a class needs. A native image uses the same dispatch for the same reason, and the conversions are the same.
 
 `telescope-internal` comes in transitively via `telescope-core`'s module declaration, but its packages are
 qualified-exported to `telescope-core` only, so you cannot accidentally reference internal lattice types from your own
@@ -243,14 +243,14 @@ references when its class initializes, and reading a method reference back needs
 same `opens` message. See
 [Compile-time, reflection-free navigation](#compile-time-reflection-free-navigation-focus--beanfocus).
 
-**Classpath users (no `module-info.java`).** No `opens` needed — the JVM grants unnamed-module access automatically.
-This section is JPMS-only.
+**Classpath users (no `module-info.java`).** No `opens` needed — the JVM grants unnamed-module access automatically. The
+`opens` directive applies only to JPMS modules.
 
 ## Registering `@FromMap` binders
 
 `Telescope.fromMap(...)` uses a generated `@FromMap` binder only when the binder is registered. A class of the right
 name is not enough. Each binder nests a `Provider` implementing `FromMapProvider`, and the processor lists it in
-`META-INF/services`. That file is all the class path and a native image need.
+`META-INF/services`. The class path and a native image need nothing more.
 
 A named module ignores that file. On the module path, its `module-info` must declare
 `provides io.github.eschizoid.telescope.conversion.FromMapProvider with <pkg>.<Name>FromMap.Provider` for each binder.
