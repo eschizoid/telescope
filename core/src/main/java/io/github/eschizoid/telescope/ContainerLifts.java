@@ -173,26 +173,17 @@ final class ContainerLifts {
     // loop. Asking the pair instead would cost the other direction its fusion to buy nothing: the
     // forward half of a sorted-source-to-unsorted-target conversion inserts into a container that
     // orders nothing and can raise no cast for the refusal to describe.
-    final var mh = srcCopy == null && tgtCopy == null ? MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc) : null;
+    final var mh = MhIso.liftCollection(elementIso, srcAlloc, tgtAlloc);
     final boolean loopForward = set && converts && keepsOrder(tgtRaw);
     final boolean loopBackward = set && converts && keepsOrder(srcRaw);
-    final Iso<Object, Object> loop =
+    final Iso<Object, Object> filled =
       mh != null && !loopForward && !loopBackward
         ? mh
         : Iso.of(
-            src ->
-              tgtCopy != null
-                ? copied(src, tgtCopy)
-                : mh != null && !loopForward
-                  ? mh.to(src)
-                  : buildConverted(src, tgtAlloc, elementIso::to, tgtRaw),
-            tgt ->
-              srcCopy != null
-                ? copied(tgt, srcCopy)
-                : mh != null && !loopBackward
-                  ? mh.from(tgt)
-                  : buildConverted(tgt, srcAlloc, elementIso::from, srcRaw)
+            src -> mh != null && !loopForward ? mh.to(src) : buildConverted(src, tgtAlloc, elementIso::to, tgtRaw),
+            tgt -> mh != null && !loopBackward ? mh.from(tgt) : buildConverted(tgt, srcAlloc, elementIso::from, srcRaw)
           );
+    final var loop = copying(filled, srcCopy, tgtCopy);
     // A comparator is a problem only for the side being built. Carrying one across a conversion
     // would mean ordering the new element type with an ordering written for the old one, which
     // cannot be done -- but a target that keeps no order has nothing to carry, and refusing there
@@ -475,26 +466,38 @@ final class ContainerLifts {
     // MethodHandle entry-loop over the value element's raw handle when it is a composed-handle
     // leaf;
     // keys pass through verbatim. Null value Iso => keep the Java loop.
-    final var mh = srcCopy == null && tgtCopy == null ? MhIso.liftMap(elementIso, srcAlloc, tgtAlloc) : null;
+    final var mh = MhIso.liftMap(elementIso, srcAlloc, tgtAlloc);
     // A side that keeps its keys in order has to see each key it inserts, to name one it cannot
     // order, and the fused loop offers nowhere to stand between the two. Only that side gives the
     // fused loop up.
     final boolean loopForward = SortedMap.class.isAssignableFrom(tgtRaw);
     final boolean loopBackward = SortedMap.class.isAssignableFrom(srcRaw);
     if (mh != null && !loopForward && !loopBackward) return mh;
+    return copying(
+      Iso.of(
+        src -> mh != null && !loopForward ? mh.to(src) : buildMap(src, tgtAlloc, elementIso::to, tgtRaw),
+        tgt -> mh != null && !loopBackward ? mh.from(tgt) : buildMap(tgt, srcAlloc, elementIso::from, srcRaw)
+      ),
+      srcCopy,
+      tgtCopy
+    );
+  }
+
+  /**
+   * {@code filled} with each direction whose output a copy constructor builds handed to it instead.
+   * The filling lambdas stay as they are, so a pair no copy constructor builds runs exactly the
+   * code it would without this; a side that is copied has no allocation for them to fill, and never
+   * reaches them.
+   */
+  private static Iso<Object, Object> copying(
+    final Iso<Object, Object> filled,
+    final Function<Object, Object> srcCopy,
+    final Function<Object, Object> tgtCopy
+  ) {
+    if (srcCopy == null && tgtCopy == null) return filled;
     return Iso.of(
-      src ->
-        tgtCopy != null
-          ? copied(src, tgtCopy)
-          : mh != null && !loopForward
-            ? mh.to(src)
-            : buildMap(src, tgtAlloc, elementIso::to, tgtRaw),
-      tgt ->
-        srcCopy != null
-          ? copied(tgt, srcCopy)
-          : mh != null && !loopBackward
-            ? mh.from(tgt)
-            : buildMap(tgt, srcAlloc, elementIso::from, srcRaw)
+      src -> tgtCopy != null ? copied(src, tgtCopy) : filled.to(src),
+      tgt -> srcCopy != null ? copied(tgt, srcCopy) : filled.from(tgt)
     );
   }
 
