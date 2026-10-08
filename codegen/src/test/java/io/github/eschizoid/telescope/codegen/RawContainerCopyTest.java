@@ -85,16 +85,34 @@ class RawContainerCopyTest {
   @DisplayName("a raw use with no public no-argument constructor is refused by name, as a field and as an element")
   void aCopyIntoAClassWithNoConstructorIsRefused() {
     // The compile-time world does not probe a concrete class's constructors, so the shared spec
-    // accepts the copy and the generated code's own allocation check has to refuse it.
+    // accepts the copy and the processor's allocation check is what refuses it. Without that
+    // check the bridge is still written, and javac then fails inside it on a constructor call
+    // that cannot resolve; only the processor's own diagnostic, raised on the annotated record,
+    // tells the user which field and which class.
+    final var refusal =
+      "@Bridge Src -> Tgt: field 'items' container type 'demo.Sized' has no public no-arg constructor";
     for (final var pair : List.of(
       List.of("java.util.ArrayList", "Sized"),
       List.of("java.util.List<java.util.ArrayList>", "java.util.List<Sized>")
     )) {
       final var compilation = compile(pair.get(0), pair.get(1));
-      assertTrue(!compilation.success(), () -> pair + " should be refused");
+      final var errors = compilation
+        .diagnostics()
+        .stream()
+        .filter(d -> d.getKind() == Diagnostic.Kind.ERROR)
+        .toList();
       assertTrue(
-        compilation.errorMessages().contains("demo.Sized"),
-        () -> pair + " should name the class it cannot build: " + compilation.errorMessages()
+        errors.stream().anyMatch(d -> d.getMessage(null).contains(refusal)),
+        () -> pair + " should be refused by the processor: " + compilation.errorMessages()
+      );
+      assertEquals(
+        List.of(),
+        errors
+          .stream()
+          .filter(d -> d.getSource() != null && d.getSource().getName().endsWith("SrcBridge.java"))
+          .map(d -> d.getLineNumber() + ": " + d.getMessage(null))
+          .toList(),
+        () -> pair + " should not reach javac inside the generated bridge"
       );
     }
   }

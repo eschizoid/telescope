@@ -2081,12 +2081,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // <Bridge>.forward(s). The legacy Telescope.from(...).using(::forward, ::backward) path
         // shared one anonymous Iso class body across every bridge, going megamorphic on
         // Function::apply as more bridges were loaded.
+        //
         // Each method reads every field into a local of the field's own type, so a field declared
-        // as
-        // a generic class used raw makes each of them declare a raw local. The record already
-        // says
-        // the type is raw; the methods only repeat it, so they carry the suppression the record's
-        // own declaration needs rather than raising the warning again in a file nobody wrote.
+        // as a generic class used raw makes each of them declare a raw local. The record already
+        // says the type is raw; the methods only repeat it, so they carry the suppression the
+        // record's own declaration needs rather than raising the warning again in a file nobody
+        // wrote.
         final var rawFields = Stream.concat(sourceFields.stream(), targetFields.stream()).anyMatch(f ->
           mentionsRawUse(f.type())
         );

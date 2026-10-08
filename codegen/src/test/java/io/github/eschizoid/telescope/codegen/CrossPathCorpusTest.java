@@ -1963,10 +1963,10 @@ class CrossPathCorpusTest {
       "leaf",
       REFUSED + "a generic container used raw"
     ),
-    // A raw use against another raw use, or against a side holding Object, has nothing its
-    // elements could fail to fit, so both paths copy them into the class the target
-    // allocates.
-    // The sorted rows carry a reversing comparator, which the copy has to hand to the target.
+    // A raw use against another raw use, or against a side holding Object, has
+    // nothing its elements could fail to fit, so both paths copy them into the
+    // class the target allocates. The sorted rows carry a reversing comparator,
+    // which the copy has to hand to the target.
     new FixedPairing("raw Gen -> ObjectList", "%1$sGen", "%1$sObjectList", "str", "[b, a] in %2$sObjectList"),
     new FixedPairing("ObjectList -> raw Gen", "%1$sObjectList", "%1$sGen", "str", "[b, a] in %2$sGen"),
     new FixedPairing(
@@ -2005,9 +2005,9 @@ class CrossPathCorpusTest {
       "strReversed",
       "{k2=a, k1=b} in java.util.concurrent.ConcurrentSkipListMap"
     ),
-    // One side raw, the other a sorted subtype fixing Object: the comparator is read without
-    // a type
-    // argument, since a raw source cannot be tested against one, and handed to the subtype.
+    // One side raw, the other a sorted subtype fixing Object: the comparator is
+    // read without a type argument, since a raw source cannot be tested against
+    // one, and handed to the subtype.
     new FixedPairing(
       "raw TreeSet -> ObjectTree",
       "java.util.TreeSet",
@@ -2072,9 +2072,8 @@ class CrossPathCorpusTest {
       "strReversed",
       "{k2=a, k1=b} in java.util.TreeMap"
     ),
-    // An abstract class the allocation table names no default for cannot be built by a copy,
-    // so
-    // neither path copies into or out of it.
+    // An abstract class the allocation table names no default for cannot be built
+    // by a copy, so neither path copies into or out of it.
     new FixedPairing(
       "raw AbstractList -> raw ArrayList",
       "java.util.AbstractList",
@@ -2097,9 +2096,9 @@ class CrossPathCorpusTest {
       "str",
       REFUSED + "IllegalStateException"
     ),
-    // A sorted generic class used raw whose comparator constructor is not public cannot be
-    // told
-    // the source's order, so a source carrying one is refused at conversion.
+    // A sorted generic class used raw whose comparator constructor is not public
+    // cannot be told the source's order, so a source carrying one is refused at
+    // conversion.
     new FixedPairing(
       "raw TreeSet -> raw sorted subtype with no public comparator constructor",
       "java.util.TreeSet",
@@ -2213,10 +2212,11 @@ class CrossPathCorpusTest {
       final var reflective = run(items, () -> Telescope.mapper(cast(src), cast(tgt)).forward(source));
 
       // A refusal is owed as `refused: ` and a fragment of the runtime's message. The generated
-      // path refuses either while compiling, with the processor's own diagnostic, or while
-      // converting, with the same fragment the runtime gives; a javac error inside a generated file
-      // is neither, so it cannot pass for one. A registered divergence owes the runtime's outcome
-      // from the runtime and the processor's diagnostic from the generated path.
+      // path refuses either while compiling, where only the processor's own diagnostic counts, or
+      // while converting, where it has to give the same fragment the runtime gives. A javac error
+      // inside a generated file is a compile refusal without that diagnostic, so it cannot pass
+      // for one, whatever its text. A registered divergence owes the runtime's outcome from the
+      // runtime and the processor's diagnostic from the generated path.
       final var refusal = pairing.owed().startsWith(REFUSED) ? pairing.owed().substring(REFUSED.length()) : null;
       final var owed =
         refusal != null
@@ -2229,10 +2229,12 @@ class CrossPathCorpusTest {
         final var refuses =
           refusal != null ||
           (divergence != null && !(generatedSide ? divergence.generated() : divergence.reflective()));
+        final var refusedWhileCompiling = generatedSide && forward == null;
         final var met = refuses
           ? outcome.refusal() != null &&
-            ((generatedSide && outcome.refusal().contains("ERROR: @Bridge")) ||
-              (refusal != null && outcome.refusal().contains(refusal)))
+            (refusedWhileCompiling
+              ? outcome.refusal().contains("ERROR: @Bridge")
+              : refusal != null && outcome.refusal().contains(refusal))
           : owed.equals(outcome.toString());
         if (!met) failures.add(pairing.name() + ": " + side.getKey() + " gave " + outcome + ", owed " + owed);
       }

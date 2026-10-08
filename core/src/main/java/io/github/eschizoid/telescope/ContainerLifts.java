@@ -59,14 +59,16 @@ final class ContainerLifts {
   private ContainerLifts() {}
 
   /**
-   * Collection ↔ Collection element-copy Iso. The forward instantiates the target collection via
-   * {@link Beans#intermediateAllocator(Class)} (cached LMF-bound Supplier) and {@code addAll}'s the
-   * source; backward is symmetric. Returns {@code null} when either side has no usable allocator,
-   * letting the caller fall through to the next branch (typically the shape-mismatch IAE).
+   * Collection ↔ Collection element-copy Iso. The forward allocates the target collection through
+   * {@link #copyAllocator} and {@code addAll}'s the source into it; backward is symmetric. The
+   * pairing spec decides a copy only when both sides can be built, so this never answers null and
+   * every side it is handed can be allocated.
    *
-   * <p>No element-type recursion: this branch fires on raw, non-parameterised subtypes (e.g. {@code
-   * class ImageUrls extends ArrayList<ImageUrl>}), where the raw class itself carries no runtime
-   * generic info. Users whose element types differ across sides should declare an explicit row.
+   * <p>No element-type recursion: a copy is decided only where neither side names an element type
+   * the other could refuse, such as a class declaring no type parameters that fixes them ({@code
+   * class ImageUrls extends ArrayList<ImageUrl>}), a generic class or interface used raw, or a
+   * class fixing every argument to {@code Object}. Users whose element types differ across sides
+   * should declare an explicit row.
    */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   static Iso<?, ?> collectionCopyIso(final Class<?> srcCls, final Class<?> tgtCls) {

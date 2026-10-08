@@ -882,9 +882,11 @@ public final class DeepMap {
     // (a.2) Same-kind Collection / Map pair written without type arguments on both sides, whose
     //       elements need no conversion: two classes declaring no type parameters that fix the
     //       same element types (`class ImageUrls extends ArrayList<ImageUrl>`), or a generic class
-    //       used raw on either side — copy elements via the target's no-arg constructor + `addAll`
-    //       / `putAll`. The element-type, kind-discriminator and allocability gates live on the
-    //       shared spec; the decision only fires when the copy is buildable.
+    //       or interface used raw on either side. Elements are copied with `addAll` / `putAll`
+    //       into a fresh container: a concrete class through its own allocator, an interface as
+    //       the default implementation the shared allocation table names for its family. The
+    //       element-type, kind-discriminator and allocability gates live on the shared spec; the
+    //       decision only fires when the copy is buildable.
     if (decision instanceof PairDecision.CollectionCopy) {
       return ContainerLifts.collectionCopyIso((Class<?>) srcType, (Class<?>) tgtType);
     }
