@@ -61,6 +61,11 @@ jmh {
     (project.findProperty("jmh.timeOnIteration") as String?)?.let { timeOnIteration = it }
     (project.findProperty("jmh.warmupTime") as String?)?.let { warmup = it }
     (project.findProperty("jmh.profilers") as String?)?.let { profilers = it.split(",") }
+    // Optional flags for every forked benchmark JVM, space-separated -- for example
+    // `-Pjmh.jvmArgsAppend="-XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining"` to read inlining decisions.
+    (project.findProperty("jmh.jvmArgsAppend") as String?)?.let { args ->
+        jvmArgsAppend = args.split(" ").filter { it.isNotBlank() }
+    }
 }
 
 // The benchmarks live in the jmh source set, which `check` does not reach: this module's own

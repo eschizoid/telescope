@@ -465,9 +465,9 @@ JMH micro-benchmarks. Build wires `jmhAnnotationProcessor(project(":codegen"))` 
 are processed on the JMH source set, which means generated navigators and bridges are exercised as real emitted code.
 
 **Run them from CI, not locally.** The `Benchmarks` workflow (`.github/workflows/benchmarks.yaml`, `workflow_dispatch`)
-takes a JMH filter, warmup and measurement iteration counts, the time per iteration for each, a fork count, and an
-optional profiler. A developer machine running anything else in the background produces numbers that look like findings
-and are not.
+takes a JMH filter, warmup and measurement iteration counts, the time per iteration for each, a fork count, an optional
+profiler, and optional flags for the forked benchmark JVMs (`jvm_args`, for example `-XX:+PrintInlining`). A developer
+machine running anything else in the background produces numbers that look like findings and are not.
 
 ### Measuring a change
 
