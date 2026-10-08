@@ -2,7 +2,7 @@
 
 The load-bearing claims the README makes, each with its evidence and where CI exercises it. When a claim's evidence
 moves or its version pin changes, this table is the checklist. Last audited: 2026-07-24, against telescope `1.3.0`,
-MapStruct `1.6.3`, Spring Boot `4.1.0`, Quarkus `3.37.3`.
+MapStruct `1.6.3`, Spring Boot `4.1.1`, Quarkus `3.40.1`.
 
 | Claim                                                                                                                                  | Evidence                                                                                                                                          | CI                                                      |
 | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |

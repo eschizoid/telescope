@@ -246,6 +246,20 @@ same `opens` message. See
 **Classpath users (no `module-info.java`).** No `opens` needed — the JVM grants unnamed-module access automatically.
 This section is JPMS-only.
 
+## Registering `@FromMap` binders
+
+`Telescope.fromMap(...)` uses a generated `@FromMap` binder only when the binder is registered. A class of the right
+name is not enough. Each binder nests a `Provider` implementing `FromMapProvider`, and the processor lists it in
+`META-INF/services`. That file is all the class path and a native image need.
+
+A named module ignores that file. On the module path, its `module-info` must declare
+`provides io.github.eschizoid.telescope.conversion.FromMapProvider with <pkg>.<Name>FromMap.Provider` for each binder.
+The processor warns with the exact line when the module it compiles lacks it.
+
+A fat jar has to merge the service files of the jars it combines. Use the shade plugin's `ServicesResourceTransformer`
+in Maven or `mergeServiceFiles()` in the Gradle Shadow plugin. Without that, the jar loses the registrations of all but
+one of them.
+
 ## What runs reflectively, and when
 
 The precise ledger — "reflection-free" claims are scoped to these rows:
