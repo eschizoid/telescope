@@ -706,12 +706,16 @@ public final class PairingRules<T> {
    * can hold.
    */
   public boolean hasDefaultImplementation(final T declared) {
-    final var kind = props.isSubtypeOf(declared, WellKnown.MAP)
-      ? ContainerView.Kind.MAP_VALUES
-      : props.isSubtypeOf(declared, WellKnown.SET)
-        ? ContainerView.Kind.SET
-        : ContainerView.Kind.LIST;
-    return allocationFor(declared, kind) instanceof Allocation.Build;
+    return allocationFor(declared, familyOf(declared)) instanceof Allocation.Build;
+  }
+
+  /**
+   * The family a container class is built in when no pair has settled it: a map's for a map, a
+   * set's for a set, and a list's for any other collection.
+   */
+  public ContainerView.Kind familyOf(final T declared) {
+    if (props.isSubtypeOf(declared, WellKnown.MAP)) return ContainerView.Kind.MAP_VALUES;
+    return props.isSubtypeOf(declared, WellKnown.SET) ? ContainerView.Kind.SET : ContainerView.Kind.LIST;
   }
 
   /**

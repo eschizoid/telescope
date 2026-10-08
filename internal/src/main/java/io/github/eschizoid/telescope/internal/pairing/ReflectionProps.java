@@ -445,13 +445,9 @@ public final class ReflectionProps implements PropertySystem<Type> {
     if (cls.isInterface() || Modifier.isAbstract(cls.getModifiers())) {
       return new PairingRules<Type>(this).hasDefaultImplementation(cls);
     }
-    final var kind = Map.class.isAssignableFrom(cls)
-      ? ContainerView.Kind.MAP_VALUES
-      : Set.class.isAssignableFrom(cls)
-        ? ContainerView.Kind.SET
-        : ContainerView.Kind.LIST;
+    final var allocation = new ContainerAllocation<Type>(this);
     final var alloc =
-      new ContainerAllocation<Type>(this).allocate(cls, kind, null) instanceof Allocation.Build
+      allocation.allocate(cls, allocation.familyOf(cls), null) instanceof Allocation.Build
         ? Beans.noArgConstructor(cls)
         : Beans.intermediateAllocator(cls);
     return alloc != null && alloc.get() != null;

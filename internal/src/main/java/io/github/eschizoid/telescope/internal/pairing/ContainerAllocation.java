@@ -51,6 +51,14 @@ public final class ContainerAllocation<T> {
   }
 
   /**
+   * The family a container class is built in when no pair has settled it, which is what a copy of a
+   * container whose declared type is the same on both sides asks {@link #implementationFor} in.
+   */
+  public ContainerView.Kind familyOf(final T declared) {
+    return rules.familyOf(declared);
+  }
+
+  /**
    * The same answer for a rebuild generated into {@code fromPackage}, which also has to be able to
    * call the constructor. A null {@code fromPackage} is a rebuild that reaches every package, which
    * is the runtime's: it binds constructors through a lookup with private access to the class.
