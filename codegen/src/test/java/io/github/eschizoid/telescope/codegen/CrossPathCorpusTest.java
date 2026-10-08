@@ -2107,7 +2107,7 @@ class CrossPathCorpusTest {
       "java.util.TreeSet",
       "%1$sGTree",
       "strReversed",
-      REFUSED + "declares no constructor taking a Comparator"
+      REFUSED + "declares no public constructor taking a Comparator"
     ),
     // A container whose elements are raw uses copies each element as a nested container does.
     new FixedPairing(

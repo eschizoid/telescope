@@ -264,6 +264,34 @@ public final class Beans {
     }
   }
 
+  /**
+   * A handle on {@code type}'s public constructor taking exactly {@code parameters}, or {@code
+   * null} when it declares none that can be bound.
+   *
+   * <p>It is bound the way {@link #intermediateAllocator} binds the no-argument constructor, so a
+   * class whose no-argument constructor is reached has its other public constructors reached too: a
+   * private lookup in the class's own module, which reaches a public constructor on a class that is
+   * not itself public, and the public lookup where that module declines one, which is how a {@code
+   * java.base} class is reached.
+   */
+  public static MethodHandle publicConstructor(final Class<?> type, final Class<?>... parameters) {
+    final Constructor<?> ctor;
+    try {
+      ctor = type.getConstructor(parameters);
+    } catch (final NoSuchMethodException e) {
+      return null;
+    }
+    try {
+      return ModuleAccess.privateLookupIn(type).unreflectConstructor(ctor);
+    } catch (final IllegalAccessException privateRefused) {
+      try {
+        return MethodHandles.publicLookup().unreflectConstructor(ctor);
+      } catch (final IllegalAccessException publicRefused) {
+        return null;
+      }
+    }
+  }
+
   @SuppressWarnings("unchecked")
   private static Supplier<Object> builderDefaultSupplier(final Class<?> type, final Method builderMethod) {
     try {

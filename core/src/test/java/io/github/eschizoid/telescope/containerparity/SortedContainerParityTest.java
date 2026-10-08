@@ -156,22 +156,19 @@ class SortedContainerParityTest {
   }
 
   @Test
-  @DisplayName("a comparator constructor on a class that cannot be named counts on neither path")
-  void anUnnameableClassIsNotAComparatorRouteOnEitherPath() {
-    // The constructor is public and the class is not, so only one of the two can be reached. The
-    // generated path emits a call by name and the reflective path binds through a public lookup,
-    // and both are stopped by the class rather than by the constructor.
+  @DisplayName("a comparator constructor on a class that is not public is reached wherever the class is")
+  void aClassThatIsNotPublicIsAComparatorRouteOnBothPaths() {
+    // The class is reached already: the generated bridge sits in its package and names it to call
+    // the no-argument constructor, and the reflective path binds that constructor through a
+    // private lookup. The comparator constructor is the alternative on the same class, so it is
+    // reached too.
     final var src = new SortedSubtypeHiddenSrc(mapOrderedBy(Comparator.reverseOrder()));
 
-    final var reflective = assertThrows(IllegalStateException.class, () ->
-      Telescope.mapper(SortedSubtypeHiddenSrc.class, SortedSubtypeHiddenTgt.class).forward(src)
-    );
-    final var generated = assertThrows(IllegalStateException.class, () ->
-      SortedSubtypeHiddenSrcBridge.BRIDGE.read(src)
-    );
+    final var reflective = Telescope.mapper(SortedSubtypeHiddenSrc.class, SortedSubtypeHiddenTgt.class).forward(src);
+    final var generated = SortedSubtypeHiddenSrcBridge.BRIDGE.read(src);
 
-    assertTrue(reflective.getMessage().contains("Comparator"), () -> reflective.getMessage());
-    assertTrue(generated.getMessage().contains("Comparator"), () -> generated.getMessage());
+    assertEquals(List.of("b", "a"), List.copyOf(reflective.items().keySet()), "the reflective path keeps the order");
+    assertEquals(List.of("b", "a"), List.copyOf(generated.items().keySet()), "and so does the generated one");
   }
 
   @Test

@@ -1,8 +1,6 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
 import io.github.eschizoid.telescope.internal.Beans;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
 import java.lang.reflect.Array;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.Modifier;
@@ -412,11 +410,7 @@ public final class ReflectionProps implements PropertySystem<Type> {
     if (!(rawType(impl) instanceof Class<?> raw)) return null;
     final var variables = raw.getTypeParameters();
     if (variables.length != 0 && !arguments.isEmpty() && variables.length != arguments.size()) return null;
-    try {
-      MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class, Comparator.class));
-    } catch (final NoSuchMethodException | IllegalAccessException e) {
-      return null;
-    }
+    if (Beans.publicConstructor(raw, Comparator.class) == null) return null;
     for (final var ctor : raw.getConstructors()) {
       if (ctor.getParameterCount() != 1 || ctor.getParameterTypes()[0] != Comparator.class) continue;
       return resolve(ctor.getGenericParameterTypes()[0], raw, arguments);

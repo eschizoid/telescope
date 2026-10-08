@@ -38,6 +38,7 @@ import javax.lang.model.element.NestingKind;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.TypeParameterElement;
+import javax.lang.model.type.ArrayType;
 import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
@@ -1869,6 +1870,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (
       !sameNames(source, nonDroppedSourceFields, target, targetFields, renames, renameFanouts, injectedTargetFields)
     ) return;
+    if (
+      !fieldTypesNameable(source, target, nonDroppedSourceFields, targetFields, renames, forwardOnlyTransforms, pkg)
+    ) return;
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
@@ -2138,8 +2142,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println(
           "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
         );
-        emitContainerHelpers(out, fieldPlans, nonDroppedSourceFields, targetFields, renames);
-        emitNestedElements(out, nested);
+        emitContainerHelpers(out, fieldPlans, nonDroppedSourceFields, targetFields, renames, pkg);
+        emitNestedElements(out, nested, pkg);
       }
     );
   }
@@ -3017,7 +3021,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         if (isContainerKind(subPlan.kind())) {
           // Whatever route the container takes, it allocates a class that has to BE the declared
           // type. That is decided before the route is, so it is asked first.
-          final var unassignable = firstUnassignableContainer(sf.type(), tf.type(), subPlan.kind());
+          final var unassignable = firstUnassignableContainer(sf.type(), tf.type(), subPlan.kind(), parentPkg);
           if (unassignable != null) {
             error(source, unassignableContainerMessage(source, target, sf.name(), unassignable));
             return null;
@@ -3029,12 +3033,12 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           // what makes a container need the builder.
           final var inlineCopy =
             elementIdentity &&
-            builderAllocExpr(sf.type(), subPlan.kind()) == null &&
-            builderAllocExpr(tf.type(), subPlan.kind()) == null &&
+            builderAllocExpr(sf.type(), subPlan.kind(), parentPkg) == null &&
+            builderAllocExpr(tf.type(), subPlan.kind(), parentPkg) == null &&
             hasCopyConstructorAccepting(tf.type(), subPlan.kind(), sf.type()) &&
             hasCopyConstructorAccepting(sf.type(), subPlan.kind(), tf.type());
           if (!inlineCopy) {
-            final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), subPlan.kind());
+            final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), subPlan.kind(), parentPkg);
             if (badAlloc != null) {
               error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
               return null;
@@ -3070,7 +3074,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         // The spec copies an interface only where the allocation table names a default for it, and
         // every default implements the declaration it is named for, so assignability holds by
         // construction. A concrete class it cannot probe, and its constructor is checked here.
-        final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), copy);
+        final var badAlloc = firstNonAllocatableContainer(sf.type(), tf.type(), copy, parentPkg);
         if (badAlloc != null) {
           error(source, unallocatableContainerMessage(source, target, sf.name(), badAlloc));
           return null;
@@ -3234,8 +3238,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // element class whose helpers copy, as the same pair does when it is a field.
     final var copy = copyKindOf(rules.decidePair(srcElement, tgtElement, fieldName), tgtElement);
     if (copy != null) {
-      // Assignable by construction, as for a field; only a concrete class's constructor is open.
-      final var badAlloc = firstNonAllocatableContainer(srcElement, tgtElement, copy);
+      // Assignable by construction, as for a field; only a concrete class's constructor is open,
+      // and whether the nested element class can write each container's name.
+      final var unnameable = firstUnnameableContainer(srcElement, tgtElement, parentPkg);
+      if (unnameable != null) {
+        error(parentSource, unnameableContainerMessage(parentSource, parentTarget, fieldName, unnameable, parentPkg));
+        return null;
+      }
+      final var badAlloc = firstNonAllocatableContainer(srcElement, tgtElement, copy, parentPkg);
       if (badAlloc != null) {
         error(parentSource, unallocatableContainerMessage(parentSource, parentTarget, fieldName, badAlloc));
         return null;
@@ -3345,12 +3355,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (inner == null) return null;
     // The nested class always fills its output through a helper, so each side is asked only
     // whether it can be allocated and assigned, never whether it has a copy constructor.
-    final var unassignable = firstUnassignableContainer(srcElement, tgtElement, inner.kind());
+    final var unassignable = firstUnassignableContainer(srcElement, tgtElement, inner.kind(), parentPkg);
     if (unassignable != null) {
       error(parentSource, unassignableContainerMessage(parentSource, parentTarget, fieldName, unassignable));
       return null;
     }
-    final var badAlloc = firstNonAllocatableContainer(srcElement, tgtElement, inner.kind());
+    final var unnameable = firstUnnameableContainer(srcElement, tgtElement, parentPkg);
+    if (unnameable != null) {
+      error(parentSource, unnameableContainerMessage(parentSource, parentTarget, fieldName, unnameable, parentPkg));
+      return null;
+    }
+    final var badAlloc = firstNonAllocatableContainer(srcElement, tgtElement, inner.kind(), parentPkg);
     if (badAlloc != null) {
       error(parentSource, unallocatableContainerMessage(parentSource, parentTarget, fieldName, badAlloc));
       return null;
@@ -3371,28 +3386,32 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * Writes each nested element class: its {@code forward} rebuilds one inner source container as
    * the target's, and {@code backward} the reverse, through the same helpers a field uses.
    */
-  private void emitNestedElements(final PrintWriter out, final Map<String, NestedElement> nested) {
+  private void emitNestedElements(
+    final PrintWriter out,
+    final Map<String, NestedElement> nested,
+    final String bridgePkg
+  ) {
     for (final var entry : nested.entrySet()) {
       final var element = entry.getValue();
       final var plan = element.plan();
       out.println();
       out.println("  private static final class " + entry.getKey() + " {");
       if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) {
-        emitRawContainerHelper(out, "forward", element.src(), element.tgt(), plan, "forward");
-        emitRawContainerHelper(out, "backward", element.tgt(), element.src(), plan, "backward");
+        emitRawContainerHelper(out, "forward", element.src(), element.tgt(), plan, "forward", bridgePkg);
+        emitRawContainerHelper(out, "backward", element.tgt(), element.src(), plan, "backward", bridgePkg);
       } else {
         switch (plan.kind()) {
           case LIST -> {
-            emitListHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), "forward");
-            emitListHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), "backward");
+            emitListHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), "forward", bridgePkg);
+            emitListHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), "backward", bridgePkg);
           }
           case SET -> {
-            emitSetHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), "forward");
-            emitSetHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), "backward");
+            emitSetHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), "forward", bridgePkg);
+            emitSetHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), "backward", bridgePkg);
           }
           case MAP_VALUES -> {
-            emitMapHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), "forward");
-            emitMapHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), "backward");
+            emitMapHelper(out, "forward", element.src(), element.tgt(), plan.subBridgeName(), "forward", bridgePkg);
+            emitMapHelper(out, "backward", element.tgt(), element.src(), plan.subBridgeName(), "backward", bridgePkg);
           }
           default -> throw new IllegalStateException("a nested element of kind " + plan.kind());
         }
@@ -3452,6 +3471,25 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (mods.contains(Modifier.PRIVATE)) return false;
     if (mods.contains(Modifier.PUBLIC)) return true;
     return processingEnv.getElementUtils().getPackageOf(m).equals(callerPackage);
+  }
+
+  /**
+   * Whether the generated bridge, emitted into {@code bridgePkg}, can name this type. A nested type
+   * is named through every type enclosing it, so each of them has to be reachable by the rule
+   * {@link #bindableFrom} applies to a member: private is out, public is in, and anything else is
+   * in only from its own package. A public class nested in one that is not public is therefore
+   * nameable beside it and nowhere else.
+   */
+  private boolean nameableFrom(final TypeElement type, final String bridgePkg) {
+    for (Element el = type; el instanceof TypeElement enclosing; el = enclosing.getEnclosingElement()) {
+      final var mods = enclosing.getModifiers();
+      if (mods.contains(Modifier.PRIVATE)) return false;
+      if (mods.contains(Modifier.PUBLIC)) continue;
+      if (!processingEnv.getElementUtils().getPackageOf(enclosing).getQualifiedName().contentEquals(bridgePkg)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**
@@ -3684,7 +3722,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Map<String, FieldPlan> fieldPlans,
     final List<Field> sourceFields,
     final List<Field> targetFields,
-    final Map<String, String> renames
+    final Map<String, String> renames,
+    final String bridgePkg
   ) {
     for (final var entry : fieldPlans.entrySet()) {
       final var fieldName = entry.getKey();
@@ -3694,29 +3733,29 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // Identity elements are normally copied inline, except where copiesThroughHelper says the
       // copy constructor cannot build the output correctly.
       if (plan.rawContainer()) {
-        emitRawContainerHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan, "forward");
-        emitRawContainerHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan, "backward");
+        emitRawContainerHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan, "forward", bridgePkg);
+        emitRawContainerHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan, "backward", bridgePkg);
         continue;
       }
       if (copiesThroughHelper(plan, plan.fwdContainerImpl())) {
-        emitRawContainerHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan, "forward");
+        emitRawContainerHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan, "forward", bridgePkg);
       }
       if (copiesThroughHelper(plan, plan.bwdContainerImpl())) {
-        emitRawContainerHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan, "backward");
+        emitRawContainerHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan, "backward", bridgePkg);
       }
       if (IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName())) continue;
       switch (plan.kind()) {
         case LIST -> {
-          emitListHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward");
-          emitListHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan.subBridgeName(), "backward");
+          emitListHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward", bridgePkg);
+          emitListHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan.subBridgeName(), "backward", bridgePkg);
         }
         case SET -> {
-          emitSetHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward");
-          emitSetHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan.subBridgeName(), "backward");
+          emitSetHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward", bridgePkg);
+          emitSetHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan.subBridgeName(), "backward", bridgePkg);
         }
         case MAP_VALUES -> {
-          emitMapHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward");
-          emitMapHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan.subBridgeName(), "backward");
+          emitMapHelper(out, "__fwd_" + fieldName, srcType, tgtType, plan.subBridgeName(), "forward", bridgePkg);
+          emitMapHelper(out, "__bwd_" + fieldName, tgtType, srcType, plan.subBridgeName(), "backward", bridgePkg);
         }
         default -> {
         }
@@ -3752,7 +3791,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror srcContainer,
     final TypeMirror tgtContainer,
     final FieldPlan plan,
-    final String direction
+    final String direction,
+    final String bridgePkg
   ) {
     final var identity = IDENTITY_ELEMENT_SENTINEL.equals(plan.subBridgeName());
     final var sub = plan.subBridgeName();
@@ -3772,7 +3812,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       concreteImplFqn(tgtContainer, plan.kind()),
       srcContainer
     );
-    out.println(rawOutDeclaration(tgtContainer, plan.kind(), identity));
+    out.println(rawOutDeclaration(tgtContainer, plan.kind(), identity, bridgePkg));
     final var element = plan.kind() == FieldPlan.Kind.MAP_VALUES ? "(e.getValue())" : "(x)";
     emitFill(out, tgtContainer, srcContainer, plan.kind(), identity ? null : sub + "." + direction + element);
     out.println("    return out;");
@@ -3788,14 +3828,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private String firstUnassignableContainer(
     final TypeMirror srcContainer,
     final TypeMirror tgtContainer,
-    final FieldPlan.Kind kind
+    final FieldPlan.Kind kind,
+    final String bridgePkg
   ) {
     final var types = processingEnv.getTypeUtils();
     for (final var container : List.of(srcContainer, tgtContainer)) {
       // A declared type nothing allocatable is an instance of may still be reachable through its
       // own builder, which is the route the reflective path takes for exactly this shape. The test
       // is the allocator's own, so a gate never refuses a container the emitter would have built.
-      if (builderAllocExpr(container, kind) != null) continue;
+      if (builderAllocExpr(container, kind, bridgePkg) != null) continue;
       final var implEl = processingEnv.getElementUtils().getTypeElement(concreteImplFqn(container, kind));
       if (implEl == null) continue;
       if (!types.isAssignable(types.erasure(implEl.asType()), types.erasure(container))) {
@@ -3813,16 +3854,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * produces the declared type. A {@code build()} returning something else fails its cast on the
    * first conversion, and emitting a call to it would move that failure into generated code.
    */
-  private String builderRouteFor(final TypeMirror container) {
+  private String builderRouteFor(final TypeMirror container, final String bridgePkg) {
     if (container.getKind() != TypeKind.DECLARED) return null;
     final var el = (TypeElement) ((DeclaredType) container).asElement();
     final var factory = staticBuilderMethod(el);
     if (factory == null || factory.getReturnType().getKind() != TypeKind.DECLARED) return null;
     final var builderEl = (TypeElement) ((DeclaredType) factory.getReturnType()).asElement();
-    // The bridge is emitted in the source's package, which need not be the container's, so a
-    // builder type that is not public cannot be named from where the call lands. Its own build()
-    // being public is not enough: a method on an inaccessible class is inaccessible with it.
-    if (!MirrorProps.publiclyNameable(builderEl)) return null;
+    // The call lands in the bridge's package, which need not be the builder's, and a method on a
+    // class that package cannot name is inaccessible however public the method itself is.
+    if (!nameableFrom(builderEl, bridgePkg)) return null;
     final var types = processingEnv.getTypeUtils();
     // All members, not the declared ones: build() may be inherited from a shared builder base, and
     // it produces the same value wherever it is written.
@@ -3842,15 +3882,60 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // The JDK default impls (ArrayList / LinkedHashSet / LinkedHashMap) always qualify; only a user
   // subtype
   // can hide its no-arg ctor.
+  /**
+   * The first of two containers held inside a field's type whose class the bridge's package cannot
+   * name, or null when it can name both. The nested element class writes each container's type as a
+   * parameter and a return type, so its erasure has to be nameable whatever the allocation. The
+   * allocation then adds nothing to ask: it writes that same class, casts a builder's result to it,
+   * or writes a public {@code java.base} default standing in for an interface. A field's own type
+   * is asked before any plan is made, which is why this is reached only for the containers inside
+   * it.
+   */
+  private String firstUnnameableContainer(
+    final TypeMirror srcContainer,
+    final TypeMirror tgtContainer,
+    final String bridgePkg
+  ) {
+    for (final var container : List.of(srcContainer, tgtContainer)) {
+      final var hidden = unnameableErasure(container, bridgePkg);
+      if (hidden != null) return hidden.getQualifiedName().toString();
+    }
+    return null;
+  }
+
+  private static String unnameableContainerMessage(
+    final TypeElement source,
+    final TypeElement target,
+    final String fieldName,
+    final String container,
+    final String bridgePkg
+  ) {
+    return (
+      "@Bridge " +
+      source.getSimpleName() +
+      " -> " +
+      target.getSimpleName() +
+      ": field '" +
+      fieldName +
+      "' container type '" +
+      container +
+      "' cannot be named from " +
+      packagePhrase(bridgePkg) +
+      ", where the bridge is generated — the helper converting it writes that type. Make it and" +
+      " every class enclosing it public, or supply an explicit @ViaMapper for this field."
+    );
+  }
+
   private String firstNonAllocatableContainer(
     final TypeMirror srcContainer,
     final TypeMirror tgtContainer,
-    final FieldPlan.Kind kind
+    final FieldPlan.Kind kind,
+    final String bridgePkg
   ) {
     for (final var container : List.of(srcContainer, tgtContainer)) {
       // A type whose builder makes it needs no constructor of its own, which is the point of
       // hiding one.
-      if (builderAllocExpr(container, kind) != null) continue;
+      if (builderAllocExpr(container, kind, bridgePkg) != null) continue;
       final var implFqn = concreteImplFqn(container, kind);
       final var implEl = processingEnv.getElementUtils().getTypeElement(implFqn);
       if (implEl != null && !hasPublicNoArgConstructor(implEl)) return implFqn;
@@ -4089,13 +4174,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * shape this route exists for. What keeps it honest is the probe, which admits a builder only
    * when its {@code build()} produces the declared type.
    */
-  private String builderAllocExpr(final TypeMirror container, final FieldPlan.Kind kind) {
+  private String builderAllocExpr(final TypeMirror container, final FieldPlan.Kind kind, final String bridgePkg) {
     if (!needsBuilderRoute(container, kind)) return null;
     // A container allocated by its builder carries whatever ordering build() chose, which nothing
     // here can pass a comparator to. A declared type promising an order would keep the promise only
     // by luck, so the route is not offered and the pairing is refused by name instead.
     if (promisesOrdering(container)) return null;
-    final var route = builderRouteFor(container);
+    final var route = builderRouteFor(container, bridgePkg);
     // Through Object, because two parameterizations of one type are unrelated: a build() declared
     // to return Buildable<Object> cannot be cast straight to Buildable<E>, and the raw type would
     // trade the unchecked warning for a rawtypes one.
@@ -4146,9 +4231,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private String helperOutDeclaration(
     final TypeMirror tgtContainer,
     final FieldPlan.Kind kind,
-    final boolean elementsPreserved
+    final boolean elementsPreserved,
+    final String bridgePkg
   ) {
-    final var viaBuilder = builderAllocExpr(tgtContainer, kind);
+    final var viaBuilder = builderAllocExpr(tgtContainer, kind, bridgePkg);
     if (viaBuilder != null) return outDeclaration(viaBuilder, true);
     final var implFqn = concreteImplFqn(tgtContainer, kind);
     final var arguments = allocTypeArguments(tgtContainer, kind);
@@ -4172,9 +4258,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private String rawOutDeclaration(
     final TypeMirror container,
     final FieldPlan.Kind kind,
-    final boolean elementsPreserved
+    final boolean elementsPreserved,
+    final String bridgePkg
   ) {
-    final var viaBuilder = builderAllocExpr(container, kind);
+    final var viaBuilder = builderAllocExpr(container, kind, bridgePkg);
     if (viaBuilder != null) return outDeclaration(viaBuilder, true);
     final var implFqn = concreteImplFqn(container, kind);
     if (
@@ -4343,13 +4430,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror srcContainer,
     final TypeMirror tgtContainer,
     final String subBridge,
-    final String direction
+    final String direction,
+    final String bridgePkg
   ) {
     out.println();
     if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
     out.println(helperSignature(name, srcContainer, tgtContainer));
     out.println("    if (src == null) return null;");
-    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false));
+    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false, bridgePkg));
     out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
     out.println("    return out;");
     out.println("  }");
@@ -4361,7 +4449,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror srcContainer,
     final TypeMirror tgtContainer,
     final String subBridge,
-    final String direction
+    final String direction,
+    final String bridgePkg
   ) {
     out.println();
     if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
@@ -4375,7 +4464,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       concreteImplFqn(tgtContainer, FieldPlan.Kind.SET),
       srcContainer
     );
-    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false));
+    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false, bridgePkg));
     emitFill(out, tgtContainer, srcContainer, FieldPlan.Kind.SET, subBridge + "." + direction + "(x)");
     out.println("    return out;");
     out.println("  }");
@@ -4612,7 +4701,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final TypeMirror srcContainer,
     final TypeMirror tgtContainer,
     final String subBridge,
-    final String direction
+    final String direction,
+    final String bridgePkg
   ) {
     out.println();
     if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
@@ -4626,7 +4716,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       concreteImplFqn(tgtContainer, FieldPlan.Kind.MAP_VALUES),
       srcContainer
     );
-    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true));
+    out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true, bridgePkg));
     emitFill(
       out,
       tgtContainer,
@@ -5166,6 +5256,72 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (name.equals("get" + cap) || (isBoolean && name.equals("is" + cap))) return name;
     }
     return null;
+  }
+
+  /**
+   * Whether the bridge, emitted into {@code bridgePkg}, can name the declared type of every field
+   * it reads, reporting the first it cannot. Each read is hoisted into a local declared with the
+   * field's own type: every source field for {@code forward}, and every target field for {@code
+   * backward} and {@code patch} except one a forward-only transform gives them nothing to read. A
+   * type the package cannot name makes that local, and with it the generated file, fail to compile
+   * whatever the field's plan would have been.
+   */
+  private boolean fieldTypesNameable(
+    final TypeElement source,
+    final TypeElement target,
+    final List<Field> sourceFields,
+    final List<Field> targetFields,
+    final Map<String, String> renames,
+    final Set<String> forwardOnlyTransforms,
+    final String bridgePkg
+  ) {
+    for (final var sf : sourceFields) {
+      final var sides = new ArrayList<TypeMirror>(2);
+      sides.add(sf.type());
+      if (!forwardOnlyTransforms.contains(sf.name())) {
+        sides.add(fieldByName(targetFields, renames.getOrDefault(sf.name(), sf.name())).type());
+      }
+      for (final var type : sides) {
+        final var hidden = unnameableErasure(type, bridgePkg);
+        if (hidden == null) continue;
+        error(
+          source,
+          "@Bridge " +
+            source.getSimpleName() +
+            " -> " +
+            target.getSimpleName() +
+            ": field '" +
+            sf.name() +
+            "' is declared as '" +
+            type +
+            "', and " +
+            hidden.getQualifiedName() +
+            " cannot be named from " +
+            packagePhrase(bridgePkg) +
+            ", where the bridge is generated — the bridge reads the field into a local of that type." +
+            " Make it and every class enclosing it public, or declare the @Bridge in its package."
+        );
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * The class {@code type} erases to when the bridge's package cannot name it, or null when it can.
+   * An array is named through its component type.
+   */
+  private TypeElement unnameableErasure(final TypeMirror type, final String bridgePkg) {
+    final var erased = processingEnv.getTypeUtils().erasure(type);
+    if (erased instanceof ArrayType array) return unnameableErasure(array.getComponentType(), bridgePkg);
+    if (!(erased instanceof DeclaredType declared) || !(declared.asElement() instanceof TypeElement element)) {
+      return null;
+    }
+    return nameableFrom(element, bridgePkg) ? null : element;
+  }
+
+  private static String packagePhrase(final String pkg) {
+    return pkg.isEmpty() ? "the unnamed package" : "package " + pkg;
   }
 
   private boolean sameNames(

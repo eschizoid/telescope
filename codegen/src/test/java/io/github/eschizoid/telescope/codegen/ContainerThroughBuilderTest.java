@@ -394,18 +394,21 @@ class ContainerThroughBuilderTest {
         """
       ),
       Arguments.of(
+        "the builder type is private",
+        """
+        public static Builder builder() { return new Builder(); }
+        private static final class Builder {
+          public Unusable<Object> build() { return new UnusableImpl<>(); }
+        }
+        """
+      ),
+      Arguments.of(
         "builder() is not static",
         """
         public Builder builder() { return new Builder(); }
         public static final class Builder {
           public Unusable<Object> build() { return new UnusableImpl<>(); }
         }
-        """
-      ),
-      Arguments.of(
-        "the builder type cannot be named",
-        """
-        public static Hidden builder() { return new Hidden(); }
         """
       )
     );
@@ -425,16 +428,6 @@ class ContainerThroughBuilderTest {
       %s}
       """.formatted(builderSurface.indent(2))
     );
-    // Only the last case needs it, and a type the others never mention costs them nothing.
-    final var hidden = ProcessorHarness.source(
-      "demo.Hidden",
-      """
-      package demo;
-      class Hidden {
-        public Unusable<Object> build() { return new UnusableImpl<>(); }
-      }
-      """
-    );
     final var impl = ProcessorHarness.source(
       "demo.UnusableImpl",
       """
@@ -446,13 +439,135 @@ class ContainerThroughBuilderTest {
       """
     );
     final var compilation = compile(
-      concat(elements(), List.of(container, hidden, impl), pair("demo.Unusable<demo.SA>", "demo.Unusable<demo.SB>"))
+      concat(elements(), List.of(container, impl), pair("demo.Unusable<demo.SA>", "demo.Unusable<demo.SB>"))
     );
 
     assertFalse(compilation.success(), () -> reason + ": should be refused; it compiled");
     assertTrue(
       compilation.hasError("which telescope cannot construct"),
       () -> reason + ": should be refused by name; saw " + compilation.errorMessages()
+    );
+  }
+
+  /**
+   * A container reached only through a builder whose type is not public, both declared in {@code
+   * demo}, and a bridged pair over it declared in {@code pairPkg}, which is where the bridge lands.
+   */
+  private static List<JavaFileObject> hiddenBuilderPair(final String pairPkg) {
+    return List.of(
+      ProcessorHarness.source(
+        "demo.Veiled",
+        """
+        package demo;
+        public abstract class Veiled<E> extends java.util.ArrayList<E> {
+          private static final long serialVersionUID = 1L;
+          protected Veiled() {}
+          public static VeiledBuilder builder() { return new VeiledBuilder(); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.VeiledBuilder",
+        """
+        package demo;
+        class VeiledBuilder {
+          public Veiled<Object> build() { return new VeiledImpl<>(); }
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.VeiledImpl",
+        """
+        package demo;
+        public final class VeiledImpl<E> extends Veiled<E> {
+          private static final long serialVersionUID = 1L;
+          public VeiledImpl() {}
+        }
+        """
+      ),
+      ProcessorHarness.source(
+        pairPkg + ".VSrc",
+        """
+        package %1$s;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        @Bridge(%1$s.VDst.class)
+        public record VSrc(demo.Veiled<demo.SA> items) {}
+        """.formatted(pairPkg)
+      ),
+      ProcessorHarness.source(
+        pairPkg + ".VDst",
+        "package %1$s; public record VDst(demo.Veiled<demo.SB> items) {}".formatted(pairPkg)
+      )
+    );
+  }
+
+  @Test
+  @DisplayName("a builder whose type is not public is a route from the package that declares it")
+  void aBuilderThatIsNotPublicIsARouteFromItsOwnPackage() {
+    // The bridge lands beside the builder, where a class that is not public is named like any
+    // other, and the reflective path reaches the same builder through a private lookup.
+    final var compilation = compile(concat(elements(), hiddenBuilderPair("demo")));
+
+    assertTrue(compilation.success(), () -> "should bridge: " + compilation.errorMessages());
+    final var bridge = compilation.generated().get("demo.VSrcBridge");
+    assertTrue(
+      bridge != null && bridge.contains("demo.Veiled.builder().build()"),
+      () -> "should allocate through the builder; saw " + bridge
+    );
+  }
+
+  @Test
+  @DisplayName("a builder nested without an access modifier is a route from its own package")
+  void aNestedBuilderThatIsNotPublicIsARouteFromItsOwnPackage() {
+    // Named through the public container enclosing it, so each type on the way out is asked in
+    // turn, and the inner one is reachable because the bridge shares its package.
+    final var container = ProcessorHarness.source(
+      "demo.Nestled",
+      """
+      package demo;
+      public abstract class Nestled<E> extends java.util.ArrayList<E> {
+        private static final long serialVersionUID = 1L;
+        protected Nestled() {}
+        public static Builder builder() { return new Builder(); }
+        static final class Builder {
+          public Nestled<Object> build() { return new NestledImpl<>(); }
+        }
+      }
+      """
+    );
+    final var impl = ProcessorHarness.source(
+      "demo.NestledImpl",
+      """
+      package demo;
+      public final class NestledImpl<E> extends Nestled<E> {
+        private static final long serialVersionUID = 1L;
+        public NestledImpl() {}
+      }
+      """
+    );
+    final var compilation = compile(
+      concat(elements(), List.of(container, impl), pair("demo.Nestled<demo.SA>", "demo.Nestled<demo.SB>"))
+    );
+
+    assertTrue(compilation.success(), () -> "should bridge: " + compilation.errorMessages());
+    final var bridge = compilation.generated().get("demo.BSrcBridge");
+    assertTrue(
+      bridge != null && bridge.contains("demo.Nestled.builder().build()"),
+      () -> "should allocate through the builder; saw " + bridge
+    );
+  }
+
+  @Test
+  @DisplayName("a builder whose type is not public is not a route from another package")
+  void aBuilderThatIsNotPublicIsNoRouteFromAnotherPackage() {
+    // The same declarations with the bridge emitted elsewhere, where the builder's build() is a
+    // method on a class that package cannot name, however public the method itself is.
+    final var compilation = compile(concat(elements(), hiddenBuilderPair("elsewhere")));
+
+    assertFalse(compilation.success(), "should be refused; it compiled");
+    assertTrue(
+      compilation.hasError("which telescope cannot construct"),
+      () -> "should be refused by name; saw " + compilation.errorMessages()
     );
   }
 

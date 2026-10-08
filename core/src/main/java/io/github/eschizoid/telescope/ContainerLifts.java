@@ -8,7 +8,6 @@ import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.Ordering;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
-import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Modifier;
@@ -27,6 +26,7 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.SortedSet;
@@ -659,19 +659,15 @@ final class ContainerLifts {
 
   /**
    * An allocator that hands the source's comparator to the class's comparator constructor, which
-   * the shared rules found callable through a public lookup.
+   * the shared rules found callable through the lookup that binds its no-argument one.
    */
   private static Function<Object, Object> carrying(
     final Class<?> raw,
     final ContainerView.Kind kind,
     final Function<Object, Object> plain
   ) {
-    final MethodHandle ctor;
-    try {
-      ctor = MethodHandles.publicLookup().findConstructor(raw, MethodType.methodType(void.class, Comparator.class));
-    } catch (final NoSuchMethodException | IllegalAccessException e) {
-      throw new IllegalStateException("Deep map: " + canonical(raw) + " hides its Comparator constructor", e);
-    }
+    // The shared rules decide to carry only where this same binding found the constructor.
+    final var ctor = Objects.requireNonNull(Beans.publicConstructor(raw, Comparator.class));
     return input -> {
       final var comparator = comparatorOf(kind, input);
       // Natural ordering is what the no-argument constructor already produces, and a constructor

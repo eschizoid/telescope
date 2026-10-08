@@ -82,7 +82,7 @@ class SortedComparatorParameterParityTest {
     return new Pair(src, classes.get(PACKAGE + "." + prefix + "Tgt"), bridge.getMethod("forward", src));
   }
 
-  private static final String REFUSAL = "declares no constructor taking a Comparator";
+  private static final String REFUSAL = "declares no public constructor taking a Comparator";
 
   /**
    * The remedy both refusals name: a row converting the whole component, which works for any side.

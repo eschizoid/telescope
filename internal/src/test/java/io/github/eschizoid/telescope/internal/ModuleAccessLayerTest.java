@@ -9,12 +9,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.Serializable;
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.module.Configuration;
 import java.lang.module.ModuleFinder;
 import java.lang.reflect.Executable;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -371,6 +373,49 @@ class ModuleAccessLayerTest {
         bean
       );
     }
+  }
+
+  @Test
+  @DisplayName("a public constructor on a class that is not public is bound across the module boundary")
+  void aPublicConstructorIsBoundAcrossTheModuleBoundary() throws Throwable {
+    final var self = layer.findModule(INTERNAL).orElseThrow();
+    final var appModule = layer.findModule("app").orElseThrow();
+    final var hidden = appClass("demo.HidBean");
+    assertFalse(self.canRead(appModule), "nothing has added the read edge yet");
+    assertTrue(appModule.isOpen("demo", self), "the package is opened to this module");
+    assertFalse(Modifier.isPublic(hidden.getModifiers()), "so only a private lookup reaches the class");
+
+    final var ctor = (MethodHandle) call(
+      "Beans",
+      "publicConstructor",
+      new Class<?>[] { Class.class, Class[].class },
+      hidden,
+      new Class<?>[0]
+    );
+
+    assertNotNull(ctor, "bound through the private lookup, after adding the read edge it needs");
+    assertEquals(hidden, ctor.invoke().getClass());
+  }
+
+  @Test
+  @DisplayName("a public constructor in a package neither exported nor opened to this module is not bound")
+  void aConstructorNoLookupCanReachIsNotBound() throws Throwable {
+    final var self = layer.findModule(INTERNAL).orElseThrow();
+    final var appModule = layer.findModule("app").orElseThrow();
+    final var kept = appClass("unexported.Kept");
+    assertFalse(appModule.isExported("unexported"), "the public lookup cannot reach the package");
+    assertFalse(appModule.isOpen("unexported", self), "and neither can a private one");
+    assertTrue(Modifier.isPublic(kept.getConstructor(String.class).getModifiers()), "though the constructor is public");
+
+    assertNull(
+      call(
+        "Beans",
+        "publicConstructor",
+        new Class<?>[] { Class.class, Class[].class },
+        kept,
+        new Class<?>[] { String.class }
+      )
+    );
   }
 
   /** A writer's {@code construct} for one property, {@code name}, holding {@code value}. */

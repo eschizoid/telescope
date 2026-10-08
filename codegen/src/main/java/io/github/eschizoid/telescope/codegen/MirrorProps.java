@@ -3,7 +3,6 @@ package io.github.eschizoid.telescope.codegen;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertySystem;
 import java.util.List;
-import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
@@ -216,7 +215,7 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   public TypeMirror comparatorParameter(final TypeMirror impl, final List<TypeMirror> arguments) {
     final var implEl = elementOf(types.erasure(impl));
     final var comparator = elements.getTypeElement("java.util.Comparator");
-    if (implEl == null || comparator == null || !publiclyNameable(implEl)) return null;
+    if (implEl == null || comparator == null) return null;
     final var parameters = implEl.getTypeParameters();
     final var substitutes = !parameters.isEmpty() && !arguments.isEmpty();
     if (substitutes && parameters.size() != arguments.size()) return null;
@@ -230,17 +229,6 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
       return ((ExecutableType) types.asMemberOf(owner, ctor)).getParameterTypes().getFirst();
     }
     return null;
-  }
-
-  /**
-   * Whether this type can be named from any package. A nested type qualifies only when every type
-   * enclosing it does too, since naming the inner one means naming the outer ones first.
-   */
-  static boolean publiclyNameable(final TypeElement type) {
-    for (Element el = type; el instanceof TypeElement enclosing; el = enclosing.getEnclosingElement()) {
-      if (!enclosing.getModifiers().contains(Modifier.PUBLIC)) return false;
-    }
-    return true;
   }
 
   /** The {@link TypeElement} of a declared type handle, or {@code null}. */

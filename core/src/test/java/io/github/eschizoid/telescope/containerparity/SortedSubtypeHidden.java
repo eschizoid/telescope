@@ -4,8 +4,8 @@ import java.util.Comparator;
 import java.util.TreeMap;
 
 /**
- * A class that is not public, carrying a public comparator constructor. The constructor's own
- * access says nothing about whether the class holding it can be reached.
+ * A class that is not public, carrying a public comparator constructor. It is reachable from its
+ * own package, where the bridge reading it is emitted.
  */
 class SortedSubtypeHidden<K, V> extends TreeMap<K, V> {
 
