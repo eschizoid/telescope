@@ -9,6 +9,9 @@ and propose remediations where the gap is structural.
 measured.** Separate runs land on runners of different speeds, so a ratio built from two of them is not a measurement —
 hence the two columns below, read as the caption describes.
 
+The latest full run, with four forks on every row, is [Run 8](#run-8-2026-10-08-every-tier-four-forks). The README's
+figures come from it.
+
 | Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio | across runs            | allocation        |
 | ----------------------------------- | ---------------: | ---------------: | ----: | ---------------------- | ----------------- |
 | flat (5 scalars)                    | 3.155 ± 0.019 ns | 3.362 ± 0.011 ns | 1.07x | ~1.07x (one run 1.13x) | 32 B/op both      |
@@ -306,6 +309,72 @@ Three things follow:
 - **This is not the residual over MapStruct.** On R6 every MapStruct fork sits between 61.77 and 63.11 ns, and the fast
   forks of the three telescope rows still sit about 4 ns above that. See
   [So is there a real gap?](#so-is-there-a-real-gap).
+
+## Run 8, 2026-10-08: every tier, four forks
+
+GitHub Actions run 37761344960 measured every row of `MapStructComparisonBenchmark` on `main` at `f7be3f30`. It used
+`ubuntu-latest`, 4 forks, 4 warmup and 8 measured iterations of 2 s each, and `-Pjmh.profilers=gc`. It is the first full
+run after same-typed containers began to be copied rather than shared. The README's figures come from it.
+
+MapStruct's rows are the control, and every ratio below is read within this run. A range replaces a single ratio where
+the two rows' error bands overlap.
+
+| Row, codegen against MapStruct | MapStruct (ns/op) | telescope `BRIDGE.read` (ns/op) | ratio        | allocation, B/op       |
+| ------------------------------ | ----------------: | ------------------------------: | ------------ | ---------------------- |
+| flat forward                   |     3.135 ± 0.011 |                   3.359 ± 0.019 | 1.07         | 32 both                |
+| flat backward                  |     3.226 ± 0.010 |                   3.355 ± 0.013 | 1.04         | 32 both                |
+| nested forward                 |     4.321 ± 0.024 |                   5.580 ± 0.012 | 1.29         | 48 both                |
+| nested backward                |     5.288 ± 0.023 |                   5.414 ± 0.015 | 1.02         | 48 both                |
+| deep forward                   |    62.215 ± 0.176 |                  68.245 ± 2.062 | 1.10         | 376 both               |
+| deep backward                  |    65.792 ± 0.421 |                  69.136 ± 3.019 | 1.00 to 1.10 | 376 both               |
+| Map, 100 entries, forward      |     1340.6 ± 76.8 |                   1523.4 ± 56.8 | 1.14         | 7,528 both             |
+| Map, 100 entries, backward     |      1307.6 ± 8.8 |                    1437.4 ± 4.6 | 1.10         | 7,528 both             |
+| Set, 100 entries, forward      |     1493.8 ± 55.8 |                    1450.2 ± 5.7 | 0.93 to 1.01 | 7,568 and 7,576, below |
+| Set, 100 entries, backward     |     3114.5 ± 12.0 |                   3189.6 ± 22.9 | 1.02         | 7,544 both             |
+
+The other codegen call shapes on the same run, in ns/op: `static forward` measured 3.128 on flat, 5.911 on nested and
+66.222 on deep. `BRIDGE_FN` measured 3.131, 5.907 and 68.634. Every one of them allocated what MapStruct allocated on
+its tier.
+
+The runtime rows, as ratios to MapStruct on the same run:
+
+| Row                       | runtime (ns/op) | ratio | allocation, B/op                 |
+| ------------------------- | --------------: | ----: | -------------------------------- |
+| flat forward              |  10.470 ± 0.061 |  3.34 | 32, same as MapStruct            |
+| flat backward             |   9.217 ± 0.029 |  2.86 | 32, same as MapStruct            |
+| nested forward            |  11.567 ± 0.022 |  2.68 | 48, same as MapStruct            |
+| nested backward           |  10.646 ± 0.127 |  2.01 | 48, same as MapStruct            |
+| deep forward              |  78.824 ± 0.202 |  1.27 | 376, same as MapStruct           |
+| deep backward             |  81.799 ± 0.193 |  1.24 | 376, same as MapStruct           |
+| Map, 100 entries, forward |    1499.9 ± 3.9 |  1.12 | 7,560, 32 more than MapStruct    |
+| Set, 100 entries, forward |    1536.6 ± 3.7 |  1.03 | 7,576, same as telescope codegen |
+
+### Reading the run per fork
+
+Four rows are bimodal across forks, and the pooled figure hides it.
+
+- **Deep forward.** Three telescope forks measured 66.3 to 66.5 ns and one measured 73.7, the slower compiled shape
+  [Run 5](#run-5--deep-forward-across-forks) describes. MapStruct's four forks measured 62.0 to 62.4. The three fast
+  forks put deep forward at about 1.07 times, and the pooled figure is 1.10. Deep backward has the same split, with one
+  telescope fork at 77.1 ns.
+- **Deep forward through `BRIDGE_FN`.** Its forks measured 72.4, 65.9, 70.2 and 66.1 ns. The two fast forks sit with
+  `static forward`, which measured 66.1 to 66.3 in every fork, and the pooled figure is 68.634.
+- **Map forward.** MapStruct's forks measured 1544, 1268, 1271 and 1279 ns. Telescope's measured 1435, 1614, 1438
+  and 1606. Comparing the fast forks of each side gives about 1.13 times, close to the pooled 1.14. Map backward has no
+  split, and it measured 1.10 times.
+- **Set forward.** MapStruct's forks measured 1443, 1642, 1448 and 1442 ns, and telescope's all measured 1447 to 1455.
+  The one slow MapStruct fork is what pulls the pooled ratio below one. Comparing the fast forks gives about 1.00 times.
+
+Set forward is also the one row where allocation differs. Telescope allocated 7,576 B/op in every fork. MapStruct
+allocated 7,576 in three forks and 7,544 in the fourth, which is the same fork that ran slow, so its pooled figure is
+7,568. Telescope never allocated more than MapStruct's usual figure on this row.
+
+### The Map row since the headline run
+
+The headline run, Actions 34470676359, measured the Map row as a tie at 1262 against 1244 ns. This run measures it at
+1.14 times forward and 1.10 times backward, with disjoint bands. Several container changes landed on `main` between the
+two runs, and the two were taken on different runners. A separate investigation is checking whether the difference is a
+regression. This document doesn't name a cause.
 
 ## So is there a real gap?
 
