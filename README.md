@@ -145,25 +145,27 @@ Same-typed JDK collections are copied rather than shared, so changing the target
 
 ## Measured performance
 
-In the latest run, telescope's generated mappers took between about the same time as MapStruct and 1.29 times its time,
-depending on the tier and direction. They allocated the same bytes per call as MapStruct on every row. The one exception
-is in MapStruct's own Set forward row, where one of its four forks allocated 32 bytes less than the other three.
+In the latest run, telescope's generated mappers took between about the same time as MapStruct and 1.37 times its time,
+depending on tier, direction and call shape. They allocated the same bytes per call as MapStruct on every row. The one
+exception is in MapStruct's own Set forward row, where one of its four forks allocated 32 bytes less than the other
+three.
 
 <!-- metrics: from MapStructComparisonBenchmark, Actions run 37761344960 -->
 
-| Tier, generated mapper against MapStruct | forward time       | backward time      | bytes per call, both sides |
-| ---------------------------------------- | ------------------ | ------------------ | -------------------------- |
-| flat, 5 scalars                          | 1.07 times         | 1.04 times         | 32                         |
-| nested, one nested type                  | 1.29 times         | 1.02 times         | 48                         |
-| deep, 3 levels and list hops             | 1.10 times         | 1.00 to 1.10 times | 376                        |
-| Map field, 100 entries                   | 1.14 times         | 1.10 times         | 7,528                      |
-| Set field, 100 entries                   | 0.93 to 1.01 times | 1.02 times         | 7,576 forward, 7,544 back  |
+| Tier, `BRIDGE.read` against MapStruct | forward time       | backward time      | bytes per call, telescope |
+| ------------------------------------- | ------------------ | ------------------ | ------------------------- |
+| flat, 5 scalars                       | 1.07 times         | 1.04 times         | 32                        |
+| nested, one nested type               | 1.29 times         | 1.02 times         | 48                        |
+| deep, 3 levels and list hops          | 1.10 times         | 1.00 to 1.10 times | 376                       |
+| Map field, 100 entries                | 1.14 times         | 1.10 times         | 7,528                     |
+| Set field, 100 entries                | 0.93 to 1.01 times | 1.02 times         | 7,576 forward, 7,544 back |
 
-The table comes from GitHub Actions run 37761344960 on `main` at `f7be3f30`, using the included JMH workloads with
-MapStruct 1.6.3 on JDK 25. The run used 4 forks of 8 measured iterations each. MapStruct's own rows are the control, so
-each ratio is read within this one run. Where the error bands of the two rows overlap, the table gives a range instead
-of one ratio. The [methodology, per-fork figures, and earlier runs](docs/perf-mapstruct-comparison.md) are recorded
-separately.
+The table times the composable `BRIDGE.read` value. The `BRIDGE_FN` constant and the static `forward` method measured
+1.00 times MapStruct forward on flat, 1.37 times on nested, and 1.06 to 1.10 times on deep. The table comes from GitHub
+Actions run 37761344960 on `main` at `f7be3f30`, using the included JMH workloads with MapStruct 1.6.3 on JDK 25. The
+run used 4 forks of 8 measured iterations each. MapStruct's own rows are the control, so each ratio is read within this
+one run. Where the error bands of the two rows overlap, the table gives a range instead of one ratio. The
+[methodology, per-fork figures, and earlier runs](docs/perf-mapstruct-comparison.md) are recorded separately.
 
 Runtime mappers are slower than generated ones, and the gap shrinks as the work per call grows. Without codegen,
 `Telescope.mapper(...)` composes each record or bean pair into a single `MethodHandle`. On the same run it measured 3.34
@@ -335,8 +337,8 @@ Rows handle the cases that same-name matching can't. A field with a different na
 The rest of this README uses these terms.
 
 - A **typed path** is a `Telescope<S, A>` value built from method references, such as `EMAILS` at the top of this page.
-- A **runtime mapper** is a mapper built while the program runs, by `Telescope.mapper`, `Telescope.map`, or
-  `Telescope.fromMap`, with no annotations and no build step.
+- A **runtime mapper** is a mapper built while the program runs, by `Telescope.mapper`, `Telescope.mapperForward`,
+  `Telescope.merge`, or `Telescope.fromMap`, with no annotations and no build step.
 - A **generated mapper** is the conversion the `telescope-codegen` processor writes at compile time for `@Bridge` or
   `@FromMap`.
 
@@ -774,9 +776,9 @@ Everything is published to Maven Central under `io.github.eschizoid`.
 | `telescope-quarkus`             | A Quarkus CDI extension with the same registry shape. Compiled and CI-tested against Quarkus 3.40.1.                                                                                                                                                              |
 
 Installation snippets, annotation-processor ordering with Lombok, and JPMS setup are in
-[docs/codegen.md](docs/codegen.md). On the module path, a runtime mapper converts an application module's types once
-that module opens their package to `io.github.eschizoid.telescope.internal`. An unqualified `opens` works too. Telescope
-adds the read edge to the application module itself.
+[docs/codegen.md](docs/codegen.md). On the module path, typed paths and runtime mappers work on an application module's
+types once that module opens their package to `io.github.eschizoid.telescope.internal`. An unqualified `opens` works
+too. Telescope adds the read edge to the application module itself.
 
 ---
 

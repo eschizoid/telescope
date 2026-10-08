@@ -351,12 +351,14 @@ The runtime rows, as ratios to MapStruct on the same run:
 
 ### Reading the run per fork
 
-Three rows are bimodal across forks, and the pooled figure hides it.
+Four rows are bimodal across forks, and the pooled figure hides it.
 
 - **Deep forward.** Three telescope forks measured 66.3 to 66.5 ns and one measured 73.7, the slower compiled shape
   [Run 5](#run-5--deep-forward-across-forks) describes. MapStruct's four forks measured 62.0 to 62.4. The three fast
   forks put deep forward at about 1.07 times, and the pooled figure is 1.10. Deep backward has the same split, with one
   telescope fork at 77.1 ns.
+- **Deep forward through `BRIDGE_FN`.** Its forks measured 72.4, 65.9, 70.2 and 66.1 ns. The two fast forks sit with
+  `static forward`, which measured 66.1 to 66.3 in every fork, and the pooled figure is 68.634.
 - **Map forward.** MapStruct's forks measured 1544, 1268, 1271 and 1279 ns. Telescope's measured 1435, 1614, 1438
   and 1606. Comparing the fast forks of each side gives about 1.13 times, close to the pooled 1.14. Map backward has no
   split, and it measured 1.10 times.
