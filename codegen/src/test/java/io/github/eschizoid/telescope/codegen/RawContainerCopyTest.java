@@ -83,7 +83,9 @@ class RawContainerCopyTest {
   }
 
   @Test
-  @DisplayName("a raw use with no public no-argument constructor is refused by name, as a field and as an element")
+  @DisplayName(
+    "a raw use with no no-argument constructor a rebuild can call is refused by name, as a field and as an element"
+  )
   void aCopyIntoAClassWithNoConstructorIsRefused() {
     // The compile-time world does not probe a concrete class's constructors, so the shared spec
     // accepts the copy and the processor's allocation check is what refuses it. Without that
@@ -91,7 +93,7 @@ class RawContainerCopyTest {
     // that cannot resolve; only the processor's own diagnostic, raised on the annotated record,
     // tells the user which field and which class.
     final var refusal =
-      "@Bridge Src -> Tgt: field 'items' container type 'demo.Sized' has no public no-arg constructor";
+      "@Bridge Src -> Tgt: field 'items': Deep map: demo.Sized has no no-argument constructor a rebuild can call";
     for (final var pair : List.of(
       List.of("java.util.ArrayList", "Sized"),
       List.of("java.util.List<java.util.ArrayList>", "java.util.List<Sized>")

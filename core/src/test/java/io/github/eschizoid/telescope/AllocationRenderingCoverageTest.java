@@ -32,9 +32,10 @@ class AllocationRenderingCoverageTest {
   @DisplayName("every declared type the shared table answers for is rendered by this module")
   void everyTableEntryIsRendered() throws Exception {
     final Method render = ContainerLifts.class.getDeclaredMethod(
-      "specAllocatorFor",
-      Class.class,
-      ContainerView.Kind.class
+      "rendered",
+      Allocation.Build.class,
+      ContainerView.Kind.class,
+      Class.class
     );
     render.setAccessible(true);
 
@@ -58,13 +59,14 @@ class AllocationRenderingCoverageTest {
     final var build = (Allocation.Build) decision;
     final var label = declared.getName() + " as " + kind;
 
+    // A container built from its key class is handed one, as the declaration naming it would be.
+    final Class<?> keyClass = build.call() == Allocation.Call.KEY_CLASS ? ContainerView.Kind.class : null;
     @SuppressWarnings("unchecked")
-    final var rendered = (Function<Object, Object>) render.invoke(null, declared, kind);
+    final var rendered = (Function<Object, Object>) render.invoke(null, build, kind, keyClass);
     assertNotNull(rendered, () -> label + " is decided but nothing renders it");
 
-    final var made = rendered.apply(
-      kind == ContainerView.Kind.MAP_VALUES ? Map.of("kind", "value") : List.of("a", "b")
-    );
+    final Object source = kind == ContainerView.Kind.MAP_VALUES ? Map.of("kind", "value") : List.of("a", "b");
+    final var made = rendered.apply(source);
     assertEquals(
       build.implName(),
       made.getClass().getName(),

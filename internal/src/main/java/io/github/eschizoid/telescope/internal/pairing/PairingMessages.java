@@ -209,6 +209,86 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * An interface or abstract container type whose family builds a class that is not one of it, so
+   * nothing a rebuild can make fits the field.
+   */
+  public static String noDefaultImplementation(final String declared, final String familyDefault) {
+    return (
+      "Deep map: " +
+      declared +
+      " has no instance of its own, and the class a rebuild builds in its place, " +
+      familyDefault +
+      ", is not a " +
+      declared +
+      ". Declare the field as a concrete container, or convert it with an explicit Mapping.via(...) row."
+    );
+  }
+
+  /**
+   * A container class with no no-argument constructor that the code rebuilding it can call: none at
+   * all, a private one, or a package-private or protected one declared in a package the rebuild is
+   * not generated into.
+   */
+  public static String noReachableConstructor(final String declared) {
+    return (
+      "Deep map: " +
+      declared +
+      " has no no-argument constructor a rebuild can call. A public one is called from anywhere, and a" +
+      " package-private or protected one only by a rebuild generated into its own package. Declare one," +
+      " or convert the field with an explicit Mapping.via(...) row."
+    );
+  }
+
+  /** A container built from the class of its keys, declared without naming one. */
+  public static String noKeyClass(final String declared) {
+    return (
+      "Deep map: " +
+      declared +
+      " is built from the class of its keys, and this declaration names none. Declare its key type, or" +
+      " convert the field with an explicit Mapping.via(...) row."
+    );
+  }
+
+  /**
+   * The start of the refusal a sorted container's insert earns, up to the class of the element or
+   * key it could not order, which only the value being inserted can name. A renderer that has the
+   * value appends its class, {@link #unorderableInsertComparable}, and {@link
+   * #unorderableInsertAdvice}; one writing code for a value it does not have writes the same three
+   * pieces around the expression that will.
+   */
+  public static String unorderableInsertHead(final String container, final boolean map) {
+    return "Deep map: " + container + (map ? " keeps its keys in order, and " : " keeps its elements in order, and ");
+  }
+
+  /** The middle of that refusal, after the class of the value it could not order. */
+  public static String unorderableInsertComparable(final boolean comparable) {
+    return comparable
+      ? " could not be ordered there, though its type implements Comparable"
+      : " could not be ordered there, and its type does not implement Comparable";
+  }
+
+  /**
+   * The middle of that refusal where no value can be named: a bulk insert failed, and inserting the
+   * same source one value at a time met nothing that failed.
+   */
+  public static String unorderableInsertUnnamed(final boolean map) {
+    return (
+      (map ? "a key" : "an element") +
+      " could not be ordered there, which a second pass over the source did not meet again to name"
+    );
+  }
+
+  /** The end of that refusal: where an ordering could come from instead. */
+  public static String unorderableInsertAdvice(final boolean map) {
+    return (
+      (map ? ". Supply an ordering these keys accept" : ". Supply an ordering these elements accept") +
+      " through a Mapping.via(...) row, or declare the target as a " +
+      (map ? "map" : "set") +
+      " that keeps no order. The cause is the cast itself."
+    );
+  }
+
   /** Terminal shape mismatch — no branch of the compatibility lattice applies. */
   public static String incompatibleShapes(final String componentName, final String srcType, final String tgtType) {
     return (

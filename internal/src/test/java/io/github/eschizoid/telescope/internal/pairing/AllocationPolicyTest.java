@@ -102,22 +102,15 @@ class AllocationPolicyTest {
   }
 
   @Test
-  @DisplayName("a type with no constructor a rebuild can call carries the sentence to refuse it with")
-  void enumMapCarriesItsRefusal() {
-    final var refuse = assertInstanceOf(Allocation.Refuse.class, RULES.allocationFor(EnumMap.class, Kind.MAP_VALUES));
+  @DisplayName("a map built from its key class names the call that hands it one")
+  void enumMapIsBuiltFromItsKeyClass() {
+    // The only row whose constructor takes something a source does not carry: the class of its
+    // keys, which comes from the declaration. Whether a declaration names one is asked where the
+    // declaration is in hand, so the table answers for the class alone.
+    final var build = assertInstanceOf(Allocation.Build.class, RULES.allocationFor(EnumMap.class, Kind.MAP_VALUES));
 
-    // Not the whole sentence, which would teach the next reader to fix a red gate by pasting
-    // prose. What it has to convey: the escape hatch, and the path that does build one.
-    assertTrue(refuse.reason().contains("Class<K>"), refuse::reason);
-    assertTrue(refuse.reason().contains("Mapping.via"), refuse::reason);
-    assertTrue(refuse.reason().contains("codegen"), refuse::reason);
-    // These are the only refusal words any test reads, which is sound only while this is the only
-    // row that refuses. A second one would arrive with its sentence unasserted.
-    assertEquals(
-      1,
-      EXPECTED.values().stream().map(Row::decision).filter(Allocation.Refuse.class::isInstance).count(),
-      "a second refusing row needs its own words asserted"
-    );
+    assertEquals("java.util.EnumMap", build.implName());
+    assertEquals(Call.KEY_CLASS, build.call());
   }
 
   @Test
@@ -146,13 +139,6 @@ class AllocationPolicyTest {
     assertNull(RULES.allocationFor(SortedMap.class, Kind.LIST));
     assertNull(RULES.allocationFor(Collection.class, Kind.MAP_VALUES));
   }
-
-  /**
-   * Stands for a row that refuses. The words it refuses with are pinned by {@link
-   * #enumMapCarriesItsRefusal()}, so repeating them here would give two places to edit and no
-   * second opinion.
-   */
-  private static final Allocation REFUSED = new Allocation.Refuse("");
 
   /**
    * What every declared row is expected to decide, stated where the table is not.
@@ -199,7 +185,7 @@ class AllocationPolicyTest {
     ),
     Map.entry("java.util.IdentityHashMap", map("java.util.IdentityHashMap", Call.COUNT)),
     Map.entry("java.util.WeakHashMap", map("java.util.WeakHashMap", Call.TABLE_ARITHMETIC)),
-    Map.entry("java.util.EnumMap", new Row(Kind.MAP_VALUES, REFUSED))
+    Map.entry("java.util.EnumMap", map("java.util.EnumMap", Call.KEY_CLASS))
   );
 
   private static Row list(final String implName, final Call call) {

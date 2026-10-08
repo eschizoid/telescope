@@ -27,8 +27,8 @@ class ContainerImplSelectionTest {
   @Test
   @DisplayName("a field typed as an adopter's own interface is reported, not filled with a default impl")
   void adopterInterfaceFieldIsReported() {
-    // concreteImplFqn falls through to the family default for anything it cannot instantiate, and
-    // ArrayList is not assignable to the declared type.
+    // The shared allocation rules build an interface the table does not name as its family's
+    // default, and ArrayList is not one of the declared type.
     final var compilation = compile(
       ProcessorHarness.source(
         "demo.MyListIface",
@@ -51,7 +51,7 @@ class ContainerImplSelectionTest {
 
     assertFalse(compilation.success(), "telescope cannot construct an adopter's interface");
     assertTrue(
-      compilation.hasError("which telescope cannot construct"),
+      compilation.hasError("has no instance of its own"),
       () -> "the declared type is the cause and should be named: " + compilation.errorMessages()
     );
     assertFalse(
@@ -96,5 +96,63 @@ class ContainerImplSelectionTest {
       compilation.success(),
       () -> "both subtypes must be nameable from the same bridge: " + compilation.errorMessages()
     );
+  }
+
+  @Test
+  @DisplayName("each container is allocated through the call the shared allocation rules decide for it")
+  void eachContainerIsAllocatedThroughTheDecidedCall() {
+    // A container sized from the wrong number is the right class with the right contents, so only
+    // the text can tell. Each row is a class whose call differs from the plain no-argument one the
+    // helper writes for a class the rules build as itself.
+    final var compilation = compile(
+      ProcessorHarness.source("demo.EA", "package demo; public record EA(String v) {}"),
+      ProcessorHarness.source("demo.EB", "package demo; public record EB(String v) {}"),
+      ProcessorHarness.source("demo.Day", "package demo; public enum Day { MON }"),
+      ProcessorHarness.source(
+        "demo.SSrc",
+        """
+        package demo;
+        import io.github.eschizoid.telescope.annotations.Bridge;
+        import java.util.List;
+        import java.util.Map;
+        @Bridge(demo.SDst.class)
+        public record SSrc(
+          List<EA> deque,
+          List<EA> vector,
+          Map<String, EA> identity,
+          Map<String, EA> weak,
+          Map<Day, EA> byDay
+        ) {}
+        """
+      ),
+      ProcessorHarness.source(
+        "demo.SDst",
+        """
+        package demo;
+        public record SDst(
+          java.util.Deque<EB> deque,
+          java.util.Vector<EB> vector,
+          java.util.IdentityHashMap<String, EB> identity,
+          java.util.WeakHashMap<String, EB> weak,
+          java.util.EnumMap<Day, EB> byDay
+        ) {}
+        """
+      )
+    );
+
+    assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+    final var bridge = compilation.generated().get("demo.SSrcBridge");
+    for (final var allocation : List.of(
+      // An element count, which a list and the two identity-sized maps take as it is.
+      "new java.util.ArrayDeque<demo.EB>(src.size())",
+      "new java.util.Vector<demo.EB>(src.size())",
+      "new java.util.IdentityHashMap<java.lang.String, demo.EB>(src.size())",
+      // A table capacity, computed where the JDK ships no factory to compute it.
+      "new java.util.WeakHashMap<java.lang.String, demo.EB>((int) Math.ceil(src.size() / 0.75d))",
+      // The key class, which is all an EnumMap can be built from.
+      "new java.util.EnumMap<demo.Day, demo.EB>(demo.Day.class)"
+    )) {
+      assertTrue(bridge.contains(allocation), () -> "expected " + allocation + " in\n" + bridge);
+    }
   }
 }

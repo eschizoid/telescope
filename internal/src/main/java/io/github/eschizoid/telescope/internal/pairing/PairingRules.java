@@ -106,6 +106,8 @@ public final class PairingRules<T> {
         );
       }
       if (elements == ElementMatch.SAME) {
+        final var classless = (collection || map) ? copyRefusal(srcType, tgtType) : null;
+        if (classless != null) return new PairDecision.Incompatible<>(classless);
         final var allocable =
           (collection || map) && props.copyAllocability(srcType, tgtType) != PropertySystem.Allocability.NOT_ALLOCABLE;
         if (collection && allocable) return new PairDecision.CollectionCopy<>();
@@ -625,18 +627,7 @@ public final class PairingRules<T> {
     map(ConcurrentSkipListMap.class, ConcurrentSkipListMap.class, Allocation.Call.ORDERING),
     map(IdentityHashMap.class, IdentityHashMap.class, Allocation.Call.COUNT),
     map(WeakHashMap.class, WeakHashMap.class, Allocation.Call.TABLE_ARITHMETIC),
-    Map.entry(
-      EnumMap.class.getName(),
-      new Entry(
-        ContainerView.Kind.MAP_VALUES,
-        new Allocation.Refuse(
-          "EnumMap targets are not supported via auto-Iso lift — EnumMap has no no-arg" +
-            " constructor (it needs the Class<K> key class). Use the codegen path" +
-            " or supply an explicit `Mapping.via(...)` row that constructs the" +
-            " EnumMap with its key class."
-        )
-      )
-    )
+    map(EnumMap.class, EnumMap.class, Allocation.Call.KEY_CLASS)
   );
 
   /** The families, computed once: the table's own iteration order is not meaningful. */
@@ -696,6 +687,38 @@ public final class PairingRules<T> {
   }
 
   /**
+   * Why a pair of same-kind container classes cannot be copied whoever builds it, or null when each
+   * side has a class to build. Asked of a concrete side only: one the table refuses outright, which
+   * a raw {@code EnumMap} is, since it names no key class to build from. An interface or abstract
+   * side with no default goes on to the container lift, which refuses it in the same words on both
+   * paths.
+   */
+  public String copyRefusal(final T srcType, final T tgtType) {
+    final var allocation = new ContainerAllocation<T>(props);
+    for (final var side : List.of(srcType, tgtType)) {
+      if (props.isAbstractType(props.rawType(side))) continue;
+      if (
+        allocation.implementationFor(side, familyOf(side)) instanceof Allocation.Refuse refuse
+      ) return refuse.reason();
+    }
+    return null;
+  }
+
+  /**
+   * What a family builds in place of a declaration the table does not name: the answer its root
+   * interface gets, so an abstract type standing in for a list is built as a {@code List} is.
+   */
+  static Allocation.Build familyDefault(final ContainerView.Kind kind) {
+    final var root = switch (kind) {
+      case LIST -> List.class;
+      case SET -> Set.class;
+      case MAP_VALUES -> Map.class;
+      case OPTIONAL, COLLECTION -> throw new IllegalArgumentException("no family default for " + kind);
+    };
+    return (Allocation.Build) BY_DECLARED_NAME.get(root.getName()).allocation();
+  }
+
+  /**
    * Whether an interface or abstract container type has a default implementation a copy can build
    * in its place: the class the allocation table rebuilds it as in the family it belongs to, a
    * map's for a map, a set's for a set, and a list's for any other collection. Every class the
@@ -703,12 +726,16 @@ public final class PairingRules<T> {
    * can hold.
    */
   public boolean hasDefaultImplementation(final T declared) {
-    final var kind = props.isSubtypeOf(declared, WellKnown.MAP)
-      ? ContainerView.Kind.MAP_VALUES
-      : props.isSubtypeOf(declared, WellKnown.SET)
-        ? ContainerView.Kind.SET
-        : ContainerView.Kind.LIST;
-    return allocationFor(declared, kind) instanceof Allocation.Build;
+    return allocationFor(declared, familyOf(declared)) instanceof Allocation.Build;
+  }
+
+  /**
+   * The family a container class is built in when no pair has settled it: a map's for a map, a
+   * set's for a set, and a list's for any other collection.
+   */
+  public ContainerView.Kind familyOf(final T declared) {
+    if (props.isSubtypeOf(declared, WellKnown.MAP)) return ContainerView.Kind.MAP_VALUES;
+    return props.isSubtypeOf(declared, WellKnown.SET) ? ContainerView.Kind.SET : ContainerView.Kind.LIST;
   }
 
   /**

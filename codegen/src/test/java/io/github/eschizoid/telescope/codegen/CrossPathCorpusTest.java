@@ -3,11 +3,17 @@ package io.github.eschizoid.telescope.codegen;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.codegen.ctorbox.BaggedDst;
+import io.github.eschizoid.telescope.codegen.ctorbox.GuardedDst;
+import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
+import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.AbstractSet;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -28,6 +34,7 @@ import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.function.Supplier;
@@ -1187,7 +1194,10 @@ class CrossPathCorpusTest {
 
   private static final Refusal UNORDERABLE_KEY = new Refusal("a sorted map whose key", "a sorted map whose key");
 
-  private static final Refusal NOT_ALLOCABLE = new Refusal("has no public no-arg constructor", "no allocator for");
+  private static final Refusal NOT_ALLOCABLE = new Refusal(
+    "has no no-argument constructor a rebuild can call",
+    "has no no-argument constructor a rebuild can call"
+  );
 
   /**
    * A collection that is neither a list, a set nor a queue, keeping its elements in a {@code
@@ -1325,9 +1335,19 @@ class CrossPathCorpusTest {
       subtype("TB", "java.util.HashMap<String, String>", ""),
       NOT_ALLOCABLE
     ),
-    refusesDeclared(
+    // A class only its own package can allocate is allocated by a bridge generated into that
+    // package, and by the runtime, which reaches every package.
+    new ContainerClassPair(
       "a list from a class only its own package can allocate",
       subtype("SA", "java.util.ArrayList<String>", "").substring("public ".length()),
+      subtype("TB", "java.util.ArrayList<String>", ""),
+      "%sTgt[items=[b, a]]",
+      "%sSrc[items=[b, a]]",
+      null
+    ),
+    refusesDeclared(
+      "a list from a class whose no-argument constructor is private",
+      subtype("SA", "java.util.ArrayList<String>", "  private %s() {}\n"),
       subtype("TB", "java.util.ArrayList<String>", ""),
       NOT_ALLOCABLE
     )
@@ -1369,11 +1389,15 @@ class CrossPathCorpusTest {
       final var src = classes.get(PACKAGE + "." + prefix + "Src");
       final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
       final var sa = classes.get(PACKAGE + "." + prefix + "SA");
-      // Looked up as declared rather than as public: the source of a refused row may be a class
-      // only this package can allocate, and the test shares its package.
+      // Looked up as declared rather than as public, and opened: the source of a row may be a class
+      // only this package can allocate, or one whose constructor is private.
+      final var ctor = srcDeclaration.contains("final int capacity")
+        ? sa.getDeclaredConstructor(int.class)
+        : sa.getDeclaredConstructor();
+      ctor.setAccessible(true);
       final var input = srcDeclaration.contains("final int capacity")
-        ? sa.getDeclaredConstructor(int.class).newInstance(VALUES.size())
-        : sa.getDeclaredConstructor().newInstance();
+        ? ctor.newInstance(VALUES.size())
+        : ctor.newInstance();
       final var leaf = srcDeclaration.contains(prefix + "Leaf>")
         ? classes.get(PACKAGE + "." + prefix + "Leaf").getConstructor(String.class)
         : srcDeclaration.contains(prefix + "Plain>")
@@ -1436,6 +1460,427 @@ class CrossPathCorpusTest {
       }
     }
     assertTrue(failures.isEmpty(), () -> failures.size() + " pair(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * A container the shared allocation rules decide how to build: the classes the cell declares
+   * beside the pair, the two field types, the expression that builds the source's field, and what
+   * both paths owe forward — the target's rendering and the class its field holds, or a fragment of
+   * each path's refusal. A converting row also owes the same round trip from both paths.
+   *
+   * <p>{@code %s} is the cell's prefix throughout, and each declaration sits on a line of its own.
+   * {@code Leaf} and {@code LeafDto} are declared for every cell.
+   */
+  private record Allocated(
+    String name,
+    String declarations,
+    String srcField,
+    String tgtField,
+    String sample,
+    String converted,
+    Refusal refused
+  ) {}
+
+  private static Allocated allocates(
+    final String name,
+    final String declarations,
+    final String srcField,
+    final String tgtField,
+    final String sample,
+    final String converted
+  ) {
+    return new Allocated(name, declarations, srcField, tgtField, sample, converted, null);
+  }
+
+  private static Allocated refusesAllocation(
+    final String name,
+    final String declarations,
+    final String srcField,
+    final String tgtField,
+    final String sample,
+    final Refusal refused
+  ) {
+    return new Allocated(name, declarations, srcField, tgtField, sample, null, refused);
+  }
+
+  private static final String TWO_LEAVES =
+    "new java.util.ArrayList<>(java.util.List.of(new %sLeaf(\"b\"), new %sLeaf(\"a\")))";
+
+  private static final String TWO_STRINGS = "new java.util.ArrayList<>(java.util.List.of(\"b\", \"a\"))";
+
+  /** A generic list subtype whose no-argument constructor has {@code %%s} as its modifiers. */
+  private static final String BOX =
+    "public class %%sBox<E> extends java.util.ArrayList<E> {" +
+    " private static final long serialVersionUID = 1L; %s %%sBox() {} }";
+
+  private static final String COPY_ONLY =
+    "public class %sCo<E> extends java.util.ArrayList<E> { private static final long serialVersionUID = 1L;" +
+    " public %sCo(final java.util.Collection<? extends E> c) { super(c); } }";
+
+  private static final String DAY = "public enum %sDay { MON, TUE }";
+
+  private static final Refusal NO_INSTANCE = new Refusal("has no instance of its own", "has no instance of its own");
+
+  private static final List<Allocated> ALLOCATIONS = List.of(
+    allocates(
+      "a class whose no-argument constructor is package-private",
+      BOX.formatted(""),
+      "java.util.List<%sLeaf>",
+      "%sBox<%sLeafDto>",
+      TWO_LEAVES,
+      "%sTgt[items=[%sLeafDto[v=b], %sLeafDto[v=a]]] in " + PACKAGE + ".%sBox"
+    ),
+    allocates(
+      "a class whose no-argument constructor is protected",
+      BOX.formatted("protected"),
+      "java.util.List<%sLeaf>",
+      "%sBox<%sLeafDto>",
+      TWO_LEAVES,
+      "%sTgt[items=[%sLeafDto[v=b], %sLeafDto[v=a]]] in " + PACKAGE + ".%sBox"
+    ),
+    allocates(
+      "a class whose no-argument constructor is package-private, elements unchanged",
+      BOX.formatted(""),
+      "java.util.List<String>",
+      "%sBox<String>",
+      TWO_STRINGS,
+      "%sTgt[items=[b, a]] in " + PACKAGE + ".%sBox"
+    ),
+    refusesAllocation(
+      "a class whose no-argument constructor is private",
+      BOX.formatted("private"),
+      "java.util.List<%sLeaf>",
+      "%sBox<%sLeafDto>",
+      TWO_LEAVES,
+      NOT_ALLOCABLE
+    ),
+    // A copy constructor builds a pair whose elements pass through, which is the one
+    // thing it can be handed. Where the elements are converted there is nothing to
+    // hand it.
+    allocates(
+      "a class with only a copy constructor, elements unchanged",
+      COPY_ONLY,
+      "java.util.List<String>",
+      "%sCo<String>",
+      TWO_STRINGS,
+      "%sTgt[items=[b, a]] in " + PACKAGE + ".%sCo"
+    ),
+    refusesAllocation(
+      "a class with only a copy constructor, elements converted",
+      COPY_ONLY,
+      "java.util.List<%sLeaf>",
+      "%sCo<%sLeafDto>",
+      TWO_LEAVES,
+      NOT_ALLOCABLE
+    ),
+    // An EnumMap is built from the key class its declaration names. Its copy
+    // constructor learns the class from the map it is handed, which an empty map that
+    // is not an EnumMap cannot tell it.
+    allocates(
+      "an EnumMap, values unchanged",
+      DAY,
+      "java.util.Map<%sDay, String>",
+      "java.util.EnumMap<%sDay, String>",
+      "new java.util.LinkedHashMap<>(java.util.Map.of(%sDay.TUE, \"b\", %sDay.MON, \"a\"))",
+      "%sTgt[items={MON=a, TUE=b}] in java.util.EnumMap"
+    ),
+    allocates(
+      "an EnumMap from an empty map",
+      DAY,
+      "java.util.Map<%sDay, String>",
+      "java.util.EnumMap<%sDay, String>",
+      "new java.util.LinkedHashMap<>()",
+      "%sTgt[items={}] in java.util.EnumMap"
+    ),
+    allocates(
+      "an EnumMap, values converted",
+      DAY,
+      "java.util.Map<%sDay, %sLeaf>",
+      "java.util.EnumMap<%sDay, %sLeafDto>",
+      "new java.util.LinkedHashMap<>(java.util.Map.of(%sDay.MON, new %sLeaf(\"a\")))",
+      "%sTgt[items={MON=%sLeafDto[v=a]}] in java.util.EnumMap"
+    ),
+    allocates(
+      "an abstract class whose family default is one of it",
+      "",
+      "java.util.List<%sLeaf>",
+      "java.util.AbstractList<%sLeafDto>",
+      TWO_LEAVES,
+      "%sTgt[items=[%sLeafDto[v=b], %sLeafDto[v=a]]] in java.util.ArrayList"
+    ),
+    refusesAllocation(
+      "an abstract class whose family default is not one of it",
+      "",
+      "java.util.List<%sLeaf>",
+      "java.util.AbstractSequentialList<%sLeafDto>",
+      TWO_LEAVES,
+      NO_INSTANCE
+    ),
+    refusesAllocation(
+      "an interface of the adopter's own",
+      "public interface %sMine<E> extends java.util.List<E> {}",
+      "java.util.List<%sLeaf>",
+      "%sMine<%sLeafDto>",
+      TWO_LEAVES,
+      NO_INSTANCE
+    ),
+    // A raw EnumMap names no key class, so neither path can build one, and both say
+    // so in the shared rules' words rather than one of them calling the pair a shape
+    // mismatch.
+    refusesAllocation(
+      "a raw EnumMap from a raw map",
+      "",
+      "java.util.Map",
+      "java.util.EnumMap",
+      "new java.util.LinkedHashMap<>()",
+      new Refusal("is built from the class of its keys", "is built from the class of its keys")
+    ),
+    // The same decisions one container down, where each inner container is rebuilt by
+    // its own helper on the generated path and by a nested lift on the reflective
+    // one.
+    allocates(
+      "a list of classes with only a copy constructor, elements unchanged",
+      COPY_ONLY,
+      "java.util.List<java.util.List<String>>",
+      "java.util.List<%sCo<String>>",
+      "new java.util.ArrayList<>(java.util.List.of(" + TWO_STRINGS + "))",
+      "%sTgt[items=[[b, a]]] in java.util.ArrayList"
+    ),
+    allocates(
+      "a map of classes with only a copy constructor, elements unchanged",
+      COPY_ONLY,
+      "java.util.Map<String, java.util.List<String>>",
+      "java.util.Map<String, %sCo<String>>",
+      "new java.util.LinkedHashMap<>(java.util.Map.of(\"k\", " + TWO_STRINGS + "))",
+      "%sTgt[items={k=[b, a]}] in java.util.LinkedHashMap"
+    ),
+    refusesAllocation(
+      "a list of classes with only a copy constructor, elements converted",
+      COPY_ONLY,
+      "java.util.List<java.util.List<%sLeaf>>",
+      "java.util.List<%sCo<%sLeafDto>>",
+      "new java.util.ArrayList<>(java.util.List.of(" + TWO_LEAVES + "))",
+      NOT_ALLOCABLE
+    ),
+    allocates(
+      "a list of classes whose no-argument constructor is package-private",
+      BOX.formatted(""),
+      "java.util.List<java.util.List<String>>",
+      "java.util.List<%sBox<String>>",
+      "new java.util.ArrayList<>(java.util.List.of(" + TWO_STRINGS + "))",
+      "%sTgt[items=[[b, a]]] in java.util.ArrayList"
+    ),
+    refusesAllocation(
+      "a list of classes whose no-argument constructor is private",
+      BOX.formatted("private"),
+      "java.util.List<java.util.List<String>>",
+      "java.util.List<%sBox<String>>",
+      "new java.util.ArrayList<>(java.util.List.of(" + TWO_STRINGS + "))",
+      NOT_ALLOCABLE
+    ),
+    refusesAllocation(
+      "a list of an abstract class whose family default is not one of it",
+      "",
+      "java.util.List<java.util.List<%sLeaf>>",
+      "java.util.List<java.util.AbstractSequentialList<%sLeafDto>>",
+      "new java.util.ArrayList<>(java.util.List.of(" + TWO_LEAVES + "))",
+      NO_INSTANCE
+    ),
+    // A raw EnumMap on both sides is one type, which passes through as itself: there
+    // is nothing to build, so the key class it does not name is never asked for.
+    allocates(
+      "a raw EnumMap into itself",
+      DAY,
+      "java.util.EnumMap",
+      "java.util.EnumMap",
+      "new java.util.EnumMap<>(java.util.Map.of(%sDay.MON, \"a\"))",
+      "%sTgt[items={MON=a}] in java.util.EnumMap"
+    ),
+    // A copied pair one side of which keeps an order: that side is filled by the
+    // helper, which reads the order from the value, and the other is copied.
+    allocates(
+      "a list of copy-only sets into a list of sorted sets",
+      "public class %sCs<E> extends java.util.LinkedHashSet<E> { private static final long serialVersionUID = 1L;" +
+        " public %sCs(final java.util.Collection<? extends E> c) { super(c); } }",
+      "java.util.List<%sCs<String>>",
+      "java.util.List<java.util.TreeSet<String>>",
+      "new java.util.ArrayList<>(java.util.List.of(new %sCs<>(java.util.List.of(\"b\", \"a\"))))",
+      "%sTgt[items=[[a, b]]] in java.util.ArrayList"
+    ),
+    allocates(
+      "a list of EnumMaps from empty maps",
+      DAY,
+      "java.util.List<java.util.Map<%sDay, String>>",
+      "java.util.List<java.util.EnumMap<%sDay, String>>",
+      "new java.util.ArrayList<>(java.util.List.of(new java.util.LinkedHashMap<%sDay, String>()))",
+      "%sTgt[items=[{}]] in java.util.ArrayList"
+    )
+  );
+
+  @Test
+  @DisplayName("a container is built the same way on both paths, or refused by both in the same words")
+  void bothPathsAllocateTheSameContainer() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var row : ALLOCATIONS) {
+      final var prefix = "Al" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var files = new ArrayList<JavaFileObject>();
+      files.add(source(prefix + "Leaf", head + "public record " + prefix + "Leaf(String v) {}\n"));
+      files.add(source(prefix + "LeafDto", head + "public record " + prefix + "LeafDto(String v) {}\n"));
+      for (final var declaration : row.declarations().replace("%s", prefix).split("\n")) {
+        if (declaration.isBlank()) continue;
+        final var named = Pattern.compile("(?:class|interface|enum) (\\w+)").matcher(declaration);
+        if (!named.find()) throw new IllegalStateException(row.name() + " declares nothing it names");
+        files.add(source(named.group(1), head + declaration + "\n"));
+      }
+      files.add(
+        source(
+          prefix + "Src",
+          head +
+            "import io.github.eschizoid.telescope.annotations.Bridge;\n@Bridge(" +
+            prefix +
+            "Tgt.class)\npublic record " +
+            prefix +
+            "Src(" +
+            row.srcField().replace("%s", prefix) +
+            " items) {\n  public static " +
+            prefix +
+            "Src sample() { return new " +
+            prefix +
+            "Src(" +
+            row.sample().replace("%s", prefix) +
+            "); }\n}\n"
+        )
+      );
+      files.add(
+        source(
+          prefix + "Tgt",
+          head + "public record " + prefix + "Tgt(" + row.tgtField().replace("%s", prefix) + " items) {}\n"
+        )
+      );
+      final var sources = files.toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> row.name() + " should compile: " + plain.errorMessages());
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+
+      final var classes = plain.define(MethodHandles.lookup());
+      final var src = classes.get(PACKAGE + "." + prefix + "Src");
+      final var tgt = classes.get(PACKAGE + "." + prefix + "Tgt");
+      final var input = src.getMethod("sample").invoke(null);
+
+      final Outcome generated;
+      final Outcome generatedBack;
+      if (processed.success()) {
+        final var bridge = emitted(processed, plain, prefix);
+        final var forward = bridge.getMethod("forward", src);
+        final var backward = bridge.getMethod("backward", tgt);
+        generated = run(tgt.getMethod("items"), () -> forward.invoke(null, input));
+        generatedBack = run(src.getMethod("items"), () -> backward.invoke(null, forward.invoke(null, input)));
+      } else {
+        generated = Outcome.refused(processed.errorMessages().strip());
+        generatedBack = generated;
+      }
+      final var reflective = run(tgt.getMethod("items"), () -> Telescope.mapper(cast(src), cast(tgt)).forward(input));
+      final var reflectiveBack = run(src.getMethod("items"), () -> {
+        final var mapper = Telescope.mapper(cast(src), cast(tgt));
+        return mapper.backward(mapper.forward(input));
+      });
+
+      if (row.refused() != null) {
+        if (generated.refusal() == null || !generated.refusal().contains(row.refused().generatedSays())) {
+          failures.add(row.name() + ": generated gave " + generated);
+        }
+        if (reflective.refusal() == null || !reflective.refusal().contains(row.refused().reflectiveSays())) {
+          failures.add(row.name() + ": reflective gave " + reflective);
+        }
+        continue;
+      }
+      final var owed = row.converted().replace("%s", prefix);
+      if (!owed.equals(generated.toString())) failures.add(
+        row.name() + ": generated gave " + generated + ", owed " + owed
+      );
+      if (!owed.equals(reflective.toString())) {
+        failures.add(row.name() + ": reflective gave " + reflective + ", owed " + owed);
+      }
+      if (generatedBack.refusal() != null || !generatedBack.toString().equals(reflectiveBack.toString())) {
+        failures.add(
+          row.name() + ": the round trip differs — generated " + generatedBack + ", reflective " + reflectiveBack
+        );
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " row(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  /**
+   * Containers the generated path refuses and the runtime builds, each with the fragment the
+   * generated path refuses it with. A bridge is code in one package, so a constructor only another
+   * package can call is out of its reach; the runtime binds the same constructor through a lookup
+   * with private access to the class, which asks nothing of the caller's package.
+   *
+   * <p>An entry keeps its row from failing and nothing else: a row both paths start to agree on
+   * fails, so the register cannot outlive what it describes.
+   */
+  private static final Map<String, String> GENERATED_PATH_LIMITS = Map.of(
+    "a package-private constructor in another package",
+    "has no no-argument constructor a rebuild can call",
+    "a protected constructor in another package",
+    "has no no-argument constructor a rebuild can call"
+  );
+
+  /**
+   * One registered limit, as real files: the container and the target holding it in one package,
+   * the source in another, and what the runtime builds from a source holding {@code b, a}.
+   */
+  private record Limit(String name, List<String> fixtures, Callable<Object> reflective, String owed) {}
+
+  @Test
+  @DisplayName("a constructor only another package can call is a limit of the generated path, which the runtime passes")
+  void aConstructorInAnotherPackageIsAGeneratedPathLimit() throws Exception {
+    final var limits = List.of(
+      new Limit(
+        "a package-private constructor in another package",
+        List.of("ctorbox/PackageBag", "ctorbox/BaggedDst", "ctorpair/BaggedSrc"),
+        () -> Telescope.mapper(BaggedSrc.class, BaggedDst.class).forward(new BaggedSrc(List.of("b", "a"))).items(),
+        "[b, a] in " + PACKAGE + ".ctorbox.PackageBag"
+      ),
+      new Limit(
+        "a protected constructor in another package",
+        List.of("ctorbox/ProtectedBag", "ctorbox/GuardedDst", "ctorpair/GuardedSrc"),
+        () -> Telescope.mapper(GuardedSrc.class, GuardedDst.class).forward(new GuardedSrc(List.of("b", "a"))).items(),
+        "[b, a] in " + PACKAGE + ".ctorbox.ProtectedBag"
+      )
+    );
+    final var fixtures = Path.of("src/test/java/io/github/eschizoid/telescope/codegen");
+    final var checked = new LinkedHashSet<String>();
+    for (final var limit : limits) {
+      final var sources = new ArrayList<JavaFileObject>();
+      for (final var fixture : limit.fixtures()) {
+        final var code = Files.readString(fixtures.resolve(fixture + ".java"));
+        sources.add(ProcessorHarness.source(PACKAGE + "." + fixture.replace('/', '.'), code));
+      }
+      final var generated = ProcessorHarness.compileFully(
+        List.of(new BridgeProcessor()),
+        List.of(),
+        sources.toArray(JavaFileObject[]::new)
+      );
+      final var refusal = GENERATED_PATH_LIMITS.get(limit.name());
+      assertTrue(
+        !generated.success() && generated.hasError(refusal),
+        () -> limit.name() + ": the generated path should refuse it by name; saw " + generated.errorMessages()
+      );
+      final var items = limit.reflective().call();
+      assertTrue(
+        limit.owed().equals(items + " in " + items.getClass().getName()),
+        () -> limit.name() + ": the runtime should build it; gave " + items
+      );
+      checked.add(limit.name());
+    }
+    // A register entry nothing here exercises is a note about something nobody checks.
+    assertTrue(
+      checked.equals(GENERATED_PATH_LIMITS.keySet()),
+      () -> "registered limits with no row: " + GENERATED_PATH_LIMITS.keySet()
+    );
   }
 
   /** A record of one string, ordered by it. */

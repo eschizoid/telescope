@@ -126,7 +126,7 @@ class GenericContainerSubtypeTest {
 
     assertTrue(compilation.success(), () -> "a declared copy constructor is usable: " + compilation.errorMessages());
     assertFalse(
-      compilation.errorMessages().contains("no public no-arg constructor"),
+      compilation.errorMessages().contains("has no no-argument constructor a rebuild can call"),
       () -> "it was never asked for a no-arg constructor: " + compilation.errorMessages()
     );
   }
@@ -169,7 +169,7 @@ class GenericContainerSubtypeTest {
 
     assertFalse(compilation.success(), "the bridged-element route cannot use a copy constructor");
     assertTrue(
-      compilation.hasError("no public no-arg constructor"),
+      compilation.hasError("has no no-argument constructor a rebuild can call"),
       () -> "the allocation the route performs is what should be reported: " + compilation.errorMessages()
     );
     assertFalse(
@@ -212,7 +212,7 @@ class GenericContainerSubtypeTest {
 
     assertFalse(compilation.success(), "the narrowed constructor cannot take a List");
     assertTrue(
-      compilation.hasError("no public no-arg constructor"),
+      compilation.hasError("has no no-argument constructor a rebuild can call"),
       () -> "it should be reported the way any unallocatable container is: " + compilation.errorMessages()
     );
     assertFalse(
@@ -316,7 +316,7 @@ class GenericContainerSubtypeTest {
 
     assertFalse(compilation.success(), "a container the processor cannot allocate must be refused");
     assertTrue(
-      compilation.hasError("no public no-arg constructor"),
+      compilation.hasError("has no no-argument constructor a rebuild can call"),
       () -> "the raw path's diagnostic should cover this shape too: " + compilation.errorMessages()
     );
     assertFalse(

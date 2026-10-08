@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -289,6 +290,42 @@ public final class Beans {
       } catch (final IllegalAccessException publicRefused) {
         return null;
       }
+    }
+  }
+
+  /**
+   * A supplier calling {@code type}'s declared no-argument constructor, whatever its access, or
+   * {@code null} when there is none or it cannot be bound. Which constructors a rebuild may call is
+   * the shared allocation rules' decision; this only makes the call.
+   *
+   * <p>It is bound through a private lookup in the class's own module, which reaches a constructor
+   * of any access on a class that is not public, and through the public lookup where that module
+   * declines, which reaches a public constructor of a {@code java.base} class. Cached per class, so
+   * the decision being asked twice binds the constructor once.
+   */
+  public static Supplier<Object> noArgConstructor(final Class<?> type) {
+    return NO_ARG_CONSTRUCTORS.get(type).orElse(null);
+  }
+
+  private static final ClassValue<Optional<Supplier<Object>>> NO_ARG_CONSTRUCTORS = new ClassValue<>() {
+    @Override
+    protected Optional<Supplier<Object>> computeValue(final Class<?> type) {
+      return Optional.ofNullable(computeNoArgConstructor(type));
+    }
+  };
+
+  private static Supplier<Object> computeNoArgConstructor(final Class<?> type) {
+    if (type.isInterface() || Modifier.isAbstract(type.getModifiers())) return null;
+    final Constructor<?> ctor;
+    try {
+      ctor = type.getDeclaredConstructor();
+    } catch (final NoSuchMethodException e) {
+      return null;
+    }
+    try {
+      return buildCtorSupplier(type, ctor, ModuleAccess.privateLookupIn(type));
+    } catch (final IllegalAccessException e) {
+      return Modifier.isPublic(ctor.getModifiers()) ? publicCtorSupplier(type) : null;
     }
   }
 

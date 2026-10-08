@@ -81,6 +81,59 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public boolean isAbstractType(final Type t) {
+    return rawType(t) instanceof Class<?> c && (c.isInterface() || Modifier.isAbstract(c.getModifiers()));
+  }
+
+  @Override
+  public boolean isImplementedBy(final Type t, final String className) {
+    if (!(rawType(t) instanceof Class<?> c)) return false;
+    try {
+      return c.isAssignableFrom(Class.forName(className, false, c.getClassLoader()));
+    } catch (final ClassNotFoundException | LinkageError e) {
+      return false;
+    }
+  }
+
+  @Override
+  public Access noArgConstructorAccess(final Type t) {
+    if (!(rawType(t) instanceof Class<?> c) || isAbstractType(c)) return Access.NONE;
+    final int modifiers;
+    try {
+      modifiers = c.getDeclaredConstructor().getModifiers();
+    } catch (final NoSuchMethodException e) {
+      return Access.NONE;
+    }
+    if (Modifier.isPublic(modifiers)) return Access.PUBLIC;
+    return Modifier.isPrivate(modifiers) ? Access.PRIVATE : Access.PACKAGE;
+  }
+
+  @Override
+  public String packageName(final Type t) {
+    return rawType(t) instanceof Class<?> c ? c.getPackageName() : "";
+  }
+
+  @Override
+  public Type typeNamed(final String binaryName) {
+    try {
+      return Class.forName(binaryName, false, ReflectionProps.class.getClassLoader());
+    } catch (final ClassNotFoundException | LinkageError e) {
+      return null;
+    }
+  }
+
+  @Override
+  public boolean hasPublicConstructorAccepting(final Type t, final Type argument) {
+    return (
+      rawType(t) instanceof Class<?> c &&
+      rawType(argument) instanceof Class<?> passed &&
+      Arrays.stream(c.getConstructors()).anyMatch(
+        ctor -> ctor.getParameterCount() == 1 && ctor.getParameterTypes()[0].isAssignableFrom(passed)
+      )
+    );
+  }
+
+  @Override
   public boolean isSubtypeOf(final Type t, final WellKnown wellKnown) {
     return t instanceof Class<?> c && classOf(wellKnown).isAssignableFrom(c);
   }
@@ -385,13 +438,19 @@ public final class ReflectionProps implements PropertySystem<Type> {
   /**
    * Whether a copy can build this side: an interface or abstract class through the default
    * implementation the shared table names for it, which the runtime copy allocates in its place,
-   * and any other class through its own allocator.
+   * and any other class through the constructor the shared allocation rules let a rebuild call, or
+   * through its builder where they let it call none.
    */
   private boolean copyAllocable(final Class<?> cls) {
     if (cls.isInterface() || Modifier.isAbstract(cls.getModifiers())) {
       return new PairingRules<Type>(this).hasDefaultImplementation(cls);
     }
-    return Beans.intermediateAllocator(cls).get() != null;
+    final var allocation = new ContainerAllocation<Type>(this);
+    final var alloc =
+      allocation.allocate(cls, allocation.familyOf(cls), null) instanceof Allocation.Build
+        ? Beans.noArgConstructor(cls)
+        : Beans.intermediateAllocator(cls);
+    return alloc != null && alloc.get() != null;
   }
 
   @Override

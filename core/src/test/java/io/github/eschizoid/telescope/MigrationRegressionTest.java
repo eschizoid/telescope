@@ -48,6 +48,7 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -1578,7 +1579,8 @@ class MigrationRegressionTest {
       assertEquals(MyMap.class, back.getItems().getClass());
     }
 
-    // EnumMap target — rejected at plan-time because EnumMap has no no-arg constructor.
+    // EnumMap target — built from the key class its declaration names, since it has
+    // no no-arg constructor.
     enum Region {
       US,
       EU,
@@ -1611,18 +1613,33 @@ class MigrationRegressionTest {
     }
 
     @Test
-    @DisplayName("EnumMap target throws plan-time IAE with codegen / via guidance")
-    void enumMapTargetThrowsPlanTime() {
-      final var ex = assertThrows(IllegalStateException.class, () ->
-        Telescope.mapper(HasMapByRegionSrc.class, HasEnumMapTgt.class, writeBeans(WriteHint.WriteStrategy.SETTERS))
+    @DisplayName("EnumMap target is built from the key class its declaration names")
+    void enumMapTargetIsBuiltFromItsKeyClass() {
+      final var mapper = Telescope.mapper(
+        HasMapByRegionSrc.class,
+        HasEnumMapTgt.class,
+        writeBeans(WriteHint.WriteStrategy.SETTERS)
       );
-      assertTrue(ex.getMessage().contains("EnumMap"), "names the offending class");
-      assertTrue(ex.getMessage().contains("Mapping.via"), "cites the escape hatch");
+      final var src = new HasMapByRegionSrc();
+      final var byRegion = new LinkedHashMap<Region, Inner>();
+      byRegion.put(Region.EU, new Inner("e"));
+      byRegion.put(Region.US, new Inner("u"));
+      src.setByRegion(byRegion);
+
+      final var tgt = mapper.forward(src);
+
+      assertEquals(EnumMap.class, tgt.getByRegion().getClass());
+      // An EnumMap iterates in the enum's declaration order, whatever order the source kept.
+      assertEquals(List.of(Region.US, Region.EU), List.copyOf(tgt.getByRegion().keySet()));
+      assertEquals("u", tgt.getByRegion().get(Region.US).id());
+      // An empty source has no key to learn the class from, which is why the
+      // declaration supplies it.
+      src.setByRegion(new LinkedHashMap<>());
+      assertTrue(mapper.forward(src).getByRegion().isEmpty());
     }
 
     // Unknown JDK collection class (SynchronousQueue is in java.base, has a no-arg ctor that
-    // throws-on-add — Beans.intermediateAllocator can't bind it via privateLookupIn either way,
-    // and there's no entry in listAllocatorFor's hard-coded table). The diagnostic-message
+    // throws-on-add, and the shared allocation table has no entry for it). The diagnostic-message
     // contract for the unknown-JDK throw is pinned by this test.
     public static class HasSyncQueueTgt {
 
@@ -1664,7 +1681,8 @@ class MigrationRegressionTest {
     }
 
     // User subclass WITHOUT a no-arg ctor — the negative side of userListSubclassToArrayListWorks.
-    // Beans.intermediateAllocator yields a null-supplier, so the new plan-time IAE fires.
+    // The shared allocation rules find no constructor a rebuild can call, so the
+    // plan-time refusal fires.
     public static class NoCtorList<E> extends ArrayList<E> {
 
       @Serial

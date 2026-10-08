@@ -424,13 +424,6 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     return found;
   }
 
-  protected static boolean hasPublicNoArgConstructor(final TypeElement type) {
-    for (final var ctor : ElementFilter.constructorsIn(type.getEnclosedElements())) {
-      if (ctor.getModifiers().contains(Modifier.PUBLIC) && ctor.getParameters().isEmpty()) return true;
-    }
-    return false;
-  }
-
   /**
    * Whether a no-argument constructor exists that the generated navigator can call. The navigator
    * is emitted into the bean's own package, so protected and package-private both reach; only

@@ -33,6 +33,8 @@ public sealed interface Allocation {
   enum Call {
     /**
      * No argument: the constructor takes none, or its {@code int} means something else entirely.
+     * Every class a rebuild builds as itself rather than through a table row is built this way,
+     * since a constructor taking an argument carries whatever meaning its author gave it.
      */
     NO_ARG,
     /**
@@ -67,5 +69,11 @@ public sealed interface Allocation {
      * invalidate, so it converts like any other set.
      */
     ORDERING,
+    /**
+     * {@code new Impl(Key.class)} — a container built from the class of its keys, which is how an
+     * {@code EnumMap} learns the enum it is over. The class is the declared key type, so a
+     * declaration that names none is refused rather than built.
+     */
+    KEY_CLASS,
   }
 }

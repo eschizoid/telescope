@@ -1,8 +1,7 @@
 package io.github.eschizoid.telescope.conversion;
 
 import io.github.eschizoid.telescope.internal.pairing.Allocation;
-import io.github.eschizoid.telescope.internal.pairing.ContainerView;
-import io.github.eschizoid.telescope.internal.pairing.PairingRules;
+import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.reflect.Type;
 import java.util.ArrayDeque;
@@ -133,22 +132,22 @@ public final class ContainerCopy {
     }
   };
 
-  /** The shared rules, over reflection handles, which say what a declared type is rebuilt as. */
-  private static final PairingRules<Type> RULES = new PairingRules<>(new ReflectionProps());
+  /**
+   * The shared allocation rules, over reflection handles, which say what a declared type is rebuilt
+   * as: the class the table names, or the family default standing in for an interface or abstract
+   * type it does not.
+   */
+  private static final ContainerAllocation<Type> ALLOCATION = new ContainerAllocation<>(new ReflectionProps());
 
   /**
-   * How a container is copied into the class the shared allocation table rebuilds a declared type
+   * How a container is copied into the class the shared allocation rules rebuild a declared type
    * as.
    */
   private static final ClassValue<Function<Object, Object>> DECLARED_COPIES = new ClassValue<>() {
     @Override
     protected Function<Object, Object> computeValue(final Class<?> declared) {
-      final var kind = Map.class.isAssignableFrom(declared)
-        ? ContainerView.Kind.MAP_VALUES
-        : Set.class.isAssignableFrom(declared)
-          ? ContainerView.Kind.SET
-          : ContainerView.Kind.LIST;
-      if (RULES.allocationFor(declared, kind) instanceof Allocation.Build build) {
+      final var kind = ALLOCATION.familyOf(declared);
+      if (ALLOCATION.implementationFor(declared, kind) instanceof Allocation.Build build) {
         for (final var entry : COPY_CONSTRUCTORS.entrySet()) {
           if (entry.getKey().getName().equals(build.implName())) return entry.getValue();
         }

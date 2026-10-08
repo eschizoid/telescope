@@ -92,10 +92,19 @@ class ReflectionPropsTest {
   }
 
   /**
-   * Package-private implicit constructor — the allocator probe requires a public one (or a public
-   * static {@code builder()}).
+   * A private no-argument constructor, which the shared allocation rules let no rebuild call, and
+   * no static {@code builder()} to reach it through instead.
    */
-  static class NoPublicCtorUrls extends ArrayList<String> {
+  static class PrivateCtorUrls extends ArrayList<String> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+
+    private PrivateCtorUrls() {}
+  }
+
+  /** A package-private implicit constructor, which a rebuild reaching every package can call. */
+  static class PackageCtorUrls extends ArrayList<String> {
 
     @Serial
     private static final long serialVersionUID = 1L;
@@ -203,10 +212,19 @@ class ReflectionPropsTest {
     }
 
     @Test
-    @DisplayName("a side without a public no-arg constructor (or builder) is NOT_ALLOCABLE")
-    void missingPublicNoArgCtorIsNotAllocable() {
-      assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(Urls.class, NoPublicCtorUrls.class));
-      assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(NoPublicCtorUrls.class, Urls.class));
+    @DisplayName("a side whose no-arg constructor is private, with no builder, is NOT_ALLOCABLE")
+    void privateNoArgCtorIsNotAllocable() {
+      assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(Urls.class, PrivateCtorUrls.class));
+      assertEquals(Allocability.NOT_ALLOCABLE, props.copyAllocability(PrivateCtorUrls.class, Urls.class));
+    }
+
+    @Test
+    @DisplayName(
+      "a side whose no-arg constructor is package-private is ALLOCABLE, as the runtime reaches every package"
+    )
+    void packagePrivateNoArgCtorIsAllocable() {
+      assertEquals(Allocability.ALLOCABLE, props.copyAllocability(Urls.class, PackageCtorUrls.class));
+      assertEquals(Allocability.ALLOCABLE, props.copyAllocability(PackageCtorUrls.class, Urls.class));
     }
 
     @Test

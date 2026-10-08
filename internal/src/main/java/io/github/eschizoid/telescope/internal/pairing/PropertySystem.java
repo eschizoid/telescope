@@ -35,6 +35,19 @@ public interface PropertySystem<T> {
     COMPARABLE,
   }
 
+  /**
+   * Who can call a class's no-argument constructor. {@code PACKAGE} covers protected as well as
+   * package-private: a rebuild subclasses nothing, so a protected constructor reaches it only from
+   * the constructor's own package, exactly as a package-private one does.
+   */
+  enum Access {
+    /** No constructor taking no arguments, or a class that cannot be instantiated at all. */
+    NONE,
+    PRIVATE,
+    PACKAGE,
+    PUBLIC,
+  }
+
   /** Whether both sides of a same-kind subtype copy can actually be allocated. */
   enum Allocability {
     /** Both sides allocable — the copy is buildable. */
@@ -81,6 +94,31 @@ public interface PropertySystem<T> {
   boolean isEnumType(T t);
 
   boolean isInterfaceType(T t);
+
+  /** Whether {@code t} is an interface or an abstract class: a type with no instance of its own. */
+  boolean isAbstractType(T t);
+
+  /**
+   * Whether an instance of the class named {@code className}, by its binary name, is an instance of
+   * {@code t}'s erasure. False when this world cannot find that class.
+   */
+  boolean isImplementedBy(T t, String className);
+
+  /** Who can call {@code t}'s declared no-argument constructor. */
+  Access noArgConstructorAccess(T t);
+
+  /** The qualified name of the package {@code t} is declared in, empty for the unnamed package. */
+  String packageName(T t);
+
+  /**
+   * Whether {@code t}'s erasure declares a public constructor taking one parameter that a value of
+   * {@code argument}'s erasure can be passed to. Compared by erasure, because a parameter written
+   * {@code Collection<? extends E>} names a variable nothing here has bound.
+   */
+  boolean hasPublicConstructorAccepting(T t, T argument);
+
+  /** The class named {@code binaryName}, or null where this world cannot find it. */
+  T typeNamed(String binaryName);
 
   /** Subtype test against a well-known JDK type. Final well-knowns make this an exact match. */
   boolean isSubtypeOf(T t, WellKnown wellKnown);

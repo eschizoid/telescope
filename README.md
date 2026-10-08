@@ -117,10 +117,11 @@ has no recorded disagreements. Renames, null strategies, and defaults aren't cro
 
 Two known differences are recorded in tests, each with its direction. In `CrossPathCorpusTest`, a target reachable only
 through a private constructor is built at run time. The processor refuses it when `@Bridge`'s `writeStrategy` asks for
-setters or for a constructor. In `ContainerAllocatorCorpusTest`, `@Bridge` accepts a `Map` field mapped onto an
-`EnumMap` field, and `Telescope.mapper(...)` refuses it. A runtime mapper only converts an `EnumMap` target whose source
-is the same `EnumMap` type. Each test also fails the build when a recorded difference goes away, so the list stays
-accurate.
+setters or for a constructor. Also in `CrossPathCorpusTest`, a container class whose no-argument constructor is
+package-private or protected is built at run time, and the processor refuses it when the bridge is generated into a
+different package from the class, because generated code there cannot call that constructor. Both the package-private
+and the protected case are tested. Each test also fails the build when a recorded difference goes away, so the list
+stays accurate.
 
 ## Unconvertible fields are refused
 

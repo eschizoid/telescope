@@ -101,11 +101,16 @@ class PairingRulesTest {
     private static final long serialVersionUID = 1L;
   }
 
-  /** Package-private implicit constructor — provably not allocable by the copy branch. */
-  static class NoPublicCtorUrls extends ArrayList<String> {
+  /**
+   * A private no-argument constructor, which no rebuild calls — provably not allocable by the copy
+   * branch.
+   */
+  static class PrivateCtorUrls extends ArrayList<String> {
 
     @Serial
     private static final long serialVersionUID = 1L;
+
+    private PrivateCtorUrls() {}
   }
 
   /** Two non-generic lists of different element types, whose elements a copy would not convert. */
@@ -278,6 +283,36 @@ class PairingRulesTest {
     @Override
     public boolean isInterfaceType(final Type t) {
       return delegate.isInterfaceType(t);
+    }
+
+    @Override
+    public boolean isAbstractType(final Type t) {
+      return delegate.isAbstractType(t);
+    }
+
+    @Override
+    public boolean isImplementedBy(final Type t, final String className) {
+      return delegate.isImplementedBy(t, className);
+    }
+
+    @Override
+    public Access noArgConstructorAccess(final Type t) {
+      return delegate.noArgConstructorAccess(t);
+    }
+
+    @Override
+    public String packageName(final Type t) {
+      return delegate.packageName(t);
+    }
+
+    @Override
+    public boolean hasPublicConstructorAccepting(final Type t, final Type argument) {
+      return delegate.hasPublicConstructorAccepting(t, argument);
+    }
+
+    @Override
+    public Type typeNamed(final String binaryName) {
+      return delegate.typeNamed(binaryName);
     }
 
     @Override
@@ -615,25 +650,25 @@ class PairingRulesTest {
     @Test
     @DisplayName("a same-kind pair that is provably not allocable lifts rather than recursing, in either direction")
     void notAllocableSameKindPairLifts() {
-      assertTrue(rules.sameKindCollection(ImageUrls.class, NoPublicCtorUrls.class), "premise: same-kind pair");
-      assertTrue(rules.reflectable(NoPublicCtorUrls.class), "premise: the recursion branch could claim this pair");
+      assertTrue(rules.sameKindCollection(ImageUrls.class, PrivateCtorUrls.class), "premise: same-kind pair");
+      assertTrue(rules.reflectable(PrivateCtorUrls.class), "premise: the recursion branch could claim this pair");
       assertEquals(
         Allocability.NOT_ALLOCABLE,
-        new ReflectionProps().copyAllocability(ImageUrls.class, NoPublicCtorUrls.class),
+        new ReflectionProps().copyAllocability(ImageUrls.class, PrivateCtorUrls.class),
         "premise: provably not allocable"
       );
       // The lift's allocator is what refuses the class by name; recursion would rebuild it as a
       // bean holding none of the source's elements.
       final var into = assertInstanceOf(
         PairDecision.LiftContainer.class,
-        rules.decidePair(ImageUrls.class, NoPublicCtorUrls.class, "f")
+        rules.decidePair(ImageUrls.class, PrivateCtorUrls.class, "f")
       );
-      assertEquals(NoPublicCtorUrls.class, into.tgt().rawType());
+      assertEquals(PrivateCtorUrls.class, into.tgt().rawType());
       final var from = assertInstanceOf(
         PairDecision.LiftContainer.class,
-        rules.decidePair(NoPublicCtorUrls.class, ImageUrls.class, "f")
+        rules.decidePair(PrivateCtorUrls.class, ImageUrls.class, "f")
       );
-      assertEquals(NoPublicCtorUrls.class, from.src().rawType());
+      assertEquals(PrivateCtorUrls.class, from.src().rawType());
     }
 
     @Test

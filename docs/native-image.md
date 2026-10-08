@@ -124,11 +124,15 @@ What reaches the handle is a declared type the table does not name and whose fam
 concrete JDK container outside the list, or a container class of the adopter's own. Give such a class an entry for its
 no-argument constructor, the same way a DTO gets one.
 
+A container class of the adopter's own with no no-argument constructor, only one taking the container it copies, is
+built through that one-argument constructor where its elements pass through unchanged. Register that constructor
+instead, with the parameter type it declares.
+
 The failure mode if you do not is worth knowing, because it is deliberately not softened. Under exact reachability
 metadata the image raises a missing-registration error naming the class it was built without, and telescope lets that
-through rather than converting it into its own "no allocator for this type" refusal. That refusal's advice — name the
-type in the table, or supply an explicit conversion row — is wrong here: the type is fine and the program works on the
-JVM. Only the image is missing something, and only the registration error says so.
+through rather than converting it into its own refusal that the class has no constructor a rebuild can call. That
+refusal's advice — declare a constructor, or supply an explicit conversion row — is wrong here: the type is fine and the
+program works on the JVM. Only the image is missing something, and only the registration error says so.
 
 ## Producing the app metadata
 
