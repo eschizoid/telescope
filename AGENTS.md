@@ -654,6 +654,11 @@ JVM/codegen-only under AOT).
     Wall A (`SerializedLambda`) = app-level `serialization-config`. Core ships its own `native-image.properties`; no
     separate `telescope-graalvm` Feature module is needed. The `:examples:graphql` `NativeVerify` binary is the CI
     regression gate.
+16. **0016 — `telescope-jackson`.** (Accepted, not built.) A Jackson 3.x module: mappers registered as Jackson
+    converters through a `TelescopeModule`, a streaming `JsonBinder` over `jackson-core`, and a codegen phase.
+17. **0017 — `telescope-jpa`.** (Proposed.) Persistence-aware container copies through a `ContainerCopy` SPI (an
+    unloaded lazy collection is shared, not loaded), proxy unwrapping moved out of core, and starter wiring, all against
+    the Jakarta Persistence API.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
