@@ -92,6 +92,19 @@ public final class LambdaIntrospection {
   }
 
   /**
+   * The binary name of the class declaring a Serializable method reference's target, read from the
+   * decoded {@code SerializedLambda} without loading the class. Callers that already hold candidate
+   * classes match against this name instead of {@link #implClassOf}, which resolves the name with
+   * {@code Class.forName} — a lookup a native image answers only for classes registered for
+   * reflection.
+   *
+   * @throws IllegalArgumentException if the lambda is not a method reference
+   */
+  public static String implClassNameOf(final Serializable lambda) {
+    return CACHE.get(lambda.getClass()).get(lambda).implName();
+  }
+
+  /**
    * The declaring class of a Serializable method reference (e.g. {@code UserEntity.class} from
    * {@code UserEntity::name}). Records can't extend other types, so for record accessors the
    * declaring class is always the receiver type. For beans, a method inherited from a superclass

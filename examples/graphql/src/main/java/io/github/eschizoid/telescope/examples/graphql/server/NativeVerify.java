@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.examples.graphql.server;
 
+import static io.github.eschizoid.telescope.Edit.over;
 import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
 
 import io.github.eschizoid.telescope.Telescope;
@@ -9,13 +10,17 @@ import io.github.eschizoid.telescope.examples.graphql.model.AccountBridge;
 import io.github.eschizoid.telescope.examples.graphql.model.AccountBuilderBean;
 import io.github.eschizoid.telescope.examples.graphql.model.AccountEntity;
 import io.github.eschizoid.telescope.examples.graphql.model.Address;
+import io.github.eschizoid.telescope.examples.graphql.model.Crewmate;
 import io.github.eschizoid.telescope.examples.graphql.model.Role;
+import io.github.eschizoid.telescope.examples.graphql.model.Shift;
+import io.github.eschizoid.telescope.examples.graphql.model.ShiftTelescope;
 import io.github.eschizoid.telescope.examples.graphql.model.User;
 import io.github.eschizoid.telescope.examples.graphql.model.UserFromMap;
 import io.github.eschizoid.telescope.examples.graphql.model.UserTelescope;
 import io.github.eschizoid.telescope.examples.graphql.model.UserView;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -55,6 +60,9 @@ import java.util.Map;
  *       heap — which is why the telescope classes take {@code --initialize-at-build-time} from
  *       telescope-core's {@code native-image.properties} and this example's generated-model package
  *       takes it from {@code build.gradle.kts}.
+ *   <li><b>navigator-only multi-edit</b> — {@code Telescope.all(over(ShiftTelescope.of()...), ...)}
+ *       over {@link Shift} and {@link Crewmate}, which have no reflection registration: the fused
+ *       pass has to rebuild each record level through the navigators' own generated setters.
  * </ul>
  *
  * <p>A JVM run only validates the harness; a green native-image run is the real verdict, and {@link
@@ -96,6 +104,12 @@ public final class NativeVerify {
     results.add(guard("generated @Bridge constant (AccountBridge.BRIDGE.read())", NativeVerify::bridgeConstant));
     results.add(
       guard("generated @Focus navigator (UserTelescope.of().address().city())", NativeVerify::focusNavigator)
+    );
+    results.add(
+      guard(
+        "navigator-only Telescope.all over records with no reflection registration",
+        NativeVerify::navigatorMultiEdit
+      )
     );
 
     System.out.println();
@@ -223,6 +237,25 @@ public final class NativeVerify {
     expect(
       "grace".equals(entity.getUsername()) && "grace@example.com".equals(entity.getEmail()),
       "bridge constant mismatch: username=" + entity.getUsername() + " email=" + entity.getEmail()
+    );
+  }
+
+  // (k) Telescope.all over generated navigator paths only. Shift and Crewmate carry no
+  // reflect-config entry, so each fused record level has to rebuild through the navigators' own
+  // setters; a rebuild that discovered the canonical constructor reflectively fails here.
+  private static void navigatorMultiEdit() {
+    final var normalize = Telescope.all(
+      over(ShiftTelescope.of().label(), String::toUpperCase),
+      over(ShiftTelescope.of().code(), String::trim),
+      over(ShiftTelescope.of().crew().each().name(), String::toLowerCase),
+      over(ShiftTelescope.of().crew().each().handle(), (final String h) -> "@" + h)
+    );
+    final var out = normalize.apply(
+      new Shift("night", " n1 ", List.of(new Crewmate("ADA", "ada"), new Crewmate("BO", "bo")))
+    );
+    expect(
+      new Shift("NIGHT", "n1", List.of(new Crewmate("ada", "@ada"), new Crewmate("bo", "@bo"))).equals(out),
+      "navigator multi-edit mismatch: " + out
     );
   }
 
