@@ -675,6 +675,9 @@ JVM/codegen-only under AOT).
 17. **0017 — `telescope-jpa`.** (Proposed.) Persistence-aware container copies through a `ContainerCopy` SPI (an
     unloaded lazy collection is shared, not loaded), proxy unwrapping moved out of core, and starter wiring, all against
     the Jakarta Persistence API.
+18. **0018 — Generated mapper parity with MapStruct.** (Proposed.) Closes the gaps on the `@Bridge` path in order: cycle
+    guard, enum to enum, conversion on a renamed field, values computed from the source, nested paths, update in place.
+    Each step is decided in the shared spec and held to both paths by `CrossPathCorpusTest`.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
