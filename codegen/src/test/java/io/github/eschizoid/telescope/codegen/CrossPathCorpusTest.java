@@ -3562,4 +3562,413 @@ class CrossPathCorpusTest {
     final var collection = (Collection<?>) container;
     return collection.isEmpty() ? null : collection.iterator().next();
   }
+
+  /**
+   * An object graph that leads back to an object still being converted: the declarations, each with
+   * {@code %1$s} as the cell's prefix, and the shape both paths owe forward, backward and in {@code
+   * patch}. {@code Src} carries the {@code @Bridge}; {@code Src.sample()} and {@code Tgt.sample()}
+   * build the cyclic inputs, and {@code patch} lays {@code Tgt.sample()} over {@code Src.sample()}.
+   *
+   * <p>A shape names each distinct target object {@code #n} where it first appears and {@code @n}
+   * wherever it appears again, so the identity relationships between targets are part of what both
+   * paths owe, not only the values.
+   */
+  private record Cycle(String name, List<String> declarations, String forward, String backward, String patch) {}
+
+  /**
+   * A public class with a no-arg constructor, a getter and setter per property, and {@code extra}.
+   */
+  private static String bean(final String name, final String extra, final String... properties) {
+    final var sb = new StringBuilder("public class ").append(name).append(" {\n");
+    for (final var property : properties) {
+      final var type = property.substring(0, property.lastIndexOf(' '));
+      final var field = property.substring(property.lastIndexOf(' ') + 1);
+      final var cap = Character.toUpperCase(field.charAt(0)) + field.substring(1);
+      sb.append("  private ").append(type).append(' ').append(field).append(";\n");
+      sb.append("  public ").append(type).append(" get").append(cap).append("() { return ").append(field);
+      sb.append("; }\n  public void set").append(cap).append("(final ").append(type).append(" v) { ");
+      sb.append(field).append(" = v; }\n");
+    }
+    return sb.append(extra).append("}\n").toString();
+  }
+
+  private static final String BRIDGE_TO_TGT = "@io.github.eschizoid.telescope.annotations.Bridge(%1$sTgt.class)\n";
+
+  /** Two people who manage each other, as {@code type}. */
+  private static String pair(final String type) {
+    return (
+      "  public static " +
+      type +
+      " sample() {\n" +
+      "    final var alice = new " +
+      type +
+      "();\n" +
+      "    final var bob = new " +
+      type +
+      "();\n" +
+      "    alice.setName(\"alice\");\n" +
+      "    bob.setName(\"bob\");\n" +
+      "    alice.setManager(bob);\n" +
+      "    bob.setManager(alice);\n" +
+      "    return alice;\n" +
+      "  }\n"
+    );
+  }
+
+  /** One person who manages themself, as {@code type}. */
+  private static String loop(final String type) {
+    return (
+      "  public static " +
+      type +
+      " sample() {\n" +
+      "    final var self = new " +
+      type +
+      "();\n" +
+      "    self.setName(\"self\");\n" +
+      "    self.setManager(self);\n" +
+      "    return self;\n" +
+      "  }\n"
+    );
+  }
+
+  private static final List<Cycle> CYCLES = List.of(
+    new Cycle(
+      "an object that refers to itself",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", loop("%1$sSrc"), "String name", "%1$sSrc manager"),
+        bean("%1$sTgt", loop("%1$sTgt"), "String name", "%1$sTgt manager")
+      ),
+      "#0(manager=null, name=\"self\")",
+      "#0(manager=null, name=\"self\")",
+      "#0(manager=#1(manager=null, name=\"self\"), name=\"self\")"
+    ),
+    new Cycle(
+      "two objects of one type that refer to each other",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", pair("%1$sSrc"), "String name", "%1$sSrc manager"),
+        bean("%1$sTgt", pair("%1$sTgt"), "String name", "%1$sTgt manager")
+      ),
+      "#0(manager=#1(manager=null, name=\"bob\"), name=\"alice\")",
+      "#0(manager=#1(manager=null, name=\"bob\"), name=\"alice\")",
+      "#0(manager=#1(manager=#2(manager=null, name=\"alice\"), name=\"bob\"), name=\"alice\")"
+    ),
+    new Cycle(
+      "two objects of two types that refer to each other",
+      List.of(
+        BRIDGE_TO_TGT +
+          bean(
+            "%1$sSrc",
+            "  public static %1$sSrc sample() {\n" +
+              "    final var person = new %1$sSrc();\n" +
+              "    final var desk = new %1$sDesk();\n" +
+              "    person.setName(\"person\");\n" +
+              "    desk.setLabel(\"desk\");\n" +
+              "    person.setDesk(desk);\n" +
+              "    desk.setOwner(person);\n" +
+              "    return person;\n" +
+              "  }\n",
+            "String name",
+            "%1$sDesk desk"
+          ),
+        bean("%1$sDesk", "", "String label", "%1$sSrc owner"),
+        bean(
+          "%1$sTgt",
+          "  public static %1$sTgt sample() {\n" +
+            "    final var person = new %1$sTgt();\n" +
+            "    final var desk = new %1$sDeskDto();\n" +
+            "    person.setName(\"person\");\n" +
+            "    desk.setLabel(\"desk\");\n" +
+            "    person.setDesk(desk);\n" +
+            "    desk.setOwner(person);\n" +
+            "    return person;\n" +
+            "  }\n",
+          "String name",
+          "%1$sDeskDto desk"
+        ),
+        bean("%1$sDeskDto", "", "String label", "%1$sTgt owner")
+      ),
+      "#0(desk=#1(label=\"desk\", owner=null), name=\"person\")",
+      "#0(desk=#1(label=\"desk\", owner=null), name=\"person\")",
+      "#0(desk=#1(label=\"desk\", owner=#2(desk=null, name=\"person\")), name=\"person\")"
+    ),
+    new Cycle(
+      "a record that holds itself in a list",
+      List.of(
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(String name, java.util.List<%1$sSrc> children) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    final var children = new java.util.ArrayList<%1$sSrc>();\n" +
+          "    final var root = new %1$sSrc(\"root\", children);\n" +
+          "    children.add(new %1$sSrc(\"child\", java.util.List.of(root)));\n" +
+          "    return root;\n" +
+          "  }\n" +
+          "}\n",
+        "public record %1$sTgt(String name, java.util.List<%1$sTgt> children) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    final var children = new java.util.ArrayList<%1$sTgt>();\n" +
+          "    final var root = new %1$sTgt(\"root\", children);\n" +
+          "    children.add(root);\n" +
+          "    return root;\n" +
+          "  }\n" +
+          "}\n"
+      ),
+      "#0(name=\"root\", children=[#1(name=\"child\", children=[null])])",
+      "#0(name=\"root\", children=[null])",
+      "#0(name=\"root\", children=[#1(name=\"root\", children=[null])])"
+    ),
+    new Cycle(
+      "a record that holds itself in a list of lists",
+      List.of(
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(String name, java.util.List<java.util.List<%1$sSrc>> grid) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    final var row = new java.util.ArrayList<%1$sSrc>();\n" +
+          "    final var root = new %1$sSrc(\"root\", java.util.List.of(row));\n" +
+          "    row.add(root);\n" +
+          "    return root;\n" +
+          "  }\n" +
+          "}\n",
+        "public record %1$sTgt(String name, java.util.List<java.util.List<%1$sTgt>> grid) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    final var row = new java.util.ArrayList<%1$sTgt>();\n" +
+          "    final var root = new %1$sTgt(\"root\", java.util.List.of(row));\n" +
+          "    row.add(root);\n" +
+          "    return root;\n" +
+          "  }\n" +
+          "}\n"
+      ),
+      "#0(name=\"root\", grid=[[null]])",
+      "#0(name=\"root\", grid=[[null]])",
+      "#0(name=\"root\", grid=[[#1(name=\"root\", grid=[[null]])]])"
+    ),
+    new Cycle(
+      "a record that holds itself in a container class of its own",
+      List.of(
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(String name, %1$sKids kids) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    final var kids = new %1$sKids();\n" +
+          "    final var root = new %1$sSrc(\"root\", kids);\n" +
+          "    kids.add(root);\n" +
+          "    return root;\n" +
+          "  }\n" +
+          "}\n",
+        "public class %1$sKids extends java.util.ArrayList<%1$sSrc> {\n" +
+          "  private static final long serialVersionUID = 1L;\n" +
+          "}\n",
+        "public record %1$sTgt(String name, %1$sKidsDto kids) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    final var kids = new %1$sKidsDto();\n" +
+          "    final var root = new %1$sTgt(\"root\", kids);\n" +
+          "    kids.add(root);\n" +
+          "    return root;\n" +
+          "  }\n" +
+          "}\n",
+        "public class %1$sKidsDto extends java.util.ArrayList<%1$sTgt> {\n" +
+          "  private static final long serialVersionUID = 1L;\n" +
+          "}\n"
+      ),
+      "#0(name=\"root\", kids=[null])",
+      "#0(name=\"root\", kids=[null])",
+      "#0(name=\"root\", kids=[#1(name=\"root\", kids=[null])])"
+    ),
+    new Cycle(
+      "an object that refers to itself through an Optional",
+      List.of(
+        BRIDGE_TO_TGT +
+          bean(
+            "%1$sSrc",
+            "  public static %1$sSrc sample() {\n" +
+              "    final var self = new %1$sSrc();\n" +
+              "    self.setName(\"self\");\n" +
+              "    self.setManager(java.util.Optional.of(self));\n" +
+              "    return self;\n" +
+              "  }\n",
+            "String name",
+            "java.util.Optional<%1$sSrc> manager"
+          ),
+        bean(
+          "%1$sTgt",
+          "  public static %1$sTgt sample() {\n" +
+            "    final var self = new %1$sTgt();\n" +
+            "    self.setName(\"self\");\n" +
+            "    self.setManager(java.util.Optional.of(self));\n" +
+            "    return self;\n" +
+            "  }\n",
+          "String name",
+          "java.util.Optional<%1$sTgt> manager"
+        )
+      ),
+      "#0(manager=empty, name=\"self\")",
+      "#0(manager=empty, name=\"self\")",
+      "#0(manager=of #1(manager=empty, name=\"self\"), name=\"self\")"
+    ),
+    new Cycle(
+      "one object reached twice along separate branches",
+      List.of(
+        BRIDGE_TO_TGT +
+          bean(
+            "%1$sSrc",
+            "  public static %1$sSrc sample() {\n" +
+              "    final var lead = new %1$sSrc();\n" +
+              "    final var shared = new %1$sSrc();\n" +
+              "    lead.setName(\"lead\");\n" +
+              "    shared.setName(\"shared\");\n" +
+              "    lead.setManager(shared);\n" +
+              "    lead.setMentor(shared);\n" +
+              "    return lead;\n" +
+              "  }\n",
+            "String name",
+            "%1$sSrc manager",
+            "%1$sSrc mentor"
+          ),
+        bean(
+          "%1$sTgt",
+          "  public static %1$sTgt sample() {\n" +
+            "    final var lead = new %1$sTgt();\n" +
+            "    final var shared = new %1$sTgt();\n" +
+            "    lead.setName(\"lead\");\n" +
+            "    shared.setName(\"shared\");\n" +
+            "    lead.setManager(shared);\n" +
+            "    lead.setMentor(shared);\n" +
+            "    return lead;\n" +
+            "  }\n",
+          "String name",
+          "%1$sTgt manager",
+          "%1$sTgt mentor"
+        )
+      ),
+      "#0(manager=#1(manager=null, mentor=null, name=\"shared\"), mentor=#2(manager=null, mentor=null, name=\"shared\"), name=\"lead\")",
+      "#0(manager=#1(manager=null, mentor=null, name=\"shared\"), mentor=#2(manager=null, mentor=null, name=\"shared\"), name=\"lead\")",
+      "#0(manager=#1(manager=null, mentor=null, name=\"shared\"), mentor=#2(manager=null, mentor=null, name=\"shared\"), name=\"lead\")"
+    )
+  );
+
+  @Test
+  @DisplayName("an object graph that leads back to an object being converted maps to the same shape on both paths")
+  void aCyclicGraphMapsToTheSameShapeOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var cycle : CYCLES) {
+      final var prefix = "Cy" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var sources = cycle
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(
+        plain.success(),
+        () -> cycle.name() + " should compile without the processor: " + plain.errorMessages()
+      );
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      assertTrue(processed.success(), () -> cycle.name() + " should compile: " + processed.errorMessages());
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var bridge = emitted(processed, plain, prefix);
+      final var mapper = Telescope.mapper(src, tgt);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = List.of(
+        Map.entry("forward", cycle.forward()),
+        Map.entry("backward", cycle.backward()),
+        Map.entry("patch", cycle.patch())
+      );
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              cycle.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(
+      failures.isEmpty(),
+      () -> failures.size() + " cycle cell(s) failed:\n  " + String.join("\n  ", failures)
+    );
+  }
+
+  /** The simple name of the one top-level type {@code code} declares. */
+  private static String declaredName(final String code) {
+    final var matcher = Pattern.compile("public (?:class|record) (\\w+)").matcher(code);
+    if (!matcher.find()) throw new IllegalArgumentException("no public type in " + code);
+    return matcher.group(1);
+  }
+
+  /** The shape of what {@code attempt} produced, or {@link #REFUSED} and the throwable's class. */
+  private static String shapeOf(final Attempt attempt) {
+    try {
+      return shape(attempt.get(), new IdentityHashMap<>());
+    } catch (final InvocationTargetException e) {
+      final var cause = e.getCause() == null ? e : e.getCause();
+      return REFUSED + cause.getClass().getSimpleName();
+    } catch (final ReflectiveOperationException | RuntimeException | StackOverflowError e) {
+      return REFUSED + e.getClass().getSimpleName();
+    }
+  }
+
+  /**
+   * {@code value} rendered with each object of a cell's types numbered where it first appears and
+   * referred back to by number afterwards, its properties in name order for a class and component
+   * order for a record.
+   */
+  private static String shape(final Object value, final IdentityHashMap<Object, Integer> numbered)
+    throws ReflectiveOperationException {
+    if (value == null) return "null";
+    if (value instanceof String text) return "\"" + text + "\"";
+    if (value instanceof Optional<?> present) {
+      return present.isEmpty() ? "empty" : "of " + shape(present.get(), numbered);
+    }
+    if (value instanceof Collection<?> elements) {
+      final var rendered = new ArrayList<String>();
+      for (final var element : elements) rendered.add(shape(element, numbered));
+      return rendered.toString();
+    }
+    final var seen = numbered.get(value);
+    if (seen != null) return "@" + seen;
+    final var number = numbered.size();
+    numbered.put(value, number);
+    final var properties = new TreeMap<String, Method>();
+    if (value.getClass().isRecord()) {
+      for (final var component : value.getClass().getRecordComponents()) {
+        properties.put(String.format("%03d", properties.size()) + component.getName(), component.getAccessor());
+      }
+    } else {
+      for (final var method : value.getClass().getDeclaredMethods()) {
+        if (method.getName().startsWith("get") && method.getParameterCount() == 0) {
+          properties.put(Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4), method);
+        }
+      }
+    }
+    final var parts = new ArrayList<String>();
+    for (final var entry : properties.entrySet()) {
+      final var key = value.getClass().isRecord() ? entry.getKey().substring(3) : entry.getKey();
+      parts.add(key + "=" + shape(entry.getValue().invoke(value), numbered));
+    }
+    return "#" + number + "(" + String.join(", ", parts) + ")";
+  }
 }

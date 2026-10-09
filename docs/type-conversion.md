@@ -44,7 +44,8 @@ Runtime mapping cuts a cycle when an object is encountered again on the active r
 back-edge becomes `null` (or an empty `Optional`). Shared objects in separate acyclic branches are mapped independently;
 their mapped copies do not share identity. Each public mapping invocation has independent tracking, including reentrant
 calls, and exceptions release that tracking. This replaces the earlier behavior that could turn a repeated sibling into
-`null` and expand the root twice.
+`null` and expand the root twice. A generated `@Bridge` cuts a cycle at the same reference: each `forward`, `backward`
+and `patch` call tracks the objects it is converting, for every type that can reach itself through its properties.
 
 Parameterized container subclasses resolve their element/key types through their generic supertypes. For example,
 `StringMap<V> extends HashMap<String, V>` has a `String` key regardless of its own parameter count. Raw subclass pairs

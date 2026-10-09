@@ -546,21 +546,31 @@ static Mapper<Order, OrderDto> orderMapper(final Locale locale) {
   );
 }
 
-// The cycle-tracking @Context use case needs zero code — cycles are handled automatically:
+// The cycle-tracking @Context use case needs zero code — cycles are handled automatically, on both paths:
 final var mapper = Telescope.mapper(Node.class, NodeDto.class); // self/mutual recursion just works
+
+final NodeDto dto = NodeBridge.forward(node); // the generated @Bridge cuts the same cycle at the same reference
 ```
 
 The single most common @Context use case — CycleAvoidingMappingContext — is unnecessary: DeepMap's cycle cache +
-value-level seen-set handles self/mutual recursion automatically. What's genuinely missing: a per-invocation context
-parameter threaded through nested via(...) mappers. forward(a) takes only the source; row functions and hooks capture
-context at build time, so per-request context (Locale, tenant) means building a mapper per context value (build cost is
-non-trivial) or closing over a ScopedValue/holder manually. No sugar exists for that.
+value-level seen-set handles self/mutual recursion automatically. A generated `@Bridge` does the same for a type that
+can reach itself through its properties: it tracks the objects it is converting and maps the reference that leads back
+to one of them to `null`, as the runtime mapper does, so both paths give a graph of the same shape. A type that cannot
+reach itself is generated with no tracking at all. What's genuinely missing: a per-invocation context parameter threaded
+through nested via(...) mappers. forward(a) takes only the source; row functions and hooks capture context at build
+time, so per-request context (Locale, tenant) means building a mapper per context value (build cost is non-trivial) or
+closing over a ScopedValue/holder manually. No sugar exists for that.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, `forward(final A a)` and
 `backward(final B b)` (neither takes a context argument); core/src/main/java/io/github/eschizoid/telescope/DeepMap.java,
 the `FORWARD_SEEN` / `BACKWARD_SEEN` fields (built-in ThreadLocal IdentityHashMap value-level cycle guard);
 core/src/test/java/io/github/eschizoid/telescope/CycleHandlingTest.java, every test (Optional/List self-reference and
 A-B mutual recursion map without StackOverflow, zero user code);
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java, `guardsCycles` and `emitDirection`
+(the compile-time decision and the generated path-carrying overloads);
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'an object graph that
+leads back to an object being converted maps to the same shape on both paths' (self-loop, two-object and two-type
+cycles, cycles through a List, a nested List, a container subtype and an Optional, forward, backward and patch);
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor, Function, Function)`
 (typed-transform row where a closure captures context)</sub>
 
