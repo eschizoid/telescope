@@ -1270,12 +1270,201 @@ class BridgeProcessorTest {
       final var node = compilation.generated().get("demo.NodeBridge");
       assertNotNull(node);
       assertNull(compilation.generated().get("demo.NodeToNodeDtoBridge")); // No auto-named dup.
-      // Path through the Optional<Node> field references the same NodeBridge — runtime recursion
-      // terminates on Optional.empty().
+      // The Optional<Node> field calls the same NodeBridge, passing the path of the objects it is
+      // converting, so a graph that leads back to one of them ends there.
       assertTrue(node.contains("final java.util.Optional<demo.Node> __fs_child = s.child();"), node);
-      assertTrue(node.contains("__fs_child.map(NodeBridge::forward)"), node);
+      assertTrue(node.contains("__fs_child.map(__el -> NodeBridge.forward(__el, __path))"), node);
       assertTrue(node.contains("final java.util.Optional<demo.NodeDto> __bt_child = t.child();"), node);
-      assertTrue(node.contains("__bt_child.map(NodeBridge::backward)"), node);
+      assertTrue(node.contains("__bt_child.map(__el -> NodeBridge.backward(__el, __path))"), node);
+    }
+
+    @Test
+    @DisplayName("a pair whose types cannot reach themselves is emitted with no cycle guard")
+    void anAcyclicPairCarriesNoCycleGuard() {
+      final var compilation = compile(
+        source(
+          "demo.Holder",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.List;
+          @Bridge(demo.HolderDto.class)
+          public record Holder(String id, demo.Leaf leaf, List<demo.Leaf> leaves, demo.Node node) {}
+          """
+        ),
+        source(
+          "demo.HolderDto",
+          """
+          package demo;
+          import java.util.List;
+          public record HolderDto(String id, demo.LeafDto leaf, List<demo.LeafDto> leaves, demo.NodeDto node) {}
+          """
+        ),
+        source("demo.Leaf", "package demo; public record Leaf(String v) {}"),
+        source("demo.LeafDto", "package demo; public record LeafDto(String v) {}"),
+        source("demo.Node", "package demo; public record Node(String v, demo.Node next) {}"),
+        source("demo.NodeDto", "package demo; public record NodeDto(String v, demo.NodeDto next) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      // Holder reaches the cyclic Node but not itself, and Leaf reaches nothing: both bridges are
+      // what they would be with no cycle anywhere, and Holder calls Node's public forward, which
+      // starts a path of its own.
+      for (final var name : List.of("demo.HolderBridge", "demo.LeafToLeafDtoBridge")) {
+        final var bridge = compilation.generated().get(name);
+        assertNotNull(bridge, name);
+        for (final var guard : List.of("__path", "IdentityHashMap", "_PATH")) {
+          assertFalse(bridge.contains(guard), () -> name + " mentions " + guard + ":\n" + bridge);
+        }
+      }
+      final var holder = compilation.generated().get("demo.HolderBridge");
+      assertTrue(
+        holder.contains(
+          """
+            public static demo.HolderDto forward(final demo.Holder s) {
+              if (s == null) return null;
+          """
+        ),
+        holder
+      );
+      assertTrue(holder.contains("NodeToNodeDtoBridge.forward(__fs_node)"), holder);
+      // The cyclic pair beside them is guarded, so the absence above is a decision, not a gap.
+      final var node = compilation.generated().get("demo.NodeToNodeDtoBridge");
+      assertTrue(node.contains("NodeToNodeDtoBridge.forward(__fs_next, __path)"), node);
+    }
+
+    @Test
+    @DisplayName("a cycle through a sub-bridge passes the path both ways, and only along the cycle")
+    void aCycleThroughASubBridgePassesThePathAlongIt() {
+      final var compilation = compile(
+        source(
+          "demo.Person",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import java.util.List;
+          @Bridge(demo.PersonDto.class)
+          public record Person(String name, List<demo.Desk> desks, demo.Leaf badge) {}
+          """
+        ),
+        source(
+          "demo.PersonDto",
+          """
+          package demo;
+          import java.util.List;
+          public record PersonDto(String name, List<demo.DeskDto> desks, demo.LeafDto badge) {}
+          """
+        ),
+        source("demo.Desk", "package demo; public record Desk(String label, demo.Person owner) {}"),
+        source("demo.DeskDto", "package demo; public record DeskDto(String label, demo.PersonDto owner) {}"),
+        source("demo.Leaf", "package demo; public record Leaf(String v) {}"),
+        source("demo.LeafDto", "package demo; public record LeafDto(String v) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var person = compilation.generated().get("demo.PersonBridge");
+      final var desk = compilation.generated().get("demo.DeskToDeskDtoBridge");
+      assertTrue(person.contains("__fwd_desks(__fs_desks, __path)"), person);
+      assertTrue(person.contains("out.add(DeskToDeskDtoBridge.forward(x, __path))"), person);
+      assertTrue(person.contains("__bwd_desks(__bt_desks, __path)"), person);
+      // Leaf is off the cycle, so it is called the way it always is.
+      assertTrue(person.contains("LeafToLeafDtoBridge.forward(__fs_badge)"), person);
+      assertTrue(desk.contains("PersonBridge.forward(__fs_owner, __path)"), desk);
+      assertTrue(desk.contains("PersonBridge.backward(__bt_owner, __path)"), desk);
+      // patch converts each partial slot on a path of its own.
+      assertTrue(person.contains("__bwd_desks(__pp_desks, new java.util.IdentityHashMap<>())"), person);
+    }
+
+    @Test
+    @DisplayName("a cycle whose bridges land in two packages compiles, its path overloads public")
+    void aCycleAcrossPackagesCompiles() {
+      final var compilation = compileAttributed(
+        source(
+          "a.Person",
+          """
+          package a;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(a.PersonDto.class)
+          public record Person(String name, b.Desk desk) {}
+          """
+        ),
+        source("a.PersonDto", "package a; public record PersonDto(String name, b.DeskDto desk) {}"),
+        source("b.Desk", "package b; public record Desk(String label, a.Person owner) {}"),
+        source("b.DeskDto", "package b; public record DeskDto(String label, a.PersonDto owner) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      // Each bridge calls the other's overload from another package, which only a public one
+      // allows.
+      final var person = compilation.generated().get("a.PersonBridge");
+      assertTrue(person.contains("b.DeskToDeskDtoBridge.forward(__fs_desk, __path)"), person);
+      assertTrue(person.contains("  public static a.PersonDto forward(final a.Person s, final java.util"), person);
+    }
+
+    @Test
+    @DisplayName("a cycle through a carrier bridge in its own package compiles, its path overloads public")
+    void aCycleThroughACarrierCompiles() {
+      final var compilation = compileAttributed(
+        source(
+          "c.PersonMapping",
+          """
+          package c;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(source = a.Person.class, target = a.PersonDto.class)
+          public final class PersonMapping {}
+          """
+        ),
+        source("a.Person", "package a; public record Person(String name, a.Desk desk) {}"),
+        source("a.PersonDto", "package a; public record PersonDto(String name, a.DeskDto desk) {}"),
+        source("a.Desk", "package a; public record Desk(String label, a.Person owner) {}"),
+        source("a.DeskDto", "package a; public record DeskDto(String label, a.PersonDto owner) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      // The carrier's bridge lives in c and every type in a, so both directions cross a package.
+      final var desk = compilation.generated().get("a.DeskToDeskDtoBridge");
+      assertTrue(desk.contains("c.PersonMappingBridge.forward(__fs_owner, __path)"), desk);
+      assertTrue(desk.contains("  public static a.DeskDto forward(final a.Desk s, final java.util"), desk);
+    }
+
+    @Test
+    @DisplayName("a field with no accessor still counts toward a cycle, as Lombok's fields do before it adds them")
+    void aFieldWithNoAccessorCountsTowardACycle() {
+      // A class whose fields have no accessors yet is what a Lombok class reads as before its
+      // patches run. Its bridge pairs only the properties it can read, but whether it can reach
+      // itself is decided by the fields too, so the answer does not depend on when Lombok runs.
+      final var compilation = compile(
+        source(
+          "demo.Node",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.NodeDto.class)
+          public class Node {
+            private String name;
+            private demo.Node next;
+            public String getName() { return name; }
+            public void setName(final String name) { this.name = name; }
+          }
+          """
+        ),
+        source(
+          "demo.NodeDto",
+          """
+          package demo;
+          public class NodeDto {
+            private String name;
+            private demo.NodeDto next;
+            public String getName() { return name; }
+            public void setName(final String name) { this.name = name; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var node = compilation.generated().get("demo.NodeBridge");
+      assertTrue(node.contains("__path"), node);
     }
 
     @Test

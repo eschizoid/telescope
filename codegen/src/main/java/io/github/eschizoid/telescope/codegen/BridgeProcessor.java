@@ -10,6 +10,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -18,6 +19,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -230,6 +232,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * {@link #subBridgeReference}.
    */
   private final Map<String, TypePair> bridgeNameOwner = new HashMap<>();
+
+  /** The types each type can reach through its properties, by qualified name; see reachableFrom. */
+  private final Map<String, Set<String>> reachable = new HashMap<>();
+
+  /**
+   * The sub-bridges and nested element classes of the pair being planned that take the active path,
+   * by the name the bridge calls them by. Filled while the pair is planned, read while it is
+   * emitted.
+   */
+  private final Set<String> threadedRefs = new HashSet<>();
+
+  /**
+   * The expression passed as the active path to a call that takes one, or {@code null} while
+   * emitting code that passes none. A guarded bridge's {@code forward} and {@code backward} pass
+   * their own path; its {@code patch} passes a fresh one per call.
+   */
+  private String pathArg;
 
   @Override
   public boolean process(final Set<? extends TypeElement> annotations, final RoundEnvironment roundEnv) {
@@ -495,6 +514,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       lenientPairs.clear();
       bridgeProviders.clear();
       bridgeNameOwner.clear();
+      reachable.clear();
     }
     return true;
   }
@@ -1223,6 +1243,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final Set<TypePair> seen,
     final Set<TypePair> userDeclared
   ) {
+    pathArg = null;
     if (source.getKind() == ElementKind.INTERFACE) {
       generateSealed(source, target, pending, seen, userDeclared);
       return;
@@ -1902,6 +1923,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     );
     if (fieldPlans == null) return;
     final var nested = new LinkedHashMap<>(nestedElements);
+    // A pair whose two sides can each reach themselves can be handed an object it is already
+    // converting. Its forward and backward carry the path of objects being converted and pass it to
+    // the sub-bridges on the same cycle; every other pair is emitted with no trace of it.
+    final var guarded = guardsCycles(source, target);
+    pathArg = guarded ? "__path" : null;
 
     // readForward is called with TARGET field names (we walk targetFields). Injected targets
     // (constants, computes) take priority — they're forward-only literal/Supplier expressions with
@@ -2008,7 +2034,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // caller never wrote.
       return "(" + pLocal + " != null ? " + partialRead + " : " + baseRead + ")";
     };
+    // The runtime mapper's patch converts each partial slot as a conversion of its own, so each
+    // call starts an empty path.
+    pathArg = guarded ? FRESH_PATH : null;
     final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source, sourceRebuild);
+    pathArg = guarded ? "__path" : null;
     if (patchInner == null) return;
     // Wrap the inner expression in a block prelude carrying the precomputed locals so the final
     // emitted body has the right shape: { final <type> __pp_X = ...; ... return <inner>; }
@@ -2101,20 +2131,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           mentionsRawUse(f.type())
         );
         final var suppressRaw = rawFields ? "  @SuppressWarnings(\"rawtypes\")\n" : "";
-        out.print(suppressRaw);
-        out.println("  public static " + targetFq + " forward(final " + sourceFq + " s) {");
         // Null in -> null out, matching the runtime structural Iso. Also lets a null container
         // element (subBridge.forward(null) in the container helpers) pass through as null.
-        out.println("    if (s == null) return null;");
-        emitMethodBody(out, forwardBody);
-        out.println("  }");
-        out.println();
-        out.print(suppressRaw);
-        out.println("  public static " + sourceFq + " backward(final " + targetFq + " t) {");
-        out.println("    if (t == null) return null;");
-        emitMethodBody(out, backwardBody);
-        out.println("  }");
-        out.println();
+        final var pathAccess = guarded ? pathOverloadAccess(source, pkg) : null;
+        emitDirection(out, suppressRaw, pathAccess, "forward", sourceFq, targetFq, "s", forwardBody);
+        emitDirection(out, suppressRaw, pathAccess, "backward", targetFq, sourceFq, "t", backwardBody);
         // Sparse-overlay patch: read non-null fields of `partial` (a partially-populated target)
         // and apply them onto `base`. Mirrors the runtime Mapper#patch(base, partial) semantics.
         // Reference target components null-gate to base; primitive components autobox to non-null
@@ -2919,6 +2940,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String parentPkg
   ) {
     nestedElements.clear();
+    threadedRefs.clear();
     final var plans = new LinkedHashMap<String, FieldPlan>();
     for (final var sf : sourceFields) {
       // Per-field transform supersedes the type-match logic — the transform IS the contract.
@@ -3162,6 +3184,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           userDeclared.contains(subPair),
           parentPkg
         );
+        threadPathTo(source, target, subSourceEl, subTargetEl, subBridgeName);
         plans.put(sf.name(), FieldPlan.recurse(subBridgeName));
         continue;
       }
@@ -3282,6 +3305,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // Leniency propagates into the element pair too, matching the scalar sub-pair path.
       if (lenient) lenientPairs.add(subPair);
       final var subBridgeName = subBridgeReference(subSourceEl, subTargetEl, userDeclared.contains(subPair), parentPkg);
+      threadPathTo(parentSource, parentTarget, subSourceEl, subTargetEl, subBridgeName);
       return FieldPlan.ofKind(kind, subBridgeName);
     }
     error(
@@ -3394,6 +3418,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         copied
       )
     );
+    // A nested element class whose elements take the active path takes it too, to pass it on.
+    if (threadedRefs.contains(inner.subBridgeName())) threadedRefs.add(name);
     return FieldPlan.ofKind(kind, name);
   }
 
@@ -3677,17 +3703,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private String applyForward(final String fieldName, final FieldPlan plan, final String readExpr) {
     // A container the inline copy constructor cannot build correctly routes to its self-contained
     // helper; see copiesThroughHelper.
-    if (copiesThroughHelper(plan, plan.fwdContainerImpl())) return "__fwd_" + fieldName + "(" + readExpr + ")";
     final var sub = plan.subBridgeName();
+    final var fwdHelper = "__fwd_" + fieldName + "(" + readExpr + (threads(sub) ? ", " + pathArg : "") + ")";
+    if (copiesThroughHelper(plan, plan.fwdContainerImpl())) return fwdHelper;
     final boolean elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(sub);
-    final var fwdElement = elementIdentity ? "e -> e" : sub + "::forward";
+    final var fwdElement = elementIdentity ? "e -> e" : subFunction(sub, "forward");
     return switch (plan.kind()) {
       case IDENTITY -> readExpr;
       case COPY -> containerCopy(readExpr, plan);
       case PRIM_WRAPPER -> plan.fwdNullDefault() == null
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.fwdNullDefault() + " : " + readExpr + ")";
-      case RECURSE -> sub + ".forward(" + readExpr + ")";
+      case RECURSE -> subCall(sub, "forward", readExpr);
       // LIST/SET/MAP_VALUES: when the element type needs a sub-bridge, delegate to a private static
       // helper emitted alongside this method (see emitContainerHelpers below). The helper inlines a
       // size-presized for-loop, eliminating the Stream + Spliterator + collector overhead at the
@@ -3701,7 +3728,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           "(" +
           readExpr +
           "))"
-        : "__fwd_" + fieldName + "(" + readExpr + ")";
+        : fwdHelper;
       case SET -> elementIdentity
         ? "(" +
           readExpr +
@@ -3710,7 +3737,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           "(" +
           readExpr +
           "))"
-        : "__fwd_" + fieldName + "(" + readExpr + ")";
+        : fwdHelper;
       case OPTIONAL -> "(" + readExpr + " == null ? null : " + readExpr + ".map(" + fwdElement + "))";
       case MAP_VALUES -> elementIdentity
         ? "(" +
@@ -3720,7 +3747,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           "(" +
           readExpr +
           "))"
-        : "__fwd_" + fieldName + "(" + readExpr + ")";
+        : fwdHelper;
       case OPTIONAL_TO_NULLABLE -> "(" +
       readExpr +
       " == null ? null : " +
@@ -3738,17 +3765,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   private String applyBackward(final String fieldName, final FieldPlan plan, final String readExpr) {
-    if (copiesThroughHelper(plan, plan.bwdContainerImpl())) return "__bwd_" + fieldName + "(" + readExpr + ")";
     final var sub = plan.subBridgeName();
+    final var bwdHelper = "__bwd_" + fieldName + "(" + readExpr + (threads(sub) ? ", " + pathArg : "") + ")";
+    if (copiesThroughHelper(plan, plan.bwdContainerImpl())) return bwdHelper;
     final boolean elementIdentity = IDENTITY_ELEMENT_SENTINEL.equals(sub);
-    final var bwdElement = elementIdentity ? "e -> e" : sub + "::backward";
+    final var bwdElement = elementIdentity ? "e -> e" : subFunction(sub, "backward");
     return switch (plan.kind()) {
       case IDENTITY -> readExpr;
       case COPY -> containerCopy(readExpr, plan);
       case PRIM_WRAPPER -> plan.bwdNullDefault() == null
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.bwdNullDefault() + " : " + readExpr + ")";
-      case RECURSE -> sub + ".backward(" + readExpr + ")";
+      case RECURSE -> subCall(sub, "backward", readExpr);
       case LIST, SET, MAP_VALUES -> elementIdentity
         ? "(" +
           readExpr +
@@ -3757,7 +3785,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           "(" +
           readExpr +
           "))"
-        : "__bwd_" + fieldName + "(" + readExpr + ")";
+        : bwdHelper;
       case OPTIONAL -> "(" + readExpr + " == null ? null : " + readExpr + ".map(" + bwdElement + "))";
       // For the cross-paradigm bridges, forward and backward are mirror images.
       case OPTIONAL_TO_NULLABLE -> "Optional.ofNullable(" + readExpr + ").map(" + bwdElement + ")";
@@ -3884,7 +3912,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // spec copies such a pair only where nothing it holds can be of a type the other side refuses,
     // and the suppression keeps a consumer compiling with -Werror from failing on that.
     if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
-    out.println("  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src) {");
+    out.println(
+      "  private static " + tgtContainer + " " + name + "(final " + srcContainer + " src" + pathParameter(sub) + ") {"
+    );
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
       out,
@@ -3895,8 +3925,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       srcContainer
     );
     out.println(rawOutDeclaration(tgtContainer, plan.kind(), identity, bridgePkg));
-    final var element = plan.kind() == FieldPlan.Kind.MAP_VALUES ? "(e.getValue())" : "(x)";
-    emitFill(out, tgtContainer, srcContainer, plan.kind(), identity ? null : sub + "." + direction + element);
+    final var element = plan.kind() == FieldPlan.Kind.MAP_VALUES ? "e.getValue()" : "x";
+    emitFill(out, tgtContainer, srcContainer, plan.kind(), identity ? null : subCall(sub, direction, element));
     out.println("    return out;");
     out.println("  }");
   }
@@ -4486,8 +4516,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * elements of its second. Each element is converted through the view, which is where its type is
    * found, and the signature names the declared type, which is the type the field has.
    */
-  private static String helperSignature(final String name, final TypeMirror src, final TypeMirror tgt) {
-    return "  private static " + declaredContainer(tgt) + " " + name + "(final " + declaredContainer(src) + " src) {";
+  private static String helperSignature(
+    final String name,
+    final TypeMirror src,
+    final TypeMirror tgt,
+    final String pathParameter
+  ) {
+    return (
+      "  private static " +
+      declaredContainer(tgt) +
+      " " +
+      name +
+      "(final " +
+      declaredContainer(src) +
+      " src" +
+      pathParameter +
+      ") {"
+    );
   }
 
   /** A container type as declared: its raw name and its own type arguments. */
@@ -4515,10 +4560,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     out.println();
     if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
-    out.println(helperSignature(name, srcContainer, tgtContainer));
+    out.println(helperSignature(name, srcContainer, tgtContainer, pathParameter(subBridge)));
     out.println("    if (src == null) return null;");
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.LIST, false, bridgePkg));
-    out.println("    for (final var x : src) out.add(" + subBridge + "." + direction + "(x));");
+    out.println("    for (final var x : src) out.add(" + subCall(subBridge, direction, "x") + ");");
     out.println("    return out;");
     out.println("  }");
   }
@@ -4534,7 +4579,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     out.println();
     if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
-    out.println(helperSignature(name, srcContainer, tgtContainer));
+    out.println(helperSignature(name, srcContainer, tgtContainer, pathParameter(subBridge)));
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
       out,
@@ -4545,7 +4590,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       srcContainer
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.SET, false, bridgePkg));
-    emitFill(out, tgtContainer, srcContainer, FieldPlan.Kind.SET, subBridge + "." + direction + "(x)");
+    emitFill(out, tgtContainer, srcContainer, FieldPlan.Kind.SET, subCall(subBridge, direction, "x"));
     out.println("    return out;");
     out.println("  }");
   }
@@ -4757,7 +4802,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   ) {
     out.println();
     if (mentionsRawUse(srcContainer) || mentionsRawUse(tgtContainer)) out.println(RAW_SUPPRESSION);
-    out.println(helperSignature(name, srcContainer, tgtContainer));
+    out.println(helperSignature(name, srcContainer, tgtContainer, pathParameter(subBridge)));
     out.println("    if (src == null) return null;");
     emitOrderingPrelude(
       out,
@@ -4768,13 +4813,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       srcContainer
     );
     out.println(helperOutDeclaration(tgtContainer, FieldPlan.Kind.MAP_VALUES, true, bridgePkg));
-    emitFill(
-      out,
-      tgtContainer,
-      srcContainer,
-      FieldPlan.Kind.MAP_VALUES,
-      subBridge + "." + direction + "(e.getValue())"
-    );
+    emitFill(out, tgtContainer, srcContainer, FieldPlan.Kind.MAP_VALUES, subCall(subBridge, direction, "e.getValue()"));
     out.println("    return out;");
     out.println("  }");
   }
@@ -5011,6 +5050,247 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // fall to the accurate "no auto-bridge could be derived" diagnostic instead of the
     // bean-introspection crash.
     return !assignableToRaw(dt, "java.util.Collection") && !assignableToRaw(dt, "java.util.Map");
+  }
+
+  /**
+   * The types a bridge can descend into from {@code type}, by qualified name: the record and class
+   * types its properties mention, directly or as a type argument at any depth, and the same again
+   * from each of those. A type in its own set can reach itself, so a graph of its instances can
+   * lead back to an object that is still being converted.
+   *
+   * <p>The walk reads the declared instance fields as well as the properties a bridge pairs. Lombok
+   * adds accessors for fields that are already declared, so the answer is the same before and after
+   * its patches have run. The set may name a type no bridge descends into, which only guards a
+   * bridge whose guard can never fire; every type a bridge does descend into is in it.
+   */
+  private Set<String> reachableFrom(final TypeElement type) {
+    final var name = type.getQualifiedName().toString();
+    final var cached = reachable.get(name);
+    if (cached != null) return cached;
+    final var found = new HashSet<String>();
+    final Deque<TypeElement> pending = new ArrayDeque<>(List.of(type));
+    while (!pending.isEmpty()) {
+      for (final var next : mentionedTypes(pending.poll())) {
+        if (found.add(next.getQualifiedName().toString())) pending.add(next);
+      }
+    }
+    reachable.put(name, found);
+    return found;
+  }
+
+  /** The record and class types {@code type}'s properties and instance fields mention. */
+  private List<TypeElement> mentionedTypes(final TypeElement type) {
+    final Deque<TypeMirror> pending = new ArrayDeque<>();
+    for (final var field : fieldsOf(type)) pending.add(field.type());
+    for (var owner = type; owner != null; owner = userSuperclass(owner)) {
+      for (final var field : ElementFilter.fieldsIn(owner.getEnclosedElements())) {
+        if (!field.getModifiers().contains(Modifier.STATIC)) pending.add(field.asType());
+      }
+    }
+    final var walked = new HashSet<String>();
+    final var mentioned = new ArrayList<TypeElement>();
+    while (!pending.isEmpty()) {
+      final var mirror = pending.poll();
+      if (!walked.add(mirror.toString())) continue;
+      if (mirror instanceof ArrayType array) {
+        pending.add(array.getComponentType());
+      } else if (mirror instanceof WildcardType wildcard) {
+        if (wildcard.getExtendsBound() != null) pending.add(wildcard.getExtendsBound());
+        if (wildcard.getSuperBound() != null) pending.add(wildcard.getSuperBound());
+      } else if (mirror instanceof DeclaredType declared) {
+        pending.addAll(declared.getTypeArguments());
+        if (isReflectableDeclared(declared)) {
+          mentioned.add((TypeElement) declared.asElement());
+        } else if (!isJdkType(declared)) {
+          // A container the adopter wrote, such as a class extending ArrayList<Item>, carries its
+          // element type in a supertype's arguments.
+          pending.addAll(processingEnv.getTypeUtils().directSupertypes(declared));
+        }
+      }
+    }
+    return mentioned;
+  }
+
+  /** The superclass of {@code type} when it is one the adopter wrote, or {@code null}. */
+  private TypeElement userSuperclass(final TypeElement type) {
+    if (!(type.getSuperclass() instanceof DeclaredType declared) || isJdkType(declared)) return null;
+    return (TypeElement) declared.asElement();
+  }
+
+  private static boolean isJdkType(final DeclaredType type) {
+    final var name = ((TypeElement) type.asElement()).getQualifiedName().toString();
+    return name.startsWith("java.") || name.startsWith("javax.");
+  }
+
+  /**
+   * Whether the bridge for {@code source} to {@code target} can be handed an object it is already
+   * converting, which needs both sides to reach themselves. A bridge that cannot is emitted with no
+   * cycle guard at all.
+   */
+  private boolean guardsCycles(final TypeElement source, final TypeElement target) {
+    return (
+      reachableFrom(source).contains(source.getQualifiedName().toString()) &&
+      reachableFrom(target).contains(target.getQualifiedName().toString())
+    );
+  }
+
+  /** Whether {@code a} and {@code b} each reach the other, so they lie on one cycle. */
+  private boolean onOneCycle(final TypeElement a, final TypeElement b) {
+    return (
+      reachableFrom(a).contains(b.getQualifiedName().toString()) &&
+      reachableFrom(b).contains(a.getQualifiedName().toString())
+    );
+  }
+
+  /**
+   * Records that the bridge being planned passes its active path to {@code subBridgeName}, when the
+   * sub-pair lies on a cycle with the pair being planned. A sub-pair off every cycle the parent is
+   * on cannot lead back to it, so it starts a path of its own through its public method, which
+   * converts the same way.
+   */
+  private void threadPathTo(
+    final TypeElement parentSource,
+    final TypeElement parentTarget,
+    final TypeElement subSource,
+    final TypeElement subTarget,
+    final String subBridgeName
+  ) {
+    if (
+      guardsCycles(parentSource, parentTarget) &&
+      onOneCycle(parentSource, subSource) &&
+      onOneCycle(parentTarget, subTarget)
+    ) {
+      threadedRefs.add(subBridgeName);
+    }
+  }
+
+  /** The generated type of the active path: one identity set per bridge direction. */
+  private static final String PATH_TYPE =
+    "java.util.IdentityHashMap<Object, java.util.IdentityHashMap<Object, Boolean>>";
+
+  /** An empty active path, which starts a conversion of its own. */
+  private static final String FRESH_PATH = "new java.util.IdentityHashMap<>()";
+
+  /**
+   * One direction of a bridge, null in giving null out. {@code pathAccess} is {@code null} for a
+   * bridge that cannot be handed an object it is already converting, which gets one plain method.
+   *
+   * <p>Any other bridge gets a public method that starts an empty path and an overload, of access
+   * {@code pathAccess}, that carries it: an object already on the path converts to null, which
+   * severs the cycle at the reference that closes it, as the runtime mapper does. The path holds
+   * only the objects being converted right now, one identity set per bridge direction, so an object
+   * reached twice along separate branches converts twice.
+   */
+  private static void emitDirection(
+    final PrintWriter out,
+    final String suppressRaw,
+    final String pathAccess,
+    final String direction,
+    final String inFq,
+    final String outFq,
+    final String in,
+    final String body
+  ) {
+    if (pathAccess == null) {
+      out.print(suppressRaw);
+      out.println("  public static " + outFq + " " + direction + "(final " + inFq + " " + in + ") {");
+      out.println("    if (" + in + " == null) return null;");
+      emitMethodBody(out, body);
+      out.println("  }");
+      out.println();
+      return;
+    }
+    final var token = "__" + direction.toUpperCase(Locale.ROOT) + "_PATH";
+    out.println("  private static final Object " + token + " = new Object();");
+    out.println();
+    out.print(suppressRaw);
+    out.println("  public static " + outFq + " " + direction + "(final " + inFq + " " + in + ") {");
+    out.println("    return " + in + " == null ? null : " + direction + "(" + in + ", " + FRESH_PATH + ");");
+    out.println("  }");
+    out.println();
+    out.print(suppressRaw);
+    out.println(
+      "  " +
+        pathAccess +
+        "static " +
+        outFq +
+        " " +
+        direction +
+        "(final " +
+        inFq +
+        " " +
+        in +
+        ", final " +
+        PATH_TYPE +
+        " __path) {"
+    );
+    out.println("    if (" + in + " == null) return null;");
+    out.println("    final var __active = __path.computeIfAbsent(" + token + ", __k -> " + FRESH_PATH + ");");
+    out.println("    if (__active.putIfAbsent(" + in + ", Boolean.TRUE) != null) return null;");
+    out.println("    try {");
+    final var inner = new StringWriter();
+    try (var innerOut = new PrintWriter(inner)) {
+      emitMethodBody(innerOut, body);
+    }
+    inner
+      .toString()
+      .lines()
+      .forEach(line -> out.println("  " + line));
+    out.println("    } finally {");
+    out.println("      __active.remove(" + in + ");");
+    out.println("    }");
+    out.println("  }");
+    out.println();
+  }
+
+  /**
+   * The access of a guarded bridge's path-carrying overloads: package-private when every bridge
+   * that can call them shares this bridge's package, public otherwise. Those callers are the
+   * bridges whose source lies on a cycle with this one's source, each emitted beside its source or
+   * beside its carrier.
+   */
+  private String pathOverloadAccess(final TypeElement source, final String pkg) {
+    final var elements = processingEnv.getElementUtils();
+    for (final var name : reachableFrom(source)) {
+      final var type = elements.getTypeElement(name);
+      if (type == null || !onOneCycle(source, type)) continue;
+      if (!elements.getPackageOf(type).getQualifiedName().contentEquals(pkg)) return "public ";
+    }
+    final var configs = new HashMap<TypePair, BridgeConfig>(deferredConfigs);
+    configs.putAll(configsByPair);
+    for (final var entry : configs.entrySet()) {
+      final var carrier = entry.getValue().carrierFq();
+      final var other = elements.getTypeElement(entry.getKey().sourceFq());
+      if (carrier == null || other == null || !onOneCycle(source, other)) continue;
+      final var carrierType = elements.getTypeElement(carrier);
+      if (carrierType == null || !elements.getPackageOf(carrierType).getQualifiedName().contentEquals(pkg)) {
+        return "public ";
+      }
+    }
+    return "";
+  }
+
+  /** Whether a call to {@code ref} from the code being emitted passes the active path. */
+  private boolean threads(final String ref) {
+    return pathArg != null && threadedRefs.contains(ref);
+  }
+
+  /**
+   * A call to {@code ref}'s {@code direction} on {@code arg}, passing the active path if it takes
+   * one.
+   */
+  private String subCall(final String ref, final String direction, final String arg) {
+    return ref + "." + direction + "(" + arg + (threads(ref) ? ", " + pathArg : "") + ")";
+  }
+
+  /** {@code ref}'s {@code direction} as a function, passing the active path if it takes one. */
+  private String subFunction(final String ref, final String direction) {
+    return threads(ref) ? "__el -> " + subCall(ref, direction, "__el") : ref + "::" + direction;
+  }
+
+  /** The extra parameter of a helper whose element conversion takes the active path. */
+  private String pathParameter(final String ref) {
+    return threads(ref) ? ", final " + PATH_TYPE + " __path" : "";
   }
 
   // Read field `f` from `var`: `var.f()` for a record, `var.getF()` / `var.isF()` for a POJO.
