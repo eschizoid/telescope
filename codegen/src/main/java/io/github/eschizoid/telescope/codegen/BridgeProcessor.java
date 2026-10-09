@@ -5556,7 +5556,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   /**
    * A constructor call over {@code slots}, in parameter order. With a {@code hoistInto} package,
    * every argument that calls a method or creates an instance is first evaluated into a {@code
-   * final} local, and the call names the locals. Null {@code hoistInto} emits every argument inline.
+   * final} local, and the call names the locals. Null {@code hoistInto} emits every argument
+   * inline.
    *
    * <p>javac emits the {@code new} of a constructor call before the code of its arguments, so an
    * argument that allocates, such as a nested bridge's {@code forward}, allocates after the outer
@@ -5569,13 +5570,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
    * package: a type variable the static method does not declare, or a class it cannot name.
    */
   private String construct(final String toFq, final List<CtorSlot> slots, final String hoistInto) {
-    final var hoisted = hoistInto == null
-      ? Set.<String>of()
-      : slots
-          .stream()
-          .filter(slot -> CALL_OR_NEW.matcher(slot.expr()).find() && writableFrom(slot.type(), hoistInto))
-          .map(CtorSlot::name)
-          .collect(Collectors.toUnmodifiableSet());
+    final var hoisted =
+      hoistInto == null
+        ? Set.<String>of()
+        : slots
+            .stream()
+            .filter(slot -> CALL_OR_NEW.matcher(slot.expr()).find() && writableFrom(slot.type(), hoistInto))
+            .map(CtorSlot::name)
+            .collect(Collectors.toUnmodifiableSet());
     final var args = slots
       .stream()
       .map(slot -> hoisted.contains(slot.name()) ? "__cv_" + slot.name() : slot.expr())
@@ -5599,12 +5601,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private boolean writableFrom(final TypeMirror type, final String bridgePkg) {
     return switch (type) {
       case final DeclaredType declared -> declared.asElement() instanceof TypeElement element &&
-        nameableFrom(element, bridgePkg) &&
-        declared.getTypeArguments().stream().allMatch(arg -> writableFrom(arg, bridgePkg));
+      nameableFrom(element, bridgePkg) &&
+      declared
+        .getTypeArguments()
+        .stream()
+        .allMatch(arg -> writableFrom(arg, bridgePkg));
       case final ArrayType array -> writableFrom(array.getComponentType(), bridgePkg);
       case final WildcardType wildcard -> (wildcard.getExtendsBound() == null ||
-          writableFrom(wildcard.getExtendsBound(), bridgePkg)) &&
-        (wildcard.getSuperBound() == null || writableFrom(wildcard.getSuperBound(), bridgePkg));
+        writableFrom(wildcard.getExtendsBound(), bridgePkg)) &&
+      (wildcard.getSuperBound() == null || writableFrom(wildcard.getSuperBound(), bridgePkg));
       default -> type.getKind().isPrimitive();
     };
   }
