@@ -25,6 +25,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.annotation.processing.ProcessingEnvironment;
@@ -1990,9 +1991,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
     // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
     // declaration rather than at `target` (which may be a third-party POJO with no annotation).
-    final var builtForward = buildExpr(target, readForward, targetFields, writeStrategy, source, targetRebuild);
+    final var builtForward = buildExpr(target, readForward, targetFields, writeStrategy, source, targetRebuild, pkg);
     if (builtForward == null) return;
-    final var builtBackward = buildExpr(source, readBackward, sourceFields, writeStrategy, source, sourceRebuild);
+    final var builtBackward = buildExpr(source, readBackward, sourceFields, writeStrategy, source, sourceRebuild, pkg);
     if (builtBackward == null) return;
     final var forwardBody = withPrelude(forwardLocals, builtForward);
     final var backwardBody = withPrelude(backwardLocals, builtBackward);
@@ -2037,7 +2038,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The runtime mapper's patch converts each partial slot as a conversion of its own, so each
     // call starts an empty path.
     pathArg = guarded ? FRESH_PATH : null;
-    final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source, sourceRebuild);
+    final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source, sourceRebuild, null);
     pathArg = guarded ? "__path" : null;
     if (patchInner == null) return;
     // Wrap the inner expression in a block prelude carrying the precomputed locals so the final
@@ -5473,26 +5474,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final List<Field> toFields,
     final String writeStrategy,
     final TypeElement annotationSite,
-    final Rebuild rebuild
+    final Rebuild rebuild,
+    final String hoistInto
   ) {
     final var toFq = to.getQualifiedName().toString();
     switch (rebuild.kind()) {
       case RECORD -> {
-        final var args = to
-          .getRecordComponents()
-          .stream()
-          .map(c -> read.apply(c.getSimpleName().toString()))
-          .collect(Collectors.joining(", "));
-        return "new " + toFq + "(" + args + ")";
+        final var slots = new ArrayList<CtorSlot>();
+        for (final var c : to.getRecordComponents()) {
+          final var name = c.getSimpleName().toString();
+          slots.add(new CtorSlot(name, c.asType(), read.apply(name)));
+        }
+        return construct(toFq, slots, hoistInto);
       }
       case CONSTRUCTOR -> {
-        final var args = rebuild
-          .constructor()
-          .getParameters()
-          .stream()
-          .map(pa -> read.apply(pa.getSimpleName().toString()))
-          .collect(Collectors.joining(", "));
-        return "new " + toFq + "(" + args + ")";
+        final var slots = new ArrayList<CtorSlot>();
+        for (final var pa : rebuild.constructor().getParameters()) {
+          final var name = pa.getSimpleName().toString();
+          slots.add(new CtorSlot(name, pa.asType(), read.apply(name)));
+        }
+        return construct(toFq, slots, hoistInto);
       }
       case BUILDER -> {
         final var builderType = rebuild.builderType();
@@ -5544,6 +5545,68 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // would fall through here and return the value meaning "already reported" -- emitting nothing
     // and saying nothing.
     throw new IllegalStateException("no emission for rebuild rung " + rebuild.kind());
+  }
+
+  /** One constructor argument: the parameter it fills, its declared type, and its expression. */
+  private record CtorSlot(String name, TypeMirror type, String expr) {}
+
+  /** A method call or an instance creation somewhere in an emitted expression. */
+  private static final Pattern CALL_OR_NEW = Pattern.compile("[\\w$]\\s*\\(|\\bnew\\b");
+
+  /**
+   * A constructor call over {@code slots}, in parameter order. With a {@code hoistInto} package,
+   * every argument that calls a method or creates an instance is first evaluated into a {@code
+   * final} local, and the call names the locals. Null {@code hoistInto} emits every argument inline.
+   *
+   * <p>javac emits the {@code new} of a constructor call before the code of its arguments, so an
+   * argument that allocates, such as a nested bridge's {@code forward}, allocates after the outer
+   * object. Evaluating the arguments first puts the outer allocation last, directly ahead of the
+   * constructor that writes its fields.
+   *
+   * <p>The locals are evaluated in parameter order, which is the order the call evaluated its
+   * arguments in, and an argument left inline neither calls nor creates anything, so nothing
+   * observable moves. A slot stays inline when its type cannot be written from the bridge's
+   * package: a type variable the static method does not declare, or a class it cannot name.
+   */
+  private String construct(final String toFq, final List<CtorSlot> slots, final String hoistInto) {
+    final var hoisted = hoistInto == null
+      ? Set.<String>of()
+      : slots
+          .stream()
+          .filter(slot -> CALL_OR_NEW.matcher(slot.expr()).find() && writableFrom(slot.type(), hoistInto))
+          .map(CtorSlot::name)
+          .collect(Collectors.toUnmodifiableSet());
+    final var args = slots
+      .stream()
+      .map(slot -> hoisted.contains(slot.name()) ? "__cv_" + slot.name() : slot.expr())
+      .collect(Collectors.joining(", "));
+    final var call = "new " + toFq + "(" + args + ")";
+    if (hoisted.isEmpty()) return call;
+    final var sb = new StringBuilder("{ ");
+    for (final var slot : slots) {
+      if (!hoisted.contains(slot.name())) continue;
+      sb.append("final ").append(slot.type()).append(" __cv_").append(slot.name()).append(" = ");
+      sb.append(slot.expr()).append("; ");
+    }
+    return sb.append("return ").append(call).append("; }").toString();
+  }
+
+  /**
+   * Whether a local of {@code type} can be declared in a static method of a class in {@code
+   * bridgePkg}: every class it names, at any depth, is nameable there, and it names no type
+   * variable.
+   */
+  private boolean writableFrom(final TypeMirror type, final String bridgePkg) {
+    return switch (type) {
+      case final DeclaredType declared -> declared.asElement() instanceof TypeElement element &&
+        nameableFrom(element, bridgePkg) &&
+        declared.getTypeArguments().stream().allMatch(arg -> writableFrom(arg, bridgePkg));
+      case final ArrayType array -> writableFrom(array.getComponentType(), bridgePkg);
+      case final WildcardType wildcard -> (wildcard.getExtendsBound() == null ||
+          writableFrom(wildcard.getExtendsBound(), bridgePkg)) &&
+        (wildcard.getSuperBound() == null || writableFrom(wildcard.getSuperBound(), bridgePkg));
+      default -> type.getKind().isPrimitive();
+    };
   }
 
   /**

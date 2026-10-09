@@ -1,6 +1,7 @@
 package io.github.eschizoid.telescope.codegen;
 
 import static io.github.eschizoid.telescope.codegen.ProcessorHarness.source;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -272,6 +273,80 @@ class BridgeProcessorTest {
       // The sub-bridge itself uses identity links for its same-typed name/email fields.
       assertTrue(subBridge.contains("new demo.CustomerDto(__fs_name, __fs_email)"), subBridge);
       assertTrue(subBridge.contains("new demo.Customer(__bt_name, __bt_email)"), subBridge);
+    }
+
+    @Test
+    @DisplayName("a nested sub-bridge converts before the outer constructor allocates, in both directions")
+    void nestedConversionPrecedesOuterAllocation() {
+      final var compilation = compile(
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.OrderDto.class)
+          public record Order(String id, demo.Customer customer, String note) {}
+          """
+        ),
+        source(
+          "demo.Customer",
+          """
+          package demo;
+          public record Customer(String name) {}
+          """
+        ),
+        source(
+          "demo.OrderDto",
+          """
+          package demo;
+          public record OrderDto(String id, demo.CustomerDto customer, String note) {}
+          """
+        ),
+        source(
+          "demo.CustomerDto",
+          """
+          package demo;
+          public record CustomerDto(String name) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var orderBridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(orderBridge, () -> "OrderBridge not generated; saw " + compilation.generated().keySet());
+      final var forward = methodSlice(orderBridge, "public static demo.OrderDto forward(");
+      assertEquals(
+        """
+            if (s == null) return null;
+            final java.lang.String __fs_id = s.id();
+            final demo.Customer __fs_customer = s.customer();
+            final java.lang.String __fs_note = s.note();
+            final demo.CustomerDto __cv_customer = CustomerToCustomerDtoBridge.forward(__fs_customer);
+            return new demo.OrderDto(__fs_id, __cv_customer, __fs_note);
+        """,
+        forward
+      );
+      final var backward = methodSlice(orderBridge, "public static demo.Order backward(");
+      assertEquals(
+        """
+            if (t == null) return null;
+            final java.lang.String __bt_id = t.id();
+            final demo.CustomerDto __bt_customer = t.customer();
+            final java.lang.String __bt_note = t.note();
+            final demo.Customer __cv_customer = CustomerToCustomerDtoBridge.backward(__bt_customer);
+            return new demo.Order(__bt_id, __cv_customer, __bt_note);
+        """,
+        backward
+      );
+    }
+
+    /** The body of the method whose declaration starts with {@code header}, braces excluded. */
+    private static String methodSlice(final String file, final String header) {
+      final var start = file.indexOf(header);
+      assertTrue(start >= 0, () -> "no method starting " + header + " in " + file);
+      final var bodyStart = file.indexOf('\n', start) + 1;
+      final var bodyEnd = file.indexOf("\n  }\n", bodyStart) + 1;
+      return file.substring(bodyStart, bodyEnd);
     }
 
     @Test
@@ -2703,10 +2778,12 @@ class BridgeProcessorTest {
       );
       // Forward routes the hoisted single-read local through .forward(...).
       assertTrue(bridge.contains("final java.math.BigDecimal __fs_unitPrice = s.unitPrice();"), bridge);
-      assertTrue(bridge.contains("new demo.LineItemEntity(__fs_id, __tx_unitPrice.forward(__fs_unitPrice))"), bridge);
+      assertTrue(bridge.contains("__cv_unitPrice = __tx_unitPrice.forward(__fs_unitPrice);"), bridge);
+      assertTrue(bridge.contains("new demo.LineItemEntity(__fs_id, __cv_unitPrice)"), bridge);
       // Backward routes the hoisted target-read local through .backward(...).
       assertTrue(bridge.contains("final java.lang.Long __bt_unitPrice = t.unitPrice();"), bridge);
-      assertTrue(bridge.contains("new demo.LineItem(__bt_id, __tx_unitPrice.backward(__bt_unitPrice))"), bridge);
+      assertTrue(bridge.contains("__cv_unitPrice = __tx_unitPrice.backward(__bt_unitPrice);"), bridge);
+      assertTrue(bridge.contains("new demo.LineItem(__bt_id, __cv_unitPrice)"), bridge);
     }
 
     @Test
@@ -2756,7 +2833,8 @@ class BridgeProcessorTest {
 
       // Forward routes the hoisted single-read local through the BridgeFn.
       assertTrue(bridge.contains("final java.time.Instant __fs_createdAt = s.createdAt();"), bridge);
-      assertTrue(bridge.contains("new demo.AuditEntity(__fs_id, __tx_createdAt.forward(__fs_createdAt))"), bridge);
+      assertTrue(bridge.contains("__cv_createdAt = __tx_createdAt.forward(__fs_createdAt);"), bridge);
+      assertTrue(bridge.contains("new demo.AuditEntity(__fs_id, __cv_createdAt)"), bridge);
       // Backward emits null (the reference-type zero-fill) for the forward-only slot — does NOT
       // read or convert t.createdAt() at all.
       assertTrue(
@@ -3286,7 +3364,8 @@ class BridgeProcessorTest {
         bridge.contains("private static final demo.NowSupplier __cp_createdAt = new demo.NowSupplier();"),
         bridge
       );
-      assertTrue(bridge.contains("new demo.B(__fs_id, __cp_createdAt.get())"), bridge);
+      assertTrue(bridge.contains("__cv_createdAt = __cp_createdAt.get();"), bridge);
+      assertTrue(bridge.contains("new demo.B(__fs_id, __cv_createdAt)"), bridge);
       // Backward — A has no createdAt to recover, so the source rebuild only reads t.id().
       assertTrue(bridge.contains("final java.lang.String __bt_id = t.id();"), bridge);
       assertTrue(bridge.contains("new demo.A(__bt_id)"), bridge);
@@ -3634,17 +3713,15 @@ class BridgeProcessorTest {
       // generated forward opens with its own guard. Both mentions reference the local.
       assertTrue(bridge.contains("final demo.Address __fs_address = s.address();"), bridge);
       assertTrue(
-        bridge.contains(
-          "new demo.OrderDto(__fs_id, (__fs_address == null ? null :" + " demo.AddressBridge.forward(__fs_address)))"
-        ),
+        bridge.contains("__cv_address = (__fs_address == null ? null : demo.AddressBridge.forward(__fs_address));") &&
+          bridge.contains("new demo.OrderDto(__fs_id, __cv_address)"),
         () -> "expected null-gated forward via AddressBridge, saw: " + bridge
       );
       // Backward routes the hoisted target-read local through the user-named bridge, same gate.
       assertTrue(bridge.contains("final demo.AddressDto __bt_address = t.address();"), bridge);
       assertTrue(
-        bridge.contains(
-          "new demo.Order(__bt_id, (__bt_address == null ? null :" + " demo.AddressBridge.backward(__bt_address)))"
-        ),
+        bridge.contains("__cv_address = (__bt_address == null ? null : demo.AddressBridge.backward(__bt_address));") &&
+          bridge.contains("new demo.Order(__bt_id, __cv_address)"),
         () -> "expected null-gated backward via AddressBridge, saw: " + bridge
       );
       // No auto-sub-bridge AddressBridge2 / AddressToAddressDtoBridge was generated for this pair.
@@ -4660,10 +4737,9 @@ class BridgeProcessorTest {
       // target.addr through AddressBridge.backward; @Default does NOT apply on backward.
       assertTrue(
         bridge.contains("final java.lang.String __bt_name = t.renamed();") &&
-          bridge.contains(
-            "new demo.Order(null, __bt_name, __bt_tag, __tx_qty.backward(__bt_qty)," +
-              " (__bt_addr == null ? null : demo.AddressBridge.backward(__bt_addr)))"
-          ),
+          bridge.contains("__cv_qty = __tx_qty.backward(__bt_qty);") &&
+          bridge.contains("__cv_addr = (__bt_addr == null ? null : demo.AddressBridge.backward(__bt_addr));") &&
+          bridge.contains("new demo.Order(null, __bt_name, __bt_tag, __cv_qty, __cv_addr)"),
         () -> "backward composition off; saw: " + bridge
       );
 
