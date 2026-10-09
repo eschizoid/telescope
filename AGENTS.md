@@ -503,6 +503,7 @@ Allocation (`-Pjmh.profilers=gc`) is deterministic and does not have this proble
 | `ReadFoldBenchmark`                                              | multi-focus read terminals, and the `read` / `find` head-grab against a loop floor |
 | `ContainerAllocationBenchmark`                                   | mapper container conversion across cardinality                                     |
 | `SameTypedContainerBenchmark`                                    | same-typed List, Set and Map copies by mapper and bridge, against two controls     |
+| `CycleGuardBenchmark`                                            | a self-referencing type by bridge and mapper, chain and ring, against a plain copy |
 | `ContainerWriteBenchmark`                                        | `.each()` / `.eachValue()` rebuilds across cardinality                             |
 | `IntoBenchmark`                                                  | `Mapper.into` against `forward`, at five and twenty properties                     |
 | `LmfBenchmark`                                                   | the dispatch substrate: LMF vs reflection vs hand-rolled                           |

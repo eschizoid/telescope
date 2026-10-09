@@ -3773,6 +3773,31 @@ class CrossPathCorpusTest {
       "#0(name=\"root\", kids=[#1(name=\"root\", kids=[null])])"
     ),
     new Cycle(
+      "a record that holds itself as a map value",
+      List.of(
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(String name, java.util.Map<String, %1$sSrc> kids) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    final var kids = new java.util.LinkedHashMap<String, %1$sSrc>();\n" +
+          "    final var root = new %1$sSrc(\"root\", kids);\n" +
+          "    kids.put(\"child\", new %1$sSrc(\"child\", java.util.Map.of(\"up\", root)));\n" +
+          "    return root;\n" +
+          "  }\n" +
+          "}\n",
+        "public record %1$sTgt(String name, java.util.Map<String, %1$sTgt> kids) {\n" +
+          "  public static %1$sTgt sample() {\n" +
+          "    final var kids = new java.util.LinkedHashMap<String, %1$sTgt>();\n" +
+          "    final var root = new %1$sTgt(\"root\", kids);\n" +
+          "    kids.put(\"self\", root);\n" +
+          "    return root;\n" +
+          "  }\n" +
+          "}\n"
+      ),
+      "#0(name=\"root\", kids={child=#1(name=\"child\", kids={up=null})})",
+      "#0(name=\"root\", kids={self=null})",
+      "#0(name=\"root\", kids={self=#1(name=\"root\", kids={self=null})})"
+    ),
+    new Cycle(
       "an object that refers to itself through an Optional",
       List.of(
         BRIDGE_TO_TGT +
@@ -3942,6 +3967,11 @@ class CrossPathCorpusTest {
     if (value instanceof String text) return "\"" + text + "\"";
     if (value instanceof Optional<?> present) {
       return present.isEmpty() ? "empty" : "of " + shape(present.get(), numbered);
+    }
+    if (value instanceof Map<?, ?> entries) {
+      final var rendered = new ArrayList<String>();
+      for (final var entry : entries.entrySet()) rendered.add(entry.getKey() + "=" + shape(entry.getValue(), numbered));
+      return "{" + String.join(", ", rendered) + "}";
     }
     if (value instanceof Collection<?> elements) {
       final var rendered = new ArrayList<String>();

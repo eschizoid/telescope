@@ -17,7 +17,7 @@ The features missing from `@Bridge` are these:
 | Enum to enum                    | Two enums with the same constants are refused at compile time.                      |
 | Nested source path              | A rename source must be a direct field, so `customer.address.city` cannot be named. |
 | Multiple source parameters      | A bridge has one source type.                                                       |
-| Context parameters              | `forward` takes only the source, and a cyclic object graph overflows the stack.     |
+| Context parameters              | `forward` takes only the source, so no per-call context reaches a nested bridge.    |
 | Object factory, update in place | `patch` returns a new source; nothing writes into an existing target.               |
 | Conditional mapping             | No row takes a predicate.                                                           |
 
@@ -26,8 +26,9 @@ Among the partial features, two come up in most migrations. A renamed field cann
 (String and number, enum and String, List and Set) are refused. `@Compute` cannot read the source, so a value derived
 from several source fields has no annotation.
 
-The cycle guard is a correctness defect rather than a missing feature. The runtime mapper tracks visited objects and
-handles a self-referencing graph, while the generated mapper recurses until the stack overflows.
+The cycle guard is a correctness defect rather than a missing feature. The runtime mapper tracks the objects on the
+active conversion path and cuts the back-reference to null, while the generated mapper recurses until the stack
+overflows.
 
 ## Decision
 
@@ -36,9 +37,10 @@ already share: the decision lives in the shared pairing spec under `internal/pai
 step adds rows to `CrossPathCorpusTest` so both paths are held to the same answer, and anything the generated path
 cannot do is refused by name at compile time.
 
-1. **Cycle guard.** A generated mapper for a type that can reach itself tracks the objects it has visited and maps a
-   repeated object to the same target instance, as the runtime mapper does. A type that cannot reach itself pays
-   nothing, which the processor decides from the type graph at compile time.
+1. **Cycle guard.** A generated mapper for a type that can reach itself maps a reference back to an object still being
+   converted to null on both paths, forward, backward and in `patch` (each partial slot on a path of its own); an object
+   reached along two branches converts twice. A type that cannot reach itself pays nothing, which the processor decides
+   from the type graph at compile time.
 2. **Enum to enum.** A pair of enums maps constant to constant by name, with a compile-time check that every source
    constant has a target. A rename for individual constants is a later addition.
 3. **Conversion on a renamed field.** `@Transform` and `@ViaMapper` gain a target attribute, so one row can both rename
@@ -82,4 +84,3 @@ gap is visible and each step above updates it.
 - The annotation shape for a nested source path, and whether it reuses `@Rename` or needs its own attribute.
 - Whether `into(target, source)` should also exist for builder and constructor targets, where writing in place is not
   possible.
-- How the cycle guard's visited set interacts with `patch`, which reads from two objects at once.

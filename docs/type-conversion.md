@@ -45,7 +45,10 @@ back-edge becomes `null` (or an empty `Optional`). Shared objects in separate ac
 their mapped copies do not share identity. Each public mapping invocation has independent tracking, including reentrant
 calls, and exceptions release that tracking. This replaces the earlier behavior that could turn a repeated sibling into
 `null` and expand the root twice. A generated `@Bridge` cuts a cycle at the same reference: each `forward`, `backward`
-and `patch` call tracks the objects it is converting, for every type that can reach itself through its properties.
+and `patch` call tracks the objects it is converting, for every pair whose source type and target type can both reach
+themselves through their properties. A cycle that passes through `@Transform`, `@ViaMapper`, or a `to(...)` or
+`via(...)` row hands that step to user code or to another mapper, which starts a path of its own, so neither path cuts
+the cycle there.
 
 Parameterized container subclasses resolve their element/key types through their generic supertypes. For example,
 `StringMap<V> extends HashMap<String, V>` has a `String` key regardless of its own parameter count. Raw subclass pairs
