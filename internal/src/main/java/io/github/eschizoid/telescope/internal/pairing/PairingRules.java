@@ -234,6 +234,18 @@ public final class PairingRules<T> {
     );
   }
 
+  /**
+   * Whether a pairing reads its two properties as declared rather than as members of their own
+   * classes. Read as members, a property a generic superclass declares takes the type each subclass
+   * gives it. A subclass that passes its own type variable through gives it that variable, which is
+   * a different type on each side of a pair; read as declared, two subclasses of one superclass see
+   * one type. So a pairing reads both sides as declared once either member type names a type
+   * variable, and as members otherwise.
+   */
+  public boolean readsAsDeclared(final T sourceMember, final T targetMember) {
+    return props.mentionsTypeVariable(sourceMember) || props.mentionsTypeVariable(targetMember);
+  }
+
   /** Whether both sides are enums. A pair of one enum is the same type and passes through. */
   public boolean bothEnums(final T srcType, final T tgtType) {
     return props.isEnumType(srcType) && props.isEnumType(tgtType);

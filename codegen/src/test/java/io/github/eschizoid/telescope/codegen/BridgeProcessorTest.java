@@ -1880,8 +1880,10 @@ class BridgeProcessorTest {
     }
 
     @Test
-    @DisplayName("an inherited field a generic subclass types by its own variable is refused by name")
-    void anInheritedFieldTypedByTheSubclassOwnVariableIsRefusedByName() {
+    @DisplayName(
+      "an inherited field a generic subclass types by its own variable is read as its superclass declares it, erased"
+    )
+    void anInheritedFieldTypedByTheSubclassOwnVariableIsReadAsDeclaredErased() {
       final var compilation = compileAttributed(
         source(
           "demo.Base",
@@ -1905,15 +1907,18 @@ class BridgeProcessorTest {
         ),
         source("demo.NodeDto", "package demo; public class NodeDto<Y> extends Base<Y> {}")
       );
-      // Seen from each subclass the field is typed by that subclass's own variable, X and Y, which
-      // no conversion relates, so the pair is refused by name. Read as declared, both sides are the
-      // superclass's T, which pairs as an identity field and is written into a local javac rejects.
-      assertFalse(compilation.success(), "the pair should be refused");
+      // Seen from each subclass the field is typed by that subclass's own variable, X or Y, and
+      // no static method of the bridge can name either. Both sides read it as the superclass's T,
+      // one type, and a local of T's erasure holds it.
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.NodeBridge");
+      assertNotNull(bridge, () -> "NodeBridge missing; saw " + compilation.generated().keySet());
+      assertTrue(bridge.contains("final java.lang.Object __fs_next = s.getNext();"), bridge);
+      assertTrue(bridge.contains("final java.lang.Object __bt_next = t.getNext();"), bridge);
       assertTrue(
-        compilation.hasError("@Bridge Node -> NodeDto: field 'next' has incompatible types (X vs Y)"),
-        () -> "expected the processor's refusal naming the field, saw: " + compilation.errorMessages()
+        bridge.contains("final java.lang.Object __pp_next = partial == null ? null : partial.getNext();"),
+        bridge
       );
-      assertNull(compilation.generated().get("demo.NodeBridge"), "no bridge should be written for the pair");
     }
   }
 

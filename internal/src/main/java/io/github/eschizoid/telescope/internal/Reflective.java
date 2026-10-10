@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.reflect.Type;
 import java.util.HashMap;
@@ -47,6 +48,7 @@ public record Reflective(
   Function<Class<?>, Beans.BeanWriter<?>> chosenWriter
 ) {
   private static final ReflectionProps PROPS = new ReflectionProps();
+  private static final PairingRules<Type> RULES = new PairingRules<>(PROPS);
 
   public static final Reflective RECORDS = new Reflective(
     Records::componentNames,
@@ -113,12 +115,9 @@ public record Reflective(
   public record PairedTypes(Type source, Type target) {}
 
   /**
-   * The types of a source property and the target property it pairs with, decided once for the
-   * pair. Each is read as a member of its own class, so a property a generic superclass declares
-   * takes the type the subclass gives it, unless either side's type still names a type variable;
-   * then both are read as declared. A variable passed through by one side is a different type on
-   * each side once substituted, and the declared types are what pair a property two subclasses of
-   * one superclass both inherit.
+   * The types of a source property and the target property it pairs with, decided once for the pair
+   * by {@link PairingRules#readsAsDeclared}: each as a member of its own class, or both as
+   * declared.
    */
   public static PairedTypes pairedTypes(
     final Reflective sourceRefl,
@@ -130,7 +129,7 @@ public record Reflective(
   ) {
     final var asSourceMember = memberType(sourceRefl, source, sourceName);
     final var asTargetMember = memberType(targetRefl, target, targetName);
-    if (!PROPS.mentionsTypeVariable(asSourceMember) && !PROPS.mentionsTypeVariable(asTargetMember)) {
+    if (!RULES.readsAsDeclared(asSourceMember, asTargetMember)) {
       return new PairedTypes(asSourceMember, asTargetMember);
     }
     return new PairedTypes(sourceRefl.genericType(source, sourceName), targetRefl.genericType(target, targetName));

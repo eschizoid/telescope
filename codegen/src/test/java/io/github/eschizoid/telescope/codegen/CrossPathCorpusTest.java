@@ -7,10 +7,6 @@ import io.github.eschizoid.telescope.codegen.ctorbox.BaggedDst;
 import io.github.eschizoid.telescope.codegen.ctorbox.GuardedDst;
 import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
 import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
-import io.github.eschizoid.telescope.codegen.genericpass.GmxPage;
-import io.github.eschizoid.telescope.codegen.genericpass.GmxStr;
-import io.github.eschizoid.telescope.codegen.genericpass.GpPage;
-import io.github.eschizoid.telescope.codegen.genericpass.GpPageDto;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.mapping.WriteHint;
@@ -27,12 +23,14 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.PriorityQueue;
@@ -1823,22 +1821,19 @@ class CrossPathCorpusTest {
    * Pairs the generated path refuses and the runtime builds, each with the fragment the generated
    * path refuses it with. A bridge is code in one package, so a constructor only another package
    * can call is out of its reach; the runtime binds the same constructor through a lookup with
-   * private access to the class, which asks nothing of the caller's package. A bridge is a set of
-   * static methods, so a type variable a class passes through to its superclass is out of its reach
-   * too; the runtime reads the property as the superclass declares it and copies it.
+   * private access to the class, which asks nothing of the caller's package.
    *
    * <p>An entry keeps its row from failing and nothing else: a row both paths start to agree on
    * fails, so the register cannot outlive what it describes.
    */
   private static final Map<String, String> GENERATED_PATH_LIMITS = Map.of(
+    // Inherent: source outside a package cannot call a package-private constructor in it.
     "a package-private constructor in another package",
     "has no no-argument constructor a rebuild can call",
+    // Inherent: from another package only a subclass reaches a protected constructor,
+    // and that builds the subclass rather than the target.
     "a protected constructor in another package",
-    "has no no-argument constructor a rebuild can call",
-    "a property typed by a variable each subclass passes through",
-    "@Bridge GpPage -> GpPageDto: field 'first' has incompatible types (X vs Y)",
-    "a property one side passes its variable through and the other fixes",
-    "@Bridge GmxPage -> GmxStr: field 'first' has incompatible types (X vs java.lang.String)"
+    "has no no-argument constructor a rebuild can call"
   );
 
   /**
@@ -1862,18 +1857,6 @@ class CrossPathCorpusTest {
         List.of("ctorbox/ProtectedBag", "ctorbox/GuardedDst", "ctorpair/GuardedSrc"),
         () -> Telescope.mapper(GuardedSrc.class, GuardedDst.class).forward(new GuardedSrc(List.of("b", "a"))).items(),
         "[b, a] in " + PACKAGE + ".ctorbox.ProtectedBag"
-      ),
-      new Limit(
-        "a property typed by a variable each subclass passes through",
-        List.of("genericpass/GpBase", "genericpass/GpPage", "genericpass/GpPageDto"),
-        CrossPathCorpusTest::passedThroughItems,
-        "[b, a] in java.util.ArrayList"
-      ),
-      new Limit(
-        "a property one side passes its variable through and the other fixes",
-        List.of("genericpass/GpBase", "genericpass/GmxPage", "genericpass/GmxStr"),
-        CrossPathCorpusTest::passedThroughToFixedItems,
-        "[b, a] in java.util.ArrayList"
       )
     );
     final var fixtures = Path.of("src/test/java/io/github/eschizoid/telescope/codegen");
@@ -1906,29 +1889,6 @@ class CrossPathCorpusTest {
       checked.equals(GENERATED_PATH_LIMITS.keySet()),
       () -> "registered limits with no row: " + GENERATED_PATH_LIMITS.keySet()
     );
-  }
-
-  /**
-   * What the runtime copies into a {@code GpPageDto}'s items from a {@code GpPage} holding {@code
-   * b, a}.
-   */
-  private static Object passedThroughItems() {
-    final var page = new GpPage<String>();
-    page.setItems(new ArrayList<>(List.of("b", "a")));
-    final Class<GpPage<String>> source = cast(GpPage.class);
-    final Class<GpPageDto<String>> target = cast(GpPageDto.class);
-    return Telescope.mapper(source, target).forward(page).getItems();
-  }
-
-  /**
-   * What the runtime copies into a {@code GmxStr}'s items from a {@code GmxPage} holding {@code b,
-   * a}.
-   */
-  private static Object passedThroughToFixedItems() {
-    final var page = new GmxPage<String>();
-    page.setItems(new ArrayList<>(List.of("b", "a")));
-    final Class<GmxPage<String>> source = cast(GmxPage.class);
-    return Telescope.mapper(source, GmxStr.class).forward(page).getItems();
   }
 
   /** A record of one string, ordered by it. */
@@ -2981,8 +2941,10 @@ class CrossPathCorpusTest {
    * diagnostic.
    */
   private static final Map<String, Verdict> CONSTRUCTION_KNOWN_DIVERGENCES = Map.of(
+    // Inherent: no class but the target itself can call its private constructor from source.
     "private no-arg constructor, setters asked for",
     new Verdict(false, true),
+    // Inherent: no class but the target itself can call its private constructor from source.
     "private name-matched constructor, constructor asked for",
     new Verdict(false, true)
   );
@@ -4118,97 +4080,299 @@ class CrossPathCorpusTest {
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
   }
 
-  @Test
-  @DisplayName(
-    "a generic subclass passing its own variable to its superclass converts at run time and is refused by name when generated"
-  )
-  void aSubclassPassingItsOwnVariableThroughConvertsAtRunTimeAndIsRefusedWhenGenerated()
-    throws ReflectiveOperationException {
+  /**
+   * A superclass whose key is a type variable every row fixes to {@code String} and whose first and
+   * items are typed by a variable the subclasses pass through or fix. {@code %s} is the row's
+   * prefix.
+   */
+  private static final String PASS_THROUGH_BASE =
+    "public class %sBase<K, V> {\n" +
+    "  private K key;\n" +
+    "  private V first;\n" +
+    "  private java.util.List<V> items;\n" +
+    "  public K getKey() { return key; }\n" +
+    "  public void setKey(final K key) { this.key = key; }\n" +
+    "  public V getFirst() { return first; }\n" +
+    "  public void setFirst(final V first) { this.first = first; }\n" +
+    "  public java.util.List<V> getItems() { return items; }\n" +
+    "  public void setItems(final java.util.List<V> items) { this.items = items; }\n" +
+    "}\n";
+
+  /**
+   * The base, the source {@code srcDecl} bridged to the target {@code tgtDecl}, compiled without
+   * the processor and with it. Each declaration names its class {@code %sSrc} or {@code %sTgt}.
+   */
+  private static List<ProcessorHarness.Compilation> passThroughPair(
+    final String prefix,
+    final String srcDecl,
+    final String tgtDecl
+  ) {
     final var head = "package " + PACKAGE + ";\n";
-    final var base =
-      "public class GpBase<T> {\n" +
-      "  private T first;\n" +
-      "  private java.util.List<T> items;\n" +
-      "  public T getFirst() { return first; }\n" +
-      "  public void setFirst(final T first) { this.first = first; }\n" +
-      "  public java.util.List<T> getItems() { return items; }\n" +
-      "  public void setItems(final java.util.List<T> items) { this.items = items; }\n" +
-      "}\n";
-    final var plain = ProcessorHarness.compileFully(
-      List.of(),
-      List.of(),
-      source("GpBase", head + base),
-      source("GpPage", head + "public class GpPage<X> extends GpBase<X> {}\n"),
-      source("GpPageDto", head + "public class GpPageDto<Y> extends GpBase<Y> {}\n")
-    );
-    assertTrue(plain.success(), () -> "the pair should compile: " + plain.errorMessages());
-    final var classes = plain.define(MethodHandles.lookup());
-    final Class<Object> page = cast(classes.get(PACKAGE + ".GpPage"));
-    final Class<Object> dto = cast(classes.get(PACKAGE + ".GpPageDto"));
-    final var source = page.getConstructor().newInstance();
-    page.getMethod("setFirst", Object.class).invoke(source, "a");
-    page.getMethod("setItems", List.class).invoke(source, List.of("b", "c"));
-    // Seen from either subclass the properties are typed by that subclass's own variable, X or Y,
-    // so the runtime reads them as the superclass declares them: one T, copied as same-typed.
-    final var converted = Telescope.mapper(page, dto).forward(source);
-    assertTrue(dto.isInstance(converted), () -> "expected a GpPageDto, got " + converted);
-    assertTrue(
-      "a".equals(dto.getMethod("getFirst").invoke(converted)) &&
-        List.of("b", "c").equals(dto.getMethod("getItems").invoke(converted)),
-      () -> "expected first and items copied, got " + converted
-    );
-    // The generated bridge would declare its locals with the variable, which no static method of
-    // the bridge can name, so the processor refuses the pair by name rather than write that file.
-    final var processed = ProcessorHarness.compileFully(
-      List.of(new BridgeProcessor()),
-      List.of(),
-      source("GpBase", head + base),
+    final var sources = new JavaFileObject[] {
+      source(prefix + "Base", head + PASS_THROUGH_BASE.replace("%s", prefix)),
       source(
-        "GpPage",
-        head +
-          "@io.github.eschizoid.telescope.annotations.Bridge(GpPageDto.class)\n" +
-          "public class GpPage<X> extends GpBase<X> {}\n"
+        prefix + "Src",
+        head + "@io.github.eschizoid.telescope.annotations.Bridge(%sTgt.class)\n".replace("%s", prefix) + srcDecl
       ),
-      source("GpPageDto", head + "public class GpPageDto<Y> extends GpBase<Y> {}\n")
-    );
-    assertTrue(
-      processed.hasError("@Bridge GpPage -> GpPageDto: field 'first' has incompatible types (X vs Y)"),
-      () -> "expected the processor's refusal naming the field, saw: " + processed.errorMessages()
-    );
+      source(prefix + "Tgt", head + tgtDecl),
+    };
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+    assertTrue(plain.success(), () -> prefix + ": the pair should compile: " + plain.errorMessages());
+    return List.of(plain, ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources));
   }
 
   @Test
-  @DisplayName("a property one side passes its variable through and the other fixes converts at run time as declared")
-  void aPropertyOneSidePassesThroughAndTheOtherFixesConvertsAsDeclared() throws ReflectiveOperationException {
+  @DisplayName(
+    "a property a generic subclass passes through to its superclass converts the same way on both paths, with no unchecked warning"
+  )
+  void aPropertyASubclassPassesThroughConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    // Seen from a subclass that passes its own variable through, first and items are typed by that
+    // variable, which no static method of the bridge can name. Both paths read them as the
+    // superclass declares them: one V, so first passes through and items is copied into a fresh
+    // list. In each row one side passes its own variable through, and the other passes its own
+    // through as well or fixes the variable to String. The bridge names a generic class raw, so
+    // the key, which every row fixes to String, reads back from a generic side as Object.
+    final var pairs = List.of(
+      List.of(
+        "Ptv",
+        "public class PtvSrc<X> extends PtvBase<String, X> {}\n",
+        "public class PtvTgt<Y> extends PtvBase<String, Y> {}\n"
+      ),
+      List.of(
+        "Ptx",
+        "public class PtxSrc<X> extends PtxBase<String, X> {}\n",
+        "public class PtxTgt extends PtxBase<String, String> {}\n"
+      ),
+      List.of(
+        "Pts",
+        "public class PtsSrc extends PtsBase<String, String> {}\n",
+        "public class PtsTgt<Y> extends PtsBase<String, Y> {}\n"
+      )
+    );
+    final var owed = List.of(
+      Map.entry("forward", "key=k, first=a, items=[b, c] in a fresh ArrayList"),
+      Map.entry("backward", "key=q, first=x, items=[y] in a fresh ArrayList"),
+      Map.entry("patch", "key=q, first=x, items=[y] in a fresh ArrayList")
+    );
+    final var failures = new ArrayList<String>();
+    for (final var pair : pairs) {
+      final var prefix = pair.get(0);
+      final var compiled = passThroughPair(prefix, pair.get(1), pair.get(2));
+      final var plain = compiled.get(0);
+      final var processed = compiled.get(1);
+      if (!processed.success()) {
+        failures.add(prefix + ": the generated bridge should compile: " + processed.errorMessages());
+        continue;
+      }
+      failures.addAll(warningsInBridgeMethods(prefix, processed));
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> source = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> target = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var bridge = emitted(processed, plain, prefix);
+      final var mapper = Telescope.mapper(source, target);
+      for (final var operation : owed) {
+        for (final var side : List.of("generated", "reflective")) {
+          final var srcSample = passThroughSample(source, "k", "a", List.of("b", "c"));
+          final var tgtSample = passThroughSample(target, "q", "x", List.of("y"));
+          final Attempt attempt = switch (operation.getKey() + " " + side) {
+            case "forward generated" -> () -> bridge.getMethod("forward", source).invoke(null, srcSample);
+            case "backward generated" -> () -> bridge.getMethod("backward", target).invoke(null, tgtSample);
+            case "patch generated" -> () ->
+              bridge.getMethod("patch", source, target).invoke(null, srcSample, tgtSample);
+            case "forward reflective" -> () -> mapper.forward(srcSample);
+            case "backward reflective" -> () -> mapper.backward(tgtSample);
+            default -> () -> mapper.patch(srcSample, tgtSample);
+          };
+          final var shape = passedThrough(attempt, srcSample, tgtSample);
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              prefix + " " + operation.getKey() + ": " + side + " gave " + shape + ", owed " + operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a dropped property a generic subclass passes through compiles with no unchecked warning")
+  void aDroppedPassedThroughPropertyCompilesWithNoUncheckedWarning() {
     final var head = "package " + PACKAGE + ";\n";
-    final var plain = ProcessorHarness.compileFully(
-      List.of(),
+    // Backward fills the dropped property with a default and patch copies it from base, both
+    // through the raw source, whose setter takes the erasure of List<T>.
+    final var processed = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
       List.of(),
       source(
-        "GmxBase",
+        "PtdBase",
         head +
-          "public class GmxBase<T> {\n" +
-          "  private T first;\n" +
-          "  public T getFirst() { return first; }\n" +
-          "  public void setFirst(final T first) { this.first = first; }\n" +
+          "public class PtdBase<T> {\n" +
+          "  private String name;\n" +
+          "  private java.util.List<T> extra;\n" +
+          "  public String getName() { return name; }\n" +
+          "  public void setName(final String name) { this.name = name; }\n" +
+          "  public java.util.List<T> getExtra() { return extra; }\n" +
+          "  public void setExtra(final java.util.List<T> extra) { this.extra = extra; }\n" +
           "}\n"
       ),
-      source("GmxPage", head + "public class GmxPage<X> extends GmxBase<X> {}\n"),
-      source("GmxStr", head + "public class GmxStr extends GmxBase<String> {}\n")
+      source(
+        "PtdSrc",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(value = PtdTgt.class, drops = {\"extra\"})\n" +
+          "public class PtdSrc<X> extends PtdBase<X> {}\n"
+      ),
+      source(
+        "PtdTgt",
+        head +
+          "public class PtdTgt {\n" +
+          "  private String name;\n" +
+          "  public String getName() { return name; }\n" +
+          "  public void setName(final String name) { this.name = name; }\n" +
+          "}\n"
+      )
     );
-    assertTrue(plain.success(), () -> "the pair should compile: " + plain.errorMessages());
+    assertTrue(processed.success(), () -> "the generated bridge should compile: " + processed.errorMessages());
+    final var warnings = warningsInBridgeMethods("Ptd", processed);
+    assertTrue(warnings.isEmpty(), () -> String.join("\n  ", warnings));
+  }
+
+  /**
+   * The warnings a build compiling {@code processed} would show for the bridge: any unchecked or
+   * redundant-cast warning, and a raw-type warning on a line of the bridge's {@code forward},
+   * {@code backward} or {@code patch}, which name both classes raw.
+   */
+  private static List<String> warningsInBridgeMethods(
+    final String prefix,
+    final ProcessorHarness.Compilation processed
+  ) {
+    final var bridge = processed.generated().get(PACKAGE + "." + prefix + "SrcBridge");
+    if (bridge == null) return List.of(prefix + ": no bridge was generated");
+    final var methodLines = new HashSet<Long>();
+    final var lines = bridge.split("\n", -1);
+    var inMethod = false;
+    for (int i = 0; i < lines.length; i++) {
+      final var line = lines[i];
+      if (
+        line.startsWith("  public static ") &&
+        (line.contains(" forward(") || line.contains(" backward(") || line.contains(" patch("))
+      ) {
+        inMethod = true;
+      }
+      if (inMethod) methodLines.add((long) i + 1);
+      if (inMethod && line.equals("  }")) inMethod = false;
+    }
+    final var warnings = new ArrayList<String>();
+    for (final var d : processed.diagnostics()) {
+      final var message = d.getMessage(Locale.ROOT);
+      final var inBridge = d.getSource() != null && d.getSource().getName().contains(prefix + "SrcBridge");
+      if (
+        message.contains("unchecked") ||
+        message.contains("redundant cast") ||
+        (message.contains("raw type") && inBridge && methodLines.contains(d.getLineNumber()))
+      ) {
+        warnings.add(prefix + ": the bridge warns at line " + d.getLineNumber() + ": " + message);
+      }
+    }
+    return warnings;
+  }
+
+  /**
+   * A fresh {@code type} holding {@code key}, {@code first} and a mutable copy of {@code items}.
+   */
+  private static Object passThroughSample(
+    final Class<?> type,
+    final Object key,
+    final Object first,
+    final List<String> items
+  ) throws ReflectiveOperationException {
+    final var sample = type.getConstructor().newInstance();
+    type.getMethod("setKey", Object.class).invoke(sample, key);
+    type.getMethod("setFirst", Object.class).invoke(sample, first);
+    type.getMethod("setItems", List.class).invoke(sample, new ArrayList<>(items));
+    return sample;
+  }
+
+  /**
+   * What {@code attempt} produced, read through the inherited getters: the values, the class of the
+   * items list, and whether that list is one of the inputs' rather than a fresh one.
+   */
+  private static String passedThrough(final Attempt attempt, final Object... inputs) {
+    try {
+      final var out = attempt.get();
+      final var key = out.getClass().getMethod("getKey").invoke(out);
+      final var first = out.getClass().getMethod("getFirst").invoke(out);
+      final var items = out.getClass().getMethod("getItems").invoke(out);
+      boolean shared = false;
+      for (final var input : inputs) shared |= input.getClass().getMethod("getItems").invoke(input) == items;
+      final var held = shared ? "an input's " : "a fresh ";
+      return (
+        "key=" + key + ", first=" + first + ", items=" + items + " in " + held + items.getClass().getSimpleName()
+      );
+    } catch (final InvocationTargetException e) {
+      return REFUSED + (e.getCause() == null ? e : e.getCause()).getClass().getSimpleName();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return REFUSED + e.getClass().getSimpleName();
+    }
+  }
+
+  /**
+   * Inputs on which the two paths convert a pass-through pair differently, each with what the
+   * generated path and then the runtime give. Neither path checks a value against the class the
+   * receiving side fixes the variable to. The generated path writes through a cast to that class,
+   * which throws a bare {@code ClassCastException}; the runtime writes the value as it is, and the
+   * property then holds a value of a class its type does not admit.
+   *
+   * <p>An entry no row exercises, or whose row both paths start to agree on, fails the test.
+   */
+  private static final Map<String, List<String>> UNCHECKED_WRITE_DIVERGENCES = Map.of(
+    // A defect still to close: neither path names the property when the value does not fit.
+    "an Integer into a property the target fixes to String",
+    List.of(REFUSED + "ClassCastException", "first=42, a java.lang.Integer")
+  );
+
+  @Test
+  @DisplayName("a value that does not fit the class a side fixes the variable to is a registered divergence")
+  void aValueThatDoesNotFitTheFixedClassIsARegisteredDivergence() throws ReflectiveOperationException {
+    final var compiled = passThroughPair(
+      "Ptw",
+      "public class PtwSrc<X> extends PtwBase<String, X> {}\n",
+      "public class PtwTgt extends PtwBase<String, String> {}\n"
+    );
+    final var plain = compiled.get(0);
+    final var processed = compiled.get(1);
+    assertTrue(processed.success(), () -> "the generated bridge should compile: " + processed.errorMessages());
     final var classes = plain.define(MethodHandles.lookup());
-    final Class<Object> page = cast(classes.get(PACKAGE + ".GmxPage"));
-    final Class<Object> fixed = cast(classes.get(PACKAGE + ".GmxStr"));
-    final var source = page.getConstructor().newInstance();
-    page.getMethod("setFirst", Object.class).invoke(source, "a");
-    // The source's property is its own X and the target's is String. Substituted per side the two
-    // do not pair, so the pair reads both as the superclass declares them, one T, and copies it.
-    final var converted = Telescope.mapper(page, fixed).forward(source);
+    final Class<Object> source = cast(classes.get(PACKAGE + ".PtwSrc"));
+    final Class<Object> target = cast(classes.get(PACKAGE + ".PtwTgt"));
+    final var bridge = emitted(processed, plain, "Ptw");
+    final var mapper = Telescope.mapper(source, target);
+    final var name = "an Integer into a property the target fixes to String";
+    final Attempt generated = () ->
+      bridge.getMethod("forward", source).invoke(null, passThroughSample(source, "k", 42, List.of()));
+    final Attempt reflective = () -> mapper.forward(passThroughSample(source, "k", 42, List.of()));
+    final var seen = List.of(firstHeld(generated), firstHeld(reflective));
     assertTrue(
-      fixed.isInstance(converted) && "a".equals(fixed.getMethod("getFirst").invoke(converted)),
-      () -> "expected first copied into a GmxStr, got " + converted
+      UNCHECKED_WRITE_DIVERGENCES.keySet().equals(Set.of(name)),
+      () -> "registered divergences with no row: " + UNCHECKED_WRITE_DIVERGENCES.keySet()
     );
+    assertTrue(
+      seen.equals(UNCHECKED_WRITE_DIVERGENCES.get(name)),
+      () -> name + ": generated and runtime gave " + seen + ", registered " + UNCHECKED_WRITE_DIVERGENCES.get(name)
+    );
+  }
+
+  /** What {@code attempt}'s result holds as first, with that value's class, or the refusal. */
+  private static String firstHeld(final Attempt attempt) {
+    try {
+      final var out = attempt.get();
+      final var first = out.getClass().getMethod("getFirst").invoke(out);
+      return "first=" + first + ", a " + first.getClass().getName();
+    } catch (final InvocationTargetException e) {
+      return REFUSED + (e.getCause() == null ? e : e.getCause()).getClass().getSimpleName();
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return REFUSED + e.getClass().getSimpleName();
+    }
   }
 
   /**
@@ -5076,10 +5240,13 @@ class CrossPathCorpusTest {
    * <p>An entry no cell exercises fails the test, so the register cannot outlive its cell.
    */
   private static final Map<String, String> ENUM_RUNTIME_REFUSALS = Map.of(
+    // A defect still to close: the runtime does not apply the sub-pair's own bridge config.
     "an enum pair below a sub-pair whose own bridge converts it with a transform, under a strict parent",
     "%1$sEa has no constant named C, which the backward direction needs",
+    // A defect still to close: the runtime does not apply the sub-pair's own bridge config.
     "an enum pair two levels below a sub-pair a lenient bridge shares, where the lower pair's own bridge converts it",
     "%1$sEa has no constant named C, which the backward direction needs",
+    // A defect still to close: the runtime does not apply the sub-pair's own bridge config.
     "an enum pair below a sub-pair whose own lenient bridge converts it forward only, under a strict parent",
     "%1$sEa has no constant named C, which the backward direction needs"
   );

@@ -49,6 +49,7 @@ import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
+import javax.lang.model.type.TypeVariable;
 import javax.lang.model.type.WildcardType;
 import javax.lang.model.util.ElementFilter;
 import javax.tools.Diagnostic;
@@ -2018,6 +2019,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (
       !fieldTypesNameable(source, target, nonDroppedSourceFields, targetFields, renames, forwardOnlyTransforms, pkg)
     ) return;
+    // The types each pair of properties is planned and read as, decided by the rule the runtime
+    // pairs them by, and the casts that reading them through raw classes needs.
+    final var paired = pairedFields(source, target, sourceFields, nonDroppedSourceFields, targetFields, renames);
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
@@ -2026,8 +2030,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var fieldPlans = planFields(
       source,
       target,
-      nonDroppedSourceFields,
-      targetFields,
+      paired.source(),
+      paired.target(),
       renames,
       transforms,
       cfg.transformMethods(),
@@ -2064,9 +2068,17 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (parsedConstants.containsKey(targetName)) return parsedConstants.get(targetName);
       if (computes.containsKey(targetName)) return "__cp_" + targetName + ".get()";
       final var srcName = reverseRenames.getOrDefault(targetName, targetName);
-      final var sf = fieldByName(nonDroppedSourceFields, srcName);
+      final var sf = fieldByName(paired.source(), srcName);
       final var local = "__fs_" + srcName;
-      forwardLocals.putIfAbsent(local, sf.type() + " " + local + " = " + readExpr(source, "s", sf) + ";");
+      forwardLocals.putIfAbsent(
+        local,
+        sf.type() +
+          " " +
+          local +
+          " = " +
+          paired.castInto(paired.sourceReads(), srcName, readExpr(source, "s", sf)) +
+          ";"
+      );
       final var read = parsedDefaults.containsKey(srcName)
         ? "(" + local + " == null ? " + parsedDefaults.get(srcName) + " : " + local + ")"
         : local;
@@ -2080,7 +2092,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (plan.userSuppliedBridge() && !sf.type().getKind().isPrimitive()) {
         return "(" + local + " == null ? null : " + applyForward(srcName, plan, read) + ")";
       }
-      return applyForward(srcName, plan, read);
+      return paired.castInto(paired.forwardCasts(), targetName, applyForward(srcName, plan, read));
     };
     // readBackward is called with SOURCE field names. For drops AND forward-only transforms, emit
     // the type's zero value — both mechanisms have no defined backward and the source slot must be
@@ -2093,15 +2105,23 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         fieldByName(sourceFields, sourceName).type()
       );
       final var tgtName = renames.getOrDefault(sourceName, sourceName);
-      final var tf = fieldByName(targetFields, tgtName);
+      final var tf = fieldByName(paired.target(), tgtName);
       final var local = "__bt_" + sourceName;
-      backwardLocals.putIfAbsent(local, tf.type() + " " + local + " = " + readExpr(target, "t", tf) + ";");
+      backwardLocals.putIfAbsent(
+        local,
+        tf.type() +
+          " " +
+          local +
+          " = " +
+          paired.castInto(paired.targetReads(), tgtName, readExpr(target, "t", tf)) +
+          ";"
+      );
       final var plan = fieldPlans.get(sourceName);
       // Same user-bridge null gate as readForward, skipped for a primitive for the same reason.
       if (plan.userSuppliedBridge() && !tf.type().getKind().isPrimitive()) {
         return "(" + local + " == null ? null : " + applyBackward(sourceName, plan, local) + ")";
       }
-      return applyBackward(sourceName, plan, local);
+      return paired.castInto(paired.backwardCasts(), sourceName, applyBackward(sourceName, plan, local));
     };
 
     // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
@@ -2130,9 +2150,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       if (effectiveDrops.contains(sourceName)) return baseRead;
       if (forwardOnlyTransforms.contains(sourceName)) return baseRead;
       final var tgtName = renames.getOrDefault(sourceName, sourceName);
-      final var tf = fieldByName(targetFields, tgtName);
+      final var tf = fieldByName(paired.target(), tgtName);
       final var plan = fieldPlans.get(sourceName);
-      final var partialReadExpr = readExpr(target, "partial", tf);
+      final var partialReadExpr = paired.castInto(paired.targetReads(), tgtName, readExpr(target, "partial", tf));
       // Primitive target components autobox to non-null wrappers on read — always patch them
       // from a partial that exists. A null partial overlays nothing, so base supplies every
       // slot.
@@ -2151,7 +2171,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // @Default is a forward-direction null-coalesce and is never applied here: a slot null in
       // both partial and base stays null rather than resurrecting the default on a field the
       // caller never wrote.
-      return "(" + pLocal + " != null ? " + partialRead + " : " + baseRead + ")";
+      return paired.castInto(
+        paired.backwardCasts(),
+        sourceName,
+        "(" + pLocal + " != null ? " + partialRead + " : " + baseRead + ")"
+      );
     };
     // The runtime mapper's patch converts each partial slot as a conversion of its own, so each
     // call starts an empty path.
@@ -2249,7 +2273,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var rawFields = Stream.concat(sourceFields.stream(), targetFields.stream()).anyMatch(f ->
           mentionsRawUse(f.type())
         );
-        final var suppressRaw = rawFields ? "  @SuppressWarnings(\"rawtypes\")\n" : "";
+        // A member reached through a class the bridge names raw has its type erased, so a read or
+        // a write through one whose erasure differs is unchecked.
+        final var suppressRaw = paired.rawAccess()
+          ? RAW_SUPPRESSION + "\n"
+          : rawFields
+            ? "  @SuppressWarnings(\"rawtypes\")\n"
+            : "";
         // Null in -> null out, matching the runtime structural Iso. Also lets a null container
         // element (subBridge.forward(null) in the container helpers) pass through as null.
         final var pathAccess = guarded ? pathOverloadAccess(source, pkg) : null;
@@ -2288,7 +2318,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println(
           "  public static final Telescope<" + sourceFq + ", " + targetFq + "> BRIDGE = Telescope.bridge(BRIDGE_FN);"
         );
-        emitContainerHelpers(out, fieldPlans, nonDroppedSourceFields, targetFields, renames, pkg);
+        emitContainerHelpers(out, fieldPlans, paired.source(), paired.target(), renames, pkg);
         emitNestedElements(out, nested, pkg);
       }
     );
@@ -6010,6 +6040,166 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       .stream()
       .map(p -> new Field(p.name(), p.type()))
       .toList();
+  }
+
+  /**
+   * The types a pair's properties are planned and read as, and the casts its reads and writes need.
+   *
+   * @param source the source's properties, each as the pair reads it
+   * @param target the target's properties, each as the pair reads it
+   * @param sourceReads per source property, the class a read of it is cast to before it is held as
+   *     the type the pair reads it as, where the type the read returns does not convert to that
+   * @param targetReads the same per target property
+   * @param forwardCasts per target property, the class {@code forward} casts the value it writes
+   *     to, where the type it reads is wider than the target's own
+   * @param backwardCasts the same per source property, for {@code backward} and {@code patch}
+   * @param rawAccess whether any property is read or written through a member of a class the bridge
+   *     names raw whose type erasure changes, which javac reports as unchecked
+   */
+  private record PairedFields(
+    List<Field> source,
+    List<Field> target,
+    Map<String, String> sourceReads,
+    Map<String, String> targetReads,
+    Map<String, String> forwardCasts,
+    Map<String, String> backwardCasts,
+    boolean rawAccess
+  ) {
+    /** {@code value}, cast to what {@code casts} names for {@code name}, or as is when nothing. */
+    String castInto(final Map<String, String> casts, final String name, final String value) {
+      final var cast = casts.get(name);
+      return cast == null ? value : "((" + cast + ") " + value + ")";
+    }
+  }
+
+  /**
+   * The types each source property and the target property it pairs with are read as. The shared
+   * spec decides whether a pair reads as members of its own classes or as declared ({@link
+   * PairingRules#readsAsDeclared}). Read as declared, both are read as the one type the superclass
+   * they share declares, with each type variable erased, since no static method of the bridge can
+   * name the variable. A pair whose declared types differ keeps them, and is refused in their
+   * terms.
+   *
+   * <p>The bridge names a generic class raw, so every member it reaches on one returns its erased
+   * type: a property {@code class Page<X> extends Base<String, X>} fixes to {@code String} reads
+   * back as {@code Object}. Such a read is cast to the erasure of the type it is held as. A side
+   * that fixes the variable a pair reads as declared, such as {@code class Names extends
+   * Base<String>}, is written through a cast to its own erasure where that is narrower than the
+   * read.
+   */
+  private PairedFields pairedFields(
+    final TypeElement source,
+    final TypeElement target,
+    final List<Field> everySourceField,
+    final List<Field> sourceFields,
+    final List<Field> targetFields,
+    final Map<String, String> renames
+  ) {
+    final var types = processingEnv.getTypeUtils();
+    final var pairedSource = new ArrayList<>(sourceFields);
+    final var pairedTarget = new ArrayList<>(targetFields);
+    final var sourceReads = new HashMap<String, String>();
+    final var targetReads = new HashMap<String, String>();
+    final var forwardCasts = new HashMap<String, String>();
+    final var backwardCasts = new HashMap<String, String>();
+    // The methods read and write every property of both sides, a dropped one included, which
+    // backward fills with a default and patch copies from base.
+    boolean rawAccess = false;
+    for (final var f : everySourceField) rawAccess |= !types.isSameType(asReachedThrough(source, f), f.type());
+    for (final var f : targetFields) rawAccess |= !types.isSameType(asReachedThrough(target, f), f.type());
+    for (int i = 0; i < sourceFields.size(); i++) {
+      final var sf = sourceFields.get(i);
+      final var tgtName = renames.getOrDefault(sf.name(), sf.name());
+      if (!hasField(targetFields, tgtName)) continue;
+      final var tf = fieldByName(targetFields, tgtName);
+      final var sourceOwn = asReachedThrough(source, sf);
+      final var targetOwn = asReachedThrough(target, tf);
+      var sourceRead = sf.type();
+      var targetRead = tf.type();
+      if (rules.readsAsDeclared(sf.type(), tf.type())) {
+        final var sourceDeclared = declaredTypeOf(source, sf);
+        final var targetDeclared = declaredTypeOf(target, tf);
+        if (!types.isSameType(sourceDeclared, targetDeclared)) continue;
+        sourceRead = withVariablesErased(sourceDeclared);
+        targetRead = sourceRead;
+        pairedSource.set(i, new Field(sf.name(), sourceRead));
+        pairedTarget.set(pairedTarget.indexOf(tf), new Field(tf.name(), targetRead));
+        if (!types.isAssignable(sourceRead, targetOwn)) {
+          forwardCasts.put(tf.name(), types.erasure(targetOwn).toString());
+        }
+        if (!types.isAssignable(sourceRead, sourceOwn)) {
+          backwardCasts.put(sf.name(), types.erasure(sourceOwn).toString());
+        }
+      }
+      if (!types.isAssignable(sourceOwn, sourceRead)) {
+        sourceReads.put(sf.name(), types.erasure(sourceRead).toString());
+      }
+      if (!types.isAssignable(targetOwn, targetRead)) {
+        targetReads.put(tf.name(), types.erasure(targetRead).toString());
+      }
+    }
+    return new PairedFields(
+      List.copyOf(pairedSource),
+      List.copyOf(pairedTarget),
+      sourceReads,
+      targetReads,
+      forwardCasts,
+      backwardCasts,
+      rawAccess
+    );
+  }
+
+  /**
+   * The type {@code field} of {@code owner} has where the bridge reaches it. The bridge names a
+   * generic class raw, and a member of a raw class has the erasure of its declared type, whatever a
+   * superclass's arguments fix it to.
+   */
+  private TypeMirror asReachedThrough(final TypeElement owner, final Field field) {
+    if (owner.getTypeParameters().isEmpty()) return field.type();
+    return processingEnv.getTypeUtils().erasure(declaredTypeOf(owner, field));
+  }
+
+  /**
+   * {@code type} with every type variable in it replaced by the variable's erasure, so {@code T}
+   * reads as {@code Object} and {@code List<T>} as {@code List<Object>}. The container keeps its
+   * element type, which is what decides that its elements are copied into a fresh container rather
+   * than the container passed along; a static method can name the result.
+   */
+  private TypeMirror withVariablesErased(final TypeMirror type) {
+    final var types = processingEnv.getTypeUtils();
+    if (type instanceof TypeVariable) return types.erasure(type);
+    if (type instanceof ArrayType array) return types.getArrayType(withVariablesErased(array.getComponentType()));
+    if (!(type instanceof DeclaredType declared) || declared.getTypeArguments().isEmpty()) return type;
+    if (!MirrorProps.typeVariableIn(declared)) return type;
+    final var arguments = declared
+      .getTypeArguments()
+      .stream()
+      .map(a ->
+        a instanceof WildcardType w
+          ? types.getWildcardType(
+              w.getExtendsBound() == null ? null : withVariablesErased(w.getExtendsBound()),
+              w.getSuperBound() == null ? null : withVariablesErased(w.getSuperBound())
+            )
+          : withVariablesErased(a)
+      )
+      .toArray(TypeMirror[]::new);
+    return types.getDeclaredType((TypeElement) declared.asElement(), arguments);
+  }
+
+  /**
+   * The type {@code field} is declared as where it is declared: a record component's own type, or
+   * the return type of the getter as its declaring class writes it, before any subclass fixes the
+   * declaring class's variables.
+   */
+  private TypeMirror declaredTypeOf(final TypeElement owner, final Field field) {
+    if (owner.getKind() == ElementKind.RECORD) return field.type();
+    final var getter = getterName(owner, field.name(), field.type());
+    return ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(owner))
+      .stream()
+      .filter(m -> m.getSimpleName().contentEquals(getter) && m.getParameters().isEmpty())
+      .findFirst()
+      .orElseThrow()
+      .getReturnType();
   }
 
   private String getterName(final TypeElement pojo, final String field, final TypeMirror type) {
