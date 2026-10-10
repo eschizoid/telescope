@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.ref.Reference;
 import java.util.ArrayList;
@@ -93,10 +94,13 @@ class ContainerKindMappingTest {
     assertEquals(16, ContainerLifts.capacityFor(12));
     assertEquals(23, ContainerLifts.capacityFor(17));
 
-    for (final var count : new int[] { 1, 12, 13, 16, 17, 100, 1000 }) {
-      final var table = new WeakHashMap<Integer, Integer>(ContainerLifts.capacityFor(count));
-      for (var i = 0; i < count; i++) table.put(i, i);
-      assertEquals(count, table.size(), "every entry survives the fill at count " + count);
+    // A hash table rounds its capacity up to a power of two and resizes once it holds more than
+    // three quarters of that, so the capacity is right when the rounded table's threshold covers
+    // the count.
+    for (var count = 1; count <= 1 << 16; count++) {
+      final var capacity = ContainerLifts.capacityFor(count);
+      final var table = Integer.highestOneBit(Math.max(1, capacity - 1)) << 1;
+      assertTrue((table * 3) / 4 >= count, "a table sized for " + count + " resizes before it fills");
     }
   }
 }
