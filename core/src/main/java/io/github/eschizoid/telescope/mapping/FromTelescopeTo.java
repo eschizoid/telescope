@@ -37,7 +37,7 @@ public record FromTelescopeTo<A, B, X>(
 
   @Override
   public Class<B> targetClass() {
-    return LambdaIntrospection.implClassOf(tgtAccessor);
+    return LambdaIntrospection.receiverClassOf(tgtAccessor);
   }
 
   /**

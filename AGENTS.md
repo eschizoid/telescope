@@ -167,8 +167,9 @@ common core rather than the full surface — `iso`, `bridge`, `asList`/`asSet`/`
   returns `Mapper<A, B>` for patch/nestability. The fluent alternative is `Telescope.mapperBuilder(A.class, B.class)`
   with `.add(...)` / `.inherit(...)` then `.build()` or `.buildTelescope()`. Symmetrical with
   `Telescope.all(Edit<S>...)`.
-  - **Class inference internals:** `Mapping#sourceClass()` / `targetClass()` use `LambdaIntrospection.implClassOf`
-    (`:internal`'s `SerializedLambda` helper — the one place for the decode).
+  - **Class inference internals:** `Mapping#sourceClass()` / `targetClass()` use `LambdaIntrospection.receiverClassOf`
+    (`:internal`'s `SerializedLambda` helper — the one place for the decode), so a row through an inherited getter keys
+    against the subclass it names.
 - **Indexed chain:** `withIndex()` → `WithIndex<S, A>` for indexed traversal terminals.
 
 ### `:internal` — substrate (`io.github.eschizoid.telescope.internal`)

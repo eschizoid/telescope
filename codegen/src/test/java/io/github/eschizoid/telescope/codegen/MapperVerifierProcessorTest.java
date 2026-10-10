@@ -58,6 +58,106 @@ class MapperVerifierProcessorTest {
     assertTrue(compilation.hasError("key types"), compilation::errorMessages);
   }
 
+  @Nested
+  @DisplayName("Rows through a getter inherited from an abstract base")
+  class InheritedAccessorRows {
+
+    // Sub inherits name and code from an abstract base; it declares nothing of its own.
+    private static final String BEANS = """
+      abstract class Base {
+        private String name;
+        private String code;
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public String getCode() { return code; }
+        public void setCode(String code) { this.code = code; }
+      }
+      class Sub extends Base { public Sub() {} }
+      """;
+
+    private ProcessorHarness.Compilation verifyWithBeans(final String rest) {
+      return verify(
+        """
+          package demo;
+          import static io.github.eschizoid.telescope.mapping.Mapping.*;
+          import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.mapping.Mapping;
+          """ +
+          BEANS +
+          rest
+      );
+    }
+
+    @Test
+    @DisplayName("a rename row onto an inherited target getter claims the subclass's property")
+    void renameOntoAnInheritedTargetGetter() {
+      final var compilation = verifyWithBeans(
+        """
+        record Renamed(String label, String code) {}
+        class Holder { static final Object M = Telescope.mapper(Renamed.class, Sub.class, to(Renamed::label, Sub::getName)); }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a rename row from an inherited source getter claims the subclass's property")
+    void renameFromAnInheritedSourceGetter() {
+      final var compilation = verifyWithBeans(
+        """
+        record Renamed(String label, String code) {}
+        class Holder { static final Object M = Telescope.mapper(Sub.class, Renamed.class, to(Sub::getName, Renamed::label)); }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a drop through an inherited source getter leaves the subclass's property out")
+    void dropThroughAnInheritedSourceGetter() {
+      final var compilation = verifyWithBeans(
+        """
+        record Uncoded(String name) {}
+        class Holder { static final Object M = Telescope.mapper(Sub.class, Uncoded.class, drop(Sub::getCode)); }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a row typed by a variable whose bound is another variable claims the innermost bound's property")
+    void rowTypedByAChainedTypeVariableBound() {
+      final var compilation = verifyWithBeans(
+        """
+        record Renamed(String label, String code) {}
+        class Holder {
+          static <U extends Sub, T extends U> Object m() {
+            return Telescope.mapper(
+              Renamed.class, Sub.class, Mapping.<Renamed, T, String>to(Renamed::label, Base::getName));
+          }
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a second row onto the same inherited target property is still a duplicate")
+    void duplicateRowsOntoAnInheritedTargetPropertyStillError() {
+      final var compilation = verifyWithBeans(
+        """
+        record Renamed(String label, String alias, String code) {}
+        class Holder {
+          static final Object M = Telescope.mapper(
+            Renamed.class, Sub.class, to(Renamed::label, Sub::getName), to(Renamed::alias, Sub::getName));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(compilation.hasError("duplicate override row for target field 'name'"), compilation::errorMessages);
+    }
+  }
+
   private static ProcessorHarness.Compilation verify(final String code) {
     return verify(List.of(), code);
   }

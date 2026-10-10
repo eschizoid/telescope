@@ -27,7 +27,7 @@ import io.github.eschizoid.telescope.Telescope.Accessor;
 public sealed interface MergeStep<T> permits MergeStep.FromInferred, MergeStep.AutoSameName {
   /**
    * A row whose source class is resolved at {@link Telescope#merge} build time from the source
-   * accessor's {@code SerializedLambda} declaring class.
+   * accessor's {@code SerializedLambda} receiver class.
    *
    * <p>Internal — construct via {@link #from(Accessor, Accessor)}.
    */
@@ -42,7 +42,7 @@ public sealed interface MergeStep<T> permits MergeStep.FromInferred, MergeStep.A
   record AutoSameName<T>(Class<?> sourceClass) implements MergeStep<T> {}
 
   /**
-   * Row whose source class is inferred from the source accessor's declaring class at build time; at
+   * Row whose source class is inferred from the source accessor's receiver class at build time; at
    * forward time the engine reads the source via {@link Sources#byClass(Class)} — a missing entry
    * throws {@link IllegalStateException} naming the class.
    *

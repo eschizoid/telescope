@@ -19,12 +19,12 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 public record Via<A, B>(Accessor<A, ?> src, Accessor<B, ?> tgt, Mapper<?, ?> nested) implements Mapping<A, B> {
   @Override
   public Class<A> sourceClass() {
-    return LambdaIntrospection.implClassOf(src);
+    return LambdaIntrospection.receiverClassOf(src);
   }
 
   @Override
   public Class<B> targetClass() {
-    return LambdaIntrospection.implClassOf(tgt);
+    return LambdaIntrospection.receiverClassOf(tgt);
   }
 
   @Override

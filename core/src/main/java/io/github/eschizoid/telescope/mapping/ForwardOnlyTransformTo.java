@@ -29,12 +29,12 @@ public record ForwardOnlyTransformTo<A, B, X, Y>(
 ) implements Mapping<A, B> {
   @Override
   public Class<A> sourceClass() {
-    return LambdaIntrospection.implClassOf(src);
+    return LambdaIntrospection.receiverClassOf(src);
   }
 
   @Override
   public Class<B> targetClass() {
-    return LambdaIntrospection.implClassOf(tgt);
+    return LambdaIntrospection.receiverClassOf(tgt);
   }
 
   @Override
