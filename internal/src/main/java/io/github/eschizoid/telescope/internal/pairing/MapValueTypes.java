@@ -28,8 +28,8 @@ import java.util.regex.Pattern;
  * declared type it is converted into. The binder generated for {@code @FromMap} and the runtime
  * {@code Telescope.fromMap} both call {@link #classify} over their own type model and render the
  * kind it returns: the processor as Java source, the runtime as a function. The order of the checks
- * and the tables of types taken by a cast or built from a {@code String} live here once, so a type
- * one path accepts is a type the other accepts, as the same kind.
+ * and the tables of types taken by a cast or built from a {@code String} live here once, so where
+ * both models report the same facts about a type, both paths classify it as the same kind.
  *
  * <p>What each kind does to a value is written once per path, since generated code cannot call into
  * this module; the cross-path tests hold the two renderings to the same results.
@@ -61,7 +61,11 @@ public final class MapValueTypes {
     /** Whether the declared type is an enum. */
     boolean isEnum(T type);
 
-    /** Whether the declared type has a registered binder generated for {@code @FromMap}. */
+    /**
+     * Whether the declared type has a binder generated for {@code @FromMap}: at runtime one whose
+     * provider is registered, and at compile time one the annotation asks for or an earlier
+     * compilation left.
+     */
     boolean hasGeneratedBinder(T type);
 
     /**
@@ -91,7 +95,11 @@ public final class MapValueTypes {
     AS_IS,
     /** A JDK value type built from its {@code String} form, see {@link #stringBuilt}. */
     STRING_BUILT,
-    /** Refused: a collection or map that is not one of the four interfaces above. */
+    /**
+     * Refused: a {@code Collection} or {@code Map}, or a subtype of either, that is not {@code
+     * List}, {@code Set} or {@code Map} written with its type arguments, such as {@code ArrayList},
+     * {@code Collection}, or a raw {@code List}.
+     */
     COLLECTION_SUBTYPE,
     /** Refused: a JDK type with no conversion. */
     UNKNOWN_JDK,

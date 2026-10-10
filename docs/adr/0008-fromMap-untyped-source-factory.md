@@ -80,21 +80,24 @@ gave different objects for the same map, and a mapper with no rows returned a ta
 - A component whose type has a generated binder is built by that binder, found through its `FromMapProvider`, which
   gains a `binder()` method. Building it through the binder keeps what only the source-retained annotation declares,
   such as required keys.
-- A target with a generated binder honours its own `@FromMap(required = ...)` for every component no row names, read
-  through the provider's new `required()` method, so a map the binder refuses is refused with the same message.
-- A row decides the component it names: its key and its converter replace the by-name default, and an `extract(...)` row
-  lifts a declared requirement.
+- A target with a registered generated binder honours its own `@FromMap(required = ...)`, read through the provider's
+  new `required()` method, for every slot that reads its component's own key, so a map the binder refuses is refused
+  with a message worded the same way after its own prefix. Without the registration no declared key is enforced.
+- A row decides the component it names: its key and its converter replace the by-name default. A row reading the
+  component's own key keeps a declared requirement; a row reading another key lifts it.
 - A key absent from the map, or holding `null`, still leaves the documented default. `required(...)` is unchanged.
 - A type with no conversion is still refused while the mapper is built, with the same message. A component whose type's
-  provider does not override `binder()`, and a target whose provider does not override `required()`, are refused while
-  the mapper is built too, since neither can be built as the generated binder builds it.
-- A bean property no row names and the writer cannot set is not read. `explain()` reports it as a `MISSING_SOURCE` skip
-  and every other component as an `Extracted` row under the key it reads.
+  provider does not override `binder()` is refused while the mapper is built too, since its type cannot be built as the
+  generated binder builds it. A target whose provider does not override `required()` is refused, naming the target, when
+  some slot reads its own component's name, since the provider cannot say which keys are required.
+- A bean property no row names and the writer cannot set is never converted or written, though its type is still checked
+  and a declared required key on it must be present. `explain()` reports it as a `MISSING_SOURCE` skip unless it is
+  required, and every other component as an `Extracted` row under the key it reads.
 
 This changes behaviour: a component that used to stay at its default now takes the map's value under its name, a value
 under that name that cannot be converted now throws where it used to be ignored, a map missing a required key of the
-target or of a nested type with a binder is now refused, and a mapper over a type whose provider lacks `binder()` or
-`required()` is refused at construction.
+target or of a nested type with a binder is now refused, and a mapper that needs a provider's `binder()` or `required()`
+when the provider does not implement it is refused at construction.
 
 ## Alternatives considered
 

@@ -28,7 +28,8 @@ public sealed interface OpticNode {
     DROPPED,
     /**
      * A target field that nothing fills: on the lenient paths one with no same-name source and no
-     * row, and on {@code fromMap} a bean property no row names and the bean's writer cannot set.
+     * row, and on {@code fromMap} a bean property no row names, the bean's writer cannot set, and
+     * no {@code @FromMap(required = ...)} requires.
      */
     MISSING_SOURCE,
   }
@@ -36,13 +37,13 @@ public sealed interface OpticNode {
   /** What a {@code fromMap} slot does when its key carries no value. See {@link Extracted}. */
   enum WhenAbsent {
     /**
-     * The field takes the default for its declared type: an {@code extract(...)} row, or a field no
-     * row names and no {@code @FromMap(required = ...)} lists.
+     * The field takes the default for its declared type: any slot not described under {@link
+     * #REFUSES}.
      */
     DEFAULTS,
     /**
-     * The conversion is refused, naming the key: a {@code required(...)} row, or a field no row
-     * names that the target's {@code @FromMap(required = ...)} lists.
+     * The conversion is refused, naming the key: a {@code required(...)} row, or a field the
+     * target's {@code @FromMap(required = ...)} lists whose slot reads the field's own key.
      */
     REFUSES,
   }
