@@ -32,7 +32,7 @@ set the `quarkus-arc` version. Your application's own Quarkus BOM normally sets 
 
 ## Example
 
-You register a mapper with a CDI producer method or producer field that returns it. `Mapper` is a final class with no
+You register a mapper with a CDI producer method or producer field that supplies it. `Mapper` is a final class with no
 public constructor, so a class of your own can't be a `Mapper` bean. The example uses `@Singleton`, which gives one
 shared instance with no proxy object in front of it.
 

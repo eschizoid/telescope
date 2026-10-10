@@ -402,8 +402,8 @@ framework's native bean discovery. Three symmetric classes per module:
 | `TelescopeProducer`       | `TelescopeAutoConfiguration` | Collects every `Mapper<?, ?>` bean visible to the container, builds the registry.                      |
 | `TelescopeConfig`         | `TelescopeProperties`        | `telescope.registry.fail-fast` (default `true`); Spring also binds `telescope.default-write-strategy`. |
 
-Duplicate `(srcClass, tgtClass)` pairs throw `IllegalStateException` at construction — qualify and inject directly if
-two mappers genuinely share a pair.
+Duplicate `(srcClass, tgtClass)` pairs throw `IllegalStateException` at construction, and a qualifier doesn't avoid it,
+because the registry collects every `Mapper` bean. Keep one `Mapper` bean per pair.
 
 **Quarkus specifics.** `@ApplicationScoped` registry; `TelescopeProducer` uses ArC's `@All List<Mapper<?, ?>>`
 collector; `TelescopeConfig` is `@ConfigMapping(prefix = "telescope")`. Jar ships a pre-built `META-INF/jandex.idx` to

@@ -212,8 +212,8 @@ There is no hop in the other direction. Annotate the target with its own `@Bridg
 
 `patch` writes every non-null reference field of `partial` over `base`, and every primitive field of `partial`, even one
 that holds 0 or `false`. It always returns a new object, even when `partial` is `null` or changes nothing. It rebuilds
-only the root object, so a field that `partial` leaves `null` keeps the object `base` holds, and a nested object or list
-is shared with `base`.
+only the root object. A field that `partial` leaves `null` keeps the object `base` holds, so a nested object or list is
+shared with `base`.
 
 ### Attributes of `@Bridge`
 

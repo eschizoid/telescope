@@ -595,8 +595,8 @@ public record UserEntity(String id, Instant expiresAt, Instant createdAt) {}
 The ambiguity qualifiers solve doesn't arise at runtime: each row names its converter/mapper by reference, resolved by
 javac — safer than @Named string matching. Codegen side has the literal @Named-equivalent via @Transform(using, method)
 (forward-only, same asymmetry as a single MapStruct qualified method). One corner: the DI TelescopeMapperRegistry allows
-one mapper per (src,tgt) pair — two semantically-different mappers for the same pair must be injected directly with the
-framework's own @Qualifier, bypassing the registry.
+one `Mapper` bean per (src, tgt) pair, qualified or not. A second mapper for the same pair has to be wrapped in your own
+type or built where it's used.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java, `using()` and `method()`
 (the `using()` javadoc says the method-named form "unlocks MapStruct's @Named qualifier-dispatch pattern", and

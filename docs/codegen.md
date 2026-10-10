@@ -169,7 +169,7 @@ Maven:
 Lombok and the telescope processors can sit in any order on the processor path. `telescope-lombok` generates a navigator
 once Lombok has added the class's members, and `BridgeProcessor`, `FromMapProcessor` and `BeanFocusProcessor` wait until
 the final round for a Lombok class. A class counts as a Lombok class when it, or one of its fields, carries a Lombok
-annotation that adds members, e.g. `@Data`, `@Getter` or `@AllArgsConstructor`. The full set is
+annotation that adds or changes members, e.g. `@Data`, `@Getter` or `@AllArgsConstructor`. The full set is
 `LOMBOK_SYNTHESIZING_ANNOTATIONS` in `AbstractTelescopeProcessor`.
 
 ```xml
