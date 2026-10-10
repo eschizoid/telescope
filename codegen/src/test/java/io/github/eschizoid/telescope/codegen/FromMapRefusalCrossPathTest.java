@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -174,6 +175,85 @@ class FromMapRefusalCrossPathTest {
       final var runtimeValue = getter.invoke(runtimeBean);
       if (!Objects.equals(generatedValue, runtimeValue)) {
         failures.add(type + ": bean, generated " + generatedValue + " but runtime " + runtimeValue);
+      }
+    }
+    assertEquals(List.of(), failures, () -> String.join("\n", failures));
+  }
+
+  /**
+   * A bean whose {@code value} it inherits from a generic superclass, by the superclass's argument
+   * as written in the bean's {@code extends} clause, {@code null} for one the bean passes through
+   * as a variable of its own, and the value an empty map leaves behind.
+   */
+  private record Inherited(String name, String argument, Object unfilled) {}
+
+  private static final List<Inherited> INHERITED = List.of(
+    new Inherited("an Integer the subclass fixes", "Integer", null),
+    new Inherited("a list the subclass fixes", "java.util.List<String>", List.of()),
+    new Inherited("an Optional the subclass fixes", "java.util.Optional<String>", Optional.empty()),
+    new Inherited("a variable the subclass passes through", null, null)
+  );
+
+  @Test
+  @DisplayName("a property inherited from a generic superclass is typed as the subclass fixes it on both paths")
+  void anInheritedPropertyIsReadAsTheSubclassFixesItOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var c : INHERITED) {
+      final var prefix = "Fmi" + index++;
+      final var head = "package " + PACKAGE + ";\nimport io.github.eschizoid.telescope.annotations.FromMap;\n";
+      final var generic = c.argument() == null ? "<X>" : "";
+      final var argument = c.argument() == null ? "X" : c.argument();
+      final var sources = new JavaFileObject[] {
+        ProcessorHarness.source(
+          PACKAGE + "." + prefix + "Base",
+          "package " +
+            PACKAGE +
+            ";\npublic class " +
+            prefix +
+            "Base<T> {\n  private T value;\n  public T getValue() { return value; }\n" +
+            "  public void setValue(final T value) { this.value = value; }\n}\n"
+        ),
+        ProcessorHarness.source(
+          PACKAGE + "." + prefix + "Bean",
+          head +
+            "@FromMap\npublic class " +
+            prefix +
+            "Bean" +
+            generic +
+            " extends " +
+            prefix +
+            "Base<" +
+            argument +
+            "> {}\n"
+        ),
+      };
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> c.name() + " should compile without the processor: " + plain.errorMessages());
+      final var processed = ProcessorHarness.compileFully(List.of(new FromMapProcessor()), List.of(), sources);
+      final var bean = plain.define(MethodHandles.lookup()).get(PACKAGE + "." + prefix + "Bean");
+      if (c.argument() == null) {
+        if (processed.success()) failures.add(c.name() + ": the processor accepted it");
+        expectRuntimeRefusal(failures, c.name(), bean, "property 'value' of " + prefix + "Bean");
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(c.name() + ": the processor refused it: " + processed.errorMessages().strip());
+        continue;
+      }
+      final var binders = generatedOnly(processed, plain).define(MethodHandles.lookup());
+      final var binder = binders.get(PACKAGE + "." + prefix + "BeanFromMap");
+      final var getter = bean.getMethod("getValue");
+      final var generated = getter.invoke(binder.getMethod("fromMap", Map.class).invoke(null, Map.of()));
+      final Object runtime;
+      try {
+        runtime = getter.invoke(Telescope.fromMap(bean).forward(Map.of()));
+      } catch (final IllegalArgumentException e) {
+        failures.add(c.name() + ": the runtime refused it: " + e.getMessage());
+        continue;
+      }
+      if (!Objects.equals(c.unfilled(), generated) || !Objects.equals(c.unfilled(), runtime)) {
+        failures.add(c.name() + ": generated " + generated + ", runtime " + runtime + ", owed " + c.unfilled());
       }
     }
     assertEquals(List.of(), failures, () -> String.join("\n", failures));

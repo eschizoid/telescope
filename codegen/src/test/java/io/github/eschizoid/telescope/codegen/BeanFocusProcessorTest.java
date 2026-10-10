@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
+import java.util.List;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -594,6 +595,78 @@ class BeanFocusProcessorTest {
       assertFalse(
         compilation.generated().containsKey("demo.WildFieldOptics"),
         "no Telescope holder should be generated for a rejected type"
+      );
+    }
+
+    @Test
+    @DisplayName("a property inherited from a generic superclass is typed as the subclass fixes it")
+    void anInheritedTypeVariablePropertyIsTypedAsTheSubclassFixesIt() {
+      final var compilation = ProcessorHarness.compileFully(
+        List.of(new BeanFocusProcessor()),
+        List.of(),
+        source(
+          "demo.Base",
+          """
+          package demo;
+          public abstract class Base<T extends Base<T>> {
+            private String name;
+            private T next;
+            public String getName() { return name; }
+            public void setName(final String name) { this.name = name; }
+            public T getNext() { return next; }
+            public void setNext(final T next) { this.next = next; }
+          }
+          """
+        ),
+        source(
+          "demo.Node",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Node extends Base<Node> {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var navigator = compilation.generated().get("demo.NodeTelescope");
+      assertNotNull(navigator, () -> "NodeTelescope missing; saw " + compilation.generated().keySet());
+      assertTrue(navigator.contains("public demo.NodeTelescope<R> next()"), navigator);
+      assertFalse(navigator.contains("<R, T>"), () -> "no generated member may name the superclass's T: " + navigator);
+    }
+
+    @Test
+    @DisplayName("a property a generic subclass types by its own variable is refused by name")
+    void aPropertyTypedByTheSubclassOwnVariableIsRefusedByName() {
+      final var compilation = compile(
+        source(
+          "demo.Base",
+          """
+          package demo;
+          public abstract class Base<T> {
+            private T next;
+            public T getNext() { return next; }
+            public void setNext(final T next) { this.next = next; }
+          }
+          """
+        ),
+        source(
+          "demo.Page",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.BeanFocus;
+          @BeanFocus
+          public class Page<X> extends Base<X> {}
+          """
+        )
+      );
+
+      assertFalse(compilation.success(), "the class should be refused");
+      assertTrue(
+        compilation.hasError("@BeanFocus: cannot emit metadata constant for property 'next' of type 'X'"),
+        () ->
+          "expected the refusal naming the property and the subclass's variable, saw: " + compilation.errorMessages()
       );
     }
   }

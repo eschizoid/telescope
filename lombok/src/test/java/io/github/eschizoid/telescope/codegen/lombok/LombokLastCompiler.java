@@ -11,6 +11,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
 import javax.tools.ForwardingJavaFileManager;
 import javax.tools.JavaFileObject;
@@ -46,6 +48,29 @@ final class LombokLastCompiler {
 
   /** {@link #compile(Path, String, String, boolean)} with {@code extraOptions} passed to javac. */
   static Path compile(
+    final Path dir,
+    final String simpleName,
+    final String code,
+    final boolean keepTelescopeLombok,
+    final List<String> extraOptions
+  ) throws IOException {
+    final var diagnostics = run(dir, simpleName, code, keepTelescopeLombok, extraOptions);
+    assertTrue(diagnostics == null, () -> "compilation failed: " + diagnostics);
+    return dir.resolve("generated");
+  }
+
+  /**
+   * Compiles {@code code} as {@link #compile(Path, String, String, boolean)} does and returns the
+   * error diagnostics' messages, failing when the compilation succeeds.
+   */
+  static String errors(final Path dir, final String simpleName, final String code) throws IOException {
+    final var diagnostics = run(dir, simpleName, code, true, List.of());
+    assertNotNull(diagnostics, "the compilation should fail");
+    return diagnostics;
+  }
+
+  /** Runs the compilation; {@code null} when it succeeds, else its error messages, one per line. */
+  private static String run(
     final Path dir,
     final String simpleName,
     final String code,
@@ -93,9 +118,13 @@ final class LombokLastCompiler {
       final var ok = compiler
         .getTask(null, files, diagnostics, options, null, standard.getJavaFileObjects(source.toFile()))
         .call();
-      assertTrue(ok, () -> "compilation failed: " + diagnostics.getDiagnostics());
+      if (ok) return null;
+      final var errors = new StringBuilder();
+      for (final var d : diagnostics.getDiagnostics()) {
+        if (d.getKind() == Diagnostic.Kind.ERROR) errors.append(d.getMessage(Locale.ROOT)).append('\n');
+      }
+      return errors.toString();
     }
-    return generated;
   }
 
   /** A class loader over {@code path} that delegates only to the platform class loader. */

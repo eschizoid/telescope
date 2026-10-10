@@ -30,6 +30,7 @@ import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.PrimitiveType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
@@ -2021,9 +2022,15 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * Boolean} returns). Walks {@code getAllMembers}, so inherited and Lombok-synthesised getters are
    * both picked up. The reserved property {@code class} (from {@link Object#getClass}) is filtered
    * out. Insertion order is preserved.
+   *
+   * <p>Each property's type is its getter's return type as a member of {@code pojo}. A getter
+   * inherited from a generic superclass returns that superclass's type variable, which {@code class
+   * Node extends Base<Node>} fixes to {@code Node}; read as declared, the variable is out of scope
+   * in every generated class.
    */
   protected List<Prop> beanProperties(final TypeElement pojo) {
     final Map<String, Prop> byName = new LinkedHashMap<>();
+    final var owner = (DeclaredType) pojo.asType();
     for (final var m : ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(pojo))) {
       if (!isPublicInstance(m) || !m.getParameters().isEmpty() || m.getReturnType().getKind() == TypeKind.VOID) {
         continue;
@@ -2042,7 +2049,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       } else {
         continue;
       }
-      if (!"class".equals(prop)) byName.putIfAbsent(prop, new Prop(prop, name, m.getReturnType()));
+      if ("class".equals(prop) || byName.containsKey(prop)) continue;
+      final var asMember = (ExecutableType) processingEnv.getTypeUtils().asMemberOf(owner, m);
+      byName.put(prop, new Prop(prop, name, asMember.getReturnType()));
     }
     return new ArrayList<>(byName.values());
   }
