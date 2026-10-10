@@ -104,11 +104,13 @@ jobs:
           # axion-release derives the version from git position — a commit past the tag
           # computes as next-version-SNAPSHOT, which makes JReleaser disable the Maven
           # Central deployer and demote the GitHub release to the early-access prerelease.
-          # The README pins the release version in its install snippets; rewrite every
-          # io.github.eschizoid:telescope-* coordinate and the Maven <version> block to the
-          # version just tagged, so the docs never trail the release.
+          # Every tracked Markdown file that pins a telescope coordinate is rewritten to the
+          # version just tagged, both the io.github.eschizoid:telescope-* coordinates and the
+          # Maven <version> block that follows a telescope artifactId. The Docs integrity check
+          # holds every one of those files to the latest release, so the two must cover the same set.
           VERSION="${{ steps.version.outputs.version }}"
-          for f in README.md docs/codegen.md; do
+          mapfile -t PINNED < <(git ls-files '*.md')
+          for f in "${PINNED[@]}"; do
             sed -i -E "s/(io\.github\.eschizoid:telescope-[a-z-]+:)[0-9]+\.[0-9]+\.[0-9]+/\1${VERSION}/g" "$f"
             # XML <version> blocks: only the one directly following a telescope artifactId —
             # a blanket replace would clobber unrelated pins (the Lombok processor path).
@@ -126,15 +128,15 @@ jobs:
           # workflows, so it is opened with the release token, whose checks then run as usual.
           # A failure here leaves the README behind the release, and the Docs integrity check
           # on every later pull request depends on it, so the step fails rather than warns.
-          if ! git diff --quiet README.md docs/codegen.md; then
+          if ! git diff --quiet -- '*.md'; then
             BRANCH="docs/pin-${VERSION}"
             git switch -c "$BRANCH"
-            git add README.md docs/codegen.md
+            git add -u -- '*.md'
             git commit -m "docs: pin the install snippets to ${VERSION}"
             git push origin "$BRANCH"
             PR_URL=$(gh pr create --base main --head "$BRANCH" \
               --title "docs: pin the install snippets to ${VERSION}" \
-              --body "Pins the README and codegen guide install snippets to ${VERSION}, the release just published.")
+              --body "Pins every install snippet in the Markdown docs to ${VERSION}, the release just published.")
             for _ in $(seq 1 30); do
               [ -n "$(gh pr view "$PR_URL" --json statusCheckRollup -q '.statusCheckRollup[]')" ] && break
               sleep 10
