@@ -771,7 +771,8 @@ final Mapper<UserEntity, UserDto> m = Telescope.mapper(
     UserEntity.class, UserDto.class,
     to(UserEntity::name, UserDto::fullName));   // same-name fields auto-mapped
 // immutable all-args-only POJO target; the hint binds by parameter name when -parameters or -g
-// keeps the names and each names a property, by position otherwise:
+// keeps the names and at least one names a property (null for a parameter that names none),
+// by position otherwise:
 Telescope.mapper(OrderRecord.class, ImmutablePojo.class,
     writeBean(ImmutablePojo.class, WriteStrategy.CONSTRUCTOR));
 ```

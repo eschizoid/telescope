@@ -75,6 +75,13 @@ class ParameterNamesTest {
     "  public Initials(final String f, final String l) { this.first = f; this.last = l; }\n" +
     "  public String getFirst() { return first; }\n  public String getLast() { return last; }\n}\n";
 
+  // One parameter named after a property, one named after none, in an order that binding by
+  // position would hand first's value to the parameter named last.
+  private static final String PARTIAL =
+    "package dbg;\npublic class Partial {\n  private final String first;\n  private final String last;\n" +
+    "  public Partial(final String last, final String nick) { this.last = last; this.first = nick; }\n" +
+    "  public String getFirst() { return first; }\n  public String getLast() { return last; }\n}\n";
+
   /**
    * Compiles {@code sources} with {@code options} and returns the directory the classes landed in.
    */
@@ -178,6 +185,18 @@ class ParameterNamesTest {
   }
 
   @Test
+  @DisplayName("a name that is not a Java identifier names nothing")
+  void aNameThatIsNoIdentifierNamesNothing() {
+    final var types = new Class<?>[] { String.class };
+
+    assertNull(ParameterNames.fromSlots(types, Map.of(1, local("Ljava/lang/String;", "Ljava/lang/String;"))));
+    assertArrayEquals(
+      new String[] { "$a_1" },
+      ParameterNames.fromSlots(types, Map.of(1, local("$a_1", "Ljava/lang/String;")))
+    );
+  }
+
+  @Test
   @DisplayName("a class compiled without a local variable table has no parameter names")
   void noLocalVariableTableNamesNothing() throws ReflectiveOperationException, IOException {
     final var nested = load("dbg.Outer$Nested", List.of("-g:none"), Map.of("dbg/Outer", OUTER));
@@ -267,11 +286,13 @@ class ParameterNamesTest {
 
   // --- the CONSTRUCTOR hint --------------------------------------------------------------------
 
-  /** Builds through the hint's writer with first = Ada and last = Lovelace, and reads both back. */
+  /**
+   * Builds through the hint's writer from a source holding first = Ada and last = Lovelace, and
+   * reads both back. The source has no value under any other name.
+   */
   private static String hinted(final Class<?> type) throws ReflectiveOperationException {
-    final var built = Beans.constructorWriter(type, 2).construct(Beans.propertyNames(type), n ->
-      n.equals("first") ? "Ada" : "Lovelace"
-    );
+    final var source = Map.of("first", "Ada", "last", "Lovelace");
+    final var built = Beans.constructorWriter(type, 2).construct(Beans.propertyNames(type), source::get);
     return type.getMethod("getFirst").invoke(built) + " " + type.getMethod("getLast").invoke(built);
   }
 
@@ -308,6 +329,23 @@ class ParameterNamesTest {
     final var initials = load("dbg.Initials", List.of("-parameters"), Map.of("dbg/Initials", INITIALS));
 
     assertEquals("Ada Lovelace", hinted(initials));
+  }
+
+  @Test
+  @DisplayName("the CONSTRUCTOR hint binds the parameter named after a property by name, and passes null to the other")
+  void theHintBindsAPartialMatchByName() throws ReflectiveOperationException, IOException {
+    final var partial = load("dbg.Partial", List.of("-parameters", "-g:none"), Map.of("dbg/Partial", PARTIAL));
+
+    assertEquals("null Lovelace", hinted(partial));
+  }
+
+  @Test
+  @DisplayName("the CONSTRUCTOR hint binds a partial match by the names the debug info keeps")
+  void theHintBindsAPartialMatchByDebugNames() throws ReflectiveOperationException, IOException {
+    final var partial = load("dbg.Partial", List.of("-g"), Map.of("dbg/Partial", PARTIAL));
+
+    // Inside an image the names are unknown, so the hint binds by position.
+    assertEquals(NativeImage.IN_IMAGE ? "Lovelace Ada" : "null Lovelace", hinted(partial));
   }
 
   // --- helpers ---------------------------------------------------------------------------------

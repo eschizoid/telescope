@@ -30,10 +30,10 @@ import java.util.Map;
  * <p>The bytes come from {@link Class#getResourceAsStream}, which a loader is free to answer with
  * bytes it did not define the class from. So the names are taken only when the bytes name the class
  * itself, the constructor's descriptor is found in them, every parameter's entry carries that
- * parameter's type, no slot has two entries live from the first instruction, and no two parameters
- * share a name. What these checks cannot catch is another version of the same class whose
- * constructor has the same descriptor and the same parameter types under different names: those
- * names are taken as they stand.
+ * parameter's type, no slot has two entries live from the first instruction, every name is a Java
+ * identifier, and no two parameters share a name. What these checks cannot catch is another version
+ * of the same class whose constructor has the same descriptor and the same parameter types under
+ * different names: those names are taken as they stand.
  *
  * <p>There are no class bytes inside a native image and no table in a class compiled without {@code
  * -g}; either way the answer is that the names are unknown, which is the answer reflection gives
@@ -80,8 +80,8 @@ final class ParameterNames {
 
   /**
    * The parameter names {@code slots} gives, in parameter order, or {@code null} when a parameter's
-   * slot has no entry, an entry of another type, or a name an earlier parameter took. Slot 0 is the
-   * receiver, and a {@code long} or {@code double} takes two.
+   * slot has no entry, an entry of another type, a name that is not a Java identifier, or a name an
+   * earlier parameter took. Slot 0 is the receiver, and a {@code long} or {@code double} takes two.
    */
   static String[] fromSlots(final Class<?>[] types, final Map<Integer, Local> slots) {
     final var names = new String[types.length];
@@ -90,11 +90,19 @@ final class ParameterNames {
     for (var i = 0; i < types.length; i++) {
       final var local = slots.get(slot);
       if (local == null || !local.descriptor().equals(types[i].descriptorString())) return null;
-      if (!seen.add(local.name())) return null;
+      if (!isIdentifier(local.name()) || !seen.add(local.name())) return null;
       names[i] = local.name();
       slot += types[i] == long.class || types[i] == double.class ? 2 : 1;
     }
     return names;
+  }
+
+  /**
+   * Whether {@code name} has the shape of a Java identifier, which every source parameter name has.
+   */
+  private static boolean isIdentifier(final String name) {
+    if (name.isEmpty() || !Character.isJavaIdentifierStart(name.codePointAt(0))) return false;
+    return name.codePoints().skip(1).allMatch(Character::isJavaIdentifierPart);
   }
 
   private static Map<String, Map<Integer, Local>> read(final Class<?> type) {
