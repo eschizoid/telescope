@@ -64,7 +64,7 @@ final class FromMap {
     if (target.isRecord()) {
       for (final var comp : target.getRecordComponents()) typeByName.put(comp.getName(), comp.getGenericType());
     } else {
-      for (final var name : known) typeByName.put(name, Beans.propertyType(target, name));
+      for (final var name : known) typeByName.put(name, Beans.memberPropertyType(target, name));
     }
     for (final var fieldName : byField.keySet()) {
       if (!known.contains(fieldName)) throw new IllegalArgumentException(
@@ -192,7 +192,7 @@ final class FromMap {
         converters[i] = conv;
         required[i] = e instanceof Require<?, ?>;
       }
-      final var propertyType = Beans.propertyType(target, propertyNames[i]);
+      final var propertyType = Beans.memberPropertyType(target, propertyNames[i]);
       defaults[i] = unfilledDefault(rawOf(propertyType), propertyType);
     }
     final var refusal = MissingKeys.of(target, "property", keys, propertyNames, required);
