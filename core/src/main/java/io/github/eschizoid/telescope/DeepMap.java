@@ -184,6 +184,7 @@ public final class DeepMap {
       cyclicPairs,
       inProgress,
       lenient,
+      lenient,
       trail
     );
     validateAllHintsConsumed(hintMap, cache);
@@ -486,6 +487,9 @@ public final class DeepMap {
     final Set<TypePair> cyclicPairs,
     final Deque<TypePair> inProgress,
     final boolean lenient,
+    // True for a mapper with no backward direction, at every depth: it decides which enum pairs
+    // convert. `lenient` differs because it applies to the pair the user named and nowhere below.
+    final boolean forwardOnly,
     // Introspection collector: non-null only for the top-level pair, where each field decision
     // appends one OpticNode as it is made. Recursive (nested-pair) Iso-building calls pass null;
     // nested dotted paths are captured separately by collectNested from the top-level pair, so
@@ -679,7 +683,8 @@ public final class DeepMap {
                 cache,
                 nullStrategy,
                 cyclicPairs,
-                inProgress
+                inProgress,
+                forwardOnly
               )
             : fieldIsoOf(row, srcType, tgtType);
         final var step = new FieldStep(srcField, tgtField, rowIso);
@@ -760,7 +765,18 @@ public final class DeepMap {
         final var step = new FieldStep(
           name,
           name,
-          autoIso(autoSrcType, autoTgtType, name, overrides, beanRefl, cache, nullStrategy, cyclicPairs, inProgress)
+          autoIso(
+            autoSrcType,
+            autoTgtType,
+            name,
+            overrides,
+            beanRefl,
+            cache,
+            nullStrategy,
+            cyclicPairs,
+            inProgress,
+            forwardOnly
+          )
         );
         byTargetName.put(name, step);
         bySourceName.put(name, step);
@@ -830,7 +846,8 @@ public final class DeepMap {
     final Map<TypePair, Iso<?, ?>> cache,
     final NullHint.NullStrategy nullStrategy,
     final Set<TypePair> cyclicPairs,
-    final Deque<TypePair> inProgress
+    final Deque<TypePair> inProgress,
+    final boolean forwardOnly
   ) {
     final var raw = computeAutoIso(
       srcType,
@@ -841,7 +858,8 @@ public final class DeepMap {
       cache,
       nullStrategy,
       cyclicPairs,
-      inProgress
+      inProgress,
+      forwardOnly
     );
     // DEFAULT strategy wraps EVERY auto-recursed per-component Iso uniformly: scalar identity,
     // recursive record/bean pair, lifted container, cross-Optional bridge. When the source value
@@ -860,13 +878,14 @@ public final class DeepMap {
     final Map<TypePair, Iso<?, ?>> cache,
     final NullHint.NullStrategy nullStrategy,
     final Set<TypePair> cyclicPairs,
-    final Deque<TypePair> inProgress
+    final Deque<TypePair> inProgress,
+    final boolean forwardOnly
   ) {
     // Every branch DECISION routes through the shared pairing spec — this method only maps each
     // decision to its runtime Iso. Branch rationale (kind discriminators, scalar exclusions,
     // ordering) lives on PairingRules#decidePair, consumed identically by the compile-time
     // verifier so what constructs here and what compiles there cannot drift.
-    final var decision = PAIRING.decidePair(srcType, tgtType, componentName);
+    final var decision = PAIRING.decidePair(srcType, tgtType, componentName, forwardOnly);
 
     // (a) Same type, and not a container the allocation table rebuilds → identity Iso. A
     //     container of one declared type takes the copy in (a.2) instead.
@@ -897,6 +916,12 @@ public final class DeepMap {
       return ContainerLifts.mapCopyIso(srcType, tgtType);
     }
 
+    // (a.1b) Two different enums whose constants line up by name in every direction this mapper
+    //        converts → constant to constant by name, null to null.
+    if (decision instanceof PairDecision.EnumByName) {
+      return enumByNameIso((Class<?>) srcType, (Class<?>) tgtType);
+    }
+
     // (b) Both reflectable (record or bean) → recurse, return cache-reading Iso so cycles work.
     if (decision instanceof PairDecision.RecursePair) {
       final var srcCls = (Class<?>) srcType;
@@ -904,7 +929,20 @@ public final class DeepMap {
       // Nested recursion — `isNested` (inProgress.size() > 1) already triggers the lenient gate
       // for unmatched fields regardless of the outer call's strictness. Pass `false` here so the
       // lenient flag's meaning stays anchored to the user-facing top-level call (mapperForward).
-      populateIso(srcCls, tgtCls, overrides, beanRefl, cache, null, nullStrategy, cyclicPairs, inProgress, false, null);
+      populateIso(
+        srcCls,
+        tgtCls,
+        overrides,
+        beanRefl,
+        cache,
+        null,
+        nullStrategy,
+        cyclicPairs,
+        inProgress,
+        false,
+        forwardOnly,
+        null
+      );
       final var subKey = new TypePair(srcCls, tgtCls);
       return lazyCacheIso(cache, subKey, !cyclicPairs.contains(subKey));
     }
@@ -930,7 +968,8 @@ public final class DeepMap {
         cache,
         NullHint.NullStrategy.PROPAGATE,
         cyclicPairs,
-        inProgress
+        inProgress,
+        forwardOnly
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso));
     }
@@ -944,7 +983,8 @@ public final class DeepMap {
         cache,
         NullHint.NullStrategy.PROPAGATE,
         cyclicPairs,
-        inProgress
+        inProgress,
+        forwardOnly
       );
       return Iso.liftOptionalToNullable(eraseIso(elementIso)).reverse();
     }
@@ -963,7 +1003,8 @@ public final class DeepMap {
         cache,
         NullHint.NullStrategy.PROPAGATE,
         cyclicPairs,
-        inProgress
+        inProgress,
+        forwardOnly
       );
       // The lifts consult MhIso.liftCollection/liftMap, which sharpen to a MethodHandle loop when
       // the
@@ -1153,6 +1194,32 @@ public final class DeepMap {
    */
   private static String slot(final Reflective refl) {
     return refl == Reflective.RECORDS ? "field" : "property";
+  }
+
+  /**
+   * Constant to constant by name, through a table indexed by the converted constant's ordinal,
+   * built once when the mapper is. A constant with no same-named counterpart has a null entry,
+   * which only a forward-only mapper's unused backward table can hold, since every other such pair
+   * is refused.
+   */
+  private static Iso<Object, Object> enumByNameIso(final Class<?> src, final Class<?> tgt) {
+    final var forward = constantsByName(src, tgt);
+    final var backward = constantsByName(tgt, src);
+    return Iso.of(
+      s -> s == null ? null : forward[((Enum<?>) s).ordinal()],
+      t -> t == null ? null : backward[((Enum<?>) t).ordinal()]
+    );
+  }
+
+  /** For each constant of {@code from}, by ordinal, the constant of {@code to} with its name. */
+  private static Object[] constantsByName(final Class<?> from, final Class<?> to) {
+    final var toConstants = to.getEnumConstants();
+    final var byName = HashMap.<String, Object>newHashMap(toConstants.length);
+    for (final var constant : toConstants) byName.put(((Enum<?>) constant).name(), constant);
+    final var fromConstants = from.getEnumConstants();
+    final var table = new Object[fromConstants.length];
+    for (var i = 0; i < fromConstants.length; i++) table[i] = byName.get(((Enum<?>) fromConstants[i]).name());
+    return table;
   }
 
   /**

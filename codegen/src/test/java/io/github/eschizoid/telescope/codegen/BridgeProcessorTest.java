@@ -5,9 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
+import java.lang.reflect.InvocationTargetException;
+import java.util.HashMap;
 import java.util.List;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
@@ -50,6 +53,148 @@ class BridgeProcessorTest {
       from += needle.length();
     }
     return count;
+  }
+
+  @Nested
+  @DisplayName("Enum pairs — constant to constant by name")
+  class EnumPairs {
+
+    @Test
+    @DisplayName("an enum property is read once forward, once backward and once from the patch partial")
+    void anEnumPropertyIsReadOnce() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          @io.github.eschizoid.telescope.annotations.Bridge(Tgt.class)
+          public class Src {
+            private Ea status;
+            public Ea getStatus() { return status; }
+            public void setStatus(final Ea v) { status = v; }
+          }
+          """
+        ),
+        source(
+          "demo.Tgt",
+          """
+          package demo;
+          public class Tgt {
+            private Eb status;
+            public Eb getStatus() { return status; }
+            public void setStatus(final Eb v) { status = v; }
+          }
+          """
+        ),
+        source("demo.Ea", "package demo;\npublic enum Ea { A, B }\n"),
+        source("demo.Eb", "package demo;\npublic enum Eb { A, B }\n")
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+      final var bridge = compilation.generated().get("demo.SrcBridge");
+      assertNotNull(bridge, () -> "SrcBridge not generated; saw " + compilation.generated().keySet());
+      assertEquals(1, occurrences(bridge, "s.getStatus()"), bridge);
+      assertEquals(1, occurrences(bridge, "t.getStatus()"), bridge);
+      assertEquals(1, occurrences(bridge, "partial.getStatus()"), bridge);
+    }
+
+    @Test
+    @DisplayName("a lenient bridge sends a target constant with no source counterpart back to null")
+    void aLenientBridgeSendsAnUnmatchedConstantBackToNull() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          @io.github.eschizoid.telescope.annotations.Bridge(value = Tgt.class, lenient = true)
+          public record Src(Ea status) {}
+          """
+        ),
+        source("demo.Tgt", "package demo;\npublic record Tgt(Eb status) {}\n"),
+        source("demo.Ea", "package demo;\npublic enum Ea { A, B }\n"),
+        source("demo.Eb", "package demo;\npublic enum Eb { A, B, C }\n")
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+      final var bridge = compilation.generated().get("demo.SrcBridge");
+      assertNotNull(bridge, () -> "SrcBridge not generated; saw " + compilation.generated().keySet());
+      final var backward = bridge.substring(bridge.indexOf("static demo.Ea backward(final demo.Eb in)"));
+      final var body = backward.substring(0, backward.indexOf("\n    }"));
+      assertTrue(body.contains("case A -> demo.Ea.A;") && body.contains("case B -> demo.Ea.B;"), body);
+      assertTrue(body.contains("default -> null;"), body);
+    }
+
+    @Test
+    @DisplayName("a source constant added after the bridge was generated is refused by name")
+    void aConstantAddedAfterGenerationIsRefusedByName() throws ReflectiveOperationException {
+      final var generated = compileAttributed(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          @io.github.eschizoid.telescope.annotations.Bridge(Tgt.class)
+          public record Src(Ea status) {}
+          """
+        ),
+        source("demo.Tgt", "package demo;\npublic record Tgt(Eb status) {}\n"),
+        source("demo.Ea", "package demo;\npublic enum Ea { A, B }\n"),
+        source("demo.Eb", "package demo;\npublic enum Eb { A, B }\n")
+      );
+      assertTrue(generated.success(), generated::errorMessages);
+      final var grown = ProcessorHarness.compileFully(
+        List.of(),
+        List.of(),
+        source("demo.Ea", "package demo;\npublic enum Ea { A, B, X }\n")
+      );
+      assertTrue(grown.success(), grown::errorMessages);
+      final var bytes = new HashMap<>(generated.classes());
+      bytes.putAll(grown.classes());
+      final var loader = new ClassLoader(BridgeProcessorTest.class.getClassLoader()) {
+        @Override
+        protected Class<?> findClass(final String name) throws ClassNotFoundException {
+          final var code = bytes.get(name);
+          if (code == null) throw new ClassNotFoundException(name);
+          return defineClass(name, code, 0, code.length);
+        }
+      };
+      final var ea = loader.loadClass("demo.Ea");
+      final var src = loader.loadClass("demo.Src");
+      final var added = ea.getEnumConstants()[2];
+      final var input = src.getConstructor(ea).newInstance(added);
+      final var forward = loader.loadClass("demo.SrcBridge").getMethod("forward", src);
+      final var thrown = assertThrows(InvocationTargetException.class, () -> forward.invoke(null, input));
+      assertEquals(IllegalArgumentException.class, thrown.getCause().getClass(), () ->
+        String.valueOf(thrown.getCause())
+      );
+      assertEquals(
+        "demo.Ea constant X has no counterpart in demo.Eb; re-run the annotation processor",
+        thrown.getCause().getMessage()
+      );
+    }
+
+    @Test
+    @DisplayName("a strict bridge refuses an enum pair whose target has a constant the source lacks")
+    void aStrictBridgeRefusesASupersetTarget() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Src",
+          """
+          package demo;
+          @io.github.eschizoid.telescope.annotations.Bridge(Tgt.class)
+          public record Src(Ea status) {}
+          """
+        ),
+        source("demo.Tgt", "package demo;\npublic record Tgt(Eb status) {}\n"),
+        source("demo.Ea", "package demo;\npublic enum Ea { A, B }\n"),
+        source("demo.Eb", "package demo;\npublic enum Eb { A, B, C }\n")
+      );
+      assertFalse(compilation.success(), compilation::errorMessages);
+      assertTrue(
+        compilation.hasError(
+          "@Bridge Src -> Tgt: Component 'status' maps enum demo.Ea to enum demo.Eb by constant name, but" +
+            " demo.Ea has no constant named C, which the backward direction needs."
+        ),
+        compilation::errorMessages
+      );
+    }
   }
 
   @Nested

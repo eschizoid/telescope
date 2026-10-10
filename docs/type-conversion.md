@@ -70,7 +70,11 @@ source's container, nested records / POJOs recurse, `List<X>↔List<Y>` / `Set<X
 
 > Auto means exact name + type, nothing more — no fuzzy heuristics, no flattening, no inferred relationships (that's
 > ModelMapper / Dozer territory, and they lost to MapStruct for good reasons). Anything that isn't an exact match you
-> declare yourself with a `Mapping.to(srcAcc, tgtAcc)` or `Mapping.via(srcAcc, tgtAcc, nestedMapper)` row.
+> declare yourself with a `Mapping.to(srcAcc, tgtAcc)` or `Mapping.via(srcAcc, tgtAcc, nestedMapper)` row. Two different
+> enum types are the exception, matched by exact constant name: each constant converts to the constant of the same name,
+> so a mapper that converts both ways needs every constant on each side to have a counterpart, and a forward-only mapper
+> (`mapperForward`, `@Bridge(lenient = true)`) needs one for every source constant. Any other enum pair is refused when
+> the mapper is built, naming the constants that have none.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
@@ -110,7 +114,7 @@ recursion caches each type pair as it descends, and re-entry returns the in-prog
 | `toOneWay(src, tgt, fn)`      | Forward-only typed transform                                                                    | (separate `@Mapper` interface)              |
 | `toOrElse(src, tgt, default)` | Null-coalesce to a default value                                                                | `@Mapping(defaultValue = "...")`            |
 | `toOrElseGet(src, tgt, sup)`  | Null-coalesce via a `Supplier`                                                                  | `@Mapping(defaultExpression = "java(…)")`   |
-| `enumTo(src, tgt, SE, TE)`    | By-name enum mapping, exhaustiveness checked at mapper construction                             | `@ValueMapping(source = "X", target = "Y")` |
+| `enumTo(src, tgt, SE, TE)`    | By-name enum mapping as a row, for a renamed field; checked at mapper construction              | `@ValueMapping(source = "X", target = "Y")` |
 | `via(src, tgt, mapper)`       | Drop in a pre-built nested mapper                                                               | (composition by hand)                       |
 | `constant(tgt, value)`        | Forward-only literal at the target slot                                                         | `@Mapping(constant = "...")`                |
 | `compute(tgt, supplier)`      | Forward-only supplier-computed value                                                            | `@Mapping(expression = "java(...)")`        |

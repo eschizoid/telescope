@@ -187,7 +187,7 @@ declaration needed.
 **telescope:**
 
 ```java
-// Auto (no row needed): primitive<->wrapper, collection copies, Optional<->nullable
+// Auto (no row needed): primitive<->wrapper, collection copies, Optional<->nullable, enum<->enum by constant name
 final var mapper = Telescope.mapper(Source.class, Target.class); // boolean<->Boolean, Integer<->int just work, null-safe
 
 // Everything else is an explicit typed row (by design — ADR-0002):
@@ -195,28 +195,27 @@ Telescope.mapper(Src.class, Dst.class,
     to(Src::getAttempts, Dst::getAttemptsText,
        i -> i == null ? null : String.valueOf(i),
        s -> s == null ? null : Integer.parseInt(s)),          // String<->number
-    to(Src::status, Dst::statusName, Enum::name, s -> Status.valueOf(s)), // enum<->String
-    enumTo(Src::status, Dst::status, SrcStatus.class, DstStatus.class));  // enum<->enum by name, exhaustiveness-checked
+    to(Src::status, Dst::statusName, Enum::name, s -> Status.valueOf(s))); // enum<->String
 ```
 
-`Primitive<->wrapper` is genuinely automatic and matches MapStruct's null->0/false behavior (tested). But
-`String<->number`, `enum<->String`, and date/time conversions are deliberately NOT implicit (ADR-0002 'no fuzzy
-auto-mapping'): a same-name field with mismatched types throws at mapper-build time with a message naming the fix. The
-workaround is one explicit to(src, tgt, fwd, bwd) row per pair — compile-typed, but a MapStruct migrator must write rows
-MapStruct generated silently. enum<->enum by name gets first-class sugar (enumTo, with build-time exhaustiveness
-MapStruct lacks); enum<->String does not.
+`Primitive<->wrapper` is genuinely automatic and matches MapStruct's null->0/false behavior (tested). Two different enum
+types whose constants match by name convert without a row too, on the runtime mapper and on `@Bridge` alike (see
+[Enum mapping](#enum-mapping)). But `String<->number`, `enum<->String`, and date/time conversions are deliberately NOT
+implicit (ADR-0002 'no fuzzy auto-mapping'): a same-name field with mismatched types throws at mapper-build time with a
+message naming the fix. The workaround is one explicit to(src, tgt, fwd, bwd) row per pair — compile-typed, but a
+MapStruct migrator must write rows MapStruct generated silently.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `computeAutoIso` (the Identity,
-PrimitiveWrapper, CollectionCopy and MapCopy branches, and the OptionalToNullable / NullableToOptional branches that
-lift `Optional<->nullable`) and `primitiveWrapperIso` (autobox with a JLS-default null guard);
+PrimitiveWrapper, EnumByName, CollectionCopy and MapCopy branches, and the OptionalToNullable / NullableToOptional
+branches that lift `Optional<->nullable`) and `primitiveWrapperIso` (autobox with a JLS-default null guard);
 internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingMessages.java, `incompatibleShapes` (a
 same-name pair of differing scalar types is refused with 'add a to(src, tgt, forward, backward) row');
 core/src/test/java/io/github/eschizoid/telescope/MigrationRegressionTest.java, the `PrimitiveWrapperAutoboxing` nested
 class ('auto-mapping handles primitive↔wrapper pairs …' and 'null boxed source mapping to primitive target uses JLS
 default …'), and the tests '2-arg to(Integer-getter, String-getter) rename is rejected at build, not a runtime
 ClassCastException' and 'the documented fix — 4-arg to(src, tgt, forward, backward) — round-trips the renamed field';
-core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `enumTo`; docs/adr/0002-no-fuzzy-auto-mapping.md
-(exact name+type only, explicit rows otherwise)</sub>
+docs/adr/0002-no-fuzzy-auto-mapping.md (exact name+type only, explicit rows otherwise, amended for enum constant
+names)</sub>
 
 ### Format strings
 
@@ -1089,8 +1088,12 @@ ANY_REMAINING/ANY_UNMAPPED defaults; @EnumMapping name-transformation strategies
 **telescope:**
 
 ```java
-// Same-name constants — exhaustiveness validated when the mapper is built (both directions):
-enumTo(UserEntity::status, UserDto::status, EntityStatus.class, DtoStatus.class)
+// Same-name constants — no row on either path. Each constant converts to the constant of the same name:
+Telescope.mapper(UserEntity.class, UserDto.class);   // runtime
+@Bridge(UserDto.class) public record UserEntity(String id, EntityStatus status) {} // generated: one switch per direction
+
+// The same correspondence as a row, for a field that is also renamed:
+enumTo(UserEntity::status, UserDto::state, EntityStatus.class, DtoStatus.class)
 
 // Renamed constants / ANY_REMAINING — a typed switch instead of @ValueMapping strings:
 to(UserEntity::status, UserDto::status,
@@ -1098,19 +1101,34 @@ to(UserEntity::status, UserDto::status,
    d -> switch (d) { case CLOSED -> EntityStatus.ARCHIVED; default -> EntityStatus.valueOf(d.name()); })
 ```
 
-The by-name case is fully covered and arguably stronger than MapStruct — mismatched constant sets fail at mapper-build
-time with a named diff, instead of at the first unlucky call. What's missing is the declarative sugar for asymmetric
-enums: per-constant renames, @EnumMapping prefix/suffix/case name transformations, and ANY_REMAINING/ANY_UNMAPPED
-defaults all require a hand-written (though javac-exhaustive and refactor-safe) switch or lambda inside a to(src, tgt,
-fwd, bwd) row; enumTo itself deliberately rejects non-bijective enum pairs. Workaround quality is high, but it is manual
-code, not a factory.
+The by-name case is fully covered on both paths, as a field, inside `List`, `Set`, `Map` values and `Optional`, and
+across `Optional<->nullable`; a null constant stays null. One rule decides it for the runtime mapper, `@Bridge` and the
+mapper verifier: a mapper that converts in both directions needs a counterpart for every constant on each side, and a
+forward-only mapper (`mapperForward`, `@Bridge(lenient = true)`) for every source constant, so a target with extra
+constants converts forward there. A lenient bridge's lossy backward sends a constant with no counterpart to null, and a
+strict bridge applies the both-ways rule to every enum pair below a sub-bridge it shares with a lenient one, down to any
+pair with a `@Bridge` of its own, which decides its own fields. A generated switch meeting a source constant added after
+the bridge was generated throws an `IllegalArgumentException` naming it. An `EnumSet` of converted constants is refused
+on every path, since no rebuild can build an `EnumSet`. A mismatch is refused when the mapper is built, and on the
+generated path at compile time, naming the constants that have no counterpart, which is stronger than MapStruct's error
+on unmapped source constants alone. What's missing is the declarative sugar for asymmetric enums: per-constant renames,
+@EnumMapping prefix/suffix/case name transformations, and ANY_REMAINING/ANY_UNMAPPED defaults all require a hand-written
+(though javac-exhaustive and refactor-safe) switch inside a to(src, tgt, fwd, bwd) row on the runtime path, or a
+`@Transform` on `@Bridge`. Workaround quality is high, but it is manual code, not a factory.
 
-<sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `enumTo` (javadoc: "Closes
-MapStruct's @ValueMapping gap for the common 'status enums that line up by name' case"; implemented over Enum.valueOf
-both ways) and `validateEnumCorrespondence` (factory-time exhaustiveness diff naming missing constants and pointing to
-to(src, tgt, fwd, bwd)); core/src/test/java/io/github/eschizoid/telescope/MappingEnumToTest.java, the nested classes
-'Happy path — enums with identical constants line up by name' (round-trip) and 'Exhaustiveness validation at factory
-time' (mismatch diagnostics + escape-hatch message)</sub>
+<sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/PairingRules.java, `decidePair`
+(the enum-by-constant-name branch and its forward-only overload);
+internal/src/main/java/io/github/eschizoid/telescope/internal/pairing/EnumCorrespondence.java, `converts`;
+core/src/main/java/io/github/eschizoid/telescope/DeepMap.java, `enumByNameIso`;
+codegen/src/main/java/io/github/eschizoid/telescope/codegen/BridgeProcessor.java, `planEnum` and `emitEnumDirection`;
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/CrossPathCorpusTest.java, the test 'an enum maps to an enum
+by constant name on both paths, and both refuse the same mismatches';
+codegen/src/test/java/io/github/eschizoid/telescope/codegen/MapperVerifierProcessorTest.java, the nested class 'Enum
+pairs — constant names checked in each direction the mapper converts';
+core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `enumTo`;
+core/src/test/java/io/github/eschizoid/telescope/MappingEnumToTest.java, the nested classes 'Happy path — enums with
+identical constants line up by name' (round-trip) and 'Exhaustiveness validation at factory time' (mismatch
+diagnostics + escape-hatch message)</sub>
 
 ### Subclass mapping
 

@@ -93,6 +93,9 @@ public interface PropertySystem<T> {
 
   boolean isEnumType(T t);
 
+  /** The names of an enum's constants in declaration order; empty for a type that is no enum. */
+  List<String> enumConstants(T t);
+
   boolean isInterfaceType(T t);
 
   /** Whether {@code t} is an interface or an abstract class: a type with no instance of its own. */

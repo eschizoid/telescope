@@ -41,14 +41,14 @@ import java.util.stream.Collectors;
  * time.
  *
  * <p>Decision order in {@link #decidePair} is load-bearing — it IS the runtime lattice: same type
- * (identity, or a copy for a container) → primitive/wrapper → same-kind subtype copy → reflectable
- * recursion → cross-{@code Optional} bridge → same-kind container lift → incompatible. Subtype copy
- * must precede reflectable recursion: a container subclass that declares no type parameters of its
- * own ({@code class ImageUrls extends ArrayList<ImageUrl>}) counts as reflectable, and
- * bean-decomposing it would fail at the JDK boundary (private lookup into {@code java.base} is
- * rejected) — the copy branch intercepts those pairs first, and a pair of containers it does not
- * take never reaches recursion: it goes to the container lift, which converts each element or
- * refuses the pair by name.
+ * (identity, or a copy for a container) → primitive/wrapper → enum by constant name → same-kind
+ * subtype copy → reflectable recursion → cross-{@code Optional} bridge → same-kind container lift →
+ * incompatible. Subtype copy must precede reflectable recursion: a container subclass that declares
+ * no type parameters of its own ({@code class ImageUrls extends ArrayList<ImageUrl>}) counts as
+ * reflectable, and bean-decomposing it would fail at the JDK boundary (private lookup into {@code
+ * java.base} is rejected) — the copy branch intercepts those pairs first, and a pair of containers
+ * it does not take never reaches recursion: it goes to the container lift, which converts each
+ * element or refuses the pair by name.
  *
  * @param <T> the world's type handle
  */
@@ -60,14 +60,49 @@ public final class PairingRules<T> {
     this.props = props;
   }
 
-  /** Decide the conversion for one (source type, target type) field pair. Never returns null. */
+  /**
+   * Decide the conversion for one (source type, target type) field pair, for a mapper that converts
+   * in both directions. Never returns null.
+   */
   public PairDecision<T> decidePair(final T srcType, final T tgtType, final String componentName) {
+    return decidePair(srcType, tgtType, componentName, false);
+  }
+
+  /**
+   * Decide the conversion for one (source type, target type) field pair. {@code forwardOnly} is
+   * true for a mapper with no backward direction to satisfy: {@code mapperForward}, and a lenient
+   * {@code @Bridge}, whose backward is documented as lossy. It changes only which enum pairs
+   * convert, since an enum pair converts in the directions the mapper runs. Never returns null.
+   */
+  public PairDecision<T> decidePair(
+    final T srcType,
+    final T tgtType,
+    final String componentName,
+    final boolean forwardOnly
+  ) {
     // (a) Same type → identity, or a copy for a container the allocation table can rebuild.
     if (props.sameType(srcType, tgtType)) return unchanged(srcType);
 
     if (props.isClassType(srcType) && props.isClassType(tgtType)) {
       // (a.1) Primitive ↔ wrapper over the same scalar — null-safe box/unbox.
       if (primitiveWrapperPair(srcType, tgtType)) return new PairDecision.PrimitiveWrapper<>();
+
+      // (a.1b) Two different enums convert constant to constant by name, which needs a same-named
+      // constant on the receiving side of each direction the mapper runs. Any other enum pair is
+      // refused naming the constants that have no counterpart.
+      if (bothEnums(srcType, tgtType)) {
+        final var correspondence = enumCorrespondence(srcType, tgtType);
+        if (correspondence.converts(forwardOnly)) return new PairDecision.EnumByName<>();
+        return new PairDecision.Incompatible<>(
+          PairingMessages.unmatchedEnumConstants(
+            componentName,
+            props.typeName(srcType),
+            props.typeName(tgtType),
+            correspondence.missingOnTarget(),
+            forwardOnly ? List.of() : correspondence.missingOnSource()
+          )
+        );
+      }
 
       // (a.2) Same-kind Collection / Map pair written without type arguments on both sides:
       // element copy, which converts nothing. It is right only where the elements can be shown to
@@ -169,7 +204,8 @@ public final class PairingRules<T> {
       }
       if (
         tgt.kind() == ContainerView.Kind.MAP_VALUES &&
-        !(decidePair(src.elementType(), tgt.elementType(), componentName) instanceof PairDecision.Incompatible) &&
+        !(decidePair(src.elementType(), tgt.elementType(), componentName, forwardOnly) instanceof
+            PairDecision.Incompatible) &&
         unorderableSortedKeys(tgt.keyType(), tgtType)
       ) {
         return new PairDecision.Incompatible<>(
@@ -178,7 +214,8 @@ public final class PairingRules<T> {
       }
       if (
         tgt.kind() == ContainerView.Kind.SET &&
-        !(decidePair(src.elementType(), tgt.elementType(), componentName) instanceof PairDecision.Incompatible) &&
+        !(decidePair(src.elementType(), tgt.elementType(), componentName, forwardOnly) instanceof
+            PairDecision.Incompatible) &&
         unorderableSortedTarget(src.elementType(), tgt.elementType(), tgtType)
       ) {
         return new PairDecision.Incompatible<>(
@@ -195,6 +232,21 @@ public final class PairingRules<T> {
     return new PairDecision.Incompatible<>(
       PairingMessages.incompatibleShapes(componentName, props.typeName(srcType), props.typeName(tgtType))
     );
+  }
+
+  /** Whether both sides are enums. A pair of one enum is the same type and passes through. */
+  public boolean bothEnums(final T srcType, final T tgtType) {
+    return props.isEnumType(srcType) && props.isEnumType(tgtType);
+  }
+
+  /** The names of an enum's constants in declaration order. */
+  public List<String> enumConstants(final T enumType) {
+    return props.enumConstants(enumType);
+  }
+
+  /** How the constants of two enums line up by name. */
+  public EnumCorrespondence enumCorrespondence(final T srcType, final T tgtType) {
+    return EnumCorrespondence.of(props.enumConstants(srcType), props.enumConstants(tgtType));
   }
 
   /**

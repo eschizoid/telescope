@@ -170,6 +170,154 @@ class MapperVerifierProcessorTest {
   }
 
   @Nested
+  @DisplayName("Enum pairs — constant names checked in each direction the mapper converts")
+  class EnumPairs {
+
+    @Test
+    @DisplayName("two enums with the same constants compile clean under a strict mapper")
+    void sameConstantsPass() {
+      final var compilation = verify(
+        """
+        package demo;
+        import io.github.eschizoid.telescope.Telescope;
+        enum Ea { A, B }
+        enum Eb { A, B }
+        record Src(Ea status, java.util.List<Ea> history) {}
+        record Tgt(Eb status, java.util.List<Eb> history) {}
+        class Holder { static final Object M = Telescope.mapper(Src.class, Tgt.class); }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a target constant the source lacks is an error under a strict mapper, naming the constant")
+    void supersetTargetErrorsWhenStrict() {
+      final var compilation = verify(
+        """
+        package demo;
+        import io.github.eschizoid.telescope.Telescope;
+        enum Ea { A, B }
+        enum Eb { A, B, C }
+        record Src(Ea status) {}
+        record Tgt(Eb status) {}
+        class Holder { static final Object M = Telescope.mapper(Src.class, Tgt.class); }
+        """
+      );
+      assertFalse(compilation.success(), compilation::errorMessages);
+      assertTrue(
+        compilation.hasError("demo.Ea has no constant named C, which the backward direction needs"),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("enums in an EnumSet are an error, since no rebuild can build an EnumSet")
+    void enumSetIsRefused() {
+      final var compilation = verify(
+        """
+        package demo;
+        import io.github.eschizoid.telescope.Telescope;
+        enum Ea { A, B }
+        enum Eb { A, B }
+        record Src(java.util.EnumSet<Ea> items) {}
+        record Tgt(java.util.EnumSet<Eb> items) {}
+        class Holder { static final Object M = Telescope.mapper(Src.class, Tgt.class); }
+        """
+      );
+      assertFalse(compilation.success(), compilation::errorMessages);
+      assertTrue(compilation.hasError("java.util.EnumSet has no instance of its own"), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName(
+      "a container with no reachable constructor is an error unless it offers the builder construction falls back to"
+    )
+    void anUnbuildableContainerIsAnErrorWithoutAPublicNoArgBuilder() {
+      final var compilation = verify(
+        """
+        package demo;
+        import io.github.eschizoid.telescope.Telescope;
+        enum Ea { A, B }
+        enum Eb { A, B }
+        class Bag<E> extends java.util.ArrayList<E> {
+          private Bag() {}
+          static String builder(final int n) { return ""; }
+        }
+        record Src(Bag<Ea> items) {}
+        record Tgt(Bag<Eb> items) {}
+        class Holder { static final Object M = Telescope.mapper(Src.class, Tgt.class); }
+        """
+      );
+      assertFalse(compilation.success(), compilation::errorMessages);
+      assertTrue(
+        compilation.hasError("demo.Bag has no no-argument constructor a rebuild can call"),
+        compilation::errorMessages
+      );
+      final var withBuilder = verify(
+        """
+        package demo;
+        import io.github.eschizoid.telescope.Telescope;
+        enum Ea { A, B }
+        enum Eb { A, B }
+        class Bag<E> extends java.util.ArrayList<E> {
+          private Bag() {}
+          public static Builder builder() { return new Builder(); }
+          public static final class Builder {
+            public Bag<Object> build() { return new Bag<>(); }
+          }
+        }
+        record Src(Bag<Ea> items) {}
+        record Tgt(Bag<Eb> items) {}
+        class Holder { static final Object M = Telescope.mapper(Src.class, Tgt.class); }
+        """
+      );
+      assertTrue(withBuilder.success(), withBuilder::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a target constant the source lacks compiles clean on a mapperForward row")
+    void supersetTargetPassesForwardOnly() {
+      final var compilation = verify(
+        """
+        package demo;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.mapping.Mapping;
+        enum Ea { A, B }
+        enum Eb { A, B, C }
+        record Src(Ea status) {}
+        record Tgt(Eb status) {}
+        class Holder {
+          static final Object M = Telescope.mapperForward(Src.class, Tgt.class, Mapping.to(Src::status, Tgt::status));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a source constant the target lacks is an error on a mapperForward row, naming the constant")
+    void missingTargetConstantErrorsForwardOnly() {
+      final var compilation = verify(
+        """
+        package demo;
+        import io.github.eschizoid.telescope.Telescope;
+        import io.github.eschizoid.telescope.mapping.Mapping;
+        enum Ea { A, B, C }
+        enum Eb { A }
+        record Src(Ea status) {}
+        record Tgt(Eb status) {}
+        class Holder {
+          static final Object M = Telescope.mapperForward(Src.class, Tgt.class, Mapping.to(Src::status, Tgt::status));
+        }
+        """
+      );
+      assertFalse(compilation.success(), compilation::errorMessages);
+      assertTrue(compilation.hasError("demo.Eb has no constant named B, C."), compilation::errorMessages);
+    }
+  }
+
+  @Nested
   @DisplayName("Shape checks — the shared pairing lattice at compile time")
   class ShapeChecks {
 

@@ -12,6 +12,9 @@ import com.sun.source.util.TreePath;
 import com.sun.source.util.TreePathScanner;
 import com.sun.source.util.Trees;
 import io.github.eschizoid.telescope.annotations.UncheckedMapping;
+import io.github.eschizoid.telescope.internal.pairing.Allocation;
+import io.github.eschizoid.telescope.internal.pairing.ContainerAllocation;
+import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
@@ -44,6 +47,7 @@ import javax.lang.model.type.ExecutableType;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.type.WildcardType;
+import javax.lang.model.util.ElementFilter;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic;
@@ -96,6 +100,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
   private Elements elements;
   private MirrorProps props;
   private PairingRules<TypeMirror> rules;
+  private ContainerAllocation<TypeMirror> allocation;
   private Diagnostic.Kind reportKind;
   private boolean off;
   private boolean verbose;
@@ -109,6 +114,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     elements = processingEnv.getElementUtils();
     props = new MirrorProps(types, elements);
     rules = new PairingRules<>(props);
+    allocation = new ContainerAllocation<>(props);
     final var mode = processingEnv.getOptions().getOrDefault("telescope.verify", "error");
     if (!"error".equals(mode) && !"warn".equals(mode) && !"off".equals(mode)) {
       processingEnv
@@ -305,7 +311,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           analyzable = false;
           continue;
         }
-        analyzable &= verifyRow(row, rowExec, srcType, tgtType, srcSimple, tgtSimple, claimedSrc, claimedTgt);
+        analyzable &= verifyRow(row, rowExec, srcType, tgtType, srcSimple, tgtSimple, claimedSrc, claimedTgt, !strict);
         permissive |= isPermissiveRow(row, rowExec);
       }
 
@@ -335,7 +341,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         final var seen = new HashSet<String>();
         seen.add(pairKey(srcType, tgtType));
         for (final var name : match.matched()) {
-          verifyDeep(srcProps.get(name), tgtProps.get(name), name, node, seen);
+          verifyDeep(srcProps.get(name), tgtProps.get(name), name, node, seen, false);
         }
       }
     }
@@ -349,7 +355,8 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       final String srcSimple,
       final String tgtSimple,
       final Set<String> claimedSrc,
-      final Set<String> claimedTgt
+      final Set<String> claimedTgt,
+      final boolean forwardOnly
     ) {
       final var rowName = rowExec.getSimpleName().toString();
       final var rowArgs = row.getArguments();
@@ -381,7 +388,7 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           // carries user functions (or a user default), which construction accepts as-is.
           if ("to".equals(rowName) && rowArgs.size() == 2) {
             final var seen = new HashSet<String>();
-            verifyDeep(src.type(), tgt.type(), src.name() + " → " + tgt.name(), row, seen);
+            verifyDeep(src.type(), tgt.type(), src.name() + " → " + tgt.name(), row, seen, forwardOnly);
           }
           return true;
         }
@@ -400,7 +407,17 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           if (rowArgs.size() == 2 && rowArgs.get(1) instanceof MethodInvocationTree inner) {
             final var innerMethod = elementAt(inner.getMethodSelect());
             if (innerMethod instanceof ExecutableElement innerExec) {
-              return verifyRow(inner, innerExec, srcType, tgtType, srcSimple, tgtSimple, claimedSrc, claimedTgt);
+              return verifyRow(
+                inner,
+                innerExec,
+                srcType,
+                tgtType,
+                srcSimple,
+                tgtSimple,
+                claimedSrc,
+                claimedTgt,
+                forwardOnly
+              );
             }
           }
           return false;
@@ -466,19 +483,22 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * Replay the shared pair decision for one field pair, recursing exactly as construction does:
      * container lifts and Optional bridges recurse on elements; reflectable pairs recurse on their
      * same-name matches (nested pairs are lenient about unmatched fields, as at runtime, but each
-     * matched nested field is still shape-checked). Cycles terminate via {@code seen}.
+     * matched nested field is still shape-checked). Cycles terminate via {@code seen}. {@code
+     * forwardOnly} holds for a {@code mapperForward} site, whose enum pairs need a counterpart for
+     * each source constant only.
      */
     private void verifyDeep(
       final TypeMirror srcType,
       final TypeMirror tgtType,
       final String componentName,
       final Tree at,
-      final Set<String> seen
+      final Set<String> seen,
+      final boolean forwardOnly
     ) {
       // A type variable is bound only when the mapper is built, so nothing here can say what it
       // pairs with. Skip rather than mis-decide: the construction backstop still applies.
       if (!staticallyComparable(srcType) || !staticallyComparable(tgtType)) return;
-      final var decision = rules.decidePair(srcType, tgtType, componentName);
+      final var decision = rules.decidePair(srcType, tgtType, componentName, forwardOnly);
       if (decision instanceof PairDecision.Incompatible<TypeMirror> incompatible) {
         report(at, incompatible.message());
         return;
@@ -497,21 +517,74 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           Set.of()
         );
         for (final var name : match.matched()) {
-          verifyDeep(srcProps.get(name), tgtProps.get(name), name, at, seen);
+          verifyDeep(srcProps.get(name), tgtProps.get(name), name, at, seen, forwardOnly);
         }
         return;
       }
       if (decision instanceof PairDecision.OptionalToNullable<TypeMirror> d) {
-        verifyDeep(d.elementSrc(), d.elementTgt(), componentName + "[*]", at, seen);
+        verifyDeep(d.elementSrc(), d.elementTgt(), componentName + "[*]", at, seen, forwardOnly);
         return;
       }
       if (decision instanceof PairDecision.NullableToOptional<TypeMirror> d) {
-        verifyDeep(d.elementSrc(), d.elementTgt(), componentName + "[*]", at, seen);
+        verifyDeep(d.elementSrc(), d.elementTgt(), componentName + "[*]", at, seen, forwardOnly);
         return;
       }
       if (decision instanceof PairDecision.LiftContainer<TypeMirror> d) {
-        verifyDeep(d.src().elementType(), d.tgt().elementType(), componentName + "[*]", at, seen);
+        final var refusal = unbuildableSide(srcType, tgtType, d, componentName, forwardOnly);
+        if (refusal != null) {
+          report(at, refusal);
+          return;
+        }
+        verifyDeep(d.src().elementType(), d.tgt().elementType(), componentName + "[*]", at, seen, forwardOnly);
       }
+    }
+
+    /**
+     * The allocation refusal construction raises for a lifted collection or map whose elements
+     * convert, or null. Construction builds an allocator for both sides whichever directions the
+     * mapper runs, and falls back to a public static {@code builder()} taking no arguments where
+     * the shared allocation rules refuse, so a side offering one is left to construction.
+     */
+    private String unbuildableSide(
+      final TypeMirror srcType,
+      final TypeMirror tgtType,
+      final PairDecision.LiftContainer<TypeMirror> lift,
+      final String componentName,
+      final boolean forwardOnly
+    ) {
+      final var kind = lift.src().kind();
+      if (kind == ContainerView.Kind.OPTIONAL) return null;
+      final var elements = rules.decidePair(
+        lift.src().elementType(),
+        lift.tgt().elementType(),
+        componentName,
+        forwardOnly
+      );
+      if (elements instanceof PairDecision.Identity || elements instanceof PairDecision.Incompatible) return null;
+      for (final var side : List.of(srcType, tgtType)) {
+        if (allocation.allocate(side, kind, null) instanceof Allocation.Refuse refuse && !declaresStaticBuilder(side)) {
+          return refuse.reason();
+        }
+      }
+      return null;
+    }
+
+    /**
+     * Whether {@code type}'s class has a public static {@code builder()} taking no arguments,
+     * declared or inherited, which is the one shape construction falls back to.
+     */
+    private boolean declaresStaticBuilder(final TypeMirror type) {
+      final var element = props.elementOf(type);
+      if (element == null) return true;
+      return ElementFilter.methodsIn(elements.getAllMembers(element))
+        .stream()
+        .anyMatch(
+          method ->
+            method.getSimpleName().contentEquals("builder") &&
+            method.getParameters().isEmpty() &&
+            method.getModifiers().contains(Modifier.STATIC) &&
+            method.getModifiers().contains(Modifier.PUBLIC)
+        );
     }
 
     /** True when {@code t} contains no type variable at any depth, wildcard bounds included. */

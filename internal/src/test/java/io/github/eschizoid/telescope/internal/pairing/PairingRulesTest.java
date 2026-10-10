@@ -281,6 +281,11 @@ class PairingRulesTest {
     }
 
     @Override
+    public List<String> enumConstants(final Type t) {
+      return delegate.enumConstants(t);
+    }
+
+    @Override
     public boolean isInterfaceType(final Type t) {
       return delegate.isInterfaceType(t);
     }
