@@ -357,6 +357,19 @@ class SuperclassTargetRowTest {
   }
 
   @Test
+  @DisplayName(
+    "constant through an interface's isX record-style accessor writes the record component of that exact name"
+  )
+  void constantThroughAnInterfaceIsAccessorOnARecordTarget() {
+    final var result = Telescope.mapper(
+      SuperRowSource.class,
+      SuperRowOpenRecord.class,
+      constant(SuperRowOpen::isOpen, "yes")
+    ).forward(SOURCE);
+    assertEquals(new SuperRowOpenRecord(7, "yes"), result);
+  }
+
+  @Test
   @DisplayName("constant through an interface's getter writes on the bean that implements it")
   void constantThroughAnInterfaceOnABeanTarget() {
     final var result = Telescope.mapperForward(
