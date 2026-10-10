@@ -506,6 +506,120 @@ public final class PairingRules<T> {
     return !props.isSubtypeOf(t, WellKnown.UUID);
   }
 
+  /**
+   * How a value of {@code property}, a bean property's read type, reaches {@code parameter}, the
+   * write type its setter takes. Both are read by their erasure. See {@link SetterFit}.
+   */
+  public SetterFit setterFit(final T property, final T parameter) {
+    final var read = props.rawType(property);
+    final var write = props.rawType(parameter);
+    if (props.sameType(props.boxed(read), props.boxed(write))) return SetterFit.SAME;
+    if (props.isPrimitive(write)) {
+      final var scalar = props.isPrimitive(read) ? props.typeName(read) : UNBOXED.get(props.typeName(read));
+      if (scalar != null && WIDENS.getOrDefault(scalar, Set.of()).contains(props.typeName(write))) {
+        return SetterFit.CONVERTS;
+      }
+      // A reference read type that a boxed value of the parameter's type is an instance of, such
+      // as Number or Object, may hold a value the setter can take once unboxed.
+      return !props.isPrimitive(read) && props.isAssignable(props.boxed(write), read)
+        ? SetterFit.NARROWS
+        : SetterFit.DISJOINT;
+    }
+    // A boxed read value is an instance of its final wrapper class and of nothing narrower.
+    if (props.isPrimitive(read)) {
+      return props.isAssignable(props.boxed(read), write) ? SetterFit.CONVERTS : SetterFit.DISJOINT;
+    }
+    if (props.isAssignable(read, write)) return SetterFit.CONVERTS;
+    if (props.isAssignable(write, read) || props.isInterfaceType(read) || props.isInterfaceType(write)) {
+      return SetterFit.NARROWS;
+    }
+    return SetterFit.DISJOINT;
+  }
+
+  /**
+   * Which of the methods named after a property's setter is its setter, by its index in {@code
+   * parameters}, the parameter type of each; {@code -1} when none can be chosen. A sole method is
+   * the setter whatever it takes. Among several, the choice is the overload Java binds a value of
+   * {@code property} to, so a generated call and a reflective one reach the same method: the
+   * methods that take the value without boxing or unboxing are asked first, then those that take it
+   * with either, and among those asked the one whose parameter every other one's accepts. A
+   * parameter equal to the property's type is that one whenever it is present. None taking the
+   * value, or no single most specific one, is {@code -1}, and the paths refuse the property by
+   * name. The answer does not depend on the order the methods are listed in.
+   */
+  public int chooseSetter(final T property, final List<T> parameters) {
+    if (parameters.size() == 1) return 0;
+    final var read = props.rawType(property);
+    final var strict = new ArrayList<Integer>();
+    final var loose = new ArrayList<Integer>();
+    for (var i = 0; i < parameters.size(); i++) {
+      final var write = props.rawType(parameters.get(i));
+      if (passesStrictly(read, write)) strict.add(i);
+      if (setterFit(read, write).compiles()) loose.add(i);
+    }
+    final var applicable = strict.isEmpty() ? loose : strict;
+    var chosen = -1;
+    for (final var i : applicable) {
+      final var mine = props.rawType(parameters.get(i));
+      final var mostSpecific = applicable
+        .stream()
+        .allMatch(j -> j.equals(i) || passesStrictly(mine, props.rawType(parameters.get(j))));
+      if (!mostSpecific) continue;
+      if (chosen >= 0) return -1;
+      chosen = i;
+    }
+    return chosen;
+  }
+
+  /**
+   * Whether a value of {@code from} is passed to {@code to} without boxing or unboxing: the same
+   * type, a primitive widening, or a reference widening.
+   */
+  private boolean passesStrictly(final T from, final T to) {
+    if (props.sameType(from, to)) return true;
+    if (props.isPrimitive(from) != props.isPrimitive(to)) return false;
+    if (props.isPrimitive(from)) {
+      return WIDENS.getOrDefault(props.typeName(from), Set.of()).contains(props.typeName(to));
+    }
+    return props.isAssignable(from, to);
+  }
+
+  /** The primitive each wrapper unboxes to, by type name. */
+  private static final Map<String, String> UNBOXED = Map.of(
+    "java.lang.Boolean",
+    "boolean",
+    "java.lang.Byte",
+    "byte",
+    "java.lang.Short",
+    "short",
+    "java.lang.Character",
+    "char",
+    "java.lang.Integer",
+    "int",
+    "java.lang.Long",
+    "long",
+    "java.lang.Float",
+    "float",
+    "java.lang.Double",
+    "double"
+  );
+
+  /** The widening primitive conversions, by type name. */
+  private static final Map<String, Set<String>> WIDENS = Map.of(
+    "byte",
+    Set.of("short", "int", "long", "float", "double"),
+    "short",
+    Set.of("int", "long", "float", "double"),
+    "char",
+    Set.of("int", "long", "float", "double"),
+    "int",
+    Set.of("long", "float", "double"),
+    "long",
+    Set.of("float", "double"),
+    "float",
+    Set.of("double")
+  );
+
   /** Primitive ↔ wrapper pair over the same scalar, in either direction. */
   public boolean primitiveWrapperPair(final T src, final T tgt) {
     return (

@@ -985,6 +985,11 @@ public final class DeepMap {
         );
       }
 
+      // A value converted for a bean property's own type is written through its setter, so a
+      // setter that cannot take that type refuses the pair here, on the side each direction the
+      // mapper runs writes.
+      refuseUnwritableSetters(target, tgtRefl.writerFor(target), byTargetName, true);
+      if (!forwardOnly) refuseUnwritableSetters(source, srcRefl.writerFor(source), bySourceName, false);
       final Iso<S, T> baseIso = assembleIso(source, target, srcRefl, tgtRefl, byTargetName, bySourceName);
       cache.put(
         key,
@@ -1907,6 +1912,27 @@ public final class DeepMap {
    * One per-component step: source/target field names + the {@link Iso} between their leaf types.
    */
   private record FieldStep(String sourceName, String targetName, Iso<?, ?> iso) {}
+
+  /**
+   * Refuses a bean side whose setter cannot take a value of the property's own type, for every
+   * property of {@code cls} a step fills from the other side: the target's properties when {@code
+   * target} is true, and otherwise the source's, which the backward direction writes.
+   */
+  private static void refuseUnwritableSetters(
+    final Class<?> cls,
+    final Beans.BeanWriter<?> writer,
+    final Map<String, FieldStep> steps,
+    final boolean target
+  ) {
+    if (writer == null) return;
+    for (final var step : steps.values()) {
+      final var written = target ? step.targetName() : step.sourceName();
+      final var from = target ? step.sourceName() : step.targetName();
+      if (written == null || from == null) continue;
+      final var refusal = Beans.setterRefusal(writer, cls, written);
+      if (refusal != null) throw new IllegalStateException(refusal);
+    }
+  }
 
   /**
    * Strip generics from a {@link Type} to the raw {@link Class}, returning {@code null} for

@@ -4,8 +4,10 @@ import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
+import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
+import io.github.eschizoid.telescope.internal.pairing.SetterFit;
 import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -19,6 +21,7 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -65,6 +68,17 @@ public final class Beans {
   private Beans() {}
 
   private static final ReflectionProps PROPS = new ReflectionProps();
+
+  private static final PairingRules<Type> RULES = new PairingRules<>(PROPS);
+
+  // Per-class cache of each property's setter choice, filled one property at a time as a write
+  // path asks for it, so a lens checking its property on every write pays one map lookup.
+  private static final ClassValue<Map<String, SetterChoice>> SETTER_CHOICES = new ClassValue<>() {
+    @Override
+    protected Map<String, SetterChoice> computeValue(final Class<?> type) {
+      return new ConcurrentHashMap<>();
+    }
+  };
 
   // ClassValue is the JDK-provided cache that genuinely permits class unloading: the entry is held
   // off-heap from the Class, so a cached value (which strongly references reflective members and
@@ -616,16 +630,19 @@ public final class Beans {
 
   @SuppressWarnings("unchecked")
   private static BiConsumer<Object, Object> buildSetterInvoker(final Class<?> cls, final String name) {
-    final var set = "set" + capitalize(name);
-    Method setter = null;
-    for (final var m : cls.getMethods()) {
-      if (
-        m.getParameterCount() == 1 && m.getName().equals(set) && !Modifier.isStatic(m.getModifiers()) && !m.isBridge()
-      ) {
-        setter = m;
-        break;
-      }
-    }
+    return setterInvoker(cls, name, false);
+  }
+
+  /**
+   * The writer for property {@code name} of {@code cls} through the setter {@link #setterChoice}
+   * picks, or a no-op where there is none. A setter {@link SetterFit#DISJOINT} from the property's
+   * type is written through only when {@code anyFit} is true, by a caller that converts its value
+   * to the setter's own type.
+   */
+  @SuppressWarnings("unchecked")
+  private static BiConsumer<Object, Object> setterInvoker(final Class<?> cls, final String name, final boolean anyFit) {
+    final var choice = setterChoice(cls, name);
+    final var setter = choice.method() != null && (anyFit || choice.fit().reflects()) ? choice.method() : null;
     // Getter-only / computed / immutable properties are silently skipped — without this,
     // Mapper.into(target, source) would throw on the same property pair that Mapper.forward
     // (via SettersWriter) silently skipped, producing an asymmetric same-mapper contract.
@@ -659,9 +676,10 @@ public final class Beans {
       // target property unchanged, not NPE at the unbox — Mapper.into must not crash on the input
       // Mapper.forward silently defaults (same-mapper symmetry).
       if (paramType.isPrimitive()) {
+        final var widens = choice.fit() == SetterFit.CONVERTS;
         return (pojo, value) -> {
           if (value == null) return;
-          base.accept(pojo, value);
+          base.accept(pojo, widens ? widened(value, paramType) : value);
         };
       }
       return base;
@@ -1115,7 +1133,7 @@ public final class Beans {
 
         @Override
         public boolean setterWrites(final String property) {
-          return isSetterConstructible(cls, new String[] { property });
+          return !setterChoice(cls, property).candidates().isEmpty();
         }
 
         @Override
@@ -1344,14 +1362,15 @@ public final class Beans {
       }
 
       // Every BeanWriter keeps its state in final fields, so a racing first write that sees this
-      // field unset only resolves the same cached autoWriter entry again.
-      private BeanWriter<P> resolved = writer;
+      // field unset only resolves the same cached autoWriter entry again, and checks it again.
+      private BeanWriter<P> resolved;
 
       @Override
       public P set(final P source, final A value) {
         var w = resolved;
         if (w == null) {
-          w = autoWriter(pojoClass);
+          w = writer == null ? autoWriter(pojoClass) : writer;
+          refuseUnwritableFocus(w, pojoClass, property);
           resolved = w;
         }
         return w.construct(names, n -> n.equals(property) ? value : readForRebuild(source, n));
@@ -1414,6 +1433,7 @@ public final class Beans {
         final Class cls = source.getClass();
         final var names = propertyNames(cls);
         final var writer = (BeanWriter<P>) autoWriter(cls);
+        refuseUnwritableFocus(writer, cls, property);
         return writer.construct(names, n -> n.equals(property) ? value : readProperty(source, n));
       }
 
@@ -1423,6 +1443,16 @@ public final class Beans {
         return set(source, f.apply(get(source)));
       }
     };
+  }
+
+  /**
+   * Refuses a lens write to a property whose setter cannot take a value of the property's type. The
+   * lens's other properties are unaffected: a rebuild through the same writer leaves such a
+   * property out, as it leaves out one with no setter.
+   */
+  private static void refuseUnwritableFocus(final BeanWriter<?> writer, final Class<?> cls, final String property) {
+    final var refusal = setterRefusal(writer, cls, property);
+    if (refusal != null) throw new IllegalArgumentException(refusal);
   }
 
   private static boolean hasNoArgConstructor(final Class<?> cls) {
@@ -1495,9 +1525,171 @@ public final class Beans {
   // member type leaves a type variable unresolved.
   private static Class<?> memberReturnClass(final Method getter, final Class<?> cls) {
     final var member = PROPS.memberOf(getter.getGenericReturnType(), getter.getDeclaringClass(), cls);
+    return erasureOr(member, getter.getReturnType());
+  }
+
+  private static Class<?> erasureOr(final Type member, final Class<?> declared) {
     if (member instanceof Class<?> c) return c;
     if (member instanceof ParameterizedType pt && pt.getRawType() instanceof Class<?> c) return c;
-    return getter.getReturnType();
+    return declared;
+  }
+
+  /**
+   * Which method writes a bean property: {@code method} is the setter {@link
+   * PairingRules#chooseSetter} picks among {@code candidates}, every public instance method of one
+   * parameter named after the property's setter, or null when there are none or no single one is
+   * chosen. {@code writeType} is its parameter type as a member of the bean, and {@code fit} how
+   * the property's read type reaches it.
+   */
+  record SetterChoice(Method method, Type writeType, SetterFit fit, List<Method> candidates) {}
+
+  private static final SetterChoice NO_SETTER = new SetterChoice(null, null, null, List.of());
+
+  /** The setter choice for property {@code name} of {@code cls}, cached per class and name. */
+  static SetterChoice setterChoice(final Class<?> cls, final String name) {
+    return SETTER_CHOICES.get(cls).computeIfAbsent(name, n -> computeSetterChoice(cls, n));
+  }
+
+  private static SetterChoice computeSetterChoice(final Class<?> cls, final String name) {
+    final var set = "set" + capitalize(name);
+    final var candidates = new ArrayList<Method>();
+    for (final var m : cls.getMethods()) {
+      if (m.getParameterCount() != 1 || !m.getName().equals(set)) continue;
+      if (Modifier.isStatic(m.getModifiers()) || m.isBridge()) continue;
+      candidates.add(m);
+    }
+    if (candidates.isEmpty()) return NO_SETTER;
+    // getMethods() lists methods in no particular order; sorting keeps a message that names the
+    // candidates the same from run to run. The choice itself does not depend on the order.
+    candidates.sort(Comparator.comparing(Method::toGenericString));
+    final var getter = getters(cls).get(name);
+    final var writeTypes = new ArrayList<Type>(candidates.size());
+    final var writeClasses = new ArrayList<Type>(candidates.size());
+    for (final var m : candidates) {
+      final var member = PROPS.memberOf(m.getGenericParameterTypes()[0], m.getDeclaringClass(), cls);
+      writeTypes.add(member);
+      writeClasses.add(erasureOr(member, m.getParameterTypes()[0]));
+    }
+    if (getter == null) {
+      return candidates.size() == 1
+        ? new SetterChoice(candidates.getFirst(), writeTypes.getFirst(), SetterFit.SAME, List.copyOf(candidates))
+        : new SetterChoice(null, null, null, List.copyOf(candidates));
+    }
+    final var read = memberReturnClass(getter, cls);
+    final var index = RULES.chooseSetter(read, writeClasses);
+    if (index < 0) return new SetterChoice(null, null, null, List.copyOf(candidates));
+    return new SetterChoice(
+      candidates.get(index),
+      writeTypes.get(index),
+      RULES.setterFit(read, writeClasses.get(index)),
+      List.copyOf(candidates)
+    );
+  }
+
+  /**
+   * The setter the reflective writers write property {@code name} of {@code cls} through, or null:
+   * the one {@link #setterChoice} picks, unless no value of the property's type can be passed to
+   * it. A property with no such setter is written by none of them, as one with no setter at all.
+   */
+  static Method propertySetter(final Class<?> cls, final String name) {
+    final var choice = setterChoice(cls, name);
+    return choice.method() != null && choice.fit().reflects() ? choice.method() : null;
+  }
+
+  /**
+   * Why {@code writer} cannot write property {@code name} of {@code cls} with a value of the
+   * property's own type, or null when it can or the property has no setter. Only a setters writer
+   * answers: the property's setter takes a type no value of the property's type is an instance of,
+   * or several setters bind the value equally. A mapper filling the property from a source and a
+   * lens writing it refuse with this message.
+   */
+  public static String setterRefusal(final BeanWriter<?> writer, final Class<?> cls, final String name) {
+    if (!(writer instanceof SettersWriter<?>)) return null;
+    final var choice = setterChoice(cls, name);
+    if (choice.candidates().isEmpty() || (choice.method() != null && choice.fit().reflects())) return null;
+    if (!getters(cls).containsKey(name)) return null;
+    final var readType = memberPropertyType(cls, name).getTypeName();
+    if (choice.method() == null) {
+      return PairingMessages.ambiguousSetters(
+        cls.getSimpleName(),
+        name,
+        readType,
+        choice.candidates().stream().map(Beans::setterSignature).toList()
+      );
+    }
+    return PairingMessages.setterCannotTake(
+      cls.getSimpleName(),
+      name,
+      setterSignature(choice.method()),
+      readType,
+      choice.writeType().getTypeName()
+    );
+  }
+
+  /**
+   * Why property {@code name} of {@code cls} cannot be written through a setter at all, or null:
+   * several setters bind its value equally. A path that converts its value to the setter's own type
+   * refuses only this.
+   */
+  public static String setterAmbiguity(final BeanWriter<?> writer, final Class<?> cls, final String name) {
+    if (!(writer instanceof SettersWriter<?>)) return null;
+    return setterChoice(cls, name).method() == null ? setterRefusal(writer, cls, name) : null;
+  }
+
+  /**
+   * The type a path that converts a value only to write it, such as fromMap, converts property
+   * {@code name} of {@code cls} to: the setter's own parameter type where {@code writer} writes
+   * through a setter that generated code could not pass a value of the property's type to, and the
+   * property's type, its getter's, everywhere else.
+   */
+  public static Type conversionType(final BeanWriter<?> writer, final Class<?> cls, final String name) {
+    if (writer instanceof SettersWriter<?>) {
+      final var choice = setterChoice(cls, name);
+      if (choice.method() != null && !choice.fit().compiles()) return choice.writeType();
+    }
+    return memberPropertyType(cls, name);
+  }
+
+  /**
+   * Whether {@code writer} writes property {@code name} of {@code cls} only through a setter no
+   * value of the property's own type can be passed to. Such a property is left out of every build
+   * the writer makes, and a path that converts its value to the setter's type writes it itself,
+   * through {@link #convertedWriter}, once the writer has built the bean.
+   */
+  public static boolean writtenOnlyConverted(final BeanWriter<?> writer, final Class<?> cls, final String name) {
+    if (!(writer instanceof SettersWriter<?>)) return false;
+    final var choice = setterChoice(cls, name);
+    return choice.method() != null && !choice.fit().reflects();
+  }
+
+  /**
+   * A writer for property {@code name} of {@code cls} through the setter {@link #setterChoice}
+   * picks, whatever type it takes, for a value already converted to that type.
+   */
+  public static BiConsumer<Object, Object> convertedWriter(final Class<?> cls, final String name) {
+    return setterInvoker(cls, name, true);
+  }
+
+  // A setter as a message names it: its name and its parameter type.
+  private static String setterSignature(final Method setter) {
+    return setter.getName() + "(" + setter.getGenericParameterTypes()[0].getTypeName() + ")";
+  }
+
+  /**
+   * A boxed primitive widened to the wrapper of {@code primitive}, where Java's widening primitive
+   * conversion takes it there, so a setter whose parameter is wider than its property's type takes
+   * the value a generated call would pass. Any other value is returned as it is.
+   */
+  private static Object widened(final Object value, final Class<?> primitive) {
+    if (wrap(primitive).isInstance(value)) return value;
+    if (RULES.setterFit(value.getClass(), primitive) != SetterFit.CONVERTS) return value;
+    final Number number = value instanceof Character c ? (int) c.charValue() : (Number) value;
+    if (primitive == short.class) return number.shortValue();
+    if (primitive == int.class) return number.intValue();
+    if (primitive == long.class) return number.longValue();
+    if (primitive == float.class) return number.floatValue();
+    if (primitive == double.class) return number.doubleValue();
+    return value;
   }
 
   /**
@@ -2126,21 +2318,18 @@ public final class Beans {
       return setterInvokers.computeIfAbsent(name, this::buildSetterInvoker);
     }
 
-    /** A property is written when the bean has a public single-argument {@code setX} for it. */
+    /**
+     * A property is written when {@link #propertySetter} finds a setter for it: one that can take a
+     * value of the property's own type.
+     */
     @Override
     public boolean writes(final String name) {
       return setterMethod(name) != null;
     }
 
-    /**
-     * The public single-argument {@code setX} method for {@code name}, or null when there is none.
-     */
+    /** The setter {@link #propertySetter} finds for {@code name}, or null when there is none. */
     private Method setterMethod(final String name) {
-      final var set = "set" + capitalize(name);
-      for (final var m : cls.getMethods()) {
-        if (m.getParameterCount() == 1 && m.getName().equals(set)) return m;
-      }
-      return null;
+      return propertySetter(cls, name);
     }
 
     /**
@@ -2198,9 +2387,10 @@ public final class Beans {
         // a primitive setter (e.g. autoboxing-relaxation work). When the parameter type is a
         // primitive, skip on null so the field stays at its JLS default rather than crashing.
         if (paramType.isPrimitive()) {
+          final var widens = setterChoice(cls, name).fit() == SetterFit.CONVERTS;
           return (pojo, value) -> {
             if (value == null) return;
-            baseSetter.accept(pojo, value);
+            baseSetter.accept(pojo, widens ? widened(value, paramType) : value);
           };
         }
         return baseSetter;
@@ -2252,7 +2442,7 @@ public final class Beans {
       }
       final var setters = new LinkedHashMap<String, MethodHandle>();
       for (final var name : props) {
-        final var setter = findSetter(cls, name);
+        final var setter = propertySetter(cls, name);
         if (setter == null) continue;
         final var declaringClass = setter.getDeclaringClass();
         final var lookup = lookupByDeclaringClass.computeIfAbsent(declaringClass, dc ->
@@ -2274,14 +2464,6 @@ public final class Beans {
         // MhIso.supports gates it out before the fold runs. Leave the handle null.
       }
       return new BeanMhInfo(props, accessors, setters, ctorHandle);
-    }
-
-    private static Method findSetter(final Class<?> cls, final String name) {
-      final var set = "set" + capitalize(name);
-      for (final var m : cls.getMethods()) {
-        if (m.getParameterCount() == 1 && m.getName().equals(set)) return m;
-      }
-      return null;
     }
 
     MethodHandle setterHandle(final String name) {

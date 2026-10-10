@@ -2126,9 +2126,33 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
 
     // Pass `source` as the annotation site so write-strategy errors land at the user's @Bridge
     // declaration rather than at `target` (which may be a third-party POJO with no annotation).
-    final var builtForward = buildExpr(target, readForward, targetFields, writeStrategy, source, targetRebuild, pkg);
+    // A transformed field's value is what its transform returns, which the transform check has
+    // already held to the member it is written through; every other value has the field's own type.
+    final var transformedTargets = new HashSet<String>();
+    for (final var t : transforms.keySet()) transformedTargets.add(renames.getOrDefault(t, t));
+    final var transformedSources = new HashSet<>(transforms.keySet());
+    transformedSources.removeAll(forwardOnlyTransforms);
+    final var builtForward = buildExpr(
+      target,
+      readForward,
+      targetFields,
+      writeStrategy,
+      source,
+      targetRebuild,
+      pkg,
+      transformedTargets
+    );
     if (builtForward == null) return;
-    final var builtBackward = buildExpr(source, readBackward, sourceFields, writeStrategy, source, sourceRebuild, pkg);
+    final var builtBackward = buildExpr(
+      source,
+      readBackward,
+      sourceFields,
+      writeStrategy,
+      source,
+      sourceRebuild,
+      pkg,
+      transformedSources
+    );
     if (builtBackward == null) return;
     final var forwardBody = withPrelude(forwardLocals, builtForward);
     final var backwardBody = withPrelude(backwardLocals, builtBackward);
@@ -2180,7 +2204,16 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // The runtime mapper's patch converts each partial slot as a conversion of its own, so each
     // call starts an empty path.
     pathArg = guarded ? FRESH_PATH : null;
-    final var patchInner = buildExpr(source, readPatch, sourceFields, writeStrategy, source, sourceRebuild, null);
+    final var patchInner = buildExpr(
+      source,
+      readPatch,
+      sourceFields,
+      writeStrategy,
+      source,
+      sourceRebuild,
+      null,
+      Set.of()
+    );
     pathArg = guarded ? "__path" : null;
     if (patchInner == null) return;
     // Wrap the inner expression in a block prelude carrying the precomputed locals so the final
@@ -5849,7 +5882,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final String writeStrategy,
     final TypeElement annotationSite,
     final Rebuild rebuild,
-    final String hoistInto
+    final String hoistInto,
+    final Set<String> transformed
   ) {
     final var toFq = to.getQualifiedName().toString();
     switch (rebuild.kind()) {
@@ -5898,6 +5932,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case SETTERS -> {
         final var sb = new StringBuilder("{ final var out = new " + toFq + "(); ");
         for (final var f : toFields) {
+          // A value of the field's own type is written through the setter, which has to take it;
+          // a transformed value only has to fit the member, which the transform check decided.
+          final var refusal = setterRefusal(to, f.name(), transformed.contains(f.name()));
+          if (refusal != null) {
+            error(annotationSite, "@Bridge: " + refusal);
+            return null;
+          }
           final var setter = setterName(to, f.name());
           if (setter == null) {
             error(
