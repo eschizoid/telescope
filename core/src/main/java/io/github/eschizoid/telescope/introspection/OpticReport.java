@@ -52,7 +52,10 @@ public record OpticReport(List<OpticNode> nodes) {
     return nodes.stream().filter(Transformed.class::isInstance).map(Transformed.class::cast).toList();
   }
 
-  /** The {@code fromMap} rows, each with what an absent key does to it, in trail order. */
+  /**
+   * The {@code fromMap} slots, each with the key it reads and what an absent key does to it, in
+   * trail order. A slot no row names reads the key with its own name.
+   */
   public List<Extracted> extractions() {
     return nodes.stream().filter(Extracted.class::isInstance).map(Extracted.class::cast).toList();
   }

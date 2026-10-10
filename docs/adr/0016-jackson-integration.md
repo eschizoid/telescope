@@ -101,12 +101,9 @@ custom deserializers, where Jackson hands over a parser already positioned on th
 
 **Binding model — name-driven with extract overrides.** Every target component auto-binds to its same-named JSON field
 through the coercion taxonomy; `extract(jsonName, accessor, converter)` rows override individual fields (rename, custom
-conversion). This is deliberately the `@FromMap` **codegen** model, not the runtime `fromMap` row-driven model — the
-consistency that matters is with the `@FromJson` codegen twin (same feature, two tiers, identical semantics), and a JSON
-binder that required one row per field would be unusable on real payloads. Runtime `fromMap` stays row-driven for `Map`
-sources; the divergence is recorded here as intentional, not drift. (Design note: consistency with the existing family
-was weighed and preferred in the abstract; the third model won because the two existing models already disagree with
-each other, so "consistent" had no single referent.)
+conversion). This is the model both `Map` tiers follow: the `@FromMap` codegen binder, and the runtime `fromMap`, which
+reads every component no row names by its own name with the same conversion (ADR-0008, amended). A JSON binder that
+required one row per field would be unusable on real payloads.
 
 The engine is a **recursive-descent token loop** over `jackson-core`'s `JsonParser` — no intermediate `JsonNode` or
 `Map`. One name→slot table per binder frame (so `id` at the root and `id` inside a nested object cannot collide);
@@ -116,10 +113,10 @@ same-level duplicate JSON keys take last-wins (matching databind's tree behavior
 
 Semantics, precisely:
 
-- **Lenient:** a missing JSON field and an explicit JSON `null` both produce the same result — the `NullDefaults` value
-  for auto-bound components, `converter.apply(null)` for extract-row components (the two-tier behavior runtime `fromMap`
-  already has). Unknown JSON fields are skipped. Extract rows naming a nonexistent target component fail loudly at build
-  time.
+- **Lenient:** a missing JSON field and an explicit JSON `null` both produce the same result — the default for the
+  component's declared type, whether it is auto-bound or named by an extract row. A converter is called only for a value
+  that is present, as in runtime `fromMap`. Unknown JSON fields are skipped. Extract rows naming a nonexistent target
+  component fail loudly at build time.
 - **Lossless number coercion, hand-enforced:** jackson-core's typed getters do **not** provide the strictness —
   `getIntValue()` on a fractional token silently truncates. The binder gates on the token kind: `VALUE_NUMBER_INT` binds
   to integral slots, any number token binds to `double`/`BigDecimal`, a fractional token into an integral slot throws

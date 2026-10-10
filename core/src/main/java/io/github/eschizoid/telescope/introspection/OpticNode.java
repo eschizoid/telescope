@@ -27,16 +27,24 @@ public sealed interface OpticNode {
     /** An explicit {@code Mapping.drop(src)} row removed a source field from the mapping. */
     DROPPED,
     /**
-     * A target field with no same-name source and no row — lenient / {@code fromMap} paths only.
+     * A target field that nothing fills: on the lenient paths one with no same-name source and no
+     * row, and on {@code fromMap} a bean property no row names, the bean's writer cannot set, and
+     * no {@code @FromMap(required = ...)} requires.
      */
     MISSING_SOURCE,
   }
 
-  /** What a {@code fromMap} row does when its key carries no value. See {@link Extracted}. */
+  /** What a {@code fromMap} slot does when its key carries no value. See {@link Extracted}. */
   enum WhenAbsent {
-    /** The field takes the default for its declared type: an {@code extract(...)} row. */
+    /**
+     * The field takes the default for its declared type: any slot not described under {@link
+     * #REFUSES}.
+     */
     DEFAULTS,
-    /** The conversion is refused, naming the key: a {@code required(...)} row. */
+    /**
+     * The conversion is refused, naming the key: a {@code required(...)} row, or a field the
+     * target's {@code @FromMap(required = ...)} lists whose slot reads the field's own key.
+     */
     REFUSES,
   }
 
@@ -92,10 +100,11 @@ public sealed interface OpticNode {
   record Transformed(String from, String to, String fromType, String toType) implements Row {}
 
   /**
-   * A {@code fromMap} row: the value under map key {@code key} is converted into {@code field},
-   * whose declared type is {@code fieldType}. The conversion happens only where the key carries a
-   * value, and {@code whenAbsent} says what happens where it does not, which is the difference
-   * between a binder that returns a target and one that refuses the source.
+   * A {@code fromMap} slot: the value under map key {@code key} is converted into {@code field},
+   * whose declared type is {@code fieldType}. The key is the one a row names, or the field's own
+   * name where no row names the field. The conversion happens only where the key carries a value,
+   * and {@code whenAbsent} says what happens where it does not, which is the difference between a
+   * binder that returns a target and one that refuses the source.
    */
   record Extracted(String key, String field, String fieldType, WhenAbsent whenAbsent) implements Row {}
 

@@ -222,13 +222,17 @@ public final class NativeVerify {
     );
   }
 
-  // (j) runtime fromMap accepting an unnamed component whose type has a generated binder: the
-  // decision rests on the binder's ServiceLoader registration, which the image must carry.
+  // (j) runtime fromMap filling an unnamed component whose type has a generated binder, through
+  // that binder: both finding it and calling it rest on the binder's ServiceLoader registration,
+  // which the image must carry.
   private static void runtimeFromMapFindsBinder() {
     final var user = Telescope.fromMap(User.class, extract("name", User::name, Object::toString)).forward(
-      Map.of("name", "Bea")
+      Map.of("name", "Bea", "age", "41", "address", Map.of("city", "Oslo", "zip", "0150"))
     );
-    expect("Bea".equals(user.name()) && user.address() == null, "runtime fromMap mismatch: " + user);
+    expect(
+      "Bea".equals(user.name()) && user.age() == 41 && new Address("Oslo", "0150").equals(user.address()),
+      "runtime fromMap mismatch: " + user
+    );
   }
 
   // (h) generated @Bridge constant — pure typed method calls, baked into the image heap.

@@ -1012,40 +1012,63 @@ public sealed class Telescope<
   /**
    * Forward-only factory for {@code Map<String, Object> → T} mappings — the typed entry point for
    * adopters consuming untyped sources (JDBC {@code ResultSet} maps, framework request-body
-   * parsers, message-bus payload decoders). Each row supplies a map key, a target component
-   * accessor, and a converter that turns the raw {@code Object} into the typed component value.
+   * parsers, message-bus payload decoders).
+   *
+   * <p><b>Every component reads the map key with its own name unless a row says otherwise.</b> A
+   * component no row names converts its value exactly as the binder generated for {@link
+   * io.github.eschizoid.telescope.annotations.FromMap} converts it: a {@code Number} is narrowed to
+   * a numeric component and any other value parsed from its {@code String} form, an enum is looked
+   * up by name, a JDK value type such as {@code Instant}, {@code UUID} or {@code BigDecimal} is
+   * built from its {@code String} form, a type with a generated binder is built by that binder from
+   * a nested map, and {@code List}, {@code Set}, {@code Map} and {@code Optional} convert each
+   * element the same way. A value that cannot be converted throws, as it does in the generated
+   * binder. When {@code T} has a registered generated binder (its {@code FromMapProvider} found
+   * through {@code ServiceLoader}), a component its {@code @FromMap(required = ...)} lists is
+   * required whenever its slot reads that component's own key: with no row, or with a row reading
+   * the same key. Without the registration, such as a named module with no {@code provides}
+   * directive or a fat jar whose service files were not merged, no declared key is enforced. A
+   * declared key is enforced only for its own component's slot: a row reading that key into another
+   * component does not make it required. With no rows and the binder registered, the two paths give
+   * the same object for the same map, or refuse it with a message worded the same way after its own
+   * prefix.
+   *
+   * <p>A row overrides that for the component it names, with its own key and converter, which
+   * covers what reading by name can't, such as a key spelled differently from the component:
    *
    * <pre>{@code
    * import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
    *
    * ForwardMapper<Map<String, Object>, CaseListRequest> m = Telescope.fromMap(
    *     CaseListRequest.class,
-   *     extract("bookingType", CaseListRequest::getBookingType, Object::toString),
-   *     extract("caseId",      CaseListRequest::getCaseId,      Object::toString),
-   *     extract("priority",    CaseListRequest::getPriority,    v -> Integer.parseInt(v.toString())));
+   *     extract("booking_type", CaseListRequest::getBookingType, Object::toString),
+   *     extract("priority_level", CaseListRequest::getPriority,  v -> Priority.fromCode(v.toString())));
    * }</pre>
    *
    * <p><b>A component with no value takes a default for its declared type.</b> A reference is
    * {@code null}, a primitive is zero or {@code false}, and a component declared exactly {@code
-   * List}, {@code Set}, {@code Map} or {@link java.util.Optional} comes back empty. The binder
-   * generated for {@link io.github.eschizoid.telescope.annotations.FromMap} produces the same
-   * values for the same record, so which path an adopter reaches a map through does not change the
-   * record they get back.
+   * List}, {@code Set}, {@code Map} or {@link java.util.Optional} comes back empty. The generated
+   * binder leaves the same values, so which path an adopter reaches a map through does not change
+   * the record they get back.
    *
-   * <p>A component no row names is filled by that default alone, so one whose declared type the
-   * generated binder refuses is refused here too, with an {@link IllegalArgumentException} naming
-   * the component, its type and the fix: an array, a type variable, a container other than those
-   * four, a JDK type with no String form the binder rebuilds, or a class with no generated binder.
-   * A row that names such a component converts it, and an absent key leaves it {@code null}.
+   * <p>A component no row names whose declared type the generated binder refuses is refused here
+   * too, with an {@link IllegalArgumentException} naming the component, its type and the fix: an
+   * array, a type variable, a container other than those four, a JDK type with no String form the
+   * binder rebuilds, or a class with no generated binder. A row that names such a component
+   * converts it, and an absent key leaves it {@code null}. A component whose type's registered
+   * {@code FromMapProvider} does not override {@code binder()} is refused the same way, since its
+   * type cannot be built as the generated binder builds it. A target whose provider does not
+   * override {@code required()} is refused, naming the target, when some slot reads its own
+   * component's name, since the provider cannot say which keys are required.
    *
    * <p>That is not the table behind {@code NullHint.NullStrategy#DEFAULT}, which substitutes {@code
    * ""} for a {@code String} and {@code ZERO} for the two big numeric types. Standing in for a
    * {@code null} the mapping engine met is a different question from filling a component the map
    * never carried, and {@link #mapperForward(Class, Class, MapStep...)} answers the first.
    *
-   * <p>A converter receives a value or is not called. A key that is absent, or present with a
-   * {@code null} value, leaves its component at the same type default an unnamed one gets, so a
-   * converter never has to say what the absence of a value means. The binder generated for {@link
+   * <p>A converter receives a value or is not called. Unless a requirement applies (below, or a
+   * declared {@code @FromMap(required = ...)} as above), a key that is absent, or present with a
+   * {@code null} value, leaves its component at its type default, so a converter never has to say
+   * what the absence of a value means. The binder generated for {@link
    * io.github.eschizoid.telescope.annotations.FromMap} reads the map the same way and cannot
    * distinguish the two cases either.
    *
@@ -1056,6 +1079,8 @@ public sealed class Telescope<
    *
    * <p>A row that names a bean property with no setter, builder method or constructor parameter
    * behind it is refused while the mapper is built, because the value it reads would be dropped.
+   * Such a property that no row names is never converted or written, though its declared type is
+   * still checked as above and a key its {@code @FromMap(required = ...)} lists must be present.
    *
    * <p>The backward direction ({@code T → Map<String, Object>}) is not generated by design — the
    * map shape is the boundary layer, not a typed counterpart, and round-tripping back to a flat
@@ -1067,7 +1092,8 @@ public sealed class Telescope<
    *     {@link Records#construct(Class, java.util.function.Function)} / {@link
    *     Beans#autoWriter(Class)}.
    * @param rows one {@link MapExtractStep#extract(String, Accessor, java.util.function.Function)}
-   *     per target component to fill.
+   *     or {@code required(...)} per component whose key or conversion differs from the by-name
+   *     default; none at all binds every component by name.
    * @return a {@link ForwardMapper} from {@code Map<String, Object>} to {@code T}, ready to inject
    *     as a CDI/Spring bean.
    */

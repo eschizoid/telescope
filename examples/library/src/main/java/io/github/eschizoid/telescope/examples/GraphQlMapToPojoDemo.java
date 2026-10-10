@@ -12,11 +12,11 @@ import java.util.Map;
  * <p>In graphql-java every argument arrives as a {@code String}, primitive, enum name, or {@code
  * Map<String, Object>} (input objects nest as maps). The usual fix is Jackson's {@code
  * convertValue}, which works but is reflection-heavy and a chore to register for GraalVM native
- * image. {@code fromMap} builds a reusable converter from typed accessor rows: each row names a map
- * key, a target field via a method reference (compile-checked, not a string on the target side),
- * and a per-key converter that coerces the raw value. A converter is called only for a key that
- * carries a value; an absent key, like a component with no row at all, leaves the field at its JLS
- * default.
+ * image. {@code fromMap} builds a reusable converter that reads every component from the key with
+ * its own name; typed accessor rows override that where a key or conversion differs. Each row names
+ * a map key, a target field via a method reference (compile-checked, not a string on the target
+ * side), and a per-key converter that coerces the raw value. A converter is called only for a key
+ * that carries a value; an absent key leaves the field at its type default.
  *
  * <p>This is the <em>runtime</em> tier: {@code fromMap} binds the accessors through {@code
  * LambdaMetafactory}, so it is well clear of naive reflection but still resolves at runtime. The

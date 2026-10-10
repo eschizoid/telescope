@@ -10,15 +10,18 @@ import java.util.function.Function;
  * One row in a {@link Telescope#fromMap(Class, MapExtractStep...) Telescope.fromMap(...)} factory
  * call — names a key in the untyped source {@code Map<String, Object>}, the target accessor that
  * receives the converted value, and a per-row converter that turns the raw map value into the typed
- * target value.
+ * target value. A row is an override: a component no row names reads the key with its own name and
+ * converts its value as the generated {@code @FromMap} binder does.
  *
  * <p>Build rows via the static factory {@link #extract(String, Accessor, Function)} —
  * static-imported it reads as a list of correspondences alongside the {@link Mapping#to(Accessor,
  * Accessor)} rows on the typed surface.
  *
  * <p>Sealed. {@link Extract} fills its component from the map where the key carries a value and
- * from a type default where it does not; {@link Require} refuses instead. Future expansions (nested
- * extracts, conditional gates) extend the same surface — the pattern {@link MapStep} uses.
+ * from a type default where it does not, unless the target's registered {@code @FromMap(required =
+ * ...)} lists the component and the row reads the component's own key, in which case the map is
+ * refused. {@link Require} always refuses instead. Future expansions (nested extracts, conditional
+ * gates) extend the same surface — the pattern {@link MapStep} uses.
  */
 public sealed interface MapExtractStep permits Extract, Require {
   /** The key to look up in the source {@code Map<String, Object>}. */
@@ -46,10 +49,12 @@ public sealed interface MapExtractStep permits Extract, Require {
    * <pre>{@code
    * ForwardMapper<Map<String, Object>, CaseListRequest> m = Telescope.fromMap(
    *     CaseListRequest.class,
-   *     extract("bookingType", CaseListRequest::getBookingType, Object::toString),
-   *     extract("caseId",      CaseListRequest::getCaseId,      Object::toString),
-   *     extract("priority",    CaseListRequest::getPriority,    v -> Integer.parseInt(v.toString())));
+   *     extract("booking_type",   CaseListRequest::getBookingType, Object::toString),
+   *     extract("priority_level", CaseListRequest::getPriority,    v -> Priority.fromCode(v.toString())));
    * }</pre>
+   *
+   * <p>A component no row names already reads the key with its own name, so a row earns its place
+   * by reading another key or converting differently from the default.
    *
    * @param key the map key the row pulls its raw value from
    * @param targetAccessor method reference naming the target field/component
@@ -82,7 +87,8 @@ public sealed interface MapExtractStep permits Extract, Require {
    * instead of at every call site — and is guarded: a key present but holding a non-{@code Map}
    * value raises an {@link IllegalArgumentException} naming the key rather than leaking a bare
    * {@code ClassCastException}. An absent key never reaches this converter, so the component takes
-   * its type default.
+   * its type default, unless the target's registered {@code @FromMap(required = ...)} lists the
+   * component and the row reads the component's own key, in which case the map is refused.
    *
    * @param key the map key the row pulls its nested map from
    * @param targetAccessor method reference naming the target field/component
@@ -125,13 +131,14 @@ public sealed interface MapExtractStep permits Extract, Require {
    * Static factory for a {@link Require} row — one whose key has to carry a value.
    *
    * <p>An {@link #extract(String, Accessor, Function) extract} row fills its component from a type
-   * default when the key is absent, and a default is indistinguishable from a supplied value once
-   * it is in the target: an id arrives as {@code null}, a count as {@code 0}, a list as empty.
-   * Where that distinction matters, this row makes the source's obligation part of the declaration.
-   * The conversion is refused with an {@link IllegalArgumentException} before any converter runs,
-   * and the message names every required key the map carries no value for, each beside the
-   * component it was to fill. A {@code @FromMap} type says the same with {@code @FromMap(required =
-   * ...)}.
+   * default when the key is absent, unless the target's registered {@code @FromMap(required = ...)}
+   * lists the component and the row reads the component's own key, in which case the map is
+   * refused. A default is indistinguishable from a supplied value once it is in the target: an id
+   * arrives as {@code null}, a count as {@code 0}, a list as empty. Where that distinction matters,
+   * this row makes the source's obligation part of the declaration. The conversion is refused with
+   * an {@link IllegalArgumentException} before any converter runs, and the message names every
+   * required key the map carries no value for, each beside the component it was to fill. A
+   * {@code @FromMap} type says the same with {@code @FromMap(required = ...)}.
    *
    * <pre>{@code
    * ForwardMapper<Map<String, Object>, Ticket> m = Telescope.fromMap(

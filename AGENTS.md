@@ -655,8 +655,9 @@ JVM/codegen-only under AOT).
    miss. For annotated types, the only remaining runtime reflection is `SerializedLambda` decode.
 7. **0007 — Cross-module `@Bridge` carrier.** (Accepted, shipped.) `@Bridge` on a third "carrier" class with explicit
    `source`/`target`. Closes the split-module MapStruct-parity gap.
-8. **0008 — `Telescope.fromMap(...)` for untyped sources.** (Accepted, shipped.) Forward-only factory;
-   `extract(key, accessor, converter)` rows; lenient default.
+8. **0008 — `Telescope.fromMap(...)` for untyped sources.** (Accepted, shipped.) Forward-only factory; every component
+   reads the key with its own name, converted as `@FromMap` converts it, and `extract(key, accessor, converter)` rows
+   override that; lenient default.
 9. **0009 — `@Bridge(lenient = true)`.** (Accepted, shipped.) Codegen sibling of the runtime `mapperForward` lenient
    default. Opt-in flag; partial-Iso when on.
 10. **0010 — `@FromMap` codegen.** (Accepted, shipped.) Reflection-free `Map<String, Object> → record` ingestion —

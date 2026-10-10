@@ -3,8 +3,11 @@ package io.github.eschizoid.telescope.frommapparity;
 import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
 import static io.github.eschizoid.telescope.mapping.MapExtractStep.required;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.introspection.OpticNode.Extracted;
+import io.github.eschizoid.telescope.introspection.OpticNode.WhenAbsent;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -68,6 +71,66 @@ class FromMapRequiredParityTest {
     assertAgreement(
       RequiredBeanFromMap::fromMap,
       runtime::forward,
+      b -> List.of(Objects.toString(b.getId()), b.getCount(), Objects.toString(b.getNote())),
+      "property"
+    );
+  }
+
+  @Test
+  @DisplayName("a record with no rows: its own @FromMap(required = ...) is refused the same way on both paths")
+  void recordWithNoRowsHonoursItsDeclaredRequiredKeys() {
+    final var runtime = Telescope.fromMap(RequiredRow.class);
+    assertAgreement(RequiredRowFromMap::fromMap, runtime::forward, Function.identity(), "component");
+    assertEquals(
+      List.of(
+        new Extracted("id", "id", "String", WhenAbsent.REFUSES),
+        new Extracted("count", "count", "int", WhenAbsent.REFUSES),
+        new Extracted("note", "note", "String", WhenAbsent.DEFAULTS)
+      ),
+      runtime.explain().extractions()
+    );
+  }
+
+  @Test
+  @DisplayName("a record with a row on another component still refuses the keys its annotation requires")
+  void recordWithARowOnAnotherComponentHonoursItsDeclaredRequiredKeys() {
+    final var runtime = Telescope.fromMap(RequiredRow.class, extract("note", RequiredRow::note, v -> "row:" + v));
+    assertAgreement(
+      RequiredRowFromMap::fromMap,
+      runtime::forward,
+      r -> List.of(Objects.toString(r.id()), r.count()),
+      "component"
+    );
+  }
+
+  @Test
+  @DisplayName("a row reading a required component's own key keeps the requirement the annotation declares")
+  void aRowReadingTheSameKeyKeepsTheDeclaredRequirement() {
+    final var runtime = Telescope.fromMap(RequiredRow.class, extract("id", RequiredRow::id, Object::toString));
+    final var refusal = assertThrows(IllegalArgumentException.class, () -> runtime.forward(Map.of("count", 3)));
+    assertEquals(
+      "Telescope.fromMap: the map carries no value for required key \"id\" (component 'id') of RequiredRow",
+      refusal.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a row reading another key for a required component lifts the requirement")
+  void aRowReadingAnotherKeyLiftsTheDeclaredRequirement() {
+    final var runtime = Telescope.fromMap(
+      RequiredRow.class,
+      extract("identifier", RequiredRow::id, Object::toString),
+      extract("total", RequiredRow::count, FromMapRequiredParityTest::asInt)
+    );
+    assertEquals(new RequiredRow(null, 0, null), runtime.forward(Map.of()));
+  }
+
+  @Test
+  @DisplayName("a bean with no rows: its own @FromMap(required = ...) is refused the same way on both paths")
+  void beanWithNoRowsHonoursItsDeclaredRequiredKeys() {
+    assertAgreement(
+      RequiredBeanFromMap::fromMap,
+      Telescope.fromMap(RequiredBean.class)::forward,
       b -> List.of(Objects.toString(b.getId()), b.getCount(), Objects.toString(b.getNote())),
       "property"
     );
