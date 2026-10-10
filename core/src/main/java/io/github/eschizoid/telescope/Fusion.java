@@ -135,12 +135,13 @@ final class Fusion {
     /**
      * This component-anchored hop read on {@code root} through {@code rootSegment}, with the
      * identity key naming {@code root} so the hop fuses with every other path that reads the same
-     * component on it. Field and traverse keys both carry the owner second.
+     * component on it. Field and traverse keys both carry the owner second. {@code ownSetter} says
+     * whether {@code rootSegment} writes through a generated setter.
      */
-    Hop on(final Class<?> root, final Traversal<Object, Object> rootSegment) {
+    Hop on(final Class<?> root, final Traversal<Object, Object> rootSegment, final boolean ownSetter) {
       final var rootKey = new ArrayList<Object>((List<?>) key);
       rootKey.set(1, root);
-      return new Hop(kind, List.copyOf(rootKey), rootSegment, root, component, inner, false);
+      return new Hop(kind, List.copyOf(rootKey), rootSegment, root, component, inner, ownSetter);
     }
 
     static Hop narrow(final Class<?> subType, final Traversal<Object, Object> prism) {

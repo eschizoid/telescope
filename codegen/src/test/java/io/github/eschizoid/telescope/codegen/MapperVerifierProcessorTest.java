@@ -206,6 +206,78 @@ class MapperVerifierProcessorTest {
         compilation::errorMessages
       );
     }
+
+    @Test
+    @DisplayName("a constant row through an interface the record target implements is accepted")
+    void constantThroughAnInterfaceOfARecordTargetIsAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        interface Named { String name(); }
+        record Rec(String code, String name) implements Named {}
+        record Coded(String code) {}
+        class Holder { static final Object M = Telescope.mapper(Coded.class, Rec.class, constant(Named::name, "fixed")); }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("target telescopes rooted at the abstract base are accepted on every row that writes through one")
+    void baseRootedTargetTelescopesAreAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        record Coded(String code, String label) {}
+        class Holder {
+          static final Object A = Telescope.mapper(Coded.class, Sub.class,
+            constant(Telescope.of(Base.class).field(Base::getName), "fixed"));
+          static final Object B = Telescope.mapper(Coded.class, Sub.class,
+            to(Coded::label, Telescope.of(Base.class).filter(b -> true).field(Base::getName)));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName(
+      "target telescopes rooted at a class the target does not extend are refused as construction refuses them"
+    )
+    void unrelatedTargetTelescopesAreRefused() {
+      final var compilation = verifyWithBeans(
+        """
+        class Other {
+          private String name;
+          private java.util.List<String> tags;
+          public String getName() { return name; }
+          public void setName(String n) { name = n; }
+          public java.util.List<String> getTags() { return tags; }
+          public void setTags(java.util.List<String> t) { tags = t; }
+        }
+        record Coded(String code, String label, java.util.List<String> tags) {}
+        class Holder {
+          static final Object A = Telescope.mapperForward(Coded.class, Sub.class,
+            compute(Telescope.of(Other.class).filter(o -> true).field(Other::getName), () -> "made"));
+          static final Object B = Telescope.mapperForward(Coded.class, Sub.class,
+            to(Coded::label, Telescope.ofBean(Other.class).field(Other::getName)));
+          static final Object C = Telescope.mapperForward(Coded.class, Sub.class,
+            zip(Telescope.of(Coded.class).each(Coded::tags), Telescope.of(Other.class).each(Other::getTags)));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "compute", "Other", "name")),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "to", "Other", "name")),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "zip", "Other", "tags")),
+        compilation::errorMessages
+      );
+    }
   }
 
   private static ProcessorHarness.Compilation verify(final String code) {

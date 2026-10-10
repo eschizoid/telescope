@@ -389,11 +389,12 @@ public final class DeepMap {
   }
 
   /**
-   * A {@code constant} or {@code compute} row, bare or under {@code when}, with its path started at
-   * the mapper's target. Such a row writes only the top-level target, and a path started at a
-   * superclass or interface of it rebuilds that type instead of the target, so the path is started
-   * again at the target. A path whose first hop reads a class the target neither is nor extends
-   * names no property of the target and is refused. Every other row is returned unchanged.
+   * A row that writes the top-level target through a path, bare or under {@code when}, with that
+   * path started at the mapper's target: {@code constant}, {@code compute}, {@code to} onto a
+   * target telescope, and {@code zip}. A path started at a superclass or interface of the target
+   * rebuilds that type instead of the target, so the path is started again at the target. A path
+   * whose root component hop reads a class the target neither is nor extends names no property of
+   * the target and is refused. Every other row is returned unchanged.
    */
   @SuppressWarnings("unchecked")
   private static Mapping<?, ?> writtenOnTarget(
@@ -409,6 +410,20 @@ public final class DeepMap {
       case Compute<?, ?, ?> c -> new Compute<>(
         targetRooted(c.targetTelescope(), "compute", topSource, topTarget),
         c.supplier()
+      );
+      case TelescopeTo<?, ?, ?> t -> new TelescopeTo<>(
+        (Telescope.Accessor<Object, Object>) t.srcAccessor(),
+        targetRooted(t.targetTelescope(), "to", topSource, topTarget)
+      );
+      case TelescopeToTelescope<?, ?, ?> t -> new TelescopeToTelescope<>(
+        (Telescope<Object, Object>) t.sourceTelescope(),
+        targetRooted(
+          t.targetTelescope(),
+          t.kind() == TelescopeToTelescope.Kind.ZIP ? "zip" : "to",
+          topSource,
+          topTarget
+        ),
+        t.kind()
       );
       case Conditional<?, ?> c -> {
         final var inner = writtenOnTarget(c.inner(), topSource, topTarget);
@@ -427,7 +442,7 @@ public final class DeepMap {
     final Class<?> topSource,
     final Class<?> topTarget
   ) {
-    final var first = path.firstComponentHop();
+    final var first = path.rootComponentHop();
     if (first != null && !first.owner().isAssignableFrom(topTarget)) throw new IllegalArgumentException(
       PairingMessages.targetRowOffTarget(
         topSource.getSimpleName(),

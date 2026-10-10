@@ -2,19 +2,21 @@ package io.github.eschizoid.telescope;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.compute;
 import static io.github.eschizoid.telescope.mapping.Mapping.constant;
+import static io.github.eschizoid.telescope.mapping.Mapping.when;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * A {@code constant} or {@code compute} row whose accessor names a superclass of the mapper's
- * target writes the property on the target class itself, so the result keeps that class and every
- * property the superclass does not declare. Each base shape is driven through both rows, on the
+ * A {@code constant} or {@code compute} row whose accessor names a superclass or interface of the
+ * mapper's target writes the property on the target class itself, so the result keeps that class
+ * and every property the declaring type lacks. Each base shape is driven through both rows, on the
  * bidirectional mapper's forward direction and on a forward-only mapper.
  */
 class SuperclassTargetRowTest {
@@ -209,7 +211,7 @@ class SuperclassTargetRowTest {
       SuperRowHolderSource.class,
       SuperRowHolderSub.class,
       constant(Telescope.of(SuperRowHolderBase.class).field(SuperRowHolderBase::getChild).field(SuperRowSource::n), 9)
-    ).forward(new SuperRowHolderSource(7, new SuperRowSource(1), List.of("a", "b")));
+    ).forward(new SuperRowHolderSource(7, new SuperRowSource(1), List.of("a", "b"), "lbl"));
     assertSame(SuperRowHolderSub.class, result.getClass());
     assertEquals(new SuperRowSource(9), result.getChild());
     assertEquals(List.of("a", "b"), result.getTags());
@@ -223,7 +225,7 @@ class SuperclassTargetRowTest {
       SuperRowHolderSource.class,
       SuperRowHolderSub.class,
       constant(Telescope.of(SuperRowHolderBase.class).each(SuperRowHolderBase::getTags), "x")
-    ).forward(new SuperRowHolderSource(7, new SuperRowSource(1), List.of("a", "b")));
+    ).forward(new SuperRowHolderSource(7, new SuperRowSource(1), List.of("a", "b"), "lbl"));
     assertSame(SuperRowHolderSub.class, result.getClass());
     assertEquals(List.of("x", "x"), result.getTags());
     assertEquals(new SuperRowSource(1), result.getChild());
@@ -268,8 +270,206 @@ class SuperclassTargetRowTest {
         constant(SuperRowConcreteBase::getName, "fixed")
       )
     );
-    assertTrue(failure.getMessage().contains("SuperRowConcreteBase"), failure.getMessage());
-    assertTrue(failure.getMessage().contains("SuperRowAbstractSub"), failure.getMessage());
-    assertTrue(failure.getMessage().contains("name"), failure.getMessage());
+    assertEquals(
+      PairingMessages.targetRowOffTarget(
+        "SuperRowSource",
+        "SuperRowAbstractSub",
+        "constant",
+        "SuperRowConcreteBase",
+        "name"
+      ),
+      failure.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("when(constant) through a concrete base's getter keeps the subclass")
+  void conditionalConstantThroughAConcreteBase() {
+    final var result = Telescope.mapper(
+      SuperRowSource.class,
+      SuperRowConcreteSub.class,
+      when((final SuperRowSource s) -> s.n() > 0, constant(SuperRowConcreteBase::getName, "fixed"))
+    ).forward(SOURCE);
+    assertSame(SuperRowConcreteSub.class, result.getClass());
+    assertEquals("fixed", result.getName());
+    assertEquals(7, result.getN());
+  }
+
+  @Test
+  @DisplayName("when(constant) through an abstract base's getter writes on the subclass")
+  void conditionalConstantThroughAnAbstractBase() {
+    final var result = Telescope.mapperForward(
+      SuperRowSource.class,
+      SuperRowAbstractSub.class,
+      when((final SuperRowSource s) -> s.n() > 0, constant(SuperRowAbstractBase::getName, "fixed"))
+    ).forward(SOURCE);
+    assertSame(SuperRowAbstractSub.class, result.getClass());
+    assertEquals("fixed", result.getName());
+    assertEquals(7, result.getN());
+  }
+
+  @Test
+  @DisplayName("when(compute) through a concrete base's getter keeps the subclass")
+  void conditionalComputeThroughAConcreteBase() {
+    final var result = Telescope.mapperForward(
+      SuperRowSource.class,
+      SuperRowConcreteSub.class,
+      when((final SuperRowSource s) -> s.n() > 0, compute(SuperRowConcreteBase::getName, () -> "made"))
+    ).forward(SOURCE);
+    assertSame(SuperRowConcreteSub.class, result.getClass());
+    assertEquals("made", result.getName());
+    assertEquals(7, result.getN());
+  }
+
+  @Test
+  @DisplayName("when(compute) through an abstract base's getter writes on the subclass")
+  void conditionalComputeThroughAnAbstractBase() {
+    final var result = Telescope.mapper(
+      SuperRowSource.class,
+      SuperRowAbstractSub.class,
+      when((final SuperRowSource s) -> s.n() > 0, compute(SuperRowAbstractBase::getName, () -> "made"))
+    ).forward(SOURCE);
+    assertSame(SuperRowAbstractSub.class, result.getClass());
+    assertEquals("made", result.getName());
+    assertEquals(7, result.getN());
+  }
+
+  @Test
+  @DisplayName("constant through an interface's record-style accessor writes on the record target")
+  void constantThroughAnInterfaceOnARecordTarget() {
+    final var result = Telescope.mapper(
+      SuperRowSource.class,
+      SuperRowNamedRecord.class,
+      constant(SuperRowNamed::name, "fixed")
+    ).forward(SOURCE);
+    assertEquals(new SuperRowNamedRecord(7, "fixed"), result);
+  }
+
+  @Test
+  @DisplayName("compute through an interface's record-style accessor writes on the record target")
+  void computeThroughAnInterfaceOnARecordTarget() {
+    final var result = Telescope.mapperForward(
+      SuperRowSource.class,
+      SuperRowNamedRecord.class,
+      compute(SuperRowNamed::name, () -> "made")
+    ).forward(SOURCE);
+    assertEquals(new SuperRowNamedRecord(7, "made"), result);
+  }
+
+  @Test
+  @DisplayName("constant through an interface's getter writes on the bean that implements it")
+  void constantThroughAnInterfaceOnABeanTarget() {
+    final var result = Telescope.mapperForward(
+      SuperRowSource.class,
+      SuperRowNamedBean.class,
+      constant(SuperRowBeanNamed::getName, "fixed")
+    ).forward(SOURCE);
+    assertSame(SuperRowNamedBean.class, result.getClass());
+    assertEquals("fixed", result.getName());
+    assertEquals(7, result.getN());
+  }
+
+  @Test
+  @DisplayName("constant through an interface converts as the generated bridge's @Constant does")
+  void interfaceConstantMatchesTheGeneratedBridge() {
+    final var runtime = Telescope.mapper(
+      SuperRowNamedBridged.class,
+      SuperRowNamedRecord.class,
+      constant(SuperRowNamed::name, "fixed")
+    ).forward(new SuperRowNamedBridged(7));
+    assertEquals(SuperRowNamedBridgedBridge.BRIDGE.read(new SuperRowNamedBridged(7)), runtime);
+  }
+
+  @Test
+  @DisplayName("a path through an interface reads but refuses a write naming the interface")
+  void anInterfacePathRefusesAWrite() {
+    final var path = Telescope.of(SuperRowNamed.class).field(SuperRowNamed::name);
+    final var record = new SuperRowNamedRecord(7, "ann");
+    assertEquals("ann", path.read(record));
+    final var failure = assertThrows(IllegalStateException.class, () -> path.set(record, "bo"));
+    assertTrue(failure.getMessage().contains(SuperRowNamed.class.getName()), failure.getMessage());
+  }
+
+  @Test
+  @DisplayName("constant through a base-rooted path that starts with a filter writes on the subclass")
+  void constantThroughABaseRootedFilteredPath() {
+    final var result = Telescope.mapperForward(
+      SuperRowSource.class,
+      SuperRowAbstractSub.class,
+      constant(
+        Telescope.of(SuperRowAbstractBase.class)
+          .filter(b -> b.getName() == null)
+          .field(SuperRowAbstractBase::getName),
+        "fixed"
+      )
+    ).forward(SOURCE);
+    assertSame(SuperRowAbstractSub.class, result.getClass());
+    assertEquals("fixed", result.getName());
+    assertEquals(7, result.getN());
+  }
+
+  @Test
+  @DisplayName("a leading filter that rejects the target still skips the write once the path starts at the target")
+  void aRejectingLeadingFilterIsKept() {
+    final var result = Telescope.mapperForward(
+      SuperRowSource.class,
+      SuperRowAbstractSub.class,
+      constant(
+        Telescope.of(SuperRowAbstractBase.class)
+          .filter(b -> b.getName() != null)
+          .field(SuperRowAbstractBase::getName),
+        "fixed"
+      )
+    ).forward(SOURCE);
+    assertSame(SuperRowAbstractSub.class, result.getClass());
+    assertEquals(null, result.getName());
+    assertEquals(7, result.getN());
+  }
+
+  @Test
+  @DisplayName("a filtered path on a class the target does not extend is refused by name")
+  void filteredPathOnAnUnrelatedClassIsRefused() {
+    final var failure = assertThrows(IllegalArgumentException.class, () ->
+      Telescope.mapperForward(
+        SuperRowSource.class,
+        SuperRowAbstractSub.class,
+        constant(
+          Telescope.of(SuperRowConcreteBase.class)
+            .filter(b -> true)
+            .field(SuperRowConcreteBase::getName),
+          "fixed"
+        )
+      )
+    );
+    assertEquals(
+      PairingMessages.targetRowOffTarget(
+        "SuperRowSource",
+        "SuperRowAbstractSub",
+        "constant",
+        "SuperRowConcreteBase",
+        "name"
+      ),
+      failure.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a path started again on a class with a generated holder writes through the holder's lens")
+  void rootingOnAClassWithAHolderUsesTheHolderLens() {
+    final var rooted = Telescope.of(SuperRowAbstractBase.class)
+      .field(SuperRowAbstractBase::getName)
+      .rootedAt(SuperRowFocusedSub.class);
+    final var hop = rooted.rootComponentHop();
+    assertSame(SuperRowFocusedSub.class, hop.owner());
+    assertSame(SuperRowFocusedSubFieldOptics.name.optic, hop.segment());
+    assertTrue(hop.ownSetter());
+    final var result = Telescope.mapperForward(
+      SuperRowSource.class,
+      SuperRowFocusedSub.class,
+      constant(SuperRowAbstractBase::getName, "fixed")
+    ).forward(SOURCE);
+    assertSame(SuperRowFocusedSub.class, result.getClass());
+    assertEquals("fixed", result.getName());
+    assertEquals(7, result.getN());
   }
 }
