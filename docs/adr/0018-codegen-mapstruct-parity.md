@@ -68,7 +68,7 @@ gap is visible and each step above updates it.
 - A MapStruct user can move the common shapes, enums, renamed conversions, flattened fields and JPA updates, to
   `@Bridge` without falling back to the runtime mapper.
 - Each step widens what the generated mapper accepts, so none of them breaks code that compiles today. The cycle guard
-  changes behaviour only for graphs that currently overflow the stack.
+  changes behavior only for graphs that currently overflow the stack.
 - The cross-path corpus grows with every step, so the two paths stay in agreement as the generated path gains features.
 - The parity document reports the generated path on its own, which makes the remaining gap measurable.
 

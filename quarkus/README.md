@@ -1,37 +1,19 @@
 # telescope-quarkus
 
-Drop-in Quarkus 3 CDI extension for [telescope](../README.md). Adds one CDI bean — a typed `Mapper<A, B>` registry — and
-nothing else. Mirrors the [`spring-boot-starter`](../spring-boot-starter/README.md) surface for Quarkus apps.
+`telescope-quarkus` adds one CDI bean to a Quarkus 3 application, a registry of the [telescope](../README.md) mappers
+the application defines. The registry, `TelescopeMapperRegistry`, finds a `Mapper<A, B>` by its source class and target
+class. It is the Quarkus counterpart of the registry in the [Spring Boot starter](../spring-boot-starter/README.md).
 
-```kotlin
-dependencies {
-    implementation("io.github.eschizoid:telescope-quarkus:2.0.0")
-}
-```
-
-No `@EnableTelescope` annotation. No `application.properties` you have to touch. Declare any `@Produces Mapper<A, B>`
-method (or `@ApplicationScoped` class) and it shows up in the registry; the registry resolves them by
-`(sourceClass, targetClass)` pair.
-
-## What you get
-
-- **`TelescopeMapperRegistry`** — auto-built `@ApplicationScoped` bean, indexes every `Mapper<?, ?>` ArC can resolve
-  into the application. Polymorphic dispatch: generic services receive `Object` and convert via
-  `registry.get(src.getClass(), Target.class).forward(src)` without enumerating type pairs.
-- **`TelescopeProducer`** — CDI producer that uses ArC's `@All List<Mapper<?, ?>>` collector to inject every mapper
-  bean.
-- **`TelescopeConfig`** — `@ConfigMapping(prefix = "telescope")` interface for the `telescope.registry.fail-fast`
-  toggle.
-
-The jar ships a pre-built `META-INF/jandex.idx` so Quarkus skips the startup bytecode scan and avoids the "Application
-archive ... is being scanned without a Jandex index" warning.
+The module is a small runtime library. It has no `deployment` module and no build steps, and it does not need an
+annotation to switch it on or any entry in `application.properties`.
 
 ## Install
 
+The module is built against Quarkus 3.40.1 and needs Java 21 or later.
+
 ```kotlin
-// Gradle (Quarkus 3 BOM picks up Quarkus's version)
+// Gradle
 dependencies {
-    implementation(platform("io.quarkus.platform:quarkus-bom:3.40.1"))
     implementation("io.github.eschizoid:telescope-quarkus:2.0.0")
 }
 ```
@@ -45,78 +27,117 @@ dependencies {
 </dependency>
 ```
 
-The `telescope` core library comes along transitively (`api` scope).
+The artifact brings in `telescope-core` and `io.quarkus:quarkus-arc`, and it imports the Quarkus 3.40.1 platform BOM to
+set the `quarkus-arc` version. Your application's own Quarkus BOM normally sets the Quarkus versions you get.
 
-## Minimum viable example
+## Example
+
+You register a mapper with a CDI producer method or producer field that supplies it. `Mapper` is a final class with no
+public constructor, so a class of your own can't be a `Mapper` bean. The example uses `@Singleton`, which gives one
+shared instance with no proxy object in front of it.
 
 ```java
 @ApplicationScoped
 public class MapperProducers {
 
   @Produces
-  @ApplicationScoped
-  Mapper<Order, OrderEntity> orderMapper() {
+  @Singleton
+  Mapper<Order, OrderEntity> orderEntityMapper() {
     return Telescope.mapper(Order.class, OrderEntity.class);
   }
 
   @Produces
-  @ApplicationScoped
+  @Singleton
   Mapper<Order, OrderDto> orderDtoMapper() {
     return Telescope.mapper(Order.class, OrderDto.class);
   }
 }
+```
 
+When the target type is known where you write the code, inject the mapper directly, for example
+`@Inject Mapper<Order, OrderDto> orderDtoMapper`. The registry is for code that only learns the source class at run
+time. The converter below takes any source object and looks up the mapper for that object's class and the requested
+target class:
+
+```java
 @ApplicationScoped
-public class OrderConverter {
+public class Converter {
 
   @Inject
   TelescopeMapperRegistry registry;
 
-  // Polymorphic conversion — no switch over known type pairs.
-  public <A, B> B convert(A src, Class<B> targetClass) {
+  public <B> B convert(Object source, Class<B> targetClass) {
     @SuppressWarnings("unchecked")
-    Mapper<A, B> mapper = (Mapper<A, B>) registry.get(src.getClass(), targetClass);
-    return mapper.forward(src);
+    Mapper<Object, B> mapper = (Mapper<Object, B>) registry.get(source.getClass(), targetClass);
+    return mapper.forward(source);
   }
 }
 ```
 
+The lookup uses the exact class. A subclass of `Order`, or a proxy class that wraps one, does not find the
+`Mapper<Order, OrderDto>`.
+
+## What the module contains
+
+The module adds these public types:
+
+- `TelescopeMapperRegistry` holds every `Mapper<?, ?>` bean in the application, keyed by its source class and target
+  class.
+- `TelescopeProducer` is an `@ApplicationScoped` bean with a producer method that builds the registry as an
+  `@ApplicationScoped` bean. The method receives every `Mapper` bean through ArC's `@All List<Mapper<?, ?>>` injection.
+- `TelescopeConfig` is a `@ConfigMapping(prefix = "telescope")` interface that holds the `telescope.registry.fail-fast`
+  setting.
+
+The jar includes a pre-built `META-INF/jandex.idx`. Quarkus reads that index to find the producer, so the jar needs no
+`beans.xml` and Quarkus does not warn that the archive has no Jandex index.
+
+## Registry methods
+
+| Method                     | Result                                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------------------- |
+| `get(source, target)`      | The mapper for the pair. On a missing pair it throws or returns `null`, as set by `fail-fast`. |
+| `find(source, target)`     | An `Optional` holding the mapper, empty on a missing pair, whatever `fail-fast` says.          |
+| `contains(source, target)` | `true` when a mapper is registered for the pair.                                               |
+| `size()`                   | The number of registered mappers.                                                              |
+
+`get` and `find` throw `NullPointerException` when either class is `null`. The registry is built when the bean is first
+used, and its contents do not change after that.
+
 ## Configuration
 
-| Property                       | Default | Effect                                                                                                                                                                                      |
-| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `telescope.registry.fail-fast` | `true`  | When `true`, `registry.get(srcCls, tgtCls)` throws `IllegalArgumentException` on a missing type pair. When `false`, returns `null`. Either way, `registry.find(...)` returns an `Optional`. |
+The registry reads its setting from Quarkus configuration:
 
-`application.properties`:
+| Property                       | Default | Effect                                                                                                              |
+| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `telescope.registry.fail-fast` | `true`  | When `true`, `get` throws `IllegalArgumentException` for a pair with no mapper. When `false`, `get` returns `null`. |
+
+To make `get` return `null`, add the line below to `application.properties`:
 
 ```properties
 telescope.registry.fail-fast=false
 ```
 
-## Overrides
+The setting changes only what `get` does for a missing pair. Duplicate pairs fail either way, and `find` and `contains`
+behave the same either way.
 
-To suppress the default registry (e.g. to provide your own), declare your own `@Produces TelescopeMapperRegistry` bean.
-CDI's alternatives / `@Specializes` picks yours over ours.
+## Two mappers for the same pair
 
-## Duplicate-pair behaviour
+Each source and target pair can have only one mapper. If two `Mapper` beans share a pair, building the registry throws
+`IllegalStateException` with a message that starts `Duplicate Mapper for type pair`. Qualifiers don't help, because the
+registry collects every `Mapper` bean. Keep one `Mapper` bean per pair, and wrap the other in your own type or build it
+where it's used.
 
-Defining two beans for the same `(srcClass, tgtClass)` pair fails at registry construction with `IllegalStateException`
-— the pair must uniquely identify a mapper. If you genuinely have two semantically-different mappers for the same pair,
-qualify them with `@Named` / `@Qualifier` and `@Inject` the specific bean instead of going through the registry.
+## Replacing the registry
 
-## What's NOT here
+`TelescopeProducer` is not a default bean, so a second plain producer of `TelescopeMapperRegistry` makes the injection
+ambiguous and Quarkus fails at build time. To supply your own registry, annotate your producer method with
+`@Alternative` and `@Priority`, which makes CDI choose it over the one in this module.
 
-This is a runtime-only extension — no separate `deployment` module, no `@BuildStep` recorders. Beans are discovered via
-the pre-built `META-INF/jandex.idx` shipped in the jar (no `beans.xml` needed in modern Quarkus when an index is
-present); the registry's index is built once at application bootstrap and then immutable. For most cases this is fine;
-if you need build-time optimization for an enormous mapper graph, a follow-up split into `deployment` + `runtime` would
-be the path.
+## What the module does not include
 
-`@QuarkusTest` integration tests aren't shipped — the registry is pure Java with no CDI dependency, so the existing unit
-tests cover the behaviour. Add a `@QuarkusTest` in your own application if you want to validate the producer wiring
-end-to-end.
+The module has no counterpart to the Spring starter's `@TelescopeMapper` and `@TelescopeTransformer` generated beans,
+which are Spring only. It also has no `telescope.default-write-strategy` setting.
 
-## Spring Boot equivalent
-
-`telescope-spring-boot-starter` ships the same registry shape via Spring's auto-config — see
-[`spring-boot-starter`](../spring-boot-starter/README.md) for the Spring 4 equivalent.
+The tests in this module are unit tests of `TelescopeMapperRegistry`, which is plain Java with no CDI dependency. No
+`@QuarkusTest` in this repository starts Quarkus with the producer, so add one to your own application if you want to
+check the wiring end to end.

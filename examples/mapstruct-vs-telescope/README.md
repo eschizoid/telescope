@@ -1,182 +1,183 @@
-# telescope vs MapStruct — the canonical head-to-head
+# telescope and MapStruct side by side
 
-A small, runnable, **reproducible** comparison. Same `Order → OrderDto` mapping, written both ways, in one module so you
-can run it yourself:
+The `mapstruct-vs-telescope` module writes the same `Order` to `OrderDto` mapping with MapStruct 1.6.3 and with
+telescope, so you can run both and compare them. Run the tests with this command:
 
 ```bash
 ./gradlew :examples:mapstruct-vs-telescope:test
 ```
 
-The domain is deliberately ordinary — a nested object and a collection, one field that needs an explicit rename.
-Immutable records in, mutable JavaBean DTOs out — the shape JPA and serialization frameworks impose — and both
-frameworks handle the paradigm hop:
+The source side is immutable records and the target side is mutable JavaBeans, each with a no-argument constructor and
+setters. The domain has a nested object, a list, and one field whose name differs between source and target, which is
+`Customer.email` to `CustomerDto.contactEmail`. Every other field has the same name on both sides.
+
+| Source record                                               | Target bean                                   |
+| ----------------------------------------------------------- | --------------------------------------------- |
+| `Order(String id, Customer customer, List<LineItem> lines)` | `OrderDto` with `id`, `customer`, `lines`     |
+| `Customer(String name, String email)`                       | `CustomerDto` with `name`, `contactEmail`     |
+| `LineItem(String sku, int quantity, BigDecimal price)`      | `LineItemDto` with `sku`, `quantity`, `price` |
+
+MapStruct is configured the usual way in `OrderMapStructMapper`, and the first test checks that both libraries produce
+equal `OrderDto` values for the same input. The tests log what each one shows through `System.Logger`, so the test
+output reads as a walkthrough.
+
+## The mappings
+
+Both libraries need the one renamed field spelled out, and both map the nested customer, the list, and the same-named
+fields without more configuration. Telescope names the field with method references in `TelescopeMappings`:
+
+```java
+public static final Mapper<Order, OrderDto> ORDER_MAPPER = Telescope.mapper(
+  Order.class,
+  OrderDto.class,
+  to(Customer::email, CustomerDto::getContactEmail)
+);
+```
+
+MapStruct names it with strings in `OrderMapStructMapper`:
+
+```java
+@Mapper
+public interface OrderMapStructMapper {
+  OrderMapStructMapper INSTANCE = Mappers.getMapper(OrderMapStructMapper.class);
+
+  OrderDto toDto(Order order);
+
+  @Mapping(source = "email", target = "contactEmail")
+  CustomerDto toDto(Customer customer);
+
+  LineItemDto toDto(LineItem line);
+}
+```
+
+The telescope mapper also converts in the other direction. A test checks that `ORDER_MAPPER.backward(...)` applied to
+the result of `ORDER_MAPPER.forward(order)` gives back an `Order` equal to the original. MapStruct needs a second method
+for the reverse direction, usually with `@InheritInverseConfiguration`.
+
+## Renaming a source field
+
+Both libraries fail the build when a source field named in a mapping goes away, and they differ in who updates the name.
+`Customer::email` is a method reference, so `javac` checks it and your IDE's rename refactoring updates it with the
+record component. The `"email"` in `@Mapping(source = "email", ...)` is a string, which MapStruct's processor checks at
+compile time. The [MapStruct IDEA plugin](https://mapstruct.org/documentation/ide-support/) refactors such strings
+according to its documentation. A plain rename in the editor doesn't change them.
+
+To reproduce the MapStruct side, follow these steps:
+
+1. Rename the `email` component of `Customer` to `emailAddress`.
+2. Change both `Customer::email` references in `TelescopeMappings` to `Customer::emailAddress`. An IDE rename does both
+   steps at once.
+3. Leave the `@Mapping(source = "email", ...)` strings as they are, and run
+   `./gradlew :examples:mapstruct-vs-telescope:compileJava`.
+
+The telescope code compiles. MapStruct reports one error for each mapper method whose `@Mapping` names `email`, which is
+three in this module (`OrderMapStructMapper`, `SilentDropMapper`, and `StrictPolicyMapper`). Each error reads like this:
 
 ```text
-immutable records                          mutable JavaBeans (no-arg ctor + setters)
-Order(id, Customer, List<LineItem>)        OrderDto(getId, getCustomer, getLines)
-  Customer(name, email)          ──▶         CustomerDto(getName, getContactEmail)      // email -> contactEmail
-  LineItem(sku, quantity, price)             LineItemDto(getSku, getQuantity, getPrice) // same-named, auto
+OrderMapStructMapper.java:38: error: No property named "email" exists in source parameter(s). Did you mean "name"?
+  @Mapping(source = "email", target = "contactEmail")
+                    ^
 ```
 
-Both frameworks produce the **identical** `OrderDto` (the first test pins it). This isn't a strawman where MapStruct is
-misused — it's configured the normal way, and it works. The difference shows up the moment the code changes underneath
-it: renaming a field, leaving a target unmapped, or needing to do anything past mapping.
+Without the plugin, you fix each of those strings by hand. A compile failure can't be a passing test, so the module
+documents the rename as a manual step rather than testing it.
 
----
+## A target field with no source
 
-## Act 1 — rename a field: the mapping string can't refactor
+MapStruct leaves a target property with no source as `null` under its default `unmappedTargetPolicy`, which is `WARN`.
+`SilentDropMapper` maps `Customer` to `CustomerContactDto`, whose `region` property has no counterpart on `Customer`.
+The module compiles with this warning:
 
-The one cross-named field has to be spelled out on both sides. Here's the entire difference:
+```text
+SilentDropMapper.java:25: warning: Unmapped target property: "region".
+  CustomerContactDto toContactDto(Customer customer);
+                     ^
+```
+
+The test `mapStructSilentlyDropsUnmappedTarget` checks that `region` is `null` at run time. `StrictPolicyMapper` shows
+the stricter setup. It sets `unmappedTargetPolicy = ReportingPolicy.ERROR`, which makes the same mapper fail to compile
+until the drop is written out as `@Mapping(target = "region", ignore = true)`.
+
+Telescope's `Telescope.mapper(...)` is strict by default. It throws when the mapper is built if a target field has no
+source, and you give that field a value with a row such as `to(...)`, `constant(...)`, or `compute(...)`. The two
+libraries reach the same safety, and the difference is the default. With `telescope-codegen` on the annotation processor
+path, a mapper verifier also reports the same message as a compile error for each `Telescope.mapper(...)` call whose
+types it can read. The `mapstruct-vs-telescope` module doesn't put `telescope-codegen` on its processor path, so here
+the check happens when the mapper is built. The root README's
+[unconvertible fields section](../../README.md#unconvertible-fields-are-refused) shows the message.
+
+## Updating values inside an immutable graph
+
+Telescope uses the same vocabulary to update values inside an `Order` as it uses to map one. `TelescopeMappings` holds a
+path to every line item's price and uses it to multiply each price by a rate:
 
 ```java
-// telescope — a method reference the compiler checks and the IDE refactors
-Telescope.mapper(Order.class, OrderDto.class,
-    to(Customer::email, CustomerDto::getContactEmail));  // recursion handles everything else
-
-// MapStruct — a string the IDE cannot see
-@Mapping(source = "email", target = "contactEmail")
-CustomerDto toDto(Customer customer);
-```
-
-Now do what every codebase does eventually: **rename `Customer.email()` → `Customer.emailAddress()`** with your IDE's
-rename refactor. Both frameworks catch the change at compile time — credit where due, MapStruct is loud here, not
-silent. The difference is **who does the fixing**.
-
-- **telescope:** `Customer::email` is a real reference. The refactor updates it to `Customer::emailAddress`
-  automatically; if anything is missed it's a compile error at the line. Zero edits, and the mapping keeps working.
-- **MapStruct:** `@Mapping(source = "email", …)` is opaque text the refactor cannot touch. Left pointing at a property
-  that no longer exists, MapStruct **fails the build** — this is the actual error, captured from this module:
-
-  ```
-  error: No property named "email" exists in source parameter(s). Did you mean "emailAddress"?
-  ```
-
-  That's the _good_ outcome: caught at compile time, not a silent runtime bug. But the fix is **manual** — you hand-edit
-  that string, and every other `@Mapping` across every mapper that named the renamed field. telescope's refactor did all
-  of it in one keystroke.
-
-So both are compile-safe on a field they map explicitly; telescope is **refactor-safe**. The string isn't unsafe — it's
-_un-refactorable_, which turns every rename into a string-chase across your mappers.
-
-> The documented core of the pitch: **method references over string-keyed `@Mapping`.** Strings don't refactor.
-
-**Reproduce it:** rename `Customer.email` via your IDE (let it update telescope's `Customer::email`), leave the
-`@Mapping("email")` string as-is, and run `./gradlew :examples:mapstruct-vs-telescope:build`. telescope compiles;
-MapStruct prints the error above.
-
----
-
-## A separate footgun — unmapped targets go silently null
-
-MapStruct's _other_ hazard is unrelated to renames, and it really is silent. A target field with **no source at all** —
-a newly added DTO field, or one whose source quietly drifted away — is, under MapStruct's **default**
-`unmappedTargetPolicy` (`WARN`), compiled with only a warning and left **`null` at runtime**:
-
-```
-warning: Unmapped target property: "region".   // <- compiles anyway; region is null at runtime
-```
-
-This module pins it permanently: `SilentDropMapper` maps to a `CustomerContactDto` whose `region` has no source, and the
-test asserts the `null`, so CI demonstrates the footgun on every run. Setting `unmappedTargetPolicy = ERROR` turns it
-into a build failure (the recommended hardening) — but it's off by default. telescope closes this hole twice over: the
-strict `mapper(...)` refuses an unmapped field at construction rather than nulling it, and with `telescope-codegen` on
-the annotation-processor path the same refusal fires at **compile time** — the verifier replays the pairing decisions
-over every statically-visible `mapper(...)` call and anchors the error on the offending call site, with the identical
-diagnostic text, no annotation or policy flag required.
-
----
-
-## Act 2 — the same typed path also updates the graph
-
-Act 1 showed the _mapping_ is refactor-safe. The deeper point is that it isn't a mapper at all — it's **one typed path
-for the whole lifecycle**. The same `Telescope` vocabulary that mapped `Order → OrderDto` also reads, writes, and
-updates an `Order`'s interior:
-
-```java
-// Multiply every line item's price by a rate and rebuild the whole immutable Order graph — one pass.
-Order taxed = Telescope.of(Order.class)
+public static final Telescope<Order, BigDecimal> LINE_PRICES = Telescope.of(Order.class)
   .each(Order::lines)
-  .field(LineItem::price)
-  .update(order, (price) -> price.multiply(rate));
-// `order` is untouched; `taxed` is a new immutable graph.
+  .field(LineItem::price);
+
+public static Order applyRate(final Order order, final BigDecimal rate) {
+  return LINE_PRICES.update(order, (price) -> price.multiply(rate));
+}
 ```
 
-MapStruct has **no equivalent**, by design: it maps `A → B`. It does not read, write, or update a value's interior, so
-this operation simply isn't expressible. (MapStruct's `@MappingTarget` update methods mutate an existing _mutable_ bean
-in place — they can't rebuild an immutable record graph and hand you a new value with the original untouched.) The test
-pins that the original `Order` is unchanged and a new graph is returned.
+`update` returns a new `Order` with new `LineItem` records and leaves the original unchanged. The test
+`deepUpdateRebuildsImmutably` checks both, with a rate of 2:
 
-One vocabulary mapped the object _and_ updated it. With MapStruct you'd reach for a second tool (hand-written
-copy-with-changes, or an optics library) the moment you step past mapping.
-
----
-
-## Act 3 — telescope explains and traces itself; MapStruct is a black box
-
-Acts 1 and 2 were about _writing_ the mapping. Act 3 is about **seeing it**. Every telescope mapper answers two
-questions MapStruct structurally cannot: its structure lives only in generated `…MapperImpl.java` you go read, and its
-runtime behaviour is whatever you hand-instrument.
-
-**`explain()` — the static structure, as data.** The Act 1 rename isn't a string buried in generated code; it's a row
-you can print or assert on:
-
-```java
-TelescopeMappings.CUSTOMER_MAPPER.explain();
-// Mapped:
-//   ✓ email → contactEmail
-//   ✓ name  → name
+```text
+before: [LineItem[sku=sku-1, quantity=2, price=10.00], LineItem[sku=sku-2, quantity=1, price=5.00]]
+after:  [LineItem[sku=sku-1, quantity=2, price=20.00], LineItem[sku=sku-2, quantity=1, price=10.00]]
 ```
 
-That `✓ email → contactEmail` is the exact override from Act 1, now a first-class correspondence. The test asserts on it
-directly — `explain().mapped()` contains `("email", "contactEmail")` — a completeness check MapStruct offers no surface
-for.
+MapStruct converts one type to another and has no API for this kind of update. Its `@MappingTarget` methods write into
+an existing mutable object in place, so they can't return a new record graph with the original untouched.
 
-**`trace(input)` — the same rows with real values, whole nested graph.** For one `Order`:
+## Inspecting a mapper
 
-```java
-TelescopeMappings.ORDER_MAPPER.trace(order);
-// ✓ id        "o-1"                                      → id "o-1"
-// • customer  Customer[name=Ada, email=ada@example.com]  → customer CustomerDto[name=Ada, contactEmail=ada@example.com]
-// • lines     [LineItem[sku=sku-1, …], …]                → lines [LineItemDto[sku=sku-1, …], …]
+A telescope mapper can describe its own structure with `explain()` and show the values of one conversion with
+`trace(input)`. To see the same things in MapStruct, you read the generated `OrderMapStructMapperImpl` source or step
+through it in a debugger.
+
+`TelescopeMappings.CUSTOMER_MAPPER` maps `Customer` to `CustomerDto` with the same `to(...)` row, so its `explain()`
+lists the renamed field as a top-level row. The test asserts that `explain().mapped()` contains the pair `email` and
+`contactEmail`. The test prints this:
+
+```text
+Mapped:
+  ✓ email → contactEmail
+  ✓ name  → name
 ```
 
-**Auto-logging — flip a level, no code change.** telescope logs its own `explain()` at `DEBUG` and every conversion's
-`trace()` at `TRACE` through `java.lang.System.Logger` (java.base, zero dependency). With the JDK's default backend it
-routes through `java.util.logging` (`TRACE` maps to JUL `FINER`); name the type-pair logger and every mapping narrates
-itself:
+`ORDER_MAPPER.trace(order)` shows each field of one conversion with its source and target values:
+
+```text
+✓ id        "o-1"                                                                                       → id "o-1"
+• customer  Customer[name=Ada, email=ada@example.com]                                                   → customer CustomerDto[name=Ada, contactEmail=ada@example.com]
+• lines     [LineItem[sku=sku-1, quantity=2, price=10.00], LineItem[sku=sku-2, quantity=1, price=5.00]] → lines [LineItemDto[sku=sku-1, quantity=2, price=10.00], LineItemDto[sku=sku-2, quantity=1, price=5.00]]
+```
+
+Every mapper also logs both reports through `java.lang.System.Logger`, so you can turn them on with a log level instead
+of a code change. It logs `explain()` at `DEBUG` once, when the mapper is built, and `trace(input)` at `TRACE` on every
+`forward(...)`. The logger for a mapper is named `io.github.eschizoid.telescope.mapper.<Source>.<Target>`, with simple
+class names. With the JDK's default backend, `System.Logger` writes to `java.util.logging`, where `TRACE` maps to
+`FINER`. The handler needs a low enough level as well, as in this `logging.properties`:
 
 ```properties
-# logging.properties — the zero-dependency JDK default
+handlers = java.util.logging.ConsoleHandler
+java.util.logging.ConsoleHandler.level = FINER
 io.github.eschizoid.telescope.mapper.Order.OrderDto.level = FINER
 ```
 
-The same facade reaches any backend through its own level syntax — Logback
-(`<logger name="…mapper.Order.OrderDto" level="TRACE"/>`) or Spring Boot (`logging.level.…=TRACE`).
+[docs/introspection.md](../../docs/introspection.md) covers the Spring Boot and Logback settings.
 
-MapStruct's generated `OrderMapStructMapperImpl` is opaque: to see what it mapped you read generated source; to see
-values at runtime you instrument it by hand. telescope makes both first-class — structure you can assert on, values you
-can flip on.
+## When MapStruct is the right pick
 
-> This slice's own tests prove the point: every act narrates what it proves through `System.Logger`. Run
-> `./gradlew :examples:mapstruct-vs-telescope:test` and read the walkthrough, not just the green ticks.
+MapStruct is the better fit in some cases, and the root README's
+[comparison](../../README.md#when-mapstruct-is-the-right-pick) lists them:
 
----
-
-## Where MapStruct is still the right call
-
-Being fair is the point of a reproducible comparison:
-
-- **Mature ecosystem and IDE tooling** — MapStruct has years of plugins, docs, and community answers behind it.
-- **Pure compile-time generation everywhere** — telescope's runtime path uses reflection (its `@Focus` / `@Bridge`
-  codegen path is reflection-free, but it's opt-in); MapStruct generates code for every mapping by default.
-- **`jakarta` validation accumulates too** — if your only need is "collect all invalid fields," `Validator.validate()`
-  already returns the whole set. telescope's edge there is _cohesion_ (validation threaded through the same typed pass),
-  not raw capability — so it's intentionally left out of this head-to-head.
-
-What telescope changes is narrower and sharper: your mappings are **refactor-safe by construction**, and the same typed
-path keeps working when you step past mapping into reading and updating the immutable graph.
-
----
-
-_Run `./gradlew :examples:mapstruct-vs-telescope:test` — every claim here is a passing test or a one-command
-reproduction._
+- You need mapping bodies written in an embedded expression language, such as `@Mapping(expression = "java(...)")`, or
+  qualifier dispatch. Telescope takes plain Java mappers passed to `Mapping.via(...)` instead.
+- You need `@SubclassMapping` across hierarchies that are open rather than sealed. Telescope's `Match` covers sealed
+  roots.
+- Conversion is the whole job, with no path reuse or deep updates, and your team treats readable generated mapper source
+  as a feature.

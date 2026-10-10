@@ -5,7 +5,7 @@
 ## Context
 
 Entity-to-DTO mapping is the most common reason a team adopts a mapper, and it is where a mapper meets the persistence
-provider's own collection and proxy types. Three behaviours decide whether a mapping is safe on a JPA entity:
+provider's own collection and proxy types. Three behaviors decide whether a mapping is safe on a JPA entity:
 
 - **Lazy collections.** A same-typed container component is copied rather than shared with the source. Copying iterates
   the source, so a lazy `@OneToMany` backed by a provider collection (`PersistentBag`, `PersistentSet`) is loaded from
@@ -21,8 +21,8 @@ provider's own collection and proxy types. Three behaviours decide whether a map
   cascade=all-delete-orphan was no longer referenced"). The safe write clears the managed instance and adds the new
   elements to it.
 
-None of this belongs in core, which carries no persistence dependency, except the patch behaviour, which is a property
-of writing into any existing mutable container rather than of JPA.
+None of this belongs in core, which carries no persistence dependency, except the patch behavior, which is a property of
+writing into any existing mutable container rather than of JPA.
 
 ## Decision
 
@@ -40,7 +40,7 @@ rather than a provider, so it serves Hibernate and EclipseLink alike.
 3. **Starter wiring.** The Spring Boot starter and the Quarkus extension register the module when `jakarta.persistence`
    is on the classpath, as they already register mappers.
 
-The patch behaviour stays in core: writing a same-typed container into a target that already holds a mutable instance
+The patch behavior stays in core: writing a same-typed container into a target that already holds a mutable instance
 clears and refills that instance instead of replacing it. Whether `patch` does this today is checked before this module
 is built, and fixed in core if it does not.
 
@@ -61,12 +61,12 @@ live concurrent view or a very large container on a hot path.
 - **A Hibernate-specific module.** Rejected: the lazy-load and proxy questions are answerable through the Jakarta
   Persistence API, and a provider-specific module would exclude EclipseLink users for no gain.
 - **Keep everything in core behind optional class loading**, as the proxy accessors are today. Rejected: it grows a
-  provider-specific branch in core for each behaviour and keeps the native-image exception.
+  provider-specific branch in core for each behavior and keeps the native-image exception.
 - **Rely on `share(...)` alone.** Rejected as the only answer: it makes every entity mapper opt out field by field,
   which is the MapStruct `ignore = true` pattern in typed form rather than an improvement on it.
 
 ## Open questions
 
-- The exact SPI shape in `ContainerCopy`, settled once the same-typed copy behaviour is on main.
+- The exact SPI shape in `ContainerCopy`, settled once the same-typed copy behavior is on main.
 - Whether `PersistenceUtil.isLoaded` is cheap enough per call on the hot path, measured with the `Benchmarks` workflow
   against a control before the policy is enabled by default.

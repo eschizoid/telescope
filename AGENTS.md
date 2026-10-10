@@ -32,7 +32,7 @@ verifies mapper pairings at compile time. Read the mantras before the module map
 7. **A test that cannot fail is not a test.** Before claiming a test guards a change, revert the change and watch it go
    red. The trap is an assertion that holds on both sides: a container rebuild has the same size and contents whether or
    not its table was sized correctly, and a filtered read whose match sits at the last element costs the same whether it
-   stops there or walks the whole tree. Choose the input where the two behaviours actually diverge.
+   stops there or walks the whole tree. Choose the input where the two behaviors actually diverge.
 
 ## Writing conventions
 
@@ -46,7 +46,7 @@ verifies mapper pairings at compile time. Read the mantras before the module map
   `spotlessApply` will reflow anything else and `spotlessCheck` will fail the build. PR and issue bodies are the
   opposite: one line per paragraph, because GitHub's comment renderer turns a single newline into a line break. Commit
   messages wrap at ~72 columns, since they are read in terminals.
-- **No bug or issue numbers in source comments.** Describe the behaviour in its own terms; cross-references live in the
+- **No bug or issue numbers in source comments.** Describe the behavior in its own terms; cross-references live in the
   PR body and the release notes. There is no `CHANGELOG.md` — JReleaser generates the notes for each release
   (`preset.set("conventional-commits")` in the root `build.gradle.kts`). The preset categorises on the **subject**
   alone, so the subject of a squash merge decides which section a change lands under and how it reads. A subject whose
@@ -402,8 +402,8 @@ framework's native bean discovery. Three symmetric classes per module:
 | `TelescopeProducer`       | `TelescopeAutoConfiguration` | Collects every `Mapper<?, ?>` bean visible to the container, builds the registry.                      |
 | `TelescopeConfig`         | `TelescopeProperties`        | `telescope.registry.fail-fast` (default `true`); Spring also binds `telescope.default-write-strategy`. |
 
-Duplicate `(srcClass, tgtClass)` pairs throw `IllegalStateException` at construction — qualify and inject directly if
-two mappers genuinely share a pair.
+Duplicate `(srcClass, tgtClass)` pairs throw `IllegalStateException` at construction, and a qualifier doesn't avoid it,
+because the registry collects every `Mapper` bean. Keep one `Mapper` bean per pair.
 
 **Quarkus specifics.** `@ApplicationScoped` registry; `TelescopeProducer` uses ArC's `@All List<Mapper<?, ?>>`
 collector; `TelescopeConfig` is `@ConfigMapping(prefix = "telescope")`. Jar ships a pre-built `META-INF/jandex.idx` to
@@ -537,7 +537,7 @@ Proven optic types (Haskell `lens` → Scala Monocle → Arrow Optics) inside; o
 `Telescope.of(...).each(...).field(...)` without ever naming Affine / Lens / Prism. Effectful update, indexed
 traversals, and codegen each extend `internal/optics` and surface new methods on `Telescope`; none requires a core
 rewrite. Tested at both layers: `OpticLawsTest` in `:internal` proves the optic laws, the `:core` suites prove DSL
-behaviour.
+behavior.
 
 ---
 

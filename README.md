@@ -86,11 +86,11 @@ name fields with strings. Its entries, e.g. `@Rename` and `@Compute`, take field
 a name that isn't a field of the class as a compile error. `@FromMap(required = ...)` also takes strings, which name map
 keys.
 
-The [head-to-head module](examples/mapstruct-vs-telescope/) tests MapStruct's default-policy unmapped-target case. The
-rename failures can't be passing tests, because a rename has to be applied by hand to show them. The module documents
-them as manual steps instead, and the IDE plugin's behavior is cited from its documentation.
+The [head-to-head module](examples/mapstruct-vs-telescope/) tests MapStruct's default-policy unmapped-target case. A
+rename failure can't be a passing test, because the rename has to be applied by hand to show it, so the module describes
+the rename as a manual step.
 
-## Runtime and generated mappers give the same result on container shapes
+## Runtime and generated mappers are tested to give the same result
 
 Telescope can run the same mapping in two ways. A runtime mapper, built by `Telescope.mapper(...)`, does the conversion
 while the program runs, with no annotations and no build step. Putting `@Bridge(Target.class)` on the source type makes
@@ -110,18 +110,34 @@ InvoiceDto viaMapper = Telescope.mapper(Invoice.class, InvoiceDto.class).forward
 InvoiceDto viaBridge = InvoiceBridge.BRIDGE_FN.forward(invoice);
 ```
 
-A test holds the two kinds of mapper to the same result on container shapes and on how a target is constructed.
-`CrossPathCorpusTest` crosses container families with element shapes and runs one input through each kind for every
-cell. It fails when the two disagree. It runs as part of `./gradlew check`, which is what CI runs. Its container grid
-has no recorded disagreements. Renames, null strategies, and defaults aren't cross-checked by it.
+Two tests run the same input through both kinds of mapper and fail when they disagree. `CrossPathCorpusTest` covers
+container shapes, how a target is constructed, same-typed container copies, object graphs that lead back to an object
+being converted, `patch`, and enum pairs. `BeanRebuildCorpusTest` covers the ways a bean target can be built. Both run
+as part of `./gradlew check`, which is what CI runs. Renames, null strategies, and defaults aren't cross-checked by
+them.
 
-Two known differences are recorded in tests, each with its direction. In `CrossPathCorpusTest`, a target reachable only
-through a private constructor is built at run time. The processor refuses it when `@Bridge`'s `writeStrategy` asks for
-setters or for a constructor. Also in `CrossPathCorpusTest`, a container class whose no-argument constructor is
-package-private or protected is built at run time, and the processor refuses it when the bridge is generated into a
-different package from the class, because generated code there cannot call that constructor. Both the package-private
-and the protected case are tested. Each test also fails the build when a recorded difference goes away, so the list
-stays accurate.
+The tests record each known difference between the two paths, and they fail when a recorded difference goes away, so the
+list stays accurate.
+
+### Built at run time, refused by the processor
+
+- A target reachable only through a private constructor is built at run time. The processor refuses it when `@Bridge`'s
+  `writeStrategy` asks for setters or for a constructor.
+- A container class whose no-argument constructor is package-private or protected is built at run time. The processor
+  refuses it when the bridge is generated into a different package from the class, because generated code there can't
+  call that constructor.
+- A bean whose builder has no method for a `final` field with no initializer is built at run time, and the value is
+  lost. The processor refuses it.
+
+### Built by the generated path, refused at run time
+
+- A bean built through a constructor whose parameters are named after its properties converts on the generated path. The
+  runtime mapper refuses it unless the bean was compiled with `-parameters`, because it matches the arguments by
+  parameter name.
+- `patch` on two sealed roots returns a new object from a generated bridge, which dispatches on the case. The runtime
+  mapper refuses it with an `UnsupportedOperationException` that names the root.
+- A nested pair can carry its own `@Bridge` with a `@Transform` or with `lenient = true`. An enum pair below it compiles
+  on the generated path. The runtime mapper refuses it unless you give it a row for the nested pair.
 
 ## Unconvertible fields are refused
 
@@ -146,21 +162,25 @@ Same-typed JDK collections are copied rather than shared, so changing the target
 
 ## Measured performance
 
-On the latest run, the `BRIDGE_FN` constant that the `@Bridge` sample above calls ran at the same speed as MapStruct on
-flat, at 0.99 times its time on deep, and at 1.02 on nested. The composable `BRIDGE.read` value took 1.08 times
-MapStruct's time forward on flat, 1.06 on nested, and up to 1.11 on the Map field. Backward it ran faster than MapStruct
-on nested, deep and the Set field. Telescope's generated mappers allocated the same bytes per call as MapStruct on every
-row.
+On the latest run, each call shape of the generated mapper ran close to MapStruct's time on every tier.
+
+- Forward, from the source bean to the target record, the `BRIDGE_FN` constant that the `@Bridge` sample above calls
+  took 1.00 to 1.01 times MapStruct's time on flat, 1.02 on nested, and 0.99 on deep.
+- Forward, the composable `BRIDGE.read` value took 1.08 times MapStruct's time on flat, 1.06 on nested, 0.99 to 1.00 on
+  deep, 1.05 on the Set field, and 0.99 to 1.11 on the Map field.
+- Backward, from the record to the bean, `BRIDGE.set` took 1.05 times MapStruct's time on flat and 1.09 on the Map
+  field. It took less time than MapStruct on nested, deep, and the Set field, at 0.87, 0.96, and 0.97.
+- Telescope's generated mappers allocated the same bytes per call as MapStruct on every row.
 
 <!-- metrics: from MapStructComparisonBenchmark, Actions run 38008688244 -->
 
-| Tier, generated mapper against MapStruct | forward, `BRIDGE_FN` | forward, `BRIDGE.read` | backward, `BRIDGE.read` | bytes per call, both sides |
-| ---------------------------------------- | -------------------- | ---------------------- | ----------------------- | -------------------------- |
-| flat, 5 scalars                          | 1.00 to 1.01 times   | 1.08 times             | 1.05 times              | 32                         |
-| nested, one nested type                  | 1.02 times           | 1.06 times             | 0.87 times              | 48                         |
-| deep, 3 levels and list hops             | 0.99 times           | 0.99 to 1.00 times     | 0.96 times              | 376                        |
-| Map field, 100 entries                   | not measured         | 0.99 to 1.11 times     | 1.09 times, see below   | 7,528                      |
-| Set field, 100 entries                   | not measured         | 1.05 times, see below  | 0.97 times              | 7,576 forward, 7,544 back  |
+| Tier, generated mapper against MapStruct | forward, `BRIDGE_FN` | forward, `BRIDGE.read` | backward, `BRIDGE.set` | bytes per call, both sides |
+| ---------------------------------------- | -------------------- | ---------------------- | ---------------------- | -------------------------- |
+| flat, 5 scalars                          | 1.00 to 1.01 times   | 1.08 times             | 1.05 times             | 32                         |
+| nested, one nested type                  | 1.02 times           | 1.06 times             | 0.87 times             | 48                         |
+| deep, 3 levels and list hops             | 0.99 times           | 0.99 to 1.00 times     | 0.96 times             | 376                        |
+| Map field, 100 entries                   | not measured         | 0.99 to 1.11 times     | 1.09 times, see below  | 7,528                      |
+| Set field, 100 entries                   | not measured         | 1.05 times, see below  | 0.97 times             | 7,576 forward, 7,544 back  |
 
 The table comes from GitHub Actions run 38008688244 on `main` at `35caef83`, using the included JMH workloads with
 MapStruct 1.6.3 on JDK 25. The run used 4 forks of 8 measured iterations each. MapStruct's own rows are the control, so
@@ -183,7 +203,7 @@ grows while the ratio falls.
 Flat, nested, and deep conversions take well under a microsecond with both kinds of mapper. The 100-entry container rows
 take more than one with both. Read the tier that matches your shape. You can reproduce any of it from the
 [`Benchmarks`](.github/workflows/benchmarks.yaml) GitHub Action. The full matrix is in
-[`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison-apples-to-apples).
+[`benchmarks/README.md`](benchmarks/README.md#mapstruct-comparison).
 
 ---
 
@@ -226,7 +246,7 @@ build time, by design.
 | Sealed-root dispatch              | `Match.of(...).when(...).exhaustive()`, checked over the permits   | `@SubclassMapping`, broader hierarchies, no sealed check             |
 | Multi-source merge, many to one   | `Telescope.merge(Target.class, from(...), ...)`                    | first-class multi-source methods, disambiguated by string            |
 | No codegen required               | `Telescope.of(Class)`, with `@Focus` as a later opt-in             | compile-time only                                                    |
-| GraalVM native-image              | codegen needs no config, and runtime mappers work there too        | fully AOT-compatible for codegen, with no runtime mapper to need it  |
+| GraalVM native-image              | `@Bridge` code needs no config, and runtime mappers work there too | fully AOT-compatible for codegen, with no runtime mapper to need it  |
 
 The [coverage matrix](docs/mapstruct-parity.md) scores 29 MapStruct features against telescope. It rates 13 as covered
 fully and 16 as covered partially. Each partial row states its limitation, and every verdict cites the source and tests
@@ -331,12 +351,19 @@ annotations that the `telescope-codegen` processor reads. `@Focus` and `@BeanFoc
 method calls. `@Bridge` generates a conversion as plain Java for a known pair. The codegen guide is
 [docs/codegen.md](docs/codegen.md).
 
-`Telescope.mapper(...)` returns a `Mapper`, which has `forward`, `backward`, and `patch`. `patch(base, partial)` returns
-a copy of `base` with the partial's non-null reference fields, and all of its primitive fields, written over it. The
-copy is a new object even when the partial is null or holds nothing but nulls, so changing it never changes `base`. It
-is shallow: a field the partial leaves null holds the same object `base` holds. `Telescope.map(...)` takes the same rows
-and returns a `Telescope` path instead. A conversion that runs in both directions composes into a longer path with
-`.then(...)`.
+`Telescope.mapper(...)` returns a `Mapper`, which has `forward`, `backward`, and `patch`. `Telescope.map(...)` takes the
+same rows and returns a `Telescope` path instead. A conversion that runs in both directions composes into a longer path
+with `.then(...)`.
+
+`patch(base, partial)` returns a copy of `base` with the partial's non-null reference fields, and all of its primitive
+fields, written over it. The copy is a new object even when the partial is null or holds nothing but nulls, and only a
+null `base` gives `null`. The copy is shallow. A field the partial leaves null holds the same object that `base` holds,
+so a change to that nested object or container through the copy also shows in `base`. Some mappers refuse `patch` with
+an `UnsupportedOperationException`:
+
+- a mapper whose source is an enum, or a class no write strategy can build, such as a sealed interface
+- a mapper from `liftList`, `liftSet`, `liftOptional`, or `liftMapValues`, whose source is a container with no fields
+- a mapper from `Telescope.merge`, which only runs forward
 
 Rows handle the cases that same-name matching can't. A field with a different name gets a
 `Mapping.to(srcAccessor, tgtAccessor)` row. A class whose write strategy isn't detected gets a
@@ -476,9 +503,14 @@ final Company cleaned = normalize.apply(company);
 ```
 
 The two edits above touch different fields of the same root, so the fold rebuilds that root once instead of twice. Edits
-that share a longer prefix save more, because their shared steps are walked once. Edits run one after another on a path
-that doesn't record its steps, such as a path built by `then(...)`, by `Telescope.lens(...)`, or by a generated
-navigator.
+that share a longer prefix save more, because their shared steps are walked once. Paths from a generated navigator fuse
+the same way, with each other and with hand-written paths through the same fields.
+
+The fold runs its edits one after another instead when a path doesn't record its steps, as in these cases:
+
+- a path built by `Telescope.lens(...)` or `fieldByName(...)`
+- a path that goes through `observe(...)`, a bridge, or a mapper's `asTelescope()`
+- a `then(...)` join where either side is one of the paths above
 
 ### Mapping
 
@@ -510,7 +542,15 @@ final Company restored = dtoMapper.backward(dto); // the same row list, run in r
 ```
 
 You only name what changes. Same-name fields map automatically, including nested ones. `User::email`, `User::age`, and
-all the list and tree wiring need no rows.
+all the list and tree wiring need no rows. Two different enum types convert by constant name with no row. A strict
+mapper needs the same constant names on both sides, while `mapperForward(...)` and `@Bridge(lenient = true)` only need
+every source constant to exist in the target. Any other enum pair is refused when the mapper is built, or at compile
+time for `@Bridge`, with a message that names the missing constants.
+
+An object graph can lead back to an object that is still being converted, as when an employee's manager lists the
+employee among their reports. Telescope maps such a back-reference to `null`, on the runtime and the generated path
+alike, so the conversion ends. An object reached along two separate branches isn't a cycle, and it's converted once for
+each branch.
 
 The same row list also runs backward for the rows that can be reversed. In MapStruct, the reverse direction is a second
 method on the same interface. `@InheritInverseConfiguration` copies eligible configuration from the forward method, but
@@ -539,7 +579,7 @@ level of the pair.
 ```java
 dtoMapper.explain();
 // Mapped:
-//   ✓ name                                       → name
+//   ✓ name                                    → name
 //
 // Transformations:
 //   • departments(java.util.List<Department>) → java.util.List<DepartmentDto>
@@ -554,10 +594,10 @@ values, and a log level can narrate every conversion. [docs/introspection.md](do
 
 A field whose declared type is the same on both sides is handed across as the same instance, with some exceptions. A
 `List`, `Set`, `Map`, or other JDK collection gets a shallow copy instead. The copy happens forward, backward, and in
-`patch` for a container the partial supplies; a container the partial leaves null is the one `base` holds. Changing the
-target's container then never changes the source's. Arrays aren't copied, so the target holds the source's array. A
-field declared as your own collection class, such as `class Urls extends ArrayList<String>`, is handed across as it is
-too.
+`patch` for a container the partial supplies, while a container the partial leaves null is the one `base` holds. Adding
+to or removing from the target's container then never changes the source's. Arrays aren't copied, so the target holds
+the source's array. A field declared as your own collection class, such as `class Urls extends ArrayList<String>`, is
+handed across as it is too.
 
 The copy keeps the source's order, including a sorted set's comparator. It never creates an instance of a class
 telescope doesn't know, such as a framework's own collection.
@@ -659,11 +699,10 @@ asks for. The difference is where a per-key conversion goes. Telescope takes it 
 
 ### Spring Boot starter
 
-`telescope-spring-boot-starter` does two things. It collects every `Mapper<A, B>` bean into a `TelescopeMapperRegistry`,
-so you can look a mapper up by its source and target class. And with the starter on the classpath, the
-`telescope-codegen` annotation processor turns an annotated interface into a Spring bean: `@TelescopeMapper` gives you
-an injectable mapper, and `@TelescopeTransformer` gives you a reusable clean-up step that a mapper runs on the source
-before it maps.
+`telescope-spring-boot-starter` collects every `Mapper<A, B>` bean into a `TelescopeMapperRegistry`, so you can look a
+mapper up by its source and target class. With the starter on the classpath, the `telescope-codegen` annotation
+processor also turns an annotated interface into a Spring bean. `@TelescopeMapper` gives you an injectable mapper, and
+`@TelescopeTransformer` gives you a reusable clean-up step that a mapper runs on the source before it maps.
 
 In the example below, `CustomerEmailTransformer` cleans an email, and `CustomerProjection` maps a `CustomerEntity` to a
 `CustomerRestDto` after running that transformer. The processor writes both implementations, so the service only injects
@@ -704,9 +743,8 @@ class CustomerService {
 ```
 
 `map` runs the listed transformers in order, then maps. A null email becomes `"unknown@example.com"`, a non-null one is
-trimmed and lowercased, and the entity itself is not changed. Transformers run only in this direction; `backward` does
-not run them. A projection is injected directly and is not added to the registry, because it is not a `Mapper`. For
-fields with different names, add typed translation rows.
+trimmed and lowercased, and the entity itself is not changed. A projection is injected directly and is not added to the
+registry, because it is not a `Mapper`. For fields with different names, add typed translation rows.
 
 ```java
 record AccountEntity(String displayName, String phoneNumber) {}
@@ -725,38 +763,43 @@ interface AccountMapper extends TelescopeProjection<AccountEntity, AccountRestDt
 }
 ```
 
-The generated Spring bean also has `forward`, `backward`, and `patch`. Transformers run only on the way forward. To
-register transformers from configuration, declare a typed `TelescopeCustomizer<AccountMapper>` bean, with no bean names
-involved. The [Spring starter guide](spring-boot-starter/README.md) covers both forms and their Spring wiring.
+The generated Spring bean also has `forward`, `backward`, and `patch`. Transformers run on `map` and `forward` only, and
+`backward` and `patch` don't run them. To register transformers from configuration, declare a typed
+`TelescopeCustomizer<AccountMapper>` bean, with no bean names involved. The
+[Spring starter guide](spring-boot-starter/README.md) covers both forms and their Spring wiring.
 
 ### Quarkus
 
-`telescope-quarkus` is a Quarkus CDI extension with the same registry shape. A `Mapper<A, B>` from a `@Produces` method
-or an `@ApplicationScoped` class shows up in `TelescopeMapperRegistry` under its source and target class. The generated
-`@TelescopeMapper` beans are Spring-only for now. The [Quarkus guide](quarkus/README.md) has the setup.
+`telescope-quarkus` adds the same registry to a Quarkus application as a CDI bean. Every `Mapper<A, B>` that a
+`@Produces` method returns shows up in `TelescopeMapperRegistry` under its source and target class. The generated
+`@TelescopeMapper` and `@TelescopeTransformer` beans exist only for Spring. The [Quarkus guide](quarkus/README.md) has
+the setup.
 
 ### Lombok
 
-`telescope-lombok` is a Lombok-aware variant of the annotation processor. It finds `@Data`, `@Value`, and `@Builder`
-POJOs on its own. For each one it emits the same typed navigator that `@Focus` gives a record. It has to come after
-Lombok in the processor list, which the [Lombok guide](lombok/README.md) and [docs/codegen.md](docs/codegen.md) explain.
+`telescope-lombok` is a Lombok-aware variant of the annotation processor. It finds classes with `@Data`, `@Value`, or
+`@Builder` on its own, and for each one it generates the same typed navigator that `@Focus` gives a record. It waits
+until Lombok has added a class's getters, setters, and builder before it generates the navigator, so its place on the
+processor path doesn't matter. The [Lombok guide](lombok/README.md) has the setup.
 
 ### Native image
 
 Runtime mappers and typed paths work inside a GraalVM native image, so `Telescope.mapper(...)` and `.field(User::name)`
-run there with no build step. Generated code from MapStruct and from telescope is free of reflection. Both build under
-native-image with no configuration.
+run there with no build step. You register your own types the way you would in any GraalVM application. A runtime
+mapper's types go in `reflect-config.json`, and a class that passes method references such as `User::name` goes in
+`serialization-config.json`, because telescope reads the field name from the method reference. Code generated by
+`@Bridge` and `@FromMap` needs no configuration. A navigator generated by `@Focus` or `@BeanFocus` builds its paths from
+method references, so the navigator class goes in `serialization-config.json` too.
 
-Inside an image, telescope swaps its `LambdaMetafactory` accessors for plain `MethodHandle` closures.
-`LambdaMetafactory` defines classes at run time, and native-image forbids that. One `static final boolean` picks the
-branch. `telescope-core` carries its own native-image metadata. You register your own DTO types the way you would in any
-GraalVM application.
+Inside an image, telescope swaps its `LambdaMetafactory` accessors for plain `MethodHandle` closures, because
+`LambdaMetafactory` defines classes at run time and native-image forbids that. One `static final boolean` picks the
+branch. `telescope-core` carries its own native-image metadata.
 
 CI checks native-image support in two ways. The `:core:imageTest` and `:internal:imageTest` tasks re-run each module's
 whole suite with the `imagecode` property set. Every existing assertion then runs on the code an image uses, and both
-tasks are part of `check`. A verifier covering nine capabilities also compiles and runs as a native binary. It runs on
-every push to `main` that touches the substrate, and weekly. Setup and limits are in
-[`docs/native-image.md`](docs/native-image.md).
+tasks are part of `check`. A verifier covering eleven capabilities also compiles and runs as a native binary. It runs on
+every push to `main` that changes `core`, `internal`, `codegen`, or the GraphQL example, and every week. Setup and
+limits are in [`docs/native-image.md`](docs/native-image.md).
 
 ---
 
@@ -782,19 +825,19 @@ Start with [`order-jpa/`](examples/springboot/order-jpa/) for the broadest view.
 
 Everything is published to Maven Central under `io.github.eschizoid`.
 
-| Artifact                        | Role                                                                                                                                                                                                                                                              |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `telescope-core`                | The DSL, meaning `Telescope`, `Mapper`, `Mapping`, `Either`, `Validated`, and the annotations. Add this one for typed paths and runtime mappers.                                                                                                                  |
-| `telescope-internal`            | The optic lattice and reflection helpers. Transitive only, so it arrives automatically. A consumer that is itself a JPMS module can't compile against it, because the exports are qualified to `:core`. A classpath consumer can reach it and shouldn't.          |
-| `telescope-codegen`             | The optional annotation processor for `@Focus`, `@BeanFocus`, `@Bridge`, and `@FromMap`, described in [docs/codegen.md](docs/codegen.md). It also registers the mapper verifier, which runs on every compilation and is turned off with `-Atelescope.verify=off`. |
-| `telescope-lombok`              | A Lombok-aware variant of the processor, for `@Data`, `@Value`, and `@Builder` POJOs.                                                                                                                                                                             |
-| `telescope-spring-boot-starter` | Spring Boot autoconfiguration plus a `Mapper<A, B>` bean registry. Compiled and CI-tested against Spring Boot 4.1.1.                                                                                                                                              |
-| `telescope-quarkus`             | A Quarkus CDI extension with the same registry shape. Compiled and CI-tested against Quarkus 3.40.1.                                                                                                                                                              |
+| Artifact                        | Role                                                                                                                                                                                                                                                                          |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `telescope-core`                | The DSL, meaning `Telescope`, `Mapper`, `Mapping`, `Either`, `Validated`, and the annotations. Add this one for typed paths and runtime mappers.                                                                                                                              |
+| `telescope-internal`            | The optic lattice and reflection helpers. Transitive only, so it arrives automatically. A consumer that is itself a JPMS module can't compile against it, because its packages are exported only to telescope's own modules. A classpath consumer can reach it and shouldn't. |
+| `telescope-codegen`             | The optional annotation processor for `@Focus`, `@BeanFocus`, `@Bridge`, and `@FromMap`, described in [docs/codegen.md](docs/codegen.md). It also registers the mapper verifier, which runs on every compilation and is turned off with `-Atelescope.verify=off`.             |
+| `telescope-lombok`              | A Lombok-aware variant of the processor, for `@Data`, `@Value`, and `@Builder` POJOs.                                                                                                                                                                                         |
+| `telescope-spring-boot-starter` | Spring Boot autoconfiguration and a `Mapper<A, B>` bean registry. With it on the classpath, `telescope-codegen` writes the `@TelescopeMapper` beans. Tested against Spring Boot 4.1.1.                                                                                        |
+| `telescope-quarkus`             | The same registry as a Quarkus CDI bean. Built against Quarkus 3.40.1, with unit tests of the registry.                                                                                                                                                                       |
 
-Installation snippets, annotation-processor ordering with Lombok, and JPMS setup are in
-[docs/codegen.md](docs/codegen.md). On the module path, typed paths and runtime mappers work on an application module's
-types once that module opens their package to `io.github.eschizoid.telescope.internal`. An unqualified `opens` works
-too. Telescope adds the read edge to the application module itself.
+Installation snippets, Lombok on the processor path, and JPMS setup are in [docs/codegen.md](docs/codegen.md). On the
+module path, typed paths and runtime mappers work on an application module's types once that module opens their package
+to `io.github.eschizoid.telescope.internal`. An unqualified `opens` works too. Telescope adds the read edge to the
+application module itself.
 
 ---
 
@@ -829,11 +872,21 @@ types of every method reference. Building a path then runs checks right away. Th
 strategies, and mapper rows. The late-bound entry points are `.fieldByName(String)` and its `Class<B>` overload. Their
 names say so, and they resolve at first use.
 
-Structural mapping is exact. Same-name matching is exact on name and type, recursively. There is no fuzzy matching and
-no implicit conversion between `String` and numbers. Any conversion like that is a row you write.
+Structural mapping is exact. Same-name matching pairs fields by exact name, recursively, and there is no fuzzy matching.
+Without a row, a pair of fields converts only in these cases:
 
-Null handling is uniform. Null containers and null `Optional` fields focus nothing. Null steps in the middle of a path
-propagate on reads, and `forward(null)` returns `null`. The full table is in [docs/navigation.md](docs/navigation.md).
+- the two types are the same, or one is a primitive and the other its wrapper
+- one is an `Optional` and the other a nullable value
+- the two are records or beans that map, or containers of the same kind whose elements convert
+- the two are enums with matching constant names
+
+There is no implicit conversion between `String` and numbers, between an enum and a `String`, or between dates and
+strings. Any conversion like that is a row you write.
+
+Null handling is uniform. Null containers and null `Optional` fields focus nothing. A null value in the middle of a path
+also focuses nothing, so `find` returns an empty `Optional`, `toList` returns an empty list, and `read` throws
+`NoSuchElementException`. A mapper's `forward(null)` and `backward(null)` return `null`. The full table is in
+[docs/navigation.md](docs/navigation.md).
 
 Telescope isn't a general transformation language. One path focuses one type. Bulk edits of different types go through
 `Telescope.all` with one edit per path.
@@ -857,8 +910,8 @@ why the lattice is hidden and what the codegen emits.
 
 ```bash
 ./gradlew build          # everything: core, internal, codegen, lombok, the starters, and the examples
-./gradlew :core:test     # the DSL surface
-./gradlew check          # adds the formatting gate and the AOT-substrate suite runs
+./gradlew check          # what CI runs: every test suite, the formatting gate, and the native-image suite runs
+./gradlew :core:test     # the DSL surface only
 ./gradlew :benchmarks:jmh -Pjmh.includes=MapStructComparisonBenchmark   # the head-to-head numbers
 ```
 
