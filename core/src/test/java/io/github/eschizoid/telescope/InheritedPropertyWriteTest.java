@@ -108,16 +108,20 @@ class InheritedPropertyWriteTest {
   @Test
   @DisplayName("Telescope.all fuses a runtime path through an inherited property with a navigator path")
   void fusesARuntimeInheritedPathWithANavigatorPath() {
-    final var name = over(Telescope.ofBean(InheritNamedLeaf.class).field(InheritNamedLeaf::getName), String::toUpperCase);
+    final var runtimeName = over(
+      Telescope.ofBean(InheritNamedLeaf.class).field(InheritNamedLeaf::getName),
+      String::toUpperCase
+    );
+    final var navigatorName = over(InheritNamedLeafTelescope.of().name(), (final String s) -> s + "!");
     final var size = over(InheritNamedLeafTelescope.of().size(), (final Integer n) -> n + 1);
-    assertNotNull(fuse(name, size));
+    assertNotNull(fuse(runtimeName, navigatorName, size));
     final var source = leaf("ann", 3);
-    final var fused = Telescope.all(name, size).apply(source);
-    final var sequential = size.apply(name.apply(source));
+    final var fused = Telescope.all(runtimeName, navigatorName, size).apply(source);
+    final var sequential = size.apply(navigatorName.apply(runtimeName.apply(source)));
     assertSame(InheritNamedLeaf.class, fused.getClass());
     assertEquals(sequential.getName(), fused.getName());
     assertEquals(sequential.getSize(), fused.getSize());
-    assertEquals("ANN", fused.getName());
+    assertEquals("ANN!", fused.getName());
     assertEquals(4, fused.getSize());
   }
 }
