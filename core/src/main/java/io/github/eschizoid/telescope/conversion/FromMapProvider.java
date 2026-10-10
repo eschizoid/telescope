@@ -42,9 +42,7 @@ public interface FromMapProvider {
     throw new UnsupportedOperationException(
       "a FromMapProvider that does not override binder() cannot build " +
         targetType().getName() +
-        "; recompile " +
-        targetType().getSimpleName() +
-        " with the current telescope-codegen"
+        "; regenerate its binder with the current telescope-codegen, or implement both binder() and required()"
     );
   }
 
@@ -54,7 +52,8 @@ public interface FromMapProvider {
    * {@code Telescope.fromMap} over the same type refuses the maps the binder refuses.
    *
    * <p>A provider that does not override this method cannot say which keys are required, so a
-   * runtime {@code fromMap} over its type refuses while the mapper is built.
+   * runtime {@code fromMap} over its type that reads any component by its own name refuses while
+   * the mapper is built. One whose rows all read other keys never asks.
    *
    * @throws UnsupportedOperationException when the provider does not override it
    */
@@ -62,9 +61,8 @@ public interface FromMapProvider {
     throw new UnsupportedOperationException(
       "a FromMapProvider that does not override required() cannot say which keys " +
         targetType().getName() +
-        " requires; recompile " +
-        targetType().getSimpleName() +
-        " with the current telescope-codegen"
+        " requires; regenerate its binder with the current telescope-codegen, or implement both binder() and" +
+        " required()"
     );
   }
 }

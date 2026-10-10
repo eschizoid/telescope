@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.frommapparity;
 import static io.github.eschizoid.telescope.mapping.MapExtractStep.extract;
 import static io.github.eschizoid.telescope.mapping.MapExtractStep.required;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.introspection.OpticNode.Extracted;
@@ -103,12 +104,23 @@ class FromMapRequiredParityTest {
   }
 
   @Test
-  @DisplayName("a row naming a required component decides it: an extract row lets its key be absent")
-  void aRowOverridesTheDeclaredRequirement() {
+  @DisplayName("a row reading a required component's own key keeps the requirement the annotation declares")
+  void aRowReadingTheSameKeyKeepsTheDeclaredRequirement() {
+    final var runtime = Telescope.fromMap(RequiredRow.class, extract("id", RequiredRow::id, Object::toString));
+    final var refusal = assertThrows(IllegalArgumentException.class, () -> runtime.forward(Map.of("count", 3)));
+    assertEquals(
+      "Telescope.fromMap: the map carries no value for required key \"id\" (component 'id') of RequiredRow",
+      refusal.getMessage()
+    );
+  }
+
+  @Test
+  @DisplayName("a row reading another key for a required component lifts the requirement")
+  void aRowReadingAnotherKeyLiftsTheDeclaredRequirement() {
     final var runtime = Telescope.fromMap(
       RequiredRow.class,
-      extract("id", RequiredRow::id, Object::toString),
-      extract("count", RequiredRow::count, FromMapRequiredParityTest::asInt)
+      extract("identifier", RequiredRow::id, Object::toString),
+      extract("total", RequiredRow::count, FromMapRequiredParityTest::asInt)
     );
     assertEquals(new RequiredRow(null, 0, null), runtime.forward(Map.of()));
   }

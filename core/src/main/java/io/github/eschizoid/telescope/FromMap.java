@@ -47,12 +47,13 @@ final class FromMap {
   /**
    * What one component / property is filled from.
    *
-   * @param key the map key read, or null for a bean property the writer cannot set, which reads
-   *     none
+   * @param key the map key the slot answers to
    * @param converter applied to a non-null value under {@code key}
    * @param required whether a missing value refuses the source rather than defaulting
+   * @param written whether the value is converted and written; false for a bean property the writer
+   *     cannot set, whose key is at most checked for presence
    */
-  private record Slot(String key, Function<Object, Object> converter, boolean required) {}
+  private record Slot(String key, Function<Object, Object> converter, boolean required, boolean written) {}
 
   @SuppressWarnings("unchecked")
   static <T> ForwardMapper<Map<String, Object>, T> build(final Class<T> target, final MapExtractStep... rows) {
@@ -91,9 +92,15 @@ final class FromMap {
       );
     }
     final var kind = target.isRecord() ? "component" : "property";
+    // A key @FromMap(required = ...) declares is the component's own name, so it can bind only a
+    // slot that reads that name: one no row names, or a row reading the same key. A mapper whose
+    // rows all read other keys never asks the provider, which may not be able to answer.
+    final var readsOwnName = known
+      .stream()
+      .anyMatch(name -> !byField.containsKey(name) || byField.get(name).key().equals(name));
     final List<String> declaredRequired;
     try {
-      declaredRequired = FromMapCoercions.requiredOf(target);
+      declaredRequired = readsOwnName ? FromMapCoercions.requiredOf(target) : List.of();
     } catch (final UnsupportedOperationException e) {
       throw new IllegalArgumentException(
         "Telescope.fromMap: " + target.getSimpleName() + " has a registered @FromMap binder, but " + e.getMessage(),
@@ -106,7 +113,15 @@ final class FromMap {
       final var name = entry.getKey();
       final var row = byField.get(name);
       if (row != null) {
-        slots.put(name, new Slot(row.key(), (Function<Object, Object>) row.converter(), row instanceof Require<?, ?>));
+        slots.put(
+          name,
+          new Slot(
+            row.key(),
+            (Function<Object, Object>) row.converter(),
+            row instanceof Require<?, ?> || (row.key().equals(name) && declaredRequired.contains(name)),
+            true
+          )
+        );
         continue;
       }
       // A component no row names reads the key with its own name, converted as the generated
@@ -127,11 +142,12 @@ final class FromMap {
           cause
         )
       );
-      // A bean property the writer cannot set is never read: its value would be converted and
-      // dropped, and a value that does not convert would refuse a map for a property it never
-      // fills.
-      final var key = writer != null && !writer.writes(name) ? null : name;
-      slots.put(name, new Slot(key, converter, key != null && declaredRequired.contains(name)));
+      // A bean property the writer cannot set is never converted: its value would be dropped, and
+      // a value that does not convert would refuse a map for a property it never fills. A
+      // declared requirement on it still holds, as in the generated binder, so its key is checked
+      // for presence and nothing more.
+      final var written = writer == null || writer.writes(name);
+      slots.put(name, new Slot(name, converter, declaredRequired.contains(name), written));
     }
     if (writer != null) refuseUnwritableRows(target, writer, byField);
     final Function<Map<String, Object>, T> forward =
@@ -139,12 +155,12 @@ final class FromMap {
     // The slot alignment above already decided every component's fate — surface those decisions
     // as the explain() trail instead of throwing them away: one Extracted row per slot that reads a
     // key, saying which key and what an absent key does to it, and one MISSING_SOURCE skip per
-    // slot that reads none. The report is derived from the same data the forward path runs on, so
-    // it cannot drift.
+    // slot that neither is written nor requires its key. The report is derived from the same data
+    // the forward path runs on, so it cannot drift.
     final var trail = new ArrayList<OpticNode>(known.size());
     for (final var comp : known) {
       final var slot = slots.get(comp);
-      if (slot.key() == null) {
+      if (!slot.written() && !slot.required()) {
         trail.add(new OpticNode.Skipped(comp, OpticNode.Reason.MISSING_SOURCE));
         continue;
       }
@@ -217,6 +233,7 @@ final class FromMap {
     final var converters = (Function<Object, Object>[]) new Function<?, ?>[n];
     final var defaults = new Object[n];
     final var required = new boolean[n];
+    final var written = new boolean[n];
     final var indexByName = HashMap.<String, Integer>newHashMap(n);
     for (var i = 0; i < n; i++) {
       indexByName.put(propertyNames[i], i);
@@ -224,6 +241,7 @@ final class FromMap {
       keys[i] = slot.key();
       converters[i] = slot.converter();
       required[i] = slot.required();
+      written[i] = slot.written();
       final var propertyType = Beans.memberPropertyType(target, propertyNames[i]);
       defaults[i] = unfilledDefault(rawOf(propertyType), propertyType);
     }
@@ -234,7 +252,7 @@ final class FromMap {
       final Function<String, Object> valueByName = name -> {
         final var i = indexByName.get(name);
         if (i == null) return null;
-        final var value = keys[i] == null ? null : mapSrc.get(keys[i]);
+        final var value = written[i] ? mapSrc.get(keys[i]) : null;
         return value == null ? defaults[i] : converters[i].apply(value);
       };
       return writer.construct(propertyNames, valueByName);
