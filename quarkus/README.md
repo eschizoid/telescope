@@ -31,7 +31,7 @@ archive ... is being scanned without a Jandex index" warning.
 ```kotlin
 // Gradle (Quarkus 3 BOM picks up Quarkus's version)
 dependencies {
-    implementation(platform("io.quarkus.platform:quarkus-bom:3.20.0"))
+    implementation(platform("io.quarkus.platform:quarkus-bom:3.40.1"))
     implementation("io.github.eschizoid:telescope-quarkus:2.0.0")
 }
 ```

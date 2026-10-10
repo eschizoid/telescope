@@ -43,8 +43,8 @@ dependencies {
     implementation("io.github.eschizoid:telescope-core:2.0.0")
 
     // Lombok itself
-    compileOnly("org.projectlombok:lombok:1.18.42")
-    annotationProcessor("org.projectlombok:lombok:1.18.42")
+    compileOnly("org.projectlombok:lombok:1.18.48")
+    annotationProcessor("org.projectlombok:lombok:1.18.48")
 
     // Telescope's Lombok-aware codegen — must come AFTER Lombok in the processor list so
     // Lombok's AST patches have fired when telescope reads the synthesized members.
@@ -62,7 +62,7 @@ dependencies {
       <path>
         <groupId>org.projectlombok</groupId>
         <artifactId>lombok</artifactId>
-        <version>1.18.42</version>
+        <version>1.18.48</version>
       </path>
       <path>
         <groupId>io.github.eschizoid</groupId>

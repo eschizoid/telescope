@@ -657,9 +657,10 @@ asks for. The difference is where a per-key conversion goes. Telescope takes it 
 ### Spring Boot starter
 
 `telescope-spring-boot-starter` does two things. It collects every `Mapper<A, B>` bean into a `TelescopeMapperRegistry`,
-so you can look a mapper up by its source and target class. And with the `telescope-codegen` annotation processor on the
-build, it turns an annotated interface into a Spring bean: `@TelescopeMapper` gives you an injectable mapper, and
-`@TelescopeTransformer` gives you a reusable clean-up step that a mapper runs on the source before it maps.
+so you can look a mapper up by its source and target class. And with the starter on the classpath, the
+`telescope-codegen` annotation processor turns an annotated interface into a Spring bean: `@TelescopeMapper` gives you
+an injectable mapper, and `@TelescopeTransformer` gives you a reusable clean-up step that a mapper runs on the source
+before it maps.
 
 In the example below, `CustomerEmailTransformer` cleans an email, and `CustomerProjection` maps a `CustomerEntity` to a
 `CustomerRestDto` after running that transformer. The processor writes both implementations, so the service only injects
