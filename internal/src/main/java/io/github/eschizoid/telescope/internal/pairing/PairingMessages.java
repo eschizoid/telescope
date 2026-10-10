@@ -119,10 +119,10 @@ public final class PairingMessages {
   }
 
   /**
-   * A row whose target path starts at a class other than the mapper's target and cannot be started
-   * again at it, because its first step off the root is not an accessor navigation: the path starts
-   * at a lens, reaches its first property through an iso or a bridge, or writes the root value
-   * itself. Writing through such a path builds {@code root} in place of the target.
+   * A row whose target path starts at a class the mapper's target neither is, extends, nor is
+   * extended by, and that cannot be started again at the target because its first step off the root
+   * is not an accessor navigation: the path starts at a lens, reaches its first property through an
+   * iso or a bridge, or writes the root value itself. Such a path can never write the target.
    */
   public static String targetPathNotOnTarget(
     final String source,
@@ -139,10 +139,71 @@ public final class PairingMessages {
       row +
       " row's target path starts at " +
       root +
-      " and cannot be started again at " +
+      ", which " +
       target +
-      ", because its first step off the root is not an accessor navigation such as field(...)." +
+      " neither is nor extends nor is extended by, and cannot be started again at " +
+      target +
+      " because its first step off the root is not an accessor navigation such as field(...)." +
       " Start the path at " +
+      target +
+      "."
+    );
+  }
+
+  /**
+   * A {@code constant} row that replaces the mapper's target with its value, through a path started
+   * at a supertype or subtype of the target, whose value is not an instance of the target.
+   */
+  public static String targetValueOffTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String valueClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row replaces the whole " +
+      target +
+      " with a value of class " +
+      valueClass +
+      ", which is not a " +
+      target +
+      ". Use a value of class " +
+      target +
+      "."
+    );
+  }
+
+  /**
+   * A write through a row's target path, started at a supertype or subtype of the mapper's target,
+   * that returned something other than a target instance: a lens setter, iso or bridge that built
+   * another class in place of the target it was given.
+   */
+  public static String targetPathWroteOffTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String writtenClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's target path returned " +
+      writtenClass +
+      " from a write on " +
+      target +
+      ", which is not a " +
+      target +
+      ". A lens or iso started at another class must return the instance it is given, or another " +
       target +
       "."
     );

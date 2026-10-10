@@ -301,8 +301,8 @@ class MapperVerifierProcessorTest {
     }
 
     @Test
-    @DisplayName("target telescopes construction cannot start at the target are refused as construction refuses them")
-    void targetTelescopesThatCannotStartAtTheTargetAreRefused() {
+    @DisplayName("target telescopes construction is certain to refuse are refused as construction refuses them")
+    void targetTelescopesConstructionRefusesAreRefused() {
       final var compilation = verifyWithBeans(
         """
         class Other { private String name; public String getName() { return name; } public void setName(String n) { name = n; } }
@@ -313,9 +313,9 @@ class MapperVerifierProcessorTest {
           static final Object B = Telescope.mapperForward(Coded.class, Sub.class,
             compute(Telescope.of(Other.class).as(Other.class).field(Other::getName), () -> "made"));
           static final Object C = Telescope.mapperForward(Coded.class, Sub.class,
-            to(Coded::label, Telescope.lens(Base::getName, (Base b, String v) -> b)));
+            to(Coded::label, Telescope.lens(Other::getName, (Other o, String v) -> o)));
           static final Object D = Telescope.mapperForward(Coded.class, Sub.class,
-            zip(Telescope.of(Coded.class).field(Coded::label), Telescope.of(Base.class).after(b -> b).field(Base::getName)));
+            constant(Telescope.of(Other.class), new Other()));
         }
         """
       );
@@ -329,13 +329,50 @@ class MapperVerifierProcessorTest {
         compilation::errorMessages
       );
       assertTrue(
-        compilation.hasError(PairingMessages.targetPathNotOnTarget("Coded", "Sub", "to", "Base")),
+        compilation.hasError(PairingMessages.targetPathNotOnTarget("Coded", "Sub", "to", "Other")),
         compilation::errorMessages
       );
       assertTrue(
-        compilation.hasError(PairingMessages.targetPathNotOnTarget("Coded", "Sub", "zip", "Base")),
+        compilation.hasError(PairingMessages.targetPathNotOnTarget("Coded", "Sub", "constant", "Other")),
         compilation::errorMessages
       );
+    }
+
+    @Test
+    @DisplayName("target telescopes construction accepts or checks on each write are accepted")
+    void targetTelescopesConstructionAcceptsAreAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        record Coded(String code, String label) {}
+        class Holder {
+          static final Object A = Telescope.mapperForward(Coded.class, Sub.class,
+            constant(Telescope.of(Base.class).then(Telescope.of(Base.class).field(Base::getName)), "x"));
+          static final Object B = Telescope.mapperForward(Coded.class, Sub.class,
+            to(Coded::label, Telescope.lens(Base::getName, (Base b, String v) -> { b.setName(v); return b; })));
+          static final Object C = Telescope.mapperForward(Coded.class, Sub.class,
+            zip(Telescope.of(Coded.class).field(Coded::label), Telescope.of(Base.class).after(b -> b).field(Base::getName)));
+          static final Object D = Telescope.mapperForward(Coded.class, Sub.class,
+            constant(Telescope.of(Base.class), (Base) new Sub()));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a target telescope through then(...) is left to construction even on an unrelated root")
+    void thenIsLeftToConstruction() {
+      final var compilation = verifyWithBeans(
+        """
+        class Other { private String name; public String getName() { return name; } public void setName(String n) { name = n; } }
+        record Coded(String code, String label) {}
+        class Holder {
+          static final Object M = Telescope.mapperForward(Coded.class, Sub.class,
+            constant(Telescope.of(Other.class).then(Telescope.of(Other.class).field(Other::getName)), "x"));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
     }
 
     @Test
@@ -351,28 +388,6 @@ class MapperVerifierProcessorTest {
         """
       );
       assertTrue(compilation.success(), compilation::errorMessages);
-    }
-
-    @Test
-    @DisplayName(
-      "to(telescope, accessor) through a class the target does not extend is refused as construction refuses it"
-    )
-    void sourceTelescopeOntoAnUnrelatedGetterIsRefused() {
-      final var compilation = verifyWithBeans(
-        """
-        class Other { private String name; public String getName() { return name; } public void setName(String n) { name = n; } }
-        record Coded(String code, String label) {}
-        class Holder {
-          static final Object M = Telescope.mapperForward(Coded.class, Sub.class,
-            when(c -> true, to(Telescope.of(Coded.class).field(Coded::label), Other::getName)));
-        }
-        """
-      );
-      assertFalse(compilation.success());
-      assertTrue(
-        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "to", "Other", "name")),
-        compilation::errorMessages
-      );
     }
   }
 

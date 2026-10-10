@@ -11,7 +11,6 @@ import io.github.eschizoid.telescope.internal.pairing.ContainerView;
 import io.github.eschizoid.telescope.internal.pairing.PairDecision;
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PairingRules;
-import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import io.github.eschizoid.telescope.introspection.OpticNode;
 import io.github.eschizoid.telescope.mapping.Compute;
@@ -381,12 +380,16 @@ public final class DeepMap {
       //     records no root class at all.
       // In both cases the substitution lands the row on the outer (topSource, topTarget) bucket so
       // populateIso picks it up at the outermost (source, target) recursion frame only. A
-      // FromTelescopeTo row lands there too, whatever class its target accessor names: its source
-      // side already pins it to the top-level pair, so the accessor names a property of the
-      // top-level target or of a type that target extends, and writtenOnTarget refuses any other.
+      // FromTelescopeTo row whose target accessor is applied to a superclass or interface of the
+      // top-level target lands there too: that pair is never visited, and the row writes the
+      // property by name on the target's own class. Every other FromTelescopeTo row keys by its
+      // accessor's class, which may name a nested pair the recursion reaches.
       final Class<?> effectiveSource = row.sourceClass() == null ? topSource : row.sourceClass();
       final Class<?> effectiveTarget =
-        row.targetClass() == null || row instanceof FromTelescopeTo<?, ?, ?> ? topTarget : row.targetClass();
+        row.targetClass() == null ||
+        (row instanceof FromTelescopeTo<?, ?, ?> && row.targetClass().isAssignableFrom(topTarget))
+          ? topTarget
+          : row.targetClass();
       final var key = new TypePair(effectiveSource, effectiveTarget);
       grouped.computeIfAbsent(key, __ -> new ArrayList<>()).add(writtenOnTarget(row, topSource, topTarget));
     }
@@ -394,13 +397,10 @@ public final class DeepMap {
   }
 
   /**
-   * A row that writes the top-level target, bare or under {@code when}, checked against that target
-   * and, when it writes through a path, with the path started at the target: {@code constant},
-   * {@code compute}, {@code to} onto a target telescope, and {@code zip}, through {@link
-   * #targetRooted}. A {@code to} from a source telescope onto a target accessor writes the property
-   * by name on the target's own class, so it only needs the accessor to name a property of the
-   * target or of a type it extends, and is refused otherwise. Every other row is returned
-   * unchanged.
+   * A row that writes the top-level target through a path, bare or under {@code when}, with that
+   * path started at the mapper's target, checked against it, or checked on each write, through
+   * {@link #targetRooted}: {@code constant}, {@code compute}, {@code to} onto a target telescope,
+   * and {@code zip}. Every other row is returned unchanged.
    */
   @SuppressWarnings("unchecked")
   private static Mapping<?, ?> writtenOnTarget(
@@ -410,16 +410,16 @@ public final class DeepMap {
   ) {
     return switch (row) {
       case Constant<?, ?, ?> c -> new Constant<>(
-        targetRooted(c.targetTelescope(), "constant", topSource, topTarget),
+        targetRooted(c.targetTelescope(), "constant", topSource, topTarget, true, c.value()),
         (Object) c.value()
       );
       case Compute<?, ?, ?> c -> new Compute<>(
-        targetRooted(c.targetTelescope(), "compute", topSource, topTarget),
+        targetRooted(c.targetTelescope(), "compute", topSource, topTarget, false, null),
         c.supplier()
       );
       case TelescopeTo<?, ?, ?> t -> new TelescopeTo<>(
         (Telescope.Accessor<Object, Object>) t.srcAccessor(),
-        targetRooted(t.targetTelescope(), "to", topSource, topTarget)
+        targetRooted(t.targetTelescope(), "to", topSource, topTarget, false, null)
       );
       case TelescopeToTelescope<?, ?, ?> t -> new TelescopeToTelescope<>(
         (Telescope<Object, Object>) t.sourceTelescope(),
@@ -427,23 +427,12 @@ public final class DeepMap {
           t.targetTelescope(),
           t.kind() == TelescopeToTelescope.Kind.ZIP ? "zip" : "to",
           topSource,
-          topTarget
+          topTarget,
+          false,
+          null
         ),
         t.kind()
       );
-      case FromTelescopeTo<?, ?, ?> f -> {
-        final Class<?> owner = f.targetClass();
-        if (!owner.isAssignableFrom(topTarget)) throw new IllegalArgumentException(
-          PairingMessages.targetRowOffTarget(
-            topSource.getSimpleName(),
-            topTarget.getSimpleName(),
-            "to",
-            owner.getSimpleName(),
-            owner.isRecord() ? f.targetField() : PropertyNames.property(f.targetField())
-          )
-        );
-        yield row;
-      }
       case Conditional<?, ?> c -> {
         final var inner = writtenOnTarget(c.inner(), topSource, topTarget);
         yield inner == c.inner()
@@ -455,24 +444,33 @@ public final class DeepMap {
   }
 
   /**
-   * {@code path}, which a row writes on the top-level target, started at that target, or refused
-   * when it cannot write there. The hops before the path's first step off its root value keep the
-   * focus on that value: a filter or an observer whatever its class, and a narrowing only when the
-   * target is the class it narrows to or extends it, so any other narrowing never matches and is
-   * refused. A first step that reads a component through an accessor is read again on the target
-   * when its class is the target or a type the target extends, and refused otherwise. A first step
-   * by {@code fieldByName} reads the property on whatever class it is given and is kept as it is.
-   * Any other path, one that starts at a lens, reaches its first property through an iso or a
-   * bridge, or writes the root value itself, cannot be started again, so it is refused unless the
-   * class its root value is known to have is the target. A path whose root class is unknown, one
-   * started at a lambda lens, an iso or a bridge, is kept as it is.
+   * {@code path}, which a row writes on the top-level target, started at that target, checked
+   * against it, or refused when it cannot write there.
+   *
+   * <p>The hops before the path's first step off its root value keep the focus on that value: a
+   * filter or an observer whatever its class, and a narrowing only when the target is the class it
+   * narrows to or extends it, so any other narrowing never matches and is refused. A first step
+   * that reads a component through an accessor is read again on the target when its class is the
+   * target or a type the target extends, and refused otherwise. A first step by {@code fieldByName}
+   * reads the property on whatever class it is given and is kept as it is.
+   *
+   * <p>Any other path cannot be started again: one that starts at a lens, reaches its first
+   * property through an iso or a bridge, or writes the root value itself. Such a path is kept when
+   * its root class is the target or unknown, as for a lambda lens, an iso or a bridge, and refused
+   * when its root class is neither a supertype nor a subtype of the target. A path rooted at a
+   * supertype or subtype may still write the target correctly, since a lens's setter receives the
+   * target instance, so it is kept and each write's result is checked to be a target instance. A
+   * {@code constant} that replaces the root value is checked once, here: its value must be a target
+   * instance.
    */
   @SuppressWarnings("unchecked")
   private static Telescope<Object, Object> targetRooted(
     final Telescope<?, ?> path,
     final String row,
     final Class<?> topSource,
-    final Class<?> topTarget
+    final Class<?> topTarget,
+    final boolean constantRow,
+    final Object constantValue
   ) {
     final var hops = path.hops;
     Class<?> focus = path.rootClass;
@@ -507,15 +505,36 @@ public final class DeepMap {
       }
       if (first.kind() == Fusion.Hop.Kind.BY_NAME) return (Telescope<Object, Object>) path;
     }
-    if (focus != null && focus != topTarget) throw new IllegalArgumentException(
-      PairingMessages.targetPathNotOnTarget(
-        topSource.getSimpleName(),
-        topTarget.getSimpleName(),
-        row,
-        focus.getSimpleName()
-      )
+    if (focus == null || focus == topTarget) return (Telescope<Object, Object>) path;
+    final var source = topSource.getSimpleName();
+    final var target = topTarget.getSimpleName();
+    if (!focus.isAssignableFrom(topTarget) && !topTarget.isAssignableFrom(focus)) throw new IllegalArgumentException(
+      PairingMessages.targetPathNotOnTarget(source, target, row, focus.getSimpleName())
     );
-    return (Telescope<Object, Object>) path;
+    final var wholeValue = hops != null && step < 0;
+    if (wholeValue && constantRow) {
+      if (!topTarget.isInstance(constantValue)) throw new IllegalArgumentException(
+        PairingMessages.targetValueOffTarget(
+          source,
+          target,
+          row,
+          constantValue == null ? "null" : constantValue.getClass().getSimpleName()
+        )
+      );
+      return (Telescope<Object, Object>) path;
+    }
+    final Function<Object, Object> checked = written -> {
+      if (topTarget.isInstance(written)) return written;
+      throw new IllegalStateException(
+        PairingMessages.targetPathWroteOffTarget(
+          source,
+          target,
+          row,
+          written == null ? "null" : written.getClass().getSimpleName()
+        )
+      );
+    };
+    return Telescope.<Object, Object>iso(Function.identity(), checked).then((Telescope<Object, Object>) path);
   }
 
   // ---------- Recursive resolver (writes into the cache) ----------

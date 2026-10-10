@@ -1,20 +1,17 @@
 package io.github.eschizoid.telescope;
 
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
-import static io.github.eschizoid.telescope.mapping.Mapping.when;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * A {@code to(sourceTelescope, targetAccessor)} row applies at the mapper's own pair, so a target
- * accessor declared on a superclass or interface of the mapper's target writes the property on the
- * target class, and an accessor on a class the target neither is nor extends is refused when the
- * mapper is built.
+ * A {@code to(sourceTelescope, targetAccessor)} row whose target accessor is applied to a
+ * superclass or interface of the mapper's target applies at the mapper's own pair and writes the
+ * property on the target class. A row whose accessor names any other class keeps the pair that
+ * class names, which may be a nested pair the mapper visits.
  */
 class SuperclassTargetAccessorRowTest {
 
@@ -63,48 +60,13 @@ class SuperclassTargetAccessorRowTest {
   }
 
   @Test
-  @DisplayName("to(telescope, accessor) through a class the target does not extend is refused when the mapper is built")
-  void accessorOnAnUnrelatedClassIsRefused() {
-    final var expected = PairingMessages.targetRowOffTarget(
-      "SuperRowLabelSource",
-      "SuperRowConcreteSub",
-      "to",
-      "SuperRowNamedBean",
-      "name"
-    );
-    final var strict = assertThrows(IllegalArgumentException.class, () ->
-      Telescope.mapper(SuperRowLabelSource.class, SuperRowConcreteSub.class, to(LABEL, SuperRowNamedBean::getName))
-    );
-    assertEquals(expected, strict.getMessage());
-    final var forwardOnly = assertThrows(IllegalArgumentException.class, () ->
-      Telescope.mapperForward(
-        SuperRowLabelSource.class,
-        SuperRowConcreteSub.class,
-        to(LABEL, SuperRowNamedBean::getName)
-      )
-    );
-    assertEquals(expected, forwardOnly.getMessage());
-  }
-
-  @Test
-  @DisplayName("when(to(telescope, accessor)) through a class the target does not extend is refused as the bare row is")
-  void conditionalAccessorOnAnUnrelatedClassIsRefused() {
-    final var failure = assertThrows(IllegalArgumentException.class, () ->
-      Telescope.mapperForward(
-        SuperRowLabelSource.class,
-        SuperRowConcreteSub.class,
-        when(s -> s.n() > 0, to(LABEL, SuperRowNamedBean::getName))
-      )
-    );
-    assertEquals(
-      PairingMessages.targetRowOffTarget(
-        "SuperRowLabelSource",
-        "SuperRowConcreteSub",
-        "to",
-        "SuperRowNamedBean",
-        "name"
-      ),
-      failure.getMessage()
-    );
+  @DisplayName("to(telescope, accessor) through a class on a nested pair still applies on that nested pair")
+  void accessorOnANestedPairKeepsItsPair() {
+    final var result = Telescope.mapperForward(
+      SuperRowOuter.class,
+      SuperRowOuterDto.class,
+      to(Telescope.of(SuperRowOuter.class).field(SuperRowOuter::n), SuperRowInnerDto::m)
+    ).forward(new SuperRowOuter("top", new SuperRowOuter("in", null)));
+    assertEquals(new SuperRowOuterDto("top", new SuperRowInnerDto("in")), result);
   }
 }
