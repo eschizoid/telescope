@@ -9,8 +9,9 @@ and propose remediations where the gap is structural.
 measured.** Separate runs land on runners of different speeds, so a ratio built from two of them is not a measurement —
 hence the two columns below, read as the caption describes.
 
-The latest full run, with four forks on every row, is [Run 8](#run-8-2026-10-08-every-tier-four-forks). The README's
-figures come from it.
+The latest full run, with four forks on every row, is
+[Run 9](#run-9-2026-10-09-after-the-generated-mapper-converts-constructor-arguments-first). The README's figures come
+from it.
 
 | Tier (forward, codegen vs codegen)  |        MapStruct |        telescope | ratio | across runs            | allocation        |
 | ----------------------------------- | ---------------: | ---------------: | ----: | ---------------------- | ----------------- |
@@ -314,7 +315,9 @@ Three things follow:
 
 GitHub Actions run 37761344960 measured every row of `MapStructComparisonBenchmark` on `main` at `f7be3f30`. It used
 `ubuntu-latest`, 4 forks, 4 warmup and 8 measured iterations of 2 s each, and `-Pjmh.profilers=gc`. It is the first full
-run after same-typed containers began to be copied rather than shared. The README's figures come from it.
+run after same-typed containers began to be copied rather than shared.
+[Run 9](#run-9-2026-10-09-after-the-generated-mapper-converts-constructor-arguments-first) supersedes it for the current
+code.
 
 MapStruct's rows are the control, and every ratio below is read within this run. A range replaces a single ratio where
 the two rows' error bands overlap.
@@ -392,6 +395,64 @@ five runs show no regression between v1.9.0 and `main`. Across them, the generat
 The old tie predates the change that rebuilds an interface-typed `Map` field as a `LinkedHashMap` sized with
 `LinkedHashMap.newLinkedHashMap(size)`. That change makes telescope build the same container class as MapStruct, which
 the footnote under the headline table describes.
+
+## Run 9, 2026-10-09: after the generated mapper converts constructor arguments first
+
+GitHub Actions run 38008688244 measured every row of `MapStructComparisonBenchmark` on `main` at `35caef83`. It used
+`ubuntu-latest`, 4 forks, 4 warmup and 8 measured iterations of 2 s each, and `-Pjmh.profilers=gc`. It is the first full
+run after #551, which makes a generated mapper convert each constructor argument into a local before the outer `new`,
+and after #550, which adds the cycle guard. The README's figures come from it.
+
+#551 is what moved the nested, deep and container rows. Its A/B pair ran the same filter and configuration on the commit
+before it (Actions 38003229015, `46bcf048`) and on its branch (Actions 38003226380, `bbbf90bf`). Nested `static forward`
+went from 1.36 to 0.99 times MapStruct, deep `static forward` from 1.07 to 0.99, and Map forward went from 1.13 to 1.00
+times MapStruct, fast fork to fast fork (telescope's own time fell from 1459 to 1271 ns). MapStruct's Map rows had slow
+forks in both runs, so the pooled Map ratios are not quoted. The flat rows and MapStruct's own deep and Set forward rows
+held still between the two runs, which is what makes the pair a usable A/B.
+
+MapStruct's rows are the control, and every ratio below is read within this run. A range replaces a single ratio where
+the two rows' error bands overlap.
+
+| Row, codegen against MapStruct | MapStruct (ns/op) | `BRIDGE.read` (ns/op) | ratio        | `BRIDGE_FN` (ns/op) | ratio        | `static forward` (ns/op) | ratio        | allocation, B/op |
+| ------------------------------ | ----------------: | --------------------: | ------------ | ------------------: | ------------ | -----------------------: | ------------ | ---------------- |
+| flat forward                   |     3.103 ± 0.008 |         3.344 ± 0.007 | 1.08         |       3.107 ± 0.006 | 1.00 to 1.01 |            3.110 ± 0.008 | 1.00 to 1.01 | 32 both          |
+| flat backward                  |     3.200 ± 0.005 |         3.346 ± 0.010 | 1.05         |                     |              |                          |              | 32 both          |
+| nested forward                 |     4.304 ± 0.021 |         4.582 ± 0.011 | 1.06         |       4.382 ± 0.014 | 1.02         |            4.272 ± 0.021 | 0.98 to 1.00 | 48 both          |
+| nested backward                |     5.278 ± 0.021 |         4.588 ± 0.010 | 0.87         |                     |              |                          |              | 48 both          |
+| deep forward                   |    61.733 ± 0.143 |        61.604 ± 0.280 | 0.99 to 1.00 |      61.123 ± 0.347 | 0.99         |           61.515 ± 0.132 | 0.99 to 1.00 | 376 both         |
+| deep backward                  |    65.762 ± 0.412 |        63.455 ± 1.068 | 0.96         |                     |              |                          |              | 376 both         |
+| Map, 100 entries, forward      |      1271.5 ± 2.8 |         1334.8 ± 75.5 | 0.99 to 1.11 |                     |              |                          |              | 7,528 both       |
+| Map, 100 entries, backward     |      1291.8 ± 4.7 |         1413.9 ± 90.6 | 1.09         |                     |              |                          |              | 7,528 both       |
+| Set, 100 entries, forward      |      1439.4 ± 2.1 |         1509.7 ± 48.0 | 1.05         |                     |              |                          |              | 7,576 both       |
+| Set, 100 entries, backward     |      3096.8 ± 6.1 |          3005.1 ± 5.9 | 0.97         |                     |              |                          |              | 7,544 both       |
+
+The runtime rows, as ratios to MapStruct on the same run: flat 3.36 forward and 2.87 backward, nested 2.69 and 1.98,
+deep 1.28 and 1.24, Map forward 1.15, and Set forward 1.11. The runtime mapper allocated what MapStruct allocated on
+every row except Map forward, where three forks allocated 7,560 B/op and one allocated 7,528.
+
+### Reading Run 9 per fork
+
+Every flat and nested row, and every MapStruct row, agreed across its four forks. The split rows are all telescope's.
+
+- **Deep backward.** Three forks measured 62.5 to 62.6 ns, or 0.95 times MapStruct, and one measured 66.3. The deep
+  forward rows did not split on this run.
+- **Map forward.** Three forks measured 1261 to 1275 ns, or 1.00 times MapStruct, and one measured 1535, or 1.21.
+- **Map backward.** Two forks measured 1275 and 1277 ns, or 0.99 times MapStruct, and two measured 1529 and 1575, or
+  1.18 and 1.22.
+- **Set forward.** Two forks measured 1432 and 1441 ns, or 1.00 times MapStruct, and two measured 1582 and 1584, or
+  1.10.
+- **Runtime Map and Set forward.** Both split the same way, with one runtime Map fork at 1.07 against three at 1.17, and
+  two runtime Set forks at 1.06 against two at 1.16 and 1.17.
+
+On every split container row of the generated mapper, the fast forks sit at MapStruct's time. The runtime mapper's fast
+forks sit at 1.07 on Map and 1.06 on Set. The pooled ratios in the table include the slow forks, so they read higher
+than the fast mode. Nothing in this run says which mode a fork lands in.
+
+### What Run 9 replaces
+
+Run 9 supersedes Run 8 for the current code. The three-run Map range on `main` in the previous section measured code
+from before #551, and the README no longer quotes it. The Map row in the README now comes from Run 9 alone, with its
+per-fork split stated beside it.
 
 ## So is there a real gap?
 
