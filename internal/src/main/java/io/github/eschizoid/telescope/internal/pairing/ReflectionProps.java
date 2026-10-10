@@ -243,6 +243,20 @@ public final class ReflectionProps implements PropertySystem<Type> {
     return substitute(type, bindings);
   }
 
+  /**
+   * {@code type}, read off a member {@code declaring} declares, as a member of {@code owner}, a
+   * subclass of it: each type variable of {@code declaring} is replaced by the argument {@code
+   * owner}'s superclass chain gives it, when that chain fixes every one {@code type} names to a
+   * type with no variable in it. Otherwise {@code type} is returned as declared. A raw superclass
+   * binds nothing, and a generic subclass that passes its own variable through binds it to that
+   * variable, which is a different variable on each side of a pair; read as declared, both sides of
+   * a pair sharing the superclass see the same variable, and the property copies as same-typed.
+   */
+  public Type memberOf(final Type type, final Class<?> declaring, final Class<?> owner) {
+    final var resolved = resolve(type, declaring, argumentsAs(owner, declaring));
+    return mentionsTypeVariable(resolved) ? type : resolved;
+  }
+
   @Override
   public boolean mentionsTypeVariable(final Type t) {
     if (t instanceof TypeVariable<?>) return true;

@@ -6008,8 +6008,26 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     }
     return beanProperties(type)
       .stream()
-      .map(p -> new Field(p.name(), p.type()))
+      .map(p -> new Field(p.name(), memberType(type, p.getter())))
       .toList();
+  }
+
+  /**
+   * The return type of {@code type}'s no-arg {@code getter} as a member of {@code type}. A getter
+   * inherited from a generic superclass returns that superclass's type variable, which {@code class
+   * Node extends Base<Node>} fixes to {@code Node}; read as declared, the variable is out of scope
+   * everywhere outside {@code Base}. The getter is one {@link #beanProperties} found, so it exists;
+   * an overload of the same name that takes a parameter is not it.
+   */
+  private TypeMirror memberType(final TypeElement type, final String getter) {
+    final var method = ElementFilter.methodsIn(processingEnv.getElementUtils().getAllMembers(type))
+      .stream()
+      .filter(m -> m.getSimpleName().contentEquals(getter) && m.getParameters().isEmpty())
+      .findFirst()
+      .orElseThrow();
+    return (
+      (ExecutableType) processingEnv.getTypeUtils().asMemberOf((DeclaredType) type.asType(), method)
+    ).getReturnType();
   }
 
   private String getterName(final TypeElement pojo, final String field, final TypeMirror type) {

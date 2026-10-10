@@ -4,6 +4,7 @@ import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
+import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
@@ -60,6 +61,8 @@ import java.util.function.Supplier;
 public final class Beans {
 
   private Beans() {}
+
+  private static final ReflectionProps PROPS = new ReflectionProps();
 
   // ClassValue is the JDK-provided cache that genuinely permits class unloading: the entry is held
   // off-heap from the Class, so a cached value (which strongly references reflective members and
@@ -685,6 +688,21 @@ public final class Beans {
       "No getter for property '" + name + "' on " + beanClass.getName()
     );
     return getter.getGenericReturnType();
+  }
+
+  /**
+   * {@link #propertyType} as a member of {@code beanClass}. A getter inherited from a generic
+   * superclass returns that superclass's type variable, which {@code class Node extends Base<Node>}
+   * fixes to {@code Node}; see {@link ReflectionProps#memberOf} for what is left as declared.
+   *
+   * @throws IllegalArgumentException if no getter is found
+   */
+  public static Type memberPropertyType(final Class<?> beanClass, final String name) {
+    final var getter = getters(beanClass).get(name);
+    if (getter == null) throw new IllegalArgumentException(
+      "No getter for property '" + name + "' on " + beanClass.getName()
+    );
+    return PROPS.memberOf(getter.getGenericReturnType(), getter.getDeclaringClass(), beanClass);
   }
 
   private static Map<String, Method> getters(final Class<?> cls) {

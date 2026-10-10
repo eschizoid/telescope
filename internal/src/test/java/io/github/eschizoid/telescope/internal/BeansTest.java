@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import java.lang.invoke.MethodHandle;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -757,6 +758,62 @@ class BeansTest {
     void propertyTypeHappy() {
       assertEquals(String.class, Beans.propertyType(WithGetters.class, "id"));
       assertEquals(boolean.class, Beans.propertyType(WithGetters.class, "active"));
+    }
+
+    @Test
+    @DisplayName(
+      "memberPropertyType answers an inherited getter with the type the subclass gives the superclass's variable"
+    )
+    void memberPropertyTypeSubstitutesAnInheritedTypeVariable() {
+      assertEquals(Linked.class, Beans.memberPropertyType(Linked.class, "next"));
+      final var peers = assertInstanceOf(ParameterizedType.class, Beans.memberPropertyType(Linked.class, "peers"));
+      assertEquals(List.class, peers.getRawType());
+      assertEquals(List.of(Linked.class), List.of(peers.getActualTypeArguments()));
+    }
+
+    /** A superclass whose properties are typed by its own variable. */
+    public static class Chained<T extends Chained<T>> {
+
+      public T getNext() {
+        return null;
+      }
+
+      public List<T> getPeers() {
+        return List.of();
+      }
+    }
+
+    /** Fixes the superclass's variable to itself. */
+    public static final class Linked extends Chained<Linked> {}
+
+    /** Passes a variable of its own through to the superclass. */
+    public static class Passing<X extends Passing<X>> extends Chained<X> {}
+
+    @Test
+    @DisplayName("memberPropertyType throws, naming the property and the class, when there is no getter")
+    void memberPropertyTypeMissingThrows() {
+      final var ex = assertThrows(IllegalArgumentException.class, () ->
+        Beans.memberPropertyType(Linked.class, "ghost")
+      );
+      assertTrue(
+        ex.getMessage().contains("'ghost'") && ex.getMessage().contains(Linked.class.getName()),
+        ex.getMessage()
+      );
+    }
+
+    /** Fixes, two levels down, the variable its superclass passes through. */
+    public static final class Deep extends Passing<Deep> {}
+
+    @Test
+    @DisplayName("memberPropertyType follows a variable passed through one level and fixed at the next")
+    void memberPropertyTypeFollowsAVariableThroughTwoLevels() {
+      assertEquals(Deep.class, Beans.memberPropertyType(Deep.class, "next"));
+    }
+
+    @Test
+    @DisplayName("memberPropertyType answers as declared when the subclass passes its own variable through")
+    void memberPropertyTypeKeepsTheDeclaredVariableWhenTheSubclassPassesItsOwnThrough() {
+      assertEquals(Chained.class.getTypeParameters()[0], Beans.memberPropertyType(Passing.class, "next"));
     }
 
     @Test

@@ -1743,6 +1743,178 @@ class BridgeProcessorTest {
       assertTrue(orderBridge.contains("final demo.CustomerDto __bt_customer = t.customer();"), orderBridge);
       assertTrue(orderBridge.contains("CustomerBridge.backward(__bt_customer)"), orderBridge);
     }
+
+    @Test
+    @DisplayName("a field inherited from a generic superclass is read into a local of the type the subclass gives it")
+    void anInheritedTypeVariableFieldIsDeclaredWithItsSubstitutedType() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Base",
+          """
+          package demo;
+          public abstract class Base<T extends Base<T>> {
+            private String name;
+            private T next;
+            public String getName() { return name; }
+            public void setName(final String name) { this.name = name; }
+            public T getNext() { return next; }
+            public void setNext(final T next) { this.next = next; }
+          }
+          """
+        ),
+        source(
+          "demo.Node",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.NodeDto.class)
+          public class Node extends Base<Node> {}
+          """
+        ),
+        source(
+          "demo.NodeDto",
+          """
+          package demo;
+          public class NodeDto {
+            private String name;
+            private NodeDto next;
+            public String getName() { return name; }
+            public void setName(final String name) { this.name = name; }
+            public NodeDto getNext() { return next; }
+            public void setNext(final NodeDto next) { this.next = next; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.NodeBridge");
+      assertNotNull(bridge, () -> "NodeBridge missing; saw " + compilation.generated().keySet());
+      assertTrue(bridge.contains("final demo.Node __fs_next = "), bridge);
+      assertFalse(bridge.contains("final T "), () -> "no local may name the superclass's T, saw: " + bridge);
+    }
+
+    @Test
+    @DisplayName("an inherited getter's overload that takes a parameter does not decide the property's type")
+    void anInheritedGettersOverloadDoesNotDecideThePropertyType() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Base",
+          """
+          package demo;
+          public abstract class Base<T extends Base<T>> {
+            private T next;
+            public String getNext(final int depth) { return "depth " + depth; }
+            public T getNext() { return next; }
+            public void setNext(final T next) { this.next = next; }
+          }
+          """
+        ),
+        source(
+          "demo.Node",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.NodeDto.class)
+          public class Node extends Base<Node> {}
+          """
+        ),
+        source(
+          "demo.NodeDto",
+          """
+          package demo;
+          public class NodeDto {
+            private NodeDto next;
+            public NodeDto getNext() { return next; }
+            public void setNext(final NodeDto next) { this.next = next; }
+          }
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.NodeBridge");
+      assertNotNull(bridge, () -> "NodeBridge missing; saw " + compilation.generated().keySet());
+      assertTrue(bridge.contains("final demo.Node __fs_next = "), bridge);
+    }
+
+    @Test
+    @DisplayName("two subclasses of one generic superclass pair its inherited field through their own types")
+    void twoSubclassesOfOneGenericSuperclassPairTheInheritedFieldThroughTheirOwnTypes() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Base",
+          """
+          package demo;
+          public abstract class Base<T extends Base<T>> {
+            private String name;
+            private T next;
+            public String getName() { return name; }
+            public void setName(final String name) { this.name = name; }
+            public T getNext() { return next; }
+            public void setNext(final T next) { this.next = next; }
+          }
+          """
+        ),
+        source(
+          "demo.Node",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.NodeDto.class)
+          public class Node extends Base<Node> {}
+          """
+        ),
+        source("demo.NodeDto", "package demo; public class NodeDto extends Base<NodeDto> {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.NodeBridge");
+      assertNotNull(bridge, () -> "NodeBridge missing; saw " + compilation.generated().keySet());
+      // Both sides inherit the same T, which is the same type variable on both and so reads as an
+      // identity field; seen from each subclass it is two different types, and the field converts.
+      assertTrue(bridge.contains("final demo.Node __fs_next = "), bridge);
+      assertTrue(bridge.contains("final demo.NodeDto __bt_next = "), bridge);
+      assertTrue(bridge.contains("final demo.NodeDto __pp_next = "), bridge);
+      assertFalse(bridge.contains("final T "), () -> "no local may name the superclass's T, saw: " + bridge);
+    }
+
+    @Test
+    @DisplayName("an inherited field a generic subclass types by its own variable is refused by name")
+    void anInheritedFieldTypedByTheSubclassOwnVariableIsRefusedByName() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Base",
+          """
+          package demo;
+          public abstract class Base<T> {
+            private T next;
+            public T getNext() { return next; }
+            public void setNext(final T next) { this.next = next; }
+          }
+          """
+        ),
+        source(
+          "demo.Node",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.NodeDto.class)
+          public class Node<X> extends Base<X> {}
+          """
+        ),
+        source("demo.NodeDto", "package demo; public class NodeDto<Y> extends Base<Y> {}")
+      );
+      // Seen from each subclass the field is typed by that subclass's own variable, X and Y, which
+      // no conversion relates, so the pair is refused by name. Read as declared, both sides are the
+      // superclass's T, which pairs as an identity field and is written into a local javac rejects.
+      assertFalse(compilation.success(), "the pair should be refused");
+      assertTrue(
+        compilation.hasError("@Bridge Node -> NodeDto: field 'next' has incompatible types (X vs Y)"),
+        () -> "expected the processor's refusal naming the field, saw: " + compilation.errorMessages()
+      );
+      assertNull(compilation.generated().get("demo.NodeBridge"), "no bridge should be written for the pair");
+    }
   }
 
   @Nested

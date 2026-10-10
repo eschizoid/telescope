@@ -7,6 +7,10 @@ import io.github.eschizoid.telescope.codegen.ctorbox.BaggedDst;
 import io.github.eschizoid.telescope.codegen.ctorbox.GuardedDst;
 import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
 import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
+import io.github.eschizoid.telescope.codegen.genericpass.GmxPage;
+import io.github.eschizoid.telescope.codegen.genericpass.GmxStr;
+import io.github.eschizoid.telescope.codegen.genericpass.GpPage;
+import io.github.eschizoid.telescope.codegen.genericpass.GpPageDto;
 import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.mapping.WriteHint;
@@ -1816,10 +1820,12 @@ class CrossPathCorpusTest {
   }
 
   /**
-   * Containers the generated path refuses and the runtime builds, each with the fragment the
-   * generated path refuses it with. A bridge is code in one package, so a constructor only another
-   * package can call is out of its reach; the runtime binds the same constructor through a lookup
-   * with private access to the class, which asks nothing of the caller's package.
+   * Pairs the generated path refuses and the runtime builds, each with the fragment the generated
+   * path refuses it with. A bridge is code in one package, so a constructor only another package
+   * can call is out of its reach; the runtime binds the same constructor through a lookup with
+   * private access to the class, which asks nothing of the caller's package. A bridge is a set of
+   * static methods, so a type variable a class passes through to its superclass is out of its reach
+   * too; the runtime reads the property as the superclass declares it and copies it.
    *
    * <p>An entry keeps its row from failing and nothing else: a row both paths start to agree on
    * fails, so the register cannot outlive what it describes.
@@ -1828,7 +1834,11 @@ class CrossPathCorpusTest {
     "a package-private constructor in another package",
     "has no no-argument constructor a rebuild can call",
     "a protected constructor in another package",
-    "has no no-argument constructor a rebuild can call"
+    "has no no-argument constructor a rebuild can call",
+    "a property typed by a variable each subclass passes through",
+    "@Bridge GpPage -> GpPageDto: field 'first' has incompatible types (X vs Y)",
+    "a property one side passes its variable through and the other fixes",
+    "@Bridge GmxPage -> GmxStr: field 'first' has incompatible types (X vs java.lang.String)"
   );
 
   /**
@@ -1838,8 +1848,8 @@ class CrossPathCorpusTest {
   private record Limit(String name, List<String> fixtures, Callable<Object> reflective, String owed) {}
 
   @Test
-  @DisplayName("a constructor only another package can call is a limit of the generated path, which the runtime passes")
-  void aConstructorInAnotherPackageIsAGeneratedPathLimit() throws Exception {
+  @DisplayName("a pair out of the generated path's reach is a registered limit of it, which the runtime passes")
+  void aPairOutOfTheGeneratedPathsReachIsARegisteredLimit() throws Exception {
     final var limits = List.of(
       new Limit(
         "a package-private constructor in another package",
@@ -1852,6 +1862,18 @@ class CrossPathCorpusTest {
         List.of("ctorbox/ProtectedBag", "ctorbox/GuardedDst", "ctorpair/GuardedSrc"),
         () -> Telescope.mapper(GuardedSrc.class, GuardedDst.class).forward(new GuardedSrc(List.of("b", "a"))).items(),
         "[b, a] in " + PACKAGE + ".ctorbox.ProtectedBag"
+      ),
+      new Limit(
+        "a property typed by a variable each subclass passes through",
+        List.of("genericpass/GpBase", "genericpass/GpPage", "genericpass/GpPageDto"),
+        CrossPathCorpusTest::passedThroughItems,
+        "[b, a] in java.util.ArrayList"
+      ),
+      new Limit(
+        "a property one side passes its variable through and the other fixes",
+        List.of("genericpass/GpBase", "genericpass/GmxPage", "genericpass/GmxStr"),
+        CrossPathCorpusTest::passedThroughToFixedItems,
+        "[b, a] in java.util.ArrayList"
       )
     );
     final var fixtures = Path.of("src/test/java/io/github/eschizoid/telescope/codegen");
@@ -1884,6 +1906,29 @@ class CrossPathCorpusTest {
       checked.equals(GENERATED_PATH_LIMITS.keySet()),
       () -> "registered limits with no row: " + GENERATED_PATH_LIMITS.keySet()
     );
+  }
+
+  /**
+   * What the runtime copies into a {@code GpPageDto}'s items from a {@code GpPage} holding {@code
+   * b, a}.
+   */
+  private static Object passedThroughItems() {
+    final var page = new GpPage<String>();
+    page.setItems(new ArrayList<>(List.of("b", "a")));
+    final Class<GpPage<String>> source = cast(GpPage.class);
+    final Class<GpPageDto<String>> target = cast(GpPageDto.class);
+    return Telescope.mapper(source, target).forward(page).getItems();
+  }
+
+  /**
+   * What the runtime copies into a {@code GmxStr}'s items from a {@code GmxPage} holding {@code b,
+   * a}.
+   */
+  private static Object passedThroughToFixedItems() {
+    final var page = new GmxPage<String>();
+    page.setItems(new ArrayList<>(List.of("b", "a")));
+    final Class<GmxPage<String>> source = cast(GmxPage.class);
+    return Telescope.mapper(source, GmxStr.class).forward(page).getItems();
   }
 
   /** A record of one string, ordered by it. */
@@ -4007,6 +4052,204 @@ class CrossPathCorpusTest {
       }
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName(
+    "a field a generic superclass declares converts the same way on both paths, through the type each subclass gives it"
+  )
+  void anInheritedTypeVariableFieldConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    final var head = "package " + PACKAGE + ";\n";
+    final var base =
+      "public class TvBase<T extends TvBase<T>> {\n" +
+      "  private String name;\n" +
+      "  private T next;\n" +
+      "  public String getName() { return name; }\n" +
+      "  public void setName(final String name) { this.name = name; }\n" +
+      "  public T getNext() { return next; }\n" +
+      "  public void setNext(final T next) { this.next = next; }\n" +
+      "}\n";
+    final var sources = new JavaFileObject[] {
+      source("TvBase", head + base),
+      source(
+        "TvSrc",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(TvTgt.class)\n" +
+          "public class TvSrc extends TvBase<TvSrc> {}\n"
+      ),
+      source("TvTgt", head + "public class TvTgt extends TvBase<TvTgt> {}\n"),
+    };
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+    assertTrue(plain.success(), () -> "the pair should compile without the processor: " + plain.errorMessages());
+    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    assertTrue(processed.success(), () -> "the pair should compile: " + processed.errorMessages());
+    final var classes = plain.define(MethodHandles.lookup());
+    final Class<Object> src = cast(classes.get(PACKAGE + ".TvSrc"));
+    final Class<Object> tgt = cast(classes.get(PACKAGE + ".TvTgt"));
+    final var bridge = emitted(processed, plain, "Tv");
+    final var mapper = Telescope.mapper(src, tgt);
+    // Two nodes that name each other as next, so the field is both inherited and part of a cycle.
+    final Attempt srcSample = () -> chain(src, "alice", "bob");
+    final Attempt tgtSample = () -> chain(tgt, "carol", "dave");
+    final var owed = List.of(
+      Map.entry("forward", "#0(name=\"alice\", next=#1(name=\"bob\", next=null))"),
+      Map.entry("backward", "#0(name=\"carol\", next=#1(name=\"dave\", next=null))"),
+      Map.entry("patch", "#0(name=\"carol\", next=#1(name=\"dave\", next=#2(name=\"carol\", next=null)))")
+    );
+    final var failures = new ArrayList<String>();
+    for (final var operation : owed) {
+      final Attempt generated = switch (operation.getKey()) {
+        case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+        case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+        default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+      };
+      final Attempt reflective = switch (operation.getKey()) {
+        case "forward" -> () -> mapper.forward(srcSample.get());
+        case "backward" -> () -> mapper.backward(tgtSample.get());
+        default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+      };
+      for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+        final var shape = linked(side.getValue());
+        if (!shape.equals(operation.getValue())) {
+          failures.add(operation.getKey() + ": " + side.getKey() + " gave " + shape + ", owed " + operation.getValue());
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName(
+    "a generic subclass passing its own variable to its superclass converts at run time and is refused by name when generated"
+  )
+  void aSubclassPassingItsOwnVariableThroughConvertsAtRunTimeAndIsRefusedWhenGenerated()
+    throws ReflectiveOperationException {
+    final var head = "package " + PACKAGE + ";\n";
+    final var base =
+      "public class GpBase<T> {\n" +
+      "  private T first;\n" +
+      "  private java.util.List<T> items;\n" +
+      "  public T getFirst() { return first; }\n" +
+      "  public void setFirst(final T first) { this.first = first; }\n" +
+      "  public java.util.List<T> getItems() { return items; }\n" +
+      "  public void setItems(final java.util.List<T> items) { this.items = items; }\n" +
+      "}\n";
+    final var plain = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      source("GpBase", head + base),
+      source("GpPage", head + "public class GpPage<X> extends GpBase<X> {}\n"),
+      source("GpPageDto", head + "public class GpPageDto<Y> extends GpBase<Y> {}\n")
+    );
+    assertTrue(plain.success(), () -> "the pair should compile: " + plain.errorMessages());
+    final var classes = plain.define(MethodHandles.lookup());
+    final Class<Object> page = cast(classes.get(PACKAGE + ".GpPage"));
+    final Class<Object> dto = cast(classes.get(PACKAGE + ".GpPageDto"));
+    final var source = page.getConstructor().newInstance();
+    page.getMethod("setFirst", Object.class).invoke(source, "a");
+    page.getMethod("setItems", List.class).invoke(source, List.of("b", "c"));
+    // Seen from either subclass the properties are typed by that subclass's own variable, X or Y,
+    // so the runtime reads them as the superclass declares them: one T, copied as same-typed.
+    final var converted = Telescope.mapper(page, dto).forward(source);
+    assertTrue(dto.isInstance(converted), () -> "expected a GpPageDto, got " + converted);
+    assertTrue(
+      "a".equals(dto.getMethod("getFirst").invoke(converted)) &&
+        List.of("b", "c").equals(dto.getMethod("getItems").invoke(converted)),
+      () -> "expected first and items copied, got " + converted
+    );
+    // The generated bridge would declare its locals with the variable, which no static method of
+    // the bridge can name, so the processor refuses the pair by name rather than write that file.
+    final var processed = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      source("GpBase", head + base),
+      source(
+        "GpPage",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(GpPageDto.class)\n" +
+          "public class GpPage<X> extends GpBase<X> {}\n"
+      ),
+      source("GpPageDto", head + "public class GpPageDto<Y> extends GpBase<Y> {}\n")
+    );
+    assertTrue(
+      processed.hasError("@Bridge GpPage -> GpPageDto: field 'first' has incompatible types (X vs Y)"),
+      () -> "expected the processor's refusal naming the field, saw: " + processed.errorMessages()
+    );
+  }
+
+  @Test
+  @DisplayName("a property one side passes its variable through and the other fixes converts at run time as declared")
+  void aPropertyOneSidePassesThroughAndTheOtherFixesConvertsAsDeclared() throws ReflectiveOperationException {
+    final var head = "package " + PACKAGE + ";\n";
+    final var plain = ProcessorHarness.compileFully(
+      List.of(),
+      List.of(),
+      source(
+        "GmxBase",
+        head +
+          "public class GmxBase<T> {\n" +
+          "  private T first;\n" +
+          "  public T getFirst() { return first; }\n" +
+          "  public void setFirst(final T first) { this.first = first; }\n" +
+          "}\n"
+      ),
+      source("GmxPage", head + "public class GmxPage<X> extends GmxBase<X> {}\n"),
+      source("GmxStr", head + "public class GmxStr extends GmxBase<String> {}\n")
+    );
+    assertTrue(plain.success(), () -> "the pair should compile: " + plain.errorMessages());
+    final var classes = plain.define(MethodHandles.lookup());
+    final Class<Object> page = cast(classes.get(PACKAGE + ".GmxPage"));
+    final Class<Object> fixed = cast(classes.get(PACKAGE + ".GmxStr"));
+    final var source = page.getConstructor().newInstance();
+    page.getMethod("setFirst", Object.class).invoke(source, "a");
+    // The source's property is its own X and the target's is String. Substituted per side the two
+    // do not pair, so the pair reads both as the superclass declares them, one T, and copies it.
+    final var converted = Telescope.mapper(page, fixed).forward(source);
+    assertTrue(
+      fixed.isInstance(converted) && "a".equals(fixed.getMethod("getFirst").invoke(converted)),
+      () -> "expected first copied into a GmxStr, got " + converted
+    );
+  }
+
+  /**
+   * Two instances of {@code type}, named {@code first} and {@code second}, each the other's next.
+   */
+  private static Object chain(final Class<?> type, final String first, final String second)
+    throws ReflectiveOperationException {
+    final var a = type.getConstructor().newInstance();
+    final var b = type.getConstructor().newInstance();
+    type.getMethod("setName", String.class).invoke(a, first);
+    type.getMethod("setName", String.class).invoke(b, second);
+    type.getMethod("setNext", type.getSuperclass()).invoke(a, b);
+    type.getMethod("setNext", type.getSuperclass()).invoke(b, a);
+    return a;
+  }
+
+  /**
+   * What {@code attempt} produced, rendered through the inherited {@code getName} and {@code
+   * getNext}, with each node numbered where it first appears and referred back to by number.
+   */
+  private static String linked(final Attempt attempt) {
+    try {
+      final var numbered = new IdentityHashMap<Object, Integer>();
+      return linked(attempt.get(), numbered);
+    } catch (final InvocationTargetException e) {
+      return REFUSED + (e.getCause() == null ? e : e.getCause()).getClass().getSimpleName();
+    } catch (final ReflectiveOperationException | RuntimeException | StackOverflowError e) {
+      return REFUSED + e.getClass().getSimpleName();
+    }
+  }
+
+  private static String linked(final Object node, final IdentityHashMap<Object, Integer> numbered)
+    throws ReflectiveOperationException {
+    if (node == null) return "null";
+    final var seen = numbered.get(node);
+    if (seen != null) return "@" + seen;
+    final var number = numbered.size();
+    numbered.put(node, number);
+    final var name = node.getClass().getMethod("getName").invoke(node);
+    final var next = node.getClass().getMethod("getNext").invoke(node);
+    return "#" + number + "(name=\"" + name + "\", next=" + linked(next, numbered) + ")";
   }
 
   /** The simple name of the one top-level type {@code code} declares. */
