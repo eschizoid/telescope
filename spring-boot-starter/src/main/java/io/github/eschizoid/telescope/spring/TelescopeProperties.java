@@ -59,7 +59,8 @@ public class TelescopeProperties {
     /**
      * When true (default), the registry throws on {@code get(srcCls, tgtCls)} for a type pair with
      * no registered {@code Mapper} bean. When false, returns {@code null} silently. Keep this
-     * {@code true} unless you're intentionally probing the registry for optional mappers.
+     * {@code true} unless you're intentionally probing the registry for optional mappers. Two
+     * {@code Mapper} beans for one pair fail the registry's construction whatever this is set to.
      */
     private boolean failFast = true;
 

@@ -35,16 +35,28 @@ import java.util.Optional;
  *
  * <h2>Construction</h2>
  *
- * <p>{@link TelescopeProducer} injects every {@code Mapper<?, ?>} bean via the {@code @All
+ * <p>{@link TelescopeProducer} injects the {@code Mapper<?, ?>} beans via the {@code @All
  * List<Mapper<?, ?>>} CDI pattern and hands them to the registry constructor. Mappers built via
  * {@link io.github.eschizoid.telescope.Telescope#mapper Telescope.mapper(...)} expose {@link
  * Mapper#sourceClass()} / {@link Mapper#targetClass()} that the registry reads to build the index.
  *
- * <p>Duplicate {@code (srcClass, tgtClass)} pairs cause an {@link IllegalStateException} at
- * construction time — the {@code (sourceClass, targetClass)} pair must uniquely identify a mapper.
- * If you genuinely have two semantically-different mappers for the same pair, qualify them with CDI
- * {@code @Named} or {@code @Qualifier} annotations and {@code @Inject} the specific bean instead of
- * going through the registry.
+ * <p>The registry holds one mapper per {@code (sourceClass, targetClass)} pair, and two {@code
+ * Mapper} beans for the same pair make the constructor throw {@link IllegalStateException}. {@code
+ * telescope.registry.fail-fast} does not change this; it governs only lookups of a missing pair.
+ *
+ * <p>{@code @All} with no other qualifier resolves the way {@code @Any Instance<Mapper<?, ?>>}
+ * does, so {@code @Named} or a {@code @Qualifier} does not filter it. ArC does disambiguate the
+ * whole set of {@code Mapper} beans, across every pair: a {@code @DefaultBean} mapper is dropped
+ * once any non-default {@code Mapper} bean exists, and once an {@code @Alternative} with a priority
+ * is among two or more non-default beans, only the highest-priority alternatives are kept. A second
+ * mapper for a registered pair therefore stays out of the registry when it is declared with
+ * {@code @DefaultBean} and injected by its qualifier, wrapped in a type of the application's own,
+ * or built where it is used. {@code @Alternative} is not a way to do that, because it drops every
+ * other {@code Mapper} bean. The same rule drops a {@code @DefaultBean} mapper that is alone on its
+ * pair whenever any other {@code Mapper} bean exists.
+ *
+ * <p>{@link Mapper} is a final class with no public constructor, so a {@code Mapper} bean comes
+ * from a CDI producer method or producer field, never from a bean class.
  */
 public class TelescopeMapperRegistry {
 
@@ -62,7 +74,10 @@ public class TelescopeMapperRegistry {
           mapper.sourceClass().getName() +
           " -> " +
           mapper.targetClass().getName() +
-          ". Qualify the beans with @Named / @Qualifier and inject the specific instance instead of relying on the registry."
+          ". The registry holds one Mapper per type pair, and @Named or a @Qualifier does not keep a Mapper bean" +
+          " out of it. Keep one Mapper bean for the pair, and declare the other with @DefaultBean and inject it by its" +
+          " qualifier, wrap it in a type of your own, or build it where it is used. @Alternative does not help: it" +
+          " drops every other Mapper bean from the registry."
       );
     }
     this.mappers = Map.copyOf(index);
@@ -83,11 +98,11 @@ public class TelescopeMapperRegistry {
         sourceClass.getName() +
         ", " +
         targetClass.getName() +
-        "> registered. Define a CDI producer or @ApplicationScoped class returning Mapper<" +
+        "> registered. Declare a CDI producer method or producer field of type Mapper<" +
         sourceClass.getSimpleName() +
         ", " +
         targetClass.getSimpleName() +
-        ">."
+        ">. Mapper has no public constructor, so a bean class cannot be one."
     );
     return (Mapper<A, B>) mapper;
   }

@@ -81,10 +81,10 @@ The lookup uses the exact class. A subclass of `Order`, or a proxy class that wr
 
 The module adds these public types:
 
-- `TelescopeMapperRegistry` holds every `Mapper<?, ?>` bean in the application, keyed by its source class and target
+- `TelescopeMapperRegistry` holds the `Mapper<?, ?>` beans in the application, keyed by its source class and target
   class.
 - `TelescopeProducer` is an `@ApplicationScoped` bean with a producer method that builds the registry as an
-  `@ApplicationScoped` bean. The method receives every `Mapper` bean through ArC's `@All List<Mapper<?, ?>>` injection.
+  `@ApplicationScoped` bean. The method receives the `Mapper` beans through ArC's `@All List<Mapper<?, ?>>` injection.
 - `TelescopeConfig` is a `@ConfigMapping(prefix = "telescope")` interface that holds the `telescope.registry.fail-fast`
   setting.
 
@@ -123,9 +123,13 @@ behave the same either way.
 ## Two mappers for the same pair
 
 Each source and target pair can have only one mapper. If two `Mapper` beans share a pair, building the registry throws
-`IllegalStateException` with a message that starts `Duplicate Mapper for type pair`. Qualifiers don't help, because the
-registry collects every `Mapper` bean. Keep one `Mapper` bean per pair, and wrap the other in your own type or build it
-where it's used.
+`IllegalStateException` with a message that starts `Duplicate Mapper for type pair`. Qualifiers don't help, because
+`@All` collects `Mapper` beans whatever their qualifiers. Keep one `Mapper` bean per pair, and either declare the other
+with `@DefaultBean` and inject it by its qualifier, wrap it in your own type, or build it where it's used.
+
+`@All` resolves the whole set of `Mapper` beans at once, across every pair. A `@DefaultBean` mapper is dropped whenever
+any other `Mapper` bean exists, so a `@DefaultBean` mapper that is alone on its pair is missing from the registry too.
+`@Alternative` doesn't help either: once an alternative is present, every `Mapper` bean that is not one is dropped.
 
 ## Replacing the registry
 
@@ -138,6 +142,6 @@ ambiguous and Quarkus fails at build time. To supply your own registry, annotate
 The module has no counterpart to the Spring starter's `@TelescopeMapper` and `@TelescopeTransformer` generated beans,
 which are Spring only. It also has no `telescope.default-write-strategy` setting.
 
-The tests in this module are unit tests of `TelescopeMapperRegistry`, which is plain Java with no CDI dependency. No
-`@QuarkusTest` in this repository starts Quarkus with the producer, so add one to your own application if you want to
-check the wiring end to end.
+The tests in this module are unit tests of `TelescopeMapperRegistry`, which is plain Java with no CDI dependency, and a
+`@QuarkusComponentTest` that runs `TelescopeProducer` in an ArC container. No `@QuarkusTest` in this repository starts
+Quarkus itself, so add one to your own application if you want to check the wiring end to end.

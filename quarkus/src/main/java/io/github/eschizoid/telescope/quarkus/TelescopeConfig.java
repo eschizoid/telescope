@@ -33,7 +33,8 @@ public interface TelescopeConfig {
   interface Registry {
     /**
      * When {@code true} (default), {@link TelescopeMapperRegistry#get(Class, Class)} throws on a
-     * missing type pair; when {@code false}, returns {@code null}.
+     * missing type pair; when {@code false}, returns {@code null}. Two {@code Mapper} beans for one
+     * pair fail the registry's construction whatever this is set to.
      */
     @WithDefault("true")
     boolean failFast();
