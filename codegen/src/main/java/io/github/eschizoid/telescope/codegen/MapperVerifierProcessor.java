@@ -366,12 +366,11 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           final var tgt = rowArgs.size() < 2 ? null : accessorProp(rowArgs.get(1));
           if (src == null || tgt == null) return false;
-          // Rows are grouped by the accessors' receiver classes at construction (a row may be keyed
-          // to
-          // a nested pair encountered during recursion). Only rows keyed to THIS call's pair claim
-          // fields here; nested-keyed rows are still shape-checked against their own types below.
-          // Both sides erased: a generic owner's asType() is the parameterized prototype, which
-          // isSameType would never match against the raw class literal.
+          // Construction groups rows by their accessors' receiver classes, so a row may be keyed to
+          // a nested pair the recursion reaches. Only rows keyed to this call's pair claim fields
+          // here; nested-keyed rows are still shape-checked against their own types below. Both
+          // sides are erased: a generic owner's asType() is the parameterized prototype, which
+          // isSameType never matches against the raw class literal.
           final var topLevelRow =
             types.isSameType(types.erasure(src.owner().asType()), types.erasure(srcType)) &&
             types.isSameType(types.erasure(tgt.owner().asType()), types.erasure(tgtType));
@@ -633,16 +632,17 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
      * The class a method-reference accessor is applied to: the first type argument of the {@code
      * Accessor<A, X>} it is passed as, which is the receiver the runtime reads from the reference's
      * instantiated method type. A getter inherited from a superclass is applied to the subclass the
-     * row names, and the row keys against that subclass. A type variable stands for its bound. A
-     * receiver that is not a subtype of the declaring class answers the declaring class, as the
-     * runtime does.
+     * row names, and the row keys against that subclass. A type variable stands for its bound,
+     * followed through any variable that bound names. A receiver that is not a subtype of the
+     * declaring class answers the declaring class, as the runtime does.
      */
     private DeclaredType receiverOf(final TreePath reference, final TypeElement declaring) {
       final var fallback = declaring.asType() instanceof DeclaredType dt ? dt : null;
       if (!(trees.getTypeMirror(reference) instanceof DeclaredType target)) return fallback;
       if (target.getTypeArguments().isEmpty()) return fallback;
       var argument = target.getTypeArguments().get(0);
-      if (argument instanceof TypeVariable variable) argument = variable.getUpperBound();
+      // A variable's bound may itself be a variable (<U extends Sub, T extends U>).
+      while (argument instanceof TypeVariable variable) argument = variable.getUpperBound();
       if (!(argument instanceof DeclaredType receiver)) return fallback;
       if (!types.isSubtype(types.erasure(receiver), types.erasure(declaring.asType()))) return fallback;
       return receiver;

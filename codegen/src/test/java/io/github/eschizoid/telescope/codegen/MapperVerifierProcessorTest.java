@@ -81,6 +81,7 @@ class MapperVerifierProcessorTest {
           package demo;
           import static io.github.eschizoid.telescope.mapping.Mapping.*;
           import io.github.eschizoid.telescope.Telescope;
+          import io.github.eschizoid.telescope.mapping.Mapping;
           """ +
           BEANS +
           rest
@@ -118,6 +119,23 @@ class MapperVerifierProcessorTest {
         """
         record Uncoded(String name) {}
         class Holder { static final Object M = Telescope.mapper(Sub.class, Uncoded.class, drop(Sub::getCode)); }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a row typed by a variable whose bound is another variable claims the innermost bound's property")
+    void rowTypedByAChainedTypeVariableBound() {
+      final var compilation = verifyWithBeans(
+        """
+        record Renamed(String label, String code) {}
+        class Holder {
+          static <U extends Sub, T extends U> Object m() {
+            return Telescope.mapper(
+              Renamed.class, Sub.class, Mapping.<Renamed, T, String>to(Renamed::label, Base::getName));
+          }
+        }
         """
       );
       assertTrue(compilation.success(), compilation::errorMessages);
