@@ -252,8 +252,8 @@ public interface CustomerSummaryProjection extends TelescopeProjection<Customer,
 
 `constant` and `compute` are static methods on `io.github.eschizoid.telescope.mapping.Mapping`. A projection that
 overrides `translate` maps through a core `Mapper` instead of the bridge, so it also supports `patch`. `@Bridge` has
-annotation equivalents (`@Rename`, `@Constant`, `@Compute`), but they name fields with strings, and an IDE rename does
-not update a string.
+annotation equivalents (`@Rename`, `@Constant`, `@Compute`), but they name fields with strings. The processor reports a
+string that names no field as a compile error, and an IDE rename does not update the string.
 
 ### Bridge or core mapper
 
