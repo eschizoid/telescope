@@ -246,6 +246,48 @@ public sealed class Telescope<
   }
 
   /**
+   * This path's first hop when it reads a component, which names the class it reads and the
+   * component, or {@code null} when the path records no component-anchored first hop.
+   */
+  Fusion.Hop firstComponentHop() {
+    if (hops == null || hops.isEmpty()) return null;
+    final var first = hops.getFirst();
+    return first.owner() == null ? null : first;
+  }
+
+  /**
+   * This path started at {@code root} instead of at the class its first hop reads a component of. A
+   * write through a hop rebuilds the class that hop reads, so a path whose first hop reads a
+   * superclass or interface of {@code root} rebuilds that type in place of {@code root}: a concrete
+   * superclass drops every property only {@code root} declares, and an abstract one or an interface
+   * cannot be built at all. The first hop is read again as the same component of {@code root}, and
+   * every later hop is kept. A path whose first hop already reads {@code root}, or which records no
+   * component-anchored first hop, is answered unchanged.
+   */
+  @SuppressWarnings("unchecked")
+  <R> Telescope<R, A> rootedAt(final Class<R> root) {
+    final var first = firstComponentHop();
+    if (first == null || first.owner() == root) return (Telescope<R, A>) (Telescope<?, A>) this;
+    final Lens<Object, Object> lens = componentLensOf((Class<Object>) root, first.component());
+    final Traversal<Object, Object> rootSegment = first.inner() == null ? lens : lens.then(first.inner());
+    final var rootHops = new ArrayList<Fusion.Hop>(hops.size());
+    rootHops.add(first.on(root, rootSegment));
+    Traversal<Object, Object> rootOptic = rootSegment;
+    for (final var hop : hops.subList(1, hops.size())) {
+      rootHops.add(hop);
+      rootOptic = rootOptic.then(hop.segment());
+    }
+    return new Telescope<>(
+      (Traversal<R, A>) (Traversal<?, ?>) rootOptic,
+      root.isRecord() ? RecordFieldOptics.INSTANCE : BeanFieldOptics.INSTANCE,
+      identityChain(),
+      firstHopName,
+      trail,
+      Collections.unmodifiableList(rootHops)
+    );
+  }
+
+  /**
    * Start a telescope at the given root type. Backed by an identity {@link Iso}. The {@code
    * rootType} argument exists purely for type inference; it's not stored or consulted at runtime.
    * This is the usual entry point; from here, chain navigation methods to descend into the
@@ -2492,6 +2534,16 @@ public sealed class Telescope<
         "). Re-run the @Focus / @BeanFocus processor."
     );
     return (Lens<S, A>) ((Telescope<?, ?>) constant).optic;
+  }
+
+  /**
+   * The lens for {@code component} of {@code cls}: its generated holder's when one exists,
+   * otherwise the record or bean lens built on {@code cls} itself, which a write rebuilds.
+   */
+  private static <S, A> Lens<S, A> componentLensOf(final Class<S> cls, final String component) {
+    final var holderLens = Telescope.<S, A>singleHolderLens(cls, component);
+    if (holderLens != null) return holderLens;
+    return cls.isRecord() ? Records.fieldLens(cls, component) : Beans.lens(cls, component);
   }
 
   /**

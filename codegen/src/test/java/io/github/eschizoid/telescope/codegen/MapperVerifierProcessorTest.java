@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.List;
 import javax.tools.Diagnostic;
 import org.junit.jupiter.api.DisplayName;
@@ -155,6 +156,55 @@ class MapperVerifierProcessorTest {
       );
       assertFalse(compilation.success());
       assertTrue(compilation.hasError("duplicate override row for target field 'name'"), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a constant row through the abstract base's getter writes a property the target has")
+    void constantThroughTheBaseGetterIsAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        record Coded(String code) {}
+        class Holder { static final Object M = Telescope.mapper(Coded.class, Sub.class, constant(Base::getName, "fixed")); }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a compute row through a generic base's getter writes a property the target has")
+    void computeThroughAGenericBaseGetterIsAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        abstract class Named<T> {
+          private T label;
+          public T getLabel() { return label; }
+          public void setLabel(T label) { this.label = label; }
+        }
+        class Labelled extends Named<String> { public Labelled() {} }
+        record Plain(int n) {}
+        class Holder {
+          static final Object M = Telescope.mapper(Plain.class, Labelled.class, compute(Named<String>::getLabel, () -> "made"));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a constant row through a class the target does not extend is refused as construction refuses it")
+    void constantThroughAnUnrelatedClassIsRefused() {
+      final var compilation = verifyWithBeans(
+        """
+        class Other { private String name; public String getName() { return name; } public void setName(String n) { name = n; } }
+        record Coded(String code) {}
+        class Holder { static final Object M = Telescope.mapper(Coded.class, Sub.class, constant(Other::getName, "fixed")); }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "constant", "Other", "name")),
+        compilation::errorMessages
+      );
     }
   }
 

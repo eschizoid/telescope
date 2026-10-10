@@ -424,9 +424,23 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           return false;
         }
         case "constant", "compute" -> {
-          // Accessor-form rows put the runtime into permissive mode (handled by the caller); the
-          // telescope-form has no statically-recoverable target either way. Claims are irrelevant
-          // because permissive mode disables completeness.
+          // These rows put the runtime into permissive mode (handled by the caller), which disables
+          // completeness, so they claim nothing. They always write on the call's target, so an
+          // accessor-form row must name a property of the target or of a type it extends; the
+          // telescope form has no statically recoverable first hop.
+          final var tgt = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
+          if (tgt != null && !types.isSubtype(types.erasure(tgtType), types.erasure(tgt.owner().asType()))) {
+            report(
+              row,
+              PairingMessages.targetRowOffTarget(
+                srcSimple,
+                tgtSimple,
+                rowName,
+                tgt.owner().getSimpleName().toString(),
+                tgt.name()
+              )
+            );
+          }
           return true;
         }
         default -> {

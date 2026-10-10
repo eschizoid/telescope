@@ -515,6 +515,11 @@ public sealed interface Mapping<A, B>
    * containers, IDs) use {@link #compute(Accessor, Supplier)} instead — a literal {@code
    * constant(Tgt::metadata, new HashMap<>())} would share one map across every forward call, which
    * is almost never what you want.
+   *
+   * <p><b>Written on the mapper's target.</b> The accessor may be a getter that a superclass or an
+   * interface of the target declares; the value is still written on the target class, which keeps
+   * every property the declaring type lacks. An accessor on a type the target neither is nor
+   * extends is refused when the mapper is built.
    */
   static <A, B, X> Mapping<A, B> constant(final Accessor<B, X> tgt, final X value) {
     final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
@@ -543,6 +548,9 @@ public sealed interface Mapping<A, B>
    * <p><b>Lazy.</b> The supplier fires on every forward call, not once at row construction. Use
    * this whenever the value involves mutable state, time, randomness, or a fresh allocation; use
    * {@link #constant(Accessor, Object)} when the value is genuinely a shared literal.
+   *
+   * <p>Written on the mapper's target class, through a getter a superclass or interface of it
+   * declares if need be, as for {@link #constant(Accessor, Object)}.
    */
   static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final Supplier<? extends X> supplier) {
     final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
