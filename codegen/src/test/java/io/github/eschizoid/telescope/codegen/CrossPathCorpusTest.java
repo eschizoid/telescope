@@ -1830,9 +1830,8 @@ class CrossPathCorpusTest {
     // Inherent: source outside a package cannot call a package-private constructor in it.
     "a package-private constructor in another package",
     "has no no-argument constructor a rebuild can call",
-    // Inherent: from another package a protected constructor is reachable only from a
-    // subclass,
-    // which builds an instance of the subclass rather than of the target.
+    // Inherent: from another package only a subclass reaches a protected constructor,
+    // and that builds the subclass rather than the target.
     "a protected constructor in another package",
     "has no no-argument constructor a rebuild can call"
   );
@@ -4194,6 +4193,48 @@ class CrossPathCorpusTest {
       }
     }
     assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a dropped property a generic subclass passes through compiles with no unchecked warning")
+  void aDroppedPassedThroughPropertyCompilesWithNoUncheckedWarning() {
+    final var head = "package " + PACKAGE + ";\n";
+    // Backward fills the dropped property with a default and patch copies it from base, both
+    // through the raw source, whose setter takes the erasure of List<T>.
+    final var processed = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      source(
+        "PtdBase",
+        head +
+          "public class PtdBase<T> {\n" +
+          "  private String name;\n" +
+          "  private java.util.List<T> extra;\n" +
+          "  public String getName() { return name; }\n" +
+          "  public void setName(final String name) { this.name = name; }\n" +
+          "  public java.util.List<T> getExtra() { return extra; }\n" +
+          "  public void setExtra(final java.util.List<T> extra) { this.extra = extra; }\n" +
+          "}\n"
+      ),
+      source(
+        "PtdSrc",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(value = PtdTgt.class, drops = {\"extra\"})\n" +
+          "public class PtdSrc<X> extends PtdBase<X> {}\n"
+      ),
+      source(
+        "PtdTgt",
+        head +
+          "public class PtdTgt {\n" +
+          "  private String name;\n" +
+          "  public String getName() { return name; }\n" +
+          "  public void setName(final String name) { this.name = name; }\n" +
+          "}\n"
+      )
+    );
+    assertTrue(processed.success(), () -> "the generated bridge should compile: " + processed.errorMessages());
+    final var warnings = warningsInBridgeMethods("Ptd", processed);
+    assertTrue(warnings.isEmpty(), () -> String.join("\n  ", warnings));
   }
 
   /**

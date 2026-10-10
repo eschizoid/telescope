@@ -2021,7 +2021,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     ) return;
     // The types each pair of properties is planned and read as, decided by the rule the runtime
     // pairs them by, and the casts that reading them through raw classes needs.
-    final var paired = pairedFields(source, target, nonDroppedSourceFields, targetFields, renames);
+    final var paired = pairedFields(source, target, sourceFields, nonDroppedSourceFields, targetFields, renames);
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
     // The reads need to know how to convert each source-field-value into the matching target-field-
@@ -6090,6 +6090,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   private PairedFields pairedFields(
     final TypeElement source,
     final TypeElement target,
+    final List<Field> everySourceField,
     final List<Field> sourceFields,
     final List<Field> targetFields,
     final Map<String, String> renames
@@ -6101,7 +6102,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var targetReads = new HashMap<String, String>();
     final var forwardCasts = new HashMap<String, String>();
     final var backwardCasts = new HashMap<String, String>();
+    // The methods read and write every property of both sides, a dropped one included, which
+    // backward fills with a default and patch copies from base.
     boolean rawAccess = false;
+    for (final var f : everySourceField) rawAccess |= !types.isSameType(asReachedThrough(source, f), f.type());
+    for (final var f : targetFields) rawAccess |= !types.isSameType(asReachedThrough(target, f), f.type());
     for (int i = 0; i < sourceFields.size(); i++) {
       final var sf = sourceFields.get(i);
       final var tgtName = renames.getOrDefault(sf.name(), sf.name());
@@ -6109,7 +6114,6 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var tf = fieldByName(targetFields, tgtName);
       final var sourceOwn = asReachedThrough(source, sf);
       final var targetOwn = asReachedThrough(target, tf);
-      rawAccess |= !types.isSameType(sourceOwn, sf.type()) || !types.isSameType(targetOwn, tf.type());
       var sourceRead = sf.type();
       var targetRead = tf.type();
       if (rules.readsAsDeclared(sf.type(), tf.type())) {
