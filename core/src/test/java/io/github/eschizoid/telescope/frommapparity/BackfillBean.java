@@ -15,6 +15,15 @@ public class BackfillBean {
   private BackfillLeaf leaf;
   private List<Integer> numbers;
   private Optional<String> maybe;
+  private char initial;
+
+  public char getInitial() {
+    return initial;
+  }
+
+  public void setInitial(final char initial) {
+    this.initial = initial;
+  }
 
   public int getCount() {
     return count;

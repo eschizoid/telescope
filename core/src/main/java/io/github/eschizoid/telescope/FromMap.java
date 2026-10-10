@@ -47,7 +47,8 @@ final class FromMap {
   /**
    * What one component / property is filled from.
    *
-   * @param key the map key read
+   * @param key the map key read, or null for a bean property the writer cannot set, which reads
+   *     none
    * @param converter applied to a non-null value under {@code key}
    * @param required whether a missing value refuses the source rather than defaulting
    */
@@ -89,6 +90,17 @@ final class FromMap {
           "."
       );
     }
+    final var kind = target.isRecord() ? "component" : "property";
+    final List<String> declaredRequired;
+    try {
+      declaredRequired = FromMapCoercions.requiredOf(target);
+    } catch (final UnsupportedOperationException e) {
+      throw new IllegalArgumentException(
+        "Telescope.fromMap: " + target.getSimpleName() + " has a registered @FromMap binder, but " + e.getMessage(),
+        e
+      );
+    }
+    final Beans.BeanWriter<T> writer = target.isRecord() ? null : Beans.autoWriter(target);
     final var slots = LinkedHashMap.<String, Slot>newLinkedHashMap(known.size());
     for (final var entry : typeByName.entrySet()) {
       final var name = entry.getKey();
@@ -98,36 +110,41 @@ final class FromMap {
         continue;
       }
       // A component no row names reads the key with its own name, converted as the generated
-      // binder converts it. A type with no conversion is refused here, where the generated binder
-      // refuses it too, rather than left null.
-      final var converter = FromMapCoercions.converterFor(entry.getValue(), reason ->
+      // binder converts it, and is required when the target's own @FromMap(required = ...) says
+      // so. A type with no conversion is refused here, where the generated binder refuses it too.
+      final var converter = FromMapCoercions.converterFor(entry.getValue(), (reason, cause) ->
         new IllegalArgumentException(
           "Telescope.fromMap: " +
-            (target.isRecord() ? "component '" : "property '") +
+            kind +
+            " '" +
             name +
             "' of " +
             target.getSimpleName() +
             " is declared " +
             DeepMap.simpleTypeName(entry.getValue()) +
             " and no row names it: " +
-            reason
+            reason,
+          cause
         )
       );
-      slots.put(name, new Slot(name, converter, false));
+      // A bean property the writer cannot set is never read: its value would be converted and
+      // dropped, and a value that does not convert would refuse a map for a property it never
+      // fills.
+      final var key = writer != null && !writer.writes(name) ? null : name;
+      slots.put(name, new Slot(key, converter, key != null && declaredRequired.contains(name)));
     }
-    final Beans.BeanWriter<T> writer = target.isRecord() ? null : Beans.autoWriter(target);
     if (writer != null) refuseUnwritableRows(target, writer, byField);
     final Function<Map<String, Object>, T> forward =
       writer == null ? recordForward(target, slots) : beanForward(target, writer, slots);
     // The slot alignment above already decided every component's fate — surface those decisions
-    // as the explain() trail instead of throwing them away: one Extracted row per slot that is
-    // written, saying which key it reads and what an absent key does to it, and one MISSING_SOURCE
-    // skip per bean property the writer cannot write and no row names. The report is derived from
-    // the same data the forward path runs on, so it cannot drift.
+    // as the explain() trail instead of throwing them away: one Extracted row per slot that reads a
+    // key, saying which key and what an absent key does to it, and one MISSING_SOURCE skip per
+    // slot that reads none. The report is derived from the same data the forward path runs on, so
+    // it cannot drift.
     final var trail = new ArrayList<OpticNode>(known.size());
     for (final var comp : known) {
       final var slot = slots.get(comp);
-      if (writer != null && !byField.containsKey(comp) && !writer.writes(comp)) {
+      if (slot.key() == null) {
         trail.add(new OpticNode.Skipped(comp, OpticNode.Reason.MISSING_SOURCE));
         continue;
       }
@@ -217,7 +234,7 @@ final class FromMap {
       final Function<String, Object> valueByName = name -> {
         final var i = indexByName.get(name);
         if (i == null) return null;
-        final var value = mapSrc.get(keys[i]);
+        final var value = keys[i] == null ? null : mapSrc.get(keys[i]);
         return value == null ? defaults[i] : converters[i].apply(value);
       };
       return writer.construct(propertyNames, valueByName);

@@ -100,6 +100,15 @@ class FromMapExplainTest {
   }
 
   @Test
+  @DisplayName("a bean property the writer cannot set is never read, so a value that does not convert refuses nothing")
+  void anUnwritablePropertyIsNotRead() {
+    final var derived = Telescope.fromMap(Derived.class).forward(Map.of("name", "Ada", "length", "not an int"));
+
+    assertEquals("Ada", derived.getName());
+    assertEquals(3, derived.getLength());
+  }
+
+  @Test
   @DisplayName("a trace shows the value read under each key, and marks a slot an absent key left at its default")
   void aTraceShowsTheKeyValueAndTheDefault() {
     final var mapper = Telescope.fromMap(

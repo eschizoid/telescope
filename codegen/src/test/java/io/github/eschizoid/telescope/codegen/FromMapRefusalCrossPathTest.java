@@ -12,6 +12,7 @@ import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -107,6 +108,11 @@ class FromMapRefusalCrossPathTest {
     Case.served("java.util.Map<String, Integer>", Map.of("a", 1, "b", "2"), "not a map"),
     Case.served("java.util.Optional<String>", "s"),
     Case.served("java.util.Optional<java.util.List<String>>", List.of("a"), "not a list"),
+    // A null element is where an Optional has to test for absence before its element
+    // converts:
+    // the inner List answers a null with an empty list, which would wrap into a present
+    // Optional.
+    Case.served("java.util.List<java.util.Optional<java.util.List<Integer>>>", Arrays.asList(null, List.of(1, "2"))),
     Case.served(
       "java.util.Map<String, java.util.List<java.time.Instant>>",
       Map.of("k", List.of("2024-01-01T00:00:00Z"))

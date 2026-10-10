@@ -1,6 +1,5 @@
 package io.github.eschizoid.telescope;
 
-import io.github.eschizoid.telescope.conversion.ForwardMapper;
 import io.github.eschizoid.telescope.conversion.FromMapProvider;
 import io.github.eschizoid.telescope.internal.pairing.MapValueTypes;
 import java.lang.System.Logger;
@@ -19,20 +18,18 @@ import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
  * How a {@code fromMap} component no row names is filled from the map value under its own name: the
- * conversion for its declared type, or why that type has none. The binder generated for {@link
- * io.github.eschizoid.telescope.annotations.FromMap} makes the same decision at compile time, over
- * {@code javax.lang.model} types, as a sealed {@code Coercion} it writes out as Java. This class
- * makes it over reflected types, in the same order of checks, and each conversion below behaves as
- * the expression the processor writes for the same type. The reference types taken by a cast or
- * built from a {@code String} come from one table both read.
+ * conversion for its declared type, or why that type has none. Which kind of conversion a type gets
+ * is decided by {@link MapValueTypes#classify}, which the {@code @FromMap} processor calls too;
+ * this class renders each kind as a function that behaves as the expression the processor writes
+ * for it.
  *
- * <p>A type with no conversion is refused while the mapper is built, as the processor refuses it,
- * rather than left {@code null} for a reason nothing reports.
+ * <p>A type with no conversion is refused while the mapper is built, as the processor refuses it.
  */
 final class FromMapCoercions {
 
@@ -45,7 +42,7 @@ final class FromMapCoercions {
 
   /**
    * A type that has a conversion. It is built only when asked for, so deciding whether a type is
-   * accepted never loads a nested type's binder.
+   * accepted never asks a nested type's provider for its binder.
    */
   private record Converts(Supplier<Function<Object, Object>> build) implements Resolved {
     static Converts to(final Function<Object, Object> convert) {
@@ -68,62 +65,125 @@ final class FromMapCoercions {
    * generated binder does: the JLS default for a primitive, an empty container or {@code Optional},
    * and {@code null} otherwise.
    *
-   * @param refusal builds the exception thrown for a type with no conversion, from the reason
+   * <p>A type with no conversion, and a nested type whose provider cannot hand over its binder, are
+   * refused through {@code refusal}, which receives the reason and the exception behind it, if any.
    */
-  static Function<Object, Object> converterFor(final Type type, final Function<String, RuntimeException> refusal) {
+  static Function<Object, Object> converterFor(
+    final Type type,
+    final BiFunction<String, Throwable, RuntimeException> refusal
+  ) {
     return switch (resolve(type)) {
-      case Converts converts -> converts.build().get();
-      case Refused refused -> throw refusal.apply(refused.reason());
+      case Converts converts -> {
+        try {
+          yield converts.build().get();
+        } catch (final UnsupportedOperationException e) {
+          throw refusal.apply(e.getMessage(), e);
+        }
+      }
+      case Refused refused -> throw refusal.apply(refused.reason(), null);
     };
   }
 
-  private static Resolved resolve(final Type type) {
-    if (type instanceof Class<?> c) {
-      if (c.isPrimitive()) return Converts.to(scalar(c, true));
-      if (c.isArray()) return unsupportedKind(type);
-      return declared(c, new Type[0]);
-    }
-    // The reflection API reports the raw type of a parameterized type as a Class.
-    if (type instanceof ParameterizedType p) return declared((Class<?>) p.getRawType(), p.getActualTypeArguments());
-    return unsupportedKind(type);
+  /**
+   * The keys {@code @FromMap(required = ...)} declares on {@code target}, or empty when {@code
+   * target} has no registered binder.
+   *
+   * @throws UnsupportedOperationException when its provider cannot say
+   */
+  static List<String> requiredOf(final Class<?> target) {
+    final var provider = providerFor(target);
+    return provider == null ? List.of() : provider.required();
   }
 
-  private static Resolved declared(final Class<?> raw, final Type[] args) {
-    final var boxed = scalar(raw, false);
-    if (boxed != null) return Converts.to(boxed);
-    if (raw.isEnum()) return Converts.to(enumOf(raw));
-    if (hasGeneratedBinder(raw)) return new Converts(() -> nested(raw));
-    if (raw == List.class && args.length == 1) return each(args[0], FromMapCoercions::listOf);
-    if (raw == Set.class && args.length == 1) return each(args[0], FromMapCoercions::setOf);
-    if (raw == Optional.class && args.length == 1) return each(args[0], FromMapCoercions::optionalOf);
-    if (raw == Map.class && args.length == 2) {
-      final var key = resolve(args[0]);
-      if (key instanceof Refused) return key;
-      final var value = resolve(args[1]);
-      if (value instanceof Refused) return value;
-      final var keyBuild = ((Converts) key).build();
-      final var valueBuild = ((Converts) value).build();
-      return new Converts(() -> mapOf(keyBuild.get(), valueBuild.get()));
+  private static final MapValueTypes.TypeModel<Type> REFLECTED = new MapValueTypes.TypeModel<>() {
+    @Override
+    public String primitiveName(final Type type) {
+      return type instanceof Class<?> c && c.isPrimitive() ? c.getName() : null;
     }
-    if (Collection.class.isAssignableFrom(raw) || Map.class.isAssignableFrom(raw)) {
-      return new Refused(raw.getName() + " is a collection subtype; declare it as List/Set/Map/Optional, or " + ROW);
+
+    @Override
+    public String declaredName(final Type type) {
+      final var raw = rawOf(type);
+      return raw == null ? null : raw.getName();
     }
-    if (MapValueTypes.castAsIs(raw.getName())) {
-      return Converts.to(raw == Object.class ? Function.identity() : raw::cast);
+
+    @Override
+    public List<Type> typeArguments(final Type type) {
+      return type instanceof ParameterizedType p ? List.of(p.getActualTypeArguments()) : List.of();
     }
-    final var built = MapValueTypes.stringBuilt(raw.getName());
-    if (built.isPresent()) return Converts.to(stringBuilt(raw, built.get().build()));
-    if (isJdk(raw)) return new Refused(raw.getName() + " can't be built from a map value; " + ROW);
-    return new Refused(
-      raw.getName() +
-        " has no registered @FromMap binder; annotate it with @FromMap and recompile (on the module path its" +
-        " module-info must also declare \"provides " +
-        FromMapProvider.class.getName() +
-        " with " +
-        raw.getCanonicalName() +
-        "FromMap.Provider;\"), or " +
-        ROW
-    );
+
+    @Override
+    public boolean isEnum(final Type type) {
+      return rawOf(type).isEnum();
+    }
+
+    @Override
+    public boolean hasGeneratedBinder(final Type type) {
+      return FromMapCoercions.hasGeneratedBinder(rawOf(type));
+    }
+
+    @Override
+    public boolean isCollectionOrMap(final Type type) {
+      final var raw = rawOf(type);
+      return Collection.class.isAssignableFrom(raw) || Map.class.isAssignableFrom(raw);
+    }
+  };
+
+  /**
+   * The class a declared type names, or null for an array, a type variable, a wildcard or a
+   * primitive. The reflection API reports the raw type of a parameterized type as a Class.
+   */
+  private static Class<?> rawOf(final Type type) {
+    if (type instanceof Class<?> c) return c.isPrimitive() || c.isArray() ? null : c;
+    return type instanceof ParameterizedType p ? (Class<?>) p.getRawType() : null;
+  }
+
+  private static Type argument(final Type type, final int index) {
+    return ((ParameterizedType) type).getActualTypeArguments()[index];
+  }
+
+  private static Resolved resolve(final Type type) {
+    final var classified = MapValueTypes.classify(type, REFLECTED);
+    final var raw = rawOf(type);
+    return switch (classified.kind()) {
+      case SCALAR -> Converts.to(scalar(classified.scalar(), classified.primitive()));
+      case ENUM -> Converts.to(enumOf(raw));
+      case NESTED -> new Converts(() -> nested(raw));
+      case LIST -> each(argument(type, 0), FromMapCoercions::listOf);
+      case SET -> each(argument(type, 0), FromMapCoercions::setOf);
+      case OPTIONAL -> each(argument(type, 0), FromMapCoercions::optionalOf);
+      case MAP -> {
+        final var key = resolve(argument(type, 0));
+        if (key instanceof Refused) yield key;
+        final var value = resolve(argument(type, 1));
+        if (value instanceof Refused) yield value;
+        final var keyBuild = ((Converts) key).build();
+        final var valueBuild = ((Converts) value).build();
+        yield new Converts(() -> mapOf(keyBuild.get(), valueBuild.get()));
+      }
+      case CAST -> Converts.to(raw == String.class ? v -> (String) v : v -> (CharSequence) v);
+      case AS_IS -> Converts.to(Function.identity());
+      case STRING_BUILT -> Converts.to(
+        stringBuilt(raw, MapValueTypes.stringBuilt(raw.getName()).orElseThrow().build())
+      );
+      case COLLECTION_SUBTYPE -> new Refused(
+        raw.getName() + " is a collection subtype; declare it as List/Set/Map/Optional, or " + ROW
+      );
+      case UNKNOWN_JDK -> new Refused(raw.getName() + " can't be built from a map value; " + ROW);
+      case NO_BINDER -> new Refused(
+        raw.getName() +
+          " has no registered @FromMap binder; annotate it with @FromMap and recompile (on the module path its" +
+          " module-info must also declare \"provides " +
+          FromMapProvider.class.getName() +
+          " with " +
+          raw.getCanonicalName() +
+          "FromMap.Provider;\"), or " +
+          ROW
+      );
+      case UNSUPPORTED -> new Refused(
+        type.getTypeName() + " can't be coerced from a map value (type variable / array / unsupported kind); " + ROW
+      );
+    };
   }
 
   private static Resolved each(
@@ -134,34 +194,26 @@ final class FromMapCoercions {
     return resolved instanceof Converts converts ? new Converts(() -> lift.apply(converts.build().get())) : resolved;
   }
 
-  private static Refused unsupportedKind(final Type type) {
-    return new Refused(
-      type.getTypeName() + " can't be coerced from a map value (type variable / array / unsupported kind); " + ROW
-    );
-  }
-
   /**
-   * A primitive or its wrapper, or null for any other type. A {@code Number} is narrowed, a {@code
+   * A primitive or its wrapper. A {@code Number} is narrowed as a Java cast narrows it, a {@code
    * Boolean} or {@code Character} taken as itself, and anything else read from its {@code String}
-   * form: only {@code "true"} (in any case) is truthy, and a character is the first of a non-empty
-   * string. A null value is the primitive's default, or null for a wrapper.
+   * form: {@code "true"} in any case is the only truthy string, and a character is the first of a
+   * non-empty string. A null value is the primitive's default, or null for a wrapper.
    */
-  private static Function<Object, Object> scalar(final Class<?> type, final boolean primitive) {
-    final var name = primitive ? type.getName() : boxedName(type);
-    if (name == null) return null;
-    return switch (name) {
-      case "int" -> number(Number::intValue, Integer::parseInt, primitive ? 0 : null);
-      case "long" -> number(Number::longValue, Long::parseLong, primitive ? 0L : null);
-      case "double" -> number(Number::doubleValue, Double::parseDouble, primitive ? 0.0d : null);
-      case "float" -> number(Number::floatValue, Float::parseFloat, primitive ? 0.0f : null);
-      case "short" -> number(Number::shortValue, Short::parseShort, primitive ? (short) 0 : null);
-      case "byte" -> number(Number::byteValue, Byte::parseByte, primitive ? (byte) 0 : null);
+  private static Function<Object, Object> scalar(final String primitive, final boolean unboxed) {
+    return switch (primitive) {
+      case "int" -> number(Number::intValue, Integer::parseInt, unboxed ? 0 : null);
+      case "long" -> number(Number::longValue, Long::parseLong, unboxed ? 0L : null);
+      case "double" -> number(Number::doubleValue, Double::parseDouble, unboxed ? 0.0d : null);
+      case "float" -> number(Number::floatValue, Float::parseFloat, unboxed ? 0.0f : null);
+      case "short" -> number(Number::shortValue, Short::parseShort, unboxed ? (short) 0 : null);
+      case "byte" -> number(Number::byteValue, Byte::parseByte, unboxed ? (byte) 0 : null);
       case "boolean" -> {
-        final Object absent = primitive ? Boolean.FALSE : null;
+        final Object absent = unboxed ? Boolean.FALSE : null;
         yield raw -> raw instanceof Boolean b ? b : raw == null ? absent : Boolean.parseBoolean(String.valueOf(raw));
       }
       case "char" -> {
-        final Object absent = primitive ? '\0' : null;
+        final Object absent = unboxed ? '\0' : null;
         yield raw -> {
           if (raw instanceof Character c) return c;
           if (raw == null) return absent;
@@ -169,20 +221,8 @@ final class FromMapCoercions {
           return text.isEmpty() ? absent : text.charAt(0);
         };
       }
-      default -> null;
+      default -> throw new IllegalStateException("not a primitive: " + primitive);
     };
-  }
-
-  private static String boxedName(final Class<?> type) {
-    if (type == Integer.class) return "int";
-    if (type == Long.class) return "long";
-    if (type == Double.class) return "double";
-    if (type == Float.class) return "float";
-    if (type == Short.class) return "short";
-    if (type == Byte.class) return "byte";
-    if (type == Boolean.class) return "boolean";
-    if (type == Character.class) return "char";
-    return null;
   }
 
   private static Function<Object, Object> number(
@@ -214,7 +254,7 @@ final class FromMapCoercions {
    */
   @SuppressWarnings("unchecked")
   private static Function<Object, Object> nested(final Class<?> type) {
-    final var binder = binderFor(type);
+    final var binder = providerFor(type).binder();
     return raw -> raw == null ? null : binder.forward((Map<String, Object>) raw);
   }
 
@@ -265,25 +305,21 @@ final class FromMapCoercions {
     return raw -> raw == null ? Optional.empty() : Optional.ofNullable(each.apply(raw));
   }
 
-  private static boolean isJdk(final Class<?> raw) {
-    return raw.getName().startsWith("java.") || raw.getName().startsWith("javax.");
-  }
-
   /**
    * Whether a generated {@code @FromMap} binder is registered for {@code raw}, which is what the
    * annotation leaves behind once it is gone: it is source-retained. The binder registers a {@link
    * FromMapProvider} naming its target, and {@link ServiceLoader} finds it in whatever compilation
    * produced it and in a native image. A class that merely shares the binder's name registers
-   * nothing.
+   * nothing, and a provider naming another class of the same name, from another loader, does not
+   * count: the answer agrees with {@link #providerFor} by class identity.
    */
   private static boolean hasGeneratedBinder(final Class<?> raw) {
-    if (isJdk(raw)) return false;
-    final var loader = loaderOf(raw);
+    if (MapValueTypes.isJdk(raw.getName())) return false;
     final Set<String> targets;
     synchronized (TARGETS_BY_LOADER) {
-      targets = TARGETS_BY_LOADER.computeIfAbsent(loader, FromMapCoercions::registeredTargets);
+      targets = TARGETS_BY_LOADER.computeIfAbsent(loaderOf(raw), FromMapCoercions::registeredTargets);
     }
-    return targets.contains(raw.getName());
+    return targets.contains(raw.getName()) && providerFor(raw) != null;
   }
 
   private static ClassLoader loaderOf(final Class<?> raw) {
@@ -291,29 +327,26 @@ final class FromMapCoercions {
   }
 
   /**
-   * The generated binder for {@code raw}, found through the same registrations {@link
-   * #hasGeneratedBinder} read. It is looked up while a mapper is built, not cached, so nothing here
-   * holds a provider and with it the loader that defined it.
+   * The registered provider whose target is {@code raw} itself, or null. It is looked up while a
+   * mapper is built, not cached, so nothing here holds a provider and with it the loader that
+   * defined it.
    */
-  private static ForwardMapper<Map<String, Object>, ?> binderFor(final Class<?> raw) {
+  private static FromMapProvider providerFor(final Class<?> raw) {
     final var providers = ServiceLoader.load(FromMapProvider.class, loaderOf(raw)).iterator();
     while (true) {
       final FromMapProvider provider;
       try {
-        if (!providers.hasNext()) break;
+        if (!providers.hasNext()) return null;
         provider = providers.next();
       } catch (final ServiceConfigurationError e) {
         continue;
       }
-      final Class<?> target;
       try {
-        target = provider.targetType();
+        if (provider.targetType() == raw) return provider;
       } catch (final RuntimeException | LinkageError e) {
-        continue;
+        // Logged once by registeredTargets; a provider that cannot name its target names none.
       }
-      if (target == raw) return provider.binder();
     }
-    throw new IllegalStateException("no @FromMap binder is registered for " + raw.getName());
   }
 
   /**

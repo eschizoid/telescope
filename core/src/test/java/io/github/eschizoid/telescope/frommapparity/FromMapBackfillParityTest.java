@@ -181,7 +181,14 @@ class FromMapBackfillParityTest {
       "maybe",
       "m"
     );
-    for (final var source : List.of(typed, Map.<String, Object>of(), Map.<String, Object>of("count", 3.7d))) {
+    for (final var source : List.of(
+      typed,
+      Map.<String, Object>of(),
+      Map.<String, Object>of("count", 3.7d),
+      Map.<String, Object>of("flag", "TRUE", "initial", "xyz"),
+      Map.<String, Object>of("flag", "no", "initial", ""),
+      Map.<String, Object>of("flag", false, "initial", 'q')
+    )) {
       assertSameProperties(BackfillBeanFromMap.fromMap(source), runtime.forward(source), source);
     }
   }
@@ -218,7 +225,10 @@ class FromMapBackfillParityTest {
       final var runtime = assertThrows(RuntimeException.class, () ->
         Telescope.fromMap(BackfillRow.class).forward(source)
       );
+      // Each failure is the platform's own (a parse, an enum lookup, a cast), raised by the same
+      // call on both paths, so the message is the same too and pins which call failed.
       assertEquals(generated.getClass(), runtime.getClass(), () -> "for " + source);
+      assertEquals(generated.getMessage(), runtime.getMessage(), () -> "for " + source);
     }
   }
 
@@ -253,7 +263,8 @@ class FromMapBackfillParityTest {
       BackfillBean::getTone,
       BackfillBean::getLeaf,
       BackfillBean::getNumbers,
-      BackfillBean::getMaybe
+      BackfillBean::getMaybe,
+      BackfillBean::getInitial
     );
     final var want = getters
       .stream()
