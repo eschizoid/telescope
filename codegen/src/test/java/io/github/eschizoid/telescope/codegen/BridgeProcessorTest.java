@@ -12,6 +12,7 @@ import io.github.eschizoid.telescope.codegen.ProcessorHarness.Compilation;
 import java.lang.reflect.InvocationTargetException;
 import java.util.HashMap;
 import java.util.List;
+import javax.tools.Diagnostic;
 import javax.tools.JavaFileObject;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -3912,6 +3913,312 @@ class BridgeProcessorTest {
       );
       // No auto-sub-bridge AddressBridge2 / AddressToAddressDtoBridge was generated for this pair.
       assertNull(compilation.generated().get("demo.AddressToAddressDtoBridge"));
+    }
+
+    @Test
+    @DisplayName("@ViaMapper naming a bridge this compilation generates resolves it once it is written")
+    void viaMapperNamingABridgeGeneratedInTheSameCompilationResolvesIt() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Address",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.AddressDto.class)
+          public record Address(String line) {}
+          """
+        ),
+        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(value = demo.OrderDto.class, viaMappers = {
+            @ViaMapper(field = "address", using = demo.AddressBridge.class)
+          })
+          public record Order(String id, demo.Address address) {}
+          """
+        ),
+        source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
+      assertTrue(
+        bridge.contains("demo.AddressBridge.forward(__fs_address)"),
+        () -> "expected forward via the generated AddressBridge, saw: " + bridge
+      );
+    }
+
+    @Test
+    @DisplayName("a @Bridge read again a round later shares its nested bridges with the round before")
+    void aBridgeReadAgainLaterSharesNestedBridgesWithTheRoundBefore() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Address",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.AddressDto.class)
+          public record Address(String line) {}
+          """
+        ),
+        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
+        source("demo.Item", "package demo; public record Item(String sku) {}"),
+        source("demo.ItemDto", "package demo; public record ItemDto(String sku) {}"),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(value = demo.OrderDto.class, viaMappers = {
+            @ViaMapper(field = "address", using = demo.AddressBridge.class)
+          })
+          public record Order(String id, demo.Address address, demo.Address billing, demo.Item item) {}
+          """
+        ),
+        source(
+          "demo.OrderDto",
+          "package demo; public record OrderDto(String id, demo.AddressDto address, demo.AddressDto billing," +
+            " demo.ItemDto item) {}"
+        ),
+        source(
+          "demo.Shop",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.ShopDto.class)
+          public record Shop(demo.Order order, demo.Item item) {}
+          """
+        ),
+        source("demo.ShopDto", "package demo; public record ShopDto(demo.OrderDto order, demo.ItemDto item) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var shop = compilation.generated().get("demo.ShopBridge");
+      assertNotNull(shop, () -> "ShopBridge missing; saw " + compilation.generated().keySet());
+      // The shop reaches Order -> OrderDto before that pair is written, and names it by the short
+      // name its own @Bridge gives it, under which the later round writes it with its @ViaMapper.
+      assertTrue(shop.contains("OrderBridge.forward("), () -> "expected ShopBridge to call OrderBridge, saw: " + shop);
+      assertNull(
+        compilation.generated().get("demo.OrderToOrderDtoBridge"),
+        "Order -> OrderDto should be written once, under its declared name"
+      );
+      final var order = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(order, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
+      assertTrue(order.contains("demo.AddressBridge.forward(__fs_address)"), order);
+      // Address -> AddressDto, declared and written a round earlier, is named as it was written.
+      assertTrue(order.contains(" AddressBridge.forward(__fs_billing)"), order);
+      assertTrue(order.contains("ItemToItemDtoBridge.forward("), order);
+    }
+
+    @Test
+    @DisplayName("@ViaMapper naming a class nothing provides is refused by name on the annotation")
+    void viaMapperNamingAClassNothingProvidesIsRefusedByName() {
+      final var compilation = compileAttributed(
+        source("demo.Address", "package demo; public record Address(String line) {}"),
+        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(value = demo.OrderDto.class, viaMappers = {
+            @ViaMapper(field = "address", using = demo.MissingBridge.class)
+          })
+          public record Order(String id, demo.Address address) {}
+          """
+        ),
+        source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
+      );
+
+      assertFalse(compilation.success(), "a @ViaMapper naming no class should fail the build");
+      assertTrue(
+        compilation
+          .errorMessages()
+          .contains("@ViaMapper(field = \"address\") names a `using` class that does not exist:"),
+        () -> "expected the processor's named refusal, saw: " + compilation.errorMessages()
+      );
+      // The refusal sits on the @ViaMapper line, which is where javac's own unresolved-symbol
+      // error names the class.
+      final var refusal = compilation
+        .diagnostics()
+        .stream()
+        .filter(d -> d.getKind() == Diagnostic.Kind.ERROR)
+        .filter(d -> d.getMessage(null).startsWith("@ViaMapper(field = \"address\")"))
+        .findFirst()
+        .orElseThrow();
+      assertEquals(5L, refusal.getLineNumber(), "the refusal should point at the @ViaMapper line");
+      assertNull(compilation.generated().get("demo.OrderBridge"), "no bridge should be written for the pair");
+    }
+
+    @Test
+    @DisplayName(
+      "a carrier @Bridge waiting on its @ViaMapper is named by its carrier from a parent that reaches it first"
+    )
+    void aWaitingCarrierBridgeIsNamedByItsCarrier() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Leaf",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.LeafDto.class)
+          public record Leaf(String line) {}
+          """
+        ),
+        source("demo.LeafDto", "package demo; public record LeafDto(String line) {}"),
+        source("demo.CaChild", "package demo; public record CaChild(String id, demo.Leaf leaf) {}"),
+        source("demo.CaChildDto", "package demo; public record CaChildDto(String id, demo.LeafDto leaf) {}"),
+        source(
+          "demo.CaMapping",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(source = demo.CaChild.class, target = demo.CaChildDto.class, viaMappers = {
+            @ViaMapper(field = "leaf", using = demo.LeafBridge.class)
+          })
+          public final class CaMapping {}
+          """
+        ),
+        source(
+          "demo.CaParent",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.CaParentDto.class)
+          public record CaParent(demo.CaChild child) {}
+          """
+        ),
+        source("demo.CaParentDto", "package demo; public record CaParentDto(demo.CaChildDto child) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var parent = compilation.generated().get("demo.CaParentBridge");
+      assertNotNull(parent, () -> "CaParentBridge missing; saw " + compilation.generated().keySet());
+      assertTrue(parent.contains("CaMappingBridge.forward("), () -> "expected the carrier's bridge, saw: " + parent);
+      final var carrier = compilation.generated().get("demo.CaMappingBridge");
+      assertNotNull(carrier, () -> "CaMappingBridge missing; saw " + compilation.generated().keySet());
+      assertTrue(carrier.contains("demo.LeafBridge.forward(__fs_leaf)"), carrier);
+    }
+
+    @Test
+    @DisplayName("a @Transform method on a bridge this compilation generates resolves it once it is written")
+    void aTransformMethodOnABridgeGeneratedInTheSameCompilationResolvesIt() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.Address",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(demo.AddressDto.class)
+          public record Address(String line) {}
+          """
+        ),
+        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Transform;
+          @Bridge(value = demo.OrderDto.class, transforms = {
+            @Transform(field = "address", using = demo.AddressBridge.class, method = "forward")
+          })
+          public record Order(String id, demo.Address address) {}
+          """
+        ),
+        source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.OrderBridge");
+      assertNotNull(bridge, () -> "OrderBridge missing; saw " + compilation.generated().keySet());
+      assertTrue(bridge.contains("demo.AddressBridge.forward("), () -> "expected the qualifier call, saw: " + bridge);
+    }
+
+    @Test
+    @DisplayName("@Transform and @Compute naming a class nothing provides are refused by name")
+    void transformAndComputeNamingAClassNothingProvidesAreRefusedByName() {
+      for (final var row : List.of(
+        "transforms = { @io.github.eschizoid.telescope.annotations.Transform(field = \"id\", using = demo.NoSuchFn.class) }",
+        "computes = { @io.github.eschizoid.telescope.annotations.Compute(field = \"id\", using = demo.NoSuchSupplier.class) }"
+      )) {
+        final var compilation = compileAttributed(
+          source(
+            "demo.Order",
+            "package demo;\n@io.github.eschizoid.telescope.annotations.Bridge(value = demo.OrderDto.class, " +
+              row +
+              ")\npublic record Order(String id) {}\n"
+          ),
+          source("demo.OrderDto", "package demo; public record OrderDto(String id) {}")
+        );
+        final var annotation = row.startsWith("transforms") ? "@Transform" : "@Compute";
+        assertFalse(compilation.success(), () -> annotation + " naming no class should fail the build");
+        assertTrue(
+          compilation.hasError(annotation + "(field = \"id\") names a `using` class that does not exist:"),
+          () -> "expected the processor's named refusal, saw: " + compilation.errorMessages()
+        );
+      }
+    }
+
+    @Test
+    @DisplayName("@ViaMapper naming a bridge only the final round writes is refused with that reason")
+    void viaMapperNamingAFinalRoundBridgeIsRefusedWithThatReason() {
+      final var compilation = compileAttributed(
+        source(
+          "lombok.Data",
+          """
+          package lombok;
+          import java.lang.annotation.ElementType;
+          import java.lang.annotation.Retention;
+          import java.lang.annotation.RetentionPolicy;
+          import java.lang.annotation.Target;
+          @Retention(RetentionPolicy.SOURCE)
+          @Target(ElementType.TYPE)
+          public @interface Data {}
+          """
+        ),
+        source(
+          "demo.Address",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @lombok.Data
+          @Bridge(demo.AddressDto.class)
+          public record Address(String line) {}
+          """
+        ),
+        source("demo.AddressDto", "package demo; public record AddressDto(String line) {}"),
+        source(
+          "demo.Order",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.ViaMapper;
+          @Bridge(value = demo.OrderDto.class, viaMappers = {
+            @ViaMapper(field = "address", using = demo.AddressBridge.class)
+          })
+          public record Order(String id, demo.Address address) {}
+          """
+        ),
+        source("demo.OrderDto", "package demo; public record OrderDto(String id, demo.AddressDto address) {}")
+      );
+
+      assertFalse(compilation.success(), "a bridge only the final round writes cannot be named here");
+      assertTrue(
+        compilation.hasError(
+          "@ViaMapper(field = \"address\") names a `using` class that does not exist when this @Bridge is" +
+            " read. If it is demo.AddressBridge, that bridge is written only in the final round"
+        ),
+        () -> "expected the final-round reason, saw: " + compilation.errorMessages()
+      );
     }
 
     @Test
