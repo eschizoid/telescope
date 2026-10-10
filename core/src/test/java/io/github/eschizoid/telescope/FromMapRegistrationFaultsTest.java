@@ -1,6 +1,8 @@
 package io.github.eschizoid.telescope;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.codegen.ProcessorHarness;
@@ -31,6 +33,7 @@ class FromMapRegistrationFaultsTest {
       List.of(),
       ProcessorHarness.source("faults.Probe", "package faults;\npublic record Probe(String city) {}\n"),
       ProcessorHarness.source("faults.Other", "package faults;\npublic record Other(String city) {}\n"),
+      ProcessorHarness.source("faults.Holder", "package faults;\npublic record Holder(Probe probe) {}\n"),
       ProcessorHarness.source(
         "faults.ProbeProvider",
         "package faults;\npublic final class ProbeProvider implements " +
@@ -61,7 +64,7 @@ class FromMapRegistrationFaultsTest {
     throws ClassNotFoundException {
     final Class<?> probe = loader.loadClass(type);
     assertEquals(loader, probe.getClassLoader(), "the type comes from the test's own loader");
-    return FromMapRefusals.reasonFor(probe);
+    return FromMapCoercions.reasonFor(probe);
   }
 
   @Test
@@ -80,6 +83,41 @@ class FromMapRegistrationFaultsTest {
     try (final var loader = loaderWith("faults.Missing\nfaults.ThrowingProvider\n")) {
       final var probe = verdict(loader, "faults.Probe");
       assertTrue(probe.orElseThrow().contains("faults.Probe has no registered @FromMap binder"), probe::orElseThrow);
+    }
+  }
+
+  @Test
+  @DisplayName("a provider that does not override binder() refuses the mapper that needs it, naming the component")
+  void aProviderWithoutBinderRefusesTheComponent() throws Exception {
+    try (final var loader = loaderWith("faults.ProbeProvider\n")) {
+      final var holder = loader.loadClass("faults.Holder");
+      final var refusal = assertThrows(IllegalArgumentException.class, () -> Telescope.fromMap(holder));
+      assertEquals(
+        "Telescope.fromMap: component 'probe' of Holder is declared Probe and no row names it: a FromMapProvider" +
+          " that does not override binder() cannot build faults.Probe; recompile Probe with the current" +
+          " telescope-codegen",
+        refusal.getMessage()
+      );
+      assertInstanceOf(UnsupportedOperationException.class, refusal.getCause());
+    }
+  }
+
+  @Test
+  @DisplayName("a provider that does not override required() refuses a mapper over its own type")
+  void aProviderWithoutRequiredRefusesItsTarget() throws Exception {
+    try (final var loader = loaderWith("faults.ProbeProvider\n")) {
+      final var probe = loader.loadClass("faults.Probe");
+      final var refusal = assertThrows(IllegalArgumentException.class, () -> Telescope.fromMap(probe));
+      assertTrue(
+        refusal
+          .getMessage()
+          .startsWith(
+            "Telescope.fromMap: Probe has a registered @FromMap binder, but a FromMapProvider" +
+              " that does not override required() cannot say which keys faults.Probe requires"
+          ),
+        refusal::getMessage
+      );
+      assertInstanceOf(UnsupportedOperationException.class, refusal.getCause());
     }
   }
 }

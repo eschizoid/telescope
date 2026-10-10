@@ -29,17 +29,30 @@ import java.util.function.Function;
  * Map<String, Object> → T} boundary factory. Sibling of {@link Merge}: the {@code Telescope} facade
  * validates nothing and delegates here, keeping the factories-delegate-to-engines shape.
  *
- * <p>Rows are matched to target components / properties once at build time, into positional arrays.
- * On the record path the per-call forward is fully positional: a source {@code Map.get} plus
- * converter per extracted slot, the type default where a slot has no value (the JLS default for its
- * declared type, or an empty {@code List}/{@code Set}/{@code Map}/{@code Optional}), and one cached
+ * <p>Every component / property is resolved once at build time to a slot: the map key it reads, the
+ * conversion it applies and whether the key is required. A row decides the slot it names. Every
+ * other slot reads the key with its own name and converts the value as the binder generated for
+ * {@code @FromMap} converts it, so with no rows the two paths read the same map the same way.
+ *
+ * <p>On the record path the per-call forward is fully positional: a source {@code Map.get} plus
+ * converter per slot, the type default where a slot has no value (the JLS default for its declared
+ * type, or an empty {@code List}/{@code Set}/{@code Map}/{@code Optional}), and one cached
  * canonical-constructor invocation — no name lookup survives. On the bean path the writer's {@code
- * construct} contract stays name-driven, so one {@code name→index} lookup per property remains
- * (down from the two the old engine paid — the row map and the defaults map).
+ * construct} contract stays name-driven, so one {@code name→index} lookup per property remains.
  */
 final class FromMap {
 
   private FromMap() {}
+
+  /**
+   * What one component / property is filled from.
+   *
+   * @param key the map key read, or null for a bean property the writer cannot set, which reads
+   *     none
+   * @param converter applied to a non-null value under {@code key}
+   * @param required whether a missing value refuses the source rather than defaulting
+   */
+  private record Slot(String key, Function<Object, Object> converter, boolean required) {}
 
   @SuppressWarnings("unchecked")
   static <T> ForwardMapper<Map<String, Object>, T> build(final Class<T> target, final MapExtractStep... rows) {
@@ -77,60 +90,86 @@ final class FromMap {
           "."
       );
     }
-    // A component no row names is filled only by its type, so a type with no value of its own is
-    // refused here, where the generated binder refuses it too, rather than left null.
-    for (final var entry : typeByName.entrySet()) {
-      if (byField.containsKey(entry.getKey())) continue;
-      final var reason = FromMapRefusals.reasonFor(entry.getValue());
-      if (reason.isPresent()) throw new IllegalArgumentException(
-        "Telescope.fromMap: " +
-          (target.isRecord() ? "component '" : "property '") +
-          entry.getKey() +
-          "' of " +
-          target.getSimpleName() +
-          " is declared " +
-          DeepMap.simpleTypeName(entry.getValue()) +
-          " and no row names it: " +
-          reason.get()
+    final var kind = target.isRecord() ? "component" : "property";
+    final List<String> declaredRequired;
+    try {
+      declaredRequired = FromMapCoercions.requiredOf(target);
+    } catch (final UnsupportedOperationException e) {
+      throw new IllegalArgumentException(
+        "Telescope.fromMap: " + target.getSimpleName() + " has a registered @FromMap binder, but " + e.getMessage(),
+        e
       );
     }
-    if (!target.isRecord()) refuseUnwritableRows(target, byField);
-    final Function<Map<String, Object>, T> forward = target.isRecord()
-      ? recordForward(target, byField)
-      : beanForward(target, byField);
+    final Beans.BeanWriter<T> writer = target.isRecord() ? null : Beans.autoWriter(target);
+    final var slots = LinkedHashMap.<String, Slot>newLinkedHashMap(known.size());
+    for (final var entry : typeByName.entrySet()) {
+      final var name = entry.getKey();
+      final var row = byField.get(name);
+      if (row != null) {
+        slots.put(name, new Slot(row.key(), (Function<Object, Object>) row.converter(), row instanceof Require<?, ?>));
+        continue;
+      }
+      // A component no row names reads the key with its own name, converted as the generated
+      // binder converts it, and is required when the target's own @FromMap(required = ...) says
+      // so. A type with no conversion is refused here, where the generated binder refuses it too.
+      final var converter = FromMapCoercions.converterFor(entry.getValue(), (reason, cause) ->
+        new IllegalArgumentException(
+          "Telescope.fromMap: " +
+            kind +
+            " '" +
+            name +
+            "' of " +
+            target.getSimpleName() +
+            " is declared " +
+            DeepMap.simpleTypeName(entry.getValue()) +
+            " and no row names it: " +
+            reason,
+          cause
+        )
+      );
+      // A bean property the writer cannot set is never read: its value would be converted and
+      // dropped, and a value that does not convert would refuse a map for a property it never
+      // fills.
+      final var key = writer != null && !writer.writes(name) ? null : name;
+      slots.put(name, new Slot(key, converter, key != null && declaredRequired.contains(name)));
+    }
+    if (writer != null) refuseUnwritableRows(target, writer, byField);
+    final Function<Map<String, Object>, T> forward =
+      writer == null ? recordForward(target, slots) : beanForward(target, writer, slots);
     // The slot alignment above already decided every component's fate — surface those decisions
-    // as the explain() trail instead of throwing them away: one Extracted row per row, saying what
-    // an absent key does to it, and one MISSING_SOURCE skip per slot no row names. The report is
-    // derived from the same data the forward path runs on, so it cannot drift.
+    // as the explain() trail instead of throwing them away: one Extracted row per slot that reads a
+    // key, saying which key and what an absent key does to it, and one MISSING_SOURCE skip per
+    // slot that reads none. The report is derived from the same data the forward path runs on, so
+    // it cannot drift.
     final var trail = new ArrayList<OpticNode>(known.size());
     for (final var comp : known) {
-      final var row = byField.get(comp);
-      if (row != null) {
-        trail.add(
-          new OpticNode.Extracted(
-            row.key(),
-            comp,
-            DeepMap.simpleTypeName(typeByName.get(comp)),
-            row instanceof Require<?, ?> ? OpticNode.WhenAbsent.REFUSES : OpticNode.WhenAbsent.DEFAULTS
-          )
-        );
-      } else {
+      final var slot = slots.get(comp);
+      if (slot.key() == null) {
         trail.add(new OpticNode.Skipped(comp, OpticNode.Reason.MISSING_SOURCE));
+        continue;
       }
+      trail.add(
+        new OpticNode.Extracted(
+          slot.key(),
+          comp,
+          DeepMap.simpleTypeName(typeByName.get(comp)),
+          slot.required() ? OpticNode.WhenAbsent.REFUSES : OpticNode.WhenAbsent.DEFAULTS
+        )
+      );
     }
     return ForwardMapper.create(forward, (Class<Map<String, Object>>) (Class<?>) Map.class, target, trail);
   }
 
   /**
-   * Record path — the full positional bind. Each canonical component resolves at build time to
-   * either its extract row (source key + converter) or its type default; the forward call fills a
-   * positional args array and invokes the cached canonical-constructor handle via {@link
-   * Records#construct(Class, Object[])}. No name-keyed dispatch survives to the hot path.
+   * Record path — the full positional bind. Each canonical component resolves at build time to its
+   * slot (source key + converter) and its type default; the forward call fills a positional args
+   * array and invokes the cached canonical-constructor handle via {@link Records#construct(Class,
+   * Object[])}. No name-keyed dispatch survives to the hot path.
    */
   @SuppressWarnings("unchecked")
   private static <T> Function<Map<String, Object>, T> recordForward(
     final Class<T> target,
-    final Map<String, MapExtractStep> byField
+    final Map<String, Slot> slots
   ) {
     final var comps = target.getRecordComponents();
     final var n = comps.length;
@@ -141,12 +180,10 @@ final class FromMap {
     final var required = new boolean[n];
     for (var i = 0; i < n; i++) {
       names[i] = comps[i].getName();
-      final var e = byField.get(names[i]);
-      if (e != null) {
-        keys[i] = e.key();
-        converters[i] = (Function<Object, Object>) e.converter();
-        required[i] = e instanceof Require<?, ?>;
-      }
+      final var slot = slots.get(names[i]);
+      keys[i] = slot.key();
+      converters[i] = slot.converter();
+      required[i] = slot.required();
       defaults[i] = unfilledDefault(comps[i].getType(), comps[i].getGenericType());
     }
     final var refusal = MissingKeys.of(target, "component", keys, names, required);
@@ -155,7 +192,7 @@ final class FromMap {
       refusal.check(mapSrc);
       final var args = new Object[n];
       for (var i = 0; i < n; i++) {
-        final var value = keys[i] == null ? null : mapSrc.get(keys[i]);
+        final var value = mapSrc.get(keys[i]);
         args[i] = value == null ? defaults[i] : converters[i].apply(value);
       }
       return Records.construct(target, args);
@@ -165,33 +202,28 @@ final class FromMap {
   /**
    * Bean path — build-time alignment to the writer's property order. The writer's {@code construct}
    * contract is name-driven, so the per-call closure keeps a name entry point but resolves it
-   * through one prebuilt name→index map into the positional arrays (replacing the previous two
-   * lookups: row map then defaults map). The writer's own internals (setter resolution) are
-   * unchanged here.
+   * through one prebuilt name→index map into the positional arrays. The writer's own internals
+   * (setter resolution) are unchanged here.
    */
+  @SuppressWarnings("unchecked")
   private static <T> Function<Map<String, Object>, T> beanForward(
     final Class<T> target,
-    final Map<String, MapExtractStep> byField
+    final Beans.BeanWriter<T> writer,
+    final Map<String, Slot> slots
   ) {
-    final var writer = Beans.autoWriter(target);
     final var propertyNames = Beans.propertyNames(target);
     final var n = propertyNames.length;
     final var keys = new String[n];
-    @SuppressWarnings("unchecked")
     final var converters = (Function<Object, Object>[]) new Function<?, ?>[n];
     final var defaults = new Object[n];
     final var required = new boolean[n];
     final var indexByName = HashMap.<String, Integer>newHashMap(n);
     for (var i = 0; i < n; i++) {
       indexByName.put(propertyNames[i], i);
-      final var e = byField.get(propertyNames[i]);
-      if (e != null) {
-        keys[i] = e.key();
-        @SuppressWarnings("unchecked")
-        final var conv = (Function<Object, Object>) e.converter();
-        converters[i] = conv;
-        required[i] = e instanceof Require<?, ?>;
-      }
+      final var slot = slots.get(propertyNames[i]);
+      keys[i] = slot.key();
+      converters[i] = slot.converter();
+      required[i] = slot.required();
       final var propertyType = Beans.memberPropertyType(target, propertyNames[i]);
       defaults[i] = unfilledDefault(rawOf(propertyType), propertyType);
     }
@@ -215,8 +247,11 @@ final class FromMap {
    * or never read at all, so a source that carried it would come back without it and nothing would
    * say so.
    */
-  private static void refuseUnwritableRows(final Class<?> target, final Map<String, MapExtractStep> byField) {
-    final var writer = Beans.autoWriter(target);
+  private static void refuseUnwritableRows(
+    final Class<?> target,
+    final Beans.BeanWriter<?> writer,
+    final Map<String, MapExtractStep> byField
+  ) {
     for (final var row : byField.entrySet()) {
       if (!writer.writes(row.getKey())) throw new IllegalArgumentException(
         "Telescope.fromMap: a row names property '" +

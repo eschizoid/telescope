@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.conversion;
 
+import java.util.List;
+import java.util.Map;
 import java.util.ServiceLoader;
 
 /**
@@ -24,4 +26,45 @@ import java.util.ServiceLoader;
 public interface FromMapProvider {
   /** The {@code @FromMap} type the binder builds. */
   Class<?> targetType();
+
+  /**
+   * The generated binder itself, which a runtime {@code fromMap} calls for a component of {@link
+   * #targetType()} that no row names. A nested type is built through its own binder rather than
+   * rebuilt by the runtime, because only the binder knows what the source-retained annotation
+   * declared, such as its required keys.
+   *
+   * <p>A provider that does not override this method cannot build its type, so a runtime {@code
+   * fromMap} that needs it refuses while the mapper is built.
+   *
+   * @throws UnsupportedOperationException when the provider does not override it
+   */
+  default ForwardMapper<Map<String, Object>, ?> binder() {
+    throw new UnsupportedOperationException(
+      "a FromMapProvider that does not override binder() cannot build " +
+        targetType().getName() +
+        "; recompile " +
+        targetType().getSimpleName() +
+        " with the current telescope-codegen"
+    );
+  }
+
+  /**
+   * The keys {@code @FromMap(required = ...)} declares on {@link #targetType()}, each the name of
+   * the component or property it fills. The annotation is source-retained, so this is how a runtime
+   * {@code Telescope.fromMap} over the same type refuses the maps the binder refuses.
+   *
+   * <p>A provider that does not override this method cannot say which keys are required, so a
+   * runtime {@code fromMap} over its type refuses while the mapper is built.
+   *
+   * @throws UnsupportedOperationException when the provider does not override it
+   */
+  default List<String> required() {
+    throw new UnsupportedOperationException(
+      "a FromMapProvider that does not override required() cannot say which keys " +
+        targetType().getName() +
+        " requires; recompile " +
+        targetType().getSimpleName() +
+        " with the current telescope-codegen"
+    );
+  }
 }

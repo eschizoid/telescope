@@ -10,7 +10,8 @@ import java.util.function.Function;
  * One row in a {@link Telescope#fromMap(Class, MapExtractStep...) Telescope.fromMap(...)} factory
  * call — names a key in the untyped source {@code Map<String, Object>}, the target accessor that
  * receives the converted value, and a per-row converter that turns the raw map value into the typed
- * target value.
+ * target value. A row is an override: a component no row names reads the key with its own name and
+ * converts its value as the generated {@code @FromMap} binder does.
  *
  * <p>Build rows via the static factory {@link #extract(String, Accessor, Function)} —
  * static-imported it reads as a list of correspondences alongside the {@link Mapping#to(Accessor,
@@ -46,10 +47,12 @@ public sealed interface MapExtractStep permits Extract, Require {
    * <pre>{@code
    * ForwardMapper<Map<String, Object>, CaseListRequest> m = Telescope.fromMap(
    *     CaseListRequest.class,
-   *     extract("bookingType", CaseListRequest::getBookingType, Object::toString),
-   *     extract("caseId",      CaseListRequest::getCaseId,      Object::toString),
-   *     extract("priority",    CaseListRequest::getPriority,    v -> Integer.parseInt(v.toString())));
+   *     extract("booking_type",   CaseListRequest::getBookingType, Object::toString),
+   *     extract("priority_level", CaseListRequest::getPriority,    v -> Priority.fromCode(v.toString())));
    * }</pre>
+   *
+   * <p>A component no row names already reads the key with its own name, so a row earns its place
+   * by reading another key or converting differently from the default.
    *
    * @param key the map key the row pulls its raw value from
    * @param targetAccessor method reference naming the target field/component

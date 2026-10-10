@@ -84,8 +84,8 @@ with a non-zero status if any capability fails, so building and running the bina
   - the generated `AccountBridge.BRIDGE.read(...)`
   - the generated `UserTelescope` navigator, read and update
 - Other runtime paths
-  - a runtime `Telescope.fromMap(...)` that leaves `address` unset, which it allows because it finds `AddressFromMap`
-    through its `ServiceLoader` registration
+  - a runtime `Telescope.fromMap(...)` that fills `address`, which no row names, through the generated `AddressFromMap`
+    it finds through its `ServiceLoader` registration
   - a `Telescope.all(over(...))` over `ShiftTelescope` navigator paths, on records (`Shift`, `Crewmate`) that have no
     reflection registration
 

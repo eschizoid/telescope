@@ -24,14 +24,23 @@ import java.lang.annotation.Target;
  * wrapper, a {@code String} enum name to the enum, a {@code String}-carried JDK value type ({@code
  * Instant}, {@code UUID}, {@code BigDecimal}, {@code LocalDate}, …) via its String factory, a
  * nested {@code Map} to a nested {@code @FromMap} type, and {@code List}/{@code Set}/{@code
- * Map}/{@code Optional} element-mapped. An absent key takes the field's JLS default, unless {@link
- * #required()} names the field. A field type that can't be coerced (a non-{@code @FromMap} nested
- * object, a collection subtype) is a compile error, not a runtime failure.
+ * Map}/{@code Optional} element-mapped. An absent key takes the field's JLS default, or an empty
+ * one for a field declared exactly {@code List}, {@code Set}, {@code Map} or {@code Optional},
+ * unless {@link #required()} names the field. A field type that can't be coerced (a
+ * non-{@code @FromMap} nested object, a collection subtype) is a compile error, not a runtime
+ * failure.
+ *
+ * <p>The runtime {@code fromMap} reads every component no row names the same way, by its name and
+ * with the same conversion, and over a type carrying this annotation it honours the same {@link
+ * #required()} keys. With no rows the two give the same object for the same map, or refuse it with
+ * the same message. A nested field of a {@code @FromMap} type is built there by this generated
+ * binder.
  *
  * <p>Coercion is lenient, matching the runtime {@code fromMap}: a wrong-shaped value for a
- * container field yields an empty collection, only {@code "true"} is truthy for a boolean, a
- * multi-character String for a {@code char} takes the first character, and a non-numeric String for
- * a numeric field throws {@code NumberFormatException}.
+ * container field yields an empty collection, a {@code Boolean} is taken as is and otherwise only
+ * {@code "true"} in any case is truthy for a boolean, a multi-character String for a {@code char}
+ * takes the first character, and a non-numeric String for a numeric field throws {@code
+ * NumberFormatException}.
  *
  * <pre>{@code
  * @FromMap

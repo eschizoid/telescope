@@ -35,7 +35,7 @@ class EngineExplainTest {
   class FromMapExplain {
 
     @Test
-    @DisplayName("one Extracted row per extract, one MISSING_SOURCE skip per defaulted slot")
+    @DisplayName("one Extracted row per slot, under the row's key or else the slot's own name")
     void slotDecisionsSurface() {
       final var mapper = Telescope.fromMap(
         Payment.class,
@@ -54,8 +54,10 @@ class EngineExplainTest {
           .toList()
       );
       assertTrue(
-        report.skipped().contains(new OpticNode.Skipped("retries", OpticNode.Reason.MISSING_SOURCE)),
-        "the defaulted slot is reported"
+        report
+          .extractions()
+          .contains(new OpticNode.Extracted("retries", "retries", "int", OpticNode.WhenAbsent.DEFAULTS)),
+        "the slot no row names is read by its own name"
       );
     }
   }

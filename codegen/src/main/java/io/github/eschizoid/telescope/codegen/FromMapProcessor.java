@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import io.github.eschizoid.telescope.internal.pairing.MapValueTypes;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -7,6 +8,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -23,6 +25,7 @@ import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ModuleElement;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.ElementFilter;
 import javax.tools.Diagnostic;
@@ -51,35 +54,6 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
   private static final String FROM_MAP_PROVIDER = "io.github.eschizoid.telescope.conversion.FromMapProvider";
 
   private static final String PROVIDER = "Provider";
-
-  // Reference types a raw map plausibly carries as themselves, so a direct cast is justified.
-  private static final Set<String> CAST_AS_IS = Set.of(
-    "java.lang.String",
-    "java.lang.Object",
-    "java.lang.CharSequence"
-  );
-
-  // JDK value types that arrive as a String in an untyped map, mapped to the factory that rebuilds
-  // them from that String — a named static method, or the String constructor.
-  private static final Coercion.Factory PARSE = new Coercion.Factory.Static("parse");
-  private static final Coercion.Factory CTOR = new Coercion.Factory.Ctor();
-  private static final Map<String, Coercion.Factory> JDK_STRING_FACTORIES = Map.ofEntries(
-    Map.entry("java.time.Instant", PARSE),
-    Map.entry("java.time.LocalDate", PARSE),
-    Map.entry("java.time.LocalDateTime", PARSE),
-    Map.entry("java.time.LocalTime", PARSE),
-    Map.entry("java.time.OffsetDateTime", PARSE),
-    Map.entry("java.time.ZonedDateTime", PARSE),
-    Map.entry("java.time.Duration", PARSE),
-    Map.entry("java.time.Period", PARSE),
-    Map.entry("java.util.UUID", new Coercion.Factory.Static("fromString")),
-    Map.entry("java.math.BigDecimal", CTOR),
-    Map.entry("java.math.BigInteger", CTOR),
-    Map.entry("java.net.URI", new Coercion.Factory.Static("create")),
-    Map.entry("java.util.Currency", new Coercion.Factory.Static("getInstance")),
-    Map.entry("java.util.Locale", new Coercion.Factory.Static("forLanguageTag")),
-    Map.entry("java.util.regex.Pattern", new Coercion.Factory.Static("compile"))
-  );
 
   // @FromMap targets carrying a Lombok trigger are deferred to processingOver(): in round 1 Lombok
   // hasn't synthesized the getters/setters yet, so beanProperties() would see "no readable
@@ -159,7 +133,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     for (final var coercion : coercions) helpers.putAll(coercion.helpers());
     addRefusal(record, required, helpers);
 
-    emitConverter(record, unchecked, helpers, out -> {
+    emitConverter(record, unchecked, helpers, required, out -> {
       for (final var component : components) hoist(out, component.getSimpleName().toString());
       emitRefusalCall(out, required, "component");
       final var args = IntStream.range(0, components.size())
@@ -202,7 +176,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     addRefusal(pojo, required, helpers);
 
     final Function<Prop, String> coerced = prop -> valueOf(coercions.get(props.indexOf(prop)), prop.name());
-    emitConverter(pojo, unchecked, helpers, out -> {
+    emitConverter(pojo, unchecked, helpers, required, out -> {
       for (final var prop : props) hoist(out, prop.name());
       emitRefusalCall(out, required, "property");
       final var target = pojo.getQualifiedName().toString();
@@ -361,6 +335,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     final TypeElement type,
     final boolean unchecked,
     final Map<String, String> helpers,
+    final List<String> required,
     final Consumer<PrintWriter> body
   ) {
     final var pkg = processingEnv.getElementUtils().getPackageOf(type).getQualifiedName().toString();
@@ -405,6 +380,23 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       out.println("    @java.lang.Override");
       out.println("    public java.lang.Class<?> targetType() {");
       out.println("      return " + ref + ".class;");
+      out.println("    }");
+      out.println();
+      out.println("    @java.lang.Override");
+      out.println("    public " + FORWARD_MAPPER + "<" + MAP_TYPE + ", " + ref + "> binder() {");
+      out.println("      return FROM_MAP;");
+      out.println("    }");
+      out.println();
+      out.println("    @java.lang.Override");
+      out.println("    public java.util.List<java.lang.String> required() {");
+      out.println(
+        "      return java.util.List.of(" +
+          required
+            .stream()
+            .map(slot -> "\"" + slot + "\"")
+            .collect(Collectors.joining(", ")) +
+          ");"
+      );
       out.println("    }");
       out.println("  }");
     });
@@ -503,119 +495,109 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     return declared;
   }
 
-  /** Map a target field type to the expression strategy that coerces a raw map value into it. */
+  /**
+   * Map a target field type to the expression strategy that coerces a raw map value into it. The
+   * shared spec decides the kind, and the runtime fromMap renders the same kind for the same type;
+   * this method only writes each kind out as source.
+   */
   private Coercion resolveCoercion(final TypeMirror type) {
-    return switch (type.getKind()) {
-      case INT -> new Coercion.Parse("intValue", "java.lang.Integer.parseInt", "0");
-      case LONG -> new Coercion.Parse("longValue", "java.lang.Long.parseLong", "0L");
-      case DOUBLE -> new Coercion.Parse("doubleValue", "java.lang.Double.parseDouble", "0.0d");
-      case FLOAT -> new Coercion.Parse("floatValue", "java.lang.Float.parseFloat", "0.0f");
-      case SHORT -> new Coercion.Parse("shortValue", "java.lang.Short.parseShort", "(short) 0");
-      case BYTE -> new Coercion.Parse("byteValue", "java.lang.Byte.parseByte", "(byte) 0");
-      case BOOLEAN -> new Coercion.BoolParse("false");
-      case CHAR -> new Coercion.CharParse("'\\0'");
-      case DECLARED -> declaredCoercion((DeclaredType) type);
-      default -> new Coercion.Unsupported(
+    final var classified = MapValueTypes.classify(type, typeModel);
+    final var fqn = boxedType(type);
+    return switch (classified.kind()) {
+      case SCALAR -> scalarCoercion(classified.scalar(), classified.primitive());
+      case ENUM -> new Coercion.EnumOf(fqn);
+      case NESTED -> new Coercion.Nested(fqn + "FromMap");
+      case LIST -> new Coercion.Listed(resolveCoercion(argument(type, 0)));
+      case SET -> new Coercion.Setted(resolveCoercion(argument(type, 0)));
+      case OPTIONAL -> new Coercion.OptionalOf(resolveCoercion(argument(type, 0)));
+      case MAP -> new Coercion.MapValues(resolveCoercion(argument(type, 0)), resolveCoercion(argument(type, 1)));
+      case CAST, AS_IS -> new Coercion.Cast(fqn);
+      case STRING_BUILT -> {
+        final var factory = MapValueTypes.stringBuilt(typeModel.declaredName(type)).orElseThrow().factory();
+        yield new Coercion.StringFactory(
+          fqn,
+          factory == null ? new Coercion.Factory.Ctor() : new Coercion.Factory.Static(factory)
+        );
+      }
+      case COLLECTION_SUBTYPE -> new Coercion.Unsupported(
+        fqn + " is a collection subtype — declare the field as List/Set/Map/Optional so @FromMap can build it"
+      );
+      case UNKNOWN_JDK -> new Coercion.Unsupported(
+        fqn +
+          " can't be built from a Map value by @FromMap — use the runtime Telescope.fromMap" +
+          " with a custom extract(key, accessor, converter)"
+      );
+      case NO_BINDER -> new Coercion.Unsupported(
+        fqn + " is a nested object but isn't @FromMap — annotate " + fqn + " with @FromMap"
+      );
+      case UNSUPPORTED -> new Coercion.Unsupported(
         type + " can't be coerced from a Map (type variable / array / unsupported kind)"
       );
     };
   }
 
   /**
-   * Coercion for a boxed wrapper field (parse like its primitive, but null stays null), or null.
+   * A primitive, parsed from a {@code Number} or a {@code String}, or its wrapper, parsed the same
+   * way but left {@code null} where the primitive takes its default.
    */
-  private Coercion boxedWrapperCoercion(final String fqn) {
-    return switch (fqn) {
-      case "java.lang.Integer" -> new Coercion.Parse("intValue", "java.lang.Integer.parseInt", "null");
-      case "java.lang.Long" -> new Coercion.Parse("longValue", "java.lang.Long.parseLong", "null");
-      case "java.lang.Double" -> new Coercion.Parse("doubleValue", "java.lang.Double.parseDouble", "null");
-      case "java.lang.Float" -> new Coercion.Parse("floatValue", "java.lang.Float.parseFloat", "null");
-      case "java.lang.Short" -> new Coercion.Parse("shortValue", "java.lang.Short.parseShort", "null");
-      case "java.lang.Byte" -> new Coercion.Parse("byteValue", "java.lang.Byte.parseByte", "null");
-      case "java.lang.Boolean" -> new Coercion.BoolParse("null");
-      case "java.lang.Character" -> new Coercion.CharParse("null");
-      default -> null;
+  private static Coercion scalarCoercion(final String primitive, final boolean unboxed) {
+    return switch (primitive) {
+      case "int" -> new Coercion.Parse("intValue", "java.lang.Integer.parseInt", unboxed ? "0" : "null");
+      case "long" -> new Coercion.Parse("longValue", "java.lang.Long.parseLong", unboxed ? "0L" : "null");
+      case "double" -> new Coercion.Parse("doubleValue", "java.lang.Double.parseDouble", unboxed ? "0.0d" : "null");
+      case "float" -> new Coercion.Parse("floatValue", "java.lang.Float.parseFloat", unboxed ? "0.0f" : "null");
+      case "short" -> new Coercion.Parse("shortValue", "java.lang.Short.parseShort", unboxed ? "(short) 0" : "null");
+      case "byte" -> new Coercion.Parse("byteValue", "java.lang.Byte.parseByte", unboxed ? "(byte) 0" : "null");
+      case "boolean" -> new Coercion.BoolParse(unboxed ? "false" : "null");
+      case "char" -> new Coercion.CharParse(unboxed ? "'\\0'" : "null");
+      default -> throw new IllegalStateException("not a primitive: " + primitive);
     };
   }
 
-  /**
-   * Coercion for a declared (reference) type: boxed wrapper, enum, nested @FromMap, List/Set/Map
-   * container, else a cast.
-   */
-  private Coercion declaredCoercion(final DeclaredType type) {
-    final var element = type.asElement();
-    final var boxed = boxedWrapperCoercion(boxedType(type));
-    if (boxed != null) return boxed;
-    if (element.getKind() == ElementKind.ENUM) return new Coercion.EnumOf(boxedType(type));
-    if (hasAnnotation(element, ANNOTATION) || hasGeneratedBinder((TypeElement) element)) {
-      return new Coercion.Nested(boxedType(type) + "FromMap");
-    }
-    final var listElement = singleArgOf(type, "java.util.List");
-    if (listElement != null) {
-      return new Coercion.Listed(resolveCoercion(listElement));
-    }
-    final var setElement = singleArgOf(type, "java.util.Set");
-    if (setElement != null) {
-      return new Coercion.Setted(resolveCoercion(setElement));
-    }
-    final var optElement = singleArgOf(type, "java.util.Optional");
-    if (optElement != null) return new Coercion.OptionalOf(resolveCoercion(optElement));
-    if (isErasure(type, "java.util.Map") && type.getTypeArguments().size() == 2) {
-      final var args = type.getTypeArguments();
-      return new Coercion.MapValues(resolveCoercion(args.get(0)), resolveCoercion(args.get(1)));
-    }
-    final var fqn = boxedType(type);
-    // A collection/map SUBTYPE (ArrayList, TreeSet, HashMap, …) — codegen can't allocate the
-    // concrete target; require the interface so the lift is well-defined.
-    if (assignableToRaw(type, "java.util.Collection") || assignableToRaw(type, "java.util.Map")) {
-      return new Coercion.Unsupported(
-        fqn + " is a collection subtype — declare the field as List/Set/Map/Optional so @FromMap" + " can build it"
-      );
-    }
-    // Reference types a map plausibly holds as-is — cast and trust the map.
-    if (CAST_AS_IS.contains(fqn)) return new Coercion.Cast(fqn);
-    // A JDK value type with a known String factory (Instant, UUID, BigDecimal, LocalDate, …) —
-    // build
-    // it from the String form it arrives in.
-    final var factory = JDK_STRING_FACTORIES.get(fqn);
-    if (factory != null) return new Coercion.StringFactory(fqn, factory);
-    // An unrecognized JDK type can't be built from a Map value — refuse rather than emit a cast
-    // that
-    // would CCE at runtime and defeat the "if it compiles, it runs" guard.
-    if (fqn.startsWith("java.") || fqn.startsWith("javax.")) {
-      return new Coercion.Unsupported(
-        fqn +
-          " can't be built from a Map value by @FromMap — use the runtime Telescope.fromMap" +
-          " with a custom extract(key, accessor, converter)"
-      );
-    }
-    // A user type that isn't @FromMap would arrive as a nested Map and CCE — require the
-    // annotation.
-    return new Coercion.Unsupported(
-      fqn + " is a nested object but isn't @FromMap — annotate " + fqn + " with @FromMap"
-    );
+  private static TypeMirror argument(final TypeMirror type, final int index) {
+    return ((DeclaredType) type).getTypeArguments().get(index);
   }
+
+  /** The facts the shared classification reads, over {@code javax.lang.model} types. */
+  private final MapValueTypes.TypeModel<TypeMirror> typeModel = new MapValueTypes.TypeModel<>() {
+    @Override
+    public String primitiveName(final TypeMirror type) {
+      return type.getKind().isPrimitive() ? type.getKind().name().toLowerCase(Locale.ROOT) : null;
+    }
+
+    @Override
+    public String declaredName(final TypeMirror type) {
+      if (type.getKind() != TypeKind.DECLARED) return null;
+      return ((TypeElement) ((DeclaredType) type).asElement()).getQualifiedName().toString();
+    }
+
+    @Override
+    public List<TypeMirror> typeArguments(final TypeMirror type) {
+      return List.copyOf(((DeclaredType) type).getTypeArguments());
+    }
+
+    @Override
+    public boolean isEnum(final TypeMirror type) {
+      return ((DeclaredType) type).asElement().getKind() == ElementKind.ENUM;
+    }
+
+    @Override
+    public boolean hasGeneratedBinder(final TypeMirror type) {
+      final var element = (TypeElement) ((DeclaredType) type).asElement();
+      return hasAnnotation(element, ANNOTATION) || FromMapProcessor.this.hasGeneratedBinder(element);
+    }
+
+    @Override
+    public boolean isCollectionOrMap(final TypeMirror type) {
+      final var declared = (DeclaredType) type;
+      return assignableToRaw(declared, "java.util.Collection") || assignableToRaw(declared, "java.util.Map");
+    }
+  };
 
   /** Whether {@code type} is assignable to the raw type named {@code rawFqn}. */
   private boolean assignableToRaw(final DeclaredType type, final String rawFqn) {
     final var types = processingEnv.getTypeUtils();
     final var raw = processingEnv.getElementUtils().getTypeElement(rawFqn);
     return raw != null && types.isAssignable(types.erasure(type), types.erasure(raw.asType()));
-  }
-
-  /**
-   * The sole type argument of {@code type} when its erasure is exactly {@code rawFqn}, else null.
-   */
-  private TypeMirror singleArgOf(final DeclaredType type, final String rawFqn) {
-    if (!isErasure(type, rawFqn)) return null;
-    final var args = type.getTypeArguments();
-    return args.size() == 1 ? args.getFirst() : null;
-  }
-
-  /** Whether {@code type}'s erasure is exactly the raw type named {@code rawFqn}. */
-  private boolean isErasure(final DeclaredType type, final String rawFqn) {
-    final var types = processingEnv.getTypeUtils();
-    final var raw = processingEnv.getElementUtils().getTypeElement(rawFqn);
-    return raw != null && types.isSameType(types.erasure(type), types.erasure(raw.asType()));
   }
 }

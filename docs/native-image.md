@@ -79,12 +79,13 @@ navigators are the `SerializedLambda`-free alternatives that need no such regist
   heap; native-image defaults every class to run-time init, and a heap object of a run-time-init type is a hard error.
   telescope-core ships `--initialize-at-build-time` for the telescope packages in its jar, so **adopters need no build
   args for telescope itself**. The example still initializes its own generated-model package (app-specific).
-- **Generated `@FromMap` binder discovery — nothing to configure.** A runtime `fromMap` accepts a component whose type
-  has a generated binder by finding the binder's `FromMapProvider` through `ServiceLoader`. The processor writes the
-  `META-INF/services` registration beside the binder, and native-image includes the providers that registration lists,
-  so no reflection entry is needed for the binder or its provider. An image built from named modules reads `provides`
-  directives instead, so declare each binder's `<Name>FromMap.Provider` there, and a fat jar fed to native-image must
-  merge the service files of the jars it combines (`ServicesResourceTransformer`, `mergeServiceFiles()`).
+- **Generated `@FromMap` binder discovery — nothing to configure.** A runtime `fromMap` fills a component whose type has
+  a generated binder by finding the binder's `FromMapProvider` through `ServiceLoader` and calling the binder it
+  returns. The processor writes the `META-INF/services` registration beside the binder, and native-image includes the
+  providers that registration lists, so no reflection entry is needed for the binder or its provider. An image built
+  from named modules reads `provides` directives instead, so declare each binder's `<Name>FromMap.Provider` there, and a
+  fat jar fed to native-image must merge the service files of the jars it combines (`ServicesResourceTransformer`,
+  `mergeServiceFiles()`).
 - **`--no-fallback`** — in the example build: fail rather than silently emit a JVM-fallback image, so a reachability gap
   is a hard error, not a slow "native" binary that is really the JVM.
 - **App-level reachability metadata — the app's own types.** The runtime reflective mapper walks its source/target types
@@ -214,7 +215,7 @@ program works on the JVM. Only the image is missing something, and only the regi
 
 **Runtime and codegen both work under GraalVM native-image.** Every verifier capability — record field update, record
 read, bean read, the runtime record→record / record→bean / record→builder-bean mappers, `@FromMap`, a runtime `fromMap`
-that leaves a `@FromMap` component to its default, `@Bridge`, a generated `@Focus` navigator, and a fused
+that fills a `@FromMap` component through its generated binder, `@Bridge`, a generated `@Focus` navigator, and a fused
 `Telescope.all` over navigator paths alone — builds and runs in the native binary, confirmed by
 `.github/workflows/native-image.yaml`. Telescope's runtime reflective mapper is AOT-capable out of the box for every
 rebuild strategy (records, no-arg-ctor + setters, immutable `@Builder` targets); Wall B is fixed in `telescope-core`,
