@@ -3372,6 +3372,47 @@ class BridgeProcessorTest {
     }
 
     @Test
+    @DisplayName("a computed argument into a type-variable slot stays inline, since the bridge cannot declare it")
+    void computeIntoTypeVariableSlotStaysInline() {
+      final var compilation = compileAttributed(
+        source(
+          "demo.NowSupplier",
+          """
+          package demo;
+          import java.util.function.Supplier;
+          public final class NowSupplier implements Supplier<String> {
+            public NowSupplier() {}
+            @Override public String get() { return "now"; }
+          }
+          """
+        ),
+        source(
+          "demo.A",
+          """
+          package demo;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          import io.github.eschizoid.telescope.annotations.Compute;
+          @Bridge(value = demo.B.class, computes = {@Compute(field = "createdAt", using = demo.NowSupplier.class)})
+          public record A(String id) {}
+          """
+        ),
+        source(
+          "demo.B",
+          """
+          package demo;
+          public record B<T>(String id, T createdAt) {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
+      final var bridge = compilation.generated().get("demo.ABridge");
+      assertNotNull(bridge, () -> "ABridge missing; saw " + compilation.generated().keySet());
+      assertTrue(bridge.contains("new demo.B(__fs_id, __cp_createdAt.get())"), bridge);
+      assertFalse(bridge.contains("__cv_createdAt"), bridge);
+    }
+
+    @Test
     @DisplayName("two renames cannot share the same source or the same target")
     void duplicateRenameSourceIsRejected() {
       final var compilation = compile(
