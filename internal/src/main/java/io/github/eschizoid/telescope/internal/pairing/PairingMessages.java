@@ -180,9 +180,9 @@ public final class PairingMessages {
   }
 
   /**
-   * A write through a row's target path, started at a supertype or subtype of the mapper's target,
-   * that returned something other than a target instance: a lens setter, iso or bridge that built
-   * another class in place of the target it was given.
+   * A write through a row's target path, started at a supertype or subtype of the mapper's target
+   * or at a class that is not known, that returned something other than a target instance or null:
+   * a lens setter, iso or bridge that built another class in place of the target it was given.
    */
   public static String targetPathWroteOffTarget(
     final String source,

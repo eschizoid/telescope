@@ -456,12 +456,14 @@ public final class DeepMap {
    *
    * <p>Any other path cannot be started again: one that starts at a lens, reaches its first
    * property through an iso or a bridge, or writes the root value itself. Such a path is kept when
-   * its root class is the target or unknown, as for a lambda lens, an iso or a bridge, and refused
-   * when its root class is neither a supertype nor a subtype of the target. A path rooted at a
-   * supertype or subtype may still write the target correctly, since a lens's setter receives the
-   * target instance, so it is kept and each write's result is checked to be a target instance. A
-   * {@code constant} that replaces the root value is checked once, here: its value must be a target
-   * instance.
+   * its root class is the target, and refused when its root class is neither a supertype nor a
+   * subtype of the target. A path rooted at a supertype or subtype, or at a class that is unknown,
+   * as for a lambda lens, an iso or a bridge, may still write the target correctly, since a lens's
+   * setter receives the target instance, so it is kept and each write's result is checked to be a
+   * target instance or null. A {@code constant} that replaces the root value of a path with a known
+   * root is checked once, here: its value must be a target instance or null. A check on the result
+   * runs after the path's own write, so a path that builds an abstract class fails inside that
+   * write, before the check sees anything.
    */
   @SuppressWarnings("unchecked")
   private static Telescope<Object, Object> targetRooted(
@@ -505,33 +507,24 @@ public final class DeepMap {
       }
       if (first.kind() == Fusion.Hop.Kind.BY_NAME) return (Telescope<Object, Object>) path;
     }
-    if (focus == null || focus == topTarget) return (Telescope<Object, Object>) path;
+    if (focus == topTarget) return (Telescope<Object, Object>) path;
     final var source = topSource.getSimpleName();
     final var target = topTarget.getSimpleName();
-    if (!focus.isAssignableFrom(topTarget) && !topTarget.isAssignableFrom(focus)) throw new IllegalArgumentException(
-      PairingMessages.targetPathNotOnTarget(source, target, row, focus.getSimpleName())
-    );
-    final var wholeValue = hops != null && step < 0;
-    if (wholeValue && constantRow) {
-      if (!topTarget.isInstance(constantValue)) throw new IllegalArgumentException(
-        PairingMessages.targetValueOffTarget(
-          source,
-          target,
-          row,
-          constantValue == null ? "null" : constantValue.getClass().getSimpleName()
-        )
+    if (focus != null) {
+      if (!focus.isAssignableFrom(topTarget) && !topTarget.isAssignableFrom(focus)) throw new IllegalArgumentException(
+        PairingMessages.targetPathNotOnTarget(source, target, row, focus.getSimpleName())
       );
-      return (Telescope<Object, Object>) path;
+      if (hops != null && step < 0 && constantRow) {
+        if (constantValue != null && !topTarget.isInstance(constantValue)) throw new IllegalArgumentException(
+          PairingMessages.targetValueOffTarget(source, target, row, constantValue.getClass().getSimpleName())
+        );
+        return (Telescope<Object, Object>) path;
+      }
     }
     final Function<Object, Object> checked = written -> {
-      if (topTarget.isInstance(written)) return written;
+      if (written == null || topTarget.isInstance(written)) return written;
       throw new IllegalStateException(
-        PairingMessages.targetPathWroteOffTarget(
-          source,
-          target,
-          row,
-          written == null ? "null" : written.getClass().getSimpleName()
-        )
+        PairingMessages.targetPathWroteOffTarget(source, target, row, written.getClass().getSimpleName())
       );
     };
     return Telescope.<Object, Object>iso(Function.identity(), checked).then((Telescope<Object, Object>) path);

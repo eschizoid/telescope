@@ -4,12 +4,14 @@ import static io.github.eschizoid.telescope.mapping.Mapping.compute;
 import static io.github.eschizoid.telescope.mapping.Mapping.constant;
 import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -21,8 +23,9 @@ import org.junit.jupiter.api.Test;
  * records no component, such as a one-sided iso or {@code fieldByName}, is kept after the root
  * component hop. A path that cannot be started again at the target, because its first step off the
  * root names no component, is refused when it starts at a class unrelated to the target, and
- * otherwise has each write's result checked to be a target instance; a constant that replaces the
- * root value is checked once, when the mapper is built.
+ * otherwise has each write's result checked to be a target instance or null, as does a path whose
+ * root class is unknown; a constant that replaces the root value is checked once, when the mapper
+ * is built.
  */
 class TargetPathStartTest {
 
@@ -450,6 +453,126 @@ class TargetPathStartTest {
             constant(Telescope.of(SuperRowNamedBean.class), new SuperRowNamedBean())
           )
         )
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("null writes")
+  class NullWrites {
+
+    @Test
+    @DisplayName("a constant that replaces a base root with null writes null, as on a target-rooted path")
+    void constantNullIsKept() {
+      assertNull(
+        Telescope.mapperForward(
+          SuperRowSource.class,
+          SuperRowConcreteSub.class,
+          constant(Telescope.of(SuperRowConcreteBase.class), (SuperRowConcreteBase) null)
+        ).forward(SOURCE)
+      );
+    }
+
+    @Test
+    @DisplayName("a compute that replaces a base root with null writes null")
+    void computeNullIsKept() {
+      assertNull(
+        Telescope.mapperForward(
+          SuperRowSource.class,
+          SuperRowConcreteSub.class,
+          compute(Telescope.of(SuperRowConcreteBase.class), () -> null)
+        ).forward(SOURCE)
+      );
+    }
+
+    @Test
+    @DisplayName("a lens on a base's getter whose setter returns null writes null")
+    void lensSetterReturningNullIsKept() {
+      assertNull(
+        Telescope.mapperForward(
+          SuperRowSource.class,
+          SuperRowConcreteSub.class,
+          constant(
+            Telescope.lens(SuperRowConcreteBase::getName, (final SuperRowConcreteBase b, final String v) -> null),
+            "x"
+          )
+        ).forward(SOURCE)
+      );
+    }
+  }
+
+  @Nested
+  @DisplayName("paths whose root class is unknown")
+  class UnknownRoot {
+
+    private static final Function<SuperRowConcreteBase, String> NAME = SuperRowConcreteBase::getName;
+
+    @Test
+    @DisplayName("a lambda lens whose setter builds the base fails its first write by name")
+    void lambdaLensThatBuildsTheBaseFailsItsWrite() {
+      final var mapper = Telescope.mapperForward(
+        SuperRowSource.class,
+        SuperRowConcreteSub.class,
+        constant(
+          Telescope.lens(NAME, (final SuperRowConcreteBase b, final String v) -> {
+            final var built = new SuperRowConcreteBase();
+            built.setName(v);
+            return built;
+          }),
+          "x"
+        )
+      );
+      assertEquals(
+        PairingMessages.targetPathWroteOffTarget(
+          "SuperRowSource",
+          "SuperRowConcreteSub",
+          "constant",
+          "SuperRowConcreteBase"
+        ),
+        failedWrite(() -> mapper.forward(SOURCE))
+      );
+    }
+
+    @Test
+    @DisplayName("a lambda lens whose setter writes the instance it is given keeps the subclass")
+    void lambdaLensThatWritesTheGivenInstanceIsKept() {
+      final var result = Telescope.mapperForward(
+        SuperRowSource.class,
+        SuperRowConcreteSub.class,
+        constant(
+          Telescope.lens(NAME, (final SuperRowConcreteBase b, final String v) -> {
+            b.setName(v);
+            return b;
+          }),
+          "x"
+        )
+      ).forward(SOURCE);
+      assertSame(SuperRowConcreteSub.class, result.getClass());
+      assertEquals("x", result.getName());
+      assertEquals(7, result.getN());
+    }
+
+    @Test
+    @DisplayName("an iso root followed by a base's field fails its first write by name")
+    void isoRootThenABaseFieldFailsItsWrite() {
+      final var mapper = Telescope.mapperForward(
+        SuperRowSource.class,
+        SuperRowConcreteSub.class,
+        constant(
+          Telescope.<SuperRowConcreteBase, SuperRowConcreteBase>iso(b -> b, b -> b).then(
+            Telescope.of(SuperRowConcreteBase.class).field(SuperRowConcreteBase::getName)
+          ),
+          "x"
+        )
+      );
+      assertEquals(
+        PairingMessages.targetPathWroteOffTarget(
+          "SuperRowSource",
+          "SuperRowConcreteSub",
+          "constant",
+          "SuperRowConcreteBase"
+        ),
+        failedWrite(() -> mapper.forward(SOURCE))
       );
     }
   }
