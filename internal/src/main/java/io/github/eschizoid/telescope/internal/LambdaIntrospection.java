@@ -147,11 +147,18 @@ public final class LambdaIntrospection {
    * method type when that is a subtype of the declaring class, and the declaring class otherwise.
    * For {@code Sub::getNext} passed where an {@code Accessor<Sub, ?>} is expected, with {@code
    * getNext} declared on an abstract superclass, this is {@code Sub} while {@link #implClassOf} is
-   * the superclass. A receiver erased to a type that is not a subtype of the declaring class, such
-   * as {@code Object} for a type variable, answers the declaring class. For a record accessor the
-   * two always agree.
+   * the superclass. A receiver typed by a type variable is its bound. A receiver that is not a
+   * subtype of the declaring class answers the declaring class. For a record accessor the two
+   * always agree.
+   *
+   * <p>The receiver is loaded by name through the lambda's class loader, which on the JVM always
+   * finds it, since creating the reference already resolved it. Inside a native image the lookup
+   * answers only for a class registered for reflection: under exact reachability metadata the
+   * image's missing-registration error passes through unchanged, and otherwise the lookup's {@code
+   * ClassNotFoundException} is reported as an {@link IllegalStateException} naming the class.
    *
    * @throws IllegalArgumentException if the lambda is not a method reference
+   * @throws IllegalStateException if the receiver class cannot be loaded
    */
   @SuppressWarnings("unchecked")
   public static <A> Class<A> receiverClassOf(final Serializable lambda) {
@@ -166,7 +173,18 @@ public final class LambdaIntrospection {
           final var receiver = Class.forName(receiverName, false, lambda.getClass().getClassLoader());
           if (declaring.isAssignableFrom(receiver)) result = receiver;
         } catch (final ClassNotFoundException e) {
-          // A receiver the lambda's loader cannot resolve keeps the declaring class.
+          // The receiver is the class a write rebuilds; answering the declaring class instead
+          // would rebuild a superclass, which an abstract one cannot be.
+          throw new IllegalStateException(
+            "Cannot load " +
+              receiverName +
+              ", the class the method reference " +
+              declaring.getName() +
+              "::" +
+              slot.get(lambda).methodName() +
+              " is applied to. Inside a native image, register it for reflection.",
+            e
+          );
         }
       }
       slot.receiverClass = result;

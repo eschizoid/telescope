@@ -80,8 +80,21 @@ class InheritedPropertyWriteTest {
   }
 
   @Test
-  @DisplayName("a setter bean writes a property declared on an abstract non-generic base, as its navigator does")
-  void runtimeWriteMatchesTheNavigatorThroughAnAbstractBase() {
+  @DisplayName("a setter bean without a holder writes a property declared on an abstract non-generic base")
+  void reflectiveWriteThroughAnAbstractNonGenericBase() {
+    final var source = new InheritPlainLeaf();
+    source.setName("ann");
+    source.setSize(3);
+    final var written = Telescope.ofBean(InheritPlainLeaf.class).field(InheritPlainLeaf::getName).set(source, "bo");
+    assertSame(InheritPlainLeaf.class, written.getClass());
+    assertEquals("bo", written.getName());
+    assertEquals(3, written.getSize());
+    assertEquals("ann", source.getName());
+  }
+
+  @Test
+  @DisplayName("a @BeanFocus subclass resolves an inherited property on itself, where its holder lives")
+  void holderBackedWriteThroughAnAbstractNonGenericBase() {
     final var source = leaf("ann", 3);
     final var runtime = Telescope.ofBean(InheritNamedLeaf.class).field(InheritNamedLeaf::getName).set(source, "bo");
     final var navigator = InheritNamedLeafTelescope.of().name().set(source, "bo");
