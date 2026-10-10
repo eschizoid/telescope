@@ -4,7 +4,6 @@ import static io.github.eschizoid.telescope.Edit.over;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -37,6 +36,10 @@ class NavigatorFusionEdgeTest {
   @SuppressWarnings("varargs")
   private static <S> boolean fuses(final Edit<S>... edits) {
     return Fusion.fuse(edits) != null;
+  }
+
+  private static void assertEndsOpaque(final Telescope<?, ?> path) {
+    assertEquals(Fusion.Hop.Kind.OPAQUE, path.hops.getLast().kind());
   }
 
   @SafeVarargs
@@ -150,15 +153,15 @@ class NavigatorFusionEdgeTest {
   }
 
   @Test
-  @DisplayName("then with a side that records no hops leaves the whole path unfused")
+  @DisplayName("then with a side that records no hops records it as an opaque segment and leaves the path unfused")
   void thenWithAnUndescribedSideStaysUnfused() {
     final var custom = Telescope.lens(FusionMember::name, (final FusionMember m, final String n) ->
       new FusionMember(n.toUpperCase(), m.email(), m.age())
     );
-    assertNull(Telescope.of(FusionCrew.class).field(FusionCrew::captain).then(custom).hops);
-    assertNull(FusionCrewTelescope.of().captain().get().then(custom).hops);
-    assertNull(FusionCrewTelescope.of().label().after(String::trim).hops);
-    assertNull(FusionCrewTelescope.of().label().before(String::trim).hops);
+    assertEndsOpaque(Telescope.of(FusionCrew.class).field(FusionCrew::captain).then(custom));
+    assertEndsOpaque(FusionCrewTelescope.of().captain().get().then(custom));
+    assertEndsOpaque(FusionCrewTelescope.of().label().after(String::trim));
+    assertEndsOpaque(FusionCrewTelescope.of().label().before(String::trim));
     final var weird = over(FusionCrewTelescope.of().captain().get().then(custom), (final String s) -> s + "z");
     final var plain = over(FusionCrewTelescope.of().captain().name(), (final String s) -> s + "y");
     assertFalse(fuses(weird, plain));

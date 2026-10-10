@@ -58,9 +58,9 @@ public final class PairingMessages {
   }
 
   /**
-   * A {@code constant} or {@code compute} row whose target names a property of a class the mapper's
-   * target neither is nor extends. Such a row always writes on the mapper's target, so the property
-   * it names is not one the target has.
+   * A row that writes the mapper's target ({@code constant}, {@code compute}, {@code to} or {@code
+   * zip}) whose target names a property of a class the mapper's target neither is nor extends. Such
+   * a row always writes on the mapper's target, so the property it names is not one the target has.
    */
   public static String targetRowOffTarget(
     final String source,
@@ -85,6 +85,127 @@ public final class PairingMessages {
       " neither is nor extends. Name the property through " +
       target +
       " or a class it extends."
+    );
+  }
+
+  /**
+   * A row whose target path narrows the mapper's target, with {@code as(...)}, to a class the
+   * target neither is nor extends. The narrowing never matches the target the mapper builds, so the
+   * row would never write.
+   */
+  public static String targetPathNarrowsOffTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String narrowed
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's target path narrows to " +
+      narrowed +
+      ", which " +
+      target +
+      " neither is nor extends, so it never writes on " +
+      target +
+      ". Narrow to " +
+      target +
+      " or a class it extends."
+    );
+  }
+
+  /**
+   * A row whose target path starts at a class the mapper's target neither is, extends, nor is
+   * extended by, and that cannot be started again at the target because its first step off the root
+   * is not an accessor navigation: the path starts at a lens, reaches its first property through an
+   * iso or a bridge, or writes the root value itself. Such a path can never write the target.
+   */
+  public static String targetPathNotOnTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String root
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's target path starts at " +
+      root +
+      ", which " +
+      target +
+      " neither is nor extends nor is extended by, and cannot be started again at " +
+      target +
+      " because its first step off the root is not an accessor navigation such as field(...)." +
+      " Start the path at " +
+      target +
+      "."
+    );
+  }
+
+  /**
+   * A {@code constant} row that replaces the mapper's target with its value, through a path started
+   * at a supertype or subtype of the target, whose value is not an instance of the target.
+   */
+  public static String targetValueOffTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String valueClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row replaces the whole " +
+      target +
+      " with a value of class " +
+      valueClass +
+      ", which is not a " +
+      target +
+      ". Use a value of class " +
+      target +
+      "."
+    );
+  }
+
+  /**
+   * A write through a row's target path, started at a supertype or subtype of the mapper's target
+   * or at a class that is not known, that returned something other than a target instance or null:
+   * a lens setter, iso or bridge that built another class in place of the target it was given.
+   */
+  public static String targetPathWroteOffTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String writtenClass
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row's target path returned " +
+      writtenClass +
+      " from a write on " +
+      target +
+      ", which is not a " +
+      target +
+      ". A lens or iso started at another class must return the instance it is given, or another " +
+      target +
+      "."
     );
   }
 

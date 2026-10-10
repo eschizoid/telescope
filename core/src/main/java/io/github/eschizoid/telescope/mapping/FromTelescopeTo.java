@@ -26,15 +26,19 @@ public record FromTelescopeTo<A, B, X>(
   Accessor<B, X> tgtAccessor
 ) implements Mapping<A, B> {
   /**
-   * Returns {@code null} — the source side is a {@link Telescope} whose root class isn't
-   * recoverable at runtime (Java generics erased). The engine pins the row to the outer mapper pair
-   * via {@code DeepMap.groupOverridesByPair}'s top-source substitution.
+   * Returns {@code null} — the source side is a {@link Telescope}, which names no pair of its own.
+   * The engine pins the row to the outer mapper pair via {@code DeepMap.groupOverridesByPair}'s
+   * top-source substitution, and keys its target side there too.
    */
   @Override
   public Class<A> sourceClass() {
     return null;
   }
 
+  /**
+   * The class the target accessor is applied to. The engine applies the row at the outer mapper
+   * pair whatever this class is, and refuses it when the mapper's target neither is nor extends it.
+   */
   @Override
   public Class<B> targetClass() {
     return LambdaIntrospection.receiverClassOf(tgtAccessor);
