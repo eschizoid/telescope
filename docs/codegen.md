@@ -176,7 +176,7 @@ the processors are order-tolerant regardless):
   <path>
     <groupId>org.projectlombok</groupId>
     <artifactId>lombok</artifactId>
-    <version>1.18.46</version>
+    <version>1.18.48</version>
   </path>
   <path>
     <groupId>io.github.eschizoid</groupId>
@@ -188,7 +188,7 @@ the processors are order-tolerant regardless):
 
 ```kotlin
 dependencies {
-  annotationProcessor("org.projectlombok:lombok:1.18.46")
+  annotationProcessor("org.projectlombok:lombok:1.18.48")
   annotationProcessor("io.github.eschizoid:telescope-lombok:2.0.0")
   annotationProcessor("io.github.eschizoid:telescope-codegen:2.0.0")
 }

@@ -69,8 +69,8 @@ completeness is not required.)
 ```kotlin
 // Gradle
 dependencies {
-    implementation("io.github.eschizoid:telescope-core:1.1.1")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.1")
+    implementation("io.github.eschizoid:telescope-core:2.0.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:2.0.0")
 }
 ```
 
@@ -79,7 +79,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-core</artifactId>
-  <version>1.1.1</version>
+  <version>2.0.0</version>
 </dependency>
 <!-- annotationProcessorPaths on maven-compiler-plugin -->
 <plugin>
@@ -90,7 +90,7 @@ dependencies {
       <path>
         <groupId>io.github.eschizoid</groupId>
         <artifactId>telescope-codegen</artifactId>
-        <version>1.1.1</version>
+        <version>2.0.0</version>
       </path>
     </annotationProcessorPaths>
   </configuration>

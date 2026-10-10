@@ -319,7 +319,7 @@ injectable interfaces generated from `@TelescopeMapper` blueprints.
 
 ```kotlin
 dependencies {
-    implementation("io.github.eschizoid:telescope-spring-boot-starter:1.1.1")
+    implementation("io.github.eschizoid:telescope-spring-boot-starter:2.0.0")
 }
 ```
 
@@ -340,9 +340,9 @@ they show up in the registry, which resolves them by `(sourceClass, targetClass)
 ```kotlin
 // Gradle (Spring Boot 4 BOM picks up Boot's version)
 dependencies {
-    implementation(platform("org.springframework.boot:spring-boot-dependencies:4.0.1"))
-    implementation("io.github.eschizoid:telescope-spring-boot-starter:1.1.1")
-    annotationProcessor("io.github.eschizoid:telescope-codegen:1.1.1")
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:4.1.1"))
+    implementation("io.github.eschizoid:telescope-spring-boot-starter:2.0.0")
+    annotationProcessor("io.github.eschizoid:telescope-codegen:2.0.0")
 }
 ```
 
@@ -351,7 +351,7 @@ dependencies {
 <dependency>
   <groupId>io.github.eschizoid</groupId>
   <artifactId>telescope-spring-boot-starter</artifactId>
-  <version>1.1.1</version>
+  <version>2.0.0</version>
 </dependency>
 ```
 
@@ -369,7 +369,7 @@ Configure the codegen processor in Maven as well:
           <path>
             <groupId>io.github.eschizoid</groupId>
             <artifactId>telescope-codegen</artifactId>
-            <version>1.1.1</version>
+            <version>2.0.0</version>
           </path>
         </annotationProcessorPaths>
       </configuration>
