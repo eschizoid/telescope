@@ -165,12 +165,9 @@ class LambdaIntrospectionTest {
     }
 
     @Test
-    @DisplayName("inherited bean getter resolves to the SUPERCLASS, not the receiver — documented limitation")
+    @DisplayName("inherited bean getter resolves to the SUPERCLASS that declares it, not the receiver")
     void inheritedGetterReturnsSuperclass() {
-      // Per the class javadoc: "for beans, a method inherited from a superclass returns the
-      // superclass". Adopters who depend on the receiver-side declaring class must obtain it some
-      // other way. Pinning the documented limitation guards against a future "fix" that silently
-      // shifts the semantics — adopters who relied on the documented behavior would break.
+      // implClassOf answers the declaring class; receiverClassOf answers the receiver.
       final SerFn<SubBean, String> ref = SubBean::getInheritedName;
       assertSame(SuperBean.class, LambdaIntrospection.implClassOf(ref));
       assertNotEquals(SubBean.class, LambdaIntrospection.implClassOf(ref));
@@ -186,6 +183,42 @@ class LambdaIntrospectionTest {
       final SerFn<User, String> ref = User::name;
       assertSame(User.class, LambdaIntrospection.implClassOf(ref));
       assertSame(User.class, LambdaIntrospection.implClassOf(ref));
+    }
+  }
+
+  @Nested
+  @DisplayName("receiverClassOf — recover the class a method reference is applied to")
+  class ReceiverClassRecovery {
+
+    @Test
+    @DisplayName("an inherited bean getter resolves to the subclass it is applied to")
+    void inheritedGetterResolvesToTheReceiver() {
+      final SerFn<SubBean, String> ref = SubBean::getInheritedName;
+      assertSame(SubBean.class, LambdaIntrospection.receiverClassOf(ref));
+    }
+
+    @Test
+    @DisplayName("a superclass-qualified reference used at a subclass type resolves to the subclass")
+    void superclassQualifiedReferenceResolvesToTheReceiver() {
+      final SerFn<SubBean, String> ref = SuperBean::getInheritedName;
+      assertSame(SubBean.class, LambdaIntrospection.receiverClassOf(ref));
+    }
+
+    @Test
+    @DisplayName("a record accessor resolves to the record, as implClassOf does")
+    void recordAccessorResolvesToTheRecord() {
+      final SerFn<User, String> ref = User::name;
+      assertSame(User.class, LambdaIntrospection.receiverClassOf(ref));
+    }
+
+    @Test
+    @DisplayName("a receiver typed by a type variable resolves to the variable's bound")
+    void typeVariableReceiverResolvesToItsBound() {
+      assertSame(SuperBean.class, LambdaIntrospection.receiverClassOf(typeVariableReceiver()));
+    }
+
+    private static <T extends SuperBean> SerFn<T, String> typeVariableReceiver() {
+      return SuperBean::getInheritedName;
     }
   }
 

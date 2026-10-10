@@ -32,12 +32,13 @@ public final class LambdaIntrospection {
     }
   };
 
-  private record Metadata(String methodName, String implName) {}
+  private record Metadata(String methodName, String implName, String receiverName) {}
 
   private static final class MetadataSlot {
 
     private volatile Metadata metadata;
     private volatile Class<?> implClass;
+    private volatile Class<?> receiverClass;
 
     Metadata get(final Serializable lambda) {
       final var cached = metadata;
@@ -82,13 +83,26 @@ public final class LambdaIntrospection {
       if (name.startsWith("lambda$")) throw new IllegalArgumentException(
         "Expected a method reference (e.g. User::name, User::getName), not a lambda. Got: " + name
       );
-      return new Metadata(name, serialized.getImplClass().replace('/', '.'));
+      return new Metadata(
+        name,
+        serialized.getImplClass().replace('/', '.'),
+        receiverNameOf(serialized.getInstantiatedMethodType())
+      );
     } catch (final ReflectiveOperationException e) {
       throw new IllegalArgumentException(
         "Expected a method reference to a record component / bean property accessor",
         e
       );
     }
+  }
+
+  // The binary name of the first parameter in a method descriptor, or null when it is not a class.
+  // For an unbound method reference that parameter is the receiver, typed as the functional
+  // interface's instantiation erases it at the call site.
+  private static String receiverNameOf(final String descriptor) {
+    if (descriptor.length() < 2 || descriptor.charAt(1) != 'L') return null;
+    final var end = descriptor.indexOf(';');
+    return end < 0 ? null : descriptor.substring(2, end).replace('/', '.');
   }
 
   /**
@@ -108,7 +122,7 @@ public final class LambdaIntrospection {
    * The declaring class of a Serializable method reference (e.g. {@code UserEntity.class} from
    * {@code UserEntity::name}). Records can't extend other types, so for record accessors the
    * declaring class is always the receiver type. For beans, a method inherited from a superclass
-   * returns the superclass — callers that need the receiver type must obtain it some other way.
+   * returns the superclass; {@link #receiverClassOf} answers the class the reference is applied to.
    *
    * @throws IllegalArgumentException if the lambda is not a method reference
    */
@@ -124,6 +138,56 @@ public final class LambdaIntrospection {
       } catch (final ClassNotFoundException e) {
         throw new IllegalArgumentException("Expected a method reference; got: " + lambda, e);
       }
+    }
+    return (Class<A>) result;
+  }
+
+  /**
+   * The class a Serializable method reference is applied to: the receiver type of its instantiated
+   * method type when that is a subtype of the declaring class, and the declaring class otherwise.
+   * For {@code Sub::getNext} passed where an {@code Accessor<Sub, ?>} is expected, with {@code
+   * getNext} declared on an abstract superclass, this is {@code Sub} while {@link #implClassOf} is
+   * the superclass. A receiver typed by a type variable is its bound. A receiver that is not a
+   * subtype of the declaring class answers the declaring class. For a record accessor the two
+   * always agree.
+   *
+   * <p>The receiver is loaded by name through the lambda's class loader, which on the JVM always
+   * finds it, since creating the reference already resolved it. Inside a native image the lookup
+   * answers only for a class registered for reflection: under exact reachability metadata the
+   * image's missing-registration error passes through unchanged, and otherwise the lookup's {@code
+   * ClassNotFoundException} is reported as an {@link IllegalStateException} naming the class.
+   *
+   * @throws IllegalArgumentException if the lambda is not a method reference
+   * @throws IllegalStateException if the receiver class cannot be loaded
+   */
+  @SuppressWarnings("unchecked")
+  public static <A> Class<A> receiverClassOf(final Serializable lambda) {
+    final var slot = CACHE.get(lambda.getClass());
+    var result = slot.receiverClass;
+    if (result == null) {
+      final Class<?> declaring = implClassOf(lambda);
+      result = declaring;
+      final var receiverName = slot.get(lambda).receiverName();
+      if (receiverName != null && !receiverName.equals(declaring.getName())) {
+        try {
+          final var receiver = Class.forName(receiverName, false, lambda.getClass().getClassLoader());
+          if (declaring.isAssignableFrom(receiver)) result = receiver;
+        } catch (final ClassNotFoundException e) {
+          // The receiver is the class a write rebuilds; answering the declaring class instead
+          // would rebuild a superclass, which an abstract one cannot be.
+          throw new IllegalStateException(
+            "Cannot load " +
+              receiverName +
+              ", the class the method reference " +
+              declaring.getName() +
+              "::" +
+              slot.get(lambda).methodName() +
+              " is applied to. Inside a native image, register it for reflection.",
+            e
+          );
+        }
+      }
+      slot.receiverClass = result;
     }
     return (Class<A>) result;
   }

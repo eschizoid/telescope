@@ -2,8 +2,11 @@ package io.github.eschizoid.telescope.codegen.lombok;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.codegen.lombok.fixtures.ChainBase;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.ChainNode;
 import io.github.eschizoid.telescope.codegen.lombok.fixtures.ChainNodeTelescope;
 import java.io.IOException;
@@ -15,7 +18,8 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * A property a Lombok bean inherits from a generic superclass, typed by that superclass's variable.
  * The navigator types it as the subclass fixes the variable, or refuses the class by name when the
- * subclass passes a variable of its own through.
+ * subclass passes a variable of its own through. A runtime path through it rebuilds the subclass,
+ * as the navigator does, since the superclass that declares the getter cannot be constructed.
  */
 class InheritedGenericPropertyTest {
 
@@ -33,6 +37,47 @@ class InheritedGenericPropertyTest {
     assertEquals("b", written.getNext().getLabel());
     assertEquals("head", written.getLabel());
     assertNull(written.getNext().getNext(), "the rebuilt tail keeps its own next");
+  }
+
+  @Test
+  @DisplayName("a runtime write of an inherited self-bound property rebuilds the subclass, as the navigator does")
+  void runtimeWriteOfAnInheritedPropertyMatchesTheNavigator() {
+    final var head = new ChainNode();
+    head.setLabel("head");
+    final var tail = new ChainNode();
+    tail.setLabel("tail");
+
+    final var runtime = Telescope.ofBean(ChainNode.class).field(ChainNode::getNext).set(head, tail);
+    final var navigator = ChainNodeTelescope.of().next().set(head, tail);
+
+    assertSame(ChainNode.class, runtime.getClass());
+    assertSame(tail, runtime.getNext());
+    assertSame(navigator.getNext(), runtime.getNext());
+    assertEquals(navigator.getLabel(), runtime.getLabel());
+    assertNull(head.getNext(), "the source is not mutated");
+  }
+
+  @Test
+  @DisplayName("a runtime path through a superclass-qualified getter and on into the subclass matches the navigator")
+  void runtimePathThroughASuperclassQualifiedGetterMatchesTheNavigator() {
+    final var head = new ChainNode();
+    head.setLabel("head");
+    final var tail = new ChainNode();
+    tail.setLabel("a");
+    head.setNext(tail);
+
+    final var runtime = Telescope.ofBean(ChainNode.class)
+      .field(ChainBase<ChainNode>::getNext)
+      .field(ChainNode::getLabel)
+      .set(head, "b");
+    final var navigator = ChainNodeTelescope.of().next().label().set(head, "b");
+
+    assertSame(ChainNode.class, runtime.getClass());
+    assertSame(ChainNode.class, runtime.getNext().getClass());
+    assertEquals(navigator.getNext().getLabel(), runtime.getNext().getLabel());
+    assertEquals(navigator.getLabel(), runtime.getLabel());
+    assertEquals("b", runtime.getNext().getLabel());
+    assertEquals("head", runtime.getLabel());
   }
 
   @Test
