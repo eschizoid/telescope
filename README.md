@@ -656,10 +656,14 @@ asks for. The difference is where a per-key conversion goes. Telescope takes it 
 
 ### Spring Boot starter
 
-`telescope-spring-boot-starter` registers every `Mapper<A, B>` bean in a `TelescopeMapperRegistry`, indexed by source
-and target class. It also generates Spring components for `@TelescopeMapper` and `@TelescopeTransformer`, which are
-annotations from `telescope-core`. With them, the starter can normalize entity values before mapping them to a REST DTO.
-Declare transformers on the projection, and Spring injects and applies them in order.
+`telescope-spring-boot-starter` does two things. It collects every `Mapper<A, B>` bean into a `TelescopeMapperRegistry`,
+so you can look a mapper up by its source and target class. And with the `telescope-codegen` annotation processor on the
+build, it turns an annotated interface into a Spring bean: `@TelescopeMapper` gives you an injectable mapper, and
+`@TelescopeTransformer` gives you a reusable clean-up step that a mapper runs on the source before it maps.
+
+In the example below, `CustomerEmailTransformer` cleans an email, and `CustomerProjection` maps a `CustomerEntity` to a
+`CustomerRestDto` after running that transformer. The processor writes both implementations, so the service only injects
+`CustomerProjection` and calls `map`.
 
 ```java
 record CustomerRestDto(String email) {}
@@ -695,8 +699,10 @@ class CustomerService {
 }
 ```
 
-`map` applies the transformer before structural mapping. A null email gets the declared default. A non-null email is
-trimmed and lowercased. The original entity is unchanged. For fields with different names, add typed translation rows.
+`map` runs the listed transformers in order, then maps. A null email becomes `"unknown@example.com"`, a non-null one is
+trimmed and lowercased, and the entity itself is not changed. Transformers run only in this direction; `backward` does
+not run them. A projection is injected directly and is not added to the registry, because it is not a `Mapper`. For
+fields with different names, add typed translation rows.
 
 ```java
 record AccountEntity(String displayName, String phoneNumber) {}
