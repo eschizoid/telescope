@@ -48,7 +48,7 @@ final class FromMap {
    * What one component / property is filled from.
    *
    * @param key the map key the slot answers to
-   * @param converter applied to a non-null value under {@code key}
+   * @param converter applied to a non-null value under {@code key}; null for a slot not written
    * @param required whether a missing value refuses the source rather than defaulting
    * @param written whether the value is converted and written; false for a bean property the writer
    *     cannot set, whose key is at most checked for presence
@@ -124,6 +124,16 @@ final class FromMap {
         );
         continue;
       }
+      // A bean property the writer cannot set is never converted, and its type is never resolved:
+      // its value would be dropped, so neither a value that does not convert nor a type with no
+      // conversion can refuse anything on its account. A declared requirement on it still holds,
+      // so its key is checked for presence and nothing more. The generated binder leaves the
+      // same property out.
+      final var written = writer == null || writer.writes(name);
+      if (!written) {
+        slots.put(name, new Slot(name, null, declaredRequired.contains(name), false));
+        continue;
+      }
       // A component no row names reads the key with its own name, converted as the generated
       // binder converts it, and is required when the target's own @FromMap(required = ...) says
       // so. A type with no conversion is refused here, where the generated binder refuses it too.
@@ -142,12 +152,7 @@ final class FromMap {
           cause
         )
       );
-      // A bean property the writer cannot set is never converted: its value would be dropped, and
-      // a value that does not convert would refuse a map for a property it never fills. A
-      // declared requirement on it still holds, so its key is checked for presence and nothing
-      // more.
-      final var written = writer == null || writer.writes(name);
-      slots.put(name, new Slot(name, converter, declaredRequired.contains(name), written));
+      slots.put(name, new Slot(name, converter, declaredRequired.contains(name), true));
     }
     if (writer != null) refuseUnwritableRows(target, writer, byField);
     final Function<Map<String, Object>, T> forward =
@@ -313,8 +318,8 @@ final class FromMap {
    *
    * <p>The table answers for a container family, and its empty singleton does not fit every member
    * of one: a component declared {@code ArrayList} cannot hold it. Such a component reaches here
-   * only when a row names it, since one no row names is refused while the mapper is built, and it
-   * is left {@code null}.
+   * only when a row names it or the bean's writer cannot set it, since any other is refused while
+   * the mapper is built, and it is left {@code null}.
    */
   private static Object unfilledDefault(final Class<?> raw, final Type generic) {
     if (raw != null && raw.isPrimitive()) return Placeholders.primitiveDefault(raw);

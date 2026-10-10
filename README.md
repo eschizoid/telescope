@@ -713,8 +713,10 @@ or `required`.
 Some rows and components are refused while the mapper is built.
 
 - A row that names a bean property with no setter, builder method, or constructor parameter is refused. The value it
-  reads would be dropped. Such a property that no row names is never converted or written, but its type is still
-  checked, on both paths, and a key `@FromMap(required = ...)` lists for it must still be present.
+  reads would be dropped. Such a property that no row names is left out on both paths: its value is never read,
+  converted or written, and its type is never checked, so the generated binder accepts the bean as `fromMap` does. A key
+  `@FromMap(required = ...)` lists for it is checked for presence only. `explain()` reports it as a `MISSING_SOURCE`
+  skip unless it is required.
 - A component that no row names is refused when its type has no conversion. Examples are an array, a concrete container
   like `ArrayList`, a `Collection`, or a class with no generated binder. The generated binder refuses the same types.
   The message names the component, its type, and the fix.

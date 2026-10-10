@@ -5,17 +5,20 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.codegen.FromMapProcessor;
 import io.github.eschizoid.telescope.codegen.ProcessorHarness;
 import io.github.eschizoid.telescope.conversion.FromMapProvider;
 import io.github.eschizoid.telescope.introspection.OpticNode.Extracted;
 import io.github.eschizoid.telescope.introspection.OpticNode.WhenAbsent;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -29,10 +32,14 @@ class FromMapRegistrationFaultsTest {
 
   private static final String SERVICE = "META-INF/services/" + FromMapProvider.class.getName();
 
-  /** A class loader over a freshly compiled {@code faults} package and the given registration. */
+  /**
+   * A class loader over a freshly compiled {@code faults} package and the given registration. The
+   * package goes through the {@code @FromMap} processor, so {@code Reader} has a generated binder;
+   * the registration alone decides whether the runtime finds it.
+   */
   private static URLClassLoader loaderWith(final String registration) throws IOException {
     final var compilation = ProcessorHarness.compileFully(
-      List.of(),
+      List.of(new FromMapProcessor()),
       List.of(),
       ProcessorHarness.source("faults.Probe", "package faults;\npublic record Probe(String city) {}\n"),
       ProcessorHarness.source("faults.Other", "package faults;\npublic record Other(String city) {}\n"),
@@ -46,17 +53,12 @@ class FromMapRegistrationFaultsTest {
       ),
       ProcessorHarness.source(
         "faults.Reader",
-        "package faults;\npublic class Reader {\n  private String name;\n" +
+        "package faults;\n@io.github.eschizoid.telescope.annotations.FromMap(required = { \"length\", \"origin\" })\n" +
+          "public class Reader {\n  private String name;\n" +
           "  public String getName() { return name; }\n" +
           "  public void setName(final String name) { this.name = name; }\n" +
-          "  public int getLength() { return name == null ? 0 : name.length(); }\n}\n"
-      ),
-      ProcessorHarness.source(
-        "faults.ReaderProvider",
-        "package faults;\npublic final class ReaderProvider implements " +
-          FromMapProvider.class.getName() +
-          " {\n  public Class<?> targetType() { return Reader.class; }\n" +
-          "  public java.util.List<String> required() { return java.util.List.of(\"length\"); }\n}\n"
+          "  public int getLength() { return name == null ? 0 : name.length(); }\n" +
+          "  public Other getOrigin() { return new Other(name); }\n}\n"
       ),
       ProcessorHarness.source(
         "faults.ProbeProvider",
@@ -146,22 +148,50 @@ class FromMapRegistrationFaultsTest {
   }
 
   @Test
-  @DisplayName("a declared required key on a property the writer cannot set is checked, though its value is not read")
+  @DisplayName("a required key on a read-only property is checked for presence alone, by the binder and the runtime")
   void aRequiredReadOnlyPropertyKeepsItsRequirement() throws Exception {
-    try (final var loader = loaderWith("faults.ReaderProvider\n")) {
+    try (final var loader = loaderWith("faults.ReaderFromMap$Provider\n")) {
       final var reader = loader.loadClass("faults.Reader");
+      final var binder = loader.loadClass("faults.ReaderFromMap").getMethod("fromMap", Map.class);
       final var mapper = Telescope.fromMap(reader);
+      final Function<Map<String, Object>, Object> generated = map -> {
+        try {
+          return binder.invoke(null, map);
+        } catch (final InvocationTargetException e) {
+          throw (RuntimeException) e.getCause();
+        } catch (final IllegalAccessException e) {
+          throw new IllegalStateException(e);
+        }
+      };
 
-      final var refusal = assertThrows(IllegalArgumentException.class, () -> mapper.forward(Map.of("name", "Ada")));
-      assertEquals(
-        "Telescope.fromMap: the map carries no value for required key \"length\" (property 'length') of Reader",
-        refusal.getMessage()
-      );
-      assertEquals("Ada", reader.getMethod("getName").invoke(mapper.forward(Map.of("name", "Ada", "length", "x"))));
+      for (final var missing : List.<Map.Entry<Map<String, Object>, String>>of(
+        Map.entry(Map.of("name", "Ada"), "keys \"length\" (property 'length'), \"origin\" (property 'origin')"),
+        Map.entry(Map.of("name", "Ada", "length", "x"), "key \"origin\" (property 'origin')")
+      )) {
+        final var suffix = "the map carries no value for required " + missing.getValue() + " of Reader";
+        final var runtime = assertThrows(IllegalArgumentException.class, () -> mapper.forward(missing.getKey()));
+        assertEquals("Telescope.fromMap: " + suffix, runtime.getMessage());
+        final var bound = assertThrows(IllegalArgumentException.class, () -> generated.apply(missing.getKey()));
+        assertEquals("ReaderFromMap.fromMap: " + suffix, bound.getMessage());
+      }
+      // Neither "x" nor "y" converts to the property's type, so a path that read either value
+      // would throw rather than build.
+      final var present = Map.<String, Object>of("name", "Ada", "length", "x", "origin", "y");
+      for (final var built : List.of(mapper.forward(present), generated.apply(present))) {
+        assertEquals(
+          List.of("Ada", 3, "Other[city=Ada]"),
+          List.of(
+            reader.getMethod("getName").invoke(built),
+            reader.getMethod("getLength").invoke(built),
+            reader.getMethod("getOrigin").invoke(built).toString()
+          )
+        );
+      }
       assertEquals(
         List.of(
           new Extracted("name", "name", "String", WhenAbsent.DEFAULTS),
-          new Extracted("length", "length", "int", WhenAbsent.REFUSES)
+          new Extracted("length", "length", "int", WhenAbsent.REFUSES),
+          new Extracted("origin", "origin", "Other", WhenAbsent.REFUSES)
         ),
         mapper.explain().extractions()
       );

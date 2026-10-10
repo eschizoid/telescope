@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
+import io.github.eschizoid.telescope.introspection.OpticNode;
 import java.lang.invoke.MethodHandles;
 import java.lang.reflect.InvocationTargetException;
 import java.math.BigDecimal;
@@ -334,6 +336,136 @@ class FromMapRefusalCrossPathTest {
       }
     }
     assertEquals(List.of(), failures, () -> String.join("\n", failures));
+  }
+
+  /**
+   * A bean with one property both paths write and one neither can: a getter with no setter, builder
+   * method or constructor parameter behind it, declared by {@code getter}. {@code builder} says
+   * whether the bean is built through a static builder rather than through its setters.
+   */
+  private record ReadOnly(String name, String getter, String property, boolean builder) {}
+
+  private static final List<ReadOnly> READ_ONLY = List.of(
+    new ReadOnly(
+      "a computed int behind setters",
+      "public int getLength() { return name == null ? 0 : name.length(); }",
+      "length",
+      false
+    ),
+    new ReadOnly(
+      "a type with no conversion behind setters",
+      "public %1$sPlain getChild() { return new %1$sPlain(name); }",
+      "child",
+      false
+    ),
+    new ReadOnly(
+      "a type with no conversion behind a builder",
+      "public %1$sPlain getChild() { return new %1$sPlain(name); }",
+      "child",
+      true
+    )
+  );
+
+  @Test
+  @DisplayName("a read-only bean property is skipped on both paths, its key unread and its type unchecked")
+  void aReadOnlyPropertyIsSkippedOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var c : READ_ONLY) {
+      final var prefix = "Fro" + index++;
+      final var sources = readOnlySources(prefix, c);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(plain.success(), () -> c.name() + " should compile without the processor: " + plain.errorMessages());
+      final var processed = ProcessorHarness.compileFully(List.of(new FromMapProcessor()), List.of(), sources);
+      if (!processed.success()) {
+        failures.add(c.name() + ": the processor refused it: " + processed.errorMessages().strip());
+        continue;
+      }
+      final var binderSource = processed.generated().get(PACKAGE + "." + prefix + "BeanFromMap");
+      if (binderSource == null || binderSource.contains("\"" + c.property() + "\"")) {
+        failures.add(c.name() + ": the binder reads key \"" + c.property() + "\":\n" + binderSource);
+      }
+      final var bean = plain.define(MethodHandles.lookup()).get(PACKAGE + "." + prefix + "Bean");
+      final var binder = generatedOnly(processed, plain)
+        .define(MethodHandles.lookup())
+        .get(PACKAGE + "." + prefix + "BeanFromMap")
+        .getMethod("fromMap", Map.class);
+      final ForwardMapper<Map<String, Object>, ?> runtime;
+      try {
+        runtime = Telescope.fromMap(bean);
+      } catch (final IllegalArgumentException e) {
+        failures.add(c.name() + ": the runtime refused it: " + e.getMessage());
+        continue;
+      }
+      final var skipped = runtime.explain().skipped();
+      if (!skipped.equals(List.of(new OpticNode.Skipped(c.property(), OpticNode.Reason.MISSING_SOURCE)))) {
+        failures.add(c.name() + ": the runtime explains the property as " + skipped);
+      }
+      final var name = bean.getMethod("getName");
+      final var getter = bean.getMethod(
+        "get" + c.property().substring(0, 1).toUpperCase(Locale.ROOT) + c.property().substring(1)
+      );
+      final List<Map<String, Object>> maps = List.of(
+        Map.of(),
+        Map.of("name", "Ada"),
+        Map.of("name", "Ada", c.property(), "not convertible")
+      );
+      for (final var source : maps) {
+        final var generated = outcome(() -> {
+          final var built = binder.invoke(null, source);
+          return List.of(Objects.toString(name.invoke(built)), Objects.toString(getter.invoke(built)));
+        });
+        final var forwarded = outcome(() -> {
+          final var built = runtime.forward(source);
+          return List.of(Objects.toString(name.invoke(built)), Objects.toString(getter.invoke(built)));
+        });
+        if (!generated.equals(forwarded) || generated.startsWith("throws")) {
+          failures.add(c.name() + " from " + source + ": generated " + generated + " but runtime " + forwarded);
+        }
+      }
+    }
+    assertEquals(List.of(), failures, () -> String.join("\n", failures));
+  }
+
+  /**
+   * The bean of a {@link ReadOnly} case, which writes {@code name} and reads the other property.
+   */
+  private static JavaFileObject[] readOnlySources(final String prefix, final ReadOnly c) {
+    final var bean = prefix + "Bean";
+    final var writes = c.builder()
+      ? "  private " +
+        bean +
+        "(final String name) { this.name = name; }\n" +
+        "  public static Builder builder() { return new Builder(); }\n" +
+        "  public static final class Builder {\n" +
+        "    private String name;\n" +
+        "    public Builder name(final String name) { this.name = name; return this; }\n" +
+        "    public " +
+        bean +
+        " build() { return new " +
+        bean +
+        "(name); }\n  }\n"
+      : "  public void setName(final String name) { this.name = name; }\n";
+    return new JavaFileObject[] {
+      ProcessorHarness.source(
+        PACKAGE + "." + prefix + "Plain",
+        "package " + PACKAGE + ";\npublic record " + prefix + "Plain(String city) {}\n"
+      ),
+      ProcessorHarness.source(
+        PACKAGE + "." + bean,
+        "package " +
+          PACKAGE +
+          ";\nimport io.github.eschizoid.telescope.annotations.FromMap;\n@FromMap\npublic class " +
+          bean +
+          " {\n  private " +
+          (c.builder() ? "final " : "") +
+          "String name;\n" +
+          writes +
+          "  public String getName() { return name; }\n  " +
+          c.getter().formatted(prefix) +
+          "\n}\n"
+      ),
+    };
   }
 
   @Test

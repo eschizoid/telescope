@@ -91,9 +91,11 @@ gave different objects for the same map, and a mapper with no rows returned a ta
   provider does not override `binder()` is refused while the mapper is built too, since its type cannot be built as the
   generated binder builds it. A target whose provider does not override `required()` is refused, naming the target, when
   some slot reads its own component's name, since the provider cannot say which keys are required.
-- A bean property no row names and the writer cannot set is never converted or written, though its type is still checked
-  and a declared required key on it must be present. `explain()` reports it as a `MISSING_SOURCE` skip unless it is
-  required, and every other component as an `Extracted` row under the key it reads.
+- A bean property no row names and the writer cannot set is left out: its value is never read, converted or written, and
+  its type is never resolved, so a type with no conversion refuses nothing on its account. A declared required key on it
+  is checked for presence only. The generated binder leaves the same property out, where it used to refuse the bean at
+  compile time. `explain()` reports it as a `MISSING_SOURCE` skip unless it is required, and every other component as an
+  `Extracted` row under the key it reads.
 
 This changes behaviour: a component that used to stay at its default now takes the map's value under its name, a value
 under that name that cannot be converted now throws where it used to be ignored, a map missing a required key of the

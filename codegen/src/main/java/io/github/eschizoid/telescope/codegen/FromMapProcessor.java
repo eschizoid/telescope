@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
 import io.github.eschizoid.telescope.internal.pairing.MapValueTypes;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -10,6 +11,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -152,16 +154,27 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     // The binder is emitted into the bean's own package, so a protected or package-private no-arg
     // constructor is reachable from it; only private is not. The strategy is the one the runtime
     // fromMap's writer picks for the same bean.
-    final var rebuild = beanRebuildFor(pojo, props, "@FromMap");
+    final var rebuild = beanRebuildFor(pojo, props, "@FromMap", true);
     if (rebuild == null) return;
     final var members = rebuild.members();
-    final var coercions = props
-      .stream()
-      .map(p -> resolveCoercion(p.type()))
-      .toList();
+    // A property the rebuild has no member for is read-only: a getter with no setter, builder
+    // method or constructor parameter behind it. The runtime fromMap's writer cannot set it either,
+    // so the binder leaves it out as the runtime does: its value is never read or converted and its
+    // type is never resolved. A key @FromMap(required = ...) lists for it is checked for presence.
+    final var written = new boolean[props.size()];
+    for (var i = 0; i < props.size(); i++) {
+      written[i] = rebuild.strategy() == BeanWriteStrategy.CONSTRUCTOR || members[i] != null;
+    }
+    final var coercions = new ArrayList<Coercion>(props.size());
     var coercible = true;
     for (var i = 0; i < props.size(); i++) {
-      final var reason = coercions.get(i).firstUnsupported();
+      if (!written[i]) {
+        coercions.add(null);
+        continue;
+      }
+      final var coercion = resolveCoercion(props.get(i).type());
+      coercions.add(coercion);
+      final var reason = coercion.firstUnsupported();
       if (reason.isPresent()) {
         error(pojo, "@FromMap: property '" + props.get(i).name() + "' — " + reason.get());
         coercible = false;
@@ -170,14 +183,17 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
     if (!coercible) return;
     final var required = requiredNames(pojo, props.stream().map(Prop::name).toList(), "property");
     if (required == null) return;
-    final var unchecked = coercions.stream().anyMatch(Coercion::unchecked);
+    final var resolved = coercions.stream().filter(Objects::nonNull).toList();
+    final var unchecked = resolved.stream().anyMatch(Coercion::unchecked);
     final var helpers = new LinkedHashMap<String, String>();
-    for (final var coercion : coercions) helpers.putAll(coercion.helpers());
+    for (final var coercion : resolved) helpers.putAll(coercion.helpers());
     addRefusal(pojo, required, helpers);
 
     final Function<Prop, String> coerced = prop -> valueOf(coercions.get(props.indexOf(prop)), prop.name());
     emitConverter(pojo, unchecked, helpers, required, out -> {
-      for (final var prop : props) hoist(out, prop.name());
+      for (var i = 0; i < props.size(); i++) {
+        if (written[i] || required.contains(props.get(i).name())) hoist(out, props.get(i).name());
+      }
       emitRefusalCall(out, required, "property");
       final var target = pojo.getQualifiedName().toString();
       switch (rebuild.strategy()) {
@@ -197,6 +213,7 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
         case SETTERS -> {
           out.println("    final var bean = new " + target + "();");
           for (var i = 0; i < props.size(); i++) {
+            if (!written[i]) continue;
             out.println("    bean." + members[i] + "(" + valueOf(coercions.get(i), props.get(i).name()) + ");");
           }
           out.println("    return bean;");
