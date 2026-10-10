@@ -596,7 +596,8 @@ The ambiguity qualifiers solve doesn't arise at runtime: each row names its conv
 javac — safer than @Named string matching. Codegen side has the literal @Named-equivalent via @Transform(using, method)
 (forward-only, same asymmetry as a single MapStruct qualified method). One corner: the DI TelescopeMapperRegistry allows
 one `Mapper` bean per (src, tgt) pair, qualified or not. A second mapper for the same pair has to be wrapped in your own
-type or built where it's used.
+type or built where it's used. On Spring, a bean declared with `@Bean(defaultCandidate = false)` also stays out of the
+registry.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java, `using()` and `method()`
 (the `using()` javadoc says the method-named form "unlocks MapStruct's @Named qualifier-dispatch pattern", and
@@ -604,8 +605,8 @@ type or built where it's used.
 core/src/main/java/io/github/eschizoid/telescope/mapping/Mapping.java, `to(Accessor, Accessor, Function, Function)`
 (exact function per row) and `via(Accessor, Accessor, Mapper)` (an exact Mapper instance);
 spring-boot-starter/src/main/java/io/github/eschizoid/telescope/spring/TelescopeMapperRegistry.java, the constructor and
-the 'Construction' section of the class javadoc (duplicate (src,tgt) pairs throw with a message directing to Spring
-@Qualifier + direct injection)</sub>
+the 'Construction' section of the class javadoc (duplicate (src,tgt) pairs throw with a message naming what keeps a
+second mapper out of the registry)</sub>
 
 ### Mapper composition
 

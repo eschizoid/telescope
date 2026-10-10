@@ -118,7 +118,8 @@ The message for a missing pair names both classes and tells you to define a `@Be
 The pair must identify one mapper. When two `Mapper` beans share a source and target class, building the registry throws
 `IllegalStateException`, so the application context fails to start. The message names the pair. Qualifiers don't help,
 because the registry collects every `Mapper` bean. Keep one `Mapper` bean per pair, and wrap the other in your own type
-or build it where it's used.
+or build it where it's used. A bean declared with `@Bean(defaultCandidate = false)` also stays out of the registry, and
+you inject it by its qualifier.
 
 ### Replacing the registry
 

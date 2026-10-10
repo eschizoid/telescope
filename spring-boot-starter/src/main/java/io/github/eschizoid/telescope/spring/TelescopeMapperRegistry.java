@@ -43,12 +43,12 @@ import java.util.Optional;
  *
  * <p>The registry holds one mapper per {@code (sourceClass, targetClass)} pair, and two {@code
  * Mapper} beans for the same pair make the constructor throw {@link IllegalStateException}, so the
- * context fails to start. {@code telescope.registry.fail-fast} does not change this; it governs only
- * lookups of a missing pair. A {@code @Qualifier} does not keep a bean out of the registry, because
- * the autoconfiguration collects every {@code Mapper} bean that is a default autowire candidate,
- * qualified or not. A second mapper for a registered pair stays out of the registry when it is
- * declared with {@code @Bean(defaultCandidate = false)} and injected by its qualifier, when it is
- * wrapped in a type of the application's own, or when it is built where it is used.
+ * context fails to start. {@code telescope.registry.fail-fast} does not change this; it governs
+ * only lookups of a missing pair. A {@code @Qualifier} does not keep a bean out of the registry,
+ * because the autoconfiguration collects every {@code Mapper} bean that is a default autowire
+ * candidate, qualified or not. A second mapper for a registered pair stays out of the registry when
+ * it is declared with {@code @Bean(defaultCandidate = false)} and injected by its qualifier, when
+ * it is wrapped in a type of the application's own, or when it is built where it is used.
  */
 public class TelescopeMapperRegistry {
 
