@@ -45,6 +45,26 @@ class InheritedAccessorRowTest {
   }
 
   @Test
+  @DisplayName("rename rows onto inherited target getters convert as the generated bridge's renames do, both ways")
+  void renameRowsMatchTheGeneratedBridge() {
+    final var mapper = Telescope.mapper(
+      RowBridged.class,
+      RowNamedSub.class,
+      to(RowBridged::label, RowNamedSub::getName),
+      to(RowBridged::key, RowNamedSub::getCode)
+    );
+    final var source = new RowBridged("ann", "k1", "t");
+    final var runtime = mapper.forward(source);
+    final var generated = RowBridgedBridge.BRIDGE.read(source);
+    assertSame(generated.getClass(), runtime.getClass());
+    assertEquals(generated.getName(), runtime.getName());
+    assertEquals(generated.getCode(), runtime.getCode());
+    assertEquals(generated.getTag(), runtime.getTag());
+    final var target = sub("bo", "k2", "u");
+    assertEquals(RowBridgedBridge.BRIDGE.set(source, target), mapper.backward(target));
+  }
+
+  @Test
   @DisplayName("to(src, tgt) with an inherited source getter maps both ways")
   void sameTypedRowWithAnInheritedSourceGetter() {
     final var mapper = Telescope.mapper(
@@ -70,6 +90,48 @@ class InheritedAccessorRowTest {
     );
     assertEquals("K1", mapper.forward(new RowFlat("ann", "k1", "t")).getCode());
     assertEquals("k2", mapper.backward(sub("bo", "K2", "u")).code());
+  }
+
+  @Test
+  @DisplayName("to(src, tgt, forward, backward) with an inherited source getter converts both ways")
+  void typedTransformRowWithAnInheritedSourceGetter() {
+    final var mapper = Telescope.mapper(
+      RowNamedSub.class,
+      RowFlat.class,
+      to(RowNamedSub::getCode, RowFlat::code, String::toUpperCase, String::toLowerCase)
+    );
+    assertEquals(new RowFlat("ann", "K1", "t"), mapper.forward(sub("ann", "k1", "t")));
+    assertEquals("k2", mapper.backward(new RowFlat("bo", "K2", "u")).getCode());
+  }
+
+  @Test
+  @DisplayName("toOneWay with an inherited target getter converts forward")
+  void forwardOnlyRowWithAnInheritedTargetGetter() {
+    final var mapper = Telescope.mapperForward(
+      RowRenamed.class,
+      RowNamedSub.class,
+      toOneWay(RowRenamed::label, RowNamedSub::getName, (final String s) -> s + "!")
+    );
+    final var forward = mapper.forward(new RowRenamed("ann", "k1", "t"));
+    assertSame(RowNamedSub.class, forward.getClass());
+    assertEquals("ann!", forward.getName());
+  }
+
+  @Test
+  @DisplayName("via with an inherited source getter maps the nested value through its mapper")
+  void viaRowWithAnInheritedSourceGetter() {
+    final var entryMapper = Telescope.mapper(RowNamedSub.class, RowFlat.class);
+    final var mapper = Telescope.mapper(
+      RowHolderSub.class,
+      RowHolder.class,
+      via(RowHolderSub::getEntry, RowHolder::item, entryMapper)
+    );
+    final var holder = new RowHolderSub();
+    holder.setEntry(sub("ann", "k1", "t"));
+    assertEquals(new RowHolder(new RowFlat("ann", "k1", "t")), mapper.forward(holder));
+    final var backward = mapper.backward(new RowHolder(new RowFlat("bo", "k2", "u")));
+    assertSame(RowHolderSub.class, backward.getClass());
+    assertEquals("bo", backward.getEntry().getName());
   }
 
   @Test
