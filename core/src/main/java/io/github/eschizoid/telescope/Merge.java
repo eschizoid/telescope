@@ -180,7 +180,7 @@ final class Merge {
     if (step instanceof MergeStep.FromInferred<?, ?> r) {
       ensureAccessorPresent(r.src(), index, "from", "source");
       ensureAccessorPresent(r.tgt(), index, "from", "target");
-      final Class<?> srcClass = LambdaIntrospection.implClassOf(r.src());
+      final Class<?> srcClass = LambdaIntrospection.receiverClassOf(r.src());
       final Getter<Object, Object> srcAccessor = asGetter(r.src());
       final String tgtName = targetRefl.normalize(LambdaIntrospection.methodNameOf(r.tgt()));
       // Fail loud at build time when the target accessor is not a canonical component / writable

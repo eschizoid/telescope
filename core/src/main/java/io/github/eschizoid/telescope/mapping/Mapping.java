@@ -32,7 +32,7 @@ import java.util.function.Supplier;
  * varargs of typed rows, declarative, count-visible-at-a-glance.
  *
  * <p><b>Type-pair keying.</b> Each {@link #to to(srcAcc, tgtAcc)} / {@link #via via(srcAcc, tgtAcc,
- * mapper)} row carries the declaring classes of its accessors via {@code SerializedLambda}. {@link
+ * mapper)} row carries the receiver classes of its accessors via {@code SerializedLambda}. {@link
  * Telescope#map(Class, Class, MapStep...)} keys overrides by {@code (sourceClass, targetClass)} so
  * a single row applies wherever the recursion lands on that pair — top level or N levels deep.
  *
@@ -56,10 +56,12 @@ public sealed interface Mapping<A, B>
     Conditional
 {
   /**
-   * Source class this row keys against — the declaring class of the source accessor, recovered via
-   * {@code SerializedLambda}. May be {@code null} for permits whose source side is a {@code
-   * Telescope<A, ?>} (root class isn't recoverable at runtime — generics erased); the engine pins
-   * the row to the outer mapper pair instead.
+   * Source class this row keys against — the class the source accessor is applied to, recovered via
+   * {@code SerializedLambda}. For a getter inherited from a superclass that is the subclass the row
+   * names, not the superclass that declares the getter, so the row keys against a pair the mapper
+   * visits. May be {@code null} for permits whose source side is a {@code Telescope<A, ?>} (root
+   * class isn't recoverable at runtime — generics erased); the engine pins the row to the outer
+   * mapper pair instead.
    *
    * <p>Internal accessor exposed so {@code DeepMap} can key overrides by {@code (sourceClass,
    * targetClass)} without a cross-interface cast. Not intended as a user-facing introspection
@@ -68,7 +70,7 @@ public sealed interface Mapping<A, B>
   Class<A> sourceClass();
 
   /**
-   * Target class this row keys against — the declaring class of the target accessor. May be {@code
+   * Target class this row keys against — the class the target accessor is applied to. May be {@code
    * null} for permits whose target side is a {@code Telescope<B, ?>}; same outer-pair pinning as
    * for {@link #sourceClass}.
    *
@@ -515,7 +517,7 @@ public sealed interface Mapping<A, B>
    * is almost never what you want.
    */
   static <A, B, X> Mapping<A, B> constant(final Accessor<B, X> tgt, final X value) {
-    final Class<B> tgtClass = LambdaIntrospection.implClassOf(tgt);
+    final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
     return new Constant<>(Telescope.of(tgtClass).field(tgt), value);
   }
 
@@ -543,7 +545,7 @@ public sealed interface Mapping<A, B>
    * {@link #constant(Accessor, Object)} when the value is genuinely a shared literal.
    */
   static <A, B, X> Mapping<A, B> compute(final Accessor<B, X> tgt, final Supplier<? extends X> supplier) {
-    final Class<B> tgtClass = LambdaIntrospection.implClassOf(tgt);
+    final Class<B> tgtClass = LambdaIntrospection.receiverClassOf(tgt);
     return new Compute<>(Telescope.of(tgtClass).field(tgt), supplier);
   }
 

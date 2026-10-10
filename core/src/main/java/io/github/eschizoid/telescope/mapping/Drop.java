@@ -20,7 +20,7 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 public record Drop<A, B, X>(Accessor<A, X> src, Class<B> explicitTarget) implements Mapping<A, B> {
   @Override
   public Class<A> sourceClass() {
-    return LambdaIntrospection.implClassOf(src);
+    return LambdaIntrospection.receiverClassOf(src);
   }
 
   /**

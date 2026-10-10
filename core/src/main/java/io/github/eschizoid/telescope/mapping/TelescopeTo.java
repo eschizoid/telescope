@@ -40,7 +40,7 @@ public record TelescopeTo<A, B, X>(
 ) implements Mapping<A, B> {
   @Override
   public Class<A> sourceClass() {
-    return LambdaIntrospection.implClassOf(srcAccessor);
+    return LambdaIntrospection.receiverClassOf(srcAccessor);
   }
 
   /**

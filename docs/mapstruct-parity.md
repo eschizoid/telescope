@@ -154,7 +154,7 @@ import static io.github.eschizoid.telescope.mapping.MergeStep.from;
 Mapper<Sources, Profile> mapper = Telescope.merge(
   Profile.class,
   auto(Customer.class), // backfill same-name fields from Customer
-  from(Audit::createdBy, Profile::createdBy), // source slot inferred from declaring class
+  from(Audit::createdBy, Profile::createdBy), // source slot inferred from the accessor's class
   from(Audit::createdAt, Profile::createdAt)
 );
 

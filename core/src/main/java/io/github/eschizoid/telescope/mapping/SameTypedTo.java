@@ -14,12 +14,12 @@ import io.github.eschizoid.telescope.internal.LambdaIntrospection;
 public record SameTypedTo<A, B, X>(Accessor<A, X> src, Accessor<B, X> tgt) implements Mapping<A, B> {
   @Override
   public Class<A> sourceClass() {
-    return LambdaIntrospection.implClassOf(src);
+    return LambdaIntrospection.receiverClassOf(src);
   }
 
   @Override
   public Class<B> targetClass() {
-    return LambdaIntrospection.implClassOf(tgt);
+    return LambdaIntrospection.receiverClassOf(tgt);
   }
 
   @Override
