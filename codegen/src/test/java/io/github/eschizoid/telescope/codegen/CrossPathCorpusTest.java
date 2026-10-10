@@ -3940,6 +3940,75 @@ class CrossPathCorpusTest {
     );
   }
 
+  @Test
+  @DisplayName("a field mapped through a bridge the same compilation generates converts the same way on both paths")
+  void aFieldThroughAGeneratedBridgeConvertsTheSameWayOnBothPaths() throws ReflectiveOperationException {
+    // The @ViaMapper names a bridge the processor writes in the same compilation, so the source
+    // cannot compile without the processor and every class comes from the processed compilation.
+    final var head = "package " + PACKAGE + ";\n";
+    final var processed = ProcessorHarness.compileFully(
+      List.of(new BridgeProcessor()),
+      List.of(),
+      source(
+        "VmAddress",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(VmAddressDto.class)\n" +
+          "public record VmAddress(String line) {}\n"
+      ),
+      source("VmAddressDto", head + "public record VmAddressDto(String line) {}\n"),
+      source(
+        "VmSrc",
+        head +
+          "@io.github.eschizoid.telescope.annotations.Bridge(value = VmTgt.class, viaMappers = {\n" +
+          "  @io.github.eschizoid.telescope.annotations.ViaMapper(field = \"address\", using = VmAddressBridge.class)\n" +
+          "})\n" +
+          "public record VmSrc(String id, VmAddress address) {}\n"
+      ),
+      source("VmTgt", head + "public record VmTgt(String id, VmAddressDto address) {}\n")
+    );
+    assertTrue(processed.success(), () -> "the pair should compile: " + processed.errorMessages());
+    final var classes = processed.define(MethodHandles.lookup());
+    final Class<Object> src = cast(classes.get(PACKAGE + ".VmSrc"));
+    final Class<Object> tgt = cast(classes.get(PACKAGE + ".VmTgt"));
+    final var address = classes.get(PACKAGE + ".VmAddress");
+    final var addressDto = classes.get(PACKAGE + ".VmAddressDto");
+    final var bridge = classes.get(PACKAGE + ".VmSrcBridge");
+    final Attempt source = () ->
+      src
+        .getConstructor(String.class, address)
+        .newInstance("o1", address.getConstructor(String.class).newInstance("l1"));
+    final Attempt target = () ->
+      tgt
+        .getConstructor(String.class, addressDto)
+        .newInstance(null, addressDto.getConstructor(String.class).newInstance("m1"));
+    final var mapper = Telescope.mapper(src, tgt);
+    final var owed = List.of(
+      Map.entry("forward", "#0(id=\"o1\", address=#1(line=\"l1\"))"),
+      Map.entry("backward", "#0(id=null, address=#1(line=\"m1\"))"),
+      Map.entry("patch", "#0(id=\"o1\", address=#1(line=\"m1\"))")
+    );
+    final var failures = new ArrayList<String>();
+    for (final var operation : owed) {
+      final Attempt generated = switch (operation.getKey()) {
+        case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, source.get());
+        case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, target.get());
+        default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, source.get(), target.get());
+      };
+      final Attempt reflective = switch (operation.getKey()) {
+        case "forward" -> () -> mapper.forward(source.get());
+        case "backward" -> () -> mapper.backward(target.get());
+        default -> () -> mapper.patch(source.get(), target.get());
+      };
+      for (final var side : List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))) {
+        final var shape = shapeOf(side.getValue());
+        if (!shape.equals(operation.getValue())) {
+          failures.add(operation.getKey() + ": " + side.getKey() + " gave " + shape + ", owed " + operation.getValue());
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n  ", failures));
+  }
+
   /** The simple name of the one top-level type {@code code} declares. */
   private static String declaredName(final String code) {
     final var matcher = Pattern.compile("public (?:class|record|enum|@interface) (\\w+)").matcher(code);

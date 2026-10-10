@@ -178,6 +178,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       null,
       false
     );
+
+    /**
+     * Stands in for a declared pair whose {@code @Bridge} cannot be read until a later round. It
+     * declares the pair and carries its carrier, which decide the name its bridge is written under.
+     */
+    static BridgeConfig placeholder(final TypeElement carrierEl) {
+      return new BridgeConfig(
+        Set.of(),
+        Map.of(),
+        Map.of(),
+        Map.of(),
+        Set.of(),
+        Map.of(),
+        Map.of(),
+        "AUTO",
+        Map.of(),
+        Map.of(),
+        Map.of(),
+        carrierEl != null ? carrierEl.getQualifiedName().toString() : null,
+        false
+      );
+    }
   }
 
   // One map indexed by TypePair carries every modifier parsed from @Bridge. Replaces ten separate
@@ -210,6 +232,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // this set is refused where an enum pair below it converts forward only
   // (refuseStrictReferencesToLenientPairs).
   private final Set<TypePair> lenientPairs = new HashSet<>();
+
+  /**
+   * Qualified names of {@code @Bridge} types read again next round, because a {@code @ViaMapper},
+   * {@code @Transform} or {@code @Compute} on them names a class that does not exist yet. javac
+   * hands such a class literal to a processor as a {@code String} rather than a {@link TypeMirror},
+   * and re-attributes every source between rounds, so a class another round writes resolves when
+   * the type is looked up again.
+   */
+  private final Set<String> viaMapperRetries = new LinkedHashSet<>();
 
   // Set true around the deferred drain in processingOver() so sub-pair discovery inside
   // generate(...) / generateSealed(...) / planFieldSubBridges(...) / planElementSubBridge(...)
@@ -271,6 +302,11 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // javac wraps multiple @Bridge into when the user declares more than one on the same type).
     final var elements = new LinkedHashSet<Element>(roundEnv.getElementsAnnotatedWith(anno));
     if (bridgesAnno != null) elements.addAll(roundEnv.getElementsAnnotatedWith(bridgesAnno));
+    for (final var retried : viaMapperRetries) {
+      final var retriedEl = processingEnv.getElementUtils().getTypeElement(retried);
+      if (retriedEl != null) elements.add(retriedEl);
+    }
+    viaMapperRetries.clear();
 
     for (final var element : elements) {
       final var kind = element.getKind();
@@ -420,6 +456,28 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           continue;
         }
         final var pair = new TypePair(sourceFq, targetEl.getQualifiedName().toString());
+        // The pair is registered and seen while it waits, so a parent reaching it this round names
+        // it as its @Bridge will, and does not write it with no config. The placeholder declares
+        // the pair and carries its carrier, the two things bridgeNameOf reads; the next round's
+        // parse replaces it.
+        final var unresolved = unresolvedUsing(bridgeAm);
+        if (unresolved != null) {
+          if (!roundEnv.processingOver()) {
+            viaMapperRetries.add(((TypeElement) element).getQualifiedName().toString());
+            seen.add(pair);
+            configsByPair.putIfAbsent(pair, BridgeConfig.placeholder(carrierEl));
+          } else {
+            processingEnv
+              .getMessager()
+              .printMessage(
+                Diagnostic.Kind.ERROR,
+                unresolvedUsingMessage(sourceEl, unresolved),
+                element,
+                unresolved.row()
+              );
+          }
+          continue;
+        }
         final var drops = dropsFromMirror(bridgeAm);
         final var renameSet = renamesFromMirror(element, bridgeAm);
         if (renameSet == null) continue; // invalid rename — error already reported, skip this pair
@@ -735,7 +793,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           final var k = te.getKey().getSimpleName().toString();
           switch (k) {
             case "field" -> field = (String) te.getValue().getValue();
-            case "using" -> using = (TypeMirror) te.getValue().getValue();
+            case "using" -> using = te.getValue().getValue() instanceof TypeMirror tm ? tm : null;
             case "forwardOnly" -> forwardOnly = (Boolean) te.getValue().getValue();
             case "method" -> method = (String) te.getValue().getValue();
             default -> {
@@ -854,6 +912,90 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     return null;
   }
 
+  /**
+   * A {@code @ViaMapper}, {@code @Transform} or {@code @Compute} row whose {@code using} names a
+   * class that does not resolve. javac hands the processor no name for such a class, only a
+   * placeholder, so the annotation and its field are what identify it.
+   */
+  private record UnresolvedUsing(AnnotationMirror row, String annotation, String field) {}
+
+  /** The {@code @Bridge} attributes whose rows name a class in {@code using}, by row annotation. */
+  private static final Map<String, String> ROWS_WITH_USING = Map.of(
+    "viaMappers",
+    "@ViaMapper",
+    "transforms",
+    "@Transform",
+    "computes",
+    "@Compute"
+  );
+
+  /**
+   * The first row on {@code am} whose {@code using} class does not resolve, or {@code null} when
+   * every one does. An unresolvable class literal reaches a processor as a {@code String}, or as a
+   * type of kind {@link TypeKind#ERROR}, instead of a declared type.
+   */
+  private UnresolvedUsing unresolvedUsing(final AnnotationMirror am) {
+    for (final var entry : am.getElementValues().entrySet()) {
+      final var annotation = ROWS_WITH_USING.get(entry.getKey().getSimpleName().toString());
+      if (annotation == null || !(entry.getValue().getValue() instanceof List<?> list)) continue;
+      for (final var item : list) {
+        if (!(item instanceof AnnotationValue av) || !(av.getValue() instanceof AnnotationMirror row)) continue;
+        String field = "";
+        AnnotationValue using = null;
+        for (final var ve : row.getElementValues().entrySet()) {
+          final var k = ve.getKey().getSimpleName().toString();
+          if (k.equals("field") && ve.getValue().getValue() instanceof String f) field = f;
+          else if (k.equals("using")) using = ve.getValue();
+        }
+        if (using == null) continue;
+        final var value = using.getValue();
+        final var resolved = value instanceof TypeMirror tm && tm.getKind() != TypeKind.ERROR;
+        if (!resolved) return new UnresolvedUsing(row, annotation, field);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Why {@code unresolved} still names no class in the final round. A source field whose type is
+   * the source of a pair held back for Lombok has a bridge, but the final round's drain writes it
+   * after every {@code @Bridge} has been read, and nothing in the same module can name it.
+   */
+  private String unresolvedUsingMessage(final TypeElement source, final UnresolvedUsing unresolved) {
+    final var head = unresolved.annotation() + "(field = \"" + unresolved.field() + "\") names a `using` class";
+    if (!unresolved.annotation().equals("@Compute")) {
+      final var fieldType = fieldsOf(source)
+        .stream()
+        .filter(f -> f.name().equals(unresolved.field()))
+        .map(f -> processingEnv.getTypeUtils().erasure(f.type()))
+        .filter(t -> t.getKind() == TypeKind.DECLARED)
+        .map(t -> ((TypeElement) ((DeclaredType) t).asElement()).getQualifiedName().toString())
+        .findFirst()
+        .orElse(null);
+      final var elements = processingEnv.getElementUtils();
+      for (final var deferred : deferredPairs) {
+        if (!deferred.sourceFq().equals(fieldType)) continue;
+        final var deferredSource = elements.getTypeElement(deferred.sourceFq());
+        final var deferredTarget = elements.getTypeElement(deferred.targetFq());
+        if (deferredSource == null || deferredTarget == null) continue;
+        return (
+          head +
+          " that does not exist when this @Bridge is read. If it is " +
+          bridgeNameOf(deferredSource, deferredTarget).qualified() +
+          ", that bridge is written only in the final round, because its pair carries a Lombok" +
+          " annotation, and no code in the same module can name it. Drop the row and let the" +
+          " nested pair convert through its own bridge, or declare that pair in another module."
+        );
+      }
+    }
+    return (
+      head +
+      " that does not exist: not in this compilation, not on the classpath, and not among the" +
+      " bridges @Bridge generates. Check the name in `using`, or declare the @Bridge that" +
+      " generates it."
+    );
+  }
+
   // Read viaMappers from a @Bridge mirror. Returns source-field-name -> bridge-class FQN. The
   // referenced class's signatures are validated at the generated code level — if the static
   // forward/backward methods don't exist or don't match the field types, javac surfaces the error
@@ -871,7 +1013,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         for (final var ve : viaAm.getElementValues().entrySet()) {
           final var k = ve.getKey().getSimpleName().toString();
           if (k.equals("field")) field = (String) ve.getValue().getValue();
-          else if (k.equals("using")) using = (TypeMirror) ve.getValue().getValue();
+          else if (k.equals("using") && ve.getValue().getValue() instanceof TypeMirror tm) using = tm;
         }
         if (field == null || field.isEmpty()) {
           error(element, "@ViaMapper requires a non-empty `field` name");
@@ -987,7 +1129,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         for (final var ce : compAm.getElementValues().entrySet()) {
           final var k = ce.getKey().getSimpleName().toString();
           if (k.equals("field")) field = (String) ce.getValue().getValue();
-          else if (k.equals("using")) using = (TypeMirror) ce.getValue().getValue();
+          else if (k.equals("using") && ce.getValue().getValue() instanceof TypeMirror tm) using = tm;
         }
         if (field == null || field.isEmpty()) {
           error(element, "@Compute requires a non-empty `field` name");
