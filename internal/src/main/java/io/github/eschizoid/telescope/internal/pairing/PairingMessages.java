@@ -1,5 +1,7 @@
 package io.github.eschizoid.telescope.internal.pairing;
 
+import java.util.List;
+
 /**
  * The single source of truth for every diagnostic the shared pairing decisions emit. The runtime
  * throws these strings at mapper construction; the compile-time verifier reports the same strings
@@ -287,6 +289,45 @@ public final class PairingMessages {
       (map ? "map" : "set") +
       " that keeps no order. The cause is the cast itself."
     );
+  }
+
+  /**
+   * Two enums whose constants do not line up by name in a direction the mapper converts. {@code
+   * missingOnTarget} lists the source constants forward has nowhere to send, and {@code
+   * missingOnSource} the target constants backward has nowhere to send; the caller passes an empty
+   * list for a direction the mapper does not run.
+   */
+  public static String unmatchedEnumConstants(
+    final String componentName,
+    final String srcType,
+    final String tgtType,
+    final List<String> missingOnTarget,
+    final List<String> missingOnSource
+  ) {
+    final var sb = new StringBuilder("Component '")
+      .append(componentName)
+      .append("' maps enum ")
+      .append(srcType)
+      .append(" to enum ")
+      .append(tgtType)
+      .append(" by constant name, but");
+    if (!missingOnTarget.isEmpty()) {
+      sb.append(" ").append(tgtType).append(" has no constant named ").append(String.join(", ", missingOnTarget));
+      if (!missingOnSource.isEmpty()) sb.append(", and");
+    }
+    if (!missingOnSource.isEmpty()) {
+      sb
+        .append(" ")
+        .append(srcType)
+        .append(" has no constant named ")
+        .append(String.join(", ", missingOnSource))
+        .append(", which the backward direction needs");
+    }
+    sb.append(". Add the missing constants, or convert the component explicitly");
+    if (missingOnTarget.isEmpty()) {
+      sb.append(", or map forward only (Telescope.mapperForward, or @Bridge(lenient = true))");
+    }
+    return sb.append(".").toString();
   }
 
   /** Terminal shape mismatch — no branch of the compatibility lattice applies. */

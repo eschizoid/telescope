@@ -7,6 +7,8 @@ import io.github.eschizoid.telescope.codegen.ctorbox.BaggedDst;
 import io.github.eschizoid.telescope.codegen.ctorbox.GuardedDst;
 import io.github.eschizoid.telescope.codegen.ctorpair.BaggedSrc;
 import io.github.eschizoid.telescope.codegen.ctorpair.GuardedSrc;
+import io.github.eschizoid.telescope.conversion.ForwardMapper;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.mapping.WriteHint;
 import io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy;
 import java.lang.invoke.MethodHandles;
@@ -3940,7 +3942,7 @@ class CrossPathCorpusTest {
 
   /** The simple name of the one top-level type {@code code} declares. */
   private static String declaredName(final String code) {
-    final var matcher = Pattern.compile("public (?:class|record) (\\w+)").matcher(code);
+    final var matcher = Pattern.compile("public (?:class|record|enum|@interface) (\\w+)").matcher(code);
     if (!matcher.find()) throw new IllegalArgumentException("no public type in " + code);
     return matcher.group(1);
   }
@@ -3967,6 +3969,11 @@ class CrossPathCorpusTest {
     if (value == null) return "null";
     if (value instanceof String text) return "\"" + text + "\"";
     if (value instanceof Number number) return number.toString();
+    // A constant renders as its enum's name without the cell prefix, so a cell owes the enum a
+    // conversion produced as well as the constant.
+    if (value instanceof Enum<?> constant) {
+      return constant.getDeclaringClass().getSimpleName().replaceFirst("^En\\d+", "") + "." + constant.name();
+    }
     if (value instanceof Optional<?> present) {
       return present.isEmpty() ? "empty" : "of " + shape(present.get(), numbered);
     }
@@ -4333,5 +4340,564 @@ class CrossPathCorpusTest {
       }
     }
     return children;
+  }
+
+  /**
+   * Which directions an enum cell's mapper converts: both, for {@code Telescope.mapper} against a
+   * strict {@code @Bridge}, or forward alone, for {@code Telescope.mapperForward} against a lenient
+   * one.
+   */
+  private enum Directions {
+    BOTH,
+    FORWARD,
+  }
+
+  /**
+   * Two enums on one pair, through both paths: the declarations, each with {@code %1$s} as the
+   * cell's prefix, and the shape both paths owe forward, backward and in {@code patch}. {@code Src}
+   * carries the {@code @Bridge}; {@code Src.sample()} and {@code Tgt.sample()} build the inputs,
+   * and {@code patch} lays {@code Tgt.sample()} over {@code Src.sample()}. A forward cell owes no
+   * backward and no patch, since the runtime's forward-only mapper has neither.
+   *
+   * <p>A refusal is owed as {@link #REFUSED} followed by the words both refusals have to contain,
+   * which name the constants that have no counterpart.
+   */
+  private record EnumCell(
+    String name,
+    Directions directions,
+    List<String> declarations,
+    String forward,
+    String backward,
+    String patch
+  ) {}
+
+  private static final String LENIENT_BRIDGE_TO_TGT =
+    "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sTgt.class, lenient = true)\n";
+
+  /** A public enum named {@code name} with {@code constants}. */
+  private static String enumOf(final String name, final String constants) {
+    return "public enum " + name + " { " + constants + " }\n";
+  }
+
+  /** A public record with {@code components} and a {@code sample()} returning {@code sample}. */
+  private static String sampled(final String name, final String components, final String sample) {
+    return (
+      "public record " +
+      name +
+      "(" +
+      components +
+      ") {\n  public static " +
+      name +
+      " sample() { return " +
+      sample +
+      "; }\n}\n"
+    );
+  }
+
+  private static final List<EnumCell> ENUM_CELLS = List.of(
+    new EnumCell(
+      "two enums with the same constants",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sEa status, %1$sEa tier", "new %1$sSrc(%1$sEa.B, %1$sEa.A)"),
+        sampled("%1$sTgt", "%1$sEb status, %1$sEb tier", "new %1$sTgt(%1$sEb.C, null)"),
+        enumOf("%1$sEa", "A, B, C"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(status=Eb.B, tier=Eb.A)",
+      "#0(status=Ea.C, tier=null)",
+      "#0(status=Ea.C, tier=Ea.A)"
+    ),
+    new EnumCell(
+      "two enums with the same constants on a bean",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT +
+          bean(
+            "%1$sSrc",
+            "  public static %1$sSrc sample() {\n" +
+              "    final var s = new %1$sSrc();\n" +
+              "    s.setStatus(%1$sEa.B);\n" +
+              "    return s;\n" +
+              "  }\n",
+            "%1$sEa status"
+          ),
+        bean(
+          "%1$sTgt",
+          "  public static %1$sTgt sample() {\n" +
+            "    final var t = new %1$sTgt();\n" +
+            "    t.setStatus(%1$sEb.A);\n" +
+            "    return t;\n" +
+            "  }\n",
+          "%1$sEb status"
+        ),
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B")
+      ),
+      "#0(status=Eb.B)",
+      "#0(status=Ea.A)",
+      "#0(status=Ea.A)"
+    ),
+    new EnumCell(
+      "enums in a list, a null among them",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT +
+          sampled(
+            "%1$sSrc",
+            "java.util.List<%1$sEa> items",
+            "new %1$sSrc(java.util.Arrays.asList(%1$sEa.C, null, %1$sEa.A))"
+          ),
+        sampled("%1$sTgt", "java.util.List<%1$sEb> items", "new %1$sTgt(java.util.List.of(%1$sEb.B))"),
+        enumOf("%1$sEa", "A, B, C"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(items=[Eb.C, null, Eb.A])",
+      "#0(items=[Ea.B])",
+      "#0(items=[Ea.B])"
+    ),
+    new EnumCell(
+      "enums in a set",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT +
+          sampled(
+            "%1$sSrc",
+            "java.util.Set<%1$sEa> items",
+            "new %1$sSrc(new java.util.LinkedHashSet<>(java.util.List.of(%1$sEa.C, %1$sEa.A)))"
+          ),
+        sampled(
+          "%1$sTgt",
+          "java.util.Set<%1$sEb> items",
+          "new %1$sTgt(new java.util.LinkedHashSet<>(java.util.List.of(%1$sEb.B, %1$sEb.A)))"
+        ),
+        enumOf("%1$sEa", "A, B, C"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(items=[Eb.C, Eb.A])",
+      "#0(items=[Ea.B, Ea.A])",
+      "#0(items=[Ea.B, Ea.A])"
+    ),
+    new EnumCell(
+      "enums as map values",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT +
+          sampled(
+            "%1$sSrc",
+            "java.util.Map<String, %1$sEa> items",
+            "new %1$sSrc(new java.util.LinkedHashMap<>(java.util.Map.of(\"x\", %1$sEa.B)))"
+          ),
+        sampled(
+          "%1$sTgt",
+          "java.util.Map<String, %1$sEb> items",
+          "new %1$sTgt(new java.util.LinkedHashMap<>(java.util.Map.of(\"y\", %1$sEb.C)))"
+        ),
+        enumOf("%1$sEa", "A, B, C"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(items={x=Eb.B})",
+      "#0(items={y=Ea.C})",
+      "#0(items={y=Ea.C})"
+    ),
+    new EnumCell(
+      "an enum in an Optional, and an Optional against a nullable enum",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT +
+          sampled(
+            "%1$sSrc",
+            "java.util.Optional<%1$sEa> pick, java.util.Optional<%1$sEa> held",
+            "new %1$sSrc(java.util.Optional.of(%1$sEa.B), java.util.Optional.of(%1$sEa.A))"
+          ),
+        sampled(
+          "%1$sTgt",
+          "java.util.Optional<%1$sEb> pick, %1$sEb held",
+          "new %1$sTgt(java.util.Optional.empty(), %1$sEb.B)"
+        ),
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B")
+      ),
+      "#0(pick=of Eb.B, held=Eb.A)",
+      "#0(pick=empty, held=of Ea.B)",
+      "#0(pick=empty, held=of Ea.B)"
+    ),
+    new EnumCell(
+      "enums under a type-use annotation, as a field and as list elements",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT +
+          sampled(
+            "%1$sSrc",
+            "@%1$sTu %1$sEa status, java.util.List<@%1$sTu %1$sEa> items",
+            "new %1$sSrc(%1$sEa.B, java.util.List.of(%1$sEa.A))"
+          ),
+        sampled(
+          "%1$sTgt",
+          "@%1$sTu %1$sEb status, java.util.List<@%1$sTu %1$sEb> items",
+          "new %1$sTgt(%1$sEb.A, java.util.List.of(%1$sEb.B))"
+        ),
+        "@java.lang.annotation.Target(java.lang.annotation.ElementType.TYPE_USE)\npublic @interface %1$sTu {}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B")
+      ),
+      "#0(status=Eb.B, items=[Eb.A])",
+      "#0(status=Ea.A, items=[Ea.B])",
+      "#0(status=Ea.A, items=[Ea.B])"
+    ),
+    new EnumCell(
+      "enums in an EnumSet, which no rebuild can build",
+      Directions.BOTH,
+      List.of(
+        // The enums come first: a cell's classes are defined in the order they are
+        // declared here,
+        // and a record holding an EnumSet of an enum is not defined ahead of that enum.
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B"),
+        BRIDGE_TO_TGT +
+          sampled("%1$sSrc", "java.util.EnumSet<%1$sEa> items", "new %1$sSrc(java.util.EnumSet.of(%1$sEa.A))"),
+        sampled("%1$sTgt", "java.util.EnumSet<%1$sEb> items", "new %1$sTgt(java.util.EnumSet.of(%1$sEb.A))")
+      ),
+      REFUSED + "java.util.EnumSet has no instance of its own",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a target enum with a constant the source lacks, below a sub-pair a lenient bridge shares, both ways",
+      Directions.BOTH,
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sOtherDto.class, lenient = true)\n" +
+          "public record %1$sOther(%1$sInner inner) {}\n",
+        "public record %1$sOtherDto(%1$sInnerDto inner) {}\n",
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sInner inner", "new %1$sSrc(new %1$sInner(%1$sEa.A))"),
+        sampled("%1$sTgt", "%1$sInnerDto inner", "new %1$sTgt(new %1$sInnerDto(%1$sEb.C))"),
+        "public record %1$sInner(%1$sEa status) {}\n",
+        "public record %1$sInnerDto(%1$sEb status) {}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      REFUSED + "%1$sEa has no constant named C, which the backward direction needs",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a target enum with a constant the source lacks, in a list below a sub-pair a lenient bridge shares, both ways",
+      Directions.BOTH,
+      List.of(
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sOtherDto.class, lenient = true)\n" +
+          "public record %1$sOther(%1$sInner inner) {}\n",
+        "public record %1$sOtherDto(%1$sInnerDto inner) {}\n",
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "java.util.List<%1$sInner> items", "new %1$sSrc(java.util.List.of())"),
+        sampled("%1$sTgt", "java.util.List<%1$sInnerDto> items", "new %1$sTgt(java.util.List.of())"),
+        "public record %1$sInner(%1$sEa status) {}\n",
+        "public record %1$sInnerDto(%1$sEb status) {}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      REFUSED + "%1$sEa has no constant named C, which the backward direction needs",
+      null,
+      null
+    ),
+    new EnumCell(
+      "an enum pair below a sub-pair whose own bridge converts it with a transform, under a strict parent",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT +
+          sampled(
+            "%1$sSrc",
+            "%1$sInner inner, java.util.List<%1$sInner> items",
+            "new %1$sSrc(new %1$sInner(%1$sEa.A), java.util.List.of(new %1$sInner(%1$sEa.B)))"
+          ),
+        sampled(
+          "%1$sTgt",
+          "%1$sInnerDto inner, java.util.List<%1$sInnerDto> items",
+          "new %1$sTgt(new %1$sInnerDto(%1$sEb.C), java.util.List.of(new %1$sInnerDto(%1$sEb.C)))"
+        ),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, transforms =" +
+          " @io.github.eschizoid.telescope.annotations.Transform(field = \"status\", using = %1$sFn.class))\n" +
+          "public record %1$sInner(%1$sEa status) {}\n",
+        "public record %1$sInnerDto(%1$sEb status) {}\n",
+        "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<%1$sEa, %1$sEb> {\n" +
+          "  public %1$sEb forward(final %1$sEa a) { return a == null ? null : %1$sEb.valueOf(a.name()); }\n" +
+          "  public %1$sEa backward(final %1$sEb b) {\n" +
+          "    return b == null ? null : b == %1$sEb.C ? %1$sEa.A : %1$sEa.valueOf(b.name());\n" +
+          "  }\n" +
+          "}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(inner=#1(status=Eb.A), items=[#2(status=Eb.B)])",
+      "#0(inner=#1(status=Ea.A), items=[#2(status=Ea.A)])",
+      "#0(inner=#1(status=Ea.A), items=[#2(status=Ea.A)])"
+    ),
+    new EnumCell(
+      "an enum pair below a sub-pair whose own lenient bridge converts it forward only, under a strict parent",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sInner i", "new %1$sSrc(new %1$sInner(%1$sEa.A))"),
+        sampled("%1$sTgt", "%1$sInnerDto i", "new %1$sTgt(new %1$sInnerDto(%1$sEb.C))"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, lenient = true)\n" +
+          "public record %1$sInner(%1$sEa status) {}\n",
+        "public record %1$sInnerDto(%1$sEb status) {}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(i=#1(status=Eb.A))",
+      "#0(i=#1(status=null))",
+      "#0(i=#1(status=null))"
+    ),
+    new EnumCell(
+      "an enum pair two levels below a sub-pair a lenient bridge shares, where the lower pair's own bridge converts it",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sMid x", "new %1$sSrc(new %1$sMid(new %1$sInner(%1$sEa.A)))"),
+        sampled("%1$sTgt", "%1$sMidDto x", "new %1$sTgt(new %1$sMidDto(new %1$sInnerDto(%1$sEb.C)))"),
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sOtherDto.class, lenient = true)\n" +
+          "public record %1$sOther(%1$sMid x) {}\n",
+        "public record %1$sOtherDto(%1$sMidDto x) {}\n",
+        "public record %1$sMid(%1$sInner i) {}\n",
+        "public record %1$sMidDto(%1$sInnerDto i) {}\n",
+        "@io.github.eschizoid.telescope.annotations.Bridge(value = %1$sInnerDto.class, transforms =" +
+          " @io.github.eschizoid.telescope.annotations.Transform(field = \"status\", using = %1$sFn.class))\n" +
+          "public record %1$sInner(%1$sEa status) {}\n",
+        "public record %1$sInnerDto(%1$sEb status) {}\n",
+        "public class %1$sFn implements io.github.eschizoid.telescope.conversion.BridgeFn<%1$sEa, %1$sEb> {\n" +
+          "  public %1$sEb forward(final %1$sEa a) { return a == null ? null : %1$sEb.valueOf(a.name()); }\n" +
+          "  public %1$sEa backward(final %1$sEb b) {\n" +
+          "    return b == null ? null : b == %1$sEb.C ? %1$sEa.A : %1$sEa.valueOf(b.name());\n" +
+          "  }\n" +
+          "}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(x=#1(i=#2(status=Eb.A)))",
+      "#0(x=#1(i=#2(status=Ea.A)))",
+      "#0(x=#1(i=#2(status=Ea.A)))"
+    ),
+    new EnumCell(
+      "a target enum with a constant the source lacks, both ways",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sEa status", "new %1$sSrc(%1$sEa.A)"),
+        sampled("%1$sTgt", "%1$sEb status", "new %1$sTgt(%1$sEb.C)"),
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      REFUSED + "%1$sEa has no constant named C, which the backward direction needs",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a target enum with a constant the source lacks, inside a list, both ways",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "java.util.List<%1$sEa> items", "new %1$sSrc(java.util.List.of())"),
+        sampled("%1$sTgt", "java.util.List<%1$sEb> items", "new %1$sTgt(java.util.List.of())"),
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C, D")
+      ),
+      REFUSED + "%1$sEa has no constant named C, D, which the backward direction needs",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a target enum with a constant the source lacks, forward only",
+      Directions.FORWARD,
+      List.of(
+        LENIENT_BRIDGE_TO_TGT +
+          sampled(
+            "%1$sSrc",
+            "%1$sEa status, java.util.List<%1$sEa> items, %1$sInner inner",
+            "new %1$sSrc(%1$sEa.B, java.util.List.of(%1$sEa.A), new %1$sInner(%1$sEa.A))"
+          ),
+        sampled(
+          "%1$sTgt",
+          "%1$sEb status, java.util.List<%1$sEb> items, %1$sInnerDto inner",
+          "new %1$sTgt(%1$sEb.C, java.util.List.of(), null)"
+        ),
+        "public record %1$sInner(%1$sEa status) {}\n",
+        "public record %1$sInnerDto(%1$sEb status) {}\n",
+        enumOf("%1$sEa", "A, B"),
+        enumOf("%1$sEb", "A, B, C")
+      ),
+      "#0(status=Eb.B, items=[Eb.A], inner=#1(status=Eb.A))",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a source enum with a constant the target lacks, both ways",
+      Directions.BOTH,
+      List.of(
+        BRIDGE_TO_TGT + sampled("%1$sSrc", "%1$sEa status", "new %1$sSrc(%1$sEa.A)"),
+        sampled("%1$sTgt", "%1$sEb status", "new %1$sTgt(%1$sEb.A)"),
+        enumOf("%1$sEa", "A, B, C"),
+        enumOf("%1$sEb", "A, C")
+      ),
+      REFUSED + "%1$sEb has no constant named B",
+      null,
+      null
+    ),
+    new EnumCell(
+      "a source enum with a constant the target lacks, in an Optional, forward only",
+      Directions.FORWARD,
+      List.of(
+        LENIENT_BRIDGE_TO_TGT +
+          sampled("%1$sSrc", "java.util.Optional<%1$sEa> pick", "new %1$sSrc(java.util.Optional.empty())"),
+        sampled("%1$sTgt", "java.util.Optional<%1$sEb> pick", "new %1$sTgt(java.util.Optional.empty())"),
+        enumOf("%1$sEa", "A, B, C"),
+        enumOf("%1$sEb", "A")
+      ),
+      REFUSED + "%1$sEb has no constant named B, C",
+      null,
+      null
+    )
+  );
+
+  /**
+   * Enum cells where the runtime owes a refusal, by the words it has to contain, while the
+   * generated path owes the cell's shapes. A sub-pair's own {@code @Bridge} decides its fields on
+   * the generated path, through a {@code @Transform} or its own {@code lenient}, and the runtime
+   * mapper has no counterpart for either unless it is given a row naming the nested pair. A cell
+   * cannot write one: a row's accessors are method references to the cell's types, which exist only
+   * once the cell is compiled.
+   *
+   * <p>An entry no cell exercises fails the test, so the register cannot outlive its cell.
+   */
+  private static final Map<String, String> ENUM_RUNTIME_REFUSALS = Map.of(
+    "an enum pair below a sub-pair whose own bridge converts it with a transform, under a strict parent",
+    "%1$sEa has no constant named C, which the backward direction needs",
+    "an enum pair two levels below a sub-pair a lenient bridge shares, where the lower pair's own bridge converts it",
+    "%1$sEa has no constant named C, which the backward direction needs",
+    "an enum pair below a sub-pair whose own lenient bridge converts it forward only, under a strict parent",
+    "%1$sEa has no constant named C, which the backward direction needs"
+  );
+
+  @Test
+  @DisplayName("an enum maps to an enum by constant name on both paths, and both refuse the same mismatches")
+  void anEnumMapsByConstantNameOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    final var exercised = new LinkedHashSet<String>();
+    var index = 0;
+    for (final var cell : ENUM_CELLS) {
+      final var prefix = "En" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var sources = cell
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(
+        plain.success(),
+        () -> cell.name() + " should compile without the processor: " + plain.errorMessages()
+      );
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var forwardOnly = cell.directions() == Directions.FORWARD;
+      // Built before the bridge is defined: a forward-only mapper given no rows routes through a
+      // bridge it finds beside the source, and would then be the generated path a second time.
+      final Attempt build = () -> forwardOnly ? Telescope.mapperForward(src, tgt) : Telescope.mapper(src, tgt);
+      final var refusal = refusalOf(build);
+      final var built = refusal == null;
+      final Mapper<Object, Object> mapper = built && !forwardOnly ? Telescope.mapper(src, tgt) : null;
+      final ForwardMapper<Object, Object> forwardMapper =
+        built && forwardOnly ? Telescope.mapperForward(src, tgt) : null;
+      if (cell.forward().startsWith(REFUSED)) {
+        final var owed = cell.forward().formatted(prefix).substring(REFUSED.length());
+        if (processed.success() || !processed.hasError(owed)) {
+          failures.add(
+            cell.name() + ": the generated path owed a refusal naming " + owed + ", saw " + describe(processed)
+          );
+        }
+        if (built) {
+          failures.add(cell.name() + ": the runtime built a mapper, where it owed a refusal naming " + owed);
+        } else if (!refusal.contains(owed)) {
+          failures.add(cell.name() + ": the runtime owed a refusal naming " + owed + ", saw " + refusal);
+        }
+        continue;
+      }
+      final var runtimeRefusal = ENUM_RUNTIME_REFUSALS.get(cell.name());
+      if (runtimeRefusal != null) {
+        exercised.add(cell.name());
+        final var owed = runtimeRefusal.formatted(prefix);
+        if (built || !refusal.contains(owed)) {
+          failures.add(
+            cell.name() + ": the runtime owed a refusal naming " + owed + ", saw " + (built ? "a mapper" : refusal)
+          );
+        }
+      } else if (!built) {
+        failures.add(cell.name() + ": the runtime owed a conversion, saw " + refusal);
+        continue;
+      }
+      if (!processed.success()) {
+        failures.add(cell.name() + ": the generated path owed a conversion, saw " + describe(processed));
+        continue;
+      }
+      final var bridge = emitted(processed, plain, prefix);
+      final Attempt srcSample = () -> src.getMethod("sample").invoke(null);
+      final Attempt tgtSample = () -> tgt.getMethod("sample").invoke(null);
+      final var owed = new ArrayList<Map.Entry<String, String>>();
+      owed.add(Map.entry("forward", cell.forward()));
+      if (cell.backward() != null) owed.add(Map.entry("backward", cell.backward()));
+      if (cell.patch() != null) owed.add(Map.entry("patch", cell.patch()));
+      for (final var operation : owed) {
+        final Attempt generated = switch (operation.getKey()) {
+          case "forward" -> () -> bridge.getMethod("forward", src).invoke(null, srcSample.get());
+          case "backward" -> () -> bridge.getMethod("backward", tgt).invoke(null, tgtSample.get());
+          default -> () -> bridge.getMethod("patch", src, tgt).invoke(null, srcSample.get(), tgtSample.get());
+        };
+        final Attempt reflective = switch (operation.getKey()) {
+          case "forward" -> forwardOnly
+            ? () -> forwardMapper.forward(srcSample.get())
+            : () -> mapper.forward(srcSample.get());
+          case "backward" -> () -> mapper.backward(tgtSample.get());
+          default -> () -> mapper.patch(srcSample.get(), tgtSample.get());
+        };
+        // A cell whose runtime owes a refusal has no mapper to hold to the shapes.
+        final var sides =
+          runtimeRefusal == null
+            ? List.of(Map.entry("generated", generated), Map.entry("reflective", reflective))
+            : List.of(Map.entry("generated", generated));
+        for (final var side : sides) {
+          final var shape = shapeOf(side.getValue());
+          if (!shape.equals(operation.getValue())) {
+            failures.add(
+              cell.name() +
+                ", " +
+                operation.getKey() +
+                ": " +
+                side.getKey() +
+                " gave " +
+                shape +
+                ", owed " +
+                operation.getValue()
+            );
+          }
+        }
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " enum cell(s) failed:\n  " + String.join("\n  ", failures));
+    assertTrue(
+      exercised.equals(ENUM_RUNTIME_REFUSALS.keySet()),
+      () -> "registered runtime refusals no cell exercised: " + ENUM_RUNTIME_REFUSALS.keySet()
+    );
+  }
+
+  /** Whether a compilation succeeded, or the errors it reported. */
+  private static String describe(final ProcessorHarness.Compilation compilation) {
+    return compilation.success() ? "a successful compilation" : "errors " + compilation.errorMessages();
+  }
+
+  /** The message of what {@code attempt} threw, or null when it threw nothing. */
+  private static String refusalOf(final Attempt attempt) {
+    try {
+      attempt.get();
+      return null;
+    } catch (final ReflectiveOperationException | RuntimeException e) {
+      return String.valueOf(e.getMessage());
+    }
   }
 }

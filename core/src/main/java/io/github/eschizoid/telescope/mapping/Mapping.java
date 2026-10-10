@@ -5,9 +5,9 @@ import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.Telescope.Accessor;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.internal.LambdaIntrospection;
+import io.github.eschizoid.telescope.internal.pairing.EnumCorrespondence;
+import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.util.Objects;
-import java.util.Set;
-import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -149,14 +149,15 @@ public sealed interface Mapping<A, B>
 
   /**
    * Enum correspondence by constant name. Maps each {@code SE} constant to the {@code TE} constant
-   * of the same {@link Enum#name() name}; backward direction is symmetric. Closes MapStruct's
-   * {@code @ValueMapping} gap for the common "status enums that line up by name" case without
-   * forcing the user to hand-write a 2-arg typed transform with {@code Enum.valueOf} on both sides
-   * — the exhaustiveness check that comes free here is the value-add.
+   * of the same {@link Enum#name() name}; backward direction is symmetric.
    *
    * <pre>{@code
-   * enumTo(UserEntity::status, UserDto::status, EntityStatus.class, DtoStatus.class)
+   * enumTo(UserEntity::status, UserDto::state, EntityStatus.class, DtoStatus.class)
    * }</pre>
+   *
+   * <p>Two same-named fields of different enum types need no row: the mapper converts them by
+   * constant name on its own. This row states the same correspondence for a field that is also
+   * renamed.
    *
    * <p><b>Exhaustiveness validation runs at factory time.</b> Every constant of {@code srcEnum}
    * must have a same-named constant in {@code tgtEnum}, and vice versa. Mismatches throw {@link
@@ -168,9 +169,7 @@ public sealed interface Mapping<A, B>
    *
    * <p><b>Lattice routing:</b> this is a thin convenience over {@link TypedTransformTo} — the
    * forward and backward closures are {@code Enum.valueOf(targetClass, source.name())}. The
-   * existing lattice composition rules apply unchanged; codegen recognises the enum-shaped pair at
-   * the {@code @Bridge} processor and may in a future revision emit a switch expression for the
-   * per-pair dispatch instead of routing through the captured {@link Function}.
+   * existing lattice composition rules apply unchanged.
    */
   static <A, B, SE extends Enum<SE>, TE extends Enum<TE>> Mapping<A, B> enumTo(
     final Accessor<A, SE> src,
@@ -191,15 +190,11 @@ public sealed interface Mapping<A, B>
     final Class<SE> srcEnum,
     final Class<TE> tgtEnum
   ) {
-    final Set<String> srcNames = new TreeSet<>();
-    for (final var c : srcEnum.getEnumConstants()) srcNames.add(c.name());
-    final Set<String> tgtNames = new TreeSet<>();
-    for (final var c : tgtEnum.getEnumConstants()) tgtNames.add(c.name());
-    final var missingInTarget = new TreeSet<>(srcNames);
-    missingInTarget.removeAll(tgtNames);
-    final var missingInSource = new TreeSet<>(tgtNames);
-    missingInSource.removeAll(srcNames);
-    if (missingInTarget.isEmpty() && missingInSource.isEmpty()) return;
+    final var props = new ReflectionProps();
+    final var correspondence = EnumCorrespondence.of(props.enumConstants(srcEnum), props.enumConstants(tgtEnum));
+    if (correspondence.converts(false)) return;
+    final var missingInTarget = correspondence.missingOnTarget();
+    final var missingInSource = correspondence.missingOnSource();
     final var msg = new StringBuilder("Mapping.enumTo(")
       .append(srcEnum.getSimpleName())
       .append(" ↔ ")

@@ -201,13 +201,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   // behaviour. Cleared in processingOver() so a reused processor instance starts clean.
   //
   // Sticky-wins resolution: a sub-bridge class is emitted once per type pair, so if the SAME pair
-  // is
-  // reached from both a lenient and a strict parent the single emitted sub-bridge is lenient for
-  // both. That is more permissive, never less, so it cannot lose data the strict parent would have
-  // kept; the trade is that a strict parent's nested mismatch no longer fails when a lenient
-  // sibling
-  // also references the pair. Splitting into per-parent sub-bridges would be the stricter (and much
-  // larger) alternative.
+  // is reached from both a lenient and a strict parent the single emitted sub-bridge is lenient for
+  // both. For unmatched nested fields that is the more permissive answer, which is the one the
+  // runtime mapper gives at every nested level. For an enum pair below the sub-pair it is not:
+  // the lenient sub-bridge converts a target constant with no source counterpart back to null,
+  // where the strict parent's runtime mapper refuses the pair. Each strict reference is therefore
+  // recorded (strictReferences), and once every parent is known a strict parent of a sub-pair in
+  // this set is refused where an enum pair below it converts forward only
+  // (refuseStrictReferencesToLenientPairs).
   private final Set<TypePair> lenientPairs = new HashSet<>();
 
   // Set true around the deferred drain in processingOver() so sub-pair discovery inside
@@ -506,6 +507,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     // the same processor instance starts clean. JSR-269 normally creates fresh instances per
     // compilation, but the defensive clear costs nothing.
     if (roundEnv.processingOver()) {
+      refuseStrictReferencesToLenientPairs();
+      strictReferences.clear();
       writeBridgeServices();
       multiTargetSources.clear();
       configsByPair.clear();
@@ -2488,6 +2491,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       // A container of one declared type on both sides, copied by the runtime's ContainerCopy.of
       // so both paths copy the same way. subBridgeName carries the declared raw type's name.
       COPY,
+      // Two different enums converted constant to constant by name. subBridgeName names the
+      // nested class whose forward and backward hold the two switches.
+      ENUM,
     }
 
     static FieldPlan identity() {
@@ -2962,6 +2968,14 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         plans.put(sf.name(), FieldPlan.primWrapper(fwdNullDefault, bwdNullDefault));
         continue;
       }
+      // (1c) Two different enums: constant to constant by name, where the shared spec finds a
+      //      counterpart for every constant in each direction the bridge converts.
+      if (rules.bothEnums(sf.type(), tf.type())) {
+        final var name = planEnum(source, target, sf.name(), sf.type(), tf.type(), lenient);
+        if (name == null) return null;
+        plans.put(sf.name(), FieldPlan.ofKind(FieldPlan.Kind.ENUM, name));
+        continue;
+      }
       // (2) Container shape detection — both sides container of the same kind with element types
       //     that need their own sub-bridge. List/Set/Optional/Map values, key-equal Map.
       final var srcShape = containerShapeOf(sf.type(), tf.type());
@@ -3137,6 +3151,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
           );
           return null;
         }
+        if (!lenient) recordStrictReference(subPair, source, target, sf.type(), tf.type(), sf.name());
         // Sub-pairs whose source or target carries a Lombok-synthesizing annotation must wait for
         // processingOver() — same rationale as the top-level deferral. shouldDeferSubPair returns
         // false while inDeferredDrain is true, so the deferred drain itself doesn't re-defer.
@@ -3200,6 +3215,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       nestedElements.put(name, new NestedElement(srcElement, tgtElement, FieldPlan.copy(rawName(srcElement))));
       return FieldPlan.ofKind(kind, name);
     }
+    if (rules.bothEnums(srcElement, tgtElement)) {
+      final var name = planEnum(parentSource, parentTarget, fieldName, srcElement, tgtElement, lenient);
+      return name == null ? null : FieldPlan.ofKind(kind, name);
+    }
     final var innerSrc = containerShapeOf(srcElement, tgtElement);
     final var innerTgt = containerShapeOf(tgtElement, srcElement);
     if (
@@ -3259,6 +3278,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         subSourceEl.getQualifiedName().toString(),
         subTargetEl.getQualifiedName().toString()
       );
+      if (!lenient) recordStrictReference(subPair, parentSource, parentTarget, srcElement, tgtElement, fieldName);
       // Container-element sub-pair: same Lombok deferral as the field sub-bridge path above.
       if (seen.add(subPair)) {
         if (shouldDeferSubPair(subSourceEl, subTargetEl)) deferredPairs.add(subPair);
@@ -3286,6 +3306,141 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         " introspect."
     );
     return null;
+  }
+
+  /** A strict bridge's reference to an auto-derived sub-pair, by field. */
+  private record StrictReference(
+    TypeElement source,
+    TypeElement target,
+    TypeMirror srcType,
+    TypeMirror tgtType,
+    String fieldName
+  ) {}
+
+  /** The strict references to each sub-pair, collected across rounds. */
+  private final Map<TypePair, List<StrictReference>> strictReferences = new HashMap<>();
+
+  private void recordStrictReference(
+    final TypePair subPair,
+    final TypeElement source,
+    final TypeElement target,
+    final TypeMirror srcType,
+    final TypeMirror tgtType,
+    final String fieldName
+  ) {
+    strictReferences
+      .computeIfAbsent(subPair, __ -> new ArrayList<>())
+      .add(new StrictReference(source, target, srcType, tgtType, fieldName));
+  }
+
+  /**
+   * Refuse each strict bridge that reaches, through an auto-derived sub-pair, an enum pair the
+   * sub-bridge converts forward only. A sub-bridge is emitted once per pair, lenient when any
+   * parent reaching it is, so a strict parent of a sub-pair a lenient parent also reaches cannot
+   * leave the enum pairs below to the sub-bridge. Asked once every parent is known, so the answer
+   * does not depend on which parent was processed first. A sub-pair with a {@code @Bridge} of its
+   * own is never lenient by reach, and its own declaration decides what lies below it.
+   */
+  private void refuseStrictReferencesToLenientPairs() {
+    for (final var entry : strictReferences.entrySet()) {
+      if (!lenientPairs.contains(entry.getKey()) || configsByPair.containsKey(entry.getKey())) continue;
+      for (final var reference : entry.getValue()) {
+        final var refusal = bothWaysRefusal(
+          reference.srcType(),
+          reference.tgtType(),
+          reference.fieldName(),
+          new HashSet<>()
+        );
+        if (refusal == null) continue;
+        error(
+          reference.source(),
+          "@Bridge " + reference.source().getSimpleName() + " -> " + reference.target().getSimpleName() + ": " + refusal
+        );
+      }
+    }
+  }
+
+  /**
+   * The refusal a mapper converting both ways makes at or below a pair where one converting forward
+   * only does not, or null. The walk follows properties by name, as the runtime mapper recurses,
+   * and stops at a record or bean pair with a {@code @Bridge} of its own, whose renames, transforms
+   * and drops decide its fields. {@code seen} holds the pairs already walked, so a type that
+   * reaches itself is walked once.
+   */
+  private String bothWaysRefusal(
+    final TypeMirror srcType,
+    final TypeMirror tgtType,
+    final String name,
+    final Set<String> seen
+  ) {
+    final var decision = rules.decidePair(srcType, tgtType, name, false);
+    if (decision instanceof PairDecision.Incompatible<TypeMirror> refused) {
+      return rules.decidePair(srcType, tgtType, name, true) instanceof PairDecision.Incompatible
+        ? null
+        : refused.message();
+    }
+    return switch (decision) {
+      case PairDecision.RecursePair<TypeMirror> __ -> {
+        final var pair = new TypePair(qualifiedName(srcType), qualifiedName(tgtType));
+        if (configsByPair.containsKey(pair) || !seen.add(srcType + " -> " + tgtType)) yield null;
+        final var targetFields = fieldsOf((TypeElement) ((DeclaredType) tgtType).asElement());
+        for (final var sf : fieldsOf((TypeElement) ((DeclaredType) srcType).asElement())) {
+          for (final var tf : targetFields) {
+            if (!tf.name().equals(sf.name())) continue;
+            final var below = bothWaysRefusal(sf.type(), tf.type(), sf.name(), seen);
+            if (below != null) yield below;
+          }
+        }
+        yield null;
+      }
+      case PairDecision.OptionalToNullable<TypeMirror> d -> bothWaysRefusal(
+        d.elementSrc(),
+        d.elementTgt(),
+        name + "[*]",
+        seen
+      );
+      case PairDecision.NullableToOptional<TypeMirror> d -> bothWaysRefusal(
+        d.elementSrc(),
+        d.elementTgt(),
+        name + "[*]",
+        seen
+      );
+      case PairDecision.LiftContainer<TypeMirror> d -> bothWaysRefusal(
+        d.src().elementType(),
+        d.tgt().elementType(),
+        name + "[*]",
+        seen
+      );
+      default -> null;
+    };
+  }
+
+  /**
+   * Plan an enum pair as a nested class converting constant to constant by name, and return the
+   * class's name, or null after refusing a pair the shared spec does not convert. A lenient bridge
+   * converts forward only as far as the spec is concerned, since its backward is documented as
+   * lossy: a target constant with no source counterpart converts back to null.
+   */
+  private String planEnum(
+    final TypeElement source,
+    final TypeElement target,
+    final String fieldName,
+    final TypeMirror srcType,
+    final TypeMirror tgtType,
+    final boolean lenient
+  ) {
+    final var decision = rules.decidePair(srcType, tgtType, fieldName, lenient);
+    if (!(decision instanceof PairDecision.EnumByName)) {
+      final var reason =
+        decision instanceof PairDecision.Incompatible<TypeMirror> refused
+          ? refused.message()
+          : "the shared pairing rules decided " + decision + " for an enum pair";
+      error(source, "@Bridge " + source.getSimpleName() + " -> " + target.getSimpleName() + ": " + reason);
+      return null;
+    }
+    final var name = "__Nested" + nestedElements.size();
+    nestedElements.put(name, new NestedElement(srcType, tgtType, FieldPlan.ofKind(FieldPlan.Kind.ENUM, name)));
+    return name;
   }
 
   /**
@@ -3397,7 +3552,10 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var plan = element.plan();
       out.println();
       out.println("  private static final class " + entry.getKey() + " {");
-      if (plan.kind() == FieldPlan.Kind.COPY) {
+      if (plan.kind() == FieldPlan.Kind.ENUM) {
+        emitEnumDirection(out, "forward", element.src(), element.tgt());
+        emitEnumDirection(out, "backward", element.tgt(), element.src());
+      } else if (plan.kind() == FieldPlan.Kind.COPY) {
         for (final var direction : List.of("forward", "backward")) {
           out.println(
             "    static " +
@@ -3451,6 +3609,51 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       }
       out.println("  }");
     }
+  }
+
+  /**
+   * One direction of an enum pair: a switch sending each constant of {@code from} to the constant
+   * of {@code to} with its name, and null to null. A constant with no counterpart, which only the
+   * backward direction of a lenient bridge can meet, converts to null. Every other switch ends in a
+   * default that throws, which only a constant added to {@code from} after this bridge was
+   * generated reaches. Both enums are named by their qualified names, since a type-use annotation
+   * on the declared type is part of how that type prints and cannot qualify a constant.
+   */
+  private void emitEnumDirection(
+    final PrintWriter out,
+    final String direction,
+    final TypeMirror from,
+    final TypeMirror to
+  ) {
+    final var fromName = qualifiedName(from);
+    final var toName = qualifiedName(to);
+    final var unmatched = new HashSet<>(rules.enumCorrespondence(from, to).missingOnTarget());
+    out.println("    static " + toName + " " + direction + "(final " + fromName + " in) {");
+    out.println("      if (in == null) return null;");
+    out.println("      return switch (in) {");
+    for (final var constant : rules.enumConstants(from)) {
+      if (!unmatched.contains(constant)) out.println(
+        "        case " + constant + " -> " + toName + "." + constant + ";"
+      );
+    }
+    if (unmatched.isEmpty()) {
+      out.println(
+        "        default -> throw new IllegalArgumentException(\"" +
+          fromName +
+          " constant \" + in.name() + \" has no counterpart in " +
+          toName +
+          "; re-run the annotation processor\");"
+      );
+    } else {
+      out.println("        default -> null;");
+    }
+    out.println("      };");
+    out.println("    }");
+  }
+
+  /** The qualified name of a declared type's class, without its type-use annotations. */
+  private static String qualifiedName(final TypeMirror type) {
+    return ((TypeElement) ((DeclaredType) type).asElement()).getQualifiedName().toString();
   }
 
   /**
@@ -3674,7 +3877,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case PRIM_WRAPPER -> plan.fwdNullDefault() == null
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.fwdNullDefault() + " : " + readExpr + ")";
-      case RECURSE -> subCall(sub, "forward", readExpr);
+      case RECURSE, ENUM -> subCall(sub, "forward", readExpr);
       // LIST/SET/MAP_VALUES: when the element type needs a sub-bridge, delegate to a private static
       // helper emitted alongside this method (see emitContainerHelpers below). The helper inlines a
       // size-presized for-loop, eliminating the Stream + Spliterator + collector overhead at the
@@ -3736,7 +3939,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       case PRIM_WRAPPER -> plan.bwdNullDefault() == null
         ? readExpr
         : "(" + readExpr + " == null ? " + plan.bwdNullDefault() + " : " + readExpr + ")";
-      case RECURSE -> subCall(sub, "backward", readExpr);
+      case RECURSE, ENUM -> subCall(sub, "backward", readExpr);
       case LIST, SET, MAP_VALUES -> elementIdentity
         ? "(" +
           readExpr +

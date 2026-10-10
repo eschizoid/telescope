@@ -41,8 +41,11 @@ cannot do is refused by name at compile time.
    reference back to an object still being converted to null on both paths, forward, backward and in `patch` (each
    partial slot on a path of its own); an object reached along two branches converts twice. A pair whose types cannot
    both reach themselves pays nothing, which the processor decides from the type graph at compile time.
-2. **Enum to enum.** A pair of enums maps constant to constant by name, with a compile-time check that every source
-   constant has a target. A rename for individual constants is a later addition.
+2. **Enum to enum.** A pair of enums maps constant to constant by name without a row, on both paths, which amends
+   ADR-0002's rule that anything other than an exact type match needs one. The shared spec decides the pair: a strict
+   mapper needs a counterpart for every constant on each side, a forward-only one (`mapperForward`,
+   `@Bridge(lenient = true)`) for every source constant, and anything else is refused at compile time naming the
+   constants that have none. A rename for individual constants is a later addition.
 3. **Conversion on a renamed field.** `@Transform` and `@ViaMapper` gain a target attribute, so one row can both rename
    and convert. Built-in conversions for String and number, enum and String, and List and Set follow, each decided in
    the shared spec so both paths convert the same pairs.

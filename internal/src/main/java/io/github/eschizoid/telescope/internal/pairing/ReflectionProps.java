@@ -76,6 +76,14 @@ public final class ReflectionProps implements PropertySystem<Type> {
   }
 
   @Override
+  public List<String> enumConstants(final Type t) {
+    if (!(t instanceof Class<?> c) || !c.isEnum()) return List.of();
+    return Arrays.stream(c.getEnumConstants())
+      .map(constant -> ((Enum<?>) constant).name())
+      .toList();
+  }
+
+  @Override
   public boolean isInterfaceType(final Type t) {
     return t instanceof Class<?> c && c.isInterface();
   }

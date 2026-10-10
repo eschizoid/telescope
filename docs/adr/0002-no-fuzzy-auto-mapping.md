@@ -2,6 +2,13 @@
 
 **Status:** Accepted · **Date:** 2026-05-29
 
+> **Amendment (2026-10-09, after ADR-0018).** Two different enum types now convert without a row when their constants
+> match by exact name: each constant maps to the constant of the same name, on the runtime mapper and on `@Bridge`
+> alike. Exact constant-name matching is no heuristic, and it is what MapStruct does without being asked, which ADR-0018
+> sets out to match on the generated path. A mapper that converts in both directions needs every constant on each side
+> to have a counterpart; a forward-only mapper (`mapperForward`, `@Bridge(lenient = true)`) needs it for the source
+> constants only. Any other enum pair is refused, naming the constants that have none.
+
 ## Context
 
 Auto-mapping libraries that match fields by fuzzy heuristics at runtime (ModelMapper, Orika, Dozer) have been tried for

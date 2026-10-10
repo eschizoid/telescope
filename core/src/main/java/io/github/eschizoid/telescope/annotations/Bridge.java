@@ -17,7 +17,9 @@ import java.lang.annotation.Target;
  * <strong>bijection</strong> — each side must expose the same set of field names (so a round-trip
  * is lossless). The generated forward/backward lambdas call public members directly: there is no
  * runtime reflection, no {@code java.desktop}, and no {@code setAccessible}; a name mismatch or a
- * missing construction strategy is a compile error rather than a runtime failure.
+ * missing construction strategy is a compile error rather than a runtime failure. Two same-named
+ * fields of different enum types convert constant to constant by name; see {@link #lenient()} for
+ * which constants each side needs.
  *
  * <p>Each direction reads the other side's fields (a record component {@code x()}, or a POJO getter
  * {@code getX()} / {@code isX()}) and rebuilds, auto-detecting a construction strategy at compile
@@ -263,6 +265,10 @@ public @interface Bridge {
    * <p>Same-name auto-matches and declared renames still go through their normal type-safety
    * pipeline — {@code lenient} only removes the bijection-completeness check, never the per-pair
    * type checks.
+   *
+   * <p>An enum pair converts by constant name. A strict bridge needs a counterpart for every
+   * constant on each side; a lenient one needs one for every source constant only, so a target enum
+   * with extra constants is accepted, and its backward sends such a constant to null.
    */
   boolean lenient() default false;
 }

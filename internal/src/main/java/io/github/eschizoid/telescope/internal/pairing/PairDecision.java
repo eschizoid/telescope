@@ -29,6 +29,12 @@ public sealed interface PairDecision<T> {
    */
   record MapCopy<T>() implements PairDecision<T> {}
 
+  /**
+   * Two different enums whose constants line up by name in every direction the mapper converts —
+   * each constant converts to the constant of the same name on the other side, and null stays null.
+   */
+  record EnumByName<T>() implements PairDecision<T> {}
+
   /** Both sides reflectable (record or bean) — recurse into the nested pair. */
   record RecursePair<T>() implements PairDecision<T> {}
 

@@ -121,6 +121,17 @@ final class MirrorProps implements PropertySystem<TypeMirror> {
   }
 
   @Override
+  public List<String> enumConstants(final TypeMirror t) {
+    if (!isEnumType(t)) return List.of();
+    return ((DeclaredType) t).asElement()
+      .getEnclosedElements()
+      .stream()
+      .filter(e -> e.getKind() == ElementKind.ENUM_CONSTANT)
+      .map(e -> e.getSimpleName().toString())
+      .toList();
+  }
+
+  @Override
   public boolean isInterfaceType(final TypeMirror t) {
     return t instanceof DeclaredType dt && dt.asElement().getKind().isInterface();
   }
