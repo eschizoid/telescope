@@ -920,13 +920,13 @@ public final class Beans {
 
   /**
    * Strategy: locate the single {@code arity}-parameter constructor and supply its arguments. When
-   * the POJO was compiled with {@code -parameters}, arguments are matched by constructor parameter
-   * <em>name</em> (order-independent); otherwise they fall back to positional ({@code names[i]} for
-   * argument {@code i}). The parameter names in a {@code -g} build's local variable table are not
-   * read here, so a hint written against positional order keeps it. See {@link ConstructorWriter}.
+   * its parameter names are known, from {@code -parameters} or from the local variable table a
+   * {@code -g} build keeps, and every one is a property of the class, arguments are matched by name
+   * (order-independent); otherwise they fall back to positional ({@code names[i]} for argument
+   * {@code i}). See {@link ConstructorWriter}.
    */
   public static <P> BeanWriter<P> constructorWriter(final Class<P> pojoClass, final int arity) {
-    return new ConstructorWriter<>(pojoClass, arity, false);
+    return new ConstructorWriter<>(pojoClass, arity);
   }
 
   /**
@@ -1125,7 +1125,7 @@ public final class Beans {
     if (chosen.isPresent()) {
       return switch (chosen.get()) {
         case BUILDER -> builderWriter(cls);
-        case CONSTRUCTOR -> new ConstructorWriter<>(cls, props.length, true);
+        case CONSTRUCTOR -> constructorWriter(cls, props.length);
         case SETTERS -> settersWriter(cls);
       };
     }
@@ -1549,13 +1549,14 @@ public final class Beans {
    * {@link Constructor#newInstance} pays, and {@code invokeExact} through a {@code final} field
    * inlines under the JIT. The hot path never reaches {@code Constructor.newInstance}.
    *
-   * <p>When the constructor's parameter names are known, {@code construct} matches each argument to
-   * its source value by the parameter's <em>name</em>, so a reordered constructor is safe;
-   * otherwise it falls back to positional, assembling arguments in {@code names} order and relying
-   * on the constructor parameters lining up with the components. An explicit {@code
-   * writeBean(target, CONSTRUCTOR)} hint knows the names only under {@code -parameters}. The
-   * automatic writer also reads them from the constructor's local variable table under {@code -g},
-   * since it picks the constructor only when every name is a property and must then match by name.
+   * <p>When the constructor's parameter names are known, from {@code -parameters} or from the local
+   * variable table a {@code -g} build keeps, and every one names a property of the class, {@code
+   * construct} matches each argument to its source value by the parameter's <em>name</em>, so a
+   * reordered constructor is safe. Otherwise it falls back to positional, assembling arguments in
+   * {@code names} order and relying on the constructor parameters lining up with the components.
+   * The rule is the same whether the automatic writer chose the constructor or a {@code
+   * writeBean(target, CONSTRUCTOR)} hint pinned it, so pinning the strategy the automatic writer
+   * already picks binds the class the same way, under either compile option.
    */
   static final class ConstructorWriter<P> implements BeanWriter<P> {
 
@@ -1570,7 +1571,7 @@ public final class Beans {
     private final Object[] nullArguments;
 
     @SuppressWarnings("unchecked")
-    ConstructorWriter(final Class<P> cls, final int arity, final boolean debugNames) {
+    ConstructorWriter(final Class<P> cls, final int arity) {
       Constructor<P> found = null;
       for (final var c : cls.getDeclaredConstructors()) {
         if (c.getParameterCount() != arity) continue;
@@ -1596,7 +1597,7 @@ public final class Beans {
       // of a low-context InaccessibleObjectException.
       this.beanClass = cls;
       this.constructor = found;
-      this.paramNames = debugNames ? ParameterNames.of(found) : resolveParamNames(found);
+      this.paramNames = namesMatchingProperties(cls, found);
       this.nullArguments = nullArguments(found.getParameterTypes());
       this.ctorFn = buildCtorFn(cls, found, arity);
     }
@@ -1628,14 +1629,16 @@ public final class Beans {
       return MethodHandles.catchException(raw, Throwable.class, handler);
     }
 
-    private static String[] resolveParamNames(final Constructor<?> ctor) {
-      final var params = ctor.getParameters();
-      final var names = new String[params.length];
-      for (var i = 0; i < params.length; i++) {
-        if (!params[i].isNamePresent()) return null;
-        names[i] = params[i].getName();
-      }
-      return names;
+    /**
+     * The constructor's parameter names when they are known and each names a property of {@code
+     * cls}, else {@code null}. A name that is not a property would ask the source for a value it
+     * does not have, so such a constructor is bound by position instead.
+     */
+    private static String[] namesMatchingProperties(final Class<?> cls, final Constructor<?> ctor) {
+      final var names = ParameterNames.of(ctor);
+      if (names == null) return null;
+      final var properties = Arrays.asList(propertyNames(cls));
+      return properties.containsAll(Arrays.asList(names)) ? names : null;
     }
 
     private static <P> Function<Object, Object> buildCtorFn(

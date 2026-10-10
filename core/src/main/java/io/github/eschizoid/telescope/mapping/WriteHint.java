@@ -55,7 +55,8 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    *   <li>{@link #BUILDER} — requires a static {@code builder()} method on the target
    *   <li>{@link #SETTERS} — requires a no-arg constructor and public {@code setX(value)} setters
    *   <li>{@link #CONSTRUCTOR} — uses the all-args constructor; matches arguments by parameter name
-   *       when compiled with {@code -parameters}, otherwise positional
+   *       when the names are known, from {@code -parameters} or from {@code -g}, and each names a
+   *       property, otherwise by position
    * </ul>
    */
   enum WriteStrategy {

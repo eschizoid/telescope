@@ -54,10 +54,12 @@ strategy builds the bean. The generated `@Bridge`, `@BeanFocus` and `@FromMap` c
 offering several of these is built the same way on both paths. Pass an explicit `WriteHint.writeBean(target, strategy)`
 row to force one of `BUILDER` / `SETTERS` / `CONSTRUCTOR`, either to keep a different strategy than the order picks or
 for a class the auto path refuses because it offers a write path it will not guess at (immutable all-args-only POJOs
-compiled with neither `-parameters` nor `-g`, ambiguous multi-ctor classes). A class whose only write path is its
-private fields — a no-arg constructor and no other constructor, no public setters and no static `builder()` — is refused
-outright: add public setters, an all-args constructor or a static `builder()`, or supply an explicit mapping row that
-produces it. Package-private setters do not count; neither path calls them.
+compiled with neither `-parameters` nor `-g`, ambiguous multi-ctor classes). A `CONSTRUCTOR` hint binds arguments by
+parameter name when the names are known, from `-parameters` or `-g`, and each names a property, and by position
+otherwise, so pinning the constructor the order would pick anyway binds it the same way. A class whose only write path
+is its private fields — a no-arg constructor and no other constructor, no public setters and no static `builder()` — is
+refused outright: add public setters, an all-args constructor or a static `builder()`, or supply an explicit mapping row
+that produces it. Package-private setters do not count; neither path calls them.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;

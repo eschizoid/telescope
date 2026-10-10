@@ -770,7 +770,8 @@ record UserDto(String fullName, String email, AddressDto address) {}
 final Mapper<UserEntity, UserDto> m = Telescope.mapper(
     UserEntity.class, UserDto.class,
     to(UserEntity::name, UserDto::fullName));   // same-name fields auto-mapped
-// immutable all-args-only POJO target (compile with -parameters or -g for name matching):
+// immutable all-args-only POJO target; the hint binds by parameter name when -parameters or -g
+// keeps the names and each names a property, by position otherwise:
 Telescope.mapper(OrderRecord.class, ImmutablePojo.class,
     writeBean(ImmutablePojo.class, WriteStrategy.CONSTRUCTOR));
 ```
