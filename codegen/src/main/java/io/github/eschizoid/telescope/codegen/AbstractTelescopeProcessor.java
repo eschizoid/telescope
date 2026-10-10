@@ -409,7 +409,8 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * The constructor an unhinted rebuild calls, or {@code null}: the only constructor {@code type}
    * declares with one parameter per property, public, with every parameter named after a property.
    * The runtime writer applies the same rule, except that it can read parameter names only from a
-   * class compiled with {@code -parameters}; a processor reads them from the compilation unit.
+   * class compiled with {@code -parameters} or {@code -g}; a processor reads them from the
+   * compilation unit.
    */
   protected static ExecutableElement nameMatchedConstructor(final TypeElement type, final List<String> properties) {
     ExecutableElement found = null;

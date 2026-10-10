@@ -922,10 +922,11 @@ public final class Beans {
    * Strategy: locate the single {@code arity}-parameter constructor and supply its arguments. When
    * the POJO was compiled with {@code -parameters}, arguments are matched by constructor parameter
    * <em>name</em> (order-independent); otherwise they fall back to positional ({@code names[i]} for
-   * argument {@code i}). See {@link ConstructorWriter}.
+   * argument {@code i}). The parameter names in a {@code -g} build's local variable table are not
+   * read here, so a hint written against positional order keeps it. See {@link ConstructorWriter}.
    */
   public static <P> BeanWriter<P> constructorWriter(final Class<P> pojoClass, final int arity) {
-    return new ConstructorWriter<>(pojoClass, arity);
+    return new ConstructorWriter<>(pojoClass, arity, false);
   }
 
   /**
@@ -1001,10 +1002,11 @@ public final class Beans {
   /**
    * Pick a <em>name-based</em> write strategy for {@code cls}, in the order {@link
    * BeanWriteStrategy#AUTO_ORDER} gives: a static {@code builder()}, then a single public all-args
-   * constructor (compiled with {@code -parameters} so its arguments can be matched by name without
-   * positional ambiguity), then a no-arg constructor with setters. The generated bridges and
-   * navigators take the same order, so a bean offering several of these is built the same way on
-   * both paths. The result is cached per class.
+   * constructor whose parameter names are known, so its arguments can be matched by name without
+   * positional ambiguity, then a no-arg constructor with setters. The names come from {@code
+   * -parameters}, or from the constructor's local variable table in a class compiled with {@code
+   * -g}. The generated bridges and navigators take the same order, so a bean offering several of
+   * these is built the same way on both paths. The result is cached per class.
    *
    * <p>A builder is passed over when it has no member for a property the next available strategy
    * writes — every property when there is a name-matched constructor, else every property a public
@@ -1018,8 +1020,9 @@ public final class Beans {
    * none of the strategies applies. A class whose only write path is its private fields — a no-arg
    * constructor and nothing else — is refused, exactly as the {@code @Bridge} processor refuses it:
    * a private field is not part of the class's write contract. An immutable all-args-only POJO
-   * compiled without {@code -parameters} is refused too; its escape is a {@code writeBean(target,
-   * CONSTRUCTOR)} hint at the {@code Telescope.map(...)} call site.
+   * compiled with neither {@code -parameters} nor {@code -g}, or running in a native image without
+   * {@code -parameters}, is refused too; its escape is a {@code writeBean(target, CONSTRUCTOR)}
+   * hint at the {@code Telescope.map(...)} call site.
    */
   @SuppressWarnings("unchecked")
   public static <P> BeanWriter<P> autoWriter(final Class<P> cls) {
@@ -1069,11 +1072,12 @@ public final class Beans {
     final var props = propertyNames(cls);
     final var sole = solePublicConstructor(cls, props.length);
     // Refuse to silently use positional fallback: getter-iteration order is not guaranteed to match
-    // constructor parameter order. Requiring -parameters yields named matching and eliminates the
-    // silent-data-shuffle hazard the explicit writeBean(...) hint accepts. Also require every ctor
-    // parameter name to appear in the getter-derived property set — otherwise `getURL()` → property
-    // `"URL"` mismatched against a ctor parameter named `"url"` would silently pass null into the
-    // constructor under the lookup `valueByName("url")`.
+    // constructor parameter order. Requiring known parameter names yields named matching and
+    // eliminates the silent-data-shuffle hazard the explicit writeBean(...) hint accepts. Also
+    // require every ctor parameter name to appear in the getter-derived property set — otherwise
+    // `getURL()` → property `"URL"` mismatched against a ctor parameter named `"url"` would
+    // silently
+    // pass null into the constructor under the lookup `valueByName("url")`.
     final var nameMatchedConstructor = sole != null && allParameterNamesMatchProperties(sole, props);
     final var builderType = builderTypeOf(cls);
     final var chosen = BeanWriteStrategy.auto(
@@ -1121,7 +1125,7 @@ public final class Beans {
     if (chosen.isPresent()) {
       return switch (chosen.get()) {
         case BUILDER -> builderWriter(cls);
-        case CONSTRUCTOR -> constructorWriter(cls, props.length);
+        case CONSTRUCTOR -> new ConstructorWriter<>(cls, props.length, true);
         case SETTERS -> settersWriter(cls);
       };
     }
@@ -1140,9 +1144,10 @@ public final class Beans {
         " constructor whose arity matches the" +
         " property count (" +
         props.length +
-        "), was compiled with -parameters, and whose parameter names line up with the" +
-        " getter-derived properties. Primary fix: recompile the target class with javac" +
-        " -parameters so its constructor arguments can be matched by name. The" +
+        "), whose parameter names are known, and whose parameter names line up with the" +
+        " getter-derived properties. Primary fix: compile the target class with javac" +
+        " -parameters or -g so its constructor arguments can be matched by name; inside a" +
+        " native image only -parameters keeps them. The" +
         " writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site is an" +
         " escape hatch, but note it falls back to POSITIONAL argument matching when" +
         " -parameters is absent — argument order is then the getter-discovery order (not a" +
@@ -1190,7 +1195,7 @@ public final class Beans {
       missing +
       ", and the class offers no constructor or setters to write them instead. Building through" +
       " the builder would drop those values. Add a builder member for each, a public all-args" +
-      " constructor (compiled with -parameters), or setters; or supply an explicit Mapping row" +
+      " constructor (compiled with -parameters or -g), or setters; or supply an explicit Mapping row" +
       " that produces " +
       cls.getSimpleName() +
       "."
@@ -1227,7 +1232,7 @@ public final class Beans {
       cls.getName() +
       ": it has a no-arg constructor but no public setters, no static builder(), and no all-args" +
       " constructor, and telescope does not write private fields. Add public setters, an" +
-      " all-args constructor (compiled with -parameters), or a static builder() to " +
+      " all-args constructor (compiled with -parameters or -g), or a static builder() to " +
       cls.getSimpleName() +
       ", or supply an explicit Mapping row that produces it."
     );
@@ -1256,12 +1261,8 @@ public final class Beans {
   }
 
   private static boolean allParameterNamesMatchProperties(final Constructor<?> ctor, final String[] propertyNames) {
-    final var props = new HashSet<>(Arrays.asList(propertyNames));
-    for (final var p : ctor.getParameters()) {
-      if (!p.isNamePresent()) return false;
-      if (!props.contains(p.getName())) return false;
-    }
-    return true;
+    final var names = ParameterNames.of(ctor);
+    return names != null && new HashSet<>(Arrays.asList(propertyNames)).containsAll(Arrays.asList(names));
   }
 
   /**
@@ -1548,26 +1549,28 @@ public final class Beans {
    * {@link Constructor#newInstance} pays, and {@code invokeExact} through a {@code final} field
    * inlines under the JIT. The hot path never reaches {@code Constructor.newInstance}.
    *
-   * <p>If the POJO was compiled with {@code -parameters}, {@code construct} matches each argument
-   * to its source value by the constructor parameter's <em>name</em> — so a reordered constructor
-   * is safe; otherwise it falls back to positional, assembling arguments in {@code names} order and
-   * relying on the constructor parameters lining up with the components.
+   * <p>When the constructor's parameter names are known, {@code construct} matches each argument to
+   * its source value by the parameter's <em>name</em>, so a reordered constructor is safe;
+   * otherwise it falls back to positional, assembling arguments in {@code names} order and relying
+   * on the constructor parameters lining up with the components. An explicit {@code
+   * writeBean(target, CONSTRUCTOR)} hint knows the names only under {@code -parameters}. The
+   * automatic writer also reads them from the constructor's local variable table under {@code -g},
+   * since it picks the constructor only when every name is a property and must then match by name.
    */
   static final class ConstructorWriter<P> implements BeanWriter<P> {
 
     private final Class<P> beanClass;
     private final Constructor<P> constructor;
     private final Function<Object, Object> ctorFn;
-    // Constructor parameter names when the POJO was compiled with -parameters (enables
-    // order-independent name matching); null when names are synthetic, so we fall back to
-    // positional.
+    // The constructor's parameter names, which match arguments by name in any order; null when
+    // they are not known, which falls back to positional.
     private final String[] paramNames;
     // What each argument takes in place of null: the JLS default for a primitive parameter, which
     // cannot hold null, and null itself for a reference one.
     private final Object[] nullArguments;
 
     @SuppressWarnings("unchecked")
-    ConstructorWriter(final Class<P> cls, final int arity) {
+    ConstructorWriter(final Class<P> cls, final int arity, final boolean debugNames) {
       Constructor<P> found = null;
       for (final var c : cls.getDeclaredConstructors()) {
         if (c.getParameterCount() != arity) continue;
@@ -1593,7 +1596,7 @@ public final class Beans {
       // of a low-context InaccessibleObjectException.
       this.beanClass = cls;
       this.constructor = found;
-      this.paramNames = resolveParamNames(found);
+      this.paramNames = debugNames ? ParameterNames.of(found) : resolveParamNames(found);
       this.nullArguments = nullArguments(found.getParameterTypes());
       this.ctorFn = buildCtorFn(cls, found, arity);
     }

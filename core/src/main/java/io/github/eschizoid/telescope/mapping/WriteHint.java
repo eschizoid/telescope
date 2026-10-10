@@ -9,8 +9,8 @@ import io.github.eschizoid.telescope.Telescope;
  *
  * <p>With no hint, a bean is built through the first of these it offers: a static {@code
  * builder()}, then a public all-args constructor whose parameter names match the properties
- * (compiled with {@code -parameters}), then a no-arg constructor with setters. The generated
- * {@code @Bridge}, {@code @BeanFocus} and {@code @FromMap} code takes the same order.
+ * (compiled with {@code -parameters} or {@code -g}), then a no-arg constructor with setters. The
+ * generated {@code @Bridge}, {@code @BeanFocus} and {@code @FromMap} code takes the same order.
  *
  * <p>Closes the gap on immutable all-args-only POJOs (no builder, no no-arg constructor) by letting
  * the user pin {@link WriteStrategy#CONSTRUCTOR}. Also useful when several strategies apply and the

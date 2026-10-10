@@ -26,6 +26,14 @@ control. Every other difference is a defect to close.
    the operation, or when the JVM gives the runtime no way to perform it. Today that is a private constructor, and a
    package-private or protected constructor in a different package from the bridge. Each stays in a register, and the
    path that cannot do the work refuses by name at compile time or when the mapper is built.
+
+   > **Amendment (2026-10-10).** A third limit is inherent: a builder with no method for a `final` field that has no
+   > initializer. The processor sees from source that nothing but a write strategy gives the field a value, and refuses
+   > the builder. The runtime cannot tell such a blank final from one given a non-constant value where it is declared,
+   > because neither leaves a trace in the class file, so it cannot refuse the one without refusing the other. It builds
+   > the bean, and the field is left at whatever the builder passes. The difference stays in `BeanRebuildCorpusTest`'s
+   > register.
+
 2. **Every other difference is a defect.** It gets an issue and a fix that makes both paths give the same result, either
    both converting or both refusing by name. Converting on both is preferred when both can.
 3. **New differences need this test.** A change that adds a register entry says in its pull request which kind it is. An
@@ -57,4 +65,5 @@ work can be read from the test sources.
 - The case-pairing rule the runtime mapper uses for sealed roots: matching by simple name, by each case's own `@Bridge`,
   or both.
 - Whether the runtime can read constructor parameter names without `-parameters`, or should refuse the name-matched
-  constructor by name instead.
+  constructor by name instead. Answered: it reads them from the constructor's `LocalVariableTable` in a class compiled
+  with `-g`, as ADR-0005's amendment sets out, and refuses by name when the class has neither.

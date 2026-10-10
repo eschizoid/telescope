@@ -770,34 +770,35 @@ record UserDto(String fullName, String email, AddressDto address) {}
 final Mapper<UserEntity, UserDto> m = Telescope.mapper(
     UserEntity.class, UserDto.class,
     to(UserEntity::name, UserDto::fullName));   // same-name fields auto-mapped
-// immutable all-args-only POJO target (compile with -parameters for name matching):
+// immutable all-args-only POJO target (compile with -parameters or -g for name matching):
 Telescope.mapper(OrderRecord.class, ImmutablePojo.class,
     writeBean(ImmutablePojo.class, WriteStrategy.CONSTRUCTOR));
 ```
 
 Records are the native happy path — canonical-constructor rebuild is the default everywhere (deep mapping, patch, @Focus
 codegen), no configuration needed. Immutable non-record classes work via the CONSTRUCTOR write strategy: auto-detected
-when there is exactly one public all-args constructor compiled with -parameters and parameter names align with
-getter-derived properties; otherwise pin with writeBean(X.class, CONSTRUCTOR). Same -parameters dependency MapStruct has
-for name-based constructor matching. No @Default-style disambiguation among multiple constructors — a class with more
-than one constructor of the property-count arity is never auto-selected for the constructor strategy (`Beans`'
-`solePublicConstructor`) and is refused when nothing else applies, but the writeBean hint plus the single-ctor rule
-covers the practical cases. Verified limitation: no counterpart to MapStruct's @Default — a target with multiple
-same-arity constructors cannot be disambiguated (records: full; single-ctor immutables: full with -parameters;
-multi-constructor immutables: unsupported).
+when there is exactly one public all-args constructor whose parameter names are known (from -parameters, or from the
+local variable table -g keeps) and align with getter-derived properties; otherwise pin with writeBean(X.class,
+CONSTRUCTOR). No @Default-style disambiguation among multiple constructors — a class with more than one constructor of
+the property-count arity is never auto-selected for the constructor strategy (`Beans`' `solePublicConstructor`) and is
+refused when nothing else applies, but the writeBean hint plus the single-ctor rule covers the practical cases. Verified
+limitation: no counterpart to MapStruct's @Default — a target with multiple same-arity constructors cannot be
+disambiguated (records: full; single-ctor immutables: full with -parameters or -g; multi-constructor immutables:
+unsupported).
 
 <sub>Evidence: internal/src/main/java/io/github/eschizoid/telescope/internal/Records.java, `RecordInfo` and its
 `buildCtorFn` (cached canonical-constructor invoker per record class, components in canonical order, MethodHandle
 asSpreader); core/src/main/java/io/github/eschizoid/telescope/conversion/Mapper.java, the `patch` javadoc ('Records:
 rebuilds via the canonical constructor'); internal/src/main/java/io/github/eschizoid/telescope/internal/Beans.java,
-`ConstructorWriter` (name-matched with -parameters, positional fallback) and `computeAutoWriter` (the constructor is
-autoWriter's second rung, after a builder and before setters, guarded by -parameters and a name-alignment check, with a
-loud error otherwise); core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, the `WriteStrategy` enum
-(CONSTRUCTOR strategy docs); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the record↔record
-fixtures at the top of the class, the test 'backward(forward(entity)) equals entity for a 5-level mapping' (nested
-record mapper), and the `WriteHints` tests 'CONSTRUCTOR hint constructs an immutable all-args-only POJO round-trip',
-'autoWriter constructor fallback handles a same-arity unambiguous immutable POJO without a hint', and 'autoWriter throws
-cleanly for ambiguous multi-ctor POJO when no hint is supplied'</sub>
+`ConstructorWriter` (name-matched when the names are known, positional fallback) and `computeAutoWriter` (the
+constructor is autoWriter's second rung, after a builder and before setters, guarded by known parameter names and a
+name-alignment check, with a loud error otherwise);
+core/src/main/java/io/github/eschizoid/telescope/mapping/WriteHint.java, the `WriteStrategy` enum (CONSTRUCTOR strategy
+docs); core/src/test/java/io/github/eschizoid/telescope/DeepMappingTest.java, the record↔record fixtures at the top of
+the class, the test 'backward(forward(entity)) equals entity for a 5-level mapping' (nested record mapper), and the
+`WriteHints` tests 'CONSTRUCTOR hint constructs an immutable all-args-only POJO round-trip', 'autoWriter constructor
+fallback handles a same-arity unambiguous immutable POJO without a hint', and 'autoWriter throws cleanly for ambiguous
+multi-ctor POJO when no hint is supplied'</sub>
 
 ## Policies & null handling
 
