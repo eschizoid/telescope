@@ -148,14 +148,15 @@ Same-typed JDK collections are copied rather than shared, so changing the target
 
 On the latest run, the `BRIDGE_FN` constant that the `@Bridge` sample above calls ran at the same speed as MapStruct on
 flat, at 0.99 times its time on deep, and at 1.02 on nested. The composable `BRIDGE.read` value took 1.08 times
-MapStruct's time forward on flat and 1.06 on nested. Backward it ran faster than MapStruct on nested, deep and the Set
-field. Telescope's generated mappers allocated the same bytes per call as MapStruct on every row.
+MapStruct's time forward on flat, 1.06 on nested, and up to 1.11 on the Map field. Backward it ran faster than MapStruct
+on nested, deep and the Set field. Telescope's generated mappers allocated the same bytes per call as MapStruct on every
+row.
 
 <!-- metrics: from MapStructComparisonBenchmark, Actions run 38008688244 -->
 
 | Tier, generated mapper against MapStruct | forward, `BRIDGE_FN` | forward, `BRIDGE.read` | backward, `BRIDGE.read` | bytes per call, both sides |
 | ---------------------------------------- | -------------------- | ---------------------- | ----------------------- | -------------------------- |
-| flat, 5 scalars                          | 1.00 times           | 1.08 times             | 1.05 times              | 32                         |
+| flat, 5 scalars                          | 1.00 to 1.01 times   | 1.08 times             | 1.05 times              | 32                         |
 | nested, one nested type                  | 1.02 times           | 1.06 times             | 0.87 times              | 48                         |
 | deep, 3 levels and list hops             | 0.99 times           | 0.99 to 1.00 times     | 0.96 times              | 376                        |
 | Map field, 100 entries                   | not measured         | 0.99 to 1.11 times     | 1.09 times, see below   | 7,528                      |
