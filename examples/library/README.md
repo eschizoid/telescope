@@ -1,8 +1,8 @@
 # telescope-examples-library
 
-Twelve plain Java programs, each with a `main` method, that show one part of the telescope DSL at a time. The module
-depends only on telescope itself, its annotation processors, and Lombok. There is no Spring, JPA or Jackson in it, so
-each demo shows what telescope does without a framework around it.
+The `examples/library` module holds twelve plain Java programs, and each one shows one part of the telescope DSL in its
+own `main` method. The module depends only on telescope itself, its annotation processors, and Lombok. There is no
+Spring, JPA or Jackson in it, so each demo shows what telescope does without a framework around it.
 
 If you are new to telescope, start with `RuntimeNavigationDemo`, `MultiEditDemo` and `DeepMappingDemo`. The Spring Boot
 examples in [`../springboot/`](../springboot/) show telescope inside an application.

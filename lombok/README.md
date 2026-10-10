@@ -41,10 +41,12 @@ The update returns a new `User` with a new `Address`, and the original `user` is
 
 ## Install
 
-You need Java 21 or later. Put Lombok and `telescope-lombok` on the annotation processor path, and `telescope-core` on
-the compile classpath, because the generated code calls it. `telescope-lombok` depends on `telescope-codegen` and
-`telescope-core`, so both come onto the processor path with it, and the `telescope-codegen` processors for `@Focus`,
-`@BeanFocus`, `@Bridge` and the rest run as well. You don't need to add `telescope-codegen` separately.
+You need Java 21 or later. Put Lombok and `telescope-lombok` on the annotation processor path, and put `telescope-core`
+on the compile classpath, because the generated code calls it.
+
+`telescope-lombok` depends on `telescope-codegen` and `telescope-core`, so both come onto the processor path with it.
+The `telescope-codegen` processors for `@Focus`, `@BeanFocus`, `@Bridge` and the rest therefore run as well, and you
+don't need to add `telescope-codegen` separately.
 
 With Gradle:
 
@@ -132,7 +134,8 @@ For each class the processor generates two classes in the same package:
 - `<X>FieldOptics`, a holder of one prebuilt path per property. When the holder is present, a runtime call such as
   `Telescope.ofBean(User.class).field(User::getEmail)` uses its constant instead of building the path by reflection.
 
-A nested static class gets names that include the enclosing class. For example, `Outer.Inner` produces
+Unlike `@Focus` and `@BeanFocus`, which accept only top-level types, `telescope-lombok` also handles a nested static
+class. Its generated classes get names that include the enclosing class. For example, `Outer.Inner` produces
 `OuterInnerTelescope` and `OuterInnerFieldOptics`.
 
 The navigator reads each property through its getter, so the class needs getters. `@Data` and `@Value` add them, but
@@ -168,9 +171,11 @@ User clean = normalize.apply(user);
 ## Using @BeanFocus on a Lombok class
 
 You don't need `@BeanFocus` on a Lombok class, but it is allowed. When `telescope-lombok` is on the processor path, it
-generates the navigator for the class, and the `@BeanFocus` processor skips the class, so the result is the same as
-without `@BeanFocus`. Without `telescope-lombok`, the `@BeanFocus` processor waits until the final processing round to
-generate the navigator for a Lombok class, so main code in the same module can't refer to that navigator.
+generates the navigator for the class and the `@BeanFocus` processor skips the class. The result is the same as without
+`@BeanFocus`.
+
+Without `telescope-lombok`, the `@BeanFocus` processor waits until the final processing round to generate the navigator
+for a Lombok class. Main code in the same module then can't refer to that navigator.
 
 ## Choosing a module
 

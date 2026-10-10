@@ -14,8 +14,9 @@ manual run.
 Numbers you cite should come from the `Benchmarks` GitHub Actions workflow and not from a laptop. A developer machine
 with other work in the background gives numbers that change from run to run, and two CI runs can land on runners of
 different speed. Most benchmark classes therefore have a control row, such as a hand-written loop, an untouched path, or
-MapStruct's own row. If the control moved between two runs, the runners differ, and you should normalise against it or
-run again. Allocation per call, from the `gc` profiler, doesn't depend on runner speed, so it is the steadier evidence.
+MapStruct's own row. If the control moved between two runs, the runners differ in speed. In that case, divide each ratio
+by the control's change, or run again. Allocation per call, from the `gc` profiler, doesn't depend on runner speed, so
+it is the steadier evidence.
 
 ### Running in CI
 
@@ -160,8 +161,8 @@ An A/B comparison needs both sides to run the same benchmark. Follow these steps
 1. Put the benchmark on both branches. If the benchmark is new, cherry-pick it onto a baseline branch cut from `main`.
 2. Start the `Benchmarks` workflow on each branch with the same filter and settings. Use 3 or more forks when you plan
    to quote the result.
-3. Compare the control rows of the two runs first. If a control moved, the runners differ in speed, so normalise every
-   ratio against it or run again.
+3. Compare the control rows of the two runs first. If a control moved, the runners differ in speed. Divide every ratio
+   by the control's change, or run again.
 4. Compare allocation as well as time. Add `gc` to `profilers` for that.
 
 For `ContainerAllocationBenchmark`, `scripts/compare-runtime-benchmarks.py` compares two saved JMH JSON files, and with

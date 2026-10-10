@@ -1,9 +1,24 @@
 # telescope-codegen
 
-Annotation processors that generate code at compile time for the [core DSL](../README.md). Each annotated type gets a
-typed navigator, a converter, or a binder, and every hop in it is checked by `javac`. A generated navigator gives the
-same results as the reflective `Telescope.of(Class)` path through the same fields. A generated converter calls
-constructors, getters, builders and setters directly, with no reflection at run time.
+`telescope-codegen` holds the annotation processors that generate code at compile time for the [core DSL](../README.md).
+Each annotated type gets a typed navigator, a converter, or a binder, and `javac` checks every step in it. A generated
+navigator gives the same results as the reflective `Telescope.of(Class)` path through the same fields. A generated
+converter calls constructors, getters, builders and setters directly, with no reflection at run time.
+
+With `@Focus` on these records, the processor writes `CompanyTelescope`, `TeamTelescope` and `UserTelescope`:
+
+```java
+@Focus
+public record User(String name, String email) {}
+
+@Focus
+public record Team(String name, List<User> users) {}
+
+@Focus
+public record Company(String name, List<Team> teams) {}
+```
+
+The same update can then go through the reflective path or through the generated navigator:
 
 ```java
 // Reflective path: field names are recovered from method references at run time.
@@ -154,13 +169,13 @@ public record UserDto(String id, String email, List<String> tags) {}
 
 `UserEntityBridge` has these members:
 
-| Member                                   | What it is                                                             |
-| ---------------------------------------- | ---------------------------------------------------------------------- |
-| `static UserDto forward(UserEntity s)`   | converts source to target, and returns `null` for `null`               |
-| `static UserEntity backward(UserDto t)`  | converts target to source, and returns `null` for `null`               |
-| `static UserEntity patch(base, partial)` | rebuilds `base` with every non-null field of `partial` written over it |
-| `BRIDGE_FN`                              | a `BridgeFn<UserEntity, UserDto>` that calls `forward` and `backward`  |
-| `BRIDGE`                                 | a `Telescope<UserEntity, UserDto>`, so `BRIDGE.read(entity)` converts  |
+| Member                                   | What it is                                                                                               |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `static UserDto forward(UserEntity s)`   | converts source to target, and returns `null` for `null`                                                 |
+| `static UserEntity backward(UserDto t)`  | converts target to source, and returns `null` for `null`                                                 |
+| `static UserEntity patch(base, partial)` | rebuilds `base` with the non-null reference fields and all primitive fields of `partial` written over it |
+| `BRIDGE_FN`                              | a `BridgeFn<UserEntity, UserDto>` that calls `forward` and `backward`                                    |
+| `BRIDGE`                                 | a `Telescope<UserEntity, UserDto>`, so `BRIDGE.read(entity)` converts                                    |
 
 ```java
 UserDto dto = UserEntityBridge.forward(entity);
@@ -195,8 +210,10 @@ There is no hop in the other direction. Annotate the target with its own `@Bridg
   its backward direction turns an unmatched constant into `null`. Any other enum pair is a compile error that names the
   missing constants.
 
-`patch` always returns a new object, even when `partial` is `null` or changes nothing. It rebuilds only the root object.
-A field that `partial` leaves `null` keeps the object `base` holds, so a nested object or list is shared with `base`.
+`patch` writes every non-null reference field of `partial` over `base`, and every primitive field of `partial`, even one
+that holds 0 or `false`. It always returns a new object, even when `partial` is `null` or changes nothing. It rebuilds
+only the root object, so a field that `partial` leaves `null` keeps the object `base` holds, and a nested object or list
+is shared with `base`.
 
 ### Attributes of `@Bridge`
 
@@ -247,7 +264,7 @@ With these, `OrderBridge.forward(new Order("N-1", new BigDecimal("12.34"), null,
 `OrderDto[reference=N-1, total=1234, region=EMEA, channel=API]`.
 
 A `@Bridge` with `lenient = true` loses data on the way back. Every source field with no target counterpart comes back
-as `null` or zero, whatever the original held.
+as `null`, zero or `false`, whatever the original held.
 
 ### Carrier form and naming
 
@@ -280,9 +297,10 @@ public record Signup(String id, int age, LocalDate born) {}
 Signup s = SignupFromMap.fromMap(Map.of("id", "s1", "age", "42", "born", "2000-01-02"));
 ```
 
-A key listed in `required` that the map lacks throws `IllegalArgumentException`. Any other missing key leaves the
-component at its default. The class also holds a `FROM_MAP` constant, a `ForwardMapper`. `Telescope.fromMap(...)` uses
-the binder once it is registered. Registration on the module path is covered in [docs/codegen.md](../docs/codegen.md).
+A key listed in `required` that is absent from the map, or holds `null`, throws `IllegalArgumentException`. Any other
+missing key leaves the component at its default. The class also holds a `FROM_MAP` constant, a `ForwardMapper`.
+`Telescope.fromMap(...)` uses the binder once it is registered. Registration on the module path is covered in
+[docs/codegen.md](../docs/codegen.md).
 
 ## Compile-time mapper verification
 
@@ -305,7 +323,8 @@ It never rejects a call that the runtime would build:
 
 - A class argument that is not a literal skips the call, and the runtime check still applies when the mapper is built.
 - A row built by a helper method skips the completeness check. The rows the verifier can see are still checked.
-- A `constant` or `compute` row turns off the completeness check, because it does the same at run time.
+- A `constant` or `compute` row turns off the completeness check, because the runtime also skips the completeness check
+  for such a mapper.
 - `mapperForward` checks the rows it is given and does not require every field to be covered.
 
 The verifier is on whenever the processor is on the path, and it takes the options below:
@@ -326,7 +345,7 @@ in the same module.
 
 ## Performance
 
-Measured figures for the generated converter against MapStruct, per tier, direction and call shape (`BRIDGE_FN`,
-`BRIDGE.read` and static `forward`), are in the root README's [Measured performance](../README.md#measured-performance)
-section. The method and the per-fork numbers are in
-[docs/perf-mapstruct-comparison.md](../docs/perf-mapstruct-comparison.md).
+Measured figures for the generated converter against MapStruct, per tier and call shape (`BRIDGE_FN`, `BRIDGE.read` and
+`BRIDGE.set`), are in the root README's [Measured performance](../README.md#measured-performance) section. The static
+`forward` rows are in [benchmarks/README.md](../benchmarks/README.md#mapstruct-comparison). The method and the per-fork
+numbers are in [docs/perf-mapstruct-comparison.md](../docs/perf-mapstruct-comparison.md).

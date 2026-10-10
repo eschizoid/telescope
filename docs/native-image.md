@@ -28,7 +28,9 @@ any failure — so `native-image` compiling and running the binary **is** the te
 | Runtime record → bean `mapper`    | LMF getter readers + no-arg-ctor `Supplier` + LMF setter `BiConsumer` writers (the `Beans` path)         |
 | Runtime record → builder `mapper` | the `Beans` `BuilderWriter` — `builder()` `Supplier` + fluent-setter `BiFunction` + `build()` `Function` |
 | Generated `@FromMap`              | reflection-free codegen `Map → record` converter — the control (no LMF, no `SerializedLambda`)           |
+| Runtime `fromMap` with a binder   | `Telescope.fromMap(...)` finding the generated `AddressFromMap` binder through its `ServiceLoader` entry |
 | Generated `@Bridge` constant      | the emitted `AccountBridge.BRIDGE` (`Telescope<Account, AccountEntity>`) baked into the image heap       |
+| Generated `@Focus` navigator      | `UserTelescope.of().address().city()` read and update, with the navigator in `serialization-config.json` |
 | Navigator-only `Telescope.all`    | fused multi-edit over generated navigator paths, on records with no `reflect-config.json` entry          |
 
 `Records` / `Beans` live in `:internal`, JPMS-sealed to `:core`, so the verifier cannot call them directly. It reaches

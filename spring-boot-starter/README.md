@@ -1,9 +1,9 @@
 # telescope-spring-boot-starter
 
-The Spring Boot starter for [telescope](../README.md) does two things. It collects every `Mapper<A, B>` bean in the
-application context into a `TelescopeMapperRegistry`, so a service can look a mapper up by its source and target class.
-It also lets the `telescope-codegen` annotation processor turn an interface annotated with `@TelescopeMapper` or
-`@TelescopeTransformer` into a Spring bean that you inject like any other.
+The Spring Boot starter for [telescope](../README.md) collects every `Mapper<A, B>` bean in the application context into
+a `TelescopeMapperRegistry`, so a service can look a mapper up by its source and target class. It also lets the
+`telescope-codegen` annotation processor turn an interface annotated with `@TelescopeMapper` or `@TelescopeTransformer`
+into a Spring bean that you inject like any other.
 
 The starter is compiled and tested against Spring Boot 4.1.1 and needs Java 21 or later. It registers itself through
 Spring Boot's autoconfiguration, so there is no `@Enable...` annotation to add.
@@ -116,8 +116,9 @@ The message for a missing pair names both classes and tells you to define a `@Be
 ### Two mappers for the same pair
 
 The pair must identify one mapper. When two `Mapper` beans share a source and target class, building the registry throws
-`IllegalStateException`, so the application context fails to start. The message names the pair. If you need two
-different mappers for the same pair, give them `@Qualifier` names and inject the one you want by name.
+`IllegalStateException`, so the application context fails to start. The message names the pair. Qualifiers don't help,
+because the registry collects every `Mapper` bean. Keep one `Mapper` bean per pair, and wrap the other in your own type
+or build it where it's used.
 
 ### Replacing the registry
 
@@ -277,8 +278,9 @@ A `TelescopeProjection<S, T>` bean offers the operations of a core `Mapper<S, T>
 
 - `map` and `forward` run the transformers in order and then map. A null source maps to null.
 - `backward` maps the target back to the source. Transformers do not run in that direction.
-- `patch(base, partial)` copies `base` and overwrites each field that `partial` sets to a non-null value. Transformers
-  do not run. It works only on a projection that maps through a core `Mapper`, as described under [Patching](#patching).
+- `patch(base, partial)` copies `base` and writes over it every reference field that `partial` sets to a non-null value,
+  and every primitive field of `partial`, even one that holds 0 or `false`. Transformers do not run. It works only on a
+  projection that maps through a core `Mapper`, as described under [Patching](#patching).
 - `translate(MapperBuilder<S, T>)` accepts the same rows as `Telescope.mapperBuilder(...)`. `from(...).to(...)` pairs
   two accessors, and `add(...)` takes any `MapStep`, such as `constant` and `compute` from `Mapping`, `nullSourceValues`
   from `NullHint`, or `writeBeans` from `WriteHint`.
@@ -309,8 +311,8 @@ An empty `translate` override is enough to move off the bridge.
 
 ### A mapper with only `map`
 
-An interface that does not extend `TelescopeProjection` declares `map` and nothing else, and it names the pair with
-`from` and `to`, which must be given together. It has no `forward`, `backward` or `patch`, and customizers cannot add
+An interface that does not extend `TelescopeProjection` declares `map` and nothing else. It names the pair with `from`
+and `to`, which must be given together. It has no `forward`, `backward` or `patch`, and customizers cannot add
 transformers to it. It still accepts `transformers`, which run in order before the bridge:
 
 ```java
@@ -381,8 +383,8 @@ The default and the operation follow these rules:
   operation thread safe, because the singleton bean shares both.
 
 `TelescopeTransformation<S, A>` also inherits `read`, `find`, `toList`, `set` and `update` from `TelescopePath<S, A>`.
-`apply(source)` uses the declared transformation, while `update(source, fn)` takes a function you pass for a one-off
-edit, and `path()` gives you the whole Telescope API.
+`apply(source)` uses the declared transformation. `update(source, fn)` takes a function you pass for a one-off edit, and
+`path()` gives you the whole Telescope API.
 
 The generated bean calls `path()` and `transform()` once, when Spring constructs it, and fails bean creation if either
 returns null. Neither method may depend on field injection.
@@ -414,8 +416,9 @@ plain `Mapper` beans.
 A generated mapper that calls a bridge makes a plain method call to the generated `<Source>Bridge` and needs no
 native-image configuration for the mapping. A projection that builds a core `Mapper` uses the runtime path, so its
 source and target types need the same reflection registration as any runtime-mapped type, for example through Spring's
-`@RegisterReflectionForBinding`. A transformer path built with `.field(Type::accessor)` is a runtime path too. See
-[`docs/native-image.md`](../docs/native-image.md) for what each path needs.
+`@RegisterReflectionForBinding`. A transformer path built with `.field(Type::accessor)` is a runtime path too. Telescope
+reads the field name from the method reference, so the class that holds the method reference goes in
+`serialization-config.json`. See [`docs/native-image.md`](../docs/native-image.md) for what each path needs.
 
 ## Configuration
 

@@ -30,25 +30,11 @@ dependencies {
 The artifact brings in `telescope-core` and `io.quarkus:quarkus-arc`, and it imports the Quarkus 3.40.1 platform BOM to
 set the `quarkus-arc` version. Your application's own Quarkus BOM normally sets the Quarkus versions you get.
 
-## What the module contains
-
-The module adds these public types:
-
-- `TelescopeMapperRegistry` holds every `Mapper<?, ?>` bean in the application, keyed by its source class and target
-  class.
-- `TelescopeProducer` is an `@ApplicationScoped` bean with a producer method that builds the registry as an
-  `@ApplicationScoped` bean. The method receives every `Mapper` bean through ArC's `@All List<Mapper<?, ?>>` injection.
-- `TelescopeConfig` is a `@ConfigMapping(prefix = "telescope")` interface that holds the `telescope.registry.fail-fast`
-  setting.
-
-The jar includes a pre-built `META-INF/jandex.idx`. Quarkus reads that index to find the producer, so the jar needs no
-`beans.xml` and Quarkus does not warn that the archive has no Jandex index.
-
 ## Example
 
-You register a mapper by writing a CDI producer method that returns it. `Mapper` is a final class with no public
-constructor, so a class of your own cannot be a `Mapper` bean, and a producer method is the way to add one. The example
-uses `@Singleton` because a pseudo-scope needs no client proxy.
+You register a mapper with a CDI producer method or producer field that returns it. `Mapper` is a final class with no
+public constructor, so a class of your own can't be a `Mapper` bean. The example uses `@Singleton`, which gives one
+shared instance with no proxy object in front of it.
 
 ```java
 @ApplicationScoped
@@ -91,6 +77,20 @@ public class Converter {
 The lookup uses the exact class. A subclass of `Order`, or a proxy class that wraps one, does not find the
 `Mapper<Order, OrderDto>`.
 
+## What the module contains
+
+The module adds these public types:
+
+- `TelescopeMapperRegistry` holds every `Mapper<?, ?>` bean in the application, keyed by its source class and target
+  class.
+- `TelescopeProducer` is an `@ApplicationScoped` bean with a producer method that builds the registry as an
+  `@ApplicationScoped` bean. The method receives every `Mapper` bean through ArC's `@All List<Mapper<?, ?>>` injection.
+- `TelescopeConfig` is a `@ConfigMapping(prefix = "telescope")` interface that holds the `telescope.registry.fail-fast`
+  setting.
+
+The jar includes a pre-built `META-INF/jandex.idx`. Quarkus reads that index to find the producer, so the jar needs no
+`beans.xml` and Quarkus does not warn that the archive has no Jandex index.
+
 ## Registry methods
 
 | Method                     | Result                                                                                         |
@@ -123,8 +123,9 @@ behave the same either way.
 ## Two mappers for the same pair
 
 Each source and target pair can have only one mapper. If two `Mapper` beans share a pair, building the registry throws
-`IllegalStateException` with a message that starts `Duplicate Mapper for type pair`. When you need two different mappers
-for the same pair, give each a CDI qualifier such as `@Named` and inject the one you want directly.
+`IllegalStateException` with a message that starts `Duplicate Mapper for type pair`. Qualifiers don't help, because the
+registry collects every `Mapper` bean. Keep one `Mapper` bean per pair, and wrap the other in your own type or build it
+where it's used.
 
 ## Replacing the registry
 

@@ -6,7 +6,7 @@
 
 [ADR-0003](0003-reflection-over-method-handles.md) rejected swapping the runtime path from cached `java.lang.reflect`
 over to `MethodHandles`. The argument was specifically about **`MethodHandle.invoke` per-call dispatch** — its inflation
-behaviour and JPMS lookup friction didn't pay for themselves when codegen was the real hot-path answer.
+behavior and JPMS lookup friction didn't pay for themselves when codegen was the real hot-path answer.
 
 That argument doesn't cover `LambdaMetafactory`. `LambdaMetafactory.metafactory(...)` synthesizes a small
 SAM-implementing class whose `apply` / `accept` / `get` method calls the underlying `MethodHandle` **directly**, not

@@ -38,7 +38,8 @@ has that method only when the class that holds the method references is register
 
 The example registers `NativeVerify` and the generated navigators. `NativeVerify` uses method references, so it runs the
 same decode inside the image. `RuntimeFromMapServer` is left unregistered on purpose, so a native image built with it as
-the main class shows the failure you get without the registration (stack trace shortened):
+the main class shows the failure you get without the registration (abridged, with frames left out and the lambda's id
+replaced by `<id>`):
 
 ```
 Exception in thread "main" java.lang.IllegalArgumentException: Expected a method reference to a record component / bean property accessor
@@ -49,27 +50,27 @@ Exception in thread "main" java.lang.IllegalArgumentException: Expected a method
     at io.github.eschizoid.telescope.Telescope.fromMap
     at io.github.eschizoid.telescope.examples.graphql.server.RuntimeFromMapServer.converter
     ...
-Caused by: java.lang.NoSuchMethodException: io.github.eschizoid.telescope.examples.graphql.server.RuntimeFromMapServer$$Lambda/0x...writeReplace()
+Caused by: java.lang.NoSuchMethodException: io.github.eschizoid.telescope.examples.graphql.server.RuntimeFromMapServer$$Lambda/0x<id>.writeReplace()
 ```
 
 The generated converter does not decode method references, so it needs no registration. In short, `@FromMap` and
-`@Bridge` code works in a native image with no extra configuration. The runtime path works once you add one
-`serialization-config.json` entry for each class that holds the method references. A generated `@Focus` navigator builds
-its lenses from method references too, so each navigator class also needs an entry.
+`@Bridge` code works in a native image with no reflection or serialization configuration. The runtime path works once
+you add one `serialization-config.json` entry for each class that holds the method references. A generated `@Focus`
+navigator builds its lenses from method references too, so each navigator class also needs an entry.
 
 ## Native build
 
-The native build needs a GraalVM distribution that includes `native-image`. Point `GRAALVM_HOME` and `JAVA_HOME` at it,
-because the build turns off toolchain detection, and the project's normal compile toolchain is a plain JDK with no
-`native-image`:
+The native build needs a GraalVM distribution that includes `native-image`. The build turns off toolchain detection, and
+the project's normal compile toolchain is a plain JDK with no `native-image`. Point `GRAALVM_HOME` and `JAVA_HOME` at
+the GraalVM distribution instead:
 
 ```bash
 GRAALVM_HOME=/path/to/graalvm JAVA_HOME=/path/to/graalvm \
   ./gradlew :examples:graphql:nativeRun
 ```
 
-The image's main class is `NativeVerify`. It runs each capability below, prints `PASS` or `FAIL` for each, and exits
-non-zero if any capability fails, so building and running the binary is the test.
+The image's main class is `NativeVerify`. It runs each capability below and prints `PASS` or `FAIL` for each. It exits
+with a non-zero status if any capability fails, so building and running the binary is the test.
 
 - Record paths
   - a record field update and a record field read, through `Telescope.of(User.class).field(...)`

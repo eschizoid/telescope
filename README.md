@@ -110,12 +110,13 @@ InvoiceDto viaMapper = Telescope.mapper(Invoice.class, InvoiceDto.class).forward
 InvoiceDto viaBridge = InvoiceBridge.BRIDGE_FN.forward(invoice);
 ```
 
-`CrossPathCorpusTest` runs the same input through both kinds of mapper and fails when they disagree. It covers container
-shapes, how a target is constructed, same-typed container copies, object graphs that lead back to an object being
-converted, `patch`, and enum pairs. It runs as part of `./gradlew check`, which is what CI runs. Renames, null
-strategies, and defaults aren't cross-checked by it.
+Two tests run the same input through both kinds of mapper and fail when they disagree. `CrossPathCorpusTest` covers
+container shapes, how a target is constructed, same-typed container copies, object graphs that lead back to an object
+being converted, `patch`, and enum pairs. `BeanRebuildCorpusTest` covers the ways a bean target can be built. Both run
+as part of `./gradlew check`, which is what CI runs. Renames, null strategies, and defaults aren't cross-checked by
+them.
 
-The test records each known difference between the two paths, and it fails when a recorded difference goes away, so the
+The tests record each known difference between the two paths, and they fail when a recorded difference goes away, so the
 list stays accurate. The recorded differences are:
 
 - A target reachable only through a private constructor is built at run time. The processor refuses it when `@Bridge`'s
@@ -123,9 +124,14 @@ list stays accurate. The recorded differences are:
 - A container class whose no-argument constructor is package-private or protected is built at run time. The processor
   refuses it when the bridge is generated into a different package from the class, because generated code there can't
   call that constructor.
+- A bean built through a constructor whose parameters are named after its properties converts on the generated path. The
+  runtime mapper refuses it unless the bean was compiled with `-parameters`, because it matches the arguments by
+  parameter name.
+- A bean whose builder has no method for a `final` field with no initializer is built at run time, and the value is
+  lost. The processor refuses it.
 - `patch` on two sealed roots returns a new object from a generated bridge, which dispatches on the case. The runtime
   mapper refuses it with an `UnsupportedOperationException` that names the root.
-- An enum pair below a nested pair whose own `@Bridge` converts it, through a `@Transform` or `lenient = true`, compiles
+- A nested pair can carry its own `@Bridge` with a `@Transform` or with `lenient = true`. An enum pair below it compiles
   on the generated path. The runtime mapper refuses it unless you give it a row for the nested pair.
 
 ## Unconvertible fields are refused
@@ -151,12 +157,15 @@ Same-typed JDK collections are copied rather than shared, so changing the target
 
 ## Measured performance
 
-On the latest run, the generated mapper ran at about MapStruct's speed on every tier. Forward, from the source bean to
-the target record, the `BRIDGE_FN` constant that the `@Bridge` sample above calls took 1.00 to 1.01 times MapStruct's
-time on flat, 1.02 on nested, and 0.99 on deep. The composable `BRIDGE.read` value took 1.08 times MapStruct's time on
-flat, 1.06 on nested, and up to 1.11 on the Map field. Backward, from the record to the bean through `BRIDGE.set`, it
-took less time than MapStruct on nested, deep and the Set field. Telescope's generated mappers allocated the same bytes
-per call as MapStruct on every row.
+On the latest run, each call shape of the generated mapper ran close to MapStruct's time on every tier.
+
+- Forward, from the source bean to the target record, the `BRIDGE_FN` constant that the `@Bridge` sample above calls
+  took 1.00 to 1.01 times MapStruct's time on flat, 1.02 on nested, and 0.99 on deep.
+- Forward, the composable `BRIDGE.read` value took 1.08 times MapStruct's time on flat, 1.06 on nested, 0.99 to 1.00 on
+  deep, 1.05 on the Set field, and 0.99 to 1.11 on the Map field.
+- Backward, from the record to the bean, `BRIDGE.set` took 1.05 times MapStruct's time on flat and 1.09 on the Map
+  field. It took less time than MapStruct on nested, deep, and the Set field, at 0.87, 0.96, and 0.97.
+- Telescope's generated mappers allocated the same bytes per call as MapStruct on every row.
 
 <!-- metrics: from MapStructComparisonBenchmark, Actions run 38008688244 -->
 
@@ -343,9 +352,9 @@ with `.then(...)`.
 
 `patch(base, partial)` returns a copy of `base` with the partial's non-null reference fields, and all of its primitive
 fields, written over it. The copy is a new object even when the partial is null or holds nothing but nulls, and only a
-null `base` gives `null`. The copy is shallow, so a field the partial leaves null holds the same object that `base`
-holds, and changing that nested object or container through the copy also changes it in `base`. Some mappers refuse
-`patch` with an `UnsupportedOperationException`:
+null `base` gives `null`. The copy is shallow. A field the partial leaves null holds the same object that `base` holds,
+so a change to that nested object or container through the copy also shows in `base`. Some mappers refuse `patch` with
+an `UnsupportedOperationException`:
 
 - a mapper whose source is an enum, or a class no write strategy can build, such as a sealed interface
 - a mapper from `liftList`, `liftSet`, `liftOptional`, or `liftMapValues`, whose source is a container with no fields
@@ -490,10 +499,13 @@ final Company cleaned = normalize.apply(company);
 
 The two edits above touch different fields of the same root, so the fold rebuilds that root once instead of twice. Edits
 that share a longer prefix save more, because their shared steps are walked once. Paths from a generated navigator fuse
-the same way, with each other and with hand-written paths through the same fields. A path that doesn't record its steps
-makes the fold run its edits one after another. Examples are a path built by `Telescope.lens(...)`, by
-`fieldByName(...)`, or through `observe(...)`, a bridge, or a mapper's `asTelescope()`, and a `then(...)` join where
-either side is such a path.
+the same way, with each other and with hand-written paths through the same fields.
+
+The fold runs its edits one after another instead when a path doesn't record its steps, as in these cases:
+
+- a path built by `Telescope.lens(...)` or `fieldByName(...)`
+- a path that goes through `observe(...)`, a bridge, or a mapper's `asTelescope()`
+- a `then(...)` join where either side is one of the paths above
 
 ### Mapping
 
@@ -814,13 +826,13 @@ Everything is published to Maven Central under `io.github.eschizoid`.
 | `telescope-internal`            | The optic lattice and reflection helpers. Transitive only, so it arrives automatically. A consumer that is itself a JPMS module can't compile against it, because its packages are exported only to telescope's own modules. A classpath consumer can reach it and shouldn't. |
 | `telescope-codegen`             | The optional annotation processor for `@Focus`, `@BeanFocus`, `@Bridge`, and `@FromMap`, described in [docs/codegen.md](docs/codegen.md). It also registers the mapper verifier, which runs on every compilation and is turned off with `-Atelescope.verify=off`.             |
 | `telescope-lombok`              | A Lombok-aware variant of the processor, for `@Data`, `@Value`, and `@Builder` POJOs.                                                                                                                                                                                         |
-| `telescope-spring-boot-starter` | Spring Boot autoconfiguration, a `Mapper<A, B>` bean registry, and the generated `@TelescopeMapper` beans. Tested against Spring Boot 4.1.1.                                                                                                                                  |
+| `telescope-spring-boot-starter` | Spring Boot autoconfiguration and a `Mapper<A, B>` bean registry. With it on the classpath, `telescope-codegen` writes the `@TelescopeMapper` beans. Tested against Spring Boot 4.1.1.                                                                                        |
 | `telescope-quarkus`             | The same registry as a Quarkus CDI bean. Built against Quarkus 3.40.1, with unit tests of the registry.                                                                                                                                                                       |
 
-Installation snippets, annotation-processor ordering with Lombok, and JPMS setup are in
-[docs/codegen.md](docs/codegen.md). On the module path, typed paths and runtime mappers work on an application module's
-types once that module opens their package to `io.github.eschizoid.telescope.internal`. An unqualified `opens` works
-too. Telescope adds the read edge to the application module itself.
+Installation snippets, Lombok on the processor path, and JPMS setup are in [docs/codegen.md](docs/codegen.md). On the
+module path, typed paths and runtime mappers work on an application module's types once that module opens their package
+to `io.github.eschizoid.telescope.internal`. An unqualified `opens` works too. Telescope adds the read edge to the
+application module itself.
 
 ---
 
@@ -856,10 +868,15 @@ strategies, and mapper rows. The late-bound entry points are `.fieldByName(Strin
 names say so, and they resolve at first use.
 
 Structural mapping is exact. Same-name matching pairs fields by exact name, recursively, and there is no fuzzy matching.
-Without a row, a pair of fields converts only when the types are the same, a primitive and its wrapper, an `Optional`
-and a nullable value, two records or beans that themselves map, or two enums with matching constant names. There is no
-implicit conversion between `String` and numbers, between an enum and a `String`, or between dates and strings. Any
-conversion like that is a row you write.
+Without a row, a pair of fields converts only in these cases:
+
+- the two types are the same, or one is a primitive and the other its wrapper
+- one is an `Optional` and the other a nullable value
+- the two are records or beans that map, or containers of the same kind whose elements convert
+- the two are enums with matching constant names
+
+There is no implicit conversion between `String` and numbers, between an enum and a `String`, or between dates and
+strings. Any conversion like that is a row you write.
 
 Null handling is uniform. Null containers and null `Optional` fields focus nothing. A null value in the middle of a path
 also focuses nothing, so `find` returns an empty `Optional`, `toList` returns an empty list, and `read` throws

@@ -166,10 +166,11 @@ Maven:
 
 ### Annotation processor ordering with Lombok
 
-When both Lombok and `telescope-lombok` / `telescope-codegen` sit on the annotation processor path, list **Lombok
-first**. Maven passes the declaration order of `<annotationProcessorPaths>` to javac; Gradle passes the order of
-`annotationProcessor(...)` calls (processor discovery order is toolchain behavior, not a spec guarantee — which is why
-the processors are order-tolerant regardless):
+Lombok and the telescope processors can sit in any order on the processor path. `telescope-lombok` generates a navigator
+once Lombok has added the class's members, and `BridgeProcessor`, `FromMapProcessor` and `BeanFocusProcessor` wait until
+the final round for a Lombok class. A class counts as a Lombok class when it, or one of its fields, carries a Lombok
+annotation that adds members, e.g. `@Data`, `@Getter` or `@AllArgsConstructor`. The full set is
+`LOMBOK_SYNTHESIZING_ANNOTATIONS` in `AbstractTelescopeProcessor`.
 
 ```xml
 <annotationProcessorPaths>
@@ -190,19 +191,11 @@ the processors are order-tolerant regardless):
 dependencies {
   annotationProcessor("org.projectlombok:lombok:1.18.48")
   annotationProcessor("io.github.eschizoid:telescope-lombok:2.0.0")
-  annotationProcessor("io.github.eschizoid:telescope-codegen:2.0.0")
 }
 ```
 
-Both `BridgeProcessor` and `LombokFocusProcessor` round-defer emission to `processingOver()` when they detect that the
-host class (or its `@Bridge` target) carries a Lombok-synthesizing annotation, so the build is order-tolerant — but
-explicit ordering avoids relying on round-deferral and is the recommended posture. The Lombok-synthesizing trigger set
-includes `@Data`, `@Value`, `@Builder`, `@Getter`, `@Setter`, the three `*ArgsConstructor` variants, `@SuperBuilder`,
-and `@experimental.Accessors`.
-
-Symptoms of mis-ordering without round-deferral (now harmless thanks to the deferral fix, but worth recognizing on older
-versions): an emitted `<X>Bridge` whose `forward`/`backward` are no-ops, or a `@Data` class for which no `<X>Telescope`
-lands. Both mean the telescope processor ran before Lombok patched the host class.
+`telescope-lombok` brings `telescope-codegen` onto the processor path with it, so the Gradle snippet doesn't list
+`telescope-codegen` separately.
 
 ## JPMS / modular consumers
 

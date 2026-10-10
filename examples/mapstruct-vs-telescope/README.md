@@ -58,9 +58,9 @@ for the reverse direction, usually with `@InheritInverseConfiguration`.
 
 Both libraries fail the build when a source field named in a mapping goes away, and they differ in who updates the name.
 `Customer::email` is a method reference, so `javac` checks it and your IDE's rename refactoring updates it with the
-record component. The `"email"` in `@Mapping(source = "email", ...)` is a string. MapStruct's processor checks it at
-compile time, and the [MapStruct IDEA plugin](https://mapstruct.org/documentation/ide-support/) refactors such strings
-according to its documentation, but a plain rename in the editor doesn't change them.
+record component. The `"email"` in `@Mapping(source = "email", ...)` is a string, which MapStruct's processor checks at
+compile time. The [MapStruct IDEA plugin](https://mapstruct.org/documentation/ide-support/) refactors such strings
+according to its documentation. A plain rename in the editor doesn't change them.
 
 To reproduce the MapStruct side, follow these steps:
 
@@ -181,5 +181,3 @@ MapStruct is the better fit in some cases, and the root README's
   roots.
 - Conversion is the whole job, with no path reuse or deep updates, and your team treats readable generated mapper source
   as a feature.
-- You want every mapping generated at compile time by default. Telescope's runtime mapper finds fields and constructors
-  by reflection, and its generated path through `@Focus` and `@Bridge` is something you opt in to.
