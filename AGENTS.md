@@ -683,6 +683,9 @@ JVM/codegen-only under AOT).
 18. **0018 — Generated mapper parity with MapStruct.** (Proposed.) Closes the gaps on the `@Bridge` path in order: cycle
     guard, enum to enum, conversion on a renamed field, values computed from the source, nested paths, update in place.
     Each step is decided in the shared spec and held to both paths by `CrossPathCorpusTest`.
+19. **0019 — Which differences between the paths may remain.** (Proposed.) Only inherent limits (a private constructor,
+    a non-public constructor in another package) stay in the cross-path registers, refused by name; every other
+    difference is a defect with an issue. Runtime-only features are decided in their own ADRs.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
