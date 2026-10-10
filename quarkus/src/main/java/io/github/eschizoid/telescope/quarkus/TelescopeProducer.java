@@ -11,10 +11,10 @@ import java.util.List;
  * quarkus} extension is on the classpath — analogue of the Spring Boot starter's auto-config.
  *
  * <p>The {@code @All List<Mapper<?, ?>>} parameter is Quarkus ArC's collector pattern: CDI hands
- * over every {@link Mapper} bean defined in any {@code @ApplicationScoped} (or other normal-scope)
- * class in the user's application. No extra wiring needed — declare a producer that returns {@code
- * Mapper<A, B>} (or annotate an {@code @ApplicationScoped} class implementing the right type) and
- * it shows up in the registry.
+ * over every {@link Mapper} bean in the application, whatever its qualifiers. No extra wiring
+ * needed — declare a producer method or producer field of type {@code Mapper<A, B>} and it shows
+ * up in the registry. {@code Mapper} is final with no public constructor, so a producer is the only
+ * way to declare one.
  *
  * <p>Users who want to suppress the registry (e.g., to provide their own implementation) can
  * declare their own {@code @Produces TelescopeMapperRegistry} bean. CDI's specialization /

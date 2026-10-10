@@ -41,10 +41,14 @@ import java.util.Optional;
  * io.github.eschizoid.telescope.Telescope#mapper Telescope.mapper(...)} expose {@link
  * Mapper#sourceClass()} / {@link Mapper#targetClass()} that the registry reads to build the index.
  *
- * <p>Duplicate {@code (srcClass, tgtClass)} pairs cause an {@link IllegalStateException} at
- * construction time — the {@code (sourceClass, targetClass)} pair must uniquely identify a mapper.
- * If you genuinely have two semantically-different mappers for the same pair, qualify them with
- * Spring {@code @Qualifier}s and {@code @Autowired} the specific bean instead.
+ * <p>The registry holds one mapper per {@code (sourceClass, targetClass)} pair, and two {@code
+ * Mapper} beans for the same pair make the constructor throw {@link IllegalStateException}, so the
+ * context fails to start. {@code telescope.registry.fail-fast} does not change this; it governs only
+ * lookups of a missing pair. A {@code @Qualifier} does not keep a bean out of the registry, because
+ * the autoconfiguration collects every {@code Mapper} bean that is a default autowire candidate,
+ * qualified or not. A second mapper for a registered pair stays out of the registry when it is
+ * declared with {@code @Bean(defaultCandidate = false)} and injected by its qualifier, when it is
+ * wrapped in a type of the application's own, or when it is built where it is used.
  */
 public class TelescopeMapperRegistry {
 
@@ -62,7 +66,10 @@ public class TelescopeMapperRegistry {
           mapper.sourceClass().getName() +
           " -> " +
           mapper.targetClass().getName() +
-          ". Qualify the beans with @Qualifier and inject the specific instance instead of relying on the registry."
+          ". The registry holds one Mapper per type pair and collects every Mapper bean, qualified or not, so a" +
+          " @Qualifier does not keep the second one out. Keep one Mapper bean for the pair, and declare the other with" +
+          " @Bean(defaultCandidate = false) and inject it by its qualifier, wrap it in a type of your own, or build it" +
+          " where it is used."
       );
     }
     this.mappers = Map.copyOf(index);

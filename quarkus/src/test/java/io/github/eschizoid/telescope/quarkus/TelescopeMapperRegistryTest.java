@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.eschizoid.telescope.Telescope;
 import io.github.eschizoid.telescope.conversion.Mapper;
 import java.util.List;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -54,13 +55,16 @@ class TelescopeMapperRegistryTest {
   }
 
   @Test
+  @DisplayName("a missing pair points to a producer method or field, since Mapper cannot be a bean class")
   void getThrowsForMissingTypePairByDefault() {
     final var registry = new TelescopeMapperRegistry(List.of(Telescope.mapper(Source.class, Target.class)), true);
 
     assertThatThrownBy(() -> registry.get(Source.class, AltTarget.class))
       .isInstanceOf(IllegalArgumentException.class)
       .hasMessageContaining("No Mapper")
-      .hasMessageContaining("CDI producer");
+      .hasMessageContaining("Declare a CDI producer method or producer field of type Mapper<Source, AltTarget>")
+      .hasMessageContaining("a bean class cannot be one")
+      .hasMessageNotContaining("@ApplicationScoped");
   }
 
   @Test
@@ -79,6 +83,7 @@ class TelescopeMapperRegistryTest {
   }
 
   @Test
+  @DisplayName("a duplicate pair says qualifiers do not keep a mapper out, and names what does")
   void duplicateTypePairFailsAtConstruction() {
     assertThatThrownBy(() ->
       new TelescopeMapperRegistry(
@@ -87,7 +92,22 @@ class TelescopeMapperRegistryTest {
       )
     )
       .isInstanceOf(IllegalStateException.class)
-      .hasMessageContaining("Duplicate Mapper")
-      .hasMessageContaining("@Named / @Qualifier");
+      .hasMessageContaining("Duplicate Mapper for type pair")
+      .hasMessageContaining("one Mapper per type pair")
+      .hasMessageContaining("@Named or a @Qualifier does not keep the second one out")
+      .hasMessageContaining("wrap the other in a type of your own or build it where it is used");
+  }
+
+  @Test
+  @DisplayName("fail-fast set to false governs missing pairs only; a duplicate pair still fails construction")
+  void failFastFalseStillRejectsADuplicatePair() {
+    assertThatThrownBy(() ->
+      new TelescopeMapperRegistry(
+        List.of(Telescope.mapper(Source.class, Target.class), Telescope.mapper(Source.class, Target.class)),
+        false
+      )
+    )
+      .isInstanceOf(IllegalStateException.class)
+      .hasMessageContaining("Duplicate Mapper for type pair");
   }
 }
