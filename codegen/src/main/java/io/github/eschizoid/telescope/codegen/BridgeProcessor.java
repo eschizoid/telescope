@@ -2019,9 +2019,8 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     if (
       !fieldTypesNameable(source, target, nonDroppedSourceFields, targetFields, renames, forwardOnlyTransforms, pkg)
     ) return;
-    // The types each pair of properties is planned and read as. A pair whose type a class passes
-    // through to a superclass is read as that superclass declares it, erased, the way the runtime
-    // pairs it; every other pair keeps the types its classes give it.
+    // The types each pair of properties is planned and read as, decided by the rule the runtime
+    // pairs them by, and the casts that reading them through raw classes needs.
     final var paired = pairedFields(source, target, nonDroppedSourceFields, targetFields, renames);
 
     // Build per-field "read expression" recipes: identity, sub-pair recursion, or container lift.
@@ -2274,9 +2273,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         final var rawFields = Stream.concat(sourceFields.stream(), targetFields.stream()).anyMatch(f ->
           mentionsRawUse(f.type())
         );
-        // A property read as its superclass declares it is read off, and written into, a class
-        // that names no argument for the superclass's variable: the read and the write are raw.
-        final var suppressRaw = paired.erased()
+        // A member reached through a class the bridge names raw has its type erased, so a read or
+        // a write through one whose erasure differs is unchecked.
+        final var suppressRaw = paired.rawAccess()
           ? RAW_SUPPRESSION + "\n"
           : rawFields
             ? "  @SuppressWarnings(\"rawtypes\")\n"
@@ -6044,17 +6043,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The types a pair's properties are planned and read as, and the casts its writes need.
+   * The types a pair's properties are planned and read as, and the casts its reads and writes need.
    *
    * @param source the source's properties, each as the pair reads it
    * @param target the target's properties, each as the pair reads it
    * @param sourceReads per source property, the class a read of it is cast to before it is held as
-   *     the type the pair reads it as, where the source's own type does not convert to that
+   *     the type the pair reads it as, where the type the read returns does not convert to that
    * @param targetReads the same per target property
    * @param forwardCasts per target property, the class {@code forward} casts the value it writes
    *     to, where the type it reads is wider than the target's own
    * @param backwardCasts the same per source property, for {@code backward} and {@code patch}
-   * @param erased whether any property is read as its superclass declares it, erased
+   * @param rawAccess whether any property is read or written through a member of a class the bridge
+   *     names raw whose type erasure changes, which javac reports as unchecked
    */
   private record PairedFields(
     List<Field> source,
@@ -6063,7 +6063,7 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     Map<String, String> targetReads,
     Map<String, String> forwardCasts,
     Map<String, String> backwardCasts,
-    boolean erased
+    boolean rawAccess
   ) {
     /** {@code value}, cast to what {@code casts} names for {@code name}, or as is when nothing. */
     String castInto(final Map<String, String> casts, final String name, final String value) {
@@ -6073,17 +6073,19 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
   }
 
   /**
-   * The types each source property and the target property it pairs with are read as. Each is the
-   * property's type as a member of its own class, unless either names a type variable and both are
-   * declared as one type by a superclass they share; then both are read as that declared type,
-   * erased. A class that passes its own variable through to the superclass gives the property a
-   * type no static method of the bridge can name, and the two sides of the pair a different
-   * variable each, while the superclass's declaration is one type on both sides. The runtime pairs
-   * such a property by its declared type too, and copies it as same-typed.
+   * The types each source property and the target property it pairs with are read as. The shared
+   * spec decides whether a pair reads as members of its own classes or as declared ({@link
+   * PairingRules#readsAsDeclared}). Read as declared, both are read as the one type the superclass
+   * they share declares, with each type variable erased, since no static method of the bridge can
+   * name the variable. A pair whose declared types differ keeps them, and is refused in their
+   * terms.
    *
-   * <p>A side that fixes the variable, such as {@code class Names extends Base<String>}, is read
-   * through the erased type and written through its own: the value is cast to the side's own
-   * erasure where that is narrower.
+   * <p>The bridge names a generic class raw, so every member it reaches on one returns its erased
+   * type: a property {@code class Page<X> extends Base<String, X>} fixes to {@code String} reads
+   * back as {@code Object}. Such a read is cast to the erasure of the type it is held as. A side
+   * that fixes the variable a pair reads as declared, such as {@code class Names extends
+   * Base<String>}, is written through a cast to its own erasure where that is narrower than the
+   * read.
    */
   private PairedFields pairedFields(
     final TypeElement source,
@@ -6099,26 +6101,38 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
     final var targetReads = new HashMap<String, String>();
     final var forwardCasts = new HashMap<String, String>();
     final var backwardCasts = new HashMap<String, String>();
-    boolean erased = false;
+    boolean rawAccess = false;
     for (int i = 0; i < sourceFields.size(); i++) {
       final var sf = sourceFields.get(i);
       final var tgtName = renames.getOrDefault(sf.name(), sf.name());
       if (!hasField(targetFields, tgtName)) continue;
       final var tf = fieldByName(targetFields, tgtName);
-      if (!MirrorProps.typeVariableIn(sf.type()) && !MirrorProps.typeVariableIn(tf.type())) continue;
-      final var sourceDeclared = declaredTypeOf(source, sf);
-      final var targetDeclared = declaredTypeOf(target, tf);
-      if (!types.isSameType(sourceDeclared, targetDeclared)) continue;
-      final var read = withVariablesErased(sourceDeclared);
-      pairedSource.set(i, new Field(sf.name(), read));
-      pairedTarget.set(pairedTarget.indexOf(tf), new Field(tf.name(), read));
-      final var sourceOwn = asReachedThrough(source, sf.type());
-      final var targetOwn = asReachedThrough(target, tf.type());
-      if (!types.isAssignable(sourceOwn, read)) sourceReads.put(sf.name(), types.erasure(sourceOwn).toString());
-      if (!types.isAssignable(targetOwn, read)) targetReads.put(tf.name(), types.erasure(targetOwn).toString());
-      if (!types.isAssignable(read, targetOwn)) forwardCasts.put(tf.name(), types.erasure(targetOwn).toString());
-      if (!types.isAssignable(read, sourceOwn)) backwardCasts.put(sf.name(), types.erasure(sourceOwn).toString());
-      erased = true;
+      final var sourceOwn = asReachedThrough(source, sf);
+      final var targetOwn = asReachedThrough(target, tf);
+      rawAccess |= !types.isSameType(sourceOwn, sf.type()) || !types.isSameType(targetOwn, tf.type());
+      var sourceRead = sf.type();
+      var targetRead = tf.type();
+      if (rules.readsAsDeclared(sf.type(), tf.type())) {
+        final var sourceDeclared = declaredTypeOf(source, sf);
+        final var targetDeclared = declaredTypeOf(target, tf);
+        if (!types.isSameType(sourceDeclared, targetDeclared)) continue;
+        sourceRead = withVariablesErased(sourceDeclared);
+        targetRead = sourceRead;
+        pairedSource.set(i, new Field(sf.name(), sourceRead));
+        pairedTarget.set(pairedTarget.indexOf(tf), new Field(tf.name(), targetRead));
+        if (!types.isAssignable(sourceRead, targetOwn)) {
+          forwardCasts.put(tf.name(), types.erasure(targetOwn).toString());
+        }
+        if (!types.isAssignable(sourceRead, sourceOwn)) {
+          backwardCasts.put(sf.name(), types.erasure(sourceOwn).toString());
+        }
+      }
+      if (!types.isAssignable(sourceOwn, sourceRead)) {
+        sourceReads.put(sf.name(), types.erasure(sourceRead).toString());
+      }
+      if (!types.isAssignable(targetOwn, targetRead)) {
+        targetReads.put(tf.name(), types.erasure(targetRead).toString());
+      }
     }
     return new PairedFields(
       List.copyOf(pairedSource),
@@ -6127,16 +6141,18 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       targetReads,
       forwardCasts,
       backwardCasts,
-      erased
+      rawAccess
     );
   }
 
   /**
-   * {@code type}, a property's type as a member of {@code owner}, as the bridge reaches it. The
-   * bridge names a generic class raw, and every member of a raw class is erased.
+   * The type {@code field} of {@code owner} has where the bridge reaches it. The bridge names a
+   * generic class raw, and a member of a raw class has the erasure of its declared type, whatever a
+   * superclass's arguments fix it to.
    */
-  private TypeMirror asReachedThrough(final TypeElement owner, final TypeMirror type) {
-    return owner.getTypeParameters().isEmpty() ? type : processingEnv.getTypeUtils().erasure(type);
+  private TypeMirror asReachedThrough(final TypeElement owner, final Field field) {
+    if (owner.getTypeParameters().isEmpty()) return field.type();
+    return processingEnv.getTypeUtils().erasure(declaredTypeOf(owner, field));
   }
 
   /**

@@ -1907,10 +1907,9 @@ class BridgeProcessorTest {
         ),
         source("demo.NodeDto", "package demo; public class NodeDto<Y> extends Base<Y> {}")
       );
-      // Seen from each subclass the field is typed by that subclass's own variable, X and Y, which
-      // no static method of the bridge can name. Both sides read it as the superclass's T, one
-      // type,
-      // and a local of T's erasure holds it.
+      // Seen from each subclass the field is typed by that subclass's own variable, X or Y, and
+      // no static method of the bridge can name either. Both sides read it as the superclass's T,
+      // one type, and a local of T's erasure holds it.
       assertTrue(compilation.success(), () -> "compilation failed: " + compilation.errorMessages());
       final var bridge = compilation.generated().get("demo.NodeBridge");
       assertNotNull(bridge, () -> "NodeBridge missing; saw " + compilation.generated().keySet());
