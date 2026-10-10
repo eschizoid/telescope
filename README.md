@@ -234,19 +234,19 @@ The rows below are differences in design rather than things MapStruct can't do. 
 composed, reversed, and asked about while the program runs. A mapping compiled into a generated class is complete at
 build time, by design.
 
-| Capability                        | telescope                                                          | MapStruct                                                            |
-| --------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| Bidirectional mapping             | one row list, with `forward(...)` and `backward(...)` on one value | a second method plus `@InheritInverseConfiguration`, with exclusions |
-| Deep nested navigation and update | `of(C).each(C::depts).field(D::address).update(c, fn)`             | not in scope, and `@MappingTarget` mutates in place                  |
-| Update inside a result type       | `updateAsync`, `updateOptional`, `updateEither`, `updateValidated` | not in scope, so pair it with other code                             |
-| Accumulating validation           | `Validated.combine(...)` collects every failure in one pass        | not in scope, so pair it with Bean Validation or write it            |
-| Reading an untyped map            | `Telescope.fromMap(T.class, extract(...))` and `@FromMap`          | supported, with the per-key conversion as a separate mapping method  |
-| Mapper introspection              | `explain()`, `trace(input)`, or a log level                        | read the generated source, which you can step through                |
-| Unmapped-target safety            | strict at construction by default                                  | `WARN` by default, with `ERROR` a one-line opt-in                    |
-| Sealed-root dispatch              | `Match.of(...).when(...).exhaustive()`, checked over the permits   | `@SubclassMapping`, broader hierarchies, no sealed check             |
-| Multi-source merge, many to one   | `Telescope.merge(Target.class, from(...), ...)`                    | first-class multi-source methods, disambiguated by string            |
-| No codegen required               | `Telescope.of(Class)`, with `@Focus` as a later opt-in             | compile-time only                                                    |
-| GraalVM native-image              | `@Bridge` code needs no config, and runtime mappers work there too | fully AOT-compatible for codegen, with no runtime mapper to need it  |
+| Capability                        | telescope                                                            | MapStruct                                                            |
+| --------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Bidirectional mapping             | one row list, with `forward(...)` and `backward(...)` on one value   | a second method plus `@InheritInverseConfiguration`, with exclusions |
+| Deep nested navigation and update | `of(C).each(C::depts).field(D::address).update(c, fn)`               | not in scope, and `@MappingTarget` mutates in place                  |
+| Update inside a result type       | `updateAsync`, `updateOptional`, `updateEither`, `updateValidated`   | not in scope, so pair it with other code                             |
+| Accumulating validation           | `Validated.combine(...)` collects every failure in one pass          | not in scope, so pair it with Bean Validation or write it            |
+| Reading an untyped map            | `Telescope.fromMap(T.class)`, `extract(...)` to override, `@FromMap` | supported, with the per-key conversion as a separate mapping method  |
+| Mapper introspection              | `explain()`, `trace(input)`, or a log level                          | read the generated source, which you can step through                |
+| Unmapped-target safety            | strict at construction by default                                    | `WARN` by default, with `ERROR` a one-line opt-in                    |
+| Sealed-root dispatch              | `Match.of(...).when(...).exhaustive()`, checked over the permits     | `@SubclassMapping`, broader hierarchies, no sealed check             |
+| Multi-source merge, many to one   | `Telescope.merge(Target.class, from(...), ...)`                      | first-class multi-source methods, disambiguated by string            |
+| No codegen required               | `Telescope.of(Class)`, with `@Focus` as a later opt-in               | compile-time only                                                    |
+| GraalVM native-image              | `@Bridge` code needs no config, and runtime mappers work there too   | fully AOT-compatible for codegen, with no runtime mapper to need it  |
 
 The [coverage matrix](docs/mapstruct-parity.md) scores 29 MapStruct features against telescope. It rates 13 as covered
 fully and 16 as covered partially. Each partial row states its limitation, and every verdict cites the source and tests
@@ -343,7 +343,7 @@ Navigating one type in place is separate from converting between two types.
 | ---------------------------------- | ------------------------------------------------ | --------------------------------------- | ----------------------------------------------- |
 | **Navigate and update** in place   | `Telescope.of(R.class)`                          | `Telescope.ofBean(P.class)`             | convert first (below), then navigate the record |
 | **Convert or map** between types   | `Telescope.mapper(A.class, B.class, to(...), …)` | `Telescope.mapper(A.class, B.class, …)` | `Telescope.mapper(P.class, R.class, …)`         |
-| **Read an untyped map**            | `Telescope.fromMap(R.class, extract(...))`       | `Telescope.fromMap(P.class, …)`         | `@FromMap` for a generated binder               |
+| **Read an untyped map**            | `Telescope.fromMap(R.class)`                     | `Telescope.fromMap(P.class)`            | `@FromMap` for a generated binder               |
 | **Bind at compile time** (codegen) | `@Focus` to navigate                             | `@BeanFocus` to navigate                | `@Bridge` to convert any pair                   |
 
 The runtime entry points in the first three rows need no annotations and no build step. The last row lists the
@@ -656,22 +656,34 @@ final Payment payment = Telescope.fromMap(Payment.class).forward(
 );
 ```
 
-A component no row names converts its value the way the binder generated by `@FromMap` does. A number is narrowed to a
-numeric component, and anything else is parsed from its `String` form. A `boolean` is `true` only for `"true"`, in any
-case. A `char` is the first character of the string. An enum is looked up by name. `Instant`, `LocalDate`,
-`LocalDateTime`, `LocalTime`, `OffsetDateTime`, `ZonedDateTime`, `Duration`, `Period`, `UUID`, `BigDecimal`,
-`BigInteger`, `URI`, `Currency`, `Locale` and `Pattern` are built from their `String` form. A nested type with a
-generated `@FromMap` binder is built by that binder from a nested map. `List`, `Set`, `Map` and `Optional` convert each
-element the same way. A value that is not a `List`, `Set` or `Map` leaves the container empty. A value that cannot be
-converted, such as `"seven"` for an `int` or an unknown enum name, throws.
+A component that no row names converts its value the way the binder generated by `@FromMap` does:
 
-An `extract(...)` row overrides that for the component it names. It gives the key to read and the converter to call:
+- A number is narrowed to a numeric component the way a Java cast narrows it, so `7.9` gives `7` and a `long` too large
+  for an `int` overflows. Any other value is parsed from its `String` form.
+- A `boolean` takes a `Boolean` as it is. Any other value is `true` only when its `String` form is `"true"`, in any
+  case.
+- A `char` takes a `Character` as it is, and otherwise the first character of the `String` form. An empty string leaves
+  the default.
+- `String` and `CharSequence` take the value by a cast, so a number there throws `ClassCastException`. `Object` takes
+  the value as it is.
+- An enum takes a constant as it is, and otherwise looks the `String` form up by name.
+- `Instant`, `LocalDate`, `LocalDateTime`, `LocalTime`, `OffsetDateTime`, `ZonedDateTime`, `Duration`, `Period`, `UUID`,
+  `BigDecimal`, `BigInteger`, `URI`, `Currency`, `Locale` and `Pattern` take an instance as it is, and are otherwise
+  built from `String.valueOf(value)`.
+- A nested type with a generated `@FromMap` binder is built by that binder from a nested map.
+- `List`, `Set` and `Map` convert each element, key and value the same way. A value that is not the declared container's
+  own kind (a `List` for a `List`, a `Set` for a `Set`, a `Map` for a `Map`) leaves it empty. `Optional` wraps the
+  converted value.
+- A value that cannot be converted, such as `"seven"` for an `int` or an unknown enum name, throws.
+
+An `extract(...)` row overrides that for the component it names. It gives the key to read and the converter to call, so
+it covers what reading by name can't, such as a key spelled differently from the component:
 
 ```java
 final ForwardMapper<Map<String, Object>, CaseListRequest> requests = Telescope.fromMap(
   CaseListRequest.class,
   extract("booking_type", CaseListRequest::getBookingType, Object::toString),
-  extract("priority", CaseListRequest::getPriority, (v) -> Integer.parseInt(v.toString()))
+  extract("priority_level", CaseListRequest::getPriority, (v) -> Priority.fromCode(v.toString()))
 );
 
 final CaseListRequest request = requests.forward(payload);
@@ -681,25 +693,29 @@ Every component the rows leave out, here `caseId` and the rest, still reads the 
 
 A component with no value takes a default for its declared type. The value is missing when its key is absent or holds
 `null`. The default is `null` for a reference and zero or `false` for a primitive. A component declared exactly `List`,
-`Set`, `Map` or `Optional` gets an empty one. A converter is called only for a value that's present. The binder
-generated by `@FromMap` produces the same values for the same map when no row overrides a component. The `fromMap`
+`Set`, `Map` or `Optional` gets an empty one. A converter is called only for a value that's present. The `fromMap`
 defaults differ from those of `mapperForward`, which leaves an unpaired container `null`.
 
 Write `required(...)` in place of `extract(...)` where a key has to carry a value. A map with no value under that key is
 refused with an `IllegalArgumentException` before any converter runs. The message names every missing required key
 beside the component it was to fill. On a `@FromMap` type, `@FromMap(required = {"id"})` makes the generated binder
-refuse the same maps with the same message. A nested type with a generated binder keeps its own required keys, because
-`fromMap` builds it through that binder. `explain()` reports each component with the key it reads, as
+refuse the same maps with the same message, and `Telescope.fromMap` over that type honours the same list for every
+component no row names. A nested type with a generated binder keeps its own required keys too, because `fromMap` builds
+it through that binder. With no rows, the binder generated by `@FromMap` and `Telescope.fromMap` give the same object
+for the same map, or refuse it the same way. `explain()` reports each component it writes with the key it reads, as
 `default when absent` or `required`.
 
 Some rows and components are refused while the mapper is built.
 
 - A row that names a bean property with no setter, builder method, or constructor parameter is refused. The value it
-  reads would be dropped.
+  reads would be dropped. Such a property that no row names is not read at all.
 - A component that no row names is refused when its type has no conversion. Examples are an array, a concrete container
   like `ArrayList`, a `Collection`, or a class with no generated binder. The generated binder refuses the same types.
   The message names the component, its type, and the fix.
-- A row that names such a component converts it, and an absent key leaves it `null`.
+- A component of a type whose registered `FromMapProvider` does not override `binder()` is refused, and a target whose
+  provider does not override `required()` is refused. A binder generated by an earlier telescope-codegen, or a
+  hand-written provider, is the usual cause; recompiling the type fixes it.
+- A row that names a component of a type with no conversion converts it, and an absent key leaves it `null`.
 
 A generated `@FromMap` binder has to be registered before `fromMap` uses it. On the class path the processor registers
 it for you. On the module path and in a fat jar you have to add a line or merge service files.

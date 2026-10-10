@@ -27,16 +27,23 @@ public sealed interface OpticNode {
     /** An explicit {@code Mapping.drop(src)} row removed a source field from the mapping. */
     DROPPED,
     /**
-     * A target field with no same-name source and no row — lenient / {@code fromMap} paths only.
+     * A target field that nothing fills: on the lenient paths one with no same-name source and no
+     * row, and on {@code fromMap} a bean property no row names and the bean's writer cannot set.
      */
     MISSING_SOURCE,
   }
 
-  /** What a {@code fromMap} row does when its key carries no value. See {@link Extracted}. */
+  /** What a {@code fromMap} slot does when its key carries no value. See {@link Extracted}. */
   enum WhenAbsent {
-    /** The field takes the default for its declared type: an {@code extract(...)} row. */
+    /**
+     * The field takes the default for its declared type: an {@code extract(...)} row, or a field no
+     * row names and no {@code @FromMap(required = ...)} lists.
+     */
     DEFAULTS,
-    /** The conversion is refused, naming the key: a {@code required(...)} row. */
+    /**
+     * The conversion is refused, naming the key: a {@code required(...)} row, or a field no row
+     * names that the target's {@code @FromMap(required = ...)} lists.
+     */
     REFUSES,
   }
 

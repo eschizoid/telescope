@@ -75,20 +75,26 @@ gave different objects for the same map, and a mapper with no rows returned a ta
 `fromMap` now follows the rule `Telescope.map` follows: same-name binding is the default and rows are overrides.
 
 - A component no row names reads the map key with its own name and converts the value exactly as the generated binder
-  does. The decision is made over reflected types in the same order as the processor's `Coercion` resolution, and the
-  reference types taken by a cast or built from a `String` come from one table in the shared pairing spec
-  (`MapValueTypes`), which both paths read.
-- A component whose type has a generated binder is built by that binder, found through its `FromMapProvider`. The
-  provider gains a `binder()` method for this. Building it through the binder keeps what only the source-retained
-  annotation declares, such as required keys.
-- A row decides the component it names: its key and its converter replace the by-name default.
+  does. Which kind of conversion a declared type gets is decided once, by `MapValueTypes.classify` in the shared pairing
+  spec, over a type model each path implements. The processor renders the kind as source and the runtime as a function.
+- A component whose type has a generated binder is built by that binder, found through its `FromMapProvider`, which
+  gains a `binder()` method. Building it through the binder keeps what only the source-retained annotation declares,
+  such as required keys.
+- A target with a generated binder honours its own `@FromMap(required = ...)` for every component no row names, read
+  through the provider's new `required()` method, so a map the binder refuses is refused with the same message.
+- A row decides the component it names: its key and its converter replace the by-name default, and an `extract(...)` row
+  lifts a declared requirement.
 - A key absent from the map, or holding `null`, still leaves the documented default. `required(...)` is unchanged.
-- A type with no conversion is still refused while the mapper is built, with the same message.
-- `explain()` reports every component as an `Extracted` row under the key it reads. A bean property no row names and the
-  writer cannot set stays a `MISSING_SOURCE` skip.
+- A type with no conversion is still refused while the mapper is built, with the same message. A component whose type's
+  provider does not override `binder()`, and a target whose provider does not override `required()`, are refused while
+  the mapper is built too, since neither can be built as the generated binder builds it.
+- A bean property no row names and the writer cannot set is not read. `explain()` reports it as a `MISSING_SOURCE` skip
+  and every other component as an `Extracted` row under the key it reads.
 
-This changes behaviour: a component that used to stay at its default now takes the map's value under its name, and a
-value under that name that cannot be converted now throws where it used to be ignored.
+This changes behaviour: a component that used to stay at its default now takes the map's value under its name, a value
+under that name that cannot be converted now throws where it used to be ignored, a map missing a required key of the
+target or of a nested type with a binder is now refused, and a mapper over a type whose provider lacks `binder()` or
+`required()` is refused at construction.
 
 ## Alternatives considered
 
