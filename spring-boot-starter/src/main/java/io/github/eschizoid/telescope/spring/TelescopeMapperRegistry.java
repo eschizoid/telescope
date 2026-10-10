@@ -66,10 +66,10 @@ public class TelescopeMapperRegistry {
           mapper.sourceClass().getName() +
           " -> " +
           mapper.targetClass().getName() +
-          ". The registry holds one Mapper per type pair and collects every Mapper bean, qualified or not, so a" +
-          " @Qualifier does not keep the second one out. Keep one Mapper bean for the pair, and declare the other with" +
-          " @Bean(defaultCandidate = false) and inject it by its qualifier, wrap it in a type of your own, or build it" +
-          " where it is used."
+          ". The registry holds one Mapper per type pair and collects every default-candidate Mapper bean, qualified or" +
+          " not, so a @Qualifier does not keep the second one out. Keep one Mapper bean for the pair, and declare the" +
+          " other with @Bean(defaultCandidate = false) and inject it by its qualifier, wrap it in a type of your own, or" +
+          " build it where it is used."
       );
     }
     this.mappers = Map.copyOf(index);

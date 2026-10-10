@@ -129,6 +129,7 @@ dependencies {
     testImplementation(libs.junitJupiter)
     testRuntimeOnly(libs.junitPlatformLauncher)
     testImplementation("org.assertj:assertj-core:3.27.7")
+    testImplementation("io.quarkus:quarkus-junit-component")
 }
 
 publishing {

@@ -94,8 +94,10 @@ class TelescopeMapperRegistryTest {
       .isInstanceOf(IllegalStateException.class)
       .hasMessageContaining("Duplicate Mapper for type pair")
       .hasMessageContaining("one Mapper per type pair")
-      .hasMessageContaining("@Named or a @Qualifier does not keep the second one out")
-      .hasMessageContaining("wrap the other in a type of your own or build it where it is used");
+      .hasMessageContaining("@Named or a @Qualifier does not keep a Mapper bean out of it")
+      .hasMessageContaining("declare the other with @DefaultBean and inject it by its qualifier")
+      .hasMessageContaining("wrap it in a type of your own, or build it where it is used")
+      .hasMessageContaining("@Alternative does not help");
   }
 
   @Test

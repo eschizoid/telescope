@@ -399,11 +399,14 @@ framework's native bean discovery. Three symmetric classes per module:
 | Quarkus class             | Spring class                 | Role                                                                                                   |
 | ------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `TelescopeMapperRegistry` | `TelescopeMapperRegistry`    | `(srcClass, tgtClass) → Mapper<?, ?>` index. `get(...)` + `find(...) → Optional<Mapper<?, ?>>`.        |
-| `TelescopeProducer`       | `TelescopeAutoConfiguration` | Collects every `Mapper<?, ?>` bean visible to the container, builds the registry.                      |
+| `TelescopeProducer`       | `TelescopeAutoConfiguration` | Collects the `Mapper<?, ?>` beans the container resolves, builds the registry.                         |
 | `TelescopeConfig`         | `TelescopeProperties`        | `telescope.registry.fail-fast` (default `true`); Spring also binds `telescope.default-write-strategy`. |
 
 Duplicate `(srcClass, tgtClass)` pairs throw `IllegalStateException` at construction, and a qualifier doesn't avoid it,
-because the registry collects every `Mapper` bean. Keep one `Mapper` bean per pair.
+because neither side filters by qualifier. Keep one `Mapper` bean per pair. What does keep a bean out differs by
+container: Spring collects only default autowire candidates, so `@Bean(defaultCandidate = false)` works there; ArC's
+`@All` disambiguates the whole `Mapper` set, so a `@DefaultBean` mapper is dropped once any other `Mapper` exists, and
+an `@Alternative` mapper drops every non-alternative one.
 
 **Quarkus specifics.** `@ApplicationScoped` registry; `TelescopeProducer` uses ArC's `@All List<Mapper<?, ?>>`
 collector; `TelescopeConfig` is `@ConfigMapping(prefix = "telescope")`. Jar ships a pre-built `META-INF/jandex.idx` to
@@ -428,8 +431,9 @@ deliberately not in `TelescopeMapperRegistry`: a projection is not a `Mapper`. T
 yet.
 
 **Not here:** no `@EnableTelescope`. The registries wrap whichever `Mapper` shape the user brings — reflective or
-codegen-generated. No `@QuarkusTest`/`@SpringBootTest` integration tests: the registries are covered by unit tests, and
-the generated Spring beans by the in-memory `ProcessorHarness` plus `ApplicationContextRunner`.
+codegen-generated. No `@QuarkusTest`/`@SpringBootTest` integration tests: the registries are covered by unit tests, the
+Spring registry also through `ApplicationContextRunner`, the Quarkus producer by a `@QuarkusComponentTest` in an ArC
+container, and the generated Spring beans by the in-memory `ProcessorHarness` plus `ApplicationContextRunner`.
 
 ---
 

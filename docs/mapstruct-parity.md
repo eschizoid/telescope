@@ -597,7 +597,7 @@ javac — safer than @Named string matching. Codegen side has the literal @Named
 (forward-only, same asymmetry as a single MapStruct qualified method). One corner: the DI TelescopeMapperRegistry allows
 one `Mapper` bean per (src, tgt) pair, qualified or not. A second mapper for the same pair has to be wrapped in your own
 type or built where it's used. On Spring, a bean declared with `@Bean(defaultCandidate = false)` also stays out of the
-registry.
+registry, and on Quarkus so does a `@DefaultBean` one while another `Mapper` bean exists.
 
 <sub>Evidence: core/src/main/java/io/github/eschizoid/telescope/annotations/Transform.java, `using()` and `method()`
 (the `using()` javadoc says the method-named form "unlocks MapStruct's @Named qualifier-dispatch pattern", and
