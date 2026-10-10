@@ -37,10 +37,10 @@ already share: the decision lives in the shared pairing spec under `internal/pai
 step adds rows to `CrossPathCorpusTest` so both paths are held to the same answer, and anything the generated path
 cannot do is refused by name at compile time.
 
-1. **Cycle guard.** A generated mapper for a type that can reach itself maps a reference back to an object still being
-   converted to null on both paths, forward, backward and in `patch` (each partial slot on a path of its own); an object
-   reached along two branches converts twice. A type that cannot reach itself pays nothing, which the processor decides
-   from the type graph at compile time.
+1. **Cycle guard.** A generated mapper for a pair whose source and target types can both reach themselves maps a
+   reference back to an object still being converted to null on both paths, forward, backward and in `patch` (each
+   partial slot on a path of its own); an object reached along two branches converts twice. A pair whose types cannot
+   both reach themselves pays nothing, which the processor decides from the type graph at compile time.
 2. **Enum to enum.** A pair of enums maps constant to constant by name, with a compile-time check that every source
    constant has a target. A rename for individual constants is a later addition.
 3. **Conversion on a renamed field.** `@Transform` and `@ViaMapper` gain a target attribute, so one row can both rename
