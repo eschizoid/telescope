@@ -2,6 +2,7 @@ package io.github.eschizoid.telescope.internal;
 
 import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
+import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.reflect.Type;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -45,6 +46,8 @@ public record Reflective(
   Function<String, String> normalize,
   Function<Class<?>, Beans.BeanWriter<?>> chosenWriter
 ) {
+  private static final ReflectionProps PROPS = new ReflectionProps();
+
   public static final Reflective RECORDS = new Reflective(
     Records::componentNames,
     Records::componentType,
@@ -104,6 +107,38 @@ public record Reflective(
   /** Generic type of the named component / property (for container shape detection). */
   public Type genericType(final Class<?> cls, final String name) {
     return genericType.apply(cls, name);
+  }
+
+  /** The types one pairing reads its source and target property as. */
+  public record PairedTypes(Type source, Type target) {}
+
+  /**
+   * The types of a source property and the target property it pairs with, decided once for the
+   * pair. Each is read as a member of its own class, so a property a generic superclass declares
+   * takes the type the subclass gives it, unless either side's type still names a type variable;
+   * then both are read as declared. A variable passed through by one side is a different type on
+   * each side once substituted, and the declared types are what pair a property two subclasses of
+   * one superclass both inherit.
+   */
+  public static PairedTypes pairedTypes(
+    final Reflective sourceRefl,
+    final Class<?> source,
+    final String sourceName,
+    final Reflective targetRefl,
+    final Class<?> target,
+    final String targetName
+  ) {
+    final var asSourceMember = memberType(sourceRefl, source, sourceName);
+    final var asTargetMember = memberType(targetRefl, target, targetName);
+    if (!PROPS.mentionsTypeVariable(asSourceMember) && !PROPS.mentionsTypeVariable(asTargetMember)) {
+      return new PairedTypes(asSourceMember, asTargetMember);
+    }
+    return new PairedTypes(sourceRefl.genericType(source, sourceName), targetRefl.genericType(target, targetName));
+  }
+
+  /** A record component's type, which nothing inherits, or a bean property's type as a member. */
+  private static Type memberType(final Reflective refl, final Class<?> cls, final String name) {
+    return cls.isRecord() ? refl.genericType(cls, name) : Beans.memberPropertyType(cls, name);
   }
 
   /**

@@ -451,8 +451,9 @@ public final class DeepMap {
       Set.of()
     );
     for (final var name : match.matched()) {
-      final var st = srcRefl.genericType(srcCls, name);
-      final var tt = tgtRefl.genericType(tgtCls, name);
+      final var paired = Reflective.pairedTypes(srcRefl, srcCls, name, tgtRefl, tgtCls, name);
+      final var st = paired.source();
+      final var tt = paired.target();
       // Descend only into a pure-auto nested pair not already on the current path — the seen guard
       // severs cyclic type graphs (A → B → A) at the second encounter, emitting a single node
       // there.
@@ -662,8 +663,9 @@ public final class DeepMap {
         // sync (typically same-typed copies of the same column), and the test pin makes the
         // last-row-wins behaviour explicit so silent ambiguity is impossible.
         claimedSrc.add(srcField);
-        final var srcType = srcRefl.genericType(source, srcField);
-        final var tgtType = tgtRefl.genericType(target, tgtField);
+        final var paired = Reflective.pairedTypes(srcRefl, source, srcField, tgtRefl, target, tgtField);
+        final var srcType = paired.source();
+        final var tgtType = paired.target();
         // A same-typed to(src, tgt) carries no conversion — it resolves exactly like an
         // auto-matched (here possibly renamed) field, so route it through autoIso. One tested place
         // then supplies identity / null-safe primitive-wrapper / container lifting and the same
@@ -760,8 +762,9 @@ public final class DeepMap {
             )
           );
         }
-        final var autoSrcType = srcRefl.genericType(source, name);
-        final var autoTgtType = tgtRefl.genericType(target, name);
+        final var autoPaired = Reflective.pairedTypes(srcRefl, source, name, tgtRefl, target, name);
+        final var autoSrcType = autoPaired.source();
+        final var autoTgtType = autoPaired.target();
         final var step = new FieldStep(
           name,
           name,

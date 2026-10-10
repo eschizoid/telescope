@@ -54,6 +54,77 @@ class ReflectiveSurfaceTest {
     }
   }
 
+  /** A superclass whose property is typed by its own variable. */
+  public static class Slot<T> {
+
+    public T getV() {
+      return null;
+    }
+  }
+
+  /** Fixes the variable to {@code String}. */
+  public static final class StringSlot extends Slot<String> {}
+
+  /** Fixes the variable to {@code Integer}. */
+  public static final class IntegerSlot extends Slot<Integer> {}
+
+  /** Passes a variable of its own through. */
+  public static final class PassingSlot<X> extends Slot<X> {}
+
+  /** The same property as a record component. */
+  record StringRecord(String v) {}
+
+  @Nested
+  @DisplayName("pairedTypes — one decision for both sides of a pairing")
+  class PairedTypes {
+
+    @Test
+    @DisplayName("two sides that each fix the superclass's variable read the types they fix it to")
+    void bothSidesFixedReadSubstituted() {
+      final var paired = Reflective.pairedTypes(
+        Reflective.BEANS,
+        StringSlot.class,
+        "v",
+        Reflective.BEANS,
+        IntegerSlot.class,
+        "v"
+      );
+      assertEquals(String.class, paired.source());
+      assertEquals(Integer.class, paired.target());
+    }
+
+    @Test
+    @DisplayName("one side passing its variable through makes both sides read as declared")
+    void oneSidePassingThroughReadsBothAsDeclared() {
+      final var declared = Slot.class.getTypeParameters()[0];
+      final var paired = Reflective.pairedTypes(
+        Reflective.BEANS,
+        PassingSlot.class,
+        "v",
+        Reflective.BEANS,
+        StringSlot.class,
+        "v"
+      );
+      assertEquals(declared, paired.source());
+      assertEquals(declared, paired.target(), "the fixed side must read as declared too, not as String");
+    }
+
+    @Test
+    @DisplayName("a record side reads its component's type against a bean side's substituted type")
+    void recordSideReadsItsComponent() {
+      final var paired = Reflective.pairedTypes(
+        Reflective.RECORDS,
+        StringRecord.class,
+        "v",
+        Reflective.BEANS,
+        StringSlot.class,
+        "v"
+      );
+      assertEquals(String.class, paired.source());
+      assertEquals(String.class, paired.target());
+    }
+  }
+
   @Nested
   @DisplayName("of(Class) — record/bean dispatch")
   class FactoryDispatch {
