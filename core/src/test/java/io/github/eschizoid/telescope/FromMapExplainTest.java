@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.eschizoid.telescope.introspection.OpticNode.Extracted;
+import io.github.eschizoid.telescope.introspection.OpticNode.Reason;
+import io.github.eschizoid.telescope.introspection.OpticNode.Skipped;
 import io.github.eschizoid.telescope.introspection.OpticNode.WhenAbsent;
 import java.util.List;
 import java.util.Map;
@@ -55,18 +57,46 @@ class FromMapExplainTest {
   }
 
   @Test
-  @DisplayName("a slot no row fills is reported as having no source rather than as a conversion")
-  void anUnfilledSlotIsReportedAsMissing() {
+  @DisplayName("a slot no row names is reported as read from the key with its own name")
+  void aSlotNoRowNamesIsReportedAsReadByItsOwnName() {
     final var report = Telescope.fromMap(Row.class, extract("n", Row::name, Object::toString)).explain();
 
-    assertEquals(1, report.extractions().size(), "one row, one extraction");
-    assertTrue(
-      report
-        .skipped()
-        .stream()
-        .anyMatch(s -> s.field().equals("count")),
-      () -> "count has no row: " + report.skipped()
+    assertEquals(
+      List.of(
+        new Extracted("n", "name", "String", WhenAbsent.DEFAULTS),
+        new Extracted("count", "count", "int", WhenAbsent.DEFAULTS)
+      ),
+      report.extractions()
     );
+    assertEquals(List.of(), report.skipped(), "every slot is read from some key");
+  }
+
+  /** A bean with a property its writer cannot set: a getter with no setter behind it. */
+  public static class Derived {
+
+    private String name;
+
+    public String getName() {
+      return name;
+    }
+
+    public void setName(final String name) {
+      this.name = name;
+    }
+
+    public int getLength() {
+      return name == null ? 0 : name.length();
+    }
+  }
+
+  @Test
+  @DisplayName("a bean property no row names and the writer cannot set is reported as skipped")
+  void anUnwritablePropertyIsReportedAsSkipped() {
+    final var report = Telescope.fromMap(Derived.class).explain();
+
+    assertEquals(List.of(new Extracted("name", "name", "String", WhenAbsent.DEFAULTS)), report.extractions());
+    assertEquals(List.of(new Skipped("length", Reason.MISSING_SOURCE)), report.skipped());
+    assertEquals("Ada", Telescope.fromMap(Derived.class).forward(Map.of("name", "Ada", "length", 9)).getName());
   }
 
   @Test

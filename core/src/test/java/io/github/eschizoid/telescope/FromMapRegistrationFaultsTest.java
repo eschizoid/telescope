@@ -61,7 +61,7 @@ class FromMapRegistrationFaultsTest {
     throws ClassNotFoundException {
     final Class<?> probe = loader.loadClass(type);
     assertEquals(loader, probe.getClassLoader(), "the type comes from the test's own loader");
-    return FromMapRefusals.reasonFor(probe);
+    return FromMapCoercions.reasonFor(probe);
   }
 
   @Test

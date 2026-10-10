@@ -10,7 +10,8 @@ import java.util.function.Function;
  * One row in a {@link Telescope#fromMap(Class, MapExtractStep...) Telescope.fromMap(...)} factory
  * call — names a key in the untyped source {@code Map<String, Object>}, the target accessor that
  * receives the converted value, and a per-row converter that turns the raw map value into the typed
- * target value.
+ * target value. A row is an override: a component no row names reads the key with its own name and
+ * converts its value as the generated {@code @FromMap} binder does.
  *
  * <p>Build rows via the static factory {@link #extract(String, Accessor, Function)} —
  * static-imported it reads as a list of correspondences alongside the {@link Mapping#to(Accessor,

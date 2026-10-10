@@ -28,6 +28,10 @@ import java.lang.annotation.Target;
  * #required()} names the field. A field type that can't be coerced (a non-{@code @FromMap} nested
  * object, a collection subtype) is a compile error, not a runtime failure.
  *
+ * <p>The runtime {@code fromMap} reads every component no row names the same way, by its name and
+ * with the same conversion, so the two give the same object for the same map. A nested field of a
+ * {@code @FromMap} type is built there by this generated binder.
+ *
  * <p>Coercion is lenient, matching the runtime {@code fromMap}: a wrong-shaped value for a
  * container field yields an empty collection, only {@code "true"} is truthy for a boolean, a
  * multi-character String for a {@code char} takes the first character, and a non-numeric String for

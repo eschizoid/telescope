@@ -92,10 +92,11 @@ public sealed interface OpticNode {
   record Transformed(String from, String to, String fromType, String toType) implements Row {}
 
   /**
-   * A {@code fromMap} row: the value under map key {@code key} is converted into {@code field},
-   * whose declared type is {@code fieldType}. The conversion happens only where the key carries a
-   * value, and {@code whenAbsent} says what happens where it does not, which is the difference
-   * between a binder that returns a target and one that refuses the source.
+   * A {@code fromMap} slot: the value under map key {@code key} is converted into {@code field},
+   * whose declared type is {@code fieldType}. The key is the one a row names, or the field's own
+   * name where no row names the field. The conversion happens only where the key carries a value,
+   * and {@code whenAbsent} says what happens where it does not, which is the difference between a
+   * binder that returns a target and one that refuses the source.
    */
   record Extracted(String key, String field, String fieldType, WhenAbsent whenAbsent) implements Row {}
 

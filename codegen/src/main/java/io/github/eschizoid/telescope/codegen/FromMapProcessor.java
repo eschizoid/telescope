@@ -1,5 +1,6 @@
 package io.github.eschizoid.telescope.codegen;
 
+import io.github.eschizoid.telescope.internal.pairing.MapValueTypes;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -51,35 +52,6 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
   private static final String FROM_MAP_PROVIDER = "io.github.eschizoid.telescope.conversion.FromMapProvider";
 
   private static final String PROVIDER = "Provider";
-
-  // Reference types a raw map plausibly carries as themselves, so a direct cast is justified.
-  private static final Set<String> CAST_AS_IS = Set.of(
-    "java.lang.String",
-    "java.lang.Object",
-    "java.lang.CharSequence"
-  );
-
-  // JDK value types that arrive as a String in an untyped map, mapped to the factory that rebuilds
-  // them from that String — a named static method, or the String constructor.
-  private static final Coercion.Factory PARSE = new Coercion.Factory.Static("parse");
-  private static final Coercion.Factory CTOR = new Coercion.Factory.Ctor();
-  private static final Map<String, Coercion.Factory> JDK_STRING_FACTORIES = Map.ofEntries(
-    Map.entry("java.time.Instant", PARSE),
-    Map.entry("java.time.LocalDate", PARSE),
-    Map.entry("java.time.LocalDateTime", PARSE),
-    Map.entry("java.time.LocalTime", PARSE),
-    Map.entry("java.time.OffsetDateTime", PARSE),
-    Map.entry("java.time.ZonedDateTime", PARSE),
-    Map.entry("java.time.Duration", PARSE),
-    Map.entry("java.time.Period", PARSE),
-    Map.entry("java.util.UUID", new Coercion.Factory.Static("fromString")),
-    Map.entry("java.math.BigDecimal", CTOR),
-    Map.entry("java.math.BigInteger", CTOR),
-    Map.entry("java.net.URI", new Coercion.Factory.Static("create")),
-    Map.entry("java.util.Currency", new Coercion.Factory.Static("getInstance")),
-    Map.entry("java.util.Locale", new Coercion.Factory.Static("forLanguageTag")),
-    Map.entry("java.util.regex.Pattern", new Coercion.Factory.Static("compile"))
-  );
 
   // @FromMap targets carrying a Lombok trigger are deferred to processingOver(): in round 1 Lombok
   // hasn't synthesized the getters/setters yet, so beanProperties() would see "no readable
@@ -406,6 +378,11 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
       out.println("    public java.lang.Class<?> targetType() {");
       out.println("      return " + ref + ".class;");
       out.println("    }");
+      out.println();
+      out.println("    @java.lang.Override");
+      out.println("    public " + FORWARD_MAPPER + "<" + MAP_TYPE + ", " + ref + "> binder() {");
+      out.println("      return FROM_MAP;");
+      out.println("    }");
       out.println("  }");
     });
   }
@@ -572,16 +549,21 @@ public final class FromMapProcessor extends AbstractTelescopeProcessor {
         fqn + " is a collection subtype — declare the field as List/Set/Map/Optional so @FromMap" + " can build it"
       );
     }
-    // Reference types a map plausibly holds as-is — cast and trust the map.
-    if (CAST_AS_IS.contains(fqn)) return new Coercion.Cast(fqn);
+    // Reference types a map plausibly holds as-is — cast and trust the map. The runtime fromMap
+    // reads the same table, so the two convert the same types the same way.
+    if (MapValueTypes.castAsIs(fqn)) return new Coercion.Cast(fqn);
     // A JDK value type with a known String factory (Instant, UUID, BigDecimal, LocalDate, …) —
-    // build
-    // it from the String form it arrives in.
-    final var factory = JDK_STRING_FACTORIES.get(fqn);
-    if (factory != null) return new Coercion.StringFactory(fqn, factory);
+    // build it from the String form it arrives in.
+    final var built = MapValueTypes.stringBuilt(fqn);
+    if (built.isPresent()) {
+      final var factory = built.get().factory();
+      return new Coercion.StringFactory(
+        fqn,
+        factory == null ? new Coercion.Factory.Ctor() : new Coercion.Factory.Static(factory)
+      );
+    }
     // An unrecognized JDK type can't be built from a Map value — refuse rather than emit a cast
-    // that
-    // would CCE at runtime and defeat the "if it compiles, it runs" guard.
+    // that would CCE at runtime and defeat the "if it compiles, it runs" guard.
     if (fqn.startsWith("java.") || fqn.startsWith("javax.")) {
       return new Coercion.Unsupported(
         fqn +

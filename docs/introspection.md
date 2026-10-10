@@ -52,11 +52,12 @@ rows; container-typed fields report as one row, not per element; forward-only tr
 a direction marker.
 
 Slices: `mapped()`, `transformations()`, `extractions()`, `skipped()`, `unusedSources()`, and `hops()` (for a
-navigator's path). `extractions()` holds the rows of a `fromMap` binder, one
-`Extracted(key, field, fieldType, whenAbsent)` per row: `whenAbsent` is `DEFAULTS` for an `extract(...)` row, which
-leaves the field at its type default when the key carries no value, and `REFUSES` for a `required(...)` row, which
-refuses the map. In a `fromMap` trace each row prints the value found under its key, and a slot an absent key left at
-its default prints as `(absent) → field value (default)`.
+navigator's path). `extractions()` holds the slots of a `fromMap` binder, one
+`Extracted(key, field, fieldType, whenAbsent)` per field it writes. The key is the one a row names, or the field's own
+name when no row names it. `whenAbsent` is `DEFAULTS` for an `extract(...)` row or a field no row names, which leaves
+the field at its type default when the key carries no value, and `REFUSES` for a `required(...)` row, which refuses the
+map. In a `fromMap` trace each row prints the value found under its key, and a slot an absent key left at its default
+prints as `(absent) → field value (default)`.
 
 ## Auto-logging — flip a level, see every mapping
 

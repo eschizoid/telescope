@@ -1,6 +1,6 @@
 # ADR-0008: `Telescope.fromMap(Class<T>, MapExtractStep...)` for untyped sources
 
-**Status:** Accepted — shipped in #150 · **Date:** 2026-06-16 (accepted 2026-06-21)
+**Status:** Accepted — shipped in #150 · **Date:** 2026-06-16 (accepted 2026-06-21, amended 2026-10-10)
 
 ## Context
 
@@ -63,6 +63,32 @@ silently ignored.
   reads; the converter `Function<Object, X>` is a virtual call, not a method-reference. Adopters hit this for legacy
   code; the documented expectation is "this is the cost of unstructured input, run it at request-boundary not in a hot
   inner loop."
+
+## Amendment: a component no row names reads the key with its own name
+
+**Date:** 2026-10-10
+
+As first shipped, a component no `extract(...)` or `required(...)` row named was never read: it always took the default
+for its type. The `@FromMap` binder of ADR-0010 reads every component from the key with its own name, so the two paths
+gave different objects for the same map, and a mapper with no rows returned a target holding only defaults.
+
+`fromMap` now follows the rule `Telescope.map` follows: same-name binding is the default and rows are overrides.
+
+- A component no row names reads the map key with its own name and converts the value exactly as the generated binder
+  does. The decision is made over reflected types in the same order as the processor's `Coercion` resolution, and the
+  reference types taken by a cast or built from a `String` come from one table in the shared pairing spec
+  (`MapValueTypes`), which both paths read.
+- A component whose type has a generated binder is built by that binder, found through its `FromMapProvider`. The
+  provider gains a `binder()` method for this. Building it through the binder keeps what only the source-retained
+  annotation declares, such as required keys.
+- A row decides the component it names: its key and its converter replace the by-name default.
+- A key absent from the map, or holding `null`, still leaves the documented default. `required(...)` is unchanged.
+- A type with no conversion is still refused while the mapper is built, with the same message.
+- `explain()` reports every component as an `Extracted` row under the key it reads. A bean property no row names and the
+  writer cannot set stays a `MISSING_SOURCE` skip.
+
+This changes behaviour: a component that used to stay at its default now takes the map's value under its name, and a
+value under that name that cannot be converted now throws where it used to be ignored.
 
 ## Alternatives considered
 
