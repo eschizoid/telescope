@@ -5214,6 +5214,51 @@ class BridgeProcessorTest {
 
     @Test
     @DisplayName(
+      "carrier form over a sealed root: the umbrella is written beside the carrier under its name, and registered"
+    )
+    void carrierSealedUmbrellaTakesTheCarrierName() {
+      final var compilation = compileAttributed(
+        source("shapes.Shape", "package shapes; public sealed interface Shape permits shapes.Circle {}"),
+        source(
+          "shapes.Circle",
+          """
+          package shapes;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(views.CircleView.class)
+          public record Circle(int radius) implements Shape {}
+          """
+        ),
+        source("views.ShapeView", "package views; public sealed interface ShapeView permits views.CircleView {}"),
+        source("views.CircleView", "package views; public record CircleView(int radius) implements ShapeView {}"),
+        source(
+          "carrier.ShapeMapping",
+          """
+          package carrier;
+          import io.github.eschizoid.telescope.annotations.Bridge;
+          @Bridge(source = shapes.Shape.class, target = views.ShapeView.class)
+          public class ShapeMapping {}
+          """
+        )
+      );
+
+      assertTrue(compilation.success(), () -> "sealed carrier should compile; saw " + compilation.errorMessages());
+      final var umbrella = compilation.generated().get("carrier.ShapeMappingBridge");
+      assertNotNull(
+        umbrella,
+        () -> "expected the umbrella at carrier.ShapeMappingBridge; saw " + compilation.generated().keySet()
+      );
+      assertTrue(
+        umbrella.contains(".when(shapes.Circle.class, shapes.CircleBridge::forward)"),
+        () -> "the umbrella must dispatch to the case bridge in the case's package; saw:\n" + umbrella
+      );
+      assertNotNull(
+        compilation.generated().get("carrier.ShapeMappingBridgeProvider"),
+        () -> "expected the umbrella's provider; saw " + compilation.generated().keySet()
+      );
+    }
+
+    @Test
+    @DisplayName(
       "model-anchored form emits no provider/services — it's already name-discoverable in the" + " source's package"
     )
     void modelAnchoredEmitsNoProvider() {
