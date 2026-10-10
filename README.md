@@ -332,9 +332,11 @@ method calls. `@Bridge` generates a conversion as plain Java for a known pair. T
 [docs/codegen.md](docs/codegen.md).
 
 `Telescope.mapper(...)` returns a `Mapper`, which has `forward`, `backward`, and `patch`. `patch(base, partial)` returns
-a copy of `base` with the partial's non-null reference fields, and all of its primitive fields, written over it.
-`Telescope.map(...)` takes the same rows and returns a `Telescope` path instead. A conversion that runs in both
-directions composes into a longer path with `.then(...)`.
+a copy of `base` with the partial's non-null reference fields, and all of its primitive fields, written over it. The
+copy is a new object even when the partial is null or holds nothing but nulls, so changing it never changes `base`. It
+is shallow: a field the partial leaves null holds the same object `base` holds. `Telescope.map(...)` takes the same rows
+and returns a `Telescope` path instead. A conversion that runs in both directions composes into a longer path with
+`.then(...)`.
 
 Rows handle the cases that same-name matching can't. A field with a different name gets a
 `Mapping.to(srcAccessor, tgtAccessor)` row. A class whose write strategy isn't detected gets a
@@ -552,9 +554,10 @@ values, and a log level can narrate every conversion. [docs/introspection.md](do
 
 A field whose declared type is the same on both sides is handed across as the same instance, with some exceptions. A
 `List`, `Set`, `Map`, or other JDK collection gets a shallow copy instead. The copy happens forward, backward, and in
-`patch`. Changing the target's container then never changes the source's. Arrays aren't copied, so the target holds the
-source's array. A field declared as your own collection class, such as `class Urls extends ArrayList<String>`, is handed
-across as it is too.
+`patch` for a container the partial supplies; a container the partial leaves null is the one `base` holds. Changing the
+target's container then never changes the source's. Arrays aren't copied, so the target holds the source's array. A
+field declared as your own collection class, such as `class Urls extends ArrayList<String>`, is handed across as it is
+too.
 
 The copy keeps the source's order, including a sorted set's comparator. It never creates an instance of a class
 telescope doesn't know, such as a framework's own collection.

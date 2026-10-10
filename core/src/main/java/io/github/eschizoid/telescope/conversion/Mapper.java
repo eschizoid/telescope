@@ -52,6 +52,11 @@ public final class Mapper<A, B> {
   private final Reflective targetRefl;
   private volatile IntoPlan intoPlan;
   private final Map<String, PatchEntry> patchByTargetField;
+  // A null patchByTargetField: the mapper has no per-field table to overlay or write through.
+  private static final String UNSUPPORTED =
+    "This mapper does not support %s: Telescope.merge produces a forward-only mapper (the " +
+    "multi-source case has no general inverse), and a lift* mapper's root is a container with no " +
+    "fields to overlay. Use forward(...) instead.";
   // Folded hook chains — null = no hook. Composed by repeated calls to before*/after*. Each side
   // is a single Function/BiFunction reference at call time so HotSpot stays monomorphic regardless
   // of chain depth (avoids the megamorphic Iso.of cliff that the per-hook-Iso composition shape
@@ -336,31 +341,56 @@ public final class Mapper<A, B> {
    * top level of the source/target type pair only — patches that target nested components write the
    * <em>whole</em> nested value (since that's what the top-level component holds), not individual
    * sub-component overlays.
+   *
+   * <p>The result is always a new object, never {@code base} itself, even when {@code partial} is
+   * null or every field it holds is null: a caller that mutates the result leaves {@code base} as
+   * it was. A {@code @Bridge}'s generated {@code patch} makes the same guarantee. The rebuild is
+   * shallow: a component the partial leaves null is handed across from {@code base} as it is, so a
+   * nested object or a container it holds is the one {@code base} holds, and changing it changes
+   * {@code base}.
+   *
+   * @return a new {@code A}, or {@code null} when {@code base} is null
+   * @throws UnsupportedOperationException if the mapper came from {@code Telescope.merge} or from
+   *     one of the {@code lift*} methods, neither of which has fields to overlay, or if {@code A}
+   *     is an enum or a class no write strategy can build, such as a sealed interface or an
+   *     abstract class without a static {@code builder()}
    */
   @SuppressWarnings("unchecked")
   public A patch(final A base, final B partial) {
-    // A null table means the producing factory does not support patching at all (multi-source
-    // merge); an EMPTY table means a legitimate mapper with no patchable rows. Conflating the two
-    // made merge's patch a silent no-op while its backward threw loudly — same contract, opposite
-    // failure modes.
-    if (patchByTargetField == null) throw new UnsupportedOperationException(
-      "This mapper does not support patch() — Telescope.merge produces a forward-only mapper " +
-        "(the multi-source case has no general inverse). Use Mapper.forward(...) only."
+    // A null table means the producing factory does not support patching at all; an EMPTY table
+    // means a legitimate mapper with no patchable rows, whose patch is a rebuild of base.
+    if (patchByTargetField == null) throw new UnsupportedOperationException(UNSUPPORTED.formatted("patch()"));
+    if (base == null) return null;
+    if (!rebuildable()) throw new UnsupportedOperationException(
+      "patch() rebuilds base field by field, and " +
+        sourceClass.getName() +
+        " is an enum or a class no write strategy can build, so there is nothing to rebuild. A " +
+        "@Bridge on a sealed pair generates a patch that dispatches on the case."
     );
-    if (base == null || partial == null) return base;
-    if (patchByTargetField.isEmpty()) return base;
-    final var patched = new HashMap<String, Object>();
-    for (final var entry : patchByTargetField.entrySet()) {
+    // The overlay map exists only once the partial supplies a value, so a partial that overlays
+    // nothing rebuilds base without allocating it.
+    HashMap<String, Object> patched = null;
+    if (partial != null) for (final var entry : patchByTargetField.entrySet()) {
       final var partialValue = targetRefl.read(partial, entry.getKey());
-      if (partialValue != null) patched.put(
-        entry.getValue().sourceField(),
-        entry.getValue().backward().apply(partialValue)
-      );
+      if (partialValue == null) continue;
+      if (patched == null) patched = new HashMap<>();
+      patched.put(entry.getValue().sourceField(), entry.getValue().backward().apply(partialValue));
     }
-    if (patched.isEmpty()) return base;
+    if (patched == null) return (A) sourceRefl.construct(sourceClass, name -> sourceRefl.read(base, name));
+    final var overlay = patched;
     return (A) sourceRefl.construct(sourceClass, name ->
-      patched.containsKey(name) ? patched.get(name) : sourceRefl.read(base, name)
+      overlay.containsKey(name) ? overlay.get(name) : sourceRefl.read(base, name)
     );
+  }
+
+  /**
+   * Whether a rebuild can create an {@code A}: a record through its canonical constructor, a class
+   * through the writer {@code construct} would choose. An abstract class or an interface whose
+   * static {@code builder()} returns an implementation has such a writer.
+   */
+  private boolean rebuildable() {
+    if (sourceClass.isEnum()) return false;
+    return sourceClass.isRecord() || sourceRefl.writerFor(sourceClass) != null;
   }
 
   /**
@@ -461,11 +491,8 @@ public final class Mapper<A, B> {
     // computed getters (e.g. getFullName() derived from firstName + lastName) whose writes would
     // silently no-op — work for a property the user never asked us to map.
     // Same null-table sentinel as patch(): the producing factory does not support target-mutating
-    // operations at all (multi-source merge) — throw the UOE, don't NPE on the sentinel.
-    if (patchByTargetField == null) throw new UnsupportedOperationException(
-      "This mapper does not support into() — Telescope.merge produces a forward-only mapper " +
-        "(the multi-source case has no general inverse). Use Mapper.forward(...) only."
-    );
+    // operations at all — throw the UOE, don't NPE on the sentinel.
+    if (patchByTargetField == null) throw new UnsupportedOperationException(UNSUPPORTED.formatted("into()"));
     // Writers bind to the target's persistent class, not the declared one: a mapper declared
     // against a base or @MappedSuperclass type is routinely handed a concrete subclass, and the
     // setter that matters may exist only there. persistentClassOf collapses a proxy back to its
@@ -705,8 +732,9 @@ public final class Mapper<A, B> {
    * lists round-trip to {@code null} (mirrors the null-pass-through convention of {@link
    * io.github.eschizoid.telescope.internal.optics.Iso#liftList}).
    *
-   * <p>The lifted mapper has an empty patch table — sparse-overlay semantics aren't well-defined
-   * for list-shaped roots. Use it as a building block in {@link
+   * <p>The lifted mapper's {@link #patch} and {@link #into} throw {@link
+   * UnsupportedOperationException}: a list-shaped root has no fields to overlay. Use it as a
+   * building block in {@link
    * io.github.eschizoid.telescope.mapping.Mapping#via(io.github.eschizoid.telescope.Telescope.Accessor,
    * io.github.eschizoid.telescope.Telescope.Accessor, Mapper) Mapping.via} or hand-roll the
    * forward/backward calls at a {@code List} call site.
@@ -714,21 +742,21 @@ public final class Mapper<A, B> {
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public Mapper<List<A>, List<B>> liftList() {
     final var lifted = Iso.liftList(iso);
-    return new Mapper<>(lifted, (Class) List.class, (Class) List.class, Map.of());
+    return new Mapper<>(lifted, (Class) List.class, (Class) List.class, null);
   }
 
   /** Same as {@link #liftList()} but produces a {@code Mapper<Set<A>, Set<B>>}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public Mapper<Set<A>, Set<B>> liftSet() {
     final var lifted = Iso.liftSet(iso);
-    return new Mapper<>(lifted, (Class) Set.class, (Class) Set.class, Map.of());
+    return new Mapper<>(lifted, (Class) Set.class, (Class) Set.class, null);
   }
 
   /** Same as {@link #liftList()} but produces a {@code Mapper<Optional<A>, Optional<B>>}. */
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public Mapper<Optional<A>, Optional<B>> liftOptional() {
     final var lifted = Iso.liftOptional(iso);
-    return new Mapper<>(lifted, (Class) Optional.class, (Class) Optional.class, Map.of());
+    return new Mapper<>(lifted, (Class) Optional.class, (Class) Optional.class, null);
   }
 
   /**
@@ -738,6 +766,6 @@ public final class Mapper<A, B> {
   @SuppressWarnings({ "unchecked", "rawtypes" })
   public <K> Mapper<Map<K, A>, Map<K, B>> liftMapValues() {
     final var lifted = Iso.<K, A, B>liftMapValues(iso);
-    return new Mapper<>(lifted, (Class) Map.class, (Class) Map.class, Map.of());
+    return new Mapper<>(lifted, (Class) Map.class, (Class) Map.class, null);
   }
 }

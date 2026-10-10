@@ -114,10 +114,12 @@ Telescope.of(Page.class)                  // Page is a record holding List<Legac
 **`Telescope.mapper(...)` — the `Mapper<A, B>` sibling.** Same deep recursion, but the return is a `Mapper<A, B>`
 exposing `forward` / `backward` / `read` / `patch` / `asTelescope` / `liftList` / `liftSet` / `liftOptional` /
 `liftMapValues`. `patch(base, partial)` overlays non-null fields of `partial` onto `base` — useful for sparse JSON /
-form updates. `asTelescope()` returns the mapper as a `Telescope<A, B>` for `.then(...)` composition into a longer typed
-path (bridging record-side navigation into entity-side leaves, or vice versa). The `lift*` methods promote an
-element-level mapper to a container-level mapper without going through a `via(...)` row — useful when the lifted mapper
-is the call-site root (e.g., a bulk handler that converts a `List<Order>` payload to `List<OrderEntity>`).
+form updates. It always returns a new object, even when `partial` changes nothing. `asTelescope()` returns the mapper as
+a `Telescope<A, B>` for `.then(...)` composition into a longer typed path (bridging record-side navigation into
+entity-side leaves, or vice versa). The `lift*` methods promote an element-level mapper to a container-level mapper
+without going through a `via(...)` row — useful when the lifted mapper is the call-site root (e.g., a bulk handler that
+converts a `List<Order>` payload to `List<OrderEntity>`). A lifted mapper's root is a container with no fields to
+overlay, so its `patch` and `into` throw `UnsupportedOperationException`.
 
 ```java
 final Mapper<UserBean, UserView> mapper = Telescope.mapper(UserBean.class, UserView.class);
