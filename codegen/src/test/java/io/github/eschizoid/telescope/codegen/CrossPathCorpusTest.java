@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.PriorityQueue;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeMap;
@@ -3965,6 +3966,7 @@ class CrossPathCorpusTest {
     throws ReflectiveOperationException {
     if (value == null) return "null";
     if (value instanceof String text) return "\"" + text + "\"";
+    if (value instanceof Number number) return number.toString();
     if (value instanceof Optional<?> present) {
       return present.isEmpty() ? "empty" : "of " + shape(present.get(), numbered);
     }
@@ -4000,5 +4002,336 @@ class CrossPathCorpusTest {
       parts.add(key + "=" + shape(entry.getValue().invoke(value), numbered));
     }
     return "#" + number + "(" + String.join(", ", parts) + ")";
+  }
+
+  /**
+   * A patch whose partial changes nothing: the declarations, each with {@code %1$s} as the cell's
+   * prefix, and what both paths owe when {@code Tgt.blank()} is laid over {@code Src.sample()}. The
+   * owed text is the result's {@link #shape} followed by every place in it that holds an object
+   * {@code Src.sample()} also holds.
+   *
+   * <p>The root is always a new object. The rebuild is shallow, so a component the partial leaves
+   * null is handed across from the base as it is, and a nested partial is written whole.
+   */
+  private record Unchanged(String name, List<String> declarations, String owed) {}
+
+  private static final String SAMPLE_NAMED = """
+      public static %1$sSrc sample() {
+        final var s = new %1$sSrc();
+        s.setName("ann");
+        s.setEmail("ann@example.com");
+        return s;
+      }
+    """;
+
+  private static final String BLANK_BEAN = "  public static %1$sTgt blank() { return new %1$sTgt(); }\n";
+
+  private static final List<Unchanged> UNCHANGED = List.of(
+    new Unchanged(
+      "a record",
+      List.of(
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(String name, String email) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(\"ann\", \"ann@example.com\"); }\n" +
+          "}\n",
+        "public record %1$sTgt(String name, String email) {\n" +
+          "  public static %1$sTgt blank() { return new %1$sTgt(null, null); }\n" +
+          "}\n"
+      ),
+      "#0(name=\"ann\", email=\"ann@example.com\") sharing nothing"
+    ),
+    new Unchanged(
+      "a class built through its setters",
+      List.of(
+        BRIDGE_TO_TGT + bean("%1$sSrc", SAMPLE_NAMED, "String name", "String email"),
+        bean("%1$sTgt", BLANK_BEAN, "String name", "String email")
+      ),
+      "#0(email=\"ann@example.com\", name=\"ann\") sharing nothing"
+    ),
+    new Unchanged(
+      "a class built through its builder",
+      List.of(
+        BRIDGE_TO_TGT +
+          "public class %1$sSrc {\n" +
+          "  private final String name;\n" +
+          "  private final String email;\n" +
+          "  private %1$sSrc(final String name, final String email) { this.name = name; this.email = email; }\n" +
+          "  public String getName() { return name; }\n" +
+          "  public String getEmail() { return email; }\n" +
+          "  public static Builder builder() { return new Builder(); }\n" +
+          "  public static %1$sSrc sample() { return builder().name(\"ann\").email(\"ann@example.com\").build(); }\n" +
+          "  public static final class Builder {\n" +
+          "    private String name;\n" +
+          "    private String email;\n" +
+          "    public Builder name(final String name) { this.name = name; return this; }\n" +
+          "    public Builder email(final String email) { this.email = email; return this; }\n" +
+          "    public %1$sSrc build() { return new %1$sSrc(name, email); }\n" +
+          "  }\n" +
+          "}\n",
+        bean("%1$sTgt", BLANK_BEAN, "String name", "String email")
+      ),
+      "#0(email=\"ann@example.com\", name=\"ann\") sharing nothing"
+    ),
+    new Unchanged(
+      "a record whose nested record the partial leaves null",
+      List.of(
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(String name, %1$sHome home) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(\"ann\", new %1$sHome(\"Lima\")); }\n" +
+          "}\n",
+        "public record %1$sHome(String city) {}\n",
+        "public record %1$sTgt(String name, %1$sHomeDto home) {\n" +
+          "  public static %1$sTgt blank() { return new %1$sTgt(null, null); }\n" +
+          "}\n",
+        "public record %1$sHomeDto(String city) {}\n"
+      ),
+      "#0(name=\"ann\", home=#1(city=\"Lima\")) sharing [root.home]"
+    ),
+    new Unchanged(
+      "a record whose nested partial has every field null",
+      List.of(
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(String name, %1$sHome home) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(\"ann\", new %1$sHome(\"Lima\")); }\n" +
+          "}\n",
+        "public record %1$sHome(String city) {}\n",
+        "public record %1$sTgt(String name, %1$sHomeDto home) {\n" +
+          "  public static %1$sTgt blank() { return new %1$sTgt(null, new %1$sHomeDto(null)); }\n" +
+          "}\n",
+        "public record %1$sHomeDto(String city) {}\n"
+      ),
+      "#0(name=\"ann\", home=#1(city=null)) sharing nothing"
+    ),
+    new Unchanged(
+      "a class whose nested class the partial leaves null",
+      List.of(
+        BRIDGE_TO_TGT +
+          bean(
+            "%1$sSrc",
+            "  public static %1$sSrc sample() {\n" +
+              "    final var s = new %1$sSrc();\n" +
+              "    final var home = new %1$sHome();\n" +
+              "    home.setCity(\"Lima\");\n" +
+              "    s.setName(\"ann\");\n" +
+              "    s.setHome(home);\n" +
+              "    return s;\n" +
+              "  }\n",
+            "String name",
+            "%1$sHome home"
+          ),
+        bean("%1$sHome", "", "String city"),
+        bean("%1$sTgt", BLANK_BEAN, "String name", "%1$sHomeDto home"),
+        bean("%1$sHomeDto", "", "String city")
+      ),
+      "#0(home=#1(city=\"Lima\"), name=\"ann\") sharing [root.home]"
+    ),
+    new Unchanged(
+      "a record whose same-typed list the partial leaves null",
+      List.of(
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(String name, java.util.List<String> tags) {\n" +
+          "  public static %1$sSrc sample() {\n" +
+          "    return new %1$sSrc(\"ann\", new java.util.ArrayList<>(java.util.List.of(\"a\")));\n" +
+          "  }\n" +
+          "}\n",
+        "public record %1$sTgt(String name, java.util.List<String> tags) {\n" +
+          "  public static %1$sTgt blank() { return new %1$sTgt(null, null); }\n" +
+          "}\n"
+      ),
+      "#0(name=\"ann\", tags=[\"a\"]) sharing [root.tags]"
+    ),
+    new Unchanged(
+      "a record and a null partial",
+      List.of(
+        BRIDGE_TO_TGT +
+          "public record %1$sSrc(String name, int age) {\n" +
+          "  public static %1$sSrc sample() { return new %1$sSrc(\"ann\", 7); }\n" +
+          "}\n",
+        "public record %1$sTgt(String name, int age) {\n" + "  public static %1$sTgt blank() { return null; }\n" + "}\n"
+      ),
+      "#0(name=\"ann\", age=7) sharing nothing"
+    )
+  );
+
+  @Test
+  @DisplayName("a patch whose partial changes nothing returns a new object on both paths")
+  void aPatchThatChangesNothingReturnsANewObjectOnBothPaths() throws ReflectiveOperationException {
+    final var failures = new ArrayList<String>();
+    var index = 0;
+    for (final var cell : UNCHANGED) {
+      final var prefix = "Un" + index++;
+      final var head = "package " + PACKAGE + ";\n";
+      final var sources = cell
+        .declarations()
+        .stream()
+        .map(declaration -> declaration.formatted(prefix))
+        .map(code -> source(declaredName(code), head + code))
+        .toArray(JavaFileObject[]::new);
+      final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+      assertTrue(
+        plain.success(),
+        () -> cell.name() + " should compile without the processor: " + plain.errorMessages()
+      );
+      final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+      assertTrue(processed.success(), () -> cell.name() + " should compile: " + processed.errorMessages());
+      final var classes = plain.define(MethodHandles.lookup());
+      final Class<Object> src = cast(classes.get(PACKAGE + "." + prefix + "Src"));
+      final Class<Object> tgt = cast(classes.get(PACKAGE + "." + prefix + "Tgt"));
+      final var bridge = emitted(processed, plain, prefix);
+      final var mapper = Telescope.mapper(src, tgt);
+      final var patch = bridge.getMethod("patch", src, tgt);
+      final Map<String, Patch> sides = Map.of(
+        "generated",
+        (base, partial) -> patch.invoke(null, base, partial),
+        "reflective",
+        mapper::patch
+      );
+      for (final var side : sides.entrySet()) {
+        final var base = src.getMethod("sample").invoke(null);
+        final var partial = tgt.getMethod("blank").invoke(null);
+        final var result = side.getValue().apply(base, partial);
+        final var outcome = shape(result, new IdentityHashMap<>()) + " sharing " + shared(base, result);
+        if (!outcome.equals(cell.owed())) failures.add(
+          cell.name() + ": " + side.getKey() + " gave " + outcome + ", owed " + cell.owed()
+        );
+        if (result == base) failures.add(cell.name() + ": " + side.getKey() + " handed the base back");
+      }
+    }
+    assertTrue(failures.isEmpty(), () -> failures.size() + " cell(s) failed:\n  " + String.join("\n  ", failures));
+  }
+
+  @Test
+  @DisplayName("a sealed patch returns a new object on the generated path and is refused by name on the runtime one")
+  void aSealedPatchReturnsANewObjectWhenThePartialOverlaysNothing() throws ReflectiveOperationException {
+    final var head = "package " + PACKAGE + ";\n";
+    final var bridge = "@io.github.eschizoid.telescope.annotations.Bridge(";
+    final var sources = new JavaFileObject[] {
+      source("SpSrc", head + bridge + "SpTgt.class)\npublic sealed interface SpSrc permits SpCard, SpBank {}\n"),
+      source("SpCard", head + bridge + "SpCardDto.class)\npublic record SpCard(String pan) implements SpSrc {}\n"),
+      source("SpBank", head + bridge + "SpBankDto.class)\npublic record SpBank(String iban) implements SpSrc {}\n"),
+      source("SpTgt", head + "public sealed interface SpTgt permits SpCardDto, SpBankDto {}\n"),
+      source("SpCardDto", head + "public record SpCardDto(String pan) implements SpTgt {}\n"),
+      source("SpBankDto", head + "public record SpBankDto(String iban) implements SpTgt {}\n"),
+    };
+    final var plain = ProcessorHarness.compileFully(List.of(), List.of(), sources);
+    assertTrue(plain.success(), plain::errorMessages);
+    final var processed = ProcessorHarness.compileFully(List.of(new BridgeProcessor()), List.of(), sources);
+    assertTrue(processed.success(), processed::errorMessages);
+    final var classes = plain.define(MethodHandles.lookup());
+    final Class<Object> src = cast(classes.get(PACKAGE + ".SpSrc"));
+    final Class<Object> tgt = cast(classes.get(PACKAGE + ".SpTgt"));
+    final var patch = emitted(processed, plain, "Sp").getMethod("patch", src, tgt);
+    final var mapper = Telescope.mapper(src, tgt);
+    final var cardDto = classes.get(PACKAGE + ".SpCardDto").getConstructors()[0];
+    final var bank = classes.get(PACKAGE + ".SpBankDto").getConstructors()[0].newInstance("DE89");
+    // A partial of the same case overlays; another case or a null partial is ignored and the base
+    // is rebuilt. The runtime mapper has no rule pairing the cases of two sealed roots, so it
+    // refuses every one of them in the same words.
+    final var partials = new LinkedHashMap<String, Object>();
+    partials.put("the same case", cardDto.newInstance("5500"));
+    partials.put("the same case, every field null", cardDto.newInstance((Object) null));
+    partials.put("another case", bank);
+    partials.put("null", null);
+    final var owedGenerated = Map.of(
+      "the same case",
+      "#0(pan=\"5500\"), a new object",
+      "the same case, every field null",
+      "#0(pan=\"4111\"), a new object",
+      "another case",
+      "#0(pan=\"4111\"), a new object",
+      "null",
+      "#0(pan=\"4111\"), a new object"
+    );
+    final var owedReflective = "refused: UnsupportedOperationException, names " + src.getName();
+    final var failures = new ArrayList<String>();
+    for (final var partial : partials.entrySet()) {
+      final var card = classes.get(PACKAGE + ".SpCard").getConstructors()[0].newInstance("4111");
+      final var result = patch.invoke(null, card, partial.getValue());
+      final var generated =
+        shape(result, new IdentityHashMap<>()) + (result == card ? ", the base itself" : ", a new object");
+      if (!generated.equals(owedGenerated.get(partial.getKey()))) failures.add(
+        "generated, " + partial.getKey() + ": " + generated
+      );
+      String reflective;
+      try {
+        reflective = "returned " + mapper.patch(card, partial.getValue());
+      } catch (final RuntimeException e) {
+        reflective =
+          "refused: " +
+          e.getClass().getSimpleName() +
+          (e.getMessage().contains(src.getName()) ? ", names " + src.getName() : ", " + e.getMessage());
+      }
+      if (!reflective.equals(owedReflective)) failures.add("reflective, " + partial.getKey() + ": " + reflective);
+    }
+    assertTrue(failures.isEmpty(), () -> String.join("\n", failures));
+  }
+
+  /** One path's {@code patch}, called with a base and a partial. */
+  private interface Patch {
+    Object apply(Object base, Object partial) throws ReflectiveOperationException;
+  }
+
+  /**
+   * Every place in {@code result} that holds an object {@code base} also holds, by the property
+   * path that reaches it from the root, or {@code nothing}. A string is a value, so only the cell's
+   * own types and containers count.
+   */
+  private static String shared(final Object base, final Object result) throws ReflectiveOperationException {
+    final Set<Object> held = Collections.newSetFromMap(new IdentityHashMap<>());
+    collect(base, held);
+    final var places = new ArrayList<String>();
+    locate(result, "root", held, Collections.newSetFromMap(new IdentityHashMap<>()), places);
+    return places.isEmpty() ? "nothing" : places.toString();
+  }
+
+  private static void collect(final Object value, final Set<Object> held) throws ReflectiveOperationException {
+    if (!isObject(value) || !held.add(value)) return;
+    for (final var child : children(value).values()) collect(child, held);
+  }
+
+  private static void locate(
+    final Object value,
+    final String path,
+    final Set<Object> held,
+    final Set<Object> visited,
+    final List<String> places
+  ) throws ReflectiveOperationException {
+    if (!isObject(value) || !visited.add(value)) return;
+    if (held.contains(value)) places.add(path);
+    for (final var child : children(value).entrySet()) {
+      locate(child.getValue(), path + "." + child.getKey(), held, visited, places);
+    }
+  }
+
+  /** Whether {@code value} is a container or one of a cell's own types, rather than a value. */
+  private static boolean isObject(final Object value) {
+    return (
+      value instanceof Collection<?> ||
+      value instanceof Map<?, ?> ||
+      (value != null && value.getClass().getName().startsWith(PACKAGE + "."))
+    );
+  }
+
+  /** {@code value}'s properties or elements, keyed by name or position. */
+  private static Map<String, Object> children(final Object value) throws ReflectiveOperationException {
+    final var children = new LinkedHashMap<String, Object>();
+    if (value instanceof Map<?, ?> entries) {
+      for (final var entry : entries.entrySet()) children.put(String.valueOf(entry.getKey()), entry.getValue());
+    } else if (value instanceof Collection<?> elements) {
+      var position = 0;
+      for (final var element : elements) children.put(String.valueOf(position++), element);
+    } else if (value.getClass().isRecord()) {
+      for (final var component : value.getClass().getRecordComponents()) {
+        children.put(component.getName(), component.getAccessor().invoke(value));
+      }
+    } else {
+      for (final var method : value.getClass().getDeclaredMethods()) {
+        if (method.getName().startsWith("get") && method.getParameterCount() == 0) {
+          final var name = Character.toLowerCase(method.getName().charAt(3)) + method.getName().substring(4);
+          children.put(name, method.invoke(value));
+        }
+      }
+    }
+    return children;
   }
 }

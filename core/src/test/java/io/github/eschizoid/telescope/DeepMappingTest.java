@@ -11,6 +11,7 @@ import static io.github.eschizoid.telescope.mapping.WriteHint.writeBeans;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -320,6 +321,167 @@ class DeepMappingTest {
       final var out = mapper.patch(base, new D(null, "2024"));
       assertEquals("u1", out.id());
       assertEquals(2024, out.year());
+    }
+
+    record Noted(String note) {}
+
+    record Blank() {}
+
+    @Test
+    @DisplayName("a mapper with no patchable rows still returns a new object from patch")
+    void patchWithNoPatchableRowsRebuildsBase() {
+      final var mapper = Telescope.mapper(Noted.class, Blank.class, drop(Noted::note));
+      final var base = new Noted("kept");
+      final var out = mapper.patch(base, new Blank());
+      assertNotSame(base, out);
+      assertEquals(base, out);
+    }
+
+    @Test
+    @DisplayName("a lifted mapper refuses patch and into rather than ignoring the partial")
+    void liftedMapperRefusesPatchAndInto() {
+      final var lifted = Telescope.mapper(FlatEntity.class, FlatDto.class).liftList();
+      final var base = List.of(new FlatEntity("u1", "a@x", "alice"));
+      final var partial = List.of(new FlatDto(null, "b@x", null));
+      final var patch = assertThrows(UnsupportedOperationException.class, () -> lifted.patch(base, partial));
+      assertTrue(patch.getMessage().contains("patch()"), patch::getMessage);
+      final var into = assertThrows(UnsupportedOperationException.class, () -> lifted.into(partial, base));
+      assertTrue(into.getMessage().contains("into()"), into::getMessage);
+    }
+
+    /** An abstract root whose static builder() returns an implementation. */
+    abstract static class Shape {
+
+      public abstract String getName();
+
+      public abstract String getColor();
+
+      public static ShapeBuilder builder() {
+        return new ShapeBuilder();
+      }
+    }
+
+    static final class Circle extends Shape {
+
+      private final String name;
+      private final String color;
+
+      Circle(final String name, final String color) {
+        this.name = name;
+        this.color = color;
+      }
+
+      @Override
+      public String getName() {
+        return name;
+      }
+
+      @Override
+      public String getColor() {
+        return color;
+      }
+    }
+
+    static final class ShapeBuilder {
+
+      private String name;
+      private String color;
+
+      public ShapeBuilder name(final String name) {
+        this.name = name;
+        return this;
+      }
+
+      public ShapeBuilder color(final String color) {
+        this.color = color;
+        return this;
+      }
+
+      public Shape build() {
+        return new Circle(name, color);
+      }
+    }
+
+    record ShapeDto(String name, String color) {}
+
+    /** An interface root whose static builder() returns an implementation. */
+    interface Pet {
+      String getName();
+
+      String getColor();
+
+      static PetBuilder builder() {
+        return new PetBuilder();
+      }
+    }
+
+    record Cat(String getName, String getColor) implements Pet {}
+
+    static final class PetBuilder {
+
+      private String name;
+      private String color;
+
+      public PetBuilder name(final String name) {
+        this.name = name;
+        return this;
+      }
+
+      public PetBuilder color(final String color) {
+        this.color = color;
+        return this;
+      }
+
+      public Pet build() {
+        return new Cat(name, color);
+      }
+    }
+
+    record PetDto(String name, String color) {}
+
+    @Test
+    @DisplayName("an abstract root with a static builder() patches to a new overlaid object")
+    void abstractRootWithBuilderPatches() {
+      final var mapper = Telescope.mapper(Shape.class, ShapeDto.class);
+      final Shape base = new Circle("disc", "blue");
+      final var overlaid = mapper.patch(base, new ShapeDto(null, "red"));
+      assertNotSame(base, overlaid);
+      assertEquals(List.of("disc", "red"), List.of(overlaid.getName(), overlaid.getColor()));
+      final var unchanged = mapper.patch(base, new ShapeDto(null, null));
+      assertNotSame(base, unchanged);
+      assertEquals(List.of("disc", "blue"), List.of(unchanged.getName(), unchanged.getColor()));
+    }
+
+    @Test
+    @DisplayName("an interface root with a static builder() patches to a new overlaid object")
+    void interfaceRootWithBuilderPatches() {
+      final var mapper = Telescope.mapper(Pet.class, PetDto.class);
+      final Pet base = new Cat("tom", "grey");
+      final var overlaid = mapper.patch(base, new PetDto("felix", null));
+      assertNotSame(base, overlaid);
+      assertEquals(List.of("felix", "grey"), List.of(overlaid.getName(), overlaid.getColor()));
+      final var unchanged = mapper.patch(base, null);
+      assertNotSame(base, unchanged);
+      assertEquals(List.of("tom", "grey"), List.of(unchanged.getName(), unchanged.getColor()));
+    }
+
+    enum Tier {
+      GOLD,
+      SILVER,
+    }
+
+    enum TierDto {
+      GOLD,
+      SILVER,
+    }
+
+    @Test
+    @DisplayName("an enum root refuses patch by name, since a constant cannot be rebuilt")
+    void enumRootRefusesPatch() {
+      final var mapper = Telescope.mapper(Tier.class, TierDto.class);
+      final var refusal = assertThrows(UnsupportedOperationException.class, () -> mapper.patch(Tier.GOLD, null));
+      assertTrue(refusal.getMessage().contains(Tier.class.getName()), refusal::getMessage);
+      assertNull(mapper.patch(null, TierDto.SILVER));
     }
   }
 

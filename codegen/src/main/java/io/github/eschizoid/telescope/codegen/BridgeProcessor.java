@@ -1988,12 +1988,15 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
       final var tf = fieldByName(targetFields, tgtName);
       final var plan = fieldPlans.get(sourceName);
       final var partialReadExpr = readExpr(target, "partial", tf);
-      // Primitive target components autobox to non-null wrappers on read — always patch them.
-      // No conditional, so no double-eval; just route through applyBackward.
-      if (tf.type().getKind().isPrimitive()) return applyBackward(sourceName, plan, partialReadExpr);
+      // Primitive target components autobox to non-null wrappers on read — always patch them
+      // from a partial that exists. A null partial overlays nothing, so base supplies every
+      // slot.
+      if (tf.type().getKind().isPrimitive()) {
+        return "(partial == null ? " + baseRead + " : " + applyBackward(sourceName, plan, partialReadExpr) + ")";
+      }
       // Reference-type slots: precompute partial.<getter>() once into __pp_<sourceName>.
       final var pLocal = "__pp_" + sourceName;
-      patchLocals.put(pLocal, tf.type() + " " + pLocal + " = " + partialReadExpr + ";");
+      patchLocals.put(pLocal, tf.type() + " " + pLocal + " = partial == null ? null : " + partialReadExpr + ";");
       // A non-null partial slot is written WHOLE: every plan routes through applyBackward, so a
       // nested component converts via the sub-bridge's backward rather than a recursive
       // sub-patch. Mapper#patch documents whole-value writes for nested components, and a
@@ -2116,10 +2119,9 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println(
           "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
         );
-        // P5-1: match runtime Mapper#patch's null-guard. Without this guard, a sparse PATCH
-        // request that arrives with no body (partial == null) would NPE on the first
-        // partial.field() call; runtime returns `base` cleanly in the same situation.
-        out.println("    if (base == null || partial == null) return base;");
+        // Patch returns a new object whenever base exists, matching the runtime Mapper#patch: a
+        // null partial reads as one whose every slot is null, so the body rebuilds base.
+        out.println("    if (base == null) return null;");
         emitMethodBody(out, patchBody);
         out.println("  }");
         out.println();
@@ -2308,21 +2310,20 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
         out.println("    return BACKWARD.apply(t);");
         out.println("  }");
         out.println();
-        // P5-6: sealed-umbrella patch — dispatch each (basePermit, partialPermit) pair to the
-        // per-case bridge's patch when both sides land on the matching sealed case.
+        // Sealed-umbrella patch: when base and partial land on matching cases, the per-case
+        // bridge's patch overlays one onto the other.
         //
-        // P5-SLD: when the cases DON'T match (e.g. base is a CreditCard, partial is a
-        // BankTransferEntity), return `base` unchanged. Patch is an OVERLAY contract: the partial
-        // refines the base. If the partial's sealed case is incompatible with the base's case,
-        // there is no defined overlay — silently switching the concrete sealed type via a full
-        // backward conversion would surprise HTTP-PATCH callers ("PATCH /payments/123 with a
-        // bank-transfer body just changed my CreditCard into a BankTransfer"). No-op is the
-        // safe contract; callers who genuinely want the case switch should call backward()
-        // explicitly.
+        // When they don't (base is a CreditCard, partial is a BankTransferEntity), the partial
+        // has no defined overlay onto base: switching the concrete case through a full backward
+        // conversion would turn "PATCH /payments/123 with a bank-transfer body" into a change of
+        // payment type. The partial is ignored instead, and base is rebuilt through its own
+        // case's patch with a null partial, so the result is still a new object. A caller who
+        // wants the case switch calls backward() explicitly. The switch over base is exhaustive
+        // over the sealed permits, which javac checks.
         out.println(
           "  public static " + sourceFq + " patch(final " + sourceFq + " base, final " + targetFq + " partial) {"
         );
-        out.println("    if (base == null || partial == null) return base;");
+        out.println("    if (base == null) return null;");
         for (final var e : entries) {
           final var sCase = e.sourceCase().getQualifiedName();
           final var tCase = e.targetCase().getQualifiedName();
@@ -2336,7 +2337,13 @@ public final class BridgeProcessor extends AbstractTelescopeProcessor {
               ".patch(sb, tp);"
           );
         }
-        out.println("    return base; // P5-SLD: case mismatch is a no-op, not a type switch.");
+        out.println("    return switch (base) {");
+        for (final var e : entries) {
+          final var sCase = e.sourceCase().getQualifiedName();
+          final var tCase = e.targetCase().getQualifiedName();
+          out.println("      case " + sCase + " sb -> " + e.bridgeFq() + ".patch(sb, (" + tCase + ") null);");
+        }
+        out.println("    };");
         out.println("  }");
         out.println();
         out.println("  /** One concrete BridgeFn type per @Bridge — monomorphic dispatch site. */");

@@ -3937,20 +3937,25 @@ class BridgeProcessorTest {
         bridge.contains("public static demo.User patch(final demo.User base, final demo.UserDto partial)"),
         () -> "expected patch(base, partial) signature, saw: " + bridge
       );
-      // P5-1: null-guard at top of patch body — matches runtime Mapper#patch semantics.
+      // Only a null base short-circuits; a null partial rebuilds base, as the runtime Mapper#patch
+      // does.
       assertTrue(
-        bridge.contains("if (base == null || partial == null) return base"),
+        bridge.contains("if (base == null) return null;"),
         () -> "expected null-guard at top of patch body, saw: " + bridge
       );
+      assertFalse(bridge.contains("return base"), () -> "patch must never hand base back, saw: " + bridge);
       // P5-DBL: reference-type slots are read into __pp_<field> locals so partial.<getter>() is
       // only evaluated once per source slot. String components null-gate via the local to base.
-      assertTrue(bridge.contains("__pp_id = partial.id()"), () -> "expected __pp_id local declaration, saw: " + bridge);
+      assertTrue(
+        bridge.contains("__pp_id = partial == null ? null : partial.id()"),
+        () -> "expected __pp_id local declaration, saw: " + bridge
+      );
       assertTrue(
         bridge.contains("(__pp_id != null ? __pp_id : base.id())"),
         () -> "expected null-gate on __pp_id, saw: " + bridge
       );
       assertTrue(
-        bridge.contains("__pp_email = partial.email()"),
+        bridge.contains("__pp_email = partial == null ? null : partial.email()"),
         () -> "expected __pp_email local declaration, saw: " + bridge
       );
       assertTrue(
@@ -4009,7 +4014,7 @@ class BridgeProcessorTest {
       // with side effects).
       final var subBridge = "CustomerToCustomerDtoBridge";
       assertTrue(
-        bridge.contains("__pp_customer = partial.customer()"),
+        bridge.contains("__pp_customer = partial == null ? null : partial.customer()"),
         () -> "expected __pp_customer local declaration, saw: " + bridge
       );
       assertTrue(
@@ -4083,11 +4088,8 @@ class BridgeProcessorTest {
         ),
         () -> "expected sealed patch signature, saw: " + bridge
       );
-      // Null guard.
-      assertTrue(
-        bridge.contains("if (base == null || partial == null) return base"),
-        () -> "expected null-guard, saw: " + bridge
-      );
+      // Null guard: only a null base short-circuits.
+      assertTrue(bridge.contains("if (base == null) return null;"), () -> "expected null-guard, saw: " + bridge);
       // Case-matching dispatch for both permits.
       assertTrue(
         bridge.contains("if (base instanceof demo.CreditCard sb && partial instanceof demo.CreditCardEntity" + " tp)"),
@@ -4099,8 +4101,13 @@ class BridgeProcessorTest {
         ),
         () -> "expected BankTransfer case dispatch, saw: " + bridge
       );
-      // P5-SLD: case mismatch is a no-op (return base), NOT a backward type-switch.
-      assertTrue(bridge.contains("return base; // P5-SLD"), () -> "expected no-op mismatch fallback, saw: " + bridge);
+      // A case mismatch ignores the partial and rebuilds base through its own case's patch, never
+      // handing base back and never switching case through BACKWARD.
+      assertTrue(
+        bridge.contains("case demo.CreditCard sb -> demo.CreditCardBridge.patch(sb, (demo.CreditCardEntity) null);"),
+        () -> "expected CreditCard rebuild on a case mismatch, saw: " + bridge
+      );
+      assertFalse(bridge.contains("return base"), () -> "patch must never hand base back, saw: " + bridge);
       assertFalse(
         bridge.contains("return BACKWARD.apply(partial)"),
         () -> "case mismatch must NOT silently type-switch via BACKWARD, saw: " + bridge
@@ -4191,7 +4198,7 @@ class BridgeProcessorTest {
 
       // __pp_items must be typed to the target field's container type.
       assertTrue(
-        bridge.contains("__pp_items = partial.items()"),
+        bridge.contains("__pp_items = partial == null ? null : partial.items()"),
         () -> "expected __pp_items local from partial.items(), saw: " + bridge
       );
       // The slot is the plain null-gate with no default machinery anywhere in the body.
@@ -4389,8 +4396,8 @@ class BridgeProcessorTest {
       final var patchBody = bridge.substring(patchStart);
       // __pp_ locals MUST appear before `new demo.PA()` — the block-wrap branch (P5-BR) inlines
       // the locals into the existing SETTERS block rather than wrapping it twice.
-      final var ppIdIdx = patchBody.indexOf("__pp_id = partial.getId()");
-      final var ppEmailIdx = patchBody.indexOf("__pp_email = partial.getEmail()");
+      final var ppIdIdx = patchBody.indexOf("__pp_id = partial == null ? null : partial.getId()");
+      final var ppEmailIdx = patchBody.indexOf("__pp_email = partial == null ? null : partial.getEmail()");
       final var newPaIdx = patchBody.indexOf("new demo.PA()");
       assertTrue(
         ppIdIdx > 0 && ppEmailIdx > 0 && newPaIdx > 0,
@@ -4474,11 +4481,11 @@ class BridgeProcessorTest {
       // Patch body must precompute __pp_ locals (P5-DBL) and then thread them through the
       // builder chain with null-gates against base.getX().
       assertTrue(
-        bridge.contains("final java.lang.String __pp_id = partial.getId()"),
+        bridge.contains("final java.lang.String __pp_id = partial == null ? null : partial.getId()"),
         () -> "expected __pp_id local from partial.getId(), saw: " + bridge
       );
       assertTrue(
-        bridge.contains("final java.lang.String __pp_email = partial.getEmail()"),
+        bridge.contains("final java.lang.String __pp_email = partial == null ? null : partial.getEmail()"),
         () -> "expected __pp_email local from partial.getEmail(), saw: " + bridge
       );
       // The builder chain must use the conditional ternary for each setter.
@@ -4789,12 +4796,21 @@ class BridgeProcessorTest {
       // partial.renamed(); @Transform threads through __tx_qty.backward(__pp_qty); @ViaMapper
       // writes whole via AddressBridge.backward(__pp_addr); @Default never fires in patch.
       assertTrue(
-        bridge.contains("__pp_name = partial.renamed()"),
+        bridge.contains("__pp_name = partial == null ? null : partial.renamed()"),
         () -> "expected __pp_name from partial.renamed(); saw: " + bridge
       );
-      assertTrue(bridge.contains("__pp_qty = partial.qty()"), () -> "expected __pp_qty local; saw: " + bridge);
-      assertTrue(bridge.contains("__pp_addr = partial.addr()"), () -> "expected __pp_addr local; saw: " + bridge);
-      assertTrue(bridge.contains("__pp_tag = partial.tag()"), () -> "expected __pp_tag local; saw: " + bridge);
+      assertTrue(
+        bridge.contains("__pp_qty = partial == null ? null : partial.qty()"),
+        () -> "expected __pp_qty local; saw: " + bridge
+      );
+      assertTrue(
+        bridge.contains("__pp_addr = partial == null ? null : partial.addr()"),
+        () -> "expected __pp_addr local; saw: " + bridge
+      );
+      assertTrue(
+        bridge.contains("__pp_tag = partial == null ? null : partial.tag()"),
+        () -> "expected __pp_tag local; saw: " + bridge
+      );
       assertTrue(
         bridge.contains("(__pp_tag != null ? __pp_tag : base.tag())"),
         () -> "expected the plain null-gate on tag with no default coalesce; saw: " + bridge
