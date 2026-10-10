@@ -952,9 +952,11 @@ public sealed class Telescope<
    * through {@code ServiceLoader}), a component its {@code @FromMap(required = ...)} lists is
    * required whenever its slot reads that component's own key: with no row, or with a row reading
    * the same key. Without the registration, such as a named module with no {@code provides}
-   * directive or a fat jar whose service files were not merged, no declared key is enforced. With
-   * no rows the two paths give the same object for the same map, or refuse it with a message worded
-   * the same way after its own prefix.
+   * directive or a fat jar whose service files were not merged, no declared key is enforced. A
+   * declared key is enforced only for its own component's slot: a row reading that key into another
+   * component does not make it required. With no rows and the binder registered, the two paths give
+   * the same object for the same map, or refuse it with a message worded the same way after its own
+   * prefix.
    *
    * <p>A row overrides that for the component it names, with its own key and converter, which
    * covers what reading by name can't, such as a key spelled differently from the component:
@@ -989,7 +991,8 @@ public sealed class Telescope<
    * {@code null} the mapping engine met is a different question from filling a component the map
    * never carried, and {@link #mapperForward(Class, Class, MapStep...)} answers the first.
    *
-   * <p>A converter receives a value or is not called. A key that is absent, or present with a
+   * <p>A converter receives a value or is not called. Unless a requirement applies (below, or a
+   * declared {@code @FromMap(required = ...)} as above), a key that is absent, or present with a
    * {@code null} value, leaves its component at its type default, so a converter never has to say
    * what the absence of a value means. The binder generated for {@link
    * io.github.eschizoid.telescope.annotations.FromMap} reads the map the same way and cannot

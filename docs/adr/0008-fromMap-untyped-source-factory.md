@@ -84,7 +84,8 @@ gave different objects for the same map, and a mapper with no rows returned a ta
   new `required()` method, for every slot that reads its component's own key, so a map the binder refuses is refused
   with a message worded the same way after its own prefix. Without the registration no declared key is enforced.
 - A row decides the component it names: its key and its converter replace the by-name default. A row reading the
-  component's own key keeps a declared requirement; a row reading another key lifts it.
+  component's own key keeps a declared requirement; a row reading another key lifts it. A declared key is enforced only
+  for its own component's slot, so a row that reads that key into another component does not make it required.
 - A key absent from the map, or holding `null`, still leaves the documented default. `required(...)` is unchanged.
 - A type with no conversion is still refused while the mapper is built, with the same message. A component whose type's
   provider does not override `binder()` is refused while the mapper is built too, since its type cannot be built as the

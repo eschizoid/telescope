@@ -33,9 +33,9 @@ import java.lang.annotation.Target;
  * <p>The runtime {@code fromMap} reads every component no row names the same way, by its name and
  * with the same conversion, and, when this binder is registered (found through {@code
  * ServiceLoader}), it honours the same {@link #required()} keys for every slot that reads its own
- * component's key. With no rows the two give the same object for the same map, or refuse it with a
- * message worded the same way after its own prefix. A nested field of a {@code @FromMap} type is
- * built there by this generated binder.
+ * component's key. With no rows and this binder registered, the two give the same object for the
+ * same map, or refuse it with a message worded the same way after its own prefix. A nested field of
+ * a {@code @FromMap} type is built there by this generated binder.
  *
  * <p>Coercion is lenient, matching the runtime {@code fromMap}: a wrong-shaped value for a
  * container field yields an empty collection, a {@code Boolean} is taken as is and otherwise only

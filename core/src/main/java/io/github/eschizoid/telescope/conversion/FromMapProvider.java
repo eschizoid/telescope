@@ -49,7 +49,8 @@ public interface FromMapProvider {
   /**
    * The keys {@code @FromMap(required = ...)} declares on {@link #targetType()}, each the name of
    * the component or property it fills. The annotation is source-retained, so this is how a runtime
-   * {@code Telescope.fromMap} over the same type refuses the maps the binder refuses.
+   * {@code Telescope.fromMap} over the same type refuses a map missing one of these keys, for every
+   * slot that reads its component's own key.
    *
    * <p>A provider that does not override this method cannot say which keys are required, so a
    * runtime {@code fromMap} over its type that reads any component by its own name refuses while

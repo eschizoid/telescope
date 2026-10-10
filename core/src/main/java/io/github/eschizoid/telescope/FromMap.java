@@ -144,8 +144,8 @@ final class FromMap {
       );
       // A bean property the writer cannot set is never converted: its value would be dropped, and
       // a value that does not convert would refuse a map for a property it never fills. A
-      // declared requirement on it still holds, as in the generated binder, so its key is checked
-      // for presence and nothing more.
+      // declared requirement on it still holds, so its key is checked for presence and nothing
+      // more.
       final var written = writer == null || writer.writes(name);
       slots.put(name, new Slot(name, converter, declaredRequired.contains(name), written));
     }
