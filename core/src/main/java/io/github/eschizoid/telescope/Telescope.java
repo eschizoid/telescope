@@ -658,7 +658,9 @@ public sealed class Telescope<
         "'. Re-run the annotation processor."
     );
     final Lens<S, A> lens = Lens.of(getter, setter);
-    final var hop = Fusion.Hop.component(owner, component, (Traversal<Object, Object>) (Traversal<?, ?>) lens);
+    // The identity names the receiver, as field(...) does: a property is a component of the class
+    // the path navigates, wherever its getter is declared.
+    final var hop = Fusion.Hop.component(receiver, component, (Traversal<Object, Object>) (Traversal<?, ?>) lens);
     return new Telescope<>(lens, RecordFieldOptics.INSTANCE, identityChain(), method, List.of(), List.of(hop));
   }
 
@@ -1070,7 +1072,7 @@ public sealed class Telescope<
   @SuppressWarnings("unchecked")
   public <B> Telescope<S, B> field(final Accessor<A, B> getter) {
     final Lens<A, B> lens = lensForAccessor(getter);
-    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var owner = LambdaIntrospection.receiverClassOf(getter);
     final var name = fieldNameOf(getter);
     final var hop = owner == null ? null : Fusion.Hop.field(owner, name, (Traversal<Object, Object>) lens);
     return new Telescope<>(
@@ -1110,7 +1112,7 @@ public sealed class Telescope<
   @SuppressWarnings("unchecked")
   public <X> ListTelescope<S, X> list(final Accessor<A, List<X>> getter) {
     final Lens<A, List<X>> lens = lensForAccessor(getter);
-    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var owner = LambdaIntrospection.receiverClassOf(getter);
     final var name = fieldNameOf(getter);
     final var lensErased = (Traversal<Object, Object>) (Traversal<?, ?>) lens;
     final var fieldHop = owner == null ? null : Fusion.Hop.field(owner, name, lensErased);
@@ -1136,7 +1138,7 @@ public sealed class Telescope<
   @SuppressWarnings("unchecked")
   public <X> SetTelescope<S, X> setField(final Accessor<A, Set<X>> getter) {
     final Lens<A, Set<X>> lens = lensForAccessor(getter);
-    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var owner = LambdaIntrospection.receiverClassOf(getter);
     final var name = fieldNameOf(getter);
     final var lensErased = (Traversal<Object, Object>) (Traversal<?, ?>) lens;
     final var fieldHop = owner == null ? null : Fusion.Hop.field(owner, name, lensErased);
@@ -1163,7 +1165,7 @@ public sealed class Telescope<
   @SuppressWarnings("unchecked")
   public <K, V> MapTelescope<S, K, V> mapField(final Accessor<A, Map<K, V>> getter) {
     final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
-    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var owner = LambdaIntrospection.receiverClassOf(getter);
     final var name = fieldNameOf(getter);
     final var lensErased = (Traversal<Object, Object>) (Traversal<?, ?>) lens;
     final var fieldHop = owner == null ? null : Fusion.Hop.field(owner, name, lensErased);
@@ -1186,7 +1188,7 @@ public sealed class Telescope<
   @SuppressWarnings("unchecked")
   public <X> OptionalTelescope<S, X> optional(final Accessor<A, Optional<X>> getter) {
     final Lens<A, Optional<X>> lens = lensForAccessor(getter);
-    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var owner = LambdaIntrospection.receiverClassOf(getter);
     final var name = fieldNameOf(getter);
     final var lensErased = (Traversal<Object, Object>) (Traversal<?, ?>) lens;
     final var fieldHop = owner == null ? null : Fusion.Hop.field(owner, name, lensErased);
@@ -1278,7 +1280,7 @@ public sealed class Telescope<
   public <E> Telescope<S, E> each(final Accessor<A, ? extends Iterable<E>> getter) {
     final Traversal<Iterable<E>, E> elements = Traversals.eachIterable();
     final Lens<A, Iterable<E>> lens = lensForAccessor(getter);
-    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var owner = LambdaIntrospection.receiverClassOf(getter);
     final var name = fieldNameOf(getter);
     final var segment = lens.then(elements);
     final var hop =
@@ -1319,7 +1321,7 @@ public sealed class Telescope<
   public <K, V> Telescope<S, V> eachValue(final Accessor<A, ? extends Map<K, V>> getter) {
     final Traversal<Map<K, V>, V> values = Traversals.eachMapValue();
     final Lens<A, Map<K, V>> lens = lensForAccessor(getter);
-    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var owner = LambdaIntrospection.receiverClassOf(getter);
     final var name = fieldNameOf(getter);
     final var segment = lens.then(values);
     final var hop =
@@ -1359,7 +1361,7 @@ public sealed class Telescope<
   public <E> Telescope<S, E> whenPresent(final Accessor<A, ? extends Optional<E>> getter) {
     final Traversal<Optional<E>, E> present = Traversals.eachOptional();
     final Lens<A, Optional<E>> lens = lensForAccessor(getter);
-    final var owner = LambdaIntrospection.implClassOf(getter);
+    final var owner = LambdaIntrospection.receiverClassOf(getter);
     final var name = fieldNameOf(getter);
     final var segment = lens.then(present);
     final var hop =
@@ -2409,9 +2411,9 @@ public sealed class Telescope<
     );
   }
 
-  // methodNameOf + implClassOf live in internal/LambdaIntrospection.java so the new
-  // mapping/conversion sub-packages can reach them without re-implementing the SerializedLambda
-  // decode. These shims keep the existing callsites in this file unchanged.
+  // methodNameOf lives in internal/LambdaIntrospection.java so the mapping/conversion sub-packages
+  // can reach it without re-implementing the SerializedLambda decode. This shim keeps the callsites
+  // in this file short.
   static String methodNameOf(final Serializable lambda) {
     return LambdaIntrospection.methodNameOf(lambda);
   }
@@ -2420,15 +2422,11 @@ public sealed class Telescope<
   // accessor name IS the field name, so it passes through; a bean getter (getX / isX) is normalized
   // to its JavaBeans property name so the node matches the codegen-emitted Focus/Traverse AND reads
   // back through the same bean reflection path trace() uses. Record vs bean is decided by the
-  // accessor's declaring class (both lookups are per-lambda cached, so this is off the hot path).
+  // accessor's receiver class (both lookups are per-lambda cached, so this is off the hot path).
   private static String fieldNameOf(final Accessor<?, ?> getter) {
     final var raw = LambdaIntrospection.methodNameOf(getter);
-    if (LambdaIntrospection.implClassOf(getter).isRecord()) return raw;
+    if (LambdaIntrospection.receiverClassOf(getter).isRecord()) return raw;
     return PropertyNames.property(raw);
-  }
-
-  static <A> Class<A> implClassOf(final Serializable lambda) {
-    return LambdaIntrospection.implClassOf(lambda);
   }
 
   /**
@@ -2441,7 +2439,7 @@ public sealed class Telescope<
    * <p><b>Per-accessor dispatch.</b> The {@code fieldOptics} field is the <em>fallback</em> used by
    * methods that have no accessor (e.g. {@link #fieldByName(String)}). Accessor-based navigation
    * methods route through {@link #lensForAccessor(Accessor)}, which re-picks the adapter on every
-   * call based on the accessor's declaring class (recovered via {@code SerializedLambda}). This
+   * call based on the accessor's receiver class (recovered via {@code SerializedLambda}). This
    * matters across paradigm hops: a chain like {@code Telescope.of(Record.class).field(...).then(
    * mapper.asTelescope()).field(BeanType::getX)} crosses from a record root into a bean focus; the
    * stored {@code fieldOptics} stays {@code RecordFieldOptics} but the trailing {@code .field()}
@@ -2453,15 +2451,15 @@ public sealed class Telescope<
   }
 
   /**
-   * Pick the right {@link FieldOptics} for {@code getter}'s declaring class. Records route through
+   * Pick the right {@link FieldOptics} for {@code getter}'s receiver class. Records route through
    * {@link RecordFieldOptics}; everything else through {@link BeanFieldOptics}. Used by every
    * accessor-based navigation method so the dispatch survives paradigm hops via {@link
    * #then(Telescope)} and sealed-type narrowing via {@link #as(Class)}.
    */
   private <X, B> Lens<X, B> lensForAccessor(final Accessor<X, ?> getter) {
-    final Class<?> declaringClass = LambdaIntrospection.implClassOf(getter);
+    final Class<?> receiver = LambdaIntrospection.receiverClassOf(getter);
     final FieldOptics dispatch =
-      declaringClass != null && declaringClass.isRecord() ? RecordFieldOptics.INSTANCE : BeanFieldOptics.INSTANCE;
+      receiver != null && receiver.isRecord() ? RecordFieldOptics.INSTANCE : BeanFieldOptics.INSTANCE;
     return dispatch.lensFor(getter);
   }
 
@@ -2539,14 +2537,14 @@ public sealed class Telescope<
     @Override
     public <A, B> Lens<A, B> lensFor(final Accessor<A, ?> getter) {
       final var name = methodNameOf(getter);
-      final Class<A> implClass = Telescope.implClassOf(getter);
-      final var holderLens = Telescope.<A, B>singleHolderLens(implClass, name);
+      final Class<A> receiver = LambdaIntrospection.receiverClassOf(getter);
+      final var holderLens = Telescope.<A, B>singleHolderLens(receiver, name);
       if (holderLens != null) return holderLens;
-      // Pass the declaring class so the lens captures (info, idx, reader) at construction —
+      // Pass the record class so the lens captures (info, idx, reader) at construction —
       // eliminates the per-call (class, name) → idx scan that the string-only fieldLens(name)
       // overload pays. The string-only overload remains the fallback for fieldByName(String),
       // where the source class isn't known until call time.
-      return implClass != null ? Records.fieldLens(implClass, name) : Records.fieldLens(name);
+      return receiver != null ? Records.fieldLens(receiver, name) : Records.fieldLens(name);
     }
   }
 
@@ -2559,15 +2557,18 @@ public sealed class Telescope<
 
     @Override
     public <A, B> Lens<A, B> lensFor(final Accessor<A, ?> getter) {
-      final Class<A> implClass = Telescope.implClassOf(getter);
+      // The receiver, not the class declaring the getter: a getter inherited from an abstract
+      // superclass reads on the subclass, and only the subclass can be rebuilt or carries the
+      // holder its navigator writes through.
+      final Class<A> receiver = LambdaIntrospection.receiverClassOf(getter);
       final var rawName = methodNameOf(getter);
       // The holder names its constants by the property name (lowerCamel, no getX/isX prefix), to
       // match how @BeanFocus codegen emits them — Beans.propertyOf strips the same prefixes the
       // codegen would have stripped when naming the per-property method on <X>Telescope.
       final var property = Beans.propertyOf(rawName);
-      final var holderLens = Telescope.<A, B>singleHolderLens(implClass, property);
+      final var holderLens = Telescope.<A, B>singleHolderLens(receiver, property);
       if (holderLens != null) return holderLens;
-      return Beans.lens(implClass, property);
+      return Beans.lens(receiver, property);
     }
   }
 

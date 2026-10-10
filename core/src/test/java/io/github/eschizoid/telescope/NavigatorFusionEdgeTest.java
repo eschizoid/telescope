@@ -207,8 +207,8 @@ class NavigatorFusionEdgeTest {
   }
 
   @Test
-  @DisplayName("componentLens names a getter inherited from a superclass by the class that declares it")
-  void componentLensOwnerIsTheDeclaringClass() {
+  @DisplayName("componentLens names a getter inherited from a superclass by the class it navigates")
+  void componentLensOwnerIsTheReceiver() {
     final var seam = Telescope.componentLens(
       FusionInheritingBean.class,
       "note",
@@ -221,7 +221,7 @@ class NavigatorFusionEdgeTest {
     );
     final var hand = Telescope.ofBean(FusionInheritingBean.class).field(FusionInheritingBean::getNote);
     assertEquals(hand.hops.stream().map(Fusion.Hop::key).toList(), seam.hops.stream().map(Fusion.Hop::key).toList());
-    assertEquals(FusionNoteBase.class, seam.hops.get(0).owner());
+    assertEquals(FusionInheritingBean.class, seam.hops.get(0).owner());
   }
 
   @Test

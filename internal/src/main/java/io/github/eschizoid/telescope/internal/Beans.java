@@ -14,6 +14,7 @@ import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -1472,16 +1473,27 @@ public final class Beans {
    * which no other declaration is assignable from — so a property that genuinely is an array still
    * reaches a varargs member that can take it.
    *
-   * <p>The getter's erased return type is what is asked about, being the most that can be known
-   * before a value exists.
+   * <p>The getter's return type as a member of {@code cls}, erased, is what is asked about, being
+   * the most that can be known before a value exists. A getter inherited from a generic superclass
+   * erases to the type variable's bound, while {@code class Node extends Base<Node>} fixes the
+   * property to {@code Node}, which is what a builder for {@code Node} takes.
    */
   private static boolean builderMemberAccepts(final Method member, final Class<?> cls, final String property) {
     final var parameter = member.getParameterTypes()[0];
     final var declared = getters(cls).get(property);
     if (declared == null) return false;
-    final var propertyType = declared.getReturnType();
+    final var propertyType = memberReturnClass(declared, cls);
     if (parameter.isPrimitive() || propertyType.isPrimitive()) return parameter.equals(propertyType);
     return parameter.isAssignableFrom(propertyType);
+  }
+
+  // The erasure of `getter`'s return type as a member of `cls`, or its declared erasure when the
+  // member type leaves a type variable unresolved.
+  private static Class<?> memberReturnClass(final Method getter, final Class<?> cls) {
+    final var member = PROPS.memberOf(getter.getGenericReturnType(), getter.getDeclaringClass(), cls);
+    if (member instanceof Class<?> c) return c;
+    if (member instanceof ParameterizedType pt && pt.getRawType() instanceof Class<?> c) return c;
+    return getter.getReturnType();
   }
 
   /**
