@@ -43,6 +43,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Engine for {@link Telescope#map(Class, Class, MapStep...)} / {@link Telescope#mapper(Class,
@@ -382,9 +383,76 @@ public final class DeepMap {
       final Class<?> effectiveSource = row.sourceClass() == null ? topSource : row.sourceClass();
       final Class<?> effectiveTarget = row.targetClass() == null ? topTarget : row.targetClass();
       final var key = new TypePair(effectiveSource, effectiveTarget);
-      grouped.computeIfAbsent(key, __ -> new ArrayList<>()).add(row);
+      grouped.computeIfAbsent(key, __ -> new ArrayList<>()).add(writtenOnTarget(row, topSource, topTarget));
     }
     return grouped;
+  }
+
+  /**
+   * A row that writes the top-level target through a path, bare or under {@code when}, with that
+   * path started at the mapper's target: {@code constant}, {@code compute}, {@code to} onto a
+   * target telescope, and {@code zip}. A path started at a superclass or interface of the target
+   * rebuilds that type instead of the target, so the path is started again at the target. A path
+   * whose root component hop reads a class the target neither is nor extends names no property of
+   * the target and is refused. Every other row is returned unchanged.
+   */
+  @SuppressWarnings("unchecked")
+  private static Mapping<?, ?> writtenOnTarget(
+    final Mapping<?, ?> row,
+    final Class<?> topSource,
+    final Class<?> topTarget
+  ) {
+    return switch (row) {
+      case Constant<?, ?, ?> c -> new Constant<>(
+        targetRooted(c.targetTelescope(), "constant", topSource, topTarget),
+        (Object) c.value()
+      );
+      case Compute<?, ?, ?> c -> new Compute<>(
+        targetRooted(c.targetTelescope(), "compute", topSource, topTarget),
+        c.supplier()
+      );
+      case TelescopeTo<?, ?, ?> t -> new TelescopeTo<>(
+        (Telescope.Accessor<Object, Object>) t.srcAccessor(),
+        targetRooted(t.targetTelescope(), "to", topSource, topTarget)
+      );
+      case TelescopeToTelescope<?, ?, ?> t -> new TelescopeToTelescope<>(
+        (Telescope<Object, Object>) t.sourceTelescope(),
+        targetRooted(
+          t.targetTelescope(),
+          t.kind() == TelescopeToTelescope.Kind.ZIP ? "zip" : "to",
+          topSource,
+          topTarget
+        ),
+        t.kind()
+      );
+      case Conditional<?, ?> c -> {
+        final var inner = writtenOnTarget(c.inner(), topSource, topTarget);
+        yield inner == c.inner()
+          ? c
+          : new Conditional<>((Predicate<Object>) c.predicate(), (Mapping<Object, Object>) inner);
+      }
+      default -> row;
+    };
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Telescope<Object, Object> targetRooted(
+    final Telescope<?, ?> path,
+    final String row,
+    final Class<?> topSource,
+    final Class<?> topTarget
+  ) {
+    final var first = path.rootComponentHop();
+    if (first != null && !first.owner().isAssignableFrom(topTarget)) throw new IllegalArgumentException(
+      PairingMessages.targetRowOffTarget(
+        topSource.getSimpleName(),
+        topTarget.getSimpleName(),
+        row,
+        first.owner().getSimpleName(),
+        first.component()
+      )
+    );
+    return ((Telescope<Object, Object>) path).rootedAt((Class<Object>) topTarget);
   }
 
   // ---------- Recursive resolver (writes into the cache) ----------

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import java.util.List;
 import javax.tools.Diagnostic;
 import org.junit.jupiter.api.DisplayName;
@@ -155,6 +156,127 @@ class MapperVerifierProcessorTest {
       );
       assertFalse(compilation.success());
       assertTrue(compilation.hasError("duplicate override row for target field 'name'"), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a constant row through the abstract base's getter writes a property the target has")
+    void constantThroughTheBaseGetterIsAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        record Coded(String code) {}
+        class Holder { static final Object M = Telescope.mapper(Coded.class, Sub.class, constant(Base::getName, "fixed")); }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a compute row through a generic base's getter writes a property the target has")
+    void computeThroughAGenericBaseGetterIsAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        abstract class Named<T> {
+          private T label;
+          public T getLabel() { return label; }
+          public void setLabel(T label) { this.label = label; }
+        }
+        class Labelled extends Named<String> { public Labelled() {} }
+        record Plain(int n) {}
+        class Holder {
+          static final Object M = Telescope.mapper(Plain.class, Labelled.class, compute(Named<String>::getLabel, () -> "made"));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("a constant row through a class the target does not extend is refused as construction refuses it")
+    void constantThroughAnUnrelatedClassIsRefused() {
+      final var compilation = verifyWithBeans(
+        """
+        class Other { private String name; public String getName() { return name; } public void setName(String n) { name = n; } }
+        record Coded(String code) {}
+        class Holder { static final Object M = Telescope.mapper(Coded.class, Sub.class, constant(Other::getName, "fixed")); }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "constant", "Other", "name")),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("a constant row through an interface the record target implements is accepted")
+    void constantThroughAnInterfaceOfARecordTargetIsAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        interface Named { String name(); }
+        record Rec(String code, String name) implements Named {}
+        record Coded(String code) {}
+        class Holder { static final Object M = Telescope.mapper(Coded.class, Rec.class, constant(Named::name, "fixed")); }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("target telescopes rooted at the abstract base are accepted on every row that writes through one")
+    void baseRootedTargetTelescopesAreAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        record Coded(String code, String label) {}
+        class Holder {
+          static final Object A = Telescope.mapper(Coded.class, Sub.class,
+            constant(Telescope.of(Base.class).field(Base::getName), "fixed"));
+          static final Object B = Telescope.mapper(Coded.class, Sub.class,
+            to(Coded::label, Telescope.of(Base.class).filter(b -> true).field(Base::getName)));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName(
+      "target telescopes rooted at a class the target does not extend are refused as construction refuses them"
+    )
+    void unrelatedTargetTelescopesAreRefused() {
+      final var compilation = verifyWithBeans(
+        """
+        class Other {
+          private String name;
+          private java.util.List<String> tags;
+          public String getName() { return name; }
+          public void setName(String n) { name = n; }
+          public java.util.List<String> getTags() { return tags; }
+          public void setTags(java.util.List<String> t) { tags = t; }
+        }
+        record Coded(String code, String label, java.util.List<String> tags) {}
+        class Holder {
+          static final Object A = Telescope.mapperForward(Coded.class, Sub.class,
+            compute(Telescope.of(Other.class).filter(o -> true).field(Other::getName), () -> "made"));
+          static final Object B = Telescope.mapperForward(Coded.class, Sub.class,
+            to(Coded::label, Telescope.ofBean(Other.class).field(Other::getName)));
+          static final Object C = Telescope.mapperForward(Coded.class, Sub.class,
+            zip(Telescope.of(Coded.class).each(Coded::tags), Telescope.of(Other.class).each(Other::getTags)));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "compute", "Other", "name")),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "to", "Other", "name")),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "zip", "Other", "tags")),
+        compilation::errorMessages
+      );
     }
   }
 

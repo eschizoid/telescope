@@ -57,6 +57,37 @@ public final class PairingMessages {
     );
   }
 
+  /**
+   * A {@code constant} or {@code compute} row whose target names a property of a class the mapper's
+   * target neither is nor extends. Such a row always writes on the mapper's target, so the property
+   * it names is not one the target has.
+   */
+  public static String targetRowOffTarget(
+    final String source,
+    final String target,
+    final String row,
+    final String owner,
+    final String tgtField
+  ) {
+    return (
+      "Deep map " +
+      source +
+      " → " +
+      target +
+      ": " +
+      row +
+      " row writes '" +
+      tgtField +
+      "' of " +
+      owner +
+      ", which " +
+      target +
+      " neither is nor extends. Name the property through " +
+      target +
+      " or a class it extends."
+    );
+  }
+
   /** Strict-bijection failure: a target field has no same-name source and no row. */
   public static String noSameNameSource(
     final String source,

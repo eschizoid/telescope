@@ -245,6 +245,80 @@ public sealed class Telescope<
     return firstHopName;
   }
 
+  // The index of the hop that reads a component of the path's root: the first hop after any leading
+  // filters, which keep the focus on the root. -1 when that hop is not component-anchored (a
+  // narrowing, which moves the focus to a subtype) or the path records no hops.
+  private int rootComponentIndex() {
+    if (hops == null) return -1;
+    var i = 0;
+    while (i < hops.size() && hops.get(i).kind() == Fusion.Hop.Kind.FILTER) i++;
+    return i < hops.size() && hops.get(i).owner() != null ? i : -1;
+  }
+
+  /**
+   * The hop that reads a component of this path's root, after any leading filters, which names the
+   * class it reads and the component; {@code null} when no such hop is recorded.
+   */
+  Fusion.Hop rootComponentHop() {
+    final var i = rootComponentIndex();
+    return i < 0 ? null : hops.get(i);
+  }
+
+  // The component of the record `root` that a hop named `component` reads. A hop through an
+  // interface names its component the bean way, so a record-style accessor such as isOpen() is
+  // named open. When the record has no component of that name but has one named exactly as the
+  // path's first accessor method, that is the component the accessor reads.
+  private String recordComponentOf(final Class<?> root, final String component) {
+    final var names = List.of(Records.componentNames(root));
+    if (names.contains(component) || firstHopName == null) return component;
+    return names.contains(firstHopName) ? firstHopName : component;
+  }
+
+  /**
+   * This path started at {@code root} instead of at the class its root component hop reads. A write
+   * through a hop rebuilds the class that hop reads, so a path whose root component hop reads a
+   * superclass or interface of {@code root} rebuilds that type in place of {@code root}: a concrete
+   * superclass drops every property only {@code root} declares, and an abstract one or an interface
+   * cannot be built at all. That hop is read again as the same component of {@code root}, through
+   * the generated holder of {@code root} when one exists. On a record {@code root} the component is
+   * the one named exactly as the accessor method when no component carries the property name the
+   * hop records, as for {@code isOpen()} on a record component {@code isOpen}. Leading filters,
+   * which test the root value whatever its class, and every later hop are kept.
+   *
+   * <p>Returned unchanged, so a write still rebuilds whatever class the path itself rebuilds: a
+   * path whose root component hop already reads {@code root}; a path whose first hop after its
+   * filters is {@code as(...)}, whatever class it names; and a path that records no hops, such as
+   * one built with {@code fieldByName}, {@code lens}, {@code observe} or a bridge hop. Such a path
+   * is neither started again at {@code root} nor checked against it.
+   */
+  @SuppressWarnings("unchecked")
+  <R> Telescope<R, A> rootedAt(final Class<R> root) {
+    final var index = rootComponentIndex();
+    if (index < 0 || hops.get(index).owner() == root) return (Telescope<R, A>) (Telescope<?, A>) this;
+    final var hop = hops.get(index);
+    final var component = root.isRecord() ? recordComponentOf(root, hop.component()) : hop.component();
+    final Lens<Object, Object> holderLens = singleHolderLens((Class<Object>) root, component);
+    final Lens<Object, Object> lens =
+      holderLens != null
+        ? holderLens
+        : root.isRecord()
+          ? Records.fieldLens((Class<Object>) root, component)
+          : Beans.lens((Class<Object>) root, component);
+    final Traversal<Object, Object> rootSegment = hop.inner() == null ? lens : lens.then(hop.inner());
+    final var rootHops = new ArrayList<Fusion.Hop>(hops);
+    rootHops.set(index, hop.on(root, component, rootSegment, holderLens != null));
+    Traversal<Object, Object> rootOptic = Iso.identity();
+    for (final var each : rootHops) rootOptic = rootOptic.then(each.segment());
+    return new Telescope<>(
+      (Traversal<R, A>) (Traversal<?, ?>) rootOptic,
+      root.isRecord() ? RecordFieldOptics.INSTANCE : BeanFieldOptics.INSTANCE,
+      identityChain(),
+      firstHopName,
+      trail,
+      Collections.unmodifiableList(rootHops)
+    );
+  }
+
   /**
    * Start a telescope at the given root type. Backed by an identity {@link Iso}. The {@code
    * rootType} argument exists purely for type inference; it's not stored or consulted at runtime.
@@ -2566,9 +2640,34 @@ public sealed class Telescope<
       // match how @BeanFocus codegen emits them — Beans.propertyOf strips the same prefixes the
       // codegen would have stripped when naming the per-property method on <X>Telescope.
       final var property = Beans.propertyOf(rawName);
+      if (receiver != null && receiver.isInterface()) return interfaceLens(getter, receiver, property);
       final var holderLens = Telescope.<A, B>singleHolderLens(receiver, property);
       if (holderLens != null) return holderLens;
       return Beans.lens(receiver, property);
+    }
+
+    // An interface has no constructor, builder or state to rebuild, and its accessor need not
+    // follow the getter convention: a record component it abstracts is read as name(), not
+    // getName(). The lens reads through the accessor itself and refuses a write. A path started
+    // at a class that implements the interface writes the property there.
+    @SuppressWarnings("unchecked")
+    private static <A, B> Lens<A, B> interfaceLens(
+      final Accessor<A, ?> getter,
+      final Class<A> receiver,
+      final String property
+    ) {
+      return Lens.of(
+        source -> (B) getter.apply(source),
+        (source, value) -> {
+          throw new IllegalStateException(
+            "Cannot write '" +
+              property +
+              "' through the interface " +
+              receiver.getName() +
+              ", which cannot be rebuilt. Start the path at the class that implements it."
+          );
+        }
+      );
     }
   }
 

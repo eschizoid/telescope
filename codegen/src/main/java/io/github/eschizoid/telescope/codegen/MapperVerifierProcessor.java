@@ -21,6 +21,7 @@ import io.github.eschizoid.telescope.internal.pairing.PairingRules;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -86,6 +87,18 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
 
   private static final String TELESCOPE_FQN = "io.github.eschizoid.telescope.Telescope";
   private static final String MAPPING_FQN = "io.github.eschizoid.telescope.mapping.Mapping";
+  // The telescope navigation calls that read a component of the path's current focus through an
+  // accessor, so the first of them on a path names a property of the path's root.
+  private static final Set<String> ROOT_HOPS = Set.of(
+    "field",
+    "each",
+    "eachValue",
+    "whenPresent",
+    "list",
+    "setField",
+    "mapField",
+    "optional"
+  );
   private static final String WRITE_HINT_FQN = "io.github.eschizoid.telescope.mapping.WriteHint";
   private static final String NULL_HINT_FQN = "io.github.eschizoid.telescope.mapping.NullHint";
 
@@ -365,6 +378,9 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         case "to", "toOrElse", "toOrElseGet", "toOneWay", "enumTo", "via" -> {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           final var tgt = rowArgs.size() < 2 ? null : accessorProp(rowArgs.get(1));
+          if ("to".equals(rowName) && rowArgs.size() == 2 && tgt == null) {
+            verifyWrittenOnTarget(row, rowName, telescopeRootProp(rowArgs.get(1)), tgtType, srcSimple, tgtSimple);
+          }
           if (src == null || tgt == null) return false;
           // Construction groups rows by their accessors' receiver classes, so a row may be keyed to
           // a nested pair the recursion reaches. Only rows keyed to this call's pair claim fields
@@ -424,10 +440,27 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           return false;
         }
         case "constant", "compute" -> {
-          // Accessor-form rows put the runtime into permissive mode (handled by the caller); the
-          // telescope-form has no statically-recoverable target either way. Claims are irrelevant
-          // because permissive mode disables completeness.
+          // These rows put the runtime into permissive mode (handled by the caller), which disables
+          // completeness, so they claim nothing. They always write on the call's target, so the
+          // accessor, or the root hop of an inline target telescope, must name a property of the
+          // target or of a type it extends.
+          final var arg = rowArgs.isEmpty() ? null : rowArgs.get(0);
+          final var tgt = accessorProp(arg);
+          verifyWrittenOnTarget(
+            row,
+            rowName,
+            tgt != null ? tgt : telescopeRootProp(arg),
+            tgtType,
+            srcSimple,
+            tgtSimple
+          );
           return true;
+        }
+        case "zip" -> {
+          if (rowArgs.size() == 2) {
+            verifyWrittenOnTarget(row, rowName, telescopeRootProp(rowArgs.get(1)), tgtType, srcSimple, tgtSimple);
+          }
+          return false;
         }
         default -> {
           return false;
@@ -610,6 +643,63 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
       if (!(arg instanceof MemberSelectTree select) || !select.getIdentifier().contentEquals("class")) return null;
       final var path = TreePath.getPath(getCurrentPath().getCompilationUnit(), select.getExpression());
       return path == null ? null : trees.getTypeMirror(path);
+    }
+
+    /**
+     * Reports a row that writes the call's target through {@code prop} when {@code prop} belongs to
+     * a type the target neither is nor extends; construction refuses the same row with the same
+     * message. A null {@code prop} is not statically known and is left to construction.
+     */
+    private void verifyWrittenOnTarget(
+      final MethodInvocationTree row,
+      final String rowName,
+      final Prop prop,
+      final TypeMirror tgtType,
+      final String srcSimple,
+      final String tgtSimple
+    ) {
+      if (prop == null) return;
+      if (types.isSubtype(types.erasure(tgtType), types.erasure(prop.owner().asType()))) return;
+      report(
+        row,
+        PairingMessages.targetRowOffTarget(
+          srcSimple,
+          tgtSimple,
+          rowName,
+          prop.owner().getSimpleName().toString(),
+          prop.name()
+        )
+      );
+    }
+
+    /**
+     * The property the root component hop of an inline target telescope names: for {@code
+     * Telescope.of(X.class)} or {@code Telescope.ofBean(X.class)} followed by any {@code filter}
+     * calls and then an accessor hop, the property that accessor reads. Any other expression is not
+     * statically known and answers {@code null}.
+     */
+    private Prop telescopeRootProp(final ExpressionTree arg) {
+      final var calls = new ArrayList<MethodInvocationTree>();
+      var current = arg;
+      while (
+        current instanceof MethodInvocationTree call && call.getMethodSelect() instanceof MemberSelectTree select
+      ) {
+        calls.addFirst(call);
+        current = select.getExpression();
+      }
+      if (calls.size() < 2) return null;
+      if (!(elementAt(calls.getFirst().getMethodSelect()) instanceof ExecutableElement root)) return null;
+      if (!(root.getEnclosingElement() instanceof TypeElement owner)) return null;
+      if (!owner.getQualifiedName().contentEquals(TELESCOPE_FQN)) return null;
+      final var rootName = root.getSimpleName().toString();
+      if (!"of".equals(rootName) && !"ofBean".equals(rootName)) return null;
+      for (final var call : calls.subList(1, calls.size())) {
+        final var name = ((MemberSelectTree) call.getMethodSelect()).getIdentifier().toString();
+        if ("filter".equals(name)) continue;
+        if (!ROOT_HOPS.contains(name) || call.getArguments().size() != 1) return null;
+        return accessorProp(call.getArguments().getFirst());
+      }
+      return null;
     }
 
     /** A method-reference accessor resolved to its normalized property name + declared type. */
