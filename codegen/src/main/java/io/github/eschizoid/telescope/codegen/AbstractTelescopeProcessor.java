@@ -1271,7 +1271,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
       }
     }
 
-    final var rebuild = beanRebuildFor(pojo, props, triggerLabel);
+    final var rebuild = beanRebuildFor(pojo, props, triggerLabel, false);
     if (rebuild == null) return;
 
     for (final var p : props) {
@@ -1325,8 +1325,17 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
    * BeanWriteStrategy#AUTO_ORDER} the bean offers, the order the runtime writer takes, because the
    * holder this rebuild is emitted into stands in for that writer: deciding differently here makes
    * the same call return a different value depending on whether the holder happened to be loadable.
+   *
+   * <p>A property the chosen strategy has no member for is skipped, its {@code members} entry left
+   * null, when the strategy is a builder or when {@code readOnlySkipped} is true; otherwise a
+   * setters rebuild with no setter for it is refused.
    */
-  BeanRebuild beanRebuildFor(final TypeElement pojo, final List<Prop> props, final String triggerLabel) {
+  BeanRebuild beanRebuildFor(
+    final TypeElement pojo,
+    final List<Prop> props,
+    final String triggerLabel,
+    final boolean readOnlySkipped
+  ) {
     final var names = props.stream().map(Prop::name).toList();
     final var builderType = usableBuilderType(pojo);
     final var ctor = nameMatchedConstructor(pojo, names);
@@ -1367,8 +1376,9 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
         ? builderSetter(builderType, props.get(i).name())
         : setterName(pojo, props.get(i).name());
       // A builder is chosen only when every property it has no member for is one nothing else
-      // writes either, so the rebuild skips that property as the runtime builder writer does.
-      if (s == null && useBuilder) continue;
+      // writes either, so the rebuild skips that property as the runtime builder writer does. A
+      // caller that skips read-only properties skips one with no setter the same way.
+      if (s == null && (useBuilder || readOnlySkipped)) continue;
       if (s == null) {
         error(
           pojo,
@@ -1389,6 +1399,7 @@ public abstract class AbstractTelescopeProcessor extends AbstractProcessor {
     // be handed a null they have to guard.
     if (!useBuilder) {
       for (var i = 0; i < props.size(); i++) {
+        if (members[i] == null) continue;
         guardPrimitiveMember(setterParameter(pojo, props.get(i).name()), props.get(i), i, nullGuarded, nullDefaults);
       }
     }

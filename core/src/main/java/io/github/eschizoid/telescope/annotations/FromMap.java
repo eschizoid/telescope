@@ -30,6 +30,11 @@ import java.lang.annotation.Target;
  * non-{@code @FromMap} nested object, a collection subtype) is a compile error, not a runtime
  * failure.
  *
+ * <p>A bean property with no setter, builder method or constructor parameter behind it is left out:
+ * the binder never reads, converts or writes its value and never checks its type. A key {@link
+ * #required()} lists for such a property is checked for presence only. The runtime {@code fromMap}
+ * leaves the same property out.
+ *
  * <p>The runtime {@code fromMap} reads every component no row names the same way, by its name and
  * with the same conversion, and, when this binder is registered (found through {@code
  * ServiceLoader}), it honours the same {@link #required()} keys for every slot that reads its own
