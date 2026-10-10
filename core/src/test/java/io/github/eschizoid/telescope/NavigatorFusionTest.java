@@ -4,7 +4,6 @@ import static io.github.eschizoid.telescope.Edit.over;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -159,9 +158,12 @@ class NavigatorFusionTest {
   }
 
   @Test
-  @DisplayName("a navigator path through a bridge hop records no hop keys, so its edits take the sequential fold")
+  @DisplayName(
+    "a navigator path through a bridge hop records it as an opaque segment, so its edits take the sequential fold"
+  )
   void bridgeHopStaysUnfused() {
-    assertNull(FusionEntityTelescope.of().asFusionDto().email().hops);
+    final var hops = FusionEntityTelescope.of().asFusionDto().email().hops;
+    assertTrue(hops.stream().anyMatch(hop -> hop.kind() == Fusion.Hop.Kind.OPAQUE));
 
     final var email = over(FusionEntityTelescope.of().asFusionDto().email(), String::toLowerCase);
     final var id = over(FusionEntityTelescope.of().asFusionDto().id(), (final String i) -> i + "!");

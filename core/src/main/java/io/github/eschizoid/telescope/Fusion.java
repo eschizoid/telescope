@@ -2,12 +2,14 @@ package io.github.eschizoid.telescope;
 
 import io.github.eschizoid.telescope.internal.NativeImage;
 import io.github.eschizoid.telescope.internal.Records;
+import io.github.eschizoid.telescope.internal.optics.Iso;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.optics.Traversal;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -40,8 +42,8 @@ import java.util.function.Function;
  *
  * <ul>
  *   <li>any edit that is not an {@link EditImpl} (a user-implemented {@code Edit}), or whose path
- *       carries no hop record (runtime-checked navigation like {@code fieldByName}, bridge hops,
- *       {@code from/to/using} entry points, custom lenses);
+ *       carries no hop record ({@code from/to/using} entry points, custom lenses) or an unfusible
+ *       hop (runtime-checked navigation like {@code fieldByName}, {@code observe}, bridge hops);
  *   <li>one edit's path a strict prefix of another's (the deeper edit runs inside the shallower
  *       one's leaf — sequential order is observable);
  *   <li>a trie node branching on anything but same-owner, pairwise-distinct components — filter and
@@ -103,6 +105,17 @@ final class Fusion {
       TRAVERSE,
       NARROW,
       FILTER,
+      // The three kinds below describe a segment without an identity fusion can share, so a path
+      // carrying one is applied in sequence. OBSERVE runs a callback on the focus and keeps it;
+      // BY_NAME reads a property by its name on whatever class the focus has; OPAQUE is any other
+      // segment, such as a one-sided iso or a bridge.
+      OBSERVE,
+      BY_NAME,
+      OPAQUE;
+
+      boolean fusible() {
+        return this == FIELD || this == TRAVERSE || this == NARROW || this == FILTER;
+      }
     }
 
     static Hop field(final Class<?> owner, final String component, final Traversal<Object, Object> lens) {
@@ -160,6 +173,27 @@ final class Fusion {
       // override) means the same instance on a shared prefix — lambda equality cannot be decided.
       return new Hop(Kind.FILTER, predicate, filtered, null, null, null, false);
     }
+
+    /**
+     * The segment observes the focus it is composed onto, which is the focus {@code observe} wraps,
+     * so a path rebuilt from its hops calls the observer as the original path does.
+     */
+    static Hop observe(final Consumer<Object> observer) {
+      return new Hop(Kind.OBSERVE, observer, Iso.identity().observe(observer), null, null, null, false);
+    }
+
+    static Hop byName(final String name, final Traversal<Object, Object> lens) {
+      return new Hop(Kind.BY_NAME, List.of(Kind.BY_NAME, name), lens, null, null, null, false);
+    }
+
+    static Hop opaque(final Traversal<Object, Object> segment) {
+      return new Hop(Kind.OPAQUE, List.of(Kind.OPAQUE, segment), segment, null, null, null, false);
+    }
+
+    /** The class a narrowing hop narrows to; {@code null} for every other kind. */
+    Class<?> narrowedTo() {
+      return kind == Kind.NARROW ? (Class<?>) ((List<?>) key).get(1) : null;
+    }
   }
 
   /**
@@ -174,6 +208,7 @@ final class Fusion {
       if (!(e instanceof EditImpl)) return null;
       final var impl = (EditImpl<S, ?>) e;
       if (impl.path().hops == null) return null;
+      for (final var hop : impl.path().hops) if (!hop.kind().fusible()) return null;
       live.add(impl);
     }
     if (live.size() < 2) return null; // nothing to fuse; the sequential fold is already minimal

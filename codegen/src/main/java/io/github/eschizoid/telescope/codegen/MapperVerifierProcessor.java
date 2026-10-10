@@ -379,7 +379,12 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
           final var src = accessorProp(rowArgs.isEmpty() ? null : rowArgs.get(0));
           final var tgt = rowArgs.size() < 2 ? null : accessorProp(rowArgs.get(1));
           if ("to".equals(rowName) && rowArgs.size() == 2 && tgt == null) {
-            verifyWrittenOnTarget(row, rowName, telescopeRootProp(rowArgs.get(1)), tgtType, srcSimple, tgtSimple);
+            verifyTargetPath(row, rowName, rowArgs.get(1), tgtType, srcSimple, tgtSimple);
+          }
+          // A source telescope pins the row to the call's own pair, so its target accessor must
+          // name a property of the target or of a type it extends.
+          if ("to".equals(rowName) && rowArgs.size() == 2 && tgt != null && firstParamIsTelescope(rowExec)) {
+            verifyWrittenOnTarget(row, rowName, tgt, tgtType, srcSimple, tgtSimple);
           }
           if (src == null || tgt == null) return false;
           // Construction groups rows by their accessors' receiver classes, so a row may be keyed to
@@ -442,24 +447,16 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         case "constant", "compute" -> {
           // These rows put the runtime into permissive mode (handled by the caller), which disables
           // completeness, so they claim nothing. They always write on the call's target, so the
-          // accessor, or the root hop of an inline target telescope, must name a property of the
-          // target or of a type it extends.
+          // accessor must name a property of the target or of a type it extends, and an inline
+          // target telescope must be one construction can start at the target.
           final var arg = rowArgs.isEmpty() ? null : rowArgs.get(0);
           final var tgt = accessorProp(arg);
-          verifyWrittenOnTarget(
-            row,
-            rowName,
-            tgt != null ? tgt : telescopeRootProp(arg),
-            tgtType,
-            srcSimple,
-            tgtSimple
-          );
+          if (tgt != null) verifyWrittenOnTarget(row, rowName, tgt, tgtType, srcSimple, tgtSimple);
+          else verifyTargetPath(row, rowName, arg, tgtType, srcSimple, tgtSimple);
           return true;
         }
         case "zip" -> {
-          if (rowArgs.size() == 2) {
-            verifyWrittenOnTarget(row, rowName, telescopeRootProp(rowArgs.get(1)), tgtType, srcSimple, tgtSimple);
-          }
+          if (rowArgs.size() == 2) verifyTargetPath(row, rowName, rowArgs.get(1), tgtType, srcSimple, tgtSimple);
           return false;
         }
         default -> {
@@ -673,12 +670,26 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
     }
 
     /**
-     * The property the root component hop of an inline target telescope names: for {@code
-     * Telescope.of(X.class)} or {@code Telescope.ofBean(X.class)} followed by any {@code filter}
-     * calls and then an accessor hop, the property that accessor reads. Any other expression is not
-     * statically known and answers {@code null}.
+     * Reports an inline target telescope that cannot write the call's target, with the message
+     * construction refuses it with. The path is {@code Telescope.of(X.class)} or {@code
+     * Telescope.ofBean(X.class)} followed by navigation calls, or {@code Telescope.lens(getter,
+     * setter)} with a method-reference getter. Calls that keep the focus on the root value come
+     * first: {@code filter} and {@code observe}, which pass, and {@code as(Y.class)}, which is
+     * reported unless the target is {@code Y} or extends it. The first call after them decides the
+     * rest. An accessor hop must name a property of the target or of a type it extends, and {@code
+     * fieldByName} reads its property on whatever class it is given. Any other call, the end of the
+     * chain, or a lens root cannot be started again at the target, so it is reported unless the
+     * class the root value has there is the target. Any other expression is not statically known
+     * and is left to construction.
      */
-    private Prop telescopeRootProp(final ExpressionTree arg) {
+    private void verifyTargetPath(
+      final MethodInvocationTree row,
+      final String rowName,
+      final ExpressionTree arg,
+      final TypeMirror tgtType,
+      final String srcSimple,
+      final String tgtSimple
+    ) {
       final var calls = new ArrayList<MethodInvocationTree>();
       var current = arg;
       while (
@@ -687,19 +698,76 @@ public final class MapperVerifierProcessor extends AbstractProcessor {
         calls.addFirst(call);
         current = select.getExpression();
       }
-      if (calls.size() < 2) return null;
-      if (!(elementAt(calls.getFirst().getMethodSelect()) instanceof ExecutableElement root)) return null;
-      if (!(root.getEnclosingElement() instanceof TypeElement owner)) return null;
-      if (!owner.getQualifiedName().contentEquals(TELESCOPE_FQN)) return null;
+      if (calls.isEmpty()) return;
+      if (!(elementAt(calls.getFirst().getMethodSelect()) instanceof ExecutableElement root)) return;
+      if (!(root.getEnclosingElement() instanceof TypeElement owner)) return;
+      if (!owner.getQualifiedName().contentEquals(TELESCOPE_FQN)) return;
+      final var rootArgs = calls.getFirst().getArguments();
       final var rootName = root.getSimpleName().toString();
-      if (!"of".equals(rootName) && !"ofBean".equals(rootName)) return null;
+      if ("lens".equals(rootName)) {
+        final var getter = rootArgs.isEmpty() ? null : accessorProp(rootArgs.getFirst());
+        if (getter != null) verifyStartsOnTarget(row, rowName, getter.owner().asType(), tgtType, srcSimple, tgtSimple);
+        return;
+      }
+      if (!"of".equals(rootName) && !"ofBean".equals(rootName)) return;
+      var focus = rootArgs.size() == 1 ? classLiteral(rootArgs.getFirst()) : null;
       for (final var call : calls.subList(1, calls.size())) {
         final var name = ((MemberSelectTree) call.getMethodSelect()).getIdentifier().toString();
-        if ("filter".equals(name)) continue;
-        if (!ROOT_HOPS.contains(name) || call.getArguments().size() != 1) return null;
-        return accessorProp(call.getArguments().getFirst());
+        final var callArgs = call.getArguments();
+        if ("filter".equals(name) || "observe".equals(name)) continue;
+        if ("as".equals(name) && callArgs.size() == 1) {
+          final var narrowed = classLiteral(callArgs.getFirst());
+          if (narrowed == null) return;
+          if (!types.isSubtype(types.erasure(tgtType), types.erasure(narrowed))) {
+            report(
+              row,
+              PairingMessages.targetPathNarrowsOffTarget(srcSimple, tgtSimple, rowName, simpleName(narrowed))
+            );
+            return;
+          }
+          focus = narrowed;
+          continue;
+        }
+        if (ROOT_HOPS.contains(name) && callArgs.size() == 1) {
+          verifyWrittenOnTarget(row, rowName, accessorProp(callArgs.getFirst()), tgtType, srcSimple, tgtSimple);
+          return;
+        }
+        if ("fieldByName".equals(name)) return;
+        break;
       }
-      return null;
+      verifyStartsOnTarget(row, rowName, focus, tgtType, srcSimple, tgtSimple);
+    }
+
+    /**
+     * Reports a target path that cannot be started again at the call's target when the class its
+     * root value has is not that target; construction refuses the same path with the same message.
+     * A null {@code root} is not statically known and is left to construction.
+     */
+    private void verifyStartsOnTarget(
+      final MethodInvocationTree row,
+      final String rowName,
+      final TypeMirror root,
+      final TypeMirror tgtType,
+      final String srcSimple,
+      final String tgtSimple
+    ) {
+      if (root == null || types.isSameType(types.erasure(root), types.erasure(tgtType))) return;
+      report(row, PairingMessages.targetPathNotOnTarget(srcSimple, tgtSimple, rowName, simpleName(root)));
+    }
+
+    private String simpleName(final TypeMirror type) {
+      final var element = types.asElement(type);
+      return element == null ? type.toString() : element.getSimpleName().toString();
+    }
+
+    /**
+     * Whether the row factory's first parameter is a {@code Telescope}, as for {@code to(Telescope,
+     * Accessor)}.
+     */
+    private boolean firstParamIsTelescope(final ExecutableElement rowExec) {
+      if (rowExec.getParameters().isEmpty()) return false;
+      final var element = types.asElement(types.erasure(rowExec.getParameters().getFirst().asType()));
+      return element instanceof TypeElement type && type.getQualifiedName().contentEquals(TELESCOPE_FQN);
     }
 
     /** A method-reference accessor resolved to its normalized property name + declared type. */

@@ -472,7 +472,7 @@ class SuperclassTargetRowTest {
     final var rooted = Telescope.of(SuperRowAbstractBase.class)
       .field(SuperRowAbstractBase::getName)
       .rootedAt(SuperRowFocusedSub.class);
-    final var hop = rooted.rootComponentHop();
+    final var hop = rooted.hops.get(rooted.rootStepIndex());
     assertSame(SuperRowFocusedSub.class, hop.owner());
     assertSame(SuperRowFocusedSubFieldOptics.name.optic, hop.segment());
     assertTrue(hop.ownSetter());

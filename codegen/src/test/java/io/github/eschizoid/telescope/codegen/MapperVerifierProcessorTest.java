@@ -278,6 +278,102 @@ class MapperVerifierProcessorTest {
         compilation::errorMessages
       );
     }
+
+    @Test
+    @DisplayName("target telescopes that observe or narrow to the base before its getter are accepted")
+    void observedAndNarrowedBaseTelescopesAreAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        record Coded(String code, String label) {}
+        class Holder {
+          static final Object A = Telescope.mapperForward(Coded.class, Sub.class,
+            constant(Telescope.of(Base.class).observe(b -> {}).field(Base::getName), "fixed"));
+          static final Object B = Telescope.mapperForward(Coded.class, Sub.class,
+            constant(Telescope.of(Base.class).as(Base.class).field(Base::getName), "fixed"));
+          static final Object C = Telescope.mapperForward(Coded.class, Sub.class,
+            to(Coded::label, Telescope.of(Base.class).field(Base::getName).observe(v -> {})));
+          static final Object D = Telescope.mapperForward(Coded.class, Sub.class,
+            constant(Telescope.ofBean(Base.class).fieldByName("name", String.class), "fixed"));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName("target telescopes construction cannot start at the target are refused as construction refuses them")
+    void targetTelescopesThatCannotStartAtTheTargetAreRefused() {
+      final var compilation = verifyWithBeans(
+        """
+        class Other { private String name; public String getName() { return name; } public void setName(String n) { name = n; } }
+        record Coded(String code, String label) {}
+        class Holder {
+          static final Object A = Telescope.mapperForward(Coded.class, Sub.class,
+            constant(Telescope.of(Other.class).observe(o -> {}).field(Other::getName), "fixed"));
+          static final Object B = Telescope.mapperForward(Coded.class, Sub.class,
+            compute(Telescope.of(Other.class).as(Other.class).field(Other::getName), () -> "made"));
+          static final Object C = Telescope.mapperForward(Coded.class, Sub.class,
+            to(Coded::label, Telescope.lens(Base::getName, (Base b, String v) -> b)));
+          static final Object D = Telescope.mapperForward(Coded.class, Sub.class,
+            zip(Telescope.of(Coded.class).field(Coded::label), Telescope.of(Base.class).after(b -> b).field(Base::getName)));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "constant", "Other", "name")),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(PairingMessages.targetPathNarrowsOffTarget("Coded", "Sub", "compute", "Other")),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(PairingMessages.targetPathNotOnTarget("Coded", "Sub", "to", "Base")),
+        compilation::errorMessages
+      );
+      assertTrue(
+        compilation.hasError(PairingMessages.targetPathNotOnTarget("Coded", "Sub", "zip", "Base")),
+        compilation::errorMessages
+      );
+    }
+
+    @Test
+    @DisplayName("to(telescope, accessor) through the base's getter is accepted")
+    void sourceTelescopeOntoTheBaseGetterIsAccepted() {
+      final var compilation = verifyWithBeans(
+        """
+        record Coded(String code, String label) {}
+        class Holder {
+          static final Object M = Telescope.mapper(Coded.class, Sub.class,
+            to(Telescope.of(Coded.class).field(Coded::label), Base::getName));
+        }
+        """
+      );
+      assertTrue(compilation.success(), compilation::errorMessages);
+    }
+
+    @Test
+    @DisplayName(
+      "to(telescope, accessor) through a class the target does not extend is refused as construction refuses it"
+    )
+    void sourceTelescopeOntoAnUnrelatedGetterIsRefused() {
+      final var compilation = verifyWithBeans(
+        """
+        class Other { private String name; public String getName() { return name; } public void setName(String n) { name = n; } }
+        record Coded(String code, String label) {}
+        class Holder {
+          static final Object M = Telescope.mapperForward(Coded.class, Sub.class,
+            when(c -> true, to(Telescope.of(Coded.class).field(Coded::label), Other::getName)));
+        }
+        """
+      );
+      assertFalse(compilation.success());
+      assertTrue(
+        compilation.hasError(PairingMessages.targetRowOffTarget("Coded", "Sub", "to", "Other", "name")),
+        compilation::errorMessages
+      );
+    }
   }
 
   private static ProcessorHarness.Compilation verify(final String code) {

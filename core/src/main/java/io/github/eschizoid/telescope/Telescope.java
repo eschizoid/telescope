@@ -139,10 +139,17 @@ public sealed class Telescope<
   // read/update hot path. Empty for a bare Telescope.of(...) or an iso-backed conversion.
   final List<OpticNode> trail;
   // The fusion-facing twin of `trail`: one Fusion.Hop per combinator hop — the un-composed optic
-  // segment plus the identity key Telescope.all's fusion trie shares prefixes by. `null` marks the
-  // path unfusible (runtime-checked navigation, bridge hops, custom lenses, chain-carrying paths):
-  // Fusion declines and Telescope.all falls back to the sequential fold.
+  // segment plus the identity key Telescope.all's fusion trie shares prefixes by. `null` marks a
+  // path whose segments are not recorded, which happens when it starts at a custom lens, an iso or
+  // a
+  // bridge, or carries chain edits; a step with no fusion identity (fieldByName, observe, a bridge
+  // or one-sided iso composed with then) records an unfusible hop. Either way Fusion declines and
+  // Telescope.all falls back to the sequential fold.
   final List<Fusion.Hop> hops;
+  // The class the path starts at when it is known: the class passed to of / ofBean, the receiver
+  // of a lens built from a method reference, or the receiver a generated navigator names. `null`
+  // for a path started at a lambda lens, an iso or a bridge.
+  final Class<?> rootClass;
 
   // Package-private so that the conversion-builder classes (From, To, Mapper, …) — extracted to
   // sibling files to keep Telescope.java navigable — can construct Telescope instances without
@@ -201,11 +208,24 @@ public sealed class Telescope<
     final List<OpticNode> trail,
     final List<Fusion.Hop> hops
   ) {
+    this(optic, fieldOptics, chain, firstHopName, trail, hops, null);
+  }
+
+  Telescope(
+    final Traversal<S, A> optic,
+    final FieldOptics fieldOptics,
+    final Function<S, S> chain,
+    final String firstHopName,
+    final List<OpticNode> trail,
+    final List<Fusion.Hop> hops,
+    final Class<?> rootClass
+  ) {
     this.optic = optic;
     this.fieldOptics = fieldOptics;
     this.chain = chain;
     this.firstHopName = firstHopName;
     this.hops = hops;
+    this.rootClass = rootClass;
     // Stored as-is. The invariant callers must uphold is immutability, not non-sharing: every
     // internal caller passes an already-immutable list (an empty List.of(), a fresh unmodifiable
     // list from plus(), or a defensively-copied one from mapped()). then() may alias an existing
@@ -245,23 +265,23 @@ public sealed class Telescope<
     return firstHopName;
   }
 
-  // The index of the hop that reads a component of the path's root: the first hop after any leading
-  // filters, which keep the focus on the root. -1 when that hop is not component-anchored (a
-  // narrowing, which moves the focus to a subtype) or the path records no hops.
-  private int rootComponentIndex() {
+  // The index of the first hop that moves the focus off the path's root value: the first hop after
+  // any leading filters, observers and narrowings, which all keep the focus on the root value. -1
+  // when the path records no hops or none moves the focus.
+  int rootStepIndex() {
     if (hops == null) return -1;
-    var i = 0;
-    while (i < hops.size() && hops.get(i).kind() == Fusion.Hop.Kind.FILTER) i++;
-    return i < hops.size() && hops.get(i).owner() != null ? i : -1;
+    for (var i = 0; i < hops.size(); i++) {
+      final var kind = hops.get(i).kind();
+      if (kind != Fusion.Hop.Kind.FILTER && kind != Fusion.Hop.Kind.OBSERVE && kind != Fusion.Hop.Kind.NARROW) return i;
+    }
+    return -1;
   }
 
-  /**
-   * The hop that reads a component of this path's root, after any leading filters, which names the
-   * class it reads and the component; {@code null} when no such hop is recorded.
-   */
-  Fusion.Hop rootComponentHop() {
-    final var i = rootComponentIndex();
-    return i < 0 ? null : hops.get(i);
+  // The index of the hop that reads a component of the path's root: the root step, when it is
+  // component-anchored. -1 otherwise.
+  private int rootComponentIndex() {
+    final var i = rootStepIndex();
+    return i >= 0 && hops.get(i).owner() != null ? i : -1;
   }
 
   // The component of the record `root` that a hop named `component` reads. A hop through an
@@ -282,14 +302,14 @@ public sealed class Telescope<
    * cannot be built at all. That hop is read again as the same component of {@code root}, through
    * the generated holder of {@code root} when one exists. On a record {@code root} the component is
    * the one named exactly as the accessor method when no component carries the property name the
-   * hop records, as for {@code isOpen()} on a record component {@code isOpen}. Leading filters,
-   * which test the root value whatever its class, and every later hop are kept.
+   * hop records, as for {@code isOpen()} on a record component {@code isOpen}. The hops before it,
+   * filters, observers and narrowings that keep the focus on the root value, and every later hop
+   * are kept. The caller checks that each of those narrowings admits {@code root}.
    *
-   * <p>Returned unchanged, so a write still rebuilds whatever class the path itself rebuilds: a
-   * path whose root component hop already reads {@code root}; a path whose first hop after its
-   * filters is {@code as(...)}, whatever class it names; and a path that records no hops, such as
-   * one built with {@code fieldByName}, {@code lens}, {@code observe} or a bridge hop. Such a path
-   * is neither started again at {@code root} nor checked against it.
+   * <p>Returned unchanged when the root component hop already reads {@code root}, and when no hop
+   * reads a component of the root: a path that records no hops, one whose first step off the root
+   * value is {@code fieldByName} or a bridge or iso composed with {@code then}, and one that never
+   * leaves the root value. Such a path is not started again at {@code root}.
    */
   @SuppressWarnings("unchecked")
   <R> Telescope<R, A> rootedAt(final Class<R> root) {
@@ -315,15 +335,16 @@ public sealed class Telescope<
       identityChain(),
       firstHopName,
       trail,
-      Collections.unmodifiableList(rootHops)
+      Collections.unmodifiableList(rootHops),
+      root
     );
   }
 
   /**
-   * Start a telescope at the given root type. Backed by an identity {@link Iso}. The {@code
-   * rootType} argument exists purely for type inference; it's not stored or consulted at runtime.
-   * This is the usual entry point; from here, chain navigation methods to descend into the
-   * structure.
+   * Start a telescope at the given root type. Backed by an identity {@link Iso}. Reads and writes
+   * never consult {@code rootType}; a mapper checks it when the path writes the mapper's target, to
+   * tell whether the path starts at that target. This is the usual entry point; from here, chain
+   * navigation methods to descend into the structure.
    *
    * <pre>{@code
    * final var emails = Telescope.of(Company.class)
@@ -340,7 +361,15 @@ public sealed class Telescope<
    * @see #ofBean(Class)
    */
   public static <S> Telescope<S, S> of(final Class<S> rootType) {
-    return new Telescope<>(Iso.identity(), RecordFieldOptics.INSTANCE, identityChain(), null, List.of(), List.of());
+    return new Telescope<>(
+      Iso.identity(),
+      RecordFieldOptics.INSTANCE,
+      identityChain(),
+      null,
+      List.of(),
+      List.of(),
+      rootType
+    );
   }
 
   /**
@@ -441,7 +470,8 @@ public sealed class Telescope<
       path.firstHopName,
       path.trail,
       path.hops,
-      ContainerHop.promotion(path)
+      ContainerHop.promotion(path),
+      path.rootClass
     );
   }
 
@@ -454,7 +484,8 @@ public sealed class Telescope<
       path.firstHopName,
       path.trail,
       path.hops,
-      ContainerHop.promotion(path)
+      ContainerHop.promotion(path),
+      path.rootClass
     );
   }
 
@@ -485,7 +516,8 @@ public sealed class Telescope<
       path.firstHopName,
       path.trail,
       path.hops,
-      ContainerHop.promotion(path)
+      ContainerHop.promotion(path),
+      path.rootClass
     );
   }
 
@@ -498,7 +530,8 @@ public sealed class Telescope<
       path.firstHopName,
       path.trail,
       path.hops,
-      ContainerHop.promotion(path)
+      ContainerHop.promotion(path),
+      path.rootClass
     );
   }
 
@@ -511,7 +544,8 @@ public sealed class Telescope<
       path.firstHopName,
       path.trail,
       path.hops,
-      ContainerHop.promotion(path)
+      ContainerHop.promotion(path),
+      path.rootClass
     );
   }
 
@@ -610,7 +644,15 @@ public sealed class Telescope<
    * both kinds and any cross-paradigm mix.
    */
   public static <P> Telescope<P, P> ofBean(final Class<P> pojoClass) {
-    return new Telescope<>(Iso.identity(), BeanFieldOptics.INSTANCE, identityChain(), null, List.of(), List.of());
+    return new Telescope<>(
+      Iso.identity(),
+      BeanFieldOptics.INSTANCE,
+      identityChain(),
+      null,
+      List.of(),
+      List.of(),
+      pojoClass
+    );
   }
 
   /**
@@ -659,8 +701,22 @@ public sealed class Telescope<
       Lens.of(getter, setter),
       RecordFieldOptics.INSTANCE,
       identityChain(),
-      LambdaIntrospection.methodNameOf(getter)
+      LambdaIntrospection.methodNameOf(getter),
+      List.of(),
+      null,
+      receiverOrNull(getter)
     );
+  }
+
+  // The class a method reference is applied to, or null when it cannot be loaded, which happens
+  // only inside a native image that has not registered it. Building a lens never needs the class,
+  // so an unloadable one leaves the root unknown rather than failing the lens.
+  private static Class<?> receiverOrNull(final Accessor<?, ?> getter) {
+    try {
+      return LambdaIntrospection.receiverClassOf(getter);
+    } catch (final IllegalStateException | IllegalArgumentException e) {
+      return null;
+    }
   }
 
   /**
@@ -735,7 +791,15 @@ public sealed class Telescope<
     // The identity names the receiver, as field(...) does: a property is a component of the class
     // the path navigates, wherever its getter is declared.
     final var hop = Fusion.Hop.component(receiver, component, (Traversal<Object, Object>) (Traversal<?, ?>) lens);
-    return new Telescope<>(lens, RecordFieldOptics.INSTANCE, identityChain(), method, List.of(), List.of(hop));
+    return new Telescope<>(
+      lens,
+      RecordFieldOptics.INSTANCE,
+      identityChain(),
+      method,
+      List.of(),
+      List.of(hop),
+      receiver
+    );
   }
 
   // The class in `type`'s hierarchy (itself, its superclasses, or any interface it inherits) whose
@@ -1155,7 +1219,8 @@ public sealed class Telescope<
       chain,
       hopName(getter),
       plus(new OpticNode.Focus(name)),
-      plusHops(hop)
+      plusHops(hop),
+      rootClass
     );
   }
 
@@ -1197,7 +1262,8 @@ public sealed class Telescope<
       hopName(getter),
       plus(new OpticNode.Focus(name)),
       plusHops(fieldHop),
-      new ContainerHop<>(trail, hops, owner, name, lensErased, false)
+      new ContainerHop<>(trail, hops, owner, name, lensErased, false),
+      rootClass
     );
   }
 
@@ -1223,7 +1289,8 @@ public sealed class Telescope<
       hopName(getter),
       plus(new OpticNode.Focus(name)),
       plusHops(fieldHop),
-      new ContainerHop<>(trail, hops, owner, name, lensErased, false)
+      new ContainerHop<>(trail, hops, owner, name, lensErased, false),
+      rootClass
     );
   }
 
@@ -1250,7 +1317,8 @@ public sealed class Telescope<
       hopName(getter),
       plus(new OpticNode.Focus(name)),
       plusHops(fieldHop),
-      new ContainerHop<>(trail, hops, owner, name, lensErased, false)
+      new ContainerHop<>(trail, hops, owner, name, lensErased, false),
+      rootClass
     );
   }
 
@@ -1273,7 +1341,8 @@ public sealed class Telescope<
       hopName(getter),
       plus(new OpticNode.Focus(name)),
       plusHops(fieldHop),
-      new ContainerHop<>(trail, hops, owner, name, lensErased, false)
+      new ContainerHop<>(trail, hops, owner, name, lensErased, false),
+      rootClass
     );
   }
 
@@ -1297,6 +1366,7 @@ public sealed class Telescope<
    * <p>The compile-time-safe alternative for paths-as-data is the {@code @Focus} annotation
    * processor — it generates a typed {@code <X>Telescope<R>} navigator at build time.
    */
+  @SuppressWarnings("unchecked")
   public <B> Telescope<S, B> fieldByName(final String fieldName) {
     // Dispatch on the carried fieldOptics — the same discriminator that .field(Accessor) uses.
     // A Telescope built via `ofBean(...)` carries BeanFieldOptics; everything else carries
@@ -1312,7 +1382,9 @@ public sealed class Telescope<
       fieldOptics,
       chain,
       firstHopName != null ? firstHopName : fieldName,
-      plus(new OpticNode.Focus(fieldName))
+      plus(new OpticNode.Focus(fieldName)),
+      plusHops(Fusion.Hop.byName(fieldName, (Traversal<Object, Object>) (Traversal<?, ?>) fieldLens)),
+      rootClass
     );
   }
 
@@ -1374,7 +1446,8 @@ public sealed class Telescope<
       chain,
       hopName(getter),
       plus(new OpticNode.Traverse(name, "collection")),
-      plusHops(hop)
+      plusHops(hop),
+      rootClass
     );
   }
 
@@ -1415,7 +1488,8 @@ public sealed class Telescope<
       chain,
       hopName(getter),
       plus(new OpticNode.Traverse(name, "map values")),
-      plusHops(hop)
+      plusHops(hop),
+      rootClass
     );
   }
 
@@ -1455,7 +1529,8 @@ public sealed class Telescope<
       chain,
       hopName(getter),
       plus(new OpticNode.Traverse(name, "optional")),
-      plusHops(hop)
+      plusHops(hop),
+      rootClass
     );
   }
 
@@ -1482,7 +1557,8 @@ public sealed class Telescope<
       chain,
       firstHopName,
       plus(new OpticNode.Narrow(subType.getSimpleName())),
-      plusHops(Fusion.Hop.narrow(subType, (Traversal<Object, Object>) prism))
+      plusHops(Fusion.Hop.narrow(subType, (Traversal<Object, Object>) prism)),
+      rootClass
     );
   }
 
@@ -1511,7 +1587,8 @@ public sealed class Telescope<
       chain,
       firstHopName,
       plus(new OpticNode.Filter("predicate")),
-      plusHops(Fusion.Hop.filter(predicate, (Traversal<Object, Object>) segment))
+      plusHops(Fusion.Hop.filter(predicate, (Traversal<Object, Object>) segment)),
+      rootClass
     );
   }
 
@@ -1527,11 +1604,20 @@ public sealed class Telescope<
    *     .each(Department::teams).observe(team -> log(team));
    * }</pre>
    */
+  @SuppressWarnings("unchecked")
   public Telescope<S, A> observe(final Consumer<? super A> observer) {
-    // No hop record on purpose: Fusion rebuilds edits from hop records, not the composed optic,
-    // so a fused pass would never call the observer. Null hops makes Fusion decline and the
-    // sequential fold run the composed optic instead.
-    return new Telescope<>(optic.observe(observer), fieldOptics, chain, firstHopName, trail);
+    // Fusion rebuilds edits from hop records, not the composed optic, so a fused pass would never
+    // call the observer. The observe hop is unfusible: Fusion declines and the sequential fold runs
+    // the composed optic instead.
+    return new Telescope<>(
+      optic.observe(observer),
+      fieldOptics,
+      chain,
+      firstHopName,
+      trail,
+      plusHops(Fusion.Hop.observe((Consumer<Object>) observer)),
+      rootClass
+    );
   }
 
   /**
@@ -1601,6 +1687,7 @@ public sealed class Telescope<
    *     .update(team, String::toLowerCase);
    * }</pre>
    */
+  @SuppressWarnings("unchecked")
   public <B> Telescope<S, B> then(final Telescope<A, B> next) {
     // Prefer this side's firstHopName — only the FIRST hop on a chain is tracked. If this side has
     // none (e.g. composing a root Telescope.of(...) with a sub-path), inherit from next. The
@@ -1625,9 +1712,13 @@ public sealed class Telescope<
       joinedTrail = Collections.unmodifiableList(joined);
     }
     // A hop record describes its optic segment by segment, so two described sides compose into a
-    // described whole by concatenation. Either side undescribed leaves the whole undescribed.
+    // described whole by concatenation. An undescribed next side is recorded as one opaque segment,
+    // so this side's hops stay readable; an undescribed this side leaves the whole undescribed.
     final List<Fusion.Hop> joinedHops;
-    if (hops == null || next.hops == null) joinedHops = null;
+    if (hops == null) joinedHops = null;
+    else if (next.hops == null) joinedHops = plusHops(
+      Fusion.Hop.opaque((Traversal<Object, Object>) (Traversal<?, ?>) next.optic)
+    );
     else if (next.hops.isEmpty()) joinedHops = hops;
     else if (hops.isEmpty()) joinedHops = next.hops;
     else {
@@ -1642,7 +1733,8 @@ public sealed class Telescope<
       chain,
       firstHopName != null ? firstHopName : next.firstHopName,
       joinedTrail,
-      joinedHops
+      joinedHops,
+      rootClass
     );
   }
 
@@ -1681,7 +1773,7 @@ public sealed class Telescope<
    *     unchanged
    */
   public Telescope<S, A> hop(final OpticNode node) {
-    return new Telescope<>(optic, fieldOptics, chain, firstHopName, plus(node), hops);
+    return new Telescope<>(optic, fieldOptics, chain, firstHopName, plus(node), hops, rootClass);
   }
 
   /**
@@ -2702,9 +2794,10 @@ public sealed class Telescope<
       final String firstHopName,
       final List<OpticNode> trail,
       final List<Fusion.Hop> hops,
-      final ContainerHop<S> origin
+      final ContainerHop<S> origin,
+      final Class<?> rootClass
     ) {
-      super(optic, fieldOptics, chain, firstHopName, trail, hops);
+      super(optic, fieldOptics, chain, firstHopName, trail, hops, rootClass);
       this.origin = origin;
     }
 
@@ -2758,8 +2851,17 @@ public sealed class Telescope<
     ) {
       final var composed = step.optic.then((Traversal<A, E>) elements);
       if (owner == null) {
-        // Promotion of a path with no field hop at its end: keep the trail, no fusion identity.
-        return new Telescope<>(composed, step.fieldOptics, step.chain, step.firstHopName, step.trail, null);
+        // Promotion of a path with no field hop at its end: keep the trail, and record the element
+        // step as an opaque segment, which carries no fusion identity.
+        return new Telescope<>(
+          composed,
+          step.fieldOptics,
+          step.chain,
+          step.firstHopName,
+          step.trail,
+          step.plusHops(Fusion.Hop.opaque((Traversal<Object, Object>) (Traversal<?, ?>) elements)),
+          step.rootClass
+        );
       }
       final List<OpticNode> trailOut;
       if (preTrail == null) trailOut = step.trail;
@@ -2789,7 +2891,15 @@ public sealed class Telescope<
         h.add(hop);
         hopsOut = Collections.unmodifiableList(h);
       }
-      return new Telescope<>(composed, step.fieldOptics, step.chain, step.firstHopName, trailOut, hopsOut);
+      return new Telescope<>(
+        composed,
+        step.fieldOptics,
+        step.chain,
+        step.firstHopName,
+        trailOut,
+        hopsOut,
+        step.rootClass
+      );
     }
   }
 
@@ -2809,9 +2919,10 @@ public sealed class Telescope<
       final String firstHopName,
       final List<OpticNode> trail,
       final List<Fusion.Hop> hops,
-      final ContainerHop<S> origin
+      final ContainerHop<S> origin,
+      final Class<?> rootClass
     ) {
-      super(optic, fieldOptics, chain, firstHopName, trail, hops);
+      super(optic, fieldOptics, chain, firstHopName, trail, hops, rootClass);
       this.origin = origin;
     }
 
@@ -2842,9 +2953,10 @@ public sealed class Telescope<
       final String firstHopName,
       final List<OpticNode> trail,
       final List<Fusion.Hop> hops,
-      final ContainerHop<S> origin
+      final ContainerHop<S> origin,
+      final Class<?> rootClass
     ) {
-      super(optic, fieldOptics, chain, firstHopName, trail, hops);
+      super(optic, fieldOptics, chain, firstHopName, trail, hops, rootClass);
       this.origin = origin;
     }
 
@@ -2870,9 +2982,10 @@ public sealed class Telescope<
       final String firstHopName,
       final List<OpticNode> trail,
       final List<Fusion.Hop> hops,
-      final ContainerHop<S> origin
+      final ContainerHop<S> origin,
+      final Class<?> rootClass
     ) {
-      super(optic, fieldOptics, chain, firstHopName, trail, hops);
+      super(optic, fieldOptics, chain, firstHopName, trail, hops, rootClass);
       this.origin = origin;
     }
 
@@ -2898,9 +3011,10 @@ public sealed class Telescope<
       final String firstHopName,
       final List<OpticNode> trail,
       final List<Fusion.Hop> hops,
-      final ContainerHop<S> origin
+      final ContainerHop<S> origin,
+      final Class<?> rootClass
     ) {
-      super(optic, fieldOptics, chain, firstHopName, trail, hops);
+      super(optic, fieldOptics, chain, firstHopName, trail, hops, rootClass);
       this.origin = origin;
     }
 
