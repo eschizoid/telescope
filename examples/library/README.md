@@ -1,63 +1,61 @@
 # telescope-examples-library
 
-**Telescope without a framework.** Ten plain-Java `main()` mains that each exercise one capability of the DSL in
-isolation — no Spring, no JPA, no Jackson. Cleanest possible surface to evaluate what telescope actually does, untangled
-from any framework wrapping it around.
+Twelve plain Java programs, each with a `main` method, that show one part of the telescope DSL at a time. The module
+depends only on telescope itself, its annotation processors, and Lombok. There is no Spring, JPA or Jackson in it, so
+each demo shows what telescope does without a framework around it.
 
-If you're new to telescope, **read these first** (or at least skim three: `RuntimeNavigationDemo`, `MultiEditDemo`,
-`DeepMappingDemo`) — then move on to the Spring Boot examples in [`../springboot/`](../springboot/) once you want to see
-telescope inside a real stack.
+If you are new to telescope, start with `RuntimeNavigationDemo`, `MultiEditDemo` and `DeepMappingDemo`. The Spring Boot
+examples in [`../springboot/`](../springboot/) show telescope inside an application.
 
 ## The demos
 
-| Demo                      | One-liner                                                                                                                        |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `RuntimeNavigationDemo`   | `Telescope.of(Class)` for records, `Telescope.ofBean(Class)` for POJOs — the runtime entry                                       |
-| `CodegenDemo`             | `@Focus` / `@BeanFocus` / `@Bridge` emit Path navigators consumed directly — no reflection                                       |
-| `ContainerNavigationDemo` | Typed `list / setField / mapField / optional` subclasses + their terminals (`each` / `values` / `present`) — all compile-checked |
-| `ConversionDemo`          | `Telescope.from(A).to(B).using(fwd, back)` — bidirectional Iso, composes via `.then(...)` for longer paths                       |
-| `DeepMappingDemo`         | `Telescope.map / mapper(A, B, MapStep...)` — same-name auto-recursion, `to` / `via` overrides, `Mapper#patch`, `writeBean` hints |
-| `MultiEditDemo`           | `Telescope.all(over(PATH, fn), ...)` — two-or-more independent edits on one root, count visible at a glance                      |
-| `EffectfulUpdateDemo`     | `updateAsync` / `updateOptional` / `updateEither` / `updateValidated` — same `Traversal#modifyF` machinery, four effects         |
-| `IndexedDemo`             | `.updateIndexed`, `.toListIndexed`, `.withIndex()` — position-aware traversal terminals                                          |
-| `SealedAndFilterDemo`     | `.as(Class)` Prism narrow on sealed hierarchies + `.filter(Predicate)` restriction on many-focus paths                           |
-| `LombokDemo`              | `telescope-lombok` integration — `LombokFocusProcessor` emits `<X>Path<R>` against `@Data` / `@Builder` synthesised properties   |
+| Demo                      | What it shows                                                                                                                                            |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RuntimeNavigationDemo`   | `Telescope.of(Class)` for records, `Telescope.ofBean(Class)` for POJOs, and the two `fieldByName` forms that take a field name as a string               |
+| `ContainerNavigationDemo` | The typed container paths `list`, `setField`, `mapField` and `optional`, with their terminals `each`, `values` and `present`                             |
+| `SealedAndFilterDemo`     | `.as(Class)` to narrow a sealed hierarchy to one case, and `.filter(Predicate)` to restrict a path with many focuses                                     |
+| `MultiEditDemo`           | `Telescope.all(over(path, fn), ...)` to apply several edits to one root, built once and reused on another value                                          |
+| `IndexedDemo`             | `updateIndexed`, `toListIndexed`, and the `withIndex()` view with its `update`, `toList`, `count` and `find`                                             |
+| `EffectfulUpdateDemo`     | `updateAsync`, `updateOptional`, `updateEither` and `updateValidated`                                                                                    |
+| `ValidatedMappingDemo`    | `Validated.combine` and `Validated.combineAll`, which build a typed object from raw input and collect every validation error instead of stopping at one  |
+| `ConversionDemo`          | `Telescope.from(A).to(B).using(forward, backward)`, read in both directions and composed into a longer path with `.then(...)`                            |
+| `DeepMappingDemo`         | `Telescope.map` and `Telescope.mapper` with nested types, the `to` and `via` rows, `Mapper#patch`, and the `writeBean` hint for a constructor-only POJO  |
+| `GraphQlMapToPojoDemo`    | `Telescope.fromMap` to build a record from a `Map<String, Object>`, the shape a GraphQL server receives its arguments in                                 |
+| `CodegenDemo`             | The `<X>Telescope<R>` navigators that `@Focus` and `@BeanFocus` generate, and the `<Source>Bridge` class and `as<Target>()` hop that `@Bridge` generates |
+| `LombokDemo`              | The navigators that telescope-lombok generates for a `@Data` class and a `@Builder` class                                                                |
 
-Each demo prints a sequence of values to stdout that shows the DSL doing its thing — read the javadoc at the top of each
-file for the capability, then run the main to see the output.
+In `DeepMappingDemo`, `patch` overlays a partial DTO onto a base entity. A null field in the partial keeps the base
+value, and the result is always a new object.
+
+Each demo prints labelled lines to standard output. The javadoc at the top of each file says what the demo covers.
 
 ## Running
 
-Run a single demo:
+Each demo has its own Gradle task, named `run` followed by the class name. To run one demo:
 
 ```bash
-./gradlew :examples:library:run -PmainClass=io.github.eschizoid.telescope.examples.RuntimeNavigationDemo
+./gradlew :examples:library:runRuntimeNavigationDemo
 ```
 
-Or run them all (each is independent — there's no shared state across mains):
+To run all twelve:
 
 ```bash
-for demo in RuntimeNavigationDemo CodegenDemo ContainerNavigationDemo ConversionDemo DeepMappingDemo \
-            MultiEditDemo EffectfulUpdateDemo IndexedDemo SealedAndFilterDemo LombokDemo; do
-  ./gradlew :examples:library:run -PmainClass=io.github.eschizoid.telescope.examples.$demo
-done
+./gradlew :examples:library:runAllDemos
 ```
 
-## What this directory is _not_
+The demos share no state, so they can run in any order.
 
-- **Not integration tests.** There's no JUnit, no assertions — these are demonstrations, not verifications. The real
-  test surface lives in `:core`'s `src/test/`.
-- **Not the recommended entry point for adopting telescope in a real app.** For that, look at
-  [`../springboot/`](../springboot/). These mains are a learning aid, not a starter template.
-- **Not exhaustive.** They cover the user-facing DSL surface, not every internal pathway. For the full lattice +
-  composition law coverage see `:core/OpticLawsTest.java`.
+## What this module does not cover
 
-## Why this exists
+- The demos have no assertions. The tests live in each library module. The optic laws are tested in `OpticLawsTest`
+  under `internal/src/test`.
+- The demos are not a template for an application. Use the Spring Boot examples in [`../springboot/`](../springboot/)
+  for that.
+- The demos cover the public DSL only.
 
-Two audiences:
+## Compilation as a check
 
-1. **Evaluators** — when someone wants to know "what does this DSL look like in isolation, with no framework noise?",
-   these are the smallest possible answers. Each demo fits on one screen.
-2. **CI sanity** — every demo is compiled and runnable. If any one of them stops compiling, the `@Focus` / `@BeanFocus`
-   / `@Bridge` / `@telescope-lombok` codegen has regressed in a way the `:codegen` and `:lombok` unit tests didn't
-   catch. They're the smoke test of the user-facing surface.
+CI runs `./gradlew check`, which compiles this module but does not run the demos. `CodegenDemo` and `LombokDemo` import
+the generated navigators and bridge by name. If a processor stops generating one of those classes, or renames a method
+on one, this module fails to compile. `LombokDemo` also fails to compile if telescope-lombok writes its navigators too
+late in annotation processing for same-module code to use them.
