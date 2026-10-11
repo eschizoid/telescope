@@ -62,16 +62,29 @@ tasks.withType<Javadoc>().configureEach {
 }
 
 val springBootVersion = "4.1.1"
+val springdocVersion = "3.1.1"
 
 dependencies {
     api(project(":core"))
     api("org.springframework.boot:spring-boot-autoconfigure:$springBootVersion")
     annotationProcessor("org.springframework.boot:spring-boot-configuration-processor:$springBootVersion")
 
+    // Optional integrations: each is guarded by @ConditionalOnClass, so none reaches a consumer's classpath.
+    compileOnly(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
+    compileOnly("org.springframework:spring-webmvc")
+    compileOnly("jakarta.servlet:jakarta.servlet-api")
+    compileOnly("org.springframework.data:spring-data-commons")
+    compileOnly("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
+
     testImplementation(platform(libs.junitBom))
+    testImplementation(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
     testImplementation(libs.junitJupiter)
     testRuntimeOnly(libs.junitPlatformLauncher)
     testImplementation("org.springframework.boot:spring-boot-starter-test:$springBootVersion")
+    testImplementation("org.springframework.boot:spring-boot-starter-web:$springBootVersion")
+    testImplementation("org.springframework.data:spring-data-commons")
+    testImplementation("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
+    testImplementation("org.springdoc:springdoc-openapi-starter-webmvc-api:$springdocVersion")
     testImplementation("org.assertj:assertj-core:3.27.7")
     testImplementation(testFixtures(project(":codegen")))
     testAnnotationProcessor(project(":codegen"))

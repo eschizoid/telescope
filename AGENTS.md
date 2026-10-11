@@ -432,10 +432,23 @@ keyed by the projection type, never by bean name, and the list is fixed once the
 deliberately not in `TelescopeMapperRegistry`: a projection is not a `Mapper`. The Quarkus starter has no equivalent
 yet.
 
+**Spring only: mapped responses (ADR-0020).** Package `io.github.eschizoid.telescope.spring.web`. The five composed
+annotations (`@TelescopeGetMapping` …) are meta-annotated with `@RequestMapping(method = ...)` and `@TelescopeResponse`;
+`@TelescopeResponse` targets annotation types only. `TelescopeWebMvcAutoConfiguration` (servlet web apps with Spring MVC
+on the classpath) registers `TelescopeResponses`, a `SmartInitializingSingleton` that resolves every annotated handler's
+mapping and `ResponseShape` at startup and fails startup with the method named; `TelescopeResponseHandlers`, a
+`BeanPostProcessor` that wraps the adapter's `RequestResponseBodyMethodProcessor`, `ResponseEntityReturnValueHandler`
+and `HttpEntityMethodProcessor` so the value is mapped, and the declared type swapped through `MappedReturnType`, before
+a converter is chosen; and, with springdoc present, `TelescopeOpenApiCustomizer`, a global customizer that documents the
+response type in every document. The handler's Java return value is never changed. Spring MVC, Spring Data and springdoc
+are `compileOnly`, each behind a class condition.
+
 **Not here:** no `@EnableTelescope`. The registries wrap whichever `Mapper` shape the user brings — reflective or
-codegen-generated. No `@QuarkusTest`/`@SpringBootTest` integration tests: the registries are covered by unit tests, the
-Spring registry also through `ApplicationContextRunner`, the Quarkus producer by a `@QuarkusComponentTest` in an ArC
-container, and the generated Spring beans by the in-memory `ProcessorHarness` plus `ApplicationContextRunner`.
+codegen-generated. No `@QuarkusTest` integration tests. The registries are covered by unit tests, the Spring registry
+also through `ApplicationContextRunner`, the Quarkus producer by a `@QuarkusComponentTest` in an ArC container, and the
+generated Spring beans by the in-memory `ProcessorHarness` plus `ApplicationContextRunner`. Mapped responses are covered
+by `MockMvc` over a `WebApplicationContextRunner`, and by the starter's only `@SpringBootTest` classes, under
+`spring/web/it`, which call a real server and read springdoc's `/v3/api-docs`.
 
 ---
 
@@ -689,6 +702,9 @@ JVM/codegen-only under AOT).
 19. **0019 — Which differences between the paths may remain.** (Proposed.) Only inherent limits (a private constructor,
     a non-public constructor in another package) stay in the cross-path registers, refused by name; every other
     difference is a defect with an issue. Runtime-only features are decided in their own ADRs.
+20. **0020 — Mapped Spring MVC responses.** (Accepted, shipped.) `@TelescopeGetMapping` and its siblings: the handler
+    declares the type it returns and the annotation names the response type; the value is mapped where Spring MVC writes
+    the body, never in the Java call. Resolved at startup; a fixed set of return shapes.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.
