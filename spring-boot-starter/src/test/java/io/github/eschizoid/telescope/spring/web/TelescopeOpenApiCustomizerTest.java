@@ -104,34 +104,49 @@ class TelescopeOpenApiCustomizerTest {
   }
 
   @Test
-  void optionalSetAndPageDocumentTheMappedType() {
+  void optionalDocumentsTheValueItHolds() {
     WebMvcTestSupport.runner()
       .withUserConfiguration(PlainProjection.class, DocController.class)
       .run(context -> {
         final var customizer = new TelescopeOpenApiCustomizer(context.getBean(TelescopeResponses.class), false);
         final var controller = context.getBean(DocController.class);
 
-        // An Optional body is documented as the value it holds.
         final var maybe = customizer.customize(operation(), new HandlerMethod(controller, "maybe", String.class));
         assertThat(schemaOf(maybe).get$ref()).isEqualTo("#/components/schemas/UserDto");
+      });
+  }
+
+  @Test
+  void setDocumentsUniqueMappedItems() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(PlainProjection.class, DocController.class)
+      .run(context -> {
+        final var customizer = new TelescopeOpenApiCustomizer(context.getBean(TelescopeResponses.class), false);
+        final var controller = context.getBean(DocController.class);
 
         final var set = customizer.customize(operation(), new HandlerMethod(controller, "set"));
         assertThat(schemaOf(set).getItems().get$ref()).isEqualTo("#/components/schemas/UserDto");
         assertThat(schemaOf(set).getUniqueItems()).isTrue();
+      });
+  }
+
+  @Test
+  void pageDocumentsTheMappedContent() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(PlainProjection.class, DocController.class)
+      .run(context -> {
+        final var customizer = new TelescopeOpenApiCustomizer(context.getBean(TelescopeResponses.class), false);
+        final var controller = context.getBean(DocController.class);
 
         final var page = customizer.customize(operation(), new HandlerMethod(controller, "page"));
-        final var pageRef = schemaOf(page).get$ref();
-        assertThat(pageRef).startsWith("#/components/schemas/Page").contains("UserDto");
+        assertThat(schemaOf(page).get$ref()).isEqualTo("#/components/schemas/PageUserDto");
 
         // The page schema is referenced directly; UserDto only through the page's content.
         final var openApi = new OpenAPI().paths(new Paths().addPathItem("/docs/page", new PathItem().get(page)));
         customizer.customise(openApi);
         final var schemas = openApi.getComponents().getSchemas();
-        assertThat(schemas).containsKeys(pageRef.substring("#/components/schemas/".length()), "UserDto");
-        final Schema<?> content = (Schema<?>) schemas
-          .get(pageRef.substring("#/components/schemas/".length()))
-          .getProperties()
-          .get("content");
+        assertThat(schemas).containsKeys("PageUserDto", "UserDto");
+        final Schema<?> content = (Schema<?>) schemas.get("PageUserDto").getProperties().get("content");
         assertThat(content.getItems().get$ref()).isEqualTo("#/components/schemas/UserDto");
       });
   }

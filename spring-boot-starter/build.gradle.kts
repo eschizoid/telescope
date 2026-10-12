@@ -143,32 +143,57 @@ signing {
     sign(publishing.publications["maven"])
 }
 
-// A named application module that runs the web auto-configuration with every jar on the module path.
+// A named application module that starts the web auto-configuration from the starter's jar, with every jar on the module
+// path. The bare run has no Spring Data or springdoc; the full run adds both, which loads the springdoc configuration
+// and the Page shape.
 val moduleSmoke by sourceSets.creating {
     compileClasspath += sourceSets.main.get().output
-    runtimeClasspath += sourceSets.main.get().output
 }
 
 dependencies {
     "moduleSmokeImplementation"(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
     "moduleSmokeImplementation"(project(":core"))
-    "moduleSmokeImplementation"("org.springframework.boot:spring-boot-autoconfigure:$springBootVersion")
+    "moduleSmokeImplementation"("org.springframework.boot:spring-boot-autoconfigure")
     "moduleSmokeImplementation"("org.springframework:spring-webmvc")
     "moduleSmokeImplementation"("org.springframework:spring-test")
     "moduleSmokeImplementation"("jakarta.servlet:jakarta.servlet-api")
     "moduleSmokeImplementation"("tools.jackson.core:jackson-databind")
+    "moduleSmokeCompileOnly"("org.springframework.data:spring-data-commons")
+    "moduleSmokeCompileOnly"("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
+}
+
+val moduleSmokeFull by configurations.creating {
+    extendsFrom(configurations["moduleSmokeRuntimeClasspath"])
+}
+
+dependencies {
+    moduleSmokeFull("org.springframework.data:spring-data-commons")
+    moduleSmokeFull("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
+}
+
+fun JavaExec.moduleSmoke(mode: String, runtime: FileCollection) {
+    group = "verification"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+    classpath = files(tasks.jar) + moduleSmoke.output + runtime
+    mainModule = "telescope.spring.smoke"
+    mainClass = "io.github.eschizoid.telescope.spring.smoke.ModuleSmoke"
+    args(mode)
+    // Spring's jars are automatic modules, which declare no dependencies, so nothing pulls the named modules they load
+    // (commons-logging among them) into the graph; the run adds every module on the path.
+    jvmArgs("--add-modules", "ALL-MODULE-PATH")
+    val marker = layout.buildDirectory.file("module-smoke/$mode.ok")
+    outputs.file(marker)
+    doLast { marker.get().asFile.writeText("ok") }
 }
 
 val moduleSmokeRun by tasks.registering(JavaExec::class) {
-    description = "Serves a mapped response with the starter and its dependencies on the module path."
-    group = "verification"
-    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
-    classpath = moduleSmoke.runtimeClasspath
-    mainModule = "telescope.spring.smoke"
-    mainClass = "io.github.eschizoid.telescope.spring.smoke.ModuleSmoke"
-    // Spring's automatic modules load modules no descriptor requires (commons-logging among them), so the graph takes
-    // every module on the path, as a modular Spring application's launch does.
-    jvmArgs("--add-modules", "ALL-MODULE-PATH")
+    description = "Serves mapped responses with the starter's jar on the module path, without Spring Data or springdoc."
+    moduleSmoke("bare", configurations["moduleSmokeRuntimeClasspath"])
 }
 
-tasks.named("check") { dependsOn(moduleSmokeRun) }
+val moduleSmokeFullRun by tasks.registering(JavaExec::class) {
+    description = "Serves mapped responses with the starter's jar on the module path, with Spring Data and springdoc."
+    moduleSmoke("full", moduleSmokeFull)
+}
+
+tasks.named("check") { dependsOn(moduleSmokeRun, moduleSmokeFullRun) }
