@@ -3,7 +3,6 @@ package io.github.eschizoid.telescope.spring.web;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Type;
 import org.springframework.core.MethodParameter;
-import org.springframework.core.ResolvableType;
 
 /**
  * A handler's return type as it reads once the value is mapped. Spring MVC picks a message
@@ -18,16 +17,18 @@ final class MappedReturnType extends MethodParameter {
 
   private final MethodParameter original;
   private final Type mappedType;
+  private final Class<?> mappedClass;
 
-  MappedReturnType(final MethodParameter original, final Type mappedType) {
+  MappedReturnType(final MethodParameter original, final Type mappedType, final Class<?> mappedClass) {
     super(original);
     this.original = original;
     this.mappedType = mappedType;
+    this.mappedClass = mappedClass;
   }
 
   @Override
   public Class<?> getParameterType() {
-    return ResolvableType.forType(mappedType).toClass();
+    return mappedClass;
   }
 
   @Override
@@ -57,6 +58,6 @@ final class MappedReturnType extends MethodParameter {
 
   @Override
   public MappedReturnType clone() {
-    return new MappedReturnType(original, mappedType);
+    return new MappedReturnType(original, mappedType, mappedClass);
   }
 }

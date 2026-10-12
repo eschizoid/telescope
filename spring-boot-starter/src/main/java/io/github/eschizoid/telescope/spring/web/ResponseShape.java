@@ -27,8 +27,7 @@ sealed interface ResponseShape {
   String PAGE = "org.springframework.data.domain.Page";
 
   // Non-generic types that are never a domain value to map. A generic type (Map, Stream, Future,
-  // DeferredResult,
-  // Callable, HttpEntity, ...) is refused earlier, by its type parameters.
+  // DeferredResult, Callable, HttpEntity, ...) is refused earlier, by its type parameters.
   List<Class<?>> NOT_SOURCES = List.of(
     CharSequence.class,
     Number.class,

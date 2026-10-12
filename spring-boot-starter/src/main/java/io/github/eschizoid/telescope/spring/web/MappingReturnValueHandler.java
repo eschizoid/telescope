@@ -39,7 +39,7 @@ final class MappingReturnValueHandler implements HandlerMethodReturnValueHandler
     }
     delegate.handleReturnValue(
       response.apply(returnValue),
-      new MappedReturnType(returnType, response.mappedType()),
+      new MappedReturnType(returnType, response.mappedType(), response.mappedClass()),
       mavContainer,
       webRequest
     );

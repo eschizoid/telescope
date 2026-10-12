@@ -55,7 +55,10 @@ final class TelescopeResponses implements SmartInitializingSingleton {
         final var annotation = MergedAnnotations.from(handler.getMethod(), SearchStrategy.TYPE_HIERARCHY).get(
           TelescopeResponse.class
         );
-        if (annotation.isPresent()) index.put(handler.getMethod(), resolve(handler, annotation));
+        // A method held by more than one handler mapping is resolved once.
+        if (annotation.isPresent() && !index.containsKey(handler.getMethod())) {
+          index.put(handler.getMethod(), resolve(handler, annotation));
+        }
       }
     }
     resolved = Map.copyOf(index);
@@ -111,7 +114,14 @@ final class TelescopeResponses implements SmartInitializingSingleton {
         target = to;
         element = lookup(shape.source(), to, annotationName);
       }
-      return new ResolvedResponse(shape, element, shape.mappedType(target), shape.bodyType(target));
+      final var mappedType = shape.mappedType(target);
+      return new ResolvedResponse(
+        shape,
+        element,
+        mappedType,
+        ResolvableType.forType(mappedType).toClass(),
+        shape.bodyType(target)
+      );
     } catch (final RuntimeException e) {
       throw new IllegalStateException(where + ": " + e.getMessage(), e);
     }
