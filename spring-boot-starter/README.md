@@ -4,7 +4,8 @@ The Spring Boot starter for [telescope](../README.md) collects every `Mapper<A, 
 a `TelescopeMapperRegistry`, so a service can look a mapper up by its source and target class. It also lets the
 `telescope-codegen` annotation processor turn an interface annotated with `@TelescopeMapper` or `@TelescopeTransformer`
 into a Spring bean that you inject like any other. In a Spring MVC application, `@TelescopeGetMapping` and its siblings
-map a controller's response to a DTO with no mapper at the endpoint.
+map a controller's response to a DTO, and `@TelescopeRequestBody` maps a request body to the type the handler takes,
+with no mapper at the endpoint.
 
 The starter is compiled and tested against Spring Boot 4.1.1 and needs Java 21 or later. It registers itself through
 Spring Boot's autoconfiguration, so there is no `@Enable...` annotation to add.
@@ -529,6 +530,57 @@ module com.acme.app {
 
 Spring's jars are automatic modules, which declare no dependencies, so a `java -m` launch may need
 `--add-modules ALL-MODULE-PATH` to bring in the modules they load, such as commons-logging.
+
+## Mapped request bodies
+
+The same idea works on the way in. Replace `@RequestBody` with `@TelescopeRequestBody`, name the type the client sends,
+and the handler receives the type it works with:
+
+```java
+@TelescopePostMapping(value = "/api/v1/users", to = UserRestDto.class)
+ResponseEntity<UserDto> create(@TelescopeRequestBody(from = CreateUserRestRequestDtoV1.class) @Valid UserDto user) {
+  UserDto created = service.create(user);
+  return ResponseEntity.created(URI.create("/api/v1/users/" + created.id())).body(created);
+}
+```
+
+The body is read as `CreateUserRestRequestDtoV1` by Spring's own `@RequestBody` machinery, so content negotiation,
+`RequestBodyAdvice`, a `415` for an unsupported content type and a `400` for malformed JSON all behave as before.
+`@Valid` validates the body as read, against the constraints on the wire DTO, and a failure is the usual `400`
+(`MethodArgumentNotValidException`) before anything is mapped. The parameter may be `T`, `List<T>`, `Collection<T>` or
+`Set<T>`; a `null` element stays `null`.
+
+When the handler needs the body as sent as well, for example to log a field the domain type does not carry, take a
+`TelescopeRequest`. Its type arguments name both types, so it needs no annotation:
+
+```java
+@PostMapping("/api/v1/users/audit")
+UserDto audit(@Valid TelescopeRequest<CreateUserRestRequestDtoV1, UserDto> request) {
+  log.info("client {}", request.original().clientRef());
+  return service.create(request.mapped());
+}
+```
+
+The mapper is found at startup in the same order as for responses. With two candidates, `using` picks one, on either
+form; on the plain form it also supplies the wire type, so `from` can be left out:
+
+```java
+UserDto create(@TelescopeRequestBody(using = CreateUserV1Projection.class) UserDto user)
+UserDto audit(@TelescopeRequestBody(using = CreateUserV1Projection.class) TelescopeRequest<CreateUserRestRequestDtoV1, UserDto> request)
+```
+
+`required = false` lets a request without a body reach the handler as `null`; by default a missing body is a `400`.
+These fail startup with the parameter named:
+
+- neither `from` nor `using` on the plain form;
+- `from` on a `TelescopeRequest`, whose first type argument is the wire type;
+- a `TelescopeRequest` without two concrete type arguments;
+- a parameter type other than `T`, `List<T>`, `Collection<T>` or `Set<T>`;
+- `@RequestBody` next to `@TelescopeRequestBody`;
+- a `using` projection that does not map the wire type to the parameter's type, and two mappers without `using`.
+
+With springdoc on the classpath, the operation's request body shows the wire type, and no query parameter is derived
+from the handler's argument.
 
 ## Configuration
 

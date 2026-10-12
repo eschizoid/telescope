@@ -440,8 +440,13 @@ mapping and `ResponseShape` at startup and fails startup with the method named; 
 `BeanPostProcessor` that wraps the adapter's `RequestResponseBodyMethodProcessor`, `ResponseEntityReturnValueHandler`
 and `HttpEntityMethodProcessor` so the value is mapped, and the declared type swapped through `MappedReturnType`, before
 a converter is chosen; and, with springdoc present, `TelescopeOpenApiCustomizer`, a global customizer that documents the
-response type in every document. The handler's Java return value is never changed. Spring MVC, Spring Data and springdoc
-are `compileOnly`, each behind a class condition.
+response type in every document. The handler's Java return value is never changed. Request bodies are the same feature
+in the other direction (ADR-0021): `@TelescopeRequestBody` on a parameter, or a `TelescopeRequest<S, T>` parameter;
+`TelescopeRequests` resolves each at startup, and `TelescopeRequestBodyResolver`, placed first among the adapter's
+argument resolvers, reads the body through Spring's `RequestResponseBodyMethodProcessor` as the wire type
+(`WireParameter`, which carries a synthesized `@RequestBody` and the parameter's own `@Valid`) before mapping it. Both
+directions find their mapper through `MapperLookup`. Spring MVC, Spring Data and springdoc are `compileOnly`, each
+behind a class condition.
 
 **Not here:** no `@EnableTelescope`. The registries wrap whichever `Mapper` shape the user brings — reflective or
 codegen-generated. No `@QuarkusTest` integration tests. The registries are covered by unit tests, the Spring registry
@@ -711,6 +716,9 @@ JVM/codegen-only under AOT).
 20. **0020 — Mapped Spring MVC responses.** (Accepted, shipped.) `@TelescopeGetMapping` and its siblings: the handler
     declares the type it returns and the annotation names the response type; the value is mapped where Spring MVC writes
     the body, never in the Java call. Resolved at startup; a fixed set of return shapes.
+21. **0021 — Mapped Spring MVC request bodies.** (Accepted, shipped.) `@TelescopeRequestBody(from = Wire.class)` or a
+    `TelescopeRequest<S, T>` parameter: the body is read and validated as the wire type by Spring's own `@RequestBody`
+    processor, then mapped before the handler runs.
 
 When making a load-bearing design choice that future-you might want to re-litigate, add a numbered ADR rather than
 burying the rationale in a code comment.

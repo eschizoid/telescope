@@ -830,6 +830,11 @@ Java caller still receives the `UserDto`. The
 [starter guide's mapped responses section](spring-boot-starter/README.md#mapped-responses) has the lookup order and the
 return types.
 
+Request bodies work the same way in the other direction:
+`@TelescopeRequestBody(from = CreateUserRestRequestDtoV1.class) @Valid UserDto user` reads and validates the body as the
+wire type and hands the handler a `UserDto`, and a `TelescopeRequest<CreateUserRestRequestDtoV1, UserDto>` parameter
+carries both. See [mapped request bodies](spring-boot-starter/README.md#mapped-request-bodies).
+
 ### Quarkus
 
 `telescope-quarkus` adds the same registry to a Quarkus application as a CDI bean. Every `Mapper<A, B>` that a
@@ -887,14 +892,14 @@ Start with [`order-jpa/`](examples/springboot/order-jpa/) for the broadest view.
 
 Everything is published to Maven Central under `io.github.eschizoid`.
 
-| Artifact                        | Role                                                                                                                                                                                                                                                                          |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `telescope-core`                | The DSL, meaning `Telescope`, `Mapper`, `Mapping`, `Either`, `Validated`, and the annotations. Add this one for typed paths and runtime mappers.                                                                                                                              |
-| `telescope-internal`            | The optic lattice and reflection helpers. Transitive only, so it arrives automatically. A consumer that is itself a JPMS module can't compile against it, because its packages are exported only to telescope's own modules. A classpath consumer can reach it and shouldn't. |
-| `telescope-codegen`             | The optional annotation processor for `@Focus`, `@BeanFocus`, `@Bridge`, and `@FromMap`, described in [docs/codegen.md](docs/codegen.md). It also registers the mapper verifier, which runs on every compilation and is turned off with `-Atelescope.verify=off`.             |
-| `telescope-lombok`              | A Lombok-aware variant of the processor, for `@Data`, `@Value`, and `@Builder` POJOs.                                                                                                                                                                                         |
-| `telescope-spring-boot-starter` | Spring Boot autoconfiguration, a `Mapper<A, B>` bean registry, and `@TelescopeGetMapping` and its siblings for mapped Spring MVC responses. With it on the classpath, `telescope-codegen` writes the `@TelescopeMapper` beans. Tested against Spring Boot 4.1.1.              |
-| `telescope-quarkus`             | The same registry as a Quarkus CDI bean. Built against Quarkus 3.40.1, with unit tests of the registry.                                                                                                                                                                       |
+| Artifact                        | Role                                                                                                                                                                                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `telescope-core`                | The DSL, meaning `Telescope`, `Mapper`, `Mapping`, `Either`, `Validated`, and the annotations. Add this one for typed paths and runtime mappers.                                                                                                                                                                    |
+| `telescope-internal`            | The optic lattice and reflection helpers. Transitive only, so it arrives automatically. A consumer that is itself a JPMS module can't compile against it, because its packages are exported only to telescope's own modules. A classpath consumer can reach it and shouldn't.                                       |
+| `telescope-codegen`             | The optional annotation processor for `@Focus`, `@BeanFocus`, `@Bridge`, and `@FromMap`, described in [docs/codegen.md](docs/codegen.md). It also registers the mapper verifier, which runs on every compilation and is turned off with `-Atelescope.verify=off`.                                                   |
+| `telescope-lombok`              | A Lombok-aware variant of the processor, for `@Data`, `@Value`, and `@Builder` POJOs.                                                                                                                                                                                                                               |
+| `telescope-spring-boot-starter` | Spring Boot autoconfiguration, a `Mapper<A, B>` bean registry, `@TelescopeGetMapping` and its siblings for mapped Spring MVC responses, and `@TelescopeRequestBody` for mapped request bodies. With it on the classpath, `telescope-codegen` writes the `@TelescopeMapper` beans. Tested against Spring Boot 4.1.1. |
+| `telescope-quarkus`             | The same registry as a Quarkus CDI bean. Built against Quarkus 3.40.1, with unit tests of the registry.                                                                                                                                                                                                             |
 
 Installation snippets, Lombok on the processor path, and JPMS setup are in [docs/codegen.md](docs/codegen.md). On the
 module path, typed paths and runtime mappers work on an application module's types once that module opens their package
