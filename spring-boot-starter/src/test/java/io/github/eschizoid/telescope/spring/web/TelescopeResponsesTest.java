@@ -12,6 +12,7 @@ import io.github.eschizoid.telescope.spring.web.fixtures.UserDto;
 import io.github.eschizoid.telescope.spring.web.fixtures.UserView;
 import io.github.eschizoid.telescope.spring.web.fixtures.plain.PlainUserDtoProjection;
 import io.github.eschizoid.telescope.spring.web.fixtures.upper.UpperUserDtoProjection;
+import io.github.eschizoid.telescope.spring.web.fixtures.upper.UpperUserDtoProjectionImpl;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.assertj.AssertableWebApplicationContext;
@@ -247,6 +248,22 @@ class TelescopeResponsesTest {
           .hasFailed()
           .getFailure()
           .hasStackTraceContaining("UsingController#user: no UpperUserDtoProjection bean")
+      );
+  }
+
+  @Test
+  void usingWithSeveralBeansListsThemAtStartup() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(UpperProjection.class, UsingController.class)
+      .withBean("secondUpper", UpperUserDtoProjectionImpl.class)
+      .run(context ->
+        assertThat(context)
+          .hasFailed()
+          .getFailure()
+          .hasStackTraceContaining("UsingController#user: 2 UpperUserDtoProjection beans: ")
+          .hasStackTraceContaining("upperUserDtoProjectionImpl")
+          .hasStackTraceContaining("secondUpper")
+          .hasStackTraceContaining("Mark one @Primary, or keep one bean of that type.")
       );
   }
 

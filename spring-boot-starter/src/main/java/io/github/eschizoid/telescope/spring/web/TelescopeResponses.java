@@ -88,10 +88,23 @@ final class TelescopeResponses implements SmartInitializingSingleton {
         if (hasTo && projectionTarget != to) throw new IllegalArgumentException(
           using.getSimpleName() + " maps to " + name(projectionTarget) + ", but to = " + to.getSimpleName()
         );
+        // getIfUnique answers null both when no bean has the type and when several do with none
+        // primary.
         final var projection = beanFactory.getBeanProvider(using).getIfUnique();
-        if (projection == null) throw new IllegalArgumentException(
-          "no " + using.getSimpleName() + " bean. Is it annotated with @TelescopeMapper and component-scanned?"
-        );
+        if (projection == null) {
+          final var names = beanFactory.getBeanNamesForType(using);
+          if (names.length == 0) throw new IllegalArgumentException(
+            "no " + using.getSimpleName() + " bean. Is it annotated with @TelescopeMapper and component-scanned?"
+          );
+          throw new IllegalArgumentException(
+            names.length +
+              " " +
+              using.getSimpleName() +
+              " beans: " +
+              String.join(", ", names) +
+              ". Mark one @Primary, or keep one bean of that type."
+          );
+        }
         target = projectionTarget;
         element = projectionMapping((TelescopeProjection<?, ?>) projection);
       } else {
