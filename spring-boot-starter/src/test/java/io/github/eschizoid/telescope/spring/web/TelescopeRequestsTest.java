@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 
+import io.github.eschizoid.telescope.inject.TelescopeProjection;
 import io.github.eschizoid.telescope.spring.web.fixtures.UserDto;
 import io.github.eschizoid.telescope.spring.web.fixtures.request.CreateUserRequest;
 import io.github.eschizoid.telescope.spring.web.fixtures.request.NewUser;
@@ -118,6 +119,18 @@ class TelescopeRequestsTest {
     }
   }
 
+  // The source type argument is still a variable, so nothing names the wire type.
+  interface OpenProjection<S> extends TelescopeProjection<S, NewUser> {}
+
+  @RestController
+  static class OpenUsingController {
+
+    @PostMapping("/open")
+    NewUser create(@TelescopeRequestBody(using = OpenProjection.class) final NewUser user) {
+      return user;
+    }
+  }
+
   @RestController
   static class WrongUsingController {
 
@@ -208,6 +221,14 @@ class TelescopeRequestsTest {
             "WrongUsingController#create(user): NewUserProjection maps to NewUser, but the parameter is UserDto"
           )
       );
+  }
+
+  @Test
+  void usingWhoseTypeArgumentsDoNotResolveFailsStartup() {
+    failsWith(
+      OpenUsingController.class,
+      "OpenUsingController#create(user): OpenProjection does not resolve its TelescopeProjection type arguments"
+    );
   }
 
   private static WebApplicationContextRunner runner() {

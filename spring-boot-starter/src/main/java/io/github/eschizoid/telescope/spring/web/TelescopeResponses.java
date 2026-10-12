@@ -78,19 +78,8 @@ final class TelescopeResponses implements SmartInitializingSingleton {
       final Class<?> target;
       final Function<Object, Object> element;
       if (hasUsing) {
-        final var pair = MapperLookup.pairOf(using);
-        if (pair[0] != shape.source()) throw new IllegalArgumentException(
-          using.getSimpleName() +
-            " maps " +
-            MapperLookup.name(pair[0]) +
-            ", but the method returns " +
-            MapperLookup.name(shape.source())
-        );
-        if (hasTo && pair[1] != to) throw new IllegalArgumentException(
-          using.getSimpleName() + " maps to " + MapperLookup.name(pair[1]) + ", but to = " + to.getSimpleName()
-        );
-        target = pair[1];
-        element = mappers.using(using);
+        element = mappers.using(using, shape.source(), "the method returns", hasTo ? to : null, "to =");
+        target = MapperLookup.pairOf(using)[1];
       } else {
         target = to;
         element = mappers.forPair(shape.source(), to, annotationName);

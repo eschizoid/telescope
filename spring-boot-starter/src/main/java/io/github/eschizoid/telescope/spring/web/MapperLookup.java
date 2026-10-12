@@ -41,8 +41,34 @@ final class MapperLookup {
     return new Class<?>[] { arguments.resolveGeneric(0), arguments.resolveGeneric(1) };
   }
 
-  /** The bean of the {@code using} projection type, as an element mapping. */
-  Function<Object, Object> using(final Class<?> projectionType) {
+  /**
+   * The bean of the {@code using} projection type, as an element mapping, once its type arguments
+   * are known to map {@code source} to {@code target}. A {@code null} target is not checked. The
+   * roles name each side in the message, as the endpoint sees it.
+   */
+  Function<Object, Object> using(
+    final Class<?> projectionType,
+    final Class<?> source,
+    final String sourceRole,
+    final Class<?> target,
+    final String targetRole
+  ) {
+    final var pair = pairOf(projectionType);
+    if (pair[0] == null || pair[1] == null) throw new IllegalArgumentException(
+      projectionType.getSimpleName() +
+        " does not resolve its TelescopeProjection type arguments. Declare both, as in" +
+        " TelescopeProjection<Source, Target>."
+    );
+    if (pair[0] != source) throw new IllegalArgumentException(
+      projectionType.getSimpleName() + " maps " + name(pair[0]) + ", but " + sourceRole + " " + name(source)
+    );
+    if (target != null && pair[1] != target) throw new IllegalArgumentException(
+      projectionType.getSimpleName() + " maps to " + name(pair[1]) + ", but " + targetRole + " " + name(target)
+    );
+    return bean(projectionType);
+  }
+
+  private Function<Object, Object> bean(final Class<?> projectionType) {
     // getIfUnique answers null both when no bean has the type and when several do with none
     // primary.
     final var projection = beanFactory.getBeanProvider(projectionType).getIfUnique();

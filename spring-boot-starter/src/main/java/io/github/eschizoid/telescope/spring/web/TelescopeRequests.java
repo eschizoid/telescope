@@ -117,22 +117,7 @@ final class TelescopeRequests implements SmartInitializingSingleton {
       final var target = shape.source();
       final Function<Object, Object> element;
       if (hasUsing) {
-        final var pair = MapperLookup.pairOf(using);
-        if (pair[0] != wire) throw new IllegalArgumentException(
-          using.getSimpleName() +
-            " maps " +
-            MapperLookup.name(pair[0]) +
-            ", but the body is read as " +
-            MapperLookup.name(wire)
-        );
-        if (pair[1] != target) throw new IllegalArgumentException(
-          using.getSimpleName() +
-            " maps to " +
-            MapperLookup.name(pair[1]) +
-            ", but the parameter is " +
-            target.getSimpleName()
-        );
-        element = mappers.using(using);
+        element = mappers.using(using, wire, "the body is read as", target, "the parameter is");
       } else {
         element = mappers.forPair(wire, target, ANNOTATION);
       }
