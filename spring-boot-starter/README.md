@@ -511,6 +511,25 @@ returned. `ResponseBodyAdvice`, `@JsonView` and content negotiation see the resp
 it. With springdoc on the classpath, the API documentation shows the response type, in the default document and in every
 `GroupedOpenApi` group.
 
+### On the module path
+
+On the module path, open the package that holds your controllers and the types they return and map to every module, with
+an unqualified `opens`. Spring invokes the handler, Jackson writes the response type, and telescope's runtime mapper
+reads the source. The `opens ... to io.github.eschizoid.telescope.internal` that
+[docs/codegen.md](../docs/codegen.md#jpms--modular-consumers) describes covers only the last of the three.
+
+```java
+module com.acme.app {
+  requires io.github.eschizoid.telescope.spring;
+  requires spring.web;
+
+  opens com.acme.api;
+}
+```
+
+Spring's jars are automatic modules, which declare no dependencies, so a `java -m` launch may need
+`--add-modules ALL-MODULE-PATH` to bring in the modules they load, such as commons-logging.
+
 ## Configuration
 
 | Property                           | Default | Effect                                                                                                                  |

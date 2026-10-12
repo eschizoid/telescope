@@ -448,10 +448,13 @@ codegen-generated. No `@QuarkusTest` integration tests. The registries are cover
 also through `ApplicationContextRunner`, the Quarkus producer by a `@QuarkusComponentTest` in an ArC container, and the
 generated Spring beans by the in-memory `ProcessorHarness` plus `ApplicationContextRunner`. Mapped responses are covered
 by `MockMvc` over a `WebApplicationContextRunner`, and by the starter's only `@SpringBootTest` classes, under
-`spring/web/it`, which call a real server and read springdoc's `/v3/api-docs`. The `moduleSmokeRun` task, part of
-`check`, starts the web auto-configuration from a named application module (`src/moduleSmoke`) with every jar on the
-module path and Spring Data and springdoc absent. It is what catches a `@Bean` method Spring cannot reach because the
-package is exported but not opened, so keep the configuration's bean methods public.
+`spring/web/it`, which call a real server and read springdoc's `/v3/api-docs`. Two tasks in `check` start the web
+auto-configuration from a named application module (`src/moduleSmoke`) with the starter jar and every dependency on the
+module path: `moduleSmokeRun` without Spring Data and springdoc, and `moduleSmokeFullRun` with both, which loads the
+springdoc configuration and serves a `Page`. Both register the configuration classes the jar's auto-configuration
+imports list, read through Spring Boot's `ImportCandidates`. They are what catch a `@Bean` method or a configuration
+class Spring cannot reach because the package is exported but not opened. Keep the configuration classes, their
+constructors, their nested `@Configuration` classes and their bean methods public.
 
 ---
 
