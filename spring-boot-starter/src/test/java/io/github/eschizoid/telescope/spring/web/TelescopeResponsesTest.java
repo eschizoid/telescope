@@ -7,6 +7,8 @@ import io.github.eschizoid.telescope.spring.web.WebMvcTestSupport.UpperMapperBea
 import io.github.eschizoid.telescope.spring.web.WebMvcTestSupport.UpperProjection;
 import io.github.eschizoid.telescope.spring.web.fixtures.Account;
 import io.github.eschizoid.telescope.spring.web.fixtures.AccountView;
+import io.github.eschizoid.telescope.spring.web.fixtures.Ledger;
+import io.github.eschizoid.telescope.spring.web.fixtures.LedgerView;
 import io.github.eschizoid.telescope.spring.web.fixtures.User;
 import io.github.eschizoid.telescope.spring.web.fixtures.UserDto;
 import io.github.eschizoid.telescope.spring.web.fixtures.UserView;
@@ -107,6 +109,17 @@ class TelescopeResponsesTest {
     @TelescopeGetMapping(value = "/by-id/{id}", to = UserView.class)
     Map<String, User> user(@PathVariable final String id) {
       return Map.of(id, ADA);
+    }
+  }
+
+  // No projection or Mapper bean for the pair, and a same-named component the forward mapping
+  // cannot convert.
+  @RestController
+  static class LedgerController {
+
+    @TelescopeGetMapping(value = "/ledgers/{id}", to = LedgerView.class)
+    Ledger ledger(@PathVariable final String id) {
+      return new Ledger(id, "a,b");
     }
   }
 
@@ -288,6 +301,19 @@ class TelescopeResponsesTest {
           .hasFailed()
           .getFailure()
           .hasStackTraceContaining("MapController#user: unsupported return type java.util.Map<")
+      );
+  }
+
+  @Test
+  void sameNameMapperThatCannotBeBuiltFailsStartup() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(LedgerController.class)
+      .run(context ->
+        assertThat(context)
+          .hasFailed()
+          .getFailure()
+          .hasStackTraceContaining("LedgerController#ledger: Deep map: component 'entries' has incompatible")
+          .hasStackTraceContaining("add a to(src, tgt, forward, backward) row")
       );
   }
 
