@@ -1,12 +1,8 @@
 package io.github.eschizoid.telescope.spring.web;
 
-import io.github.eschizoid.telescope.Telescope;
-import io.github.eschizoid.telescope.conversion.ForwardMapper;
-import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.inject.TelescopeProjection;
 import io.github.eschizoid.telescope.spring.TelescopeMapperRegistry;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
@@ -31,7 +27,7 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
 final class TelescopeResponses implements SmartInitializingSingleton {
 
   private final ConfigurableListableBeanFactory beanFactory;
-  private final ObjectProvider<TelescopeMapperRegistry> registry;
+  private final MapperLookup mappers;
   private volatile Map<Method, ResolvedResponse> resolved = Map.of();
 
   TelescopeResponses(
@@ -39,7 +35,7 @@ final class TelescopeResponses implements SmartInitializingSingleton {
     final ObjectProvider<TelescopeMapperRegistry> registry
   ) {
     this.beanFactory = beanFactory;
-    this.registry = registry;
+    this.mappers = new MapperLookup(beanFactory, registry);
   }
 
   /** The mapping for {@code method}, or {@code null} when the method is not a mapped handler. */
@@ -82,37 +78,22 @@ final class TelescopeResponses implements SmartInitializingSingleton {
       final Class<?> target;
       final Function<Object, Object> element;
       if (hasUsing) {
-        final var arguments = ResolvableType.forClass(using).as(TelescopeProjection.class);
-        final var projectionSource = arguments.resolveGeneric(0);
-        final var projectionTarget = arguments.resolveGeneric(1);
-        if (projectionSource != shape.source()) throw new IllegalArgumentException(
-          using.getSimpleName() + " maps " + name(projectionSource) + ", but the method returns " + name(shape.source())
+        final var pair = MapperLookup.pairOf(using);
+        if (pair[0] != shape.source()) throw new IllegalArgumentException(
+          using.getSimpleName() +
+            " maps " +
+            MapperLookup.name(pair[0]) +
+            ", but the method returns " +
+            MapperLookup.name(shape.source())
         );
-        if (hasTo && projectionTarget != to) throw new IllegalArgumentException(
-          using.getSimpleName() + " maps to " + name(projectionTarget) + ", but to = " + to.getSimpleName()
+        if (hasTo && pair[1] != to) throw new IllegalArgumentException(
+          using.getSimpleName() + " maps to " + MapperLookup.name(pair[1]) + ", but to = " + to.getSimpleName()
         );
-        // getIfUnique answers null both when no bean has the type and when several do with none
-        // primary.
-        final var projection = beanFactory.getBeanProvider(using).getIfUnique();
-        if (projection == null) {
-          final var names = beanFactory.getBeanNamesForType(using);
-          if (names.length == 0) throw new IllegalArgumentException(
-            "no " + using.getSimpleName() + " bean. Is it annotated with @TelescopeMapper and component-scanned?"
-          );
-          throw new IllegalArgumentException(
-            names.length +
-              " " +
-              using.getSimpleName() +
-              " beans: " +
-              String.join(", ", names) +
-              ". Mark one @Primary, or keep one bean of that type."
-          );
-        }
-        target = projectionTarget;
-        element = projectionMapping((TelescopeProjection<?, ?>) projection);
+        target = pair[1];
+        element = mappers.using(using);
       } else {
         target = to;
-        element = lookup(shape.source(), to, annotationName);
+        element = mappers.forPair(shape.source(), to, annotationName);
       }
       final var mappedType = shape.mappedType(target);
       return new ResolvedResponse(
@@ -127,64 +108,10 @@ final class TelescopeResponses implements SmartInitializingSingleton {
     }
   }
 
-  private Function<Object, Object> lookup(final Class<?> source, final Class<?> target, final String annotationName) {
-    final var projections = beanFactory.getBeanNamesForType(
-      ResolvableType.forClassWithGenerics(TelescopeProjection.class, source, target)
-    );
-    final var registered = registry.getIfAvailable();
-    final var mapper = registered == null ? null : registered.find(source, target).orElse(null);
-    final var candidates = new ArrayList<String>();
-    for (final var projection : projections) candidates.add(label(projection));
-    if (mapper != null) candidates.add("a Mapper<" + source.getSimpleName() + ", " + target.getSimpleName() + "> bean");
-    if (candidates.size() > 1) throw new IllegalArgumentException(
-      candidates.size() +
-        " mappers for " +
-        source.getSimpleName() +
-        " -> " +
-        target.getSimpleName() +
-        ": " +
-        String.join(", ", candidates) +
-        ". Add using = ... to " +
-        annotationName +
-        " to choose one."
-    );
-    if (projections.length == 1) return projectionMapping(
-      beanFactory.getBean(projections[0], TelescopeProjection.class)
-    );
-    if (mapper != null) {
-      @SuppressWarnings("unchecked")
-      final var typed = (Mapper<Object, Object>) mapper;
-      return typed::forward;
-    }
-    @SuppressWarnings("unchecked")
-    final var forward = (ForwardMapper<Object, Object>) (ForwardMapper<?, ?>) Telescope.mapperForward(source, target);
-    return forward::forward;
-  }
-
-  private String label(final String beanName) {
-    final var type = beanFactory.getType(beanName);
-    if (type == null) return beanName;
-    final var user = ClassUtils.getUserClass(type);
-    for (final var face : user.getInterfaces()) {
-      if (TelescopeProjection.class.isAssignableFrom(face)) return face.getSimpleName();
-    }
-    return user.getSimpleName();
-  }
-
   private static boolean writesBody(final HandlerMethod handler) {
     return (
       AnnotatedElementUtils.hasAnnotation(handler.getMethod(), ResponseBody.class) ||
       AnnotatedElementUtils.hasAnnotation(handler.getBeanType(), ResponseBody.class)
     );
-  }
-
-  @SuppressWarnings("unchecked")
-  private static Function<Object, Object> projectionMapping(final TelescopeProjection<?, ?> projection) {
-    final var typed = (TelescopeProjection<Object, Object>) projection;
-    return typed::map;
-  }
-
-  private static String name(final Class<?> type) {
-    return type == null ? "an unresolved type" : type.getSimpleName();
   }
 }
