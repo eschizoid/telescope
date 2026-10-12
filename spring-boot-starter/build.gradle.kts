@@ -142,3 +142,33 @@ signing {
     if (signingKey != null && signingPassword != null) useInMemoryPgpKeys(signingKey, signingPassword)
     sign(publishing.publications["maven"])
 }
+
+// A named application module that runs the web auto-configuration with every jar on the module path.
+val moduleSmoke by sourceSets.creating {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+
+dependencies {
+    "moduleSmokeImplementation"(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
+    "moduleSmokeImplementation"(project(":core"))
+    "moduleSmokeImplementation"("org.springframework.boot:spring-boot-autoconfigure:$springBootVersion")
+    "moduleSmokeImplementation"("org.springframework:spring-webmvc")
+    "moduleSmokeImplementation"("org.springframework:spring-test")
+    "moduleSmokeImplementation"("jakarta.servlet:jakarta.servlet-api")
+    "moduleSmokeImplementation"("tools.jackson.core:jackson-databind")
+}
+
+val moduleSmokeRun by tasks.registering(JavaExec::class) {
+    description = "Serves a mapped response with the starter and its dependencies on the module path."
+    group = "verification"
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+    classpath = moduleSmoke.runtimeClasspath
+    mainModule = "telescope.spring.smoke"
+    mainClass = "io.github.eschizoid.telescope.spring.smoke.ModuleSmoke"
+    // Spring's automatic modules load modules no descriptor requires (commons-logging among them), so the graph takes
+    // every module on the path, as a modular Spring application's launch does.
+    jvmArgs("--add-modules", "ALL-MODULE-PATH")
+}
+
+tasks.named("check") { dependsOn(moduleSmokeRun) }
