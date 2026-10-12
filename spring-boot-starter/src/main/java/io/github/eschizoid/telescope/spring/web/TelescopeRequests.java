@@ -14,6 +14,7 @@ import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.core.MethodParameter;
 import org.springframework.core.ResolvableType;
 import org.springframework.util.ClassUtils;
+import org.springframework.validation.annotation.ValidationAnnotationUtils;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
@@ -136,14 +137,9 @@ final class TelescopeRequests implements SmartInitializingSingleton {
         element = mappers.forPair(wire, target, ANNOTATION);
       }
       final Type wireType = holder ? wire : shape.mappedType(wire);
-      return new ResolvedRequest(
-        shape,
-        element,
-        wireType,
-        ResolvableType.forType(wireType).toClass(),
-        holder,
-        required
-      );
+      final var view = new WireParameter(parameter, wireType, ResolvableType.forType(wireType).toClass(), required);
+      view.initParameterNameDiscovery(new DefaultParameterNameDiscoverer());
+      return new ResolvedRequest(shape, element, wireType, view, holder, required, validationHints(parameter));
     } catch (final RuntimeException e) {
       throw new IllegalStateException(where + ": " + e.getMessage(), e);
     }
@@ -173,6 +169,14 @@ final class TelescopeRequests implements SmartInitializingSingleton {
         type.getTypeName() +
         ". A mapped request body is read into T, List<T>, Collection<T> or Set<T>, or a TelescopeRequest<S, T>."
     );
+  }
+
+  private static Object[] validationHints(final MethodParameter parameter) {
+    for (final var annotation : parameter.getParameterAnnotations()) {
+      final var hints = ValidationAnnotationUtils.determineValidationHints(annotation);
+      if (hints != null) return hints;
+    }
+    return null;
   }
 
   private static Class<?> concrete(final ResolvableType type) {

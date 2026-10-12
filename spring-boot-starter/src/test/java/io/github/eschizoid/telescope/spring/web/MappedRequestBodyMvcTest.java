@@ -11,6 +11,7 @@ import io.github.eschizoid.telescope.spring.web.fixtures.request.NewUser;
 import io.github.eschizoid.telescope.spring.web.fixtures.request.NewUserView;
 import io.github.eschizoid.telescope.spring.web.fixtures.request.plain.NewUserProjection;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -23,6 +24,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -91,6 +93,22 @@ class MappedRequestBodyMvcTest {
       return user;
     }
 
+    // A constraint on another parameter turns on Spring's method validation for the whole handler.
+    @PostMapping("/teams/{team}/users")
+    NewUser join(
+      @PathVariable @Min(1) final long team,
+      @TelescopeRequestBody(from = CreateUserRequest.class) @Valid final NewUser user
+    ) {
+      calls.incrementAndGet();
+      return user;
+    }
+
+    @PostMapping("/users/batch/valid")
+    int validBatch(@TelescopeRequestBody(from = CreateUserRequest.class) @Valid final List<NewUser> users) {
+      calls.incrementAndGet();
+      return users.size();
+    }
+
     @PostMapping("/users/raw")
     CreateUserRequest raw(@RequestBody final CreateUserRequest request) {
       return request;
@@ -127,6 +145,18 @@ class MappedRequestBodyMvcTest {
       mvc.perform(json("/users", blank)).andExpect(status().isBadRequest());
       mvc.perform(json("/users/holder", blank)).andExpect(status().isBadRequest());
       assertThat(controller.calls).hasValue(0);
+    });
+  }
+
+  @Test
+  void wireBodyIsValidatedWhenMethodValidationAppliesToTheHandler() {
+    runWithController((mvc, controller) -> {
+      final var blank = "{\"displayName\":\"\",\"emailAddress\":\"ada@example.org\"}";
+      mvc.perform(json("/teams/1/users", blank)).andExpect(status().isBadRequest());
+      mvc.perform(json("/users/batch/valid", "[" + ADA + "," + blank + "]")).andExpect(status().isBadRequest());
+      assertThat(controller.calls).hasValue(0);
+      mvc.perform(json("/teams/1/users", ADA)).andExpect(status().isOk());
+      mvc.perform(json("/users/batch/valid", "[" + ADA + "]")).andExpect(status().isOk());
     });
   }
 
