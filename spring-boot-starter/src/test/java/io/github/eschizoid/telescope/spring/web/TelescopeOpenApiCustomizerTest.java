@@ -15,7 +15,11 @@ import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.responses.ApiResponse;
 import io.swagger.v3.oas.models.responses.ApiResponses;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -44,6 +48,21 @@ class TelescopeOpenApiCustomizerTest {
     @TelescopeGetMapping(value = "/docs/entity/{id}", to = UserDto.class)
     public ResponseEntity<User> entity(@PathVariable final String id) {
       return ResponseEntity.ok(ADA);
+    }
+
+    @TelescopeGetMapping(value = "/docs/maybe/{id}", to = UserDto.class)
+    public Optional<User> maybe(@PathVariable final String id) {
+      return Optional.of(ADA);
+    }
+
+    @TelescopeGetMapping(value = "/docs/set", to = UserDto.class)
+    public Set<User> set() {
+      return Set.of(ADA);
+    }
+
+    @TelescopeGetMapping(value = "/docs/page", to = UserDto.class)
+    public Page<User> page() {
+      return new PageImpl<>(List.of(ADA));
     }
 
     @GetMapping("/docs/raw/{id}")
@@ -81,6 +100,39 @@ class TelescopeOpenApiCustomizerTest {
         final var unrelated = new OpenAPI();
         customizer.customise(unrelated);
         assertThat(unrelated.getComponents().getSchemas()).isNull();
+      });
+  }
+
+  @Test
+  void optionalSetAndPageDocumentTheMappedType() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(PlainProjection.class, DocController.class)
+      .run(context -> {
+        final var customizer = new TelescopeOpenApiCustomizer(context.getBean(TelescopeResponses.class), false);
+        final var controller = context.getBean(DocController.class);
+
+        // An Optional body is documented as the value it holds.
+        final var maybe = customizer.customize(operation(), new HandlerMethod(controller, "maybe", String.class));
+        assertThat(schemaOf(maybe).get$ref()).isEqualTo("#/components/schemas/UserDto");
+
+        final var set = customizer.customize(operation(), new HandlerMethod(controller, "set"));
+        assertThat(schemaOf(set).getItems().get$ref()).isEqualTo("#/components/schemas/UserDto");
+        assertThat(schemaOf(set).getUniqueItems()).isTrue();
+
+        final var page = customizer.customize(operation(), new HandlerMethod(controller, "page"));
+        final var pageRef = schemaOf(page).get$ref();
+        assertThat(pageRef).startsWith("#/components/schemas/Page").contains("UserDto");
+
+        // The page schema is referenced directly; UserDto only through the page's content.
+        final var openApi = new OpenAPI().paths(new Paths().addPathItem("/docs/page", new PathItem().get(page)));
+        customizer.customise(openApi);
+        final var schemas = openApi.getComponents().getSchemas();
+        assertThat(schemas).containsKeys(pageRef.substring("#/components/schemas/".length()), "UserDto");
+        final Schema<?> content = (Schema<?>) schemas
+          .get(pageRef.substring("#/components/schemas/".length()))
+          .getProperties()
+          .get("content");
+        assertThat(content.getItems().get$ref()).isEqualTo("#/components/schemas/UserDto");
       });
   }
 
