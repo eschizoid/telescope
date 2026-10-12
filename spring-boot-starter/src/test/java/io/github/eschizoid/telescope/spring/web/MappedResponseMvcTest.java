@@ -104,6 +104,36 @@ class MappedResponseMvcTest {
     }
   }
 
+  // The mapping, the route and the path variable are declared on the interface, as in an API-first
+  // controller.
+  interface UserApi {
+    @TelescopeGetMapping(value = "/api/users/{id}", to = UserDto.class)
+    User user(@PathVariable String id);
+  }
+
+  @RestController
+  static class ApiController implements UserApi {
+
+    @Override
+    public User user(final String id) {
+      return new User(id, "Ada");
+    }
+  }
+
+  @Test
+  void mappingDeclaredOnAnInterfaceMapsTheResponse() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(PlainProjection.class, ApiController.class)
+      .run(context ->
+        mockMvc(context)
+          .perform(get("/api/users/5"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.id").value("5"))
+          .andExpect(jsonPath("$.fullName").value("Ada"))
+          .andExpect(jsonPath("$.name").doesNotExist())
+      );
+  }
+
   @Test
   void responseCarriesTheTargetShape() {
     run(mvc ->
