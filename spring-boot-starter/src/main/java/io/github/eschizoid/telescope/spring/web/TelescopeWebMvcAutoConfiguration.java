@@ -89,18 +89,20 @@ public class TelescopeWebMvcAutoConfiguration {
      * The springdoc customizer. Its schema model follows springdoc's configured OpenAPI version, so
      * the schemas it registers match the ones springdoc writes.
      *
-     * @param responses the resolved mappings
+     * @param responses the resolved response mappings
+     * @param requests the resolved request-body mappings
      * @param properties springdoc's configuration, when present
      * @return the customizer
      */
     @Bean
     public TelescopeOpenApiCustomizer telescopeOpenApiCustomizer(
       final TelescopeResponses responses,
+      final TelescopeRequests requests,
       final ObjectProvider<SpringDocConfigProperties> properties
     ) {
       final var springdoc = properties.getIfAvailable();
       final var openapi31 = springdoc != null && springdoc.getApiDocs().getVersion() == OpenApiVersion.OPENAPI_3_1;
-      return new TelescopeOpenApiCustomizer(responses, openapi31);
+      return new TelescopeOpenApiCustomizer(responses, requests, openapi31);
     }
   }
 }

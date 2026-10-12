@@ -1,12 +1,20 @@
 package io.github.eschizoid.telescope.spring.smoke;
 
+import static io.github.eschizoid.telescope.mapping.Mapping.to;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
+import io.github.eschizoid.telescope.Telescope;
+import io.github.eschizoid.telescope.conversion.Mapper;
 import io.github.eschizoid.telescope.spring.web.TelescopeGetMapping;
+import io.github.eschizoid.telescope.spring.web.TelescopePostMapping;
+import io.github.eschizoid.telescope.spring.web.TelescopeRequestBody;
 import java.util.ArrayList;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.context.annotation.ImportCandidates;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -30,9 +38,19 @@ public final class ModuleSmoke {
 
   public record AccountView(String id, String name) {}
 
+  public record SignupRequest(String id, String displayName) {}
+
+  public record Signup(String id, String name) {}
+
   @Configuration(proxyBeanMethods = false)
   @EnableWebMvc
-  public static class Mvc {}
+  public static class Mvc {
+
+    @Bean
+    public Mapper<SignupRequest, Signup> signups() {
+      return Telescope.mapper(SignupRequest.class, Signup.class, to(SignupRequest::displayName, Signup::name));
+    }
+  }
 
   @RestController
   public static class AccountController {
@@ -40,6 +58,11 @@ public final class ModuleSmoke {
     @TelescopeGetMapping(value = "/accounts/{id}", to = AccountView.class)
     public Account account(@PathVariable("id") final String id) {
       return new Account(id, "Ada", "secret-hash");
+    }
+
+    @TelescopePostMapping(value = "/signups", to = AccountView.class)
+    public Signup signup(@TelescopeRequestBody(from = SignupRequest.class) final Signup signup) {
+      return signup;
     }
   }
 
@@ -68,6 +91,16 @@ public final class ModuleSmoke {
       final var mvc = MockMvcBuilders.webAppContextSetup(context).build();
 
       expect(mvc, "/accounts/7", "{\"id\":\"7\",\"name\":\"Ada\"}");
+      final var signup = mvc
+        .perform(
+          post("/signups").contentType(MediaType.APPLICATION_JSON).content("{\"id\":\"9\",\"displayName\":\"Bea\"}")
+        )
+        .andReturn()
+        .getResponse()
+        .getContentAsString();
+      if (!signup.equals("{\"id\":\"9\",\"name\":\"Bea\"}")) throw new AssertionError(
+        "/signups: unexpected body " + signup
+      );
       if (full) {
         expect(mvc, "/accounts", "\"content\":[{\"id\":\"1\",\"name\":\"Ada\"},{\"id\":\"2\",\"name\":\"Bea\"}]");
         SpringdocCheck.run(context);

@@ -76,7 +76,11 @@ class TelescopeOpenApiCustomizerTest {
     WebMvcTestSupport.runner()
       .withUserConfiguration(PlainProjection.class, DocController.class)
       .run(context -> {
-        final var customizer = new TelescopeOpenApiCustomizer(context.getBean(TelescopeResponses.class), false);
+        final var customizer = new TelescopeOpenApiCustomizer(
+          context.getBean(TelescopeResponses.class),
+          context.getBean(TelescopeRequests.class),
+          false
+        );
         final var controller = context.getBean(DocController.class);
 
         final var single = customizer.customize(operation(), new HandlerMethod(controller, "user", String.class));
@@ -108,7 +112,11 @@ class TelescopeOpenApiCustomizerTest {
     WebMvcTestSupport.runner()
       .withUserConfiguration(PlainProjection.class, DocController.class)
       .run(context -> {
-        final var customizer = new TelescopeOpenApiCustomizer(context.getBean(TelescopeResponses.class), false);
+        final var customizer = new TelescopeOpenApiCustomizer(
+          context.getBean(TelescopeResponses.class),
+          context.getBean(TelescopeRequests.class),
+          false
+        );
         final var controller = context.getBean(DocController.class);
 
         final var maybe = customizer.customize(operation(), new HandlerMethod(controller, "maybe", String.class));
@@ -121,7 +129,11 @@ class TelescopeOpenApiCustomizerTest {
     WebMvcTestSupport.runner()
       .withUserConfiguration(PlainProjection.class, DocController.class)
       .run(context -> {
-        final var customizer = new TelescopeOpenApiCustomizer(context.getBean(TelescopeResponses.class), false);
+        final var customizer = new TelescopeOpenApiCustomizer(
+          context.getBean(TelescopeResponses.class),
+          context.getBean(TelescopeRequests.class),
+          false
+        );
         final var controller = context.getBean(DocController.class);
 
         final var set = customizer.customize(operation(), new HandlerMethod(controller, "set"));
@@ -135,7 +147,11 @@ class TelescopeOpenApiCustomizerTest {
     WebMvcTestSupport.runner()
       .withUserConfiguration(PlainProjection.class, DocController.class)
       .run(context -> {
-        final var customizer = new TelescopeOpenApiCustomizer(context.getBean(TelescopeResponses.class), false);
+        final var customizer = new TelescopeOpenApiCustomizer(
+          context.getBean(TelescopeResponses.class),
+          context.getBean(TelescopeRequests.class),
+          false
+        );
         final var controller = context.getBean(DocController.class);
 
         final var page = customizer.customize(operation(), new HandlerMethod(controller, "page"));
@@ -156,7 +172,11 @@ class TelescopeOpenApiCustomizerTest {
     WebMvcTestSupport.runner()
       .withUserConfiguration(PlainProjection.class, DocController.class)
       .run(context -> {
-        final var customizer = new TelescopeOpenApiCustomizer(context.getBean(TelescopeResponses.class), false);
+        final var customizer = new TelescopeOpenApiCustomizer(
+          context.getBean(TelescopeResponses.class),
+          context.getBean(TelescopeRequests.class),
+          false
+        );
         final var operation = operation();
         operation.getResponses().addApiResponse("404", response("#/components/schemas/Problem"));
         customizer.customize(operation, new HandlerMethod(context.getBean(DocController.class), "user", String.class));
