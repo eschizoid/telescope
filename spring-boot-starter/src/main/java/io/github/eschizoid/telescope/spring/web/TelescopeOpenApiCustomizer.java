@@ -81,13 +81,23 @@ final class TelescopeOpenApiCustomizer
       if (request == null) continue;
       final var media = new MediaType().schema(schemaOf(request.wireType()));
       final var content = new Content();
-      final var mapping = AnnotatedElementUtils.findMergedAnnotation(handlerMethod.getMethod(), RequestMapping.class);
-      final var consumes = mapping == null ? new String[0] : mapping.consumes();
+      final var consumes = consumes(handlerMethod);
       if (consumes.length == 0) content.addMediaType("application/json", media);
       for (final var type : consumes) content.addMediaType(type, media);
       operation.setRequestBody(new RequestBody().required(request.required()).content(content));
       if (operation.getParameters() != null && operation.getParameters().isEmpty()) operation.setParameters(null);
     }
+  }
+
+  // As Spring maps it: the method's consumes when it declares any, else the controller's.
+  private static String[] consumes(final HandlerMethod handlerMethod) {
+    final var method = AnnotatedElementUtils.findMergedAnnotation(handlerMethod.getMethod(), RequestMapping.class);
+    if (method != null && method.consumes().length > 0) return method.consumes();
+    final var controller = AnnotatedElementUtils.findMergedAnnotation(
+      handlerMethod.getBeanType(),
+      RequestMapping.class
+    );
+    return controller == null ? new String[0] : controller.consumes();
   }
 
   private Schema schemaOf(final Type type) {

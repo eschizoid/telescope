@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import io.github.eschizoid.telescope.spring.web.WebMvcTestSupport.PlainProjection;
 import io.github.eschizoid.telescope.spring.web.fixtures.User;
 import io.github.eschizoid.telescope.spring.web.fixtures.UserDto;
+import io.github.eschizoid.telescope.spring.web.fixtures.request.CreateUserRequest;
+import io.github.eschizoid.telescope.spring.web.fixtures.request.NewUser;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
 import io.swagger.v3.oas.models.PathItem;
@@ -23,6 +25,8 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.method.HandlerMethod;
 
@@ -164,6 +168,37 @@ class TelescopeOpenApiCustomizerTest {
         assertThat(schemas).containsKeys("PageUserDto", "UserDto");
         final Schema<?> content = (Schema<?>) schemas.get("PageUserDto").getProperties().get("content");
         assertThat(content.getItems().get$ref()).isEqualTo("#/components/schemas/UserDto");
+      });
+  }
+
+  @RestController
+  @RequestMapping(consumes = "application/xml")
+  public static class XmlController {
+
+    @PostMapping("/xml/users")
+    public NewUser create(@TelescopeRequestBody(from = CreateUserRequest.class) final NewUser user) {
+      return user;
+    }
+  }
+
+  @Test
+  void requestBodyTakesTheControllersConsumes() {
+    WebMvcTestSupport.runner()
+      .withUserConfiguration(MappedRequestBodyMvcTest.RequestProjection.class, XmlController.class)
+      .run(context -> {
+        final var customizer = new TelescopeOpenApiCustomizer(
+          context.getBean(TelescopeResponses.class),
+          context.getBean(TelescopeRequests.class),
+          false
+        );
+        final var operation = customizer.customize(
+          new Operation(),
+          new HandlerMethod(context.getBean(XmlController.class), "create", NewUser.class)
+        );
+        assertThat(operation.getRequestBody().getContent()).containsOnlyKeys("application/xml");
+        assertThat(operation.getRequestBody().getContent().get("application/xml").getSchema().get$ref()).isEqualTo(
+          "#/components/schemas/CreateUserRequest"
+        );
       });
   }
 
