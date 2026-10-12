@@ -46,17 +46,35 @@ public class TelescopeWebMvcAutoConfiguration {
   }
 
   /**
+   * Resolves every mapped request-body parameter once the context's singletons exist.
+   *
+   * @param beanFactory the factory the handler mappings and mappers are looked up in
+   * @param registry the {@code Mapper} bean registry, consulted after projection beans
+   * @return the resolved mappings, keyed by handler parameter
+   */
+  @Bean
+  public static TelescopeRequests telescopeRequests(
+    final ConfigurableListableBeanFactory beanFactory,
+    final ObjectProvider<TelescopeMapperRegistry> registry
+  ) {
+    return new TelescopeRequests(beanFactory, registry);
+  }
+
+  /**
    * Wraps the body-writing return-value handlers. Static, so the post-processor is created before
    * this configuration class itself.
    *
-   * @param responses the resolved mappings, fetched when the handler adapter is initialised
+   * @param responses the resolved response mappings, fetched when the handler adapter is
+   *     initialised
+   * @param requests the resolved request-body mappings, fetched at the same point
    * @return the post-processor
    */
   @Bean
   public static TelescopeResponseHandlers telescopeResponseHandlers(
-    final ObjectProvider<TelescopeResponses> responses
+    final ObjectProvider<TelescopeResponses> responses,
+    final ObjectProvider<TelescopeRequests> requests
   ) {
-    return new TelescopeResponseHandlers(responses);
+    return new TelescopeResponseHandlers(responses, requests);
   }
 
   /** Documents mapped responses when springdoc is on the classpath. */

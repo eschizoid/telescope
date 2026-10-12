@@ -83,6 +83,7 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test:$springBootVersion")
     testImplementation("org.springframework.boot:spring-boot-starter-web:$springBootVersion")
     testImplementation("org.springframework.data:spring-data-commons")
+    testImplementation("org.springframework.boot:spring-boot-starter-validation")
     testImplementation("org.springdoc:springdoc-openapi-starter-common:$springdocVersion")
     testImplementation("org.springdoc:springdoc-openapi-starter-webmvc-api:$springdocVersion")
     testImplementation("org.assertj:assertj-core:3.27.7")
