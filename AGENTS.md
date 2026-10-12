@@ -448,7 +448,10 @@ codegen-generated. No `@QuarkusTest` integration tests. The registries are cover
 also through `ApplicationContextRunner`, the Quarkus producer by a `@QuarkusComponentTest` in an ArC container, and the
 generated Spring beans by the in-memory `ProcessorHarness` plus `ApplicationContextRunner`. Mapped responses are covered
 by `MockMvc` over a `WebApplicationContextRunner`, and by the starter's only `@SpringBootTest` classes, under
-`spring/web/it`, which call a real server and read springdoc's `/v3/api-docs`.
+`spring/web/it`, which call a real server and read springdoc's `/v3/api-docs`. The `moduleSmokeRun` task, part of
+`check`, starts the web auto-configuration from a named application module (`src/moduleSmoke`) with every jar on the
+module path and Spring Data and springdoc absent. It is what catches a `@Bean` method Spring cannot reach because the
+package is exported but not opened, so keep the configuration's bean methods public.
 
 ---
 
