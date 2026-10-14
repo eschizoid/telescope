@@ -245,7 +245,7 @@ class BeanRebuildCorpusTest {
 
     assertTrue("hello".equals(outcomes.get(0).text()), () -> "the generated path should convert: " + outcomes);
     assertTrue(
-      !outcomes.get(1).converted() && outcomes.get(1).text().contains("-parameters or -g"),
+      !outcomes.get(1).converted() && outcomes.get(1).text().contains("javac -parameters or -g"),
       () -> "the runtime should refuse and name both ways to keep the names: " + outcomes.get(1)
     );
   }

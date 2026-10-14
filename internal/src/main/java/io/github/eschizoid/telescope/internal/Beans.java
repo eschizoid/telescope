@@ -3,6 +3,7 @@ package io.github.eschizoid.telescope.internal;
 import io.github.eschizoid.telescope.internal.optics.Getter;
 import io.github.eschizoid.telescope.internal.optics.Lens;
 import io.github.eschizoid.telescope.internal.pairing.BeanWriteStrategy;
+import io.github.eschizoid.telescope.internal.pairing.PairingMessages;
 import io.github.eschizoid.telescope.internal.pairing.PropertyNames;
 import io.github.eschizoid.telescope.internal.pairing.ReflectionProps;
 import java.lang.invoke.LambdaMetafactory;
@@ -921,10 +922,10 @@ public final class Beans {
   /**
    * Strategy: locate the single {@code arity}-parameter constructor and supply its arguments. When
    * its parameter names are known, from {@code -parameters} or from the local variable table a
-   * {@code -g} build keeps, and at least one is a property of the class, arguments are matched by
-   * name (order-independent), and a parameter named after no property takes {@code null}; otherwise
-   * they fall back to positional ({@code names[i]} for argument {@code i}). See {@link
-   * ConstructorWriter}.
+   * {@code -g} build keeps, and every one is a property of the class, arguments are matched by name
+   * (order-independent). When the names are unknown, or none is a property, they fall back to
+   * positional ({@code names[i]} for argument {@code i}). Known names only some of which are
+   * properties are refused here, when the writer is built. See {@link ConstructorWriter}.
    */
   public static <P> BeanWriter<P> constructorWriter(final Class<P> pojoClass, final int arity) {
     return new ConstructorWriter<>(pojoClass, arity);
@@ -1151,10 +1152,10 @@ public final class Beans {
         " native image only -parameters keeps them. The" +
         " writeBean(targetClass, CONSTRUCTOR) hint at the Telescope.map(...) call site is an" +
         " escape hatch. It matches arguments by name when -parameters or -g keeps the names" +
-        " and at least one names a property, passing null to any parameter that names none;" +
-        " otherwise it falls back to POSITIONAL argument matching, in getter-discovery order" +
-        " (not a stable, user-defined canonical order), so the hint should still be paired" +
-        " with -parameters or -g to be safe."
+        " and every one names a property, refuses a constructor only some of whose names are" +
+        " properties, and otherwise falls back to POSITIONAL argument matching, in" +
+        " getter-discovery order (not a stable, user-defined canonical order), so the hint" +
+        " should still be paired with -parameters or -g to be safe."
     );
   }
 
@@ -1552,15 +1553,16 @@ public final class Beans {
    * inlines under the JIT. The hot path never reaches {@code Constructor.newInstance}.
    *
    * <p>When the constructor's parameter names are known, from {@code -parameters} or from the local
-   * variable table a {@code -g} build keeps, and at least one names a property of the class, {@code
+   * variable table a {@code -g} build keeps, and every one names a property of the class, {@code
    * construct} matches each argument to its source value by the parameter's <em>name</em>, so a
-   * reordered constructor is safe; a parameter named after no property takes {@code null}, because
-   * moving a value by position could hand one property's value to a parameter named after another.
-   * When the names are unknown, or none names a property, it falls back to positional, assembling
-   * arguments in {@code names} order and relying on the constructor parameters lining up with the
-   * components. The rule is the same whether the automatic writer chose the constructor or a {@code
-   * writeBean(target, CONSTRUCTOR)} hint pinned it, so pinning the strategy the automatic writer
-   * already picks binds the class the same way, under either compile option.
+   * reordered constructor is safe. When the names are unknown, or none names a property, it falls
+   * back to positional, assembling arguments in {@code names} order and relying on the constructor
+   * parameters lining up with the components. A constructor only some of whose known names are
+   * properties is refused when the writer is built: by name, a parameter named after no property
+   * would have no value, and by position, one property's value could land in a parameter named
+   * after another. The rule is the same whether the automatic writer chose the constructor or a
+   * {@code writeBean(target, CONSTRUCTOR)} hint pinned it, so pinning the strategy the automatic
+   * writer already picks binds the class the same way, under either compile option.
    */
   static final class ConstructorWriter<P> implements BeanWriter<P> {
 
@@ -1594,7 +1596,7 @@ public final class Beans {
           ", CONSTRUCTOR) requires a constructor with " +
           arity +
           " parameters (parameters are matched by name when -parameters or -g keeps the names" +
-          " and at least one names a property, otherwise positionally)."
+          " and every one names a property, otherwise positionally)."
       );
       // No raw setAccessible — buildCtorFn acquires private access through privateLookupOrThrow,
       // which routes JPMS failures through the opens-pointing message every writer shares instead
@@ -1635,19 +1637,22 @@ public final class Beans {
 
     /**
      * The names {@link #construct} reads its arguments by, or {@code null} to read them by
-     * position. Unknown names, or known names none of which is a property of {@code cls}, read by
-     * position. Known names of which at least one is a property read by name: a parameter named
-     * after a property takes that property's value, and any other takes {@code null}, since moving
-     * a value by position could hand one property's value to a parameter named after another.
+     * position. Known names that are all properties of {@code cls} read by name. Unknown names, or
+     * known names none of which is a property, read by position. Known names only some of which are
+     * properties are refused: by name, a parameter named after no property would have no value, and
+     * by position, one property's value could land in a parameter named after another.
      */
     private static String[] namesMatchingProperties(final Class<?> cls, final Constructor<?> ctor) {
       final var names = ParameterNames.of(ctor);
       if (names == null) return null;
       final var properties = Arrays.asList(propertyNames(cls));
+      final var unmatched = new ArrayList<String>();
       for (final var name : names) {
-        if (properties.contains(name)) return names;
+        if (!properties.contains(name)) unmatched.add(name);
       }
-      return null;
+      if (unmatched.isEmpty()) return names;
+      if (unmatched.size() == names.length) return null;
+      throw new IllegalStateException(PairingMessages.constructorParametersNotProperties(cls.getName(), unmatched));
     }
 
     private static <P> Function<Object, Object> buildCtorFn(

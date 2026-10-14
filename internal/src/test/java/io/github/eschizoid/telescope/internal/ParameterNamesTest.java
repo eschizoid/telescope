@@ -75,12 +75,55 @@ class ParameterNamesTest {
     "  public Initials(final String f, final String l) { this.first = f; this.last = l; }\n" +
     "  public String getFirst() { return first; }\n  public String getLast() { return last; }\n}\n";
 
-  // One parameter named after a property, one named after none, in an order that binding by
-  // position would hand first's value to the parameter named last.
-  private static final String PARTIAL =
-    "package dbg;\npublic class Partial {\n  private final String first;\n  private final String last;\n" +
-    "  public Partial(final String last, final String nick) { this.last = last; this.first = nick; }\n" +
-    "  public String getFirst() { return first; }\n  public String getLast() { return last; }\n}\n";
+  /**
+   * A constructor only some of whose parameter names are properties, the parameters that name none,
+   * and its arity, which is its property count.
+   */
+  private record PartlyNamed(String name, String source, List<String> unmatched, int arity) {}
+
+  private static final List<PartlyNamed> PARTLY_NAMED = List.of(
+    // In an order that binding by position would hand first's value to the parameter named
+    // last.
+    new PartlyNamed(
+      "Partial",
+      "package dbg;\npublic class Partial {\n  private final String first;\n  private final String last;\n" +
+        "  public Partial(final String last, final String nick) { this.last = last; this.first = nick; }\n" +
+        "  public String getFirst() { return first; }\n  public String getLast() { return last; }\n}\n",
+      List.of("nick"),
+      2
+    ),
+    // Two of three parameters named after properties.
+    new PartlyNamed(
+      "Subset",
+      "package dbg;\npublic class Subset {\n  private final String a;\n  private final String b;\n" +
+        "  private final String c;\n" +
+        "  public Subset(final String a, final String b, final String extra) {\n" +
+        "    this.a = a; this.b = b; this.c = extra;\n  }\n" +
+        "  public String getA() { return a; }\n  public String getB() { return b; }\n" +
+        "  public String getC() { return c; }\n}\n",
+      List.of("extra"),
+      3
+    ),
+    // The parameter that names no property is a primitive, which by name would take its
+    // default.
+    new PartlyNamed(
+      "PrimPartial",
+      "package dbg;\npublic class PrimPartial {\n  private final String name;\n  private final int age;\n" +
+        "  public PrimPartial(final String name, final int count) { this.name = name; this.age = count; }\n" +
+        "  public String getName() { return name; }\n  public int getAge() { return age; }\n}\n",
+      List.of("count"),
+      2
+    ),
+    // A property typed as the class itself, beside a parameter that names no property.
+    new PartlyNamed(
+      "Link",
+      "package dbg;\npublic class Link {\n  private final Link next;\n  private final String label;\n" +
+        "  public Link(final Link next, final String text) { this.next = next; this.label = text; }\n" +
+        "  public Link getNext() { return next; }\n  public String getLabel() { return label; }\n}\n",
+      List.of("text"),
+      2
+    )
+  );
 
   /**
    * Compiles {@code sources} with {@code options} and returns the directory the classes landed in.
@@ -265,7 +308,7 @@ class ParameterNamesTest {
 
     if (NativeImage.IN_IMAGE) {
       final var refusal = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(point));
-      assertTrue(refusal.getMessage().contains("-parameters or -g"), refusal.getMessage());
+      assertTrue(refusal.getMessage().contains("javac -parameters or -g"), refusal.getMessage());
       return;
     }
     // The properties are discovered as label then x, the constructor takes x then label, so only a
@@ -281,7 +324,7 @@ class ParameterNamesTest {
     final var point = load("dbg.Point", List.of("-g:none"), Map.of("dbg/Point", POINT));
 
     final var refusal = assertThrows(IllegalStateException.class, () -> Beans.autoWriter(point));
-    assertTrue(refusal.getMessage().contains("-parameters or -g"), refusal.getMessage());
+    assertTrue(refusal.getMessage().contains("javac -parameters or -g"), refusal.getMessage());
   }
 
   // --- the CONSTRUCTOR hint --------------------------------------------------------------------
@@ -331,21 +374,65 @@ class ParameterNamesTest {
     assertEquals("Ada Lovelace", hinted(initials));
   }
 
-  @Test
-  @DisplayName("the CONSTRUCTOR hint binds the parameter named after a property by name, and passes null to the other")
-  void theHintBindsAPartialMatchByName() throws ReflectiveOperationException, IOException {
-    final var partial = load("dbg.Partial", List.of("-parameters", "-g:none"), Map.of("dbg/Partial", PARTIAL));
+  /**
+   * Builds a {@code CONSTRUCTOR} writer for every partly named fixture compiled with {@code
+   * options}, and returns, per fixture, the refusal's message or {@code "built"}.
+   */
+  private Map<String, String> partlyNamedOutcomes(final List<String> options)
+    throws IOException, ClassNotFoundException {
+    final var sources = new HashMap<String, String>();
+    for (final var fixture : PARTLY_NAMED) sources.put("dbg/" + fixture.name(), fixture.source());
+    final var loader = new Serving(compile(options, sources), Map.of());
+    final var out = new HashMap<String, String>();
+    for (final var fixture : PARTLY_NAMED) {
+      final var type = Class.forName("dbg." + fixture.name(), false, loader);
+      try {
+        Beans.constructorWriter(type, fixture.arity());
+        out.put(fixture.name(), "built");
+      } catch (final IllegalStateException e) {
+        out.put(fixture.name(), e.getMessage());
+      }
+    }
+    return out;
+  }
 
-    assertEquals("null Lovelace", hinted(partial));
+  /**
+   * Fails unless every fixture was refused with a message naming exactly its unmatched parameters.
+   */
+  private static void assertRefusedByName(final Map<String, String> outcomes) {
+    for (final var fixture : PARTLY_NAMED) {
+      final var message = outcomes.get(fixture.name());
+      assertTrue(
+        message.contains("the parameters " + fixture.unmatched() + " are named after no property"),
+        () -> fixture.name() + ": " + message
+      );
+    }
   }
 
   @Test
-  @DisplayName("the CONSTRUCTOR hint binds a partial match by the names the debug info keeps")
-  void theHintBindsAPartialMatchByDebugNames() throws ReflectiveOperationException, IOException {
-    final var partial = load("dbg.Partial", List.of("-g"), Map.of("dbg/Partial", PARTIAL));
+  @DisplayName("the CONSTRUCTOR hint refuses a constructor only some of whose -parameters names are properties")
+  void theHintRefusesAPartialMatchUnderParameters() throws IOException, ClassNotFoundException {
+    assertRefusedByName(partlyNamedOutcomes(List.of("-parameters", "-g:none")));
+  }
 
-    // Inside an image the names are unknown, so the hint binds by position.
-    assertEquals(NativeImage.IN_IMAGE ? "Lovelace Ada" : "null Lovelace", hinted(partial));
+  @Test
+  @DisplayName("the CONSTRUCTOR hint refuses a constructor only some of whose debug names are properties")
+  void theHintRefusesAPartialMatchUnderDebugInfo() throws IOException, ClassNotFoundException {
+    final var outcomes = partlyNamedOutcomes(List.of("-g"));
+    if (NativeImage.IN_IMAGE) {
+      // Inside an image the names are unknown, so the hint binds by position and builds.
+      assertEquals(Map.of("Partial", "built", "Subset", "built", "PrimPartial", "built", "Link", "built"), outcomes);
+      return;
+    }
+    assertRefusedByName(outcomes);
+  }
+
+  @Test
+  @DisplayName("the CONSTRUCTOR hint builds a partly named constructor by position when nothing keeps the names")
+  void theHintBuildsAPartialMatchWithoutNames() throws IOException, ClassNotFoundException {
+    final var outcomes = partlyNamedOutcomes(List.of("-g:none"));
+
+    assertEquals(Map.of("Partial", "built", "Subset", "built", "PrimPartial", "built", "Link", "built"), outcomes);
   }
 
   // --- helpers ---------------------------------------------------------------------------------

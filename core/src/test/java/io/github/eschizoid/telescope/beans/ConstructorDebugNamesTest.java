@@ -45,7 +45,7 @@ class ConstructorDebugNamesTest {
 
     if (System.getProperty("org.graalvm.nativeimage.imagecode") != null) {
       final var refusal = assertThrows(RuntimeException.class, () -> Telescope.mapper(order, bean).forward(source));
-      assertTrue(String.valueOf(refusal.getMessage()).contains("-parameters or -g"), refusal.getMessage());
+      assertTrue(String.valueOf(refusal.getMessage()).contains("javac -parameters or -g"), refusal.getMessage());
       return;
     }
     final var built = Telescope.mapper(order, bean).forward(source);
