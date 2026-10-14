@@ -57,12 +57,14 @@ for a class the auto path refuses because it offers a write path it will not gue
 compiled with neither `-parameters` nor `-g`, ambiguous multi-ctor classes). A `CONSTRUCTOR` hint binds arguments by
 parameter name when the names are known, from `-parameters` or `-g`, and every one names a property. With no names, or
 with names none of which is a property, it binds by position. A constructor only some of whose known names are
-properties is refused when the mapper is built, since by name the other parameters would have no value and by position
-one property's value could land in a parameter named after another: name every parameter after a property, or write the
-class through setters or a builder. Pinning the constructor the order would pick anyway binds it the same way. A class
-whose only write path is its private fields — a no-arg constructor and no other constructor, no public setters and no
-static `builder()` — is refused outright: add public setters, an all-args constructor or a static `builder()`, or supply
-an explicit mapping row that produces it. Package-private setters do not count; neither path calls them.
+properties is refused when the mapper is built, or on first conversion under a `writeBeans(...)` default, since by name
+the other parameters would have no value and by position one property's value could land in a parameter named after
+another: name every parameter after a property, or write the class through setters or a builder. Inside a native image
+the names `-g` keeps cannot be read, so compile with `-parameters` to get this check there. Pinning the constructor the
+order would pick anyway binds it the same way. A class whose only write path is its private fields — a no-arg
+constructor and no other constructor, no public setters and no static `builder()` — is refused outright: add public
+setters, an all-args constructor or a static `builder()`, or supply an explicit mapping row that produces it.
+Package-private setters do not count; neither path calls them.
 
 ```java
 import static io.github.eschizoid.telescope.mapping.WriteHint.WriteStrategy.CONSTRUCTOR;

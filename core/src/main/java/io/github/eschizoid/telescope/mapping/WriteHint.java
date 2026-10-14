@@ -58,7 +58,9 @@ public sealed interface WriteHint<B> extends MapStep permits WriteHint.BeanWrite
    *       when the names are known, from {@code -parameters} or from {@code -g}, and every one
    *       names a property; by position when the names are unknown or none names a property. A
    *       constructor only some of whose known names are properties is refused when the mapper is
-   *       built
+   *       built, or on first conversion under a {@code writeBeans(...)} default. Inside a native
+   *       image the names {@code -g} keeps cannot be read, so compile with {@code -parameters} to
+   *       get this check there
    * </ul>
    */
   enum WriteStrategy {
